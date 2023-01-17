@@ -476,6 +476,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 
 	sql := "SELECT"
 	tableCols := tableDef.Cols
+	isAllNull := true
 	for i := range tableCols {
 		colName := tableCols[i].Name
 		if types.T(tableCols[i].GetTyp().Id) == types.T_json {
@@ -484,10 +485,15 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 		} else {
 			sql += " max(%s), min(%s),"
 			sql = fmt.Sprintf(sql, colName, colName)
+			isAllNull = false
 		}
 	}
 	sql = sql[:len(sql)-1]
 	sql += " FROM %s"
+
+	if isAllNull {
+		sql += " LIMIT 1"
+	}
 	sql = fmt.Sprintf(sql, tblName)
 
 	return returnByRewriteSQL(ctx, sql, ddlType)

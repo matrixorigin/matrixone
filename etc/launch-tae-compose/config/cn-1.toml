@@ -25,6 +25,7 @@ key-prefix = "server/data"
 [fileservice.cache]
 memory-capacity = "512MB"
 disk-capacity = "8GB"
+disk-path = "mo-data/file-service-cache"
 
 [[fileservice]]
 backend = "MINIO"
