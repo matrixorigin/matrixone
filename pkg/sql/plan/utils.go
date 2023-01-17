@@ -810,7 +810,7 @@ func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[
 		dotIdx := strings.Index(colName, ".")
 		colName = colName[dotIdx+1:]
 		colIdx := tableDef.Name2ColIndex[colName]
-		columnMap[int(idx)] = [2]int{int(colIdx), int(tableDef.Cols[colIdx].Typ.Id)}
+		columnMap[int(idx)] = [2]int{int(colIdx), int(expr.Typ.Id)}
 	}
 }
 
