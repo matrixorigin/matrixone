@@ -147,6 +147,7 @@ type ExternParam struct {
 	LoadFile     bool
 	Local        bool
 	QueryResult  bool
+	SysTable     bool
 }
 
 type S3Parameter struct {

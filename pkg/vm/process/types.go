@@ -39,6 +39,8 @@ type Analyze interface {
 	S3IOByte(*batch.Batch)
 	S3IOCount(int)
 	Network(*batch.Batch)
+	AddScanTime(t time.Time)
+	AddInsertTime(t time.Time)
 }
 
 // WaitRegister channel
@@ -120,6 +122,10 @@ type AnalyzeInfo struct {
 	S3IOCount int64
 	// NetworkIO, message size send between CN node
 	NetworkIO int64
+	// ScanTime, scan cost time in external scan
+	ScanTime int64
+	// InsertTime, insert cost time in load flow
+	InsertTime int64
 }
 
 // Process contains context used in query execution
