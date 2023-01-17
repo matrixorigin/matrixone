@@ -71,7 +71,7 @@ message Insert{
   plan.UniqueIndexDef UniqueIndexDef = 7;
   plan.ClusterTable ClusterTable = 8;
   plan.ClusterByDef ClusterByDef = 9;
-  bool IsRmote = 10;
+  bool IsRemote = 10;
   bool HasAutoCol = 11;
 }
 

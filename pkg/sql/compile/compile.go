@@ -336,7 +336,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
 		if nodeStats.GetCost() > float64(DistributedThreshold) && !arg.HasConstraints() {
 			// use distributed-insert
-			arg.IsRmote = true
+			arg.IsRemote = true
 			insertNode.NotCacheable = true
 			rs = c.newInsertMergeScope(arg, ss)
 			rs.Magic = MergeInsert
@@ -409,7 +409,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
 		if nodeStats.GetCost() > float64(DistributedThreshold) {
 			// use distributed-insert
-			arg.IsRmote = true
+			arg.IsRemote = true
 			rs = c.newInsertMergeScope(arg, ss)
 			rs.Magic = MergeInsert
 			rs.Instructions = append(rs.Instructions, vm.Instruction{

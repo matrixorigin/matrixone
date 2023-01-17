@@ -548,18 +548,18 @@ func (p *Partition) NewReader(
 	}
 
 	partReader := &PartitionReader{
-		typsMap:     mp,
-		readTime:    t,
-		tx:          tx,
-		index:       index,
-		inserts:     inserts,
-		deletes:     deletes,
-		skipBlocks:  skipBlocks,
-		data:        p.data,
-		iter:        p.data.NewIter(tx),
-		colIdxMp:    colIdxMp,
-		mp:          make(map[string]int),
-		fileService: fs,
+		typsMap:         mp,
+		readTime:        t,
+		tx:              tx,
+		index:           index,
+		inserts:         inserts,
+		deletes:         deletes,
+		skipBlocks:      skipBlocks,
+		data:            p.data,
+		iter:            p.data.NewIter(tx),
+		colIdxMp:        colIdxMp,
+		extendId2s3File: make(map[string]int),
+		s3FileService:   fs,
 	}
 	if p.txn != nil {
 		partReader.proc = p.txn.proc

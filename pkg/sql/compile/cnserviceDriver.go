@@ -710,7 +710,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			ClusterTable:   t.ClusterTable,
 			ClusterByDef:   t.ClusterByDef,
 			UniqueIndexDef: t.UniqueIndexDef,
-			IsRmote:        t.IsRmote,
+			IsRemote:       t.IsRemote,
 			HasAutoCol:     t.HasAutoCol,
 		}
 	case *anti.Argument:
@@ -958,7 +958,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			UniqueIndexDef: t.UniqueIndexDef,
 			ClusterTable:   t.ClusterTable,
 			ClusterByDef:   t.ClusterByDef,
-			IsRmote:        t.IsRmote,
+			IsRemote:       t.IsRemote,
 			HasAutoCol:     t.HasAutoCol,
 		}
 	case vm.Anti:

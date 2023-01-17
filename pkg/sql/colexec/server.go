@@ -59,6 +59,7 @@ func (srv *Server) HandleRequest(ctx context.Context, req morpc.Message, _ uint6
 	return nil
 }
 
+// SegmentId is part of Id for cn2s3 directly, for more info, refer to docs about it
 func (srv *Server) GenerateSegment() (string, error) {
 	srv.Lock()
 	defer srv.Unlock()
@@ -91,6 +92,7 @@ func (srv *Server) incrementSegmentId() error {
 	return nil
 }
 
+// getNewSegmentId returns Id given from hakeeper
 func (srv *Server) getNewSegmentId() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()

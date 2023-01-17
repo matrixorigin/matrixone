@@ -111,7 +111,7 @@ const (
 	BlockMeta_DeltaLoc        = "delta_loc"
 	BlockMeta_CommitTs        = "committs"
 	BlockMeta_SegmentID       = "segment_id"
-	BlockMeta_TableIdx_Insert = "%!%mo__meta_tbl_index"
+	BlockMeta_TableIdx_Insert = "%!%mo__meta_tbl_index" // mark which table this metaLoc belongs to
 
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"

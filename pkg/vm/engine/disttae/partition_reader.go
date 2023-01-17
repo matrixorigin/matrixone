@@ -45,18 +45,16 @@ type PartitionReader struct {
 	skipBlocks  map[uint64]uint8
 	iter        *memtable.TableIter[RowID, DataValue]
 	data        *memtable.Table[RowID, DataValue, *DataRow]
-	// s3 fileservice
-	fileService fileservice.FileService
-	// s3 block reader
-	reader objectio.Reader
-	// used to get extent.id of specfied s3 file
-	mp map[string]int
+	proc        *process.Process
+
+	// the following attributes are used to support cn2s3
+	s3FileService   fileservice.FileService
+	s3BlockReader   objectio.Reader
+	extendId2s3File map[string]int
 	// used to get idx of sepcified col
 	colIdxMp        map[string]int
 	blockBatch      *BlockBatch
 	currentFileName string
-	proc            *process.Process
-	rest            bool
 }
 
 type BlockBatch struct {
@@ -119,6 +117,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			var err error
 			var ivec *fileservice.IOVector
 			// read block
+			// These blocks may have been written to s3 before the transaction was committed if the transaction is huge, but note that these blocks are only invisible to other transactions
 			if !p.blockBatch.hasRows() {
 				p.blockBatch.setBat(p.inserts[0])
 				p.inserts = p.inserts[1:]
@@ -126,15 +125,15 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			metaLoc := p.blockBatch.read()
 			name := strings.Split(metaLoc, ":")[0]
 			if name != p.currentFileName {
-				p.reader, err = objectio.NewObjectReader(name, p.fileService)
-				p.mp[name] = 0
+				p.s3BlockReader, err = objectio.NewObjectReader(name, p.s3FileService)
+				p.extendId2s3File[name] = 0
 				p.currentFileName = name
 				if err != nil {
 					return nil, err
 				}
 			}
 			_, extent, _ := blockio.DecodeMetaLoc(metaLoc)
-			ivec, err = p.reader.Read(context.Background(), extent, p.getIdxs(colNames), p.proc.GetMPool())
+			ivec, err = p.s3BlockReader.Read(context.Background(), extent, p.getIdxs(colNames), p.proc.GetMPool())
 			rbat := batch.NewWithSize(len(colNames))
 			rbat.SetAttributes(colNames)
 			rbat.Cnt = 1

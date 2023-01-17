@@ -53,17 +53,19 @@ func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("insert select")
 }
 
-func GetMetaLocBat(bats []*batch.Batch, n *Argument, proc *process.Process) (*batch.Batch, error) {
+// After cn writes the data to s3, it will get meta data about the block (aka metaloc) by calling func WriteEndBlocks
+// and cn needs to pass it to dn for conflict detection
+// Except for the case of writing s3 directly, cn doesn't need to sense how dn is labeling the blocks on s3
+func GetBlockMeta(bats []*batch.Batch, n *Argument, proc *process.Process) (*batch.Batch, error) {
+	// A simple explanation of the two vectors held by metaLocBat
+	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
+	// vecs[1] store relative block metadata
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
 	metaLocBat := batch.New(true, attrs)
-	// we will use vecs[0] to tag which table this metaLoc belongs to
-	// 0 : insertTable (the main table)
-	// 1 : the first uniqueTable
-	// 2 : the second uniqueTable
-	// ... and so on
 	metaLocBat.Vecs[0] = vector.New(types.Type{Oid: types.T(types.T_uint16)})
 	metaLocBat.Vecs[1] = vector.New(types.New(types.T_varchar,
 		types.MaxVarcharLen, 0, 0))
+
 	for i := range bats {
 		if err := GenerateWriter(n, proc); err != nil {
 			return nil, err
@@ -81,8 +83,7 @@ func GetMetaLocBat(bats []*batch.Batch, n *Argument, proc *process.Process) (*ba
 	}
 
 	// send it to connector operator.
-	// vitually, first it will be recieved by output,
-	// then transfer it to connector by rpc
+	// vitually, first it will be recieved by output, then transfer it to connector by rpc
 	metaLocBat.SetZs(metaLocBat.Vecs[0].Length(), proc.GetMPool())
 	return metaLocBat, nil
 }
@@ -138,25 +139,31 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 	return newBat
 }
 
-// one segment has only one block, and block should have less than
-// options.DefaultBlockMaxRows rows
-func SplitBatch(n *Argument, bat *batch.Batch, proc *process.Process) (bats []*batch.Batch) {
-	var cacheLen uint32
-	var newLen uint32
+// reSizeBatch will try to set the batch with the length of DefaultBlockMaxRows
+// consider DefaultBlockMaxRows as unit
+// case 1. If the length of bat and cacheBat together is larger than DefaultBlockMaxRows, then split the batch into unit batchs and return, the smaller part store in cacheBat
+// case 2. If the length of bat and cacheBat together is less than DefaultBlockMaxRows, then bat is merged into cacheBat
+// The expected result is : unitBatch1, unitBatch2, ... unitBatchx, the last Batch that batchSize less than DefaultBlockMaxRows
+//
+// limit : one segment has only one block, this limit exists because currently, tae caches blocks in memory (instead of disk) before writing them to s3, which means that if limit 1 is removed, it may cause memory problems
+func reSizeBatch(n *Argument, bat *batch.Batch, proc *process.Process) (bats []*batch.Batch) {
 	var newBat *batch.Batch
+	var cacheLen uint32
 	if n.container.cacheBat != nil {
 		cacheLen = uint32(n.container.cacheBat.Length())
 	}
-	newLen = cacheLen + uint32(bat.Length())
-	var idx int = int(cacheLen)
-	if newLen >= options.DefaultBlockMaxRows {
+	idx := int(cacheLen)
+	cnt := cacheLen + uint32(bat.Length())
+
+	if cnt >= options.DefaultBlockMaxRows { // case 1
 		if n.container.cacheBat != nil {
 			newBat = n.container.cacheBat
 			n.container.cacheBat = nil
 		} else {
 			newBat = getNewBatch(bat)
 		}
-		for newLen >= options.DefaultBlockMaxRows {
+
+		for cnt >= options.DefaultBlockMaxRows {
 			for i := range newBat.Vecs {
 				vector.UnionOne(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
 			}
@@ -165,11 +172,12 @@ func SplitBatch(n *Argument, bat *batch.Batch, proc *process.Process) (bats []*b
 				newBat.SetZs(int(options.DefaultBlockMaxRows), proc.GetMPool())
 				bats = append(bats, newBat)
 				newBat = getNewBatch(bat)
-				newLen -= options.DefaultBlockMaxRows
+				cnt -= options.DefaultBlockMaxRows
 			}
 		}
 	}
-	if len(bats) == 0 {
+
+	if len(bats) == 0 { // implying the end of this operator, the last Batch that batchSize less than DefaultBlockMaxRows
 		if n.container.cacheBat == nil {
 			n.container.cacheBat = getNewBatch(bat)
 		}
@@ -180,16 +188,16 @@ func SplitBatch(n *Argument, bat *batch.Batch, proc *process.Process) (bats []*b
 		}
 		n.container.cacheBat.SetZs(n.container.cacheBat.Vecs[0].Length(), proc.GetMPool())
 	} else {
-		if newLen > 0 {
+		if cnt > 0 { // the part less than DefaultBlockMaxRows stored in cacheBat
 			if newBat == nil {
 				newBat = getNewBatch(bat)
 			}
-			for newLen > 0 {
+			for cnt > 0 {
 				for i := range newBat.Vecs {
 					vector.UnionOne(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
 				}
 				idx++
-				newLen--
+				cnt--
 			}
 			n.container.cacheBat = newBat
 			n.container.cacheBat.SetZs(n.container.cacheBat.Vecs[0].Length(), proc.GetMPool())
@@ -200,7 +208,7 @@ func SplitBatch(n *Argument, bat *batch.Batch, proc *process.Process) (bats []*b
 
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	if ap.IsRmote {
+	if ap.IsRemote {
 		ap.container = new(Container)
 		ap.GetPkIndexes()
 	}
@@ -224,7 +232,7 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 				b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, n.UniqueIndexDef.Fields[i].Parts, primaryKeyName, proc)
 				if rowNum != 0 {
 					b.SetZs(rowNum, proc.Mp())
-					if !n.IsRmote {
+					if !n.IsRemote {
 						err = n.UniqueIndexTables[idx].Write(ctx, b)
 					}
 					if err != nil {
@@ -236,17 +244,17 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 			}
 		}
 	}
-	if !n.IsRmote {
+	if !n.IsRemote {
 		if err := n.TargetTable.Write(ctx, bat); err != nil {
 			return err
 		}
 	} else {
-		bats := SplitBatch(n, bat, proc)
+		bats := reSizeBatch(n, bat, proc)
 		if len(bats) == 0 {
 			proc.SetInputBatch(&batch.Batch{})
 			return nil
 		}
-		metaLocBat, err = GetMetaLocBat(bats, n, proc)
+		metaLocBat, err = GetBlockMeta(bats, n, proc)
 		if err != nil {
 			return err
 		}
@@ -397,6 +405,8 @@ func SortByPrimaryKey(proc *process.Process, n *Argument, bat *batch.Batch, pkId
 	return bat.Shuffle(sels, m)
 }
 
+// GenerateIndex generates relative indexes for the batch writed directly to s3 from cn
+// For more information, please refer to the comment about func WriteIndex in Writer interface
 func GenerateIndex(fd objectio.BlockObject, objectWriter objectio.Writer, bat *batch.Batch) error {
 	for i, mvec := range bat.Vecs {
 		bloomFilter, zoneMap, err := getIndexDataFromVec(uint16(i), mvec)
@@ -419,6 +429,8 @@ func GenerateIndex(fd objectio.BlockObject, objectWriter objectio.Writer, bat *b
 	return nil
 }
 
+// WriteBlock WriteBlock writes one batch to a buffer and generate related indexes for this batch
+// For more information, please refer to the comment about func Write in Writer interface
 func WriteBlock(n *Argument, bat *batch.Batch, proc *process.Process) error {
 	fd, err := n.container.writer.Write(bat)
 	fd.GetColumn(0)
@@ -455,6 +467,8 @@ func WriteBlock(n *Argument, bat *batch.Batch, proc *process.Process) error {
 	return nil
 }
 
+// WriteEndBlocks WriteEndBlocks write batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
+// For more information, please refer to the comment about func WriteEnd in Writer interface
 func WriteEndBlocks(n *Argument, proc *process.Process, metaLocBat *batch.Batch) error {
 	blocks, err := n.container.writer.WriteEnd(context.Background())
 	if err != nil {
@@ -497,9 +511,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	bat := proc.Reg.InputBatch
 	t1 := time.Now()
 	if bat == nil {
-		if n.IsRmote {
+		if n.IsRemote {
+			// handle the last Batch that batchSize less than DefaultBlockMaxRows
+			// for more info, refer to the comments about reSizeBatch
 			if n.container.cacheBat != nil {
-				metaLocBat, err := GetMetaLocBat([]*batch.Batch{n.container.cacheBat}, n, proc)
+				metaLocBat, err := GetBlockMeta([]*batch.Batch{n.container.cacheBat}, n, proc)
 				if err != nil {
 					return true, err
 				}
@@ -666,7 +682,7 @@ func writeBatch(ctx context.Context,
 	for i := range bat.Vecs {
 		bat.Vecs[i] = vector.CheckInsertVector(bat.Vecs[i], proc.Mp())
 	}
-	if n.IsRmote {
+	if n.IsRemote {
 		return false, handleWrite(n, proc, ctx, bat)
 	}
 	if !proc.LoadTag {
