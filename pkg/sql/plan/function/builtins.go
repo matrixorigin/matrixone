@@ -2757,7 +2757,7 @@ var builtins = map[int]Functions{
 			for _, v := range timeType {
 				timeTypeSet[v] = true
 			}
-			if timeTypeSet[inputs[0]]{
+			if timeTypeSet[inputs[0]] {
 				return wrongFunctionParameters, nil
 			}
 

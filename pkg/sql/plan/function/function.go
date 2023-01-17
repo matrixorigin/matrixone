@@ -73,7 +73,7 @@ func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T) {
 	return fs.TypeCheckFn(fs.Overloads, args)
 }
 
-func normalTypeCheck(overloads []Function, inputs []types.T)  (overloadIndex int32, ts []types.T) {
+func normalTypeCheck(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
 	matched := make([]int32, 0, 4)   // function overload which can be matched directly
 	byCast := make([]int32, 0, 4)    // function overload which can be matched according to type cast
 	convertCost := make([]int, 0, 4) // records the cost of conversion for byCast
