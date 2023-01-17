@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show accounts",
-		output: "show accounts",
+		input:  "select connection_id()",
+		output: "select connection_id()",
 	}
 )
 

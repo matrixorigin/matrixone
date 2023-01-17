@@ -40,7 +40,7 @@ import (
 	"time"
 )
 
-func Test_CountConnection(t *testing.T) {
+func Test_inc_dec(t *testing.T) {
 	rt := &Routine{}
 	counter := int32(0)
 	eg := errgroup.Group{}
@@ -67,12 +67,18 @@ func Test_CountConnection(t *testing.T) {
 	assert.False(t, rt.connectionBeCounted.Load())
 }
 
-var newMockWrapper = func(ctrl *gomock.Controller, ses *Session, sql2result map[string]*MysqlResultSet, sql2NoResultSet map[string]bool, sql string, stmt tree.Statement, proc *process.Process) ComputationWrapper {
+type genMrs func(ses *Session) *MysqlResultSet
+
+var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
+	sql2result map[string]genMrs,
+	sql2NoResultSet map[string]bool, sql string, stmt tree.Statement, proc *process.Process) ComputationWrapper {
 	var mrs *MysqlResultSet
 	var columns []interface{}
 	var ok, ok2 bool
 	var err error
-	if mrs, ok = sql2result[sql]; ok {
+	var gen genMrs
+	if gen, ok = sql2result[sql]; ok {
+		mrs = gen(ses)
 		for _, col := range mrs.Columns {
 			columns = append(columns, col)
 		}
@@ -107,7 +113,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session, sql2result map[
 	return mcw
 }
 
-func TestConnectionCount(t *testing.T) {
+func Test_ConnectionCount(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connect
 	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
@@ -126,7 +132,7 @@ func TestConnectionCount(t *testing.T) {
 	require.NoError(t, err)
 
 	noResultSet := make(map[string]bool)
-	resultSet := make(map[string]*MysqlResultSet)
+	resultSet := make(map[string]genMrs)
 
 	var wrapperStubFunc = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 		var cw []ComputationWrapper = nil
