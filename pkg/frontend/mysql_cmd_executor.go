@@ -89,6 +89,10 @@ func abortTransactionErrorInfo() string {
 	return "Previous DML conflicts with existing constraints or data format. This transaction has to be aborted"
 }
 
+func writeWriteConflictsErrorInfo() string {
+	return "Write conflicts detected. Previous transaction need to be aborted."
+}
+
 const (
 	prefixPrepareStmtName       = "__mo_stmt_id"
 	prefixPrepareStmtSessionVar = "__mo_stmt_var"
