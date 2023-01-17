@@ -302,11 +302,14 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 					case resp.r.GetSubscribeResponse() != nil:
 						lt := resp.r.GetSubscribeResponse().GetLogtail()
 						logTs := lt.GetTs()
+						tbl := lt.GetTable()
+						dbId, tblId := tbl.DbId, tbl.TbId
 
 						if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &lt, logTs); err != nil {
 							needReconnect = true
 							break
 						}
+						setTableSubscribe(dbId, tblId)
 						UpdateCnLogTimestamp(*logTs)
 
 					case resp.r.GetUpdateResponse() != nil:
@@ -370,24 +373,13 @@ func TryToGetTableLogTail(
 			api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 			return err
 		}
-		e := cnLogTailSubscriber.engine
-		partitions := e.db.getPartitions(dbId, tblId)
 		// wait until each partition has the legal ts (ts >= txn ts).
-		for i := 0; i < len(partitions); i++ {
-			partition := partitions[i]
-			for {
-				partition.Lock()
-				if partition.ts.GreaterEq(txnTimestamp) {
-					partition.Unlock()
-					break
-				}
-				partition.Unlock()
-				// XX next day it should be triggered by response.
-				time.Sleep(periodToCheckLogTailReady)
-				continue
+		for {
+			if getTableSubscribe(dbId, tblId) {
+				break
 			}
+			time.Sleep(periodToCheckLogTailReady)
 		}
-		setTableSubscribe(dbId, tblId)
 	}
 	return nil
 }
@@ -481,8 +473,22 @@ func (ls logList) Less(i, j int) bool {
 }
 func (ls logList) Swap(i, j int) { ls[i], ls[j] = ls[j], ls[i] }
 func (ls logList) Sort() {
-	// if contains at least 2 type of update of mo_database, mo_table, mo_column
-	// ids of Mo_database, Mo_table, Mo_column are 1, 2, 3
+	//str := "log into sort start\n"
+	//for i := range ls {
+	//	if ls[i].GetTable().DbId == 1 && ls[i].GetTable().TbId == 2 {
+	//		for j := range ls[i].Commands {
+	//			b := ls[i].Commands[j].GetBat()
+	//			bat, _ := batch.ProtoBatchToBatch(b)
+	//			str += fmt.Sprintf("\tlog into sort : %dth, %d\n", j, ls[i].Commands[j].EntryType)
+	//			for _, v := range bat.Vecs {
+	//				str += fmt.Sprintf("\t\tlog into sort vec: %s\n", v)
+	//			}
+	//		}
+	//	}
+	//}
+	//if len(ls) != 0 {
+	//	fmt.Printf("%slog into sort end\n", str)
+	//}
 	sort.Sort(ls)
 	return
 }
