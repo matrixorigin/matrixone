@@ -695,7 +695,7 @@ func (h *transactionHeap) Pop() any {
 }
 
 // needRead determine if a block needs to be read
-func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
+func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, columnMap map[int][2]int, columns []int, maxCol int, proc *process.Process) bool {
 	var err error
 	if expr == nil {
 		return true
@@ -725,7 +725,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	defer bat.Clean(proc.Mp())
 	for k, v := range columnMap {
 		for i, realIdx := range columns {
-			if realIdx == v {
+			if realIdx == v[0] {
 				bat.SetVector(int32(k), buildVectors[i])
 				break
 			}

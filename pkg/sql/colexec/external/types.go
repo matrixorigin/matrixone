@@ -70,7 +70,8 @@ type FilterParam struct {
 	maxCol       int
 	exprMono     bool
 	columns      []uint16
-	columnMap    map[int]int
+	columnTypes  []int
+	columnMap    map[int][2]int
 	File2Size    map[string]int64
 	FilterExpr   *plan.Expr
 	objectReader objectio.Reader

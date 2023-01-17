@@ -110,7 +110,7 @@ func Prepare(proc *process.Process, arg any) error {
 		Name2ColIndex: param.Name2ColIndex,
 	}
 	var columns []int
-	param.Filter.columnMap, columns, param.Filter.maxCol = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
+	param.Filter.columnMap, columns, param.Filter.columnTypes, param.Filter.maxCol = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.columns = make([]uint16, len(columns))
 	for i := 0; i < len(columns); i++ {
 		param.Filter.columns[i] = uint16(columns[i])
@@ -807,8 +807,7 @@ func needRead(param *ExternalParam, proc *process.Process, objectReader objectio
 	datas := make([][2]any, dataLength)
 	dataTypes := make([]uint8, dataLength)
 	for i := 0; i < dataLength; i++ {
-		idx := param.Filter.columns[i]
-		dataTypes[i] = uint8(param.Cols[idx].Typ.Id)
+		dataTypes[i] = uint8(param.Filter.columnTypes[i])
 		typ := types.T(dataTypes[i]).ToType()
 
 		zm := index.NewZoneMap(typ)
@@ -829,7 +828,7 @@ func needRead(param *ExternalParam, proc *process.Process, objectReader objectio
 	defer bat.Clean(proc.Mp())
 	for k, v := range param.Filter.columnMap {
 		for i, realIdx := range param.Filter.columns {
-			if int(realIdx) == v {
+			if int(realIdx) == v[0] {
 				bat.SetVector(int32(k), buildVectors[i])
 				break
 			}
