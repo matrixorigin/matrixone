@@ -78,3 +78,18 @@ create unique index x ON t11(a) comment 'x';
 create index xx ON t11(a) comment 'xx';
 show create table t11;
 drop table t11;
+
+create table t12(a text);
+create unique index x on t12(a);
+create index x2 on t12(a);
+drop table t12;
+
+create table t13(a blob);
+create unique index x on t13(a);
+create index x2 on t13(a);
+drop table t13;
+
+create table t14(a json);
+create unique index x on t14(a);
+create index x2 on t14(a);
+drop table t14;
