@@ -160,7 +160,7 @@ Type text don't support default value
 create table t1 (a text primary key, b varchar(32));
 not supported: text type in primary key
 create table t1 (a text, index index_test(a));
-not supported: text type in index
+not supported: TEXT column 'a' cannot be in index
 create table t1 (a tinytext);
 insert into t1 values('abcdef');
 insert into t1 values('_bcdef');

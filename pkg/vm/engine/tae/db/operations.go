@@ -15,6 +15,7 @@
 package db
 
 import (
+	"context"
 	"encoding/gob"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -188,6 +189,8 @@ type WriteReq struct {
 	Jobs []*tasks.Job
 	//loaded sorted primary keys or deleted row ids.
 	JobRes []*tasks.JobResult
+	//load context cancel function
+	Cancel context.CancelFunc
 }
 
 type WriteResp struct {

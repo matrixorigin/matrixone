@@ -23,9 +23,9 @@ type Granularity int
 
 const (
 	// Row single row
-	Row = Granularity(0)
-	// RowRange row range mode
-	RowRange = Granularity(1)
+	Row Granularity = iota
+	// Range row range mode
+	Range
 )
 
 // LockMode exclusive or shared lock
@@ -33,9 +33,9 @@ type LockMode int
 
 const (
 	// Exclusive mode
-	Exclusive = LockMode(0)
+	Exclusive LockMode = iota
 	// Shared mode
-	Shared = LockMode(1)
+	Shared
 )
 
 // WaitPolicy waiting strategy if lock conflicts are encountered when locking.
@@ -43,9 +43,9 @@ type WaitPolicy int
 
 const (
 	// Wait waiting for conflicting locks to be released
-	Wait = WaitPolicy(0)
+	Wait WaitPolicy = iota
 	// FastFail return fail if lock conflicts are encountered
-	FastFail = WaitPolicy(1)
+	FastFail
 )
 
 // LockStorage the store that holds the locks, a storage instance is corresponding to
@@ -82,7 +82,7 @@ type LockStorage interface {
 // Lock, a set of background goroutines are notified to start a deadlock detection for all
 // transactions in the Lock's wait queue.
 type LockService interface {
-	// Lock lock rows(row or row range determined by the Granularity in options) a table. Lockservice
+	// Lock locks rows(row or row range determined by the Granularity in options) a table. Lockservice
 	// has no requirement for the format of rows, but requires all rows of a table on a lockservice
 	// to be sortable.
 	//
@@ -93,7 +93,7 @@ type LockService interface {
 	// returns if current operation was aborted by deadlock detection.
 	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (bool, error)
 	// Unlock release all locks associated with the transaction.
-	Unlock(ctx context.Context, txnID []byte) error
+	Unlock(txnID []byte) error
 }
 
 // LockOptions options for lock
