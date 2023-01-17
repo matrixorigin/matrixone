@@ -797,7 +797,7 @@ var (
 			);`,
 		`create table mo_mysql_compatbility_mode(
 				configuration_id int auto_increment,
-				dat_name     varchar(5000),
+				account_name     varchar(300),
 				configuration  json,
 				primary key(configuration_id)
 			);`,
@@ -810,11 +810,12 @@ var (
 		`drop table if exists mo_catalog.mo_user_grant;`,
 		`drop table if exists mo_catalog.mo_role_grant;`,
 		`drop table if exists mo_catalog.mo_role_privs;`,
+		`drop table if exists mo_catalog.mo_mysql_compatbility_mode;`,
 		//"drop table if exists mo_catalog.`%!%mo_increment_columns`;",
 	}
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
-		dat_name,
+		account_name,
 		configuration) values ("%s",%s);`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
@@ -1147,7 +1148,7 @@ const (
 	deleteUserDefinedFunctionFormat = `delete from mo_catalog.mo_user_defined_function where function_id = %d;`
 
 	// delete a tuple from mo_mysql_compatbility_mode when drop a database
-	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
+	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where account_name = "%s";`
 )
 
 var (
@@ -1374,8 +1375,8 @@ func getSqlForDeleteUser(userId int64) []string {
 	}
 }
 
-func getSqlForDeleteMysqlCompatbilityMode(dtname string) string {
-	return fmt.Sprintf(deleteMysqlCompatbilityModeFormat, dtname)
+func getSqlForDeleteMysqlCompatbilityMode(account_name string) string {
+	return fmt.Sprintf(deleteMysqlCompatbilityModeFormat, account_name)
 }
 
 // isClusterTable decides a table is the index table or not
@@ -2378,6 +2379,13 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		if err != nil {
 			goto handleFailed
 		}
+	}
+
+	//step4: delete data of mo_mysql_comaptbility_mode table
+	sql = getSqlForDeleteMysqlCompatbilityMode(da.Name)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
 	}
 
 	err = bh.Exec(ctx, "commit;")
@@ -5247,6 +5255,11 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	addSqlIntoSet(initMoUserGrant4)
 	addSqlIntoSet(initMoUserGrant5)
 
+	//step6:add new entries to the mo_mysql_compatbility_mode
+	mysql_compatbility_mode_default := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "8.0.30-MatrixOne-v0.7.0")
+	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, sysAccountName, mysql_compatbility_mode_default)
+	addSqlIntoSet(initMoMysqlCompatbilityMode)
+
 	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant
 	for _, sql := range initDataSqls {
 		err = bh.Exec(ctx, sql)
@@ -5415,7 +5428,9 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	var comment = ""
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
+	var initMoMysqlCompatbilityMode string
 	ctx, span := trace.Debug(ctx, "createTablesInMoCatalogOfGeneralTenant")
+	mysql_compatbility_mode_default := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "8.0.30-MatrixOne-v0.7.0")
 	defer span.End()
 
 	if nameIsInvalid(ca.Name) {
@@ -5438,6 +5453,14 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
 	//execute the insert
 	err = bh.Exec(ctx, initMoAccount)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step 2: add new entries to the mo_mysql_compatbility_mode
+	initMoMysqlCompatbilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, mysql_compatbility_mode_default)
+	//execute the insert
+	err = bh.Exec(ctx, initMoMysqlCompatbilityMode)
 	if err != nil {
 		goto handleFailed
 	}

@@ -20,10 +20,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"math"
 	"os"
@@ -33,6 +29,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -4022,7 +4023,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 		switch stmt.(type) {
 		case *tree.CreateTable, *tree.DropTable,
-			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
+			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig,
 			*tree.CreateFunction, *tree.DropFunction,
@@ -4037,24 +4038,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					ses.SetLastInsertID(proc.GetLastInsertID())
 				}
 			}
-			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-				return retErr
-			}
-
-		case *tree.CreateDatabase:
-			insertRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
-			resp := mce.setResponse(i, len(cws), rspLen)
-			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-				return retErr
-			}
-
-		case *tree.DropDatabase:
-			deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
-			resp := mce.setResponse(i, len(cws), rspLen)
 			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
 				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
@@ -4690,38 +4673,4 @@ func getAccountId(ctx context.Context) uint32 {
 		accountId = v.(uint32)
 	}
 	return accountId
-}
-
-func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
-	var datname string
-	var configuration string
-
-	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
-		datname = string(createDatabaseStmt.Name)
-		configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+","+"%q"+":"+"0"+"}"+"'", "transaction_ioslation", "SNAPSHOT_ISOLATION", "lower_case_table_names")
-		insertSql := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, datname, configuration)
-
-		bh := ses.GetBackgroundExec(ctx)
-		err := bh.Exec(ctx, insertSql)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
-	var datname string
-
-	if deleteDatabaseStmt, ok := stmt.(*tree.DropDatabase); ok {
-		datname = string(deleteDatabaseStmt.Name)
-		deletesql := getSqlForDeleteMysqlCompatbilityMode(datname)
-
-		bh := ses.GetBackgroundExec(ctx)
-		err := bh.Exec(ctx, deletesql)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
