@@ -151,7 +151,7 @@ yef&&190     wwww     983
 select * from text_01 where not exists(select t2 from text_05);
 t1    t2    t3
 create table text_02(t1 int,t2 text,t3 text,primary key(t1,t2));
-not supported: text type in index
+not supported: TEXT column 't2' cannot be in index
 create table text_02(t1 int,t2 text primary key,t3 text);
 not supported: text type in primary key
 prepare stmt1 from 'select * from text_01';
@@ -195,7 +195,7 @@ null
 create table blob_02(b1 blob primary key,b2 int);
 not supported: blob type in primary key
 create table blob_02(b1 blob,b2 int,primary key(b1,b2));
-not supported: blob type in index
+not supported: BLOB column 'b1' cannot be in index
 create table blob_02(b1 blob not null,b2 int);
 insert into blob_02 values (null,40);
 constraint violation: Column 'b1' cannot be null

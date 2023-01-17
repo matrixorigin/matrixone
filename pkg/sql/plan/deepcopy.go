@@ -827,5 +827,7 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		S3IOByte:         analyzeinfo.GetS3IOByte(),
 		S3IOCount:        analyzeinfo.GetS3IOCount(),
 		NetworkIO:        analyzeinfo.GetNetworkIO(),
+		ScanTime:         analyzeinfo.GetScanTime(),
+		InsertTime:       analyzeinfo.GetInsertTime(),
 	}
 }

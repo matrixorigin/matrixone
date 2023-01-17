@@ -1204,6 +1204,8 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 		target.analInfos[i].S3IOByte += n.S3IOByte
 		target.analInfos[i].S3IOCount += n.S3IOCount
 		target.analInfos[i].NetworkIO += n.NetworkIO
+		target.analInfos[i].ScanTime += n.ScanTime
+		target.analInfos[i].InsertTime += n.InsertTime
 	}
 }
 
@@ -1337,6 +1339,8 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 		S3IOByte:         info.S3IOByte,
 		S3IOCount:        info.S3IOCount,
 		NetworkIO:        info.NetworkIO,
+		ScanTime:         info.ScanTime,
+		InsertTime:       info.InsertTime,
 	}
 }
 

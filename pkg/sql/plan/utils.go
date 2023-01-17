@@ -1171,6 +1171,9 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal >= 0
 		case types.T_varchar:
 			return true
+		case types.T_float32:
+			//float32 has 6-7 significant digits.
+			return constVal <= 100000 && constVal >= -100000
 		default:
 			return false
 		}
@@ -1197,6 +1200,9 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal <= math.MaxUint32
 		case types.T_uint64:
 			return true
+		case types.T_float32:
+			//float32 has 6-7 significant digits.
+			return constVal <= 100000
 		default:
 			return false
 		}
