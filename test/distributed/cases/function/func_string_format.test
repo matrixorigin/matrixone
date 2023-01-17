@@ -222,3 +222,21 @@ INSERT INTO format_05 values ('111', '222'), ('000', '111'), ('-111', null);
 INSERT INTO format_06 values (111, 999999), (0,0000000), (-1, null), (11111, 1);
 SELECT c1, format(c1,1), i, format(i,1) from format_05 inner join format_06 on format_05.c1 = format_06.i order by c1 desc;
 SELECT format(c2, 5) FROM format_05 join format_06 ON format_05.c1 = format_06.i;
+
+drop table if exists t;
+create table t(
+d date,
+dt datetime,
+primary key (d)
+);
+insert into t values ('2022-12-04', '2022-12-04 00:03:36');
+insert into t values ('2023-11-11', '2023-11-11 03:00:48');
+select d, format(d, 1) from t order by d desc;
+select d, format(d, 0) from t order by d desc;
+select d, format(d, -1) from t order by d desc;
+select d, format(d, length("123456789")) from t order by d desc;
+select dt, format(dt, 1) from t order by dt desc;
+select dt, format(dt, 0) from t order by dt desc;
+select dt, format(dt, -1) from t order by dt desc;
+select dt, format(dt, length("123456789")) from t order by dt desc;
+drop table t;

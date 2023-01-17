@@ -35,6 +35,8 @@ func NewAnalyzeInfo(nodeId int32) *AnalyzeInfo {
 		S3IOByte:         0,
 		S3IOCount:        0,
 		NetworkIO:        0,
+		ScanTime:         0,
+		InsertTime:       0,
 	}
 }
 
@@ -94,5 +96,17 @@ func (a *analyze) S3IOCount(count int) {
 func (a *analyze) Network(bat *batch.Batch) {
 	if a.analInfo != nil && bat != nil {
 		atomic.AddInt64(&a.analInfo.NetworkIO, int64(bat.Size()))
+	}
+}
+
+func (a *analyze) AddScanTime(t time.Time) {
+	if a.analInfo != nil {
+		atomic.AddInt64(&a.analInfo.ScanTime, int64(time.Since(t)))
+	}
+}
+
+func (a *analyze) AddInsertTime(t time.Time) {
+	if a.analInfo != nil {
+		atomic.AddInt64(&a.analInfo.InsertTime, int64(time.Since(t)))
 	}
 }

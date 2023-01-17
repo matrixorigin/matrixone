@@ -146,11 +146,11 @@ col1    col2
 2    false
 3    null
 create table index_16 (col1 bigint primary key,col2 blob,col3 blob,unique key d1(col2),key d2(col3));
-not supported: blob type in index
+not supported: BLOB column 'col2' cannot be in index
 create table index_17 (col1 bigint primary key,col2 json,col3 json,unique key d1(col2),key d2(col3));
 not supported: JSON column 'col2' cannot be in index
 create table index_18 (col1 bigint primary key,col2 text,col3 text,unique key d1(col2),key d2(col3));
-not supported: text type in index
+not supported: TEXT column 'col2' cannot be in index
 create table index_name (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key 123(col2),key num_id(col4));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 108 near " 123(col2),key num_id(col4));";
 create table index_name (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key abs@123.abc(col2),key num_id(col4));
@@ -496,17 +496,17 @@ col1    col2
 2    false
 3    null
 create table create_index_16 (col1 bigint primary key,col2 blob,col3 blob);
-[unknown result because it is related to issue#7549]
 create unique index blob_index on create_index_16(col2);
-[unknown result because it is related to issue#7549]
+not supported: BLOB column 'col2' cannot be in index
+drop table create_index_16;
 create table create_index_17 (col1 bigint primary key,col2 json,col3 json);
-[unknown result because it is related to issue#7549]
 create unique index json_index on create_index_17(col2);
-[unknown result because it is related to issue#7549]
+not supported: JSON column 'col2' cannot be in index
+drop table create_index_17;
 create table create_index_18 (col1 bigint primary key,col2 text,col3 text);
-[unknown result because it is related to issue#7549]
 create unique index text_index on create_index_18(col2);
-[unknown result because it is related to issue#7549]
+not supported: TEXT column 'col2' cannot be in index
+drop table create_index_18;
 create table create_index_name (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1));
 create unique index 123 on create_index_name(col2);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 23 near " 123 on create_index_name(col2);";
