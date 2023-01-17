@@ -280,14 +280,15 @@ insert into create_index_15 values (1,TRUE),(2,FALSE),(3,TRUE);
 insert into create_index_15 values (1,TRUE),(2,FALSE),(3,NULL);
 select * from create_index_15;
 -- blob/json/text type not support unique index
--- @bvt:issue#7549
 create table create_index_16 (col1 bigint primary key,col2 blob,col3 blob);
 create unique index blob_index on create_index_16(col2);
+drop table create_index_16;
 create table create_index_17 (col1 bigint primary key,col2 json,col3 json);
 create unique index json_index on create_index_17(col2);
+drop table create_index_17;
 create table create_index_18 (col1 bigint primary key,col2 text,col3 text);
 create unique index text_index on create_index_18(col2);
--- @bvt:issue
+drop table create_index_18;
 
 --create unique index name test
 create table create_index_name (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1));
