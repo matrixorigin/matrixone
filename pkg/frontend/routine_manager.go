@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"os"
 	"sync"
 	"time"
@@ -133,6 +134,14 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	if rt != nil {
 		ses := rt.getSession()
 		if ses != nil {
+			rt.decreaseCount(func() {
+				account := ses.GetTenantInfo()
+				accountName := sysAccountName
+				if account != nil {
+					accountName = account.GetTenant()
+				}
+				metric.ConnectionCounter(accountName).Dec()
+			})
 			logDebugf(ses.GetConciseProfile(), "the io session was closed.")
 		}
 		rt.cleanup()
@@ -294,6 +303,15 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}
 
 	return nil
+}
+
+// clientCount returns the count of the clients
+func (rm *RoutineManager) clientCount() int {
+	var count int
+	rm.mu.Lock()
+	count = len(rm.clients)
+	rm.mu.Unlock()
+	return count
 }
 
 func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineManager, error) {
