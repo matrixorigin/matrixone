@@ -947,35 +947,3 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 	}
 	return exeCols
 }
-
-// Get the required columns of the index table from the original table
-func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []string) []string {
-	colNameMap := make(map[string]int)
-	for _, def := range tblDefs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Primary {
-				colNameMap[attr.Attr.Name] = 1
-				break
-			}
-		} else if cpk, ok := def.(*engine.PrimaryIndexDef); ok {
-			for _, name := range cpk.Names {
-				colNameMap[name] = 1
-			}
-			break
-		} else {
-			continue
-		}
-	}
-
-	for _, column := range indexColumns {
-		colNameMap[column] = 1
-	}
-
-	j := 0
-	keys := make([]string, len(colNameMap))
-	for k := range colNameMap {
-		keys[j] = k
-		j++
-	}
-	return keys
-}

@@ -1198,18 +1198,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		indexCols[i] = key.ColName
 	}
 
-	serialFunc := &tree.FuncExpr{
-		Func: tree.ResolvableFunctionReference{
-			FunctionReference: &tree.UnresolvedName{
-				NumParts: 1,
-				Star:     false,
-				Parts:    tree.NameParts{"serial"},
-			},
-		},
-		Type:  tree.FUNC_TYPE_DEFAULT,
-		Exprs: indexCols,
-	}
-
+	var selectStmt *tree.Select
 	selectTable := &tree.JoinTableExpr{
 		JoinType: "CROSS",
 		Left: &tree.AliasedTableExpr{
@@ -1217,11 +1206,58 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		},
 	}
 
-	selectStmt := &tree.Select{
-		Select: &tree.SelectClause{
-			Exprs: []tree.SelectExpr{{Expr: serialFunc}},
-			From:  &tree.From{Tables: []tree.TableExpr{selectTable}},
-		},
+	if len(indexCols) == 1 {
+		if oriPriKeyName != "" {
+			selectStmt = &tree.Select{
+				Select: &tree.SelectClause{
+					Exprs: []tree.SelectExpr{{Expr: indexCols[0]}, {Expr: &tree.UnresolvedName{
+						NumParts: 1,
+						Star:     false,
+						Parts:    tree.NameParts{oriPriKeyName},
+					}}},
+					From: &tree.From{Tables: []tree.TableExpr{selectTable}},
+				},
+			}
+		} else {
+			selectStmt = &tree.Select{
+				Select: &tree.SelectClause{
+					Exprs: []tree.SelectExpr{{Expr: indexCols[0]}},
+					From:  &tree.From{Tables: []tree.TableExpr{selectTable}},
+				},
+			}
+		}
+	} else {
+		serialFunc := &tree.FuncExpr{
+			Func: tree.ResolvableFunctionReference{
+				FunctionReference: &tree.UnresolvedName{
+					NumParts: 1,
+					Star:     false,
+					Parts:    tree.NameParts{"serial"},
+				},
+			},
+			Type:  tree.FUNC_TYPE_DEFAULT,
+			Exprs: indexCols,
+		}
+
+		if oriPriKeyName != "" {
+			selectStmt = &tree.Select{
+				Select: &tree.SelectClause{
+					Exprs: []tree.SelectExpr{{Expr: serialFunc}, {Expr: &tree.UnresolvedName{
+						NumParts: 1,
+						Star:     false,
+						Parts:    tree.NameParts{oriPriKeyName},
+					}}},
+					From: &tree.From{Tables: []tree.TableExpr{selectTable}},
+				},
+			}
+		} else {
+			selectStmt = &tree.Select{
+				Select: &tree.SelectClause{
+					Exprs: []tree.SelectExpr{{Expr: serialFunc}},
+					From:  &tree.From{Tables: []tree.TableExpr{selectTable}},
+				},
+			}
+		}
 	}
 
 	selectPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
@@ -1249,6 +1285,14 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 					ColPos: int32(i),
 				},
 			},
+		}
+	}
+
+	// do type cast if needed
+	for i := range insertExprs {
+		insertExprs[i], err = makePlan2CastExpr(ctx.GetContext(), insertExprs[i], indexTableDef.Cols[i].Typ)
+		if err != nil {
+			return nil, err
 		}
 	}
 
