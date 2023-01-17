@@ -105,9 +105,6 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	if ok := db.txn.catalog.GetTable(key); !ok {
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
-	if tbl, ok := db.txn.syncMap.Load(key.Id); ok {
-		return tbl.(*table), nil
-	}
 	parts := db.txn.db.getPartitions(db.databaseId, key.Id)
 	tbl := &table{
 		db:           db,
@@ -133,7 +130,6 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	}
 	tbl.meta = meta
 	tbl.updated = false
-	db.txn.syncMap.Store(key, tbl)
 	return tbl, nil
 }
 
@@ -156,7 +152,6 @@ func (db *database) Delete(ctx context.Context, name string) error {
 		}
 		id = key.Id
 	}
-	db.txn.syncMap.Delete(id)
 	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err

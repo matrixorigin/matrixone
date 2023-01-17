@@ -1177,6 +1177,14 @@ func (ses *Session) TxnBegin() error {
 	}
 	ses.ClearOptionBits(OPTION_BEGIN)
 	if err != nil {
+		/*
+			fix issue 6024.
+			When we get a w-w conflict during commit the txn,
+			we convert the error into a readable error.
+		*/
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			return moerr.NewInternalError(ses.GetRequestContext(), writeWriteConflictsErrorInfo())
+		}
 		return err
 	}
 	ses.SetOptionBits(OPTION_BEGIN)
@@ -1484,9 +1492,18 @@ func (th *TxnHandler) TxnClientNew() error {
 // Then it creates the new transaction.
 func (th *TxnHandler) NewTxn() error {
 	var err error
+	ctx := th.GetSession().GetRequestContext()
 	if th.IsValidTxn() {
 		err = th.CommitTxn()
 		if err != nil {
+			/*
+				fix issue 6024.
+				When we get a w-w conflict during commit the txn,
+				we convert the error into a readable error.
+			*/
+			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+				return moerr.NewInternalError(ctx, writeWriteConflictsErrorInfo())
+			}
 			return err
 		}
 	}
@@ -1501,7 +1518,6 @@ func (th *TxnHandler) NewTxn() error {
 	if err != nil {
 		return err
 	}
-	ctx := th.GetSession().GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
 	}
