@@ -2268,6 +2268,8 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	for i, col := range cols {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
+		c.SetOrgName(col.Name)
+		c.SetTable(col.Typ.Table)
 		c.SetOrgTable(col.Typ.Table)
 		c.SetAutoIncr(col.Typ.AutoIncr)
 		c.SetSchema(cwft.ses.GetTxnCompileCtx().DefaultDatabase())

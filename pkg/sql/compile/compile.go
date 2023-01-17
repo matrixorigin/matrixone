@@ -580,6 +580,10 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	}
 
+	if n.ObjRef != nil {
+		param.SysTable = external.IsSysTable(n.ObjRef.SchemaName, n.TableDef.Name)
+	}
+
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
 	var fileList []string
@@ -624,7 +628,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			Op:      vm.External,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructExternal(n, c.ctx, fileListTmp),
+			Arg:     constructExternal(n, param, c.ctx, fileListTmp),
 		})
 	}
 	c.anal.isFirst = false
@@ -1363,6 +1367,8 @@ func (c *Compile) fillAnalyzeInfo() {
 		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOByte = atomic.LoadInt64(&anal.S3IOByte)
 		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOCount = atomic.LoadInt64(&anal.S3IOCount)
 		c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO = atomic.LoadInt64(&anal.NetworkIO)
+		c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime = atomic.LoadInt64(&anal.ScanTime)
+		c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime = atomic.LoadInt64(&anal.InsertTime)
 	}
 }
 
