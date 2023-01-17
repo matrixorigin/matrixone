@@ -68,45 +68,49 @@ type Functions struct {
 // just set target-type nil if there is no need to do implicit-type-conversion for parameters
 func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T) {
 	if fs.TypeCheckFn == nil {
-		matched := make([]int32, 0, 4)   // function overload which can be matched directly
-		byCast := make([]int32, 0, 4)    // function overload which can be matched according to type cast
-		convertCost := make([]int, 0, 4) // records the cost of conversion for byCast
-		for i, f := range fs.Overloads {
-			c, cost := tryToMatch(args, f.Args)
-			switch c {
-			case matchedDirectly:
-				matched = append(matched, int32(i))
-			case matchedByConvert:
-				byCast = append(byCast, int32(i))
-				convertCost = append(convertCost, cost)
-			case matchedFailed:
-				continue
-			}
-		}
-		if len(matched) == 1 {
-			return matched[0], nil
-		} else if len(matched) == 0 && len(byCast) > 0 {
-			// choose the overload with the least number of conversions
-			min, index := math.MaxInt32, 0
-			for j := range convertCost {
-				if convertCost[j] < min {
-					index = j
-					min = convertCost[j]
-				}
-			}
-			return byCast[index], fs.Overloads[byCast[index]].Args
-		} else if len(matched) > 1 {
-			// if contains any scalar null as param, just return the first matched.
-			for j := range args {
-				if args[j] == ScalarNull {
-					return matched[0], nil
-				}
-			}
-			return tooManyFunctionsMatched, nil
-		}
-		return wrongFunctionParameters, nil
+		return normalTypeCheck(fs.Overloads, args)
 	}
 	return fs.TypeCheckFn(fs.Overloads, args)
+}
+
+func normalTypeCheck(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+	matched := make([]int32, 0, 4)   // function overload which can be matched directly
+	byCast := make([]int32, 0, 4)    // function overload which can be matched according to type cast
+	convertCost := make([]int, 0, 4) // records the cost of conversion for byCast
+	for i, f := range overloads {
+		c, cost := tryToMatch(inputs, f.Args)
+		switch c {
+		case matchedDirectly:
+			matched = append(matched, int32(i))
+		case matchedByConvert:
+			byCast = append(byCast, int32(i))
+			convertCost = append(convertCost, cost)
+		case matchedFailed:
+			continue
+		}
+	}
+	if len(matched) == 1 {
+		return matched[0], nil
+	} else if len(matched) == 0 && len(byCast) > 0 {
+		// choose the overload with the least number of conversions
+		min, index := math.MaxInt32, 0
+		for j := range convertCost {
+			if convertCost[j] < min {
+				index = j
+				min = convertCost[j]
+			}
+		}
+		return byCast[index], overloads[byCast[index]].Args
+	} else if len(matched) > 1 {
+		// if contains any scalar null as param, just return the first matched.
+		for j := range inputs {
+			if inputs[j] == ScalarNull {
+				return matched[0], nil
+			}
+		}
+		return tooManyFunctionsMatched, nil
+	}
+	return wrongFunctionParameters, nil
 }
 
 // Function is an overload of
