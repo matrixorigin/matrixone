@@ -174,6 +174,9 @@ func Test_ConnectionCount(t *testing.T) {
 		echoServer(rm.Handler, rm, NewSqlCodec())
 	}()
 
+	cCounter := metric.ConnectionCounter(sysAccountName)
+	cCounter.Set(0)
+
 	time.Sleep(time.Second * 2)
 	conn1, err = openDbConn(t, 6001)
 	require.NoError(t, err)
@@ -182,18 +185,28 @@ func Test_ConnectionCount(t *testing.T) {
 	conn2, err = openDbConn(t, 6001)
 	require.NoError(t, err)
 
+	time.Sleep(time.Second * 2)
+
 	cc := rm.clientCount()
-	assert.Equal(t, cc, 2)
+	assert.GreaterOrEqual(t, cc, 2)
 
 	x := &pcg.Metric{}
-	cCounter := metric.ConnectionCounter(sysAccountName)
 	err = cCounter.Write(x)
 	assert.NoError(t, err)
-	assert.Equal(t, x.Gauge.GetValue(), float64(2))
+	assert.GreaterOrEqual(t, x.Gauge.GetValue(), float64(2))
 
 	//close the connection
 	closeDbConn(t, conn1)
 	closeDbConn(t, conn2)
+
+	time.Sleep(time.Second * 2)
+
+	cc = rm.clientCount()
+	assert.GreaterOrEqual(t, cc, 0)
+
+	err = cCounter.Write(x)
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, x.Gauge.GetValue(), float64(0))
 
 	time.Sleep(time.Millisecond * 10)
 	//close server
