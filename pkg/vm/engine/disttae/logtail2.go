@@ -95,20 +95,19 @@ func UpdateCnLogTimestamp(newTimestamp timestamp.Timestamp) {
 // WaitUntilTxnTimeIsLegal check if txnTime is legal periodically. and return if legal.
 func WaitUntilTxnTimeIsLegal(ctx context.Context,
 	txnTime timestamp.Timestamp, level sql.IsolationLevel) error {
-	return nil
 
 	// if we support the ReadCommit level, we should set the txnTime as cnLogTailTimestamp.
-	//t := maxTimeToCheckTxnTimestamp
+	t := maxTimeToCheckTxnTimestamp
 	for {
-		//if t <= 0 {
-		//	// XXX I'm not sure if it is a good error info.
-		//	return moerr.NewTxnError(ctx, "start txn failed due to txn timestamp. please retry.")
-		//}
+		if t <= 0 {
+			// XXX I'm not sure if it is a good error info.
+			return moerr.NewTxnError(ctx, "start txn failed due to txn timestamp. please retry.")
+		}
 		if txnTimeIsLegal(txnTime) {
 			return nil
 		}
 		time.Sleep(periodToCheckTxnTimestamp)
-		//t -= periodToCheckTxnTimestamp
+		t -= periodToCheckTxnTimestamp
 	}
 }
 
@@ -364,32 +363,30 @@ func TryToGetTableLogTail(
 	ctx context.Context,
 	txnTimestamp timestamp.Timestamp,
 	dbId, tblId uint64) error {
-	firstTimeSubscribe := false
+	// If tbl was not subscribed, subscribe it.
+	// and poll to check whether we receive the txnTimestamp log.
 	if !getTableSubscribe(dbId, tblId) {
 		if err := cnLogTailSubscriber.subscribeTable(ctx,
 			api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 			return err
 		}
-		firstTimeSubscribe = true
-	}
-
-	e := cnLogTailSubscriber.engine
-	partitions := e.db.getPartitions(dbId, tblId)
-	// wait until each partition has the legal ts (ts >= txn ts).
-	for i := 0; i < len(partitions); i++ {
-		partition := partitions[i]
-		for {
-			partition.Lock()
-			if partition.ts.GreaterEq(txnTimestamp) {
+		e := cnLogTailSubscriber.engine
+		partitions := e.db.getPartitions(dbId, tblId)
+		// wait until each partition has the legal ts (ts >= txn ts).
+		for i := 0; i < len(partitions); i++ {
+			partition := partitions[i]
+			for {
+				partition.Lock()
+				if partition.ts.GreaterEq(txnTimestamp) {
+					partition.Unlock()
+					break
+				}
 				partition.Unlock()
-				break
+				// XX next day it should be triggered by response.
+				time.Sleep(periodToCheckLogTailReady)
+				continue
 			}
-			partition.Unlock()
-			time.Sleep(periodToCheckLogTailReady)
-			continue
 		}
-	}
-	if firstTimeSubscribe {
 		setTableSubscribe(dbId, tblId)
 	}
 	return nil
