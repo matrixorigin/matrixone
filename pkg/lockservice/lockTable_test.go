@@ -16,13 +16,14 @@ package lockservice
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRowLock(t *testing.T) {
@@ -93,67 +94,116 @@ func TestDeadLock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	option := LockOptions{
-		granularity: Row,
-		mode:        Exclusive,
-		policy:      Wait,
-	}
+	txn1 := []byte("txn1")
+	txn2 := []byte("txn2")
+	txn3 := []byte("txn3")
+	row1 := []byte{1}
+	row2 := []byte{2}
+	row3 := []byte{3}
+
+	mustAddTestLock(t, ctx, l, txn1, [][]byte{row1}, Row)
+	mustAddTestLock(t, ctx, l, txn2, [][]byte{row2}, Row)
+	mustAddTestLock(t, ctx, l, txn3, [][]byte{row3}, Row)
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+	maxDeadLockCount := uint32(1)
+	deadLockCounter := atomic.Uint32{}
+	go func() {
+		defer wg.Done()
+		maybeAddTestLockWithDeadlock(t, ctx, l, txn1, [][]byte{row2}, Row, &deadLockCounter, maxDeadLockCount)
+		require.NoError(t, l.Unlock(txn1))
+	}()
+	go func() {
+		defer wg.Done()
+		maybeAddTestLockWithDeadlock(t, ctx, l, txn2, [][]byte{row3}, Row, &deadLockCounter, maxDeadLockCount)
+		require.NoError(t, l.Unlock(txn2))
+	}()
+	go func() {
+		defer wg.Done()
+		maybeAddTestLockWithDeadlock(t, ctx, l, txn3, [][]byte{row1}, Row, &deadLockCounter, maxDeadLockCount)
+		require.NoError(t, l.Unlock(txn3))
+	}()
+	wg.Wait()
+}
+
+func TestDeadLockWithRange(t *testing.T) {
+	l := NewLockService().(*lockTable)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	txn1 := []byte("txn1")
 	txn2 := []byte("txn2")
 	txn3 := []byte("txn3")
-	row1 := []byte("row1")
-	row2 := []byte("row2")
-	row3 := []byte("row3")
+	row1 := []byte{1, 2}
+	row2 := []byte{3, 4}
+	row3 := []byte{5, 6}
 
-	ok, err := l.Lock(ctx, 1, [][]byte{row1}, txn1, option)
-	assert.NoError(t, err)
-	assert.True(t, ok)
-
-	ok, err = l.Lock(ctx, 1, [][]byte{row2}, txn2, option)
-	assert.NoError(t, err)
-	assert.True(t, ok)
-
-	ok, err = l.Lock(ctx, 1, [][]byte{row3}, txn3, option)
-	assert.NoError(t, err)
-	assert.True(t, ok)
+	mustAddTestLock(t, ctx, l, txn1, [][]byte{row1}, Range)
+	mustAddTestLock(t, ctx, l, txn2, [][]byte{row2}, Range)
+	mustAddTestLock(t, ctx, l, txn3, [][]byte{row3}, Range)
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	l.deadlockDetector.checkAddedFunc = func(txnID []byte) {
-		wg.Done()
+	wg.Add(3)
+	maxDeadLockCount := uint32(1)
+	var deadLockCounter atomic.Uint32
+	go func() {
+		defer wg.Done()
+		maybeAddTestLockWithDeadlock(t, ctx, l, txn1, [][]byte{row2}, Range, &deadLockCounter, maxDeadLockCount)
+		require.NoError(t, l.Unlock(txn1))
+	}()
+	go func() {
+		defer wg.Done()
+		maybeAddTestLockWithDeadlock(t, ctx, l, txn2, [][]byte{row3}, Range, &deadLockCounter, maxDeadLockCount)
+		require.NoError(t, l.Unlock(txn2))
+	}()
+	go func() {
+		defer wg.Done()
+		maybeAddTestLockWithDeadlock(t, ctx, l, txn3, [][]byte{row1}, Range, &deadLockCounter, maxDeadLockCount)
+		require.NoError(t, l.Unlock(txn3))
+	}()
+	wg.Wait()
+}
+
+func mustAddTestLock(t *testing.T,
+	ctx context.Context,
+	l *lockTable,
+	txnID []byte,
+	lock [][]byte,
+	granularity Granularity) {
+	maybeAddTestLockWithDeadlock(t,
+		ctx,
+		l,
+		txnID,
+		lock,
+		granularity,
+		nil,
+		0)
+}
+
+func maybeAddTestLockWithDeadlock(t *testing.T,
+	ctx context.Context,
+	l *lockTable,
+	txnID []byte,
+	lock [][]byte,
+	granularity Granularity,
+	deadLockCount *atomic.Uint32,
+	maxDeadLockCount uint32) {
+	t.Logf("%s try lock %+v", string(txnID), lock)
+	ok, err := l.Lock(ctx, 1, lock, txnID, LockOptions{
+		granularity: Row,
+		mode:        Exclusive,
+		policy:      Wait,
+	})
+	if err == ErrDeadlockDetectorClosed {
+		t.Logf("%s lock %+v, found dead lock", string(txnID), lock)
+		require.True(t, maxDeadLockCount >= deadLockCount.Add(1))
+		require.False(t, ok)
+		return
 	}
-	go func() {
-		// txn1 will wait txn2
-		fmt.Println("txn1 try get lock on row2")
-		ok, err = l.Lock(ctx, 1, [][]byte{row2}, txn1, option)
-		fmt.Println("txn1 get lock on row2")
-		assert.NoError(t, err)
-		assert.True(t, ok)
-	}()
-	wg.Wait()
-
-	wg.Add(1)
-	go func() {
-		// txn2 will wait txn3
-		fmt.Println("txn2 try get lock on row3")
-		ok, err = l.Lock(ctx, 1, [][]byte{row3}, txn2, option)
-		fmt.Println("txn2 get lock on row3")
-		assert.NoError(t, err)
-		assert.True(t, ok)
-	}()
-	wg.Wait()
-
-	// txn3 will wait txn1, dead lock
-	l.deadlockDetector.checkAddedFunc = nil
-	ok, err = l.Lock(ctx, 1, [][]byte{row1}, txn3, option)
-	assert.Equal(t, ErrDeadlockDetectorClosed, err)
-	assert.False(t, ok)
-
-	fmt.Println("txn3 unlock")
-	assert.NoError(t, l.Unlock(txn3))
-	// assert.NoError(t, l.Unlock(txn1))
-	// assert.NoError(t, l.Unlock(txn2))
+	t.Logf("%s lock %+v, ok", string(txnID), lock)
+	require.NoError(t, err)
+	require.True(t, ok)
 }
 
 func TestRangeLock(t *testing.T) {

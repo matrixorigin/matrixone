@@ -94,6 +94,8 @@ type LockService interface {
 	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (bool, error)
 	// Unlock release all locks associated with the transaction.
 	Unlock(txnID []byte) error
+	// Close close the lock service.
+	Close() error
 }
 
 // LockOptions options for lock

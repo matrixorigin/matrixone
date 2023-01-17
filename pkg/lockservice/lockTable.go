@@ -70,6 +70,18 @@ func (l *lockTable) Unlock(txnID []byte) error {
 		}
 		delete(l.locks[unsafeByteSliceToString(txnID)], tableID)
 	}
+	// The deadlock detector will hold the deadlocked transaction that is aborted
+	// to avoid the situation where the deadlock detection is interfered with by
+	// the abort transaction. When a transaction is unlocked, the deadlock detector
+	// needs to be notified to release memory.
+	l.deadlockDetector.txnClosed(txnID)
+	return nil
+}
+
+func (l *lockTable) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.deadlockDetector.close()
 	return nil
 }
 
@@ -118,13 +130,8 @@ func (l *lockTable) acquireRowLock(w *waiter, tableID uint64, row []byte, txnID 
 		if err := lock.waiter.add(w); err != nil {
 			return false, err
 		}
-		// add txn's waiting lock
-		l.waitingLocks[txnKey] = w
 
-		// add to deadlock detector to check dead lock
-		if err := l.deadlockDetector.check(txnID); err != nil {
-			panic(err)
-		}
+		l.waiterAdded(txnID, txnKey, w)
 		return false, nil
 	} else {
 		addRowLock(storage, txnID, row, w, mode)
@@ -133,21 +140,32 @@ func (l *lockTable) acquireRowLock(w *waiter, tableID uint64, row []byte, txnID 
 	return true, nil
 }
 
-func (l *lockTable) acquireRangeLock(waiter *waiter, tableID uint64, start, end, txnID []byte, mode LockMode) (bool, error) {
+func (l *lockTable) waiterAdded(txnID []byte, txnKey string, w *waiter) {
+	// add txn's waiting lock
+	l.waitingLocks[txnKey] = w
+	// add to deadlock detector to check dead lock
+	if err := l.deadlockDetector.check(txnID); err != nil {
+		panic(err)
+	}
+}
+
+func (l *lockTable) acquireRangeLock(w *waiter, tableID uint64, start, end, txnID []byte, mode LockMode) (bool, error) {
 	if bytes.Compare(start, end) >= 0 {
 		return false, moerr.NewInternalErrorNoCtx("lock error: start[%v] is greater than end[%v]", start, end)
 	}
+	txnKey := unsafeByteSliceToString(txnID)
 	storage := l.seqStorage[tableID]
 	key, lock, ok := storage.Seek(start)
 	if ok && bytes.Compare(key, end) <= 0 {
-		if err := lock.waiter.add(waiter); err != nil {
+		if err := lock.waiter.add(w); err != nil {
 			return false, err
 		}
+		l.waiterAdded(txnID, txnKey, w)
 		return false, nil
 	} else {
-		addRangeLock(storage, txnID, start, end, waiter, mode)
+		addRangeLock(storage, txnID, start, end, w, mode)
 	}
-	l.locks[unsafeByteSliceToString(txnID)][tableID] = append(l.locks[unsafeByteSliceToString(txnID)][tableID], start, end)
+	l.locks[txnKey][tableID] = append(l.locks[txnKey][tableID], start, end)
 	return true, nil
 }
 
