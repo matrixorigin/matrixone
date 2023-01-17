@@ -20,18 +20,12 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/util/ring"
-)
-
-const (
-	defaultMaxWaiters = 4096
 )
 
 var (
 	waiterPool = sync.Pool{
 		New: func() any {
-			return newWaiter(0)
+			return newWaiter()
 		},
 	}
 )
@@ -45,13 +39,10 @@ func acquireWaiter(txnID []byte) *waiter {
 	return w
 }
 
-func newWaiter(maxWaiters uint64) *waiter {
-	if maxWaiters == 0 {
-		maxWaiters = defaultMaxWaiters
-	}
+func newWaiter() *waiter {
 	w := &waiter{
 		c:       make(chan error, 1),
-		waiters: ring.NewRingBuffer[*waiter](maxWaiters),
+		waiters: newWaiterQueue(),
 	}
 	w.setFinalizer()
 	w.status.Store(waitNotifyStatus)
@@ -89,7 +80,7 @@ type waiter struct {
 	txnID    []byte
 	status   atomic.Int32
 	c        chan error
-	waiters  *ring.RingBuffer[*waiter]
+	waiters  waiterQueue
 	refCount atomic.Int32
 
 	// just used for testing
@@ -118,10 +109,7 @@ func (w *waiter) unref() {
 }
 
 func (w *waiter) add(waiter *waiter) error {
-	err := w.waiters.Put(waiter)
-	if err != nil {
-		return err
-	}
+	w.waiters.Put(waiter)
 	waiter.ref()
 	return nil
 }
