@@ -331,7 +331,8 @@ func mockWrapLogtail(table api.TableID) wrapLogtail {
 
 func mockLogtail(table api.TableID) logtail.TableLogtail {
 	return logtail.TableLogtail{
-		Table: &table,
+		CkpLocation: "checkpoint",
+		Table:       &table,
 	}
 }
 

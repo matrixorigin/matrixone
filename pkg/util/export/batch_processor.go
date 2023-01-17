@@ -87,9 +87,10 @@ func (b *bufferHolder) Start() {
 // Add call buffer.Add(), while bufferHolder is NOT readonly
 func (b *bufferHolder) Add(item batchpipe.HasName) {
 	b.mux.Lock()
-	b.buffer.Add(item)
+	buf := b.buffer
+	buf.Add(item)
 	b.mux.Unlock()
-	if b.buffer.ShouldFlush() {
+	if buf.ShouldFlush() {
 		b.signal(b)
 	}
 }

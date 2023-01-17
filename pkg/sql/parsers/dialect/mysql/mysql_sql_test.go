@@ -673,6 +673,12 @@ var (
 		input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
 		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 	}, {
+		input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 lines",
+		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+	}, {
+		input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 rows",
+		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+	}, {
 		input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
 		output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
 	}, {

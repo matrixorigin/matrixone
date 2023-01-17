@@ -206,19 +206,19 @@ create table t2(
 col1 json
 );
 show table_values from t2;
-[unknown result because it is related to issue#7527]
+max(col1)    min(col1)
 insert into t2 values();
-[unknown result because it is related to issue#7527]
 show table_values from t2;
-[unknown result because it is related to issue#7527]
+max(col1)    min(col1)
+null    null
 insert into t2 values(('{"x": 17}'));
-[unknown result because it is related to issue#7527]
 show table_values from t2;
-[unknown result because it is related to issue#7527]
+max(col1)    min(col1)
+null    null
 insert into t2 values (('{"x": [18]}'));
-[unknown result because it is related to issue#7527]
 show table_values from t2;
-[unknown result because it is related to issue#7527]
+max(col1)    min(col1)
+null    null
 create table t3(
 col1 decimal
 );
@@ -393,19 +393,19 @@ create table t2(
 col1 json
 );
 show table_values from t2;
-[unknown result because it is related to issue#7527]
+max(col1)    min(col1)
 insert into t2 values();
-[unknown result because it is related to issue#7527]
 show table_values from t2;
-[unknown result because it is related to issue#7527]
+max(col1)    min(col1)
+null    null
 insert into t2 values(('{"x": 17}'));
-[unknown result because it is related to issue#7527]
 show table_values from t2;
-[unknown result because it is related to issue#7527]
+max(col1)    min(col1)
+null    null
 insert into t2 values (('{"x": [18]}'));
-[unknown result because it is related to issue#7527]
 show table_values from t2;
-[unknown result because it is related to issue#7527]
+max(col1)    min(col1)
+null    null
 create table t3(
 col1 decimal
 );

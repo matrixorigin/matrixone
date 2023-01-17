@@ -1,1 +1,1 @@
-select message from system.log_info where extra like '%system-init%' and message="HAKeeper Timeout Configs";
+select message from system.log_info where extra like '%system-init%' and message="HAKeeper Timeout Configs" limit 1;
