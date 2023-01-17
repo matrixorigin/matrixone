@@ -1,0 +1,199 @@
+set time_zone = 'SYSTEM';
+drop table if exists t1;
+create table t1(col1 bool,col2 int,col3 varchar(100), col4 date,col5 datetime,col6 timestamp,col7 decimal,col8 float,col9 json,col10 text,col11 json,col12 bool);
+load data infile {'filepath'='$resources/load_data/jsonline_object.jl','format'='jsonline','jsondata'='object'} into table t1;
+select * from t1;
+delete from t1;
+load data infile {'filepath'='$resources/load_data/jsonline_array.jl','format'='jsonline','jsondata'='array'} into table t1;
+select * from t1;
+
+-- jsonline integer numbers,include null and extremum
+drop table if exists jsonline_t1;
+create table jsonline_t1(
+col1 tinyint,
+col2 smallint,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned
+);
+load data infile{'filepath'='$resources/load_data/integer_numbers_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t1;
+select * from jsonline_t1;
+-- into outfile
+select * from jsonline_t1 into outfile '$resources/into_outfile/json_outfile_integer_numbers_1.csv';
+select * from jsonline_t1;
+delete from jsonline_t1;
+load data infile '$resources/into_outfile/json_outfile_integer_numbers_1.csv' into table jsonline_t1 ignore 1 lines;
+select * from jsonline_t1;
+delete from jsonline_t1;
+load data infile{'filepath'='$resources/load_data/integer_numbers_1_array.jl','format'='jsonline','jsondata'='array'}into table jsonline_t1;
+select * from jsonline_t1;
+
+-- jsonline char varchar type and include Chinese and special symbols
+drop table if exists jsonline_t2;
+create table jsonline_t2(
+col1 char(225),
+col2 varchar(225),
+col3 text,
+col4 varchar(225)
+);
+load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t2;
+select * from jsonline_t2;
+-- into outfile
+select * from jsonline_t2 into outfile '$resources/into_outfile/json_outfile_char_varchar_1.csv';
+select * from jsonline_t2;
+delete from jsonline_t2;
+-- load data
+load data infile '$resources/into_outfile/json_outfile_char_varchar_1.csv' into table jsonline_t2 ignore 1 lines;
+select * from jsonline_t2;
+delete from jsonline_t2;
+load data infile{'filepath'='$resources/load_data/char_varchar_1_array.json','format'='jsonline','jsondata'='array'}into table jsonline_t2;
+select * from jsonline_t2;
+
+-- jsonline float type double type
+drop table if exists jsonline_t3;
+create table jsonline_t3(
+col1 float,
+col2 double,
+col3 decimal(38,16),
+col4 decimal(38,16)
+);
+load data infile{'filepath'='$resources/load_data/float_1.json','format'='jsonline','jsondata'='object'}into table jsonline_t3;
+select * from jsonline_t3;
+truncate table jsonline_t3;
+load data infile{'filepath'='$resources/load_data/float_1_array.jl','format'='jsonline','jsondata'='array'}into table jsonline_t3;
+select * from jsonline_t3;
+-- jsonline Time and Date type
+drop table if exists jsonline_t4;
+create table jsonline_t4(
+col1 date,
+col2 datetime(6),
+col3 timestamp(3),
+col4 bool
+);
+set time_zone = 'SYSTEM';
+load data infile{'filepath'='$resources/load_data/time_date_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t4;
+select * from jsonline_t4;
+-- into outfile
+select * from jsonline_t4 into outfile '$resources/into_outfile/json_outfile_time_date_1.csv';
+-- load data
+load data infile '$resources/into_outfile/json_outfile_time_date_1.csv' into table jsonline_t4 ignore 1 lines;
+select * from jsonline_t4;
+truncate table jsonline_t4;
+load data infile{'filepath'='$resources/load_data/time_date_1_array.jl','format'='jsonline','jsondata'='array'}into table jsonline_t4;
+select * from jsonline_t4;
+
+--Abnormal test: The json key and column do not correspond
+create table jsonline_t5 (a char(225),b varchar(225),c text,d varchar(225));
+load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t5;
+select * from jsonline_t5;
+drop table jsonline_t5;
+create table jsonline_t5 (col1 char(225),col2 varchar(225),col3 text,col4 varchar(225),col5 int default 10);
+load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t5;
+
+--The number of json keys is inconsistent with the number of columns
+create table jsonline_t6 (col1 char(225),col2 varchar(225),col4 varchar(225));
+load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t6;
+select * from jsonline_t6;
+
+--Abnormal test:filepath,format,jsondata,compression
+create table  jsonline_t7 (col1 char(225),col2 varchar(225),col3 text,col4 varchar(225));
+load data infile{'filepath'='$resources/load_data/char1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t7;
+load data infile{'filepath'='','format'='jsonline','jsondata'='object'}into table jsonline_t7;
+load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline','jsondata'='array'}into table jsonline_t7;
+load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline'}into table jsonline_t7;
+load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline','compression'='none','jsondata'='object'}into table jsonline_t7;
+load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline','compression'='gzip','jsondata'='object'}into table jsonline_t7;
+load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','jsondata'='object'}into table jsonline_t7;
+drop table jsonline_t7;
+create table jsonline_t7(col1 float,col2 double,col3 decimal(38,16),col4 decimal(38,16));
+load data infile{'filepath'='$resources/load_data/float_1.json','format'='csv'}into table jsonline_t7;
+load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t7;
+
+--column constraint test
+create table jsonline_t8(
+col1 tinyint not null primary key,
+col2 smallint,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned
+);
+load data infile{'filepath'='$resources/load_data/integer_numbers_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t8;
+drop table jsonline_t8;
+create table jsonline_t8(
+col1 tinyint default 10,
+col2 smallint,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned
+);
+load data infile{'filepath'='$resources/load_data/integer_numbers_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t8;
+drop table jsonline_t8;
+create table jsonline_t8(
+col1 tinyint primary key,
+col2 smallint,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned
+);
+load data infile{'filepath'='$resources/load_data/integer_numbers_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t8;
+drop table jsonline_t8;
+
+--compression:gzip,bzip2,lz4
+create table jsonline_gzip(col1 char(225),col2 varchar(225),col3 text,col4 varchar(225));
+load data infile{'filepath'='$resources/load_data/char_varchar_1_array.json.gz','format'='jsonline','compression'='gzip','jsondata'='array'}into table jsonline_gzip;
+select * from jsonline_gzip;
+truncate table jsonline_gzip;
+create table jsonline_bzip2(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned);
+load data infile{'filepath'='$resources/load_data/integer_numbers_1.jl.bz2','format'='jsonline','compression'='bz2','jsondata'='object'}into table jsonline_bzip2;
+select * from jsonline_bzip2;
+create table jsonline_lz4(col1 float,col2 double,col3 decimal(38,16),col4 decimal(38,16));
+load data infile{'filepath'='$resources/load_data/float_1.json.lz4','format'='jsonline','compression'='lz4','jsondata'='object'}into table jsonline_lz4;
+select * from jsonline_lz4;
+
+--load jsonline from s3
+create table jsonline_s3_01(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned);
+load data url s3option {'bucket'='bvtcase-data', 'filepath'='integer_numbers_1.jl', 'role_arn'='arn:aws:iam::141549464311:role/cross-account-s3', 'external_id'='30ffee3b_08c2_484c_b2cf_daf28147b111','format'='jsonline', 'jsondata'='object'} into table jsonline_s3_01;
+select * from jsonline_s3_01;
+truncate table jsonline_s3_01;
+load data url s3option {'bucket'='bvtcase-data', 'filepath'='integer_numbers_1_array.jl', 'role_arn'='arn:aws:iam::141549464311:role/cross-account-s3', 'external_id'='30ffee3b_08c2_484c_b2cf_daf28147b111','format'='jsonline', 'jsondata'='array'} into table jsonline_s3_01;
+select * from jsonline_s3_01;
+create table jsonline_s3_02(col1 char(225),col2 varchar(225),col3 text,col4 varchar(225));
+load data url s3option {'bucket'='bvtcase-data', 'filepath'='char_varchar_1_array.json', 'role_arn'='arn:aws:iam::141549464311:role/cross-account-s3', 'external_id'='30ffee3b_08c2_484c_b2cf_daf28147b111','format'='jsonline', 'jsondata'='array'} into table jsonline_s3_02;
+select * from jsonline_s3_02;
+truncate table jsonline_s3_02;
+load data url s3option {'bucket'='bvtcase-data', 'filepath'='char_varchar_1.jl', 'role_arn'='arn:aws:iam::141549464311:role/cross-account-s3', 'external_id'='30ffee3b_08c2_484c_b2cf_daf28147b111','format'='jsonline', 'jsondata'='object'}into table jsonline_s3_02;
+select * from jsonline_s3_02;
+create table jsonline_s3_03(col1 float,col2 double,col3 decimal(38,16),col4 decimal(38,16));
+load data url s3option {'bucket'='bvtcase-data', 'filepath'='float_1.json', 'role_arn'='arn:aws:iam::141549464311:role/cross-account-s3', 'external_id'='30ffee3b_08c2_484c_b2cf_daf28147b111','format'='jsonline', 'jsondata'='object'}into table jsonline_s3_03;
+select * from jsonline_s3_03;
+truncate table jsonline_s3_03;
+load data url s3option {'bucket'='bvtcase-data', 'filepath'='float_1_array.jl', 'role_arn'='arn:aws:iam::141549464311:role/cross-account-s3', 'external_id'='30ffee3b_08c2_484c_b2cf_daf28147b111','format'='jsonline', 'jsondata'='array'}into table jsonline_s3_03;
+select * from jsonline_t3;
+create table jsonline_s3_gzip(col1 char(225),col2 varchar(225),col3 text,col4 varchar(225));
+load data url s3option {'bucket'='bvtcase-data', 'filepath'='char_varchar_1_array.json.gz', 'role_arn'='arn:aws:iam::141549464311:role/cross-account-s3', 'external_id'='30ffee3b_08c2_484c_b2cf_daf28147b111','format'='jsonline', 'compression'='gzip','jsondata'='array'}into table jsonline_s3_gzip;
+select * from jsonline_s3_gzip;
+truncate table jsonline_s3_gzip;
+create table jsonline_s3_bzip2(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned);
+load data infile{'filepath'='$resources/load_data/integer_numbers_1.jl.bz2','format'='jsonline','compression'='bz2','jsondata'='object'}into table jsonline_s3_bzip2;
+select * from jsonline_s3_bzip2;
+create table jsonline_s3_lz4(col1 float,col2 double,col3 decimal(38,16),col4 decimal(38,16));
+load data infile{'filepath'='$resources/load_data/float_1.json.lz4','format'='jsonline','compression'='lz4','jsondata'='object'}into table jsonline_s3_lz4;
+select * from jsonline_s3_lz4;
+create table jsonline_s3_auto(col1 float,col2 double,col3 decimal(38,16),col4 decimal(38,16));
+load data infile{'filepath'='$resources/load_data/float_1.json.lz4','format'='jsonline','compression'='auto','jsondata'='object'}into table jsonline_s3_lz4;
+select * from jsonline_s3_lz4;
+create table jsonline_s3_none(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned);
+load data url s3option {'bucket'='bvtcase-data', 'filepath'='integer_numbers_1.jl', 'role_arn'='arn:aws:iam::141549464311:role/cross-account-s3', 'external_id'='30ffee3b_08c2_484c_b2cf_daf28147b111','format'='jsonline','compression'='none', 'jsondata'='object'} into table jsonline_s3_01;
+select * from jsonline_s3_none;
