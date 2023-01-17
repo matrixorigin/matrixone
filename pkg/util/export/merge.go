@@ -682,6 +682,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		ts := time.Now()
 		logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameETLMerge)
 		logger.Info(fmt.Sprintf("start merge '%s' at %v", args, ts))
+		defer logger.Info(fmt.Sprintf("done merge '%s'", args))
 
 		elems := strings.Split(string(args), ParamSeparator)
 		id := elems[0]

@@ -1,6 +1,6 @@
 
 -- this case only success in linux, not in drawin
-create account `query_tae_table` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+create account if not exists `query_tae_table` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 
 -- @session:id=1&user=query_tae_table:admin:accountadmin&password=123456
 drop database if exists `query_tae_table`;

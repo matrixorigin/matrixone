@@ -154,6 +154,7 @@ func Shutdown(ctx context.Context) error {
 			return err
 		}
 	}
+	logutil.Info("Shutdown trace complete.")
 	return nil
 }
 

@@ -1,4 +1,4 @@
-create account `query_tae_table` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+create account if not exists `query_tae_table` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 
 drop database if exists `query_tae_table`;
 
