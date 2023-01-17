@@ -116,6 +116,14 @@ func (res *internalExecResult) StringValueByName(ctx context.Context, ridx uint6
 	}
 }
 
+func (res *internalExecResult) Float64ValueByName(ctx context.Context, ridx uint64, col string) (float64, error) {
+	if cidx, err := res.resultSet.columnName2Index(ctx, col); err != nil {
+		return 0.0, err
+	} else {
+		return res.resultSet.GetFloat64(ctx, ridx, cidx)
+	}
+}
+
 func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
 	ie.Lock()
 	defer ie.Unlock()
@@ -156,6 +164,8 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	}
 	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true)
 	sess.SetRequestContext(ctx)
+	t, _ := GetTenantInfo(ctx, "internal")
+	sess.SetTenantInfo(t)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
 	return sess
