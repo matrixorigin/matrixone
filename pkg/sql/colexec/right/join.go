@@ -56,20 +56,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				ap.Free(proc, true)
 				return false, err
 			}
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
-
-				for {
-					bat := <-proc.Reg.MergeReceivers[0].Ch
-					if bat == nil {
-						break
-					} else {
-						bat.Clean(proc.Mp())
-					}
-				}
-				ap.Free(proc, false)
-				proc.SetInputBatch(nil)
-				return true, nil
-			}
 			ctr.state = Probe
 
 		case Probe:
@@ -82,6 +68,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 
+			if ctr.bat == nil || ctr.bat.Length() == 0 {
+				bat.Clean(proc.Mp())
+				continue
+			}
+
 			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
 				ap.Free(proc, true)
 				return false, err
@@ -90,7 +81,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			return false, nil
 
 		default:
-			ctr.emptyProbe(ap, proc, anal, isFirst, isLast)
+			if ctr.bat == nil || ctr.bat.Length() == 0 {
+				proc.SetInputBatch(nil)
+			} else {
+				ctr.emptyProbe(ap, proc, anal, isFirst, isLast)
+			}
 			ap.Free(proc, false)
 			return true, nil
 		}
