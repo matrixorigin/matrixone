@@ -1,9 +1,23 @@
 create account `query_metric` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 
-show databases
-
-show databases
-
+show databases;
+Database
+mo_task
+information_schema
+mysql
+mo_catalog
+system_metrics
+system
+query_metric
+show databases;
+Database
+mo_task
+information_schema
+mysql
+mo_catalog
+system_metrics
+system
+query_metric
 select sleep(16);
 sleep(16)
 0

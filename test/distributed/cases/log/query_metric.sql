@@ -4,11 +4,11 @@
 create account `query_metric` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 
 -- @session:id=1&user=query_metric:admin:accountadmin&password=123456
-show databases
+show databases;
 -- @session
 
 -- @session:id=2&user=query_metric:admin:accountadmin&password=123456
-show databases
+show databases;
 -- @session
 
 
