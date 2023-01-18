@@ -10,6 +10,7 @@ select '*' like '*' as result;
 select '**' like '**' as result;
 select '**' like '*_' as result;
 select '**' like '*^' as result;
+select '(_a)' like '(_a)';
 drop table if exists t1;
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
