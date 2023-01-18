@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -415,7 +414,7 @@ var (
 	}
 )
 
-func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor, autoIncrCaches defines.AutoIncrCaches) error {
+func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
 	initMysqlTables(ctx, ieFactory, motrace.FileService)
 	initInformationSchemaTables(ctx, ieFactory, motrace.FileService)
 	return nil

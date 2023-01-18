@@ -226,7 +226,7 @@ func (s *service) registerExecutorsLocked() {
 			if err := frontend.InitSysTenant(moServerCtx, s.mo.GetRoutineManager().GetAutoIncrCache()); err != nil {
 				return err
 			}
-			if err := sysview.InitSchema(moServerCtx, ieFactory, s.mo.GetRoutineManager().GetAutoIncrCache()); err != nil {
+			if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
 			}
 			if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
