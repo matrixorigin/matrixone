@@ -135,31 +135,21 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			return err
 		}
 		exprVals := vector.MustTCols[bool](vec)
-		if len(exprVals) == 1 {
-			if vec.Nsp.Contains(0) {
-				rbat.Vecs[markPos].Append(false, true, proc.Mp())
-			} else if exprVals[0] {
-				rbat.Vecs[markPos].Append(true, false, proc.Mp())
-			} else {
-				rbat.Vecs[markPos].Append(false, false, proc.Mp())
+		hasTrue := false
+		hasNull := false
+		for j := range exprVals {
+			if vec.Nsp.Contains(uint64(j)) {
+				hasNull = true
+			} else if exprVals[j] {
+				hasTrue = true
 			}
+		}
+		if hasTrue {
+			rbat.Vecs[markPos].Append(true, false, proc.Mp())
+		} else if hasNull {
+			rbat.Vecs[markPos].Append(false, true, proc.Mp())
 		} else {
-			hasTrue := false
-			hasNull := false
-			for j := range exprVals {
-				if vec.Nsp.Contains(uint64(j)) {
-					hasNull = true
-				} else if exprVals[j] {
-					hasTrue = true
-				}
-			}
-			if hasTrue {
-				rbat.Vecs[markPos].Append(true, false, proc.Mp())
-			} else if hasNull {
-				rbat.Vecs[markPos].Append(false, true, proc.Mp())
-			} else {
-				rbat.Vecs[markPos].Append(false, false, proc.Mp())
-			}
+			rbat.Vecs[markPos].Append(false, false, proc.Mp())
 		}
 		vec.Free(proc.Mp())
 	}
