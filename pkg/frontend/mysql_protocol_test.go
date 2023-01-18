@@ -33,13 +33,11 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -164,46 +162,12 @@ func TestKIll(t *testing.T) {
 	sql1 := "select connection_id();"
 	var sql2, sql3, sql4 string
 	noResultSet := make(map[string]bool)
-
-	newMockWrapper := func(ses *Session, sql string, stmt tree.Statement, proc *process.Process) ComputationWrapper {
-		var mrs *MysqlResultSet
-		var columns []interface{}
-		if sql == sql1 {
-			mrs = newMrsForConnectionId([][]interface{}{
-				{ses.GetConnectionID()},
-			})
-			for _, col := range mrs.Columns {
-				columns = append(columns, col)
-			}
-		} else if _, ok := noResultSet[sql]; ok {
-			//no result set
-		} else {
-			panic(fmt.Sprintf("there is no mysqlResultset for the sql %s", sql))
-		}
-		uuid, _ := uuid.NewUUID()
-		runner := mock_frontend.NewMockComputationRunner(ctrl)
-		runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) error {
-			proto := ses.GetMysqlProtocol()
-			if mrs != nil {
-				err = proto.SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount())
-				if err != nil {
-					logutil.Errorf("flush error %v", err)
-					return err
-				}
-			}
-			return nil
-		}).AnyTimes()
-		mcw := mock_frontend.NewMockComputationWrapper(ctrl)
-		mcw.EXPECT().GetAst().Return(stmt).AnyTimes()
-		mcw.EXPECT().GetProcess().Return(proc).AnyTimes()
-		mcw.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
-		mcw.EXPECT().GetColumns().Return(columns, nil).AnyTimes()
-		mcw.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
-		mcw.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
-		mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()
-		mcw.EXPECT().RecordExecPlan(gomock.Any()).Return(nil).AnyTimes()
-		mcw.EXPECT().GetLoadTag().Return(false).AnyTimes()
-		return mcw
+	resultSet := make(map[string]genMrs)
+	resultSet[sql1] = func(ses *Session) *MysqlResultSet {
+		mrs := newMrsForConnectionId([][]interface{}{
+			{ses.GetConnectionID()},
+		})
+		return mrs
 	}
 
 	var wrapperStubFunc = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
@@ -225,7 +189,7 @@ func TestKIll(t *testing.T) {
 		}
 
 		for _, stmt := range stmts {
-			cw = append(cw, newMockWrapper(ses, sql, stmt, proc))
+			cw = append(cw, newMockWrapper(ctrl, ses, resultSet, noResultSet, sql, stmt, proc))
 		}
 		return cw, nil
 	}
