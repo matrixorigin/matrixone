@@ -501,7 +501,8 @@ select dt, format(dt, -1) from t order by dt desc;
 invalid argument function format, bad value [DATETIME BIGINT]
 select dt, format(dt, length("123456789")) from t order by dt desc;
 invalid argument function format, bad value [DATETIME BIGINT]
-drop table t;drop table if exists t;
+drop table t;
+drop table if exists t;
 create table t(
 i int,
 b bigint,
