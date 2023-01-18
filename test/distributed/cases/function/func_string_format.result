@@ -477,3 +477,28 @@ SELECT format(c2, 5) FROM format_05 join format_06 ON format_05.c1 = format_06.i
 format(c2, 5)
 222.00000
 111.00000
+drop table if exists t;
+create table t(
+d date,
+dt datetime,
+primary key (d)
+);
+insert into t values ('2022-12-04', '2022-12-04 00:03:36');
+insert into t values ('2023-11-11', '2023-11-11 03:00:48');
+select d, format(d, 1) from t order by d desc;
+invalid argument function format, bad value [DATE BIGINT]
+select d, format(d, 0) from t order by d desc;
+invalid argument function format, bad value [DATE BIGINT]
+select d, format(d, -1) from t order by d desc;
+invalid argument function format, bad value [DATE BIGINT]
+select d, format(d, length("123456789")) from t order by d desc;
+invalid argument function format, bad value [DATE BIGINT]
+select dt, format(dt, 1) from t order by dt desc;
+invalid argument function format, bad value [DATETIME BIGINT]
+select dt, format(dt, 0) from t order by dt desc;
+invalid argument function format, bad value [DATETIME BIGINT]
+select dt, format(dt, -1) from t order by dt desc;
+invalid argument function format, bad value [DATETIME BIGINT]
+select dt, format(dt, length("123456789")) from t order by dt desc;
+invalid argument function format, bad value [DATETIME BIGINT]
+drop table t;

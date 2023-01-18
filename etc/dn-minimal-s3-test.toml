@@ -33,6 +33,7 @@ key-prefix = "s3 key preifx"
 [fileservice.cache]
 memory-capacity = "128MB"
 disk-capacity = "1GB"
+disk-path = "mo-data/file-service-cache"
 
 [[fileservice]]
 name = "ETL"
