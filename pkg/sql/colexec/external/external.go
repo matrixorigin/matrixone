@@ -712,12 +712,13 @@ func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, err
 }
 
 func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) (*batch.Batch, error) {
+	bat := makeBatch(param, 0, proc.Mp())
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
-		return nil, nil
+		return bat, nil
 	}
 
 	rows := 0
-	bat := makeBatch(param, 0, proc.Mp())
+
 	idxs := make([]uint16, len(param.Attrs))
 	meta := param.Zoneparam.bs[param.Zoneparam.offset].GetMeta()
 	header := meta.GetHeader()
@@ -859,7 +860,8 @@ func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, ob
 		}
 	}
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
-		return nil, nil
+		bat := makeBatch(param, 0, proc.Mp())
+		return bat, nil
 	}
 
 	if param.Filter.exprMono {
@@ -920,6 +922,7 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
 			param.Fileparam.End = true
 		}
+		param.Zoneparam.offset = 0
 	}
 	return bat, nil
 }
