@@ -37,6 +37,9 @@ import (
 
 const (
 	LogtailServiceRPCName = "logtail-push-rpc"
+
+	// minimal duration to detect slow morpc stream
+	minStreamPoisionTime = 5 * time.Millisecond
 )
 
 // TableID is type for api.TableID
@@ -90,12 +93,6 @@ type wrapLogtail struct {
 	tail logtail.TableLogtail
 }
 
-// publishment describes a batch of logtail.
-type publishment struct {
-	from, to timestamp.Timestamp
-	wraps    []wrapLogtail
-}
-
 // sessionError describes error when writing via morpc client session.
 type sessionError struct {
 	session *Session
@@ -130,7 +127,6 @@ type LogtailServer struct {
 	subscribed *TableStacker
 
 	errChan chan sessionError // errChan has no buffer in order to improve sensitivity.
-	pubChan chan publishment
 	subChan chan subscription
 
 	logtail taelogtail.Logtailer
@@ -155,7 +151,6 @@ func NewLogtailServer(
 		waterline:  NewWaterliner(rt.Clock()),
 		subscribed: NewTableStacker(),
 		errChan:    make(chan sessionError),
-		pubChan:    make(chan publishment),
 		subChan:    make(chan subscription, 10),
 		logtail:    logtail,
 	}
@@ -318,7 +313,11 @@ func (s *LogtailServer) onUnsubscription(
 
 // streamPoisionTime returns poision duration for stream.
 func (s *LogtailServer) streamPoisionTime() time.Duration {
-	return s.cfg.LogtailCollectInterval/2 + 1
+	duration := s.cfg.LogtailCollectInterval * 2
+	if duration < minStreamPoisionTime {
+		duration = minStreamPoisionTime
+	}
+	return duration
 }
 
 // NotifySessionError notifies session manager with session error.
@@ -362,6 +361,10 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 func (s *LogtailServer) logtailSender(ctx context.Context) {
 	logger := s.logger
 
+	publishTicker := time.NewTicker(s.cfg.LogtailCollectInterval)
+	defer publishTicker.Stop()
+
+	risk := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -421,44 +424,8 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 			subscriptionFunc(sub)
 
-		case pub, ok := <-s.pubChan:
-			if !ok {
-				logger.Info("publishment channel closed")
-				return
-			}
-
-			// logger.Debug("publish additional logtail", zap.Any("From", pub.from.String()), zap.Any("To", pub.to.String()))
-
-			// publish additional logtail for all subscribed tables
-			for _, session := range s.ssmgr.ListSession() {
-				if err := session.Publish(ctx, pub.from, pub.to, pub.wraps...); err != nil {
-					logger.Error("fail to publish additional logtail", zap.Error(err), zap.Uint64("stream-id", session.stream.streamID))
-					continue
-				}
-			}
-
-			// update waterline for all subscribed tables
-			s.waterline.Advance(pub.to)
-		}
-	}
-}
-
-// collector collects logtail by interval.
-func (s *LogtailServer) collector(ctx context.Context) {
-	logger := s.logger
-
-	ticker := time.NewTicker(s.cfg.LogtailCollectInterval)
-	defer ticker.Stop()
-
-	risk := 0
-	for {
-		select {
-		case <-ctx.Done():
-			logger.Error("stop logtail collector", zap.Error(ctx.Err()))
-			return
-
-		case <-ticker.C:
-			collectFunc := func() {
+		case <-publishTicker.C:
+			publishmentFunc := func() {
 				defer func() {
 					if risk >= s.cfg.MaxLogtailFetchFailure {
 						panic("fail to fetch additional logtail many times")
@@ -484,15 +451,21 @@ func (s *LogtailServer) collector(ctx context.Context) {
 					wraps = append(wraps, wrapLogtail{id: t.id, tail: tail})
 				}
 
-				select {
-				case <-ctx.Done():
-					logger.Error("fail to convey additional logtail", zap.Error(ctx.Err()))
-				case s.pubChan <- publishment{from: from, to: to, wraps: wraps}:
-					risk = 0
+				logger.Debug("publish additional logtail", zap.Any("From", from.String()), zap.Any("To", to.String()))
+
+				// publish additional logtail for all subscribed tables
+				for _, session := range s.ssmgr.ListSession() {
+					if err := session.Publish(ctx, from, to, wraps...); err != nil {
+						logger.Error("fail to publish additional logtail", zap.Error(err), zap.Uint64("stream-id", session.stream.streamID))
+						continue
+					}
 				}
+
+				// update waterline for all subscribed tables
+				s.waterline.Advance(to)
 			}
 
-			collectFunc()
+			publishmentFunc()
 		}
 	}
 }
@@ -515,11 +488,6 @@ func (s *LogtailServer) Start() error {
 
 	if err := s.stopper.RunNamedTask("logtail sender", s.logtailSender); err != nil {
 		logger.Error("fail to start logtail sender", zap.Error(err))
-		return err
-	}
-
-	if err := s.stopper.RunNamedTask("logtail collector", s.collector); err != nil {
-		logger.Error("fail to start logtail collector", zap.Error(err))
 		return err
 	}
 

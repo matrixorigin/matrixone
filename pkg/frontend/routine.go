@@ -50,21 +50,25 @@ type Routine struct {
 
 	cancelled atomic.Bool
 
-	connectionBeCounted bool
+	connectionBeCounted atomic.Bool
 
 	mu sync.Mutex
 }
 
-func (rt *Routine) setConnectionBeCounted(b bool) {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	rt.connectionBeCounted = b
+func (rt *Routine) increaseCount(counter func()) {
+	if rt.connectionBeCounted.CompareAndSwap(false, true) {
+		if counter != nil {
+			counter()
+		}
+	}
 }
 
-func (rt *Routine) isConnectionBeCounted() bool {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	return rt.connectionBeCounted
+func (rt *Routine) decreaseCount(counter func()) {
+	if rt.connectionBeCounted.CompareAndSwap(true, false) {
+		if counter != nil {
+			counter()
+		}
+	}
 }
 
 func (rt *Routine) setCancelled(b bool) bool {
@@ -157,10 +161,9 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses.SetRequestContext(tenantCtx)
 	executor.SetSession(rt.getSession())
 
-	if !rt.isConnectionBeCounted() {
-		rt.setConnectionBeCounted(true)
+	rt.increaseCount(func() {
 		metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Inc()
-	}
+	})
 
 	if resp, err = executor.ExecRequest(tenantCtx, ses, req); err != nil {
 		logErrorf(ses.GetConciseProfile(), "rt execute request failed. error:%v \n", err)
@@ -186,9 +189,9 @@ func (rt *Routine) handleRequest(req *Request) error {
 	quit = quit || rt.isCancelled()
 
 	if quit {
-		if rt.isConnectionBeCounted() {
+		rt.decreaseCount(func() {
 			metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Dec()
-		}
+		})
 		defer ses.Dispose()
 
 		//ensure cleaning the transaction
