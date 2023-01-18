@@ -15,8 +15,9 @@
 package agg
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type decimal64Slice []types.Decimal64
@@ -144,7 +145,7 @@ func (m *Median[T]) Merge(xIndex int64, yIndex int64, _ float64, _ float64, xEmp
 		if !sort.IsSorted(m.Vals[xIndex]) {
 			sort.Sort(m.Vals[xIndex])
 		}
-		merge[T](m.Vals[xIndex], yM.Vals[yIndex], newData, func(a, b T) bool { return a < b })
+		merge(m.Vals[xIndex], yM.Vals[yIndex], newData, func(a, b T) bool { return a < b })
 		m.Vals[xIndex] = newData
 		return 0, false
 	}
