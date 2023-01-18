@@ -25,6 +25,8 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
+const DefaultTenantMoAdmin = "sys:internal:moadmin"
+
 func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	if opts.Database != nil {
 		sess.SetDatabaseName(*opts.Database)
@@ -164,7 +166,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	}
 	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true)
 	sess.SetRequestContext(ctx)
-	t, _ := GetTenantInfo(ctx, "internal")
+	t, _ := GetTenantInfo(ctx, DefaultTenantMoAdmin)
 	sess.SetTenantInfo(t)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -37,7 +38,7 @@ const (
 	StorageUsageCronTask     = "StorageUsage"
 	StorageUsageTaskCronExpr = ExprEvery05Min
 
-	ExprEvery05Min = "0 */5 * * * *"
+	ExprEvery05Min = "0 */1 * * * *"
 	ParamSeparator = " "
 )
 
@@ -72,12 +73,31 @@ func GetMetricStorageUsageExecutor(sqlExecutor func() ie.InternalExecutor) func(
 }
 
 const (
-	IntervalDuration = time.Minute
-
 	ShowAccountSQL    = "SHOW ACCOUNTS;"
 	ColumnAccountName = "ACCOUNT_NAME"
 	ColumnSize        = "SIZE"
 )
+
+var gUpdateStorageUsageInterval = defaultUpdateInterval()
+
+func defaultUpdateInterval() *atomic.Int64 {
+	v := new(atomic.Int64)
+	v.Store(int64(time.Minute))
+	return v
+}
+
+func SetUpdateStorageUsageInterval(interval time.Duration) {
+	gUpdateStorageUsageInterval.Store(int64(interval))
+}
+
+func GetUpdateStorageUsageInterval() time.Duration {
+	return time.Duration(gUpdateStorageUsageInterval.Load())
+}
+
+var QuitableWait = func(ctx context.Context) (*time.Ticker, error) {
+	next := time.NewTicker(GetUpdateStorageUsageInterval())
+	return next, nil
+}
 
 func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
@@ -85,7 +105,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
 	defer logger.Info("finished.")
 
-	next := time.NewTicker(time.Minute)
+	next := time.NewTicker(time.Second)
 
 	for {
 		select {
@@ -129,7 +149,10 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		}
 
 		// next round
-		next = time.NewTicker(IntervalDuration)
+		next, err = QuitableWait(ctx)
+		if err != nil {
+			return err
+		}
 		logger.Info("wait next round")
 	}
 }
