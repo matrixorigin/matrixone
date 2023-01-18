@@ -337,7 +337,7 @@ func writeBatch(ctx context.Context,
 	bat *batch.Batch) (bool, error) {
 
 	if n.HasAutoCol {
-		if err := colexec.ChooseUpdateInsertBatch(n.Engine, ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
+		if err := colexec.UpdateInsertBatch(n.Engine, ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
 			return false, err
 		}
 	}

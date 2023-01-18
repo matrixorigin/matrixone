@@ -26,93 +26,25 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type RoutineManager struct {
-	mu            sync.Mutex
-	ctx           context.Context
-	clients       map[goetty.IOSession]*Routine
-	pu            *config.ParameterUnit
-	skipCheckUser bool
-	tlsConfig     *tls.Config
-	autocaches    map[string]AutoIncrCache
+	mu             sync.Mutex
+	ctx            context.Context
+	clients        map[goetty.IOSession]*Routine
+	pu             *config.ParameterUnit
+	skipCheckUser  bool
+	tlsConfig      *tls.Config
+	autoIncrCaches map[string]defines.AutoIncrCache
 }
 
-type AutoIncrCache struct {
-	curNum uint64
-	maxNum uint64
-	step   uint64
-}
-
-func (rm *RoutineManager) DeleteCache(name string) {
+func (rm *RoutineManager) GetAutoIncrCache() defines.AutoIncrCaches {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	_, ok := rm.autocaches[name]
-	if ok {
-		delete(rm.autocaches, name)
-	}
-}
-
-func (rm *RoutineManager) RenameCache(oldname, newname string) {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-	_, ok := rm.autocaches[oldname]
-	if ok {
-		rm.autocaches[newname] = AutoIncrCache{rm.autocaches[oldname].curNum,
-			rm.autocaches[oldname].maxNum, rm.autocaches[oldname].step}
-		delete(rm.autocaches, oldname)
-	}
-}
-
-func (rm *RoutineManager) GetNextCacheId(colDefs []*plan.ColDef, ctx context.Context, param *colexec.AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-	offset, step := make([]uint64, 0), make([]uint64, 0)
-	for i, col := range colDefs {
-		if !col.Typ.AutoIncr {
-			continue
-		}
-
-		name := fmt.Sprintf("%d_%s", tableID, col.Name)
-		autoincrcache, ok := rm.autocaches[name]
-		// Not cached yet or the cache is ran out.
-		// Need new txn for read from the table.
-		if !ok || autoincrcache.curNum >= autoincrcache.maxNum {
-			// Need return maxNum for correction.
-			cur := uint64(0)
-			if ok {
-				cur = autoincrcache.curNum
-			}
-			curNum, maxNum, stp, err := colexec.GetNextOneCache(ctx, param, bat, tableID, i, name, uint64(cacheSize), cur)
-			if err != nil {
-				return nil, nil, err
-			}
-			rm.autocaches[name] = AutoIncrCache{curNum, maxNum, stp}
-		}
-
-		offset = append(offset, rm.autocaches[name].curNum)
-		step = append(step, rm.autocaches[name].step)
-
-		// Here got the most recent id in the cache.
-		// Need compare witch vec and get the maxNum.
-		maxNum, err := colexec.GetMax(param, bat, i, rm.autocaches[name].step, 1, rm.autocaches[name].curNum)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		param.SetLastInsertID(maxNum)
-
-		// Update the caches.
-		rm.autocaches[name] = AutoIncrCache{maxNum,
-			rm.autocaches[name].maxNum, rm.autocaches[name].step}
-	}
-
-	return offset, step, nil
+	return defines.AutoIncrCaches{Mu: &rm.mu, AutoIncrCaches: rm.autoIncrCaches}
 }
 
 func (rm *RoutineManager) SetSkipCheckUser(b bool) {
@@ -176,8 +108,8 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.SetFromRealUser(true)
 	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
 
-	// Add routine manager in session structure.
-	ses.SetRoutineManager(rm)
+	// Add  autoIncrCaches in session structure.
+	ses.SetAutoIncrCaches(defines.AutoIncrCaches{Mu: &rm.mu, AutoIncrCaches: rm.autoIncrCaches})
 
 	routine.setSession(ses)
 	pro.SetSession(ses)
@@ -384,7 +316,7 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineM
 	}
 
 	// Initialize auto incre cache.
-	rm.autocaches = make(map[string]AutoIncrCache)
+	rm.autoIncrCaches = make(map[string]defines.AutoIncrCache)
 
 	if pu.SV.EnableTls {
 		err := initTlsConfig(rm, pu.SV)

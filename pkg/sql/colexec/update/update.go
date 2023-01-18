@@ -106,7 +106,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			}
 
 			if p.HasAutoCol[i] {
-				if err := colexec.ChooseUpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
+				if err := colexec.UpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
 					tmpBat.Clean(proc.Mp())
 					return false, err
 				}

@@ -209,10 +209,10 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		convey.So(exists, convey.ShouldBeTrue)
 		convey.So(err, convey.ShouldBeNil)
 
-		// A mock rm.
-		rm := &RoutineManager{}
+		// A mock autoIncrCaches.
+		aic := defines.AutoIncrCaches{}
 
-		err = InitSysTenant(ctx, rm)
+		err = InitSysTenant(ctx, aic)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

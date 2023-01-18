@@ -53,10 +53,9 @@ func (aip *AutoIncrParam) SetLastInsertID(id uint64) {
 }
 
 type Ses interface {
-	GetNextCacheId([]*plan.ColDef, context.Context, *AutoIncrParam, *batch.Batch, uint64) ([]uint64, []uint64, error)
-	DeleteCache(string)
-	RenameCache(string, string)
-	Iscached() bool
+	GetNextAutoIncrNum([]*plan.ColDef, context.Context, *AutoIncrParam, *batch.Batch, uint64) ([]uint64, []uint64, error)
+	DeleteAutoIncrCache(string)
+	RenameAutoIncrCache(string, string)
 }
 
 func GetNextOneCache(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, tableID uint64, i int, name string, cachesize, curNum uint64) (uint64, uint64, uint64, error) {
@@ -85,29 +84,7 @@ loop:
 	return d, m, s, nil
 }
 
-func updateInsertBatch1(e engine.Engine, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID uint64, dbName, tblName string) error {
-	incrParam := &AutoIncrParam{
-		eg:      e,
-		ctx:     ctx,
-		proc:    proc,
-		colDefs: ColDefs,
-		dbName:  dbName,
-		tblName: tblName,
-	}
-	ses := proc.SessionInfo.Ses.(Ses)
-
-	offset, step, err := ses.GetNextCacheId(ColDefs, ctx, incrParam, bat, tableID)
-	if err != nil {
-		return err
-	}
-
-	if err = updateBatchImpl(ctx, ColDefs, bat, offset, step); err != nil {
-		return err
-	}
-	return nil
-}
-
-func updateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID uint64, dbName, tblName string) error {
+func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID uint64, dbName, tblName string) error {
 	incrParam := &AutoIncrParam{
 		eg:      e,
 		ctx:     ctx,
@@ -117,7 +94,9 @@ func updateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 		tblName: tblName,
 	}
 
-	offset, step, err := getRangeFromAutoIncrTable(incrParam, bat, tableID)
+	ses := proc.SessionInfo.Session.(Ses)
+
+	offset, step, err := ses.GetNextAutoIncrNum(ColDefs, ctx, incrParam, bat, tableID)
 	if err != nil {
 		return err
 	}
@@ -126,13 +105,6 @@ func updateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 		return err
 	}
 	return nil
-}
-
-func ChooseUpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID uint64, dbName, tblName string) error {
-	if proc.SessionInfo.Ses.(Ses).Iscached() {
-		return updateInsertBatch1(e, ctx, proc, ColDefs, bat, tableID, dbName, tblName)
-	}
-	return updateInsertBatch(e, ctx, proc, ColDefs, bat, tableID, dbName, tblName)
 }
 
 func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch, dbName, tblName string) error {
@@ -147,43 +119,43 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 		return err
 	}
 
-	return ChooseUpdateInsertBatch(e, ctx, proc, ColDefs, bat, rel.GetTableID(ctx), dbName, tblName)
+	return UpdateInsertBatch(e, ctx, proc, ColDefs, bat, rel.GetTableID(ctx), dbName, tblName)
 }
 
 // get autoincr columns values.  This function updates the auto incr table.
 // multiple txn may cause a conflicts, but we retry off band transactions.
-func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
-	var err error
-	loopCnt := 0
-loop:
-	// if fail 100 times, too bad, really unlucky one get aborted anyway.
-	loopCnt += 1
-	if loopCnt >= 100 {
-		return nil, nil, err
-	}
-	txn, err := NewTxn(param.eg, param.proc, param.ctx)
-	if err != nil {
-		goto loop
-	}
-	offset, step := make([]uint64, 0), make([]uint64, 0)
-	for i, col := range param.colDefs {
-		if !col.Typ.AutoIncr {
-			continue
-		}
-		var d, s uint64
-		name := fmt.Sprintf("%d_%s", tableID, col.Name)
-		if d, _, s, err = getOneColRangeFromAutoIncrTable(param, bat, name, i, txn, 1, 0); err != nil {
-			RolllbackTxn(param.eg, txn, param.ctx)
-			goto loop
-		}
-		offset = append(offset, d)
-		step = append(step, s)
-	}
-	if err = CommitTxn(param.eg, txn, param.ctx); err != nil {
-		goto loop
-	}
-	return offset, step, nil
-}
+// func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
+// 	var err error
+// 	loopCnt := 0
+// loop:
+// 	// if fail 100 times, too bad, really unlucky one get aborted anyway.
+// 	loopCnt += 1
+// 	if loopCnt >= 100 {
+// 		return nil, nil, err
+// 	}
+// 	txn, err := NewTxn(param.eg, param.proc, param.ctx)
+// 	if err != nil {
+// 		goto loop
+// 	}
+// 	offset, step := make([]uint64, 0), make([]uint64, 0)
+// 	for i, col := range param.colDefs {
+// 		if !col.Typ.AutoIncr {
+// 			continue
+// 		}
+// 		var d, s uint64
+// 		name := fmt.Sprintf("%d_%s", tableID, col.Name)
+// 		if d, _, s, err = getOneColRangeFromAutoIncrTable(param, bat, name, i, txn, 1, 0); err != nil {
+// 			RolllbackTxn(param.eg, txn, param.ctx)
+// 			goto loop
+// 		}
+// 		offset = append(offset, d)
+// 		step = append(step, s)
+// 	}
+// 	if err = CommitTxn(param.eg, txn, param.ctx); err != nil {
+// 		goto loop
+// 	}
+// 	return offset, step, nil
+// }
 
 func getMaxnum[T constraints.Integer](vec *vector.Vector, length, maxNum, step uint64) uint64 {
 	vs := vector.MustTCols[T](vec)
@@ -663,8 +635,8 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 			bat.Clean(proc.Mp())
 
 			// Delete the cache.
-			ses := proc.SessionInfo.Ses.(Ses)
-			ses.DeleteCache(name)
+			ses := proc.SessionInfo.Session.(Ses)
+			ses.DeleteAutoIncrCache(name)
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
@@ -724,13 +696,11 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 			}
 
 			// Rename the old cache.
-			ses := proc.SessionInfo.Ses.(Ses)
-			ses.RenameCache(delName, newName+d.Attr.Name)
+			ses := proc.SessionInfo.Session.(Ses)
+			ses.RenameAutoIncrCache(delName, newName+d.Attr.Name)
 
-			// If cached no update needed.
-			if ses.Iscached() {
-				currentNum = currentNum - 1
-			}
+			// In cache implementation no update needed.
+			currentNum = currentNum - 1
 
 			bat2 := makeAutoIncrBatch(newName+d.Attr.Name, currentNum-1, 1, proc.Mp())
 			if err = autoRel.Write(ctx, bat2); err != nil {
@@ -795,8 +765,8 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 			}
 
 			// Delete the cache.
-			ses := proc.SessionInfo.Ses.(Ses)
-			ses.DeleteCache(delName)
+			ses := proc.SessionInfo.Session.(Ses)
+			ses.DeleteAutoIncrCache(delName)
 
 			bat2 := makeAutoIncrBatch(name+d.Attr.Name, 0, 1, proc.Mp())
 			if err = autoRel.Write(ctx, bat2); err != nil {

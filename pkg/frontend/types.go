@@ -106,7 +106,7 @@ const (
 
 // Cache size of auto_increment_columns cache.
 const (
-	cacheSize = 1000
+	cacheSize = 30000
 )
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
