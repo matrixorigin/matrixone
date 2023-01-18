@@ -257,7 +257,6 @@ select b, format(b, '0') from t order by b desc;
 select b, format(b, 'x') from t order by b desc;
 drop table t;
 
-
 drop table if exists t1;
 drop table if exists t2;
 create table t1(
