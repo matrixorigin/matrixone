@@ -39,10 +39,12 @@ var (
 var (
 	// register all supported debug command here
 	supportedCmds = map[string]handleFunc{
-		strings.ToUpper(pb.CmdMethod_Ping.String()):       handlePing(),
-		strings.ToUpper(pb.CmdMethod_Flush.String()):      handleFlush(),
-		strings.ToUpper(pb.CmdMethod_Task.String()):       handleTask,
-		strings.ToUpper(pb.CmdMethod_Checkpoint.String()): handleCheckpoint(),
+		strings.ToUpper(pb.CmdMethod_Ping.String()):        handlePing(),
+		strings.ToUpper(pb.CmdMethod_Flush.String()):       handleFlush(),
+		strings.ToUpper(pb.CmdMethod_Task.String()):        handleTask,
+		strings.ToUpper(pb.CmdMethod_UseSnapshot.String()): handleUseSnapshotTS,
+		strings.ToUpper(pb.CmdMethod_GetSnapshot.String()): handleGetSnapshotTS,
+		strings.ToUpper(pb.CmdMethod_Checkpoint.String()):  handleCheckpoint(),
 	}
 )
 

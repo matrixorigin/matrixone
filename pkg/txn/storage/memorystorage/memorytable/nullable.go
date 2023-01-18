@@ -46,14 +46,11 @@ func (n Nullable) Equal(n2 Nullable) bool {
 
 // AppendVector append the value to a vector
 func (n Nullable) AppendVector(
-	vec *vector.Vector, mp *mpool.MPool) {
+	vec *vector.Vector, mp *mpool.MPool) error {
 	value := n.Value
 	str, ok := value.(string)
 	if ok {
 		value = []byte(str)
 	}
-	vec.Append(value, false, mp)
-	if n.IsNull {
-		vec.GetNulls().Set(uint64(vec.Length() - 1))
-	}
+	return vec.Append(value, n.IsNull, mp)
 }

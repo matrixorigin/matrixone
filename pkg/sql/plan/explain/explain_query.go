@@ -16,6 +16,7 @@ package explain
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -275,7 +276,8 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 
 		//io
 		gDiskIO := NewStatisticValue(DiskIO, "byte")
-		gS3IO := NewStatisticValue(S3IO, "byte")
+		gS3IOByte := NewStatisticValue(S3IOByte, "byte")
+		gS3IOCount := NewStatisticValue(S3IOCount, "count")
 
 		// network
 		gNetwork := NewStatisticValue(Network, "byte")
@@ -321,8 +323,11 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 				if ioValue.Name == DiskIO {
 					gDiskIO.Value += ioValue.Value
 				}
-				if ioValue.Name == S3IO {
-					gS3IO.Value += ioValue.Value
+				if ioValue.Name == S3IOByte {
+					gS3IOByte.Value += ioValue.Value
+				}
+				if ioValue.Name == S3IOCount {
+					gS3IOCount.Value += ioValue.Value
 				}
 			}
 
@@ -337,7 +342,7 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		times := []StatisticValue{*gtimeConsumed, *gwaitTime}
 		mbps := []StatisticValue{*ginputRows, *goutputRows, *ginputSize, *goutputSize}
 		mems := []StatisticValue{*gMemorySize}
-		io := []StatisticValue{*gDiskIO, *gS3IO}
+		io := []StatisticValue{*gDiskIO, *gS3IOByte, *gS3IOCount}
 		nw := []StatisticValue{*gNetwork}
 
 		graphData.Global.Statistics.Time = append(graphData.Global.Statistics.Time, times...)

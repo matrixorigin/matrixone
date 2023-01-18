@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -306,6 +307,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 					FileFin:   t.Es.Fileparam.FileFin,
 					FileIndex: t.Es.Fileparam.FileIndex,
 				},
+				Extern: t.Es.Extern,
 			},
 		}
 	case vm.Connector:
@@ -474,6 +476,14 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		tblName = n.TableDef.Name
 	}
 
+	hasAutoCol := false
+	for i := 0; i < len(n.TableDef.Cols); i++ {
+		if n.TableDef.Cols[i].Typ.AutoIncr {
+			hasAutoCol = true
+			break
+		}
+	}
+
 	return &insert.Argument{
 		TargetTable:          relation,
 		TargetColDefs:        n.TableDef.Cols,
@@ -489,6 +499,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		SecondaryIndexDef:    sDef,
 		ClusterByDef:         n.TableDef.ClusterBy,
 		ClusterTable:         n.GetClusterTable(),
+		HasAutoCol:           hasAutoCol,
 	}, nil
 }
 
@@ -498,6 +509,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 	dbs := make([]engine.Database, len(n.UpdateCtxs))
 	dbNames := make([]string, len(n.UpdateCtxs))
 	tblNames := make([]string, len(n.UpdateCtxs))
+	hasAtuoCol := make([]bool, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
 		var dbSource engine.Database
 		var relation engine.Relation
@@ -563,6 +575,12 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 				}
 			}
 		}
+		for j := 0; j < len(n.TableDefVec[i].Cols); j++ {
+			if n.TableDefVec[i].Cols[j].Typ.AutoIncr {
+				hasAtuoCol[i] = true
+				break
+			}
+		}
 
 	}
 
@@ -574,6 +592,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 		DBName:      dbNames,
 		TblName:     tblNames,
 		TableDefVec: n.TableDefVec,
+		HasAutoCol:  hasAtuoCol,
 	}, nil
 }
 
@@ -583,7 +602,7 @@ func constructProjection(n *plan.Node) *projection.Argument {
 	}
 }
 
-func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *external.Argument {
+func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string) *external.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -592,6 +611,7 @@ func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *ex
 		Es: &external.ExternalParam{
 			Attrs:         attrs,
 			Cols:          n.TableDef.Cols,
+			Extern:        param,
 			Name2ColIndex: n.TableDef.Name2ColIndex,
 			CreateSql:     n.TableDef.Createsql,
 			Ctx:           ctx,

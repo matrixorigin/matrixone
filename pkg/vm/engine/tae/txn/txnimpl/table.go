@@ -618,14 +618,10 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 	//TODO::If txn at CN had checked duplication against its snapshot and workspace,
 	// we should skip here.
 	if tbl.schema.HasPK() {
-		pkDef := tbl.schema.GetSingleSortKey()
-		pkVec := containers.MakeVector(pkDef.Type, false)
 		for _, v := range pkVecs {
-			//FIXME::Is it shallow copy or deep copy?
-			pkVec.Extend(v)
-		}
-		if err = tbl.DoBatchDedup(pkVec); err != nil {
-			return
+			if err = tbl.DoBatchDedup(v); err != nil {
+				return
+			}
 		}
 	}
 	if tbl.localSegment == nil {
@@ -948,7 +944,7 @@ func (tbl *txnTable) DoPrecommitDedup(pks containers.Vector) (err error) {
 
 func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 	index := NewSimpleTableIndex()
-	//Check whether primary key is duplicated in key.
+	//Check whether primary key is duplicated.
 	if err = index.BatchInsert(
 		tbl.schema.GetSingleSortKey().Name,
 		key,
@@ -960,12 +956,12 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 	}
 
 	if tbl.localSegment != nil {
-		//Check whether primary key is duplicated in localSegment.
+		//Check whether primary key is duplicated with localSegment.
 		if err = tbl.localSegment.BatchDedup(key); err != nil {
 			return
 		}
 	}
-	//Check whether primary key is duplicated in all the blocks.
+	//Check whether primary key is duplicated with all the blocks which are visible to txn.
 	err = tbl.Dedup(key)
 	return
 }

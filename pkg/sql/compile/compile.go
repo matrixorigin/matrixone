@@ -62,6 +62,7 @@ func New(addr, db string, sql string, uid string, ctx context.Context,
 		sql:  sql,
 		proc: proc,
 		stmt: stmt,
+		addr: addr,
 	}
 }
 
@@ -137,9 +138,19 @@ func (c *Compile) Run(_ uint64) (err error) {
 		defer c.fillAnalyzeInfo()
 		return c.scope.RemoteRun(c)
 	case CreateDatabase:
-		return c.scope.CreateDatabase(c)
+		err := c.scope.CreateDatabase(c)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(1)
+		return nil
 	case DropDatabase:
-		return c.scope.DropDatabase(c)
+		err := c.scope.DropDatabase(c)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(1)
+		return nil
 	case CreateTable:
 		qry := c.scope.Plan.GetDdl().GetCreateTable()
 		if qry.Temporary {
@@ -265,8 +276,16 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	if err != nil {
 		return nil, err
 	}
-	if c.info.Typ == plan2.ExecTypeTP {
-		c.cnList = engine.Nodes{engine.Node{Mcpu: 1}}
+	blkNum := 0
+	for _, n := range qry.Nodes {
+		if n.NodeType == plan.Node_TABLE_SCAN {
+			if n.Stats != nil {
+				blkNum += int(n.Stats.BlockNum)
+			}
+		}
+	}
+	if blkNum < MinBlockNum {
+		c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
 	} else {
 		if len(c.cnList) == 0 {
 			c.cnList = append(c.cnList, engine.Node{Mcpu: c.NumCPU()})
@@ -279,68 +298,12 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	if err != nil {
 		return nil, err
 	}
-	if c.info.Typ == plan2.ExecTypeTP {
-		return c.compileTpQuery(qry, ss)
-	}
 	return c.compileApQuery(qry, ss)
-}
-
-func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
-	rs := c.newMergeScope(ss)
-	updateScopesLastFlag([]*Scope{rs})
-	switch qry.StmtType {
-	case plan.Query_DELETE:
-		rs.Magic = Deletion
-	case plan.Query_INSERT:
-		rs.Magic = Insert
-	case plan.Query_UPDATE:
-		rs.Magic = Update
-	default:
-	}
-	switch qry.StmtType {
-	case plan.Query_DELETE:
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Deletion,
-			Arg: scp,
-		})
-	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Insert,
-			Arg: arg,
-		})
-	case plan.Query_UPDATE:
-		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Update,
-			Arg: scp,
-		})
-	default:
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Output,
-			Arg: &output.Argument{
-				Data: c.u,
-				Func: c.fill,
-			},
-		})
-	}
-	return rs, nil
 }
 
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	rs := c.newMergeScope(ss)
 	updateScopesLastFlag([]*Scope{rs})
-	c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 	switch qry.StmtType {
 	case plan.Query_DELETE:
 		rs.Magic = Deletion
@@ -390,7 +353,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	return rs, nil
 }
 
-func constructValueScanBatch(ctx context.Context, m *mpool.MPool, node *plan.Node) (*batch.Batch, error) {
+func constructValueScanBatch(ctx context.Context, proc *process.Process, node *plan.Node) (*batch.Batch, error) {
 	if node == nil || node.TableDef == nil { // like : select 1, 2
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
@@ -405,13 +368,13 @@ func constructValueScanBatch(ctx context.Context, m *mpool.MPool, node *plan.Nod
 	rowCount := len(colsData[0].Data)
 	bat := batch.NewWithSize(colCount)
 	for i := 0; i < colCount; i++ {
-		vec, err := rowsetDataToVector(ctx, m, colsData[i].Data)
+		vec, err := rowsetDataToVector(ctx, proc, colsData[i].Data)
 		if err != nil {
 			return nil, err
 		}
 		bat.Vecs[i] = vec
 	}
-	bat.SetZs(rowCount, m)
+	bat.SetZs(rowCount, proc.Mp())
 	return bat, nil
 }
 
@@ -420,7 +383,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 	case plan.Node_VALUE_SCAN:
 		ds := &Scope{Magic: Normal}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
-		bat, err := constructValueScanBatch(ctx, c.proc.Mp(), n)
+		bat, err := constructValueScanBatch(ctx, c.proc, n)
 		if err != nil {
 			return nil, err
 		}
@@ -601,6 +564,9 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	mcpu := c.cnList[0].Mcpu
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
+	if param.Local {
+		mcpu = 1
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -614,26 +580,34 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	}
 
+	if n.ObjRef != nil {
+		param.SysTable = external.IsSysTable(n.ObjRef.SchemaName, n.TableDef.Name)
+	}
+
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
 	var fileList []string
-	if param.QueryResult {
-		fileList = strings.Split(param.Filepath, ",")
-		for i := range fileList {
-			fileList[i] = strings.TrimSpace(fileList[i])
+	if !param.Local {
+		if param.QueryResult {
+			fileList = strings.Split(param.Filepath, ",")
+			for i := range fileList {
+				fileList[i] = strings.TrimSpace(fileList[i])
+			}
+		} else {
+			fileList, err = external.ReadDir(param)
+			if err != nil {
+				return nil, err
+			}
 		}
-	} else {
-		fileList, err = external.ReadDir(param)
+		fileList, err = external.FliterFileList(n, c.proc, fileList)
 		if err != nil {
 			return nil, err
 		}
-	}
-	fileList, err = external.FliterFileList(n, c.proc, fileList)
-	if err != nil {
-		return nil, err
-	}
-	if param.LoadFile && len(fileList) == 0 {
-		return nil, moerr.NewInvalidInput(ctx, "the file does not exist in load flow")
+		if param.LoadFile && len(fileList) == 0 {
+			return nil, moerr.NewInvalidInput(ctx, "the file does not exist in load flow")
+		}
+	} else {
+		fileList = []string{param.Filepath}
 	}
 	cnt := len(fileList) / mcpu
 	tag := len(fileList) % mcpu
@@ -654,7 +628,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			Op:      vm.External,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructExternal(n, c.ctx, fileListTmp),
+			Arg:     constructExternal(n, param, c.ctx, fileListTmp),
 		})
 	}
 	c.anal.isFirst = false
@@ -671,7 +645,6 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 			Arg:     constructTableFunction(n, c.ctx, n.TableDef.TblFunc.Name),
 		})
 	}
-	c.anal.isFirst = false
 	c.anal.isFirst = false
 
 	return ss, nil
@@ -1147,6 +1120,8 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 }
 
 func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+	currentIsFirst := c.anal.isFirst
+	c.anal.isFirst = false
 	rs := c.newScopeList(validScopeCount(ss), int(n.Stats.BlockNum))
 	j := 0
 	for i := range ss {
@@ -1164,11 +1139,12 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 			ss[i].IsEnd = true
 		}
 	}
+
 	for i := range rs {
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:      vm.Group,
 			Idx:     c.anal.curr,
-			IsFirst: c.anal.isFirst,
+			IsFirst: currentIsFirst,
 			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], i, len(rs), true, c.proc),
 		})
 	}
@@ -1254,9 +1230,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 
 		rs[i].PreScopes = []*Scope{left, right}
 		left.appendInstruction(vm.Instruction{
-			Op:      vm.Connector,
-			Idx:     c.anal.curr,
-			IsFirst: c.anal.isFirst,
+			Op: vm.Connector,
 			Arg: &connector.Argument{
 				Reg: rs[i].Proc.Reg.MergeReceivers[0],
 			},
@@ -1275,13 +1249,14 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 
 func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 	rs := make([]*Scope, len(ss))
-	currentFirstFlag := c.anal.isFirst
+	// join's input will record in the left/right scope when JoinRun
+	// so set it to false here.
+	c.anal.isFirst = false
 	for i := range ss {
 		if ss[i].IsEnd {
 			rs[i] = ss[i]
 			continue
 		}
-		c.anal.isFirst = currentFirstFlag
 		chp := c.newMergeScope(dupScopeList(children))
 		rs[i] = new(Scope)
 		rs[i].Magic = Remote
@@ -1313,7 +1288,7 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	rs.appendInstruction(vm.Instruction{
 		Op:      vm.Merge,
 		Idx:     s.Instructions[0].Idx,
-		IsFirst: s.Instructions[0].IsFirst,
+		IsFirst: true,
 		Arg:     &merge.Argument{},
 	})
 	rs.appendInstruction(vm.Instruction{
@@ -1333,7 +1308,7 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	rs.appendInstruction(vm.Instruction{
 		Op:      vm.HashBuild,
 		Idx:     s.Instructions[0].Idx,
-		IsFirst: s.Instructions[0].IsFirst,
+		IsFirst: true,
 		Arg:     constructHashBuild(s.Instructions[0], c.proc),
 	})
 	rs.appendInstruction(vm.Instruction{
@@ -1389,8 +1364,11 @@ func (c *Compile) fillAnalyzeInfo() {
 		c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize = atomic.LoadInt64(&anal.MemorySize)
 		c.anal.qry.Nodes[i].AnalyzeInfo.WaitTimeConsumed = atomic.LoadInt64(&anal.WaitTimeConsumed)
 		c.anal.qry.Nodes[i].AnalyzeInfo.DiskIO = atomic.LoadInt64(&anal.DiskIO)
-		c.anal.qry.Nodes[i].AnalyzeInfo.S3IO = atomic.LoadInt64(&anal.S3IO)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOByte = atomic.LoadInt64(&anal.S3IOByte)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOCount = atomic.LoadInt64(&anal.S3IOCount)
 		c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO = atomic.LoadInt64(&anal.NetworkIO)
+		c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime = atomic.LoadInt64(&anal.ScanTime)
+		c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime = atomic.LoadInt64(&anal.InsertTime)
 	}
 }
 
@@ -1562,54 +1540,63 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
-func rowsetDataToVector(ctx context.Context, m *mpool.MPool, exprs []*plan.Expr) (*vector.Vector, error) {
+func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	rowCount := len(exprs)
 	if rowCount == 0 {
 		return nil, moerr.NewInternalError(ctx, "rowsetData do not have rows")
 	}
 	typ := plan2.MakeTypeByPlan2Type(exprs[0].Typ)
 	vec := vector.New(typ)
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
 
 	for _, e := range exprs {
-		t := e.Expr.(*plan.Expr_C)
-		if t.C.GetIsnull() {
-			vec.Append(0, true, m)
-			continue
+		tmp, err := colexec.EvalExpr(bat, proc, e)
+		if err != nil {
+			return nil, err
 		}
-
-		switch t.C.GetValue().(type) {
-		case *plan.Const_Bval:
-			vec.Append(t.C.GetBval(), false, m)
-		case *plan.Const_I8Val:
-			vec.Append(t.C.GetI8Val(), false, m)
-		case *plan.Const_I16Val:
-			vec.Append(t.C.GetI16Val(), false, m)
-		case *plan.Const_I32Val:
-			vec.Append(t.C.GetI32Val(), false, m)
-		case *plan.Const_I64Val:
-			vec.Append(t.C.GetI64Val(), false, m)
-		case *plan.Const_U8Val:
-			vec.Append(t.C.GetU8Val(), false, m)
-		case *plan.Const_U16Val:
-			vec.Append(t.C.GetU16Val(), false, m)
-		case *plan.Const_U32Val:
-			vec.Append(t.C.GetU32Val(), false, m)
-		case *plan.Const_U64Val:
-			vec.Append(t.C.GetU64Val(), false, m)
-		case *plan.Const_Fval:
-			vec.Append(t.C.GetFval(), false, m)
-		case *plan.Const_Dval:
-			vec.Append(t.C.GetDval(), false, m)
-		case *plan.Const_Dateval:
-			vec.Append(t.C.GetDateval(), false, m)
-		case *plan.Const_Timeval:
-			vec.Append(t.C.GetTimeval(), false, m)
-		case *plan.Const_Sval:
-			vec.Append(t.C.GetSval(), false, m)
+		switch typ.Oid {
+		case types.T_bool:
+			vec.Append(vector.MustTCols[bool](tmp)[0], false, proc.Mp())
+		case types.T_int8:
+			vec.Append(vector.MustTCols[int8](tmp)[0], false, proc.Mp())
+		case types.T_int16:
+			vec.Append(vector.MustTCols[int16](tmp)[0], false, proc.Mp())
+		case types.T_int32:
+			vec.Append(vector.MustTCols[int32](tmp)[0], false, proc.Mp())
+		case types.T_int64:
+			vec.Append(vector.MustTCols[int64](tmp)[0], false, proc.Mp())
+		case types.T_uint8:
+			vec.Append(vector.MustTCols[uint8](tmp)[0], false, proc.Mp())
+		case types.T_uint16:
+			vec.Append(vector.MustTCols[uint16](tmp)[0], false, proc.Mp())
+		case types.T_uint32:
+			vec.Append(vector.MustTCols[uint32](tmp)[0], false, proc.Mp())
+		case types.T_uint64:
+			vec.Append(vector.MustTCols[uint64](tmp)[0], false, proc.Mp())
+		case types.T_float32:
+			vec.Append(vector.MustTCols[float32](tmp)[0], false, proc.Mp())
+		case types.T_float64:
+			vec.Append(vector.MustTCols[float64](tmp)[0], false, proc.Mp())
+		case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+			vec.Append(vector.MustBytesCols(tmp)[0], false, proc.Mp())
+		case types.T_date:
+			vec.Append(vector.MustTCols[types.Date](tmp)[0], false, proc.Mp())
+		case types.T_datetime:
+			vec.Append(vector.MustTCols[types.Datetime](tmp)[0], false, proc.Mp())
+		case types.T_time:
+			vec.Append(vector.MustTCols[types.Time](tmp)[0], false, proc.Mp())
+		case types.T_timestamp:
+			vec.Append(vector.MustTCols[types.Timestamp](tmp)[0], false, proc.Mp())
+		case types.T_decimal64:
+			vec.Append(vector.MustTCols[types.Decimal64](tmp)[0], false, proc.Mp())
+		case types.T_decimal128:
+			vec.Append(vector.MustTCols[types.Decimal128](tmp)[0], false, proc.Mp())
+		case types.T_uuid:
+			vec.Append(vector.MustTCols[types.Uuid](tmp)[0], false, proc.Mp())
 		default:
-			return nil, moerr.NewNYI(ctx, fmt.Sprintf("const expression %v in rowsetData", t.C.GetValue()))
+			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", e))
 		}
 	}
-	// vec.SetIsBin(t.C.IsBin)
 	return vec, nil
 }

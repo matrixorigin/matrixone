@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"io"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,8 +36,11 @@ type Analyze interface {
 	Output(*batch.Batch, bool)
 	WaitStop(time.Time)
 	DiskIO(*batch.Batch)
-	S3IO(*batch.Batch)
+	S3IOByte(*batch.Batch)
+	S3IOCount(int)
 	Network(*batch.Batch)
+	AddScanTime(t time.Time)
+	AddInsertTime(t time.Time)
 }
 
 // WaitRegister channel
@@ -112,10 +116,16 @@ type AnalyzeInfo struct {
 	MemorySize int64
 	// DiskIO, data size read from disk
 	DiskIO int64
-	// S3IO, data size read from s3
-	S3IO int64
+	// S3IOByte, data size read from s3
+	S3IOByte int64
+	// S3IOCount, query count that read from s3
+	S3IOCount int64
 	// NetworkIO, message size send between CN node
 	NetworkIO int64
+	// ScanTime, scan cost time in external scan
+	ScanTime int64
+	// InsertTime, insert cost time in load flow
+	InsertTime int64
 }
 
 // Process contains context used in query execution
@@ -151,6 +161,8 @@ type Process struct {
 	LoadTag bool
 
 	LastInsertID *uint64
+
+	LoadLocalReader io.Reader
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

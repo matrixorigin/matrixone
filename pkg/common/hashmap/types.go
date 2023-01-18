@@ -45,6 +45,8 @@ type HashMap interface {
 	AddGroups(uint64)
 	// GroupCount returns the hash map's row count.
 	GroupCount() uint64
+	// Size returns the hash map's size
+	Size() int64
 }
 
 // Iterator allows users to do insert or find operations on hash tables in bulk.
@@ -62,8 +64,9 @@ type Iterator interface {
 
 // JoinMap is used for join
 type JoinMap struct {
-	cnt  *int64
-	sels [][]int64
+	cnt    *int64
+	dupCnt *int64
+	sels   [][]int64
 	// push-down filter expression, possibly a bloomfilter
 	expr    *plan.Expr
 	mp      *StrHashMap

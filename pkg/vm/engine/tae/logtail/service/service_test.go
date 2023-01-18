@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/tests"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -40,7 +41,10 @@ func TestService(t *testing.T) {
 	tableB := mockTable(2, 2, 2)
 	tableC := mockTable(3, 3, 3)
 
-	address := "127.0.0.1:9999"
+	addrs, err := tests.GetAddressBatch("127.0.0.1", 1)
+	require.NoError(t, err)
+
+	address := addrs[0]
 	logtailer := mockLocktailer(tableA, tableB, tableC)
 	rt := mockRuntime()
 
@@ -50,7 +54,7 @@ func TestService(t *testing.T) {
 		WithServerCollectInterval(500*time.Millisecond),
 		WithServerSendTimeout(5*time.Second),
 		WithServerEnableChecksum(true),
-		WithServerMaxMessageSize(16*mpool.KB),
+		WithServerMaxMessageSize(32+96+7),
 		WithServerPayloadCopyBufferSize(16*mpool.KB),
 		WithServerMaxLogtailFetchFailure(5),
 	)
@@ -65,7 +69,7 @@ func TestService(t *testing.T) {
 	}()
 
 	/* ---- construct logtail client ---- */
-	codec := morpc.NewMessageCodec(func() morpc.Message { return &LogtailResponse{} },
+	codec := morpc.NewMessageCodec(func() morpc.Message { return &LogtailResponseSegment{} },
 		morpc.WithCodecPayloadCopyBufferSize(16*mpool.KB),
 		morpc.WithCodecEnableChecksum(),
 		morpc.WithCodecMaxBodySize(16*mpool.KB),
@@ -172,7 +176,7 @@ func (m *logtailer) TableLogtail(
 			return mockLogtail(table), nil
 		}
 	}
-	return logtail.TableLogtail{Table: &table, Ts: &to}, nil
+	return logtail.TableLogtail{CkpLocation: "checkpoint", Table: &table, Ts: &to}, nil
 }
 
 func mockRuntime() runtime.Runtime {
