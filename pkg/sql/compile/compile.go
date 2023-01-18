@@ -1209,11 +1209,12 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 		}
 		ss2 = append(ss2, s)
 	}
+	insert := &vm.Instruction{
+		Op:  vm.Insert,
+		Arg: arg,
+	}
 	for i := range ss2 {
-		ss2[i].Instructions = append(ss2[i].Instructions, vm.Instruction{
-			Op:  vm.Insert,
-			Arg: arg,
-		})
+		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil))
 	}
 	return c.newMergeScope(ss2)
 }
