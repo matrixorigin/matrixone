@@ -114,7 +114,6 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			return ctx.Err()
 		case <-next.C:
 			logger.Info("start next round")
-		default:
 		}
 
 		// main
