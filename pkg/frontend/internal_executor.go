@@ -346,7 +346,7 @@ func (ip *internalProtocol) SendResponse(ctx context.Context, resp *Response) er
 	ip.ResetStatistics()
 	if resp.category == ResultResponse {
 		if mer := resp.data.(*MysqlExecutionResult); mer != nil && mer.Mrs() != nil {
-			ip.sendRows(mer.Mrs(), mer.affectedRows)
+			ip.sendRows(mer.Mrs(), mer.mrs.GetRowCount())
 		}
 	} else {
 		// OkResponse. this is NOT ErrorResponse because error will be returned by doComQuery

@@ -74,8 +74,8 @@ func GetMetricStorageUsageExecutor(sqlExecutor func() ie.InternalExecutor) func(
 
 const (
 	ShowAccountSQL    = "SHOW ACCOUNTS;"
-	ColumnAccountName = "ACCOUNT_NAME"
-	ColumnSize        = "SIZE"
+	ColumnAccountName = "account_name"
+	ColumnSize        = "size"
 )
 
 var gUpdateStorageUsageInterval = defaultUpdateInterval()
@@ -130,6 +130,13 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			return err
 		}
 
+		cnt := result.RowCount()
+		if cnt == 0 {
+			next = time.NewTicker(time.Minute)
+			logger.Warn("got empty account info, wait shortly")
+			continue
+		}
+		logger.Info("collect storage_usage cnt", zap.Uint64("cnt", cnt))
 		StorageUsageFactory.Reset()
 		for rowIdx := uint64(0); rowIdx < result.RowCount(); rowIdx++ {
 
@@ -143,7 +150,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 				return err
 			}
 
-			logger.Debug("collect storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
+			logger.Info("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
 			StorageUsage(account).Set(sizeMB)
 		}
 
