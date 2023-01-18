@@ -254,5 +254,5 @@ func (s *service) registerExecutorsLocked() {
 		export.MergeTaskExecutorFactory(export.WithFileService(s.fileService)))
 	// init metric task
 	s.task.runner.RegisterExecutor(task.TaskCode_MetricStorageUsage,
-		metric.CronTaskStorageUsageFactory(ieFactory))
+		metric.GetMetricStorageUsageExecutor(ieFactory))
 }

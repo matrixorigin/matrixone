@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	LoggerNameMetric        = "MetricTask"
+	LoggerName              = "MetricTask"
 	LoggerNameMetricStorage = "MetricStorage"
 
 	StorageUsageCronTask     = "StorageUsage"
@@ -55,12 +55,20 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 	var err error
 	ctx, span := trace.Start(ctx, "MetricCreateCronTask")
 	defer span.End()
-	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetric)
+	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerName)
 	logger.Info(fmt.Sprintf("init metric task with CronExpr: %s", StorageUsageTaskCronExpr))
 	if err = taskService.CreateCronTask(ctx, TaskMetadata(StorageUsageCronTask, executorID), StorageUsageTaskCronExpr); err != nil {
 		return err
 	}
 	return nil
+}
+
+// GetMetricStorageUsageExecutor collect metric server_storage_usage
+func GetMetricStorageUsageExecutor(sqlExecutor func() ie.InternalExecutor) func(ctx context.Context, task task.Task) error {
+	f := func(ctx context.Context, task task.Task) error {
+		return CalculateStorageUsage(ctx, sqlExecutor)
+	}
+	return f
 }
 
 const (
@@ -71,61 +79,57 @@ const (
 	ColumnSize        = "SIZE"
 )
 
-// CronTaskStorageUsageFactory collect metric server_storage_usage
-func CronTaskStorageUsageFactory(sqlExecutor func() ie.InternalExecutor) func(ctx context.Context, task task.Task) error {
-	f := func(ctx context.Context, task task.Task) error {
-		ctx, span := trace.Start(ctx, "MetricStorageUsage")
-		defer span.End()
-		logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
-		defer logger.Info("finished.")
+func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
+	ctx, span := trace.Start(ctx, "MetricStorageUsage")
+	defer span.End()
+	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
+	defer logger.Info("finished.")
 
-		next := time.NewTicker(time.Minute)
+	next := time.NewTicker(time.Minute)
 
-		for {
-			select {
-			case <-ctx.Done():
-				logger.Error("meet context error", zap.Error(ctx.Err()))
-				return ctx.Err()
-			case <-next.C:
-				logger.Info("start next round")
-			default:
-			}
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Error("meet context error", zap.Error(ctx.Err()))
+			return ctx.Err()
+		case <-next.C:
+			logger.Info("start next round")
+		default:
+		}
 
-			// main
-			// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
-			// | account_name    | admin_name | created             | status | suspended_time | db_count | table_count | row_count | size  | comment        |
-			// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
-			// | sys             | root       | 2023-01-17 09:56:10 | open   | NULL           |        6 |          56 |      2082 | 0.341 | system account |
-			// | query_tae_table | admin      | 2023-01-17 09:56:26 | open   | NULL           |        6 |          34 |       792 | 0.036 |                |
-			// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
-			executor := sqlExecutor()
-			result := executor.Query(ctx, ShowAccountSQL, ie.NewOptsBuilder().Finish())
-			err := result.Error()
+		// main
+		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
+		// | account_name    | admin_name | created             | status | suspended_time | db_count | table_count | row_count | size  | comment        |
+		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
+		// | sys             | root       | 2023-01-17 09:56:10 | open   | NULL           |        6 |          56 |      2082 | 0.341 | system account |
+		// | query_tae_table | admin      | 2023-01-17 09:56:26 | open   | NULL           |        6 |          34 |       792 | 0.036 |                |
+		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
+		executor := sqlExecutor()
+		result := executor.Query(ctx, ShowAccountSQL, ie.NewOptsBuilder().Finish())
+		err := result.Error()
+		if err != nil {
+			return err
+		}
+
+		StorageUsageFactory.Reset()
+		for rowIdx := uint64(0); rowIdx < result.RowCount(); rowIdx++ {
+
+			account, err := result.StringValueByName(ctx, rowIdx, ColumnAccountName)
 			if err != nil {
 				return err
 			}
 
-			StorageUsageFactory.Reset()
-			for rowIdx := uint64(0); rowIdx < result.RowCount(); rowIdx++ {
-
-				account, err := result.StringValueByName(ctx, rowIdx, ColumnAccountName)
-				if err != nil {
-					return err
-				}
-
-				sizeMB, err := result.Float64ValueByName(ctx, rowIdx, ColumnSize)
-				if err != nil {
-					return err
-				}
-
-				logger.Debug("collect storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
-				StorageUsage(account).Set(sizeMB)
+			sizeMB, err := result.Float64ValueByName(ctx, rowIdx, ColumnSize)
+			if err != nil {
+				return err
 			}
 
-			// next round
-			next = time.NewTicker(IntervalDuration)
-			logger.Info("wait next round")
+			logger.Debug("collect storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
+			StorageUsage(account).Set(sizeMB)
 		}
+
+		// next round
+		next = time.NewTicker(IntervalDuration)
+		logger.Info("wait next round")
 	}
-	return f
 }
