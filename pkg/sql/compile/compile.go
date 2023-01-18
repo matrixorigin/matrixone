@@ -307,14 +307,13 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	}
 	switch qry.StmtType {
 	case plan.Query_INSERT:
-		c.cnListStrategy()
-		// insertNode := qry.Nodes[qry.Steps[0]]
-		// nodeStats := qry.Nodes[insertNode.Children[0]].Stats
-		// if nodeStats.GetCost() > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
-		// 	c.cnListStrategy()
-		// } else {
-		// 	c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
-		// }
+		insertNode := qry.Nodes[qry.Steps[0]]
+		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
+			c.cnListStrategy()
+		} else {
+			c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+		}
 	default:
 		if blkNum < MinBlockNum {
 			c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
