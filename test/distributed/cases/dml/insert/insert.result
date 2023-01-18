@@ -413,6 +413,7 @@ select count(*) from t;
 count(*)
 10000000
 insert into t select * from t;
+Duplicate entry '245761' for key '__mo_index_idx_col'
 begin;
 insert into t select * from t;
 select count(*) from t;

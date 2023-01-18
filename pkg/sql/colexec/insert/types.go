@@ -35,8 +35,10 @@ type Container struct {
 	// record every batch's Length
 	lengths []uint64
 	// record unique batch's Length
-	unique_lengths [][]uint64
-	cacheBat       *batch.Batch
+	unique_lengths   [][]uint64
+	cacheBat         *batch.Batch
+	nameToNullablity map[string]bool
+	pk               map[string]bool
 }
 
 type Argument struct {
@@ -91,8 +93,29 @@ func (arg *Argument) GetPkIndexes() {
 	}
 }
 
-// This function was originally set up considering that some constraints may not support cn to write s3 directly.
-// Later, it might be removed directly, after validating the foreign key constraint
-func (arg *Argument) HasConstraints() bool {
+func (arg *Argument) GetNameNullAbility() bool {
+	for i := range arg.TargetColDefs {
+		def := arg.TargetColDefs[i]
+		arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
+		if def.Primary {
+			arg.container.pk[def.Name] = true
+		}
+	}
+	if arg.CPkeyColDef != nil {
+		def := arg.CPkeyColDef
+		arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
+		arg.container.pk[def.Name] = true
+	}
+	if arg.UniqueIndexDef != nil {
+		for i := range arg.UniqueIndexDef.Fields {
+			for j := range arg.UniqueIndexDef.Fields[i].Cols {
+				def := arg.UniqueIndexDef.Fields[i].Cols[j]
+				arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
+			}
+		}
+	}
+	if arg.ClusterByDef != nil {
+		arg.container.nameToNullablity[arg.ClusterByDef.Name] = true
+	}
 	return false
 }

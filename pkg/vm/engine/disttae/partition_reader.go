@@ -134,6 +134,9 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			}
 			_, extent, _ := blockio.DecodeMetaLoc(metaLoc)
 			ivec, err = p.s3BlockReader.Read(context.Background(), extent, p.getIdxs(colNames), p.proc.GetMPool())
+			if err != nil {
+				return nil, err
+			}
 			rbat := batch.NewWithSize(len(colNames))
 			rbat.SetAttributes(colNames)
 			rbat.Cnt = 1

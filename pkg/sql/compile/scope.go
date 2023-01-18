@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -134,11 +133,12 @@ func (s *Scope) MergeRun(c *Compile) error {
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		len(c.addr) == 0 || strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+		len(c.addr) == 0 || c.addr == s.NodeInfo.Addr { //strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
 	err := s.remoteRun(c)
+
 	// tell connect operator that it's over
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
 	arg.Free(s.Proc, err != nil)

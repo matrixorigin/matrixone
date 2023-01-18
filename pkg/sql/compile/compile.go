@@ -1203,7 +1203,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 }
 
 func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
-	var ss2 []*Scope
+	var ss2 []*Scope = make([]*Scope, 0, len(ss))
 	for _, s := range ss {
 		if s.IsEnd {
 			continue

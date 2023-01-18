@@ -42,10 +42,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -211,6 +212,9 @@ func Prepare(proc *process.Process, arg any) error {
 	if ap.IsRemote {
 		ap.container = new(Container)
 		ap.GetPkIndexes()
+		ap.container.nameToNullablity = make(map[string]bool)
+		ap.container.pk = make(map[string]bool)
+		ap.GetNameNullAbility()
 	}
 	return nil
 }
@@ -407,23 +411,11 @@ func SortByPrimaryKey(proc *process.Process, n *Argument, bat *batch.Batch, pkId
 
 // GenerateIndex generates relative indexes for the batch writed directly to s3 from cn
 // For more information, please refer to the comment about func WriteIndex in Writer interface
-func GenerateIndex(fd objectio.BlockObject, objectWriter objectio.Writer, bat *batch.Batch) error {
+func GenerateIndex(n *Argument, fd objectio.BlockObject, objectWriter objectio.Writer, bat *batch.Batch) error {
 	for i, mvec := range bat.Vecs {
-		bloomFilter, zoneMap, err := getIndexDataFromVec(uint16(i), mvec)
+		err := getIndexDataFromVec(fd, objectWriter, uint16(i), mvec, n.container.nameToNullablity[bat.Attrs[i]], n.container.pk[bat.Attrs[i]])
 		if err != nil {
 			return err
-		}
-		if bloomFilter != nil {
-			err = objectWriter.WriteIndex(fd, bloomFilter)
-			if err != nil {
-				return err
-			}
-		}
-		if zoneMap != nil {
-			err = objectWriter.WriteIndex(fd, zoneMap)
-			if err != nil {
-				return err
-			}
 		}
 	}
 	return nil
@@ -433,13 +425,13 @@ func GenerateIndex(fd objectio.BlockObject, objectWriter objectio.Writer, bat *b
 // For more information, please refer to the comment about func Write in Writer interface
 func WriteBlock(n *Argument, bat *batch.Batch, proc *process.Process) error {
 	fd, err := n.container.writer.Write(bat)
-	fd.GetColumn(0)
+
 	if err != nil {
 		return err
 	}
 	// atomic.AddUint64(&n.Affected, uint64(bat.Vecs[0].Length()))
 	n.container.lengths = append(n.container.lengths, uint64(bat.Vecs[0].Length()))
-	if err := GenerateIndex(fd, n.container.writer, bat); err != nil {
+	if err := GenerateIndex(n, fd, n.container.writer, bat); err != nil {
 		return err
 	}
 	if n.UniqueIndexDef != nil {
@@ -455,7 +447,7 @@ func WriteBlock(n *Argument, bat *batch.Batch, proc *process.Process) error {
 					if err != nil {
 						return err
 					}
-					if err := GenerateIndex(fd, n.container.unique_writer[idx], b); err != nil {
+					if err := GenerateIndex(n, fd, n.container.unique_writer[idx], b); err != nil {
 						return err
 					}
 				}
@@ -691,47 +683,38 @@ func writeBatch(ctx context.Context,
 	return handleLoadWrite(n, proc, ctx, bat)
 }
 
-func getIndexDataFromVec(
+func getIndexDataFromVec(block objectio.BlockObject, writer objectio.Writer,
 	idx uint16,
-	vec *vector.Vector,
-) (objectio.IndexData, objectio.IndexData, error) {
-	var bloomFilter, zoneMap objectio.IndexData
-
-	// get min/max from  vector
-	if vec.Length() > 0 {
-		cvec := containers.NewVectorWithSharedMemory(vec, true)
-
-		// create zone map
-		zm := index.NewZoneMap(vec.Typ)
-		ctx := new(index.KeysCtx)
-		ctx.Keys = cvec
-		ctx.Count = vec.Length()
-		defer ctx.Keys.Close()
-		err := zm.BatchUpdate(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		buf, err := zm.Marshal()
-		if err != nil {
-			return nil, nil, err
-		}
-		zoneMap, err = objectio.NewZoneMap(idx, buf)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// create bloomfilter
-		sf, err := index.NewBinaryFuseFilter(cvec)
-		if err != nil {
-			return nil, nil, err
-		}
-		bf, err := sf.Marshal()
-		if err != nil {
-			return nil, nil, err
-		}
-		alg := uint8(0)
-		bloomFilter = objectio.NewBloomFilter(idx, alg, bf)
+	vec *vector.Vector, nullAbliaty bool, isPk bool) error {
+	var err error
+	columnData := containers.NewVectorWithSharedMemory(vec, nullAbliaty)
+	zmPos := 0
+	zoneMapWriter := indexwrapper.NewZMWriter()
+	if err = zoneMapWriter.Init(writer, block, common.Plain, idx, uint16(zmPos)); err != nil {
+		return err
 	}
-
-	return bloomFilter, zoneMap, nil
+	err = zoneMapWriter.AddValues(columnData)
+	if err != nil {
+		return err
+	}
+	_, err = zoneMapWriter.Finalize()
+	if err != nil {
+		return err
+	}
+	if !isPk {
+		return nil
+	}
+	bfPos := 1
+	bfWriter := indexwrapper.NewBFWriter()
+	if err = bfWriter.Init(writer, block, common.Plain, idx, uint16(bfPos)); err != nil {
+		return err
+	}
+	if err = bfWriter.AddValues(columnData); err != nil {
+		return err
+	}
+	_, err = bfWriter.Finalize()
+	if err != nil {
+		return err
+	}
+	return nil
 }
