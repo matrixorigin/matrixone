@@ -49,9 +49,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
+// The current insertion of around 200,000 rows triggers cn to write s3 directly
 const (
 	DistributedThreshold   uint64 = 10 * mpool.MB
-	SingleLineSizeEstimate uint64 = 100 * mpool.B
+	SingleLineSizeEstimate uint64 = 300 * mpool.B
 )
 
 // New is used to new an object of compile
@@ -347,13 +349,13 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		})
 	case plan.Query_INSERT:
 		insertNode := qry.Nodes[qry.Steps[0]]
+		insertNode.NotCacheable = true
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
-		// fmt.Println("nodeStats: cost ", nodeStats.GetCost(), "blockNumber", nodeStats.GetBlockNum())
-		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || true {
+		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
 			rs = c.newInsertMergeScope(arg, ss)
