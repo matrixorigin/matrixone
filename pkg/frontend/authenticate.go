@@ -798,7 +798,7 @@ var (
 		`create table mo_mysql_compatbility_mode(
 				configuration_id int auto_increment,
 				account_name     varchar(300),
-				configuration  json,
+				configuration_content  json,
 				primary key(configuration_id)
 			);`,
 	}
@@ -816,7 +816,7 @@ var (
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
 		account_name,
-		configuration) values ("%s",%s);`
+		configuration_content) values ("%s",%s);`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,

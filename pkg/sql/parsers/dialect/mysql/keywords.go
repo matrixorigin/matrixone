@@ -533,5 +533,6 @@ func init() {
 		"extension":                EXTENSION,
 		"query_result":             QUERY_RESULT,
 		"mysql_compatbility_mode":  MYSQL_COMPATBILITY_MODE,
+		"configuration":            CONFIGURATION,
 	}
 }

@@ -284,7 +284,7 @@ import (
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
 
 // Alter
-%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATBILITY_MODE
+%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATBILITY_MODE CONFIGURATION
 
 // Time
 %token <str> SECOND ASCII COALESCE COLLATION HOUR MICROSECOND MINUTE MONTH QUARTER REPEAT
@@ -2153,11 +2153,11 @@ alter_account_stmt:
     }
 
 alter_database_config_stmt:
-     ALTER DATABASE db_name SET MYSQL_COMPATBILITY_MODE '=' expression
+     ALTER ACCOUNT CONFIGURATION account_name SET MYSQL_COMPATBILITY_MODE '=' expression
      {
         $$ = &tree.AlterDataBaseConfig{
-            DbName:$3,
-            UpdateConfig: $7,
+            DbName:$4,
+            UpdateConfig: $8,
         }
      }
 alter_account_auth_option:
@@ -8157,6 +8157,7 @@ reserved_keyword:
 |   TABLE_VALUES
 |   RETURNS
 |   MYSQL_COMPATBILITY_MODE
+|   CONFIGURATION
 
 non_reserved_keyword:
     ACCOUNT
