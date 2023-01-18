@@ -17,6 +17,7 @@ package morpc
 import (
 	"context"
 	"fmt"
+
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -835,7 +836,6 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	}
 
 	s.sequence++
-	fmt.Printf("steam send %+v with seqence %d\n", request, s.sequence)
 	return s.sendFunc(backendSendMessage{
 		message: RPCMessage{
 			Ctx:            ctx,
@@ -879,7 +879,6 @@ func (s *stream) done(message RPCMessage) {
 	defer s.mu.Unlock()
 
 	if s.mu.closed {
-		fmt.Printf("steam recv %+v with closed\n", message.Message)
 		return
 	}
 
@@ -889,12 +888,10 @@ func (s *stream) done(message RPCMessage) {
 	}
 	if response != nil &&
 		message.streamSequence != s.lastReceivedSequence+1 {
-		fmt.Printf("steam recv %+v with seqence not match, except %d, but got %d\n", message.Message, s.lastReceivedSequence+1, message.streamSequence)
 		response = nil
 	}
 
 	s.lastReceivedSequence = message.streamSequence
-	fmt.Printf("steam recv %+v ok\n", message)
 	s.c <- response
 }
 
