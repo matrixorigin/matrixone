@@ -20,55 +20,54 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -158,6 +157,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.LoopSingle:
 		t := sourceIns.Arg.(*loopsingle.Argument)
 		res.Arg = &loopsingle.Argument{
+			Result: t.Result,
+			Cond:   t.Cond,
+			Typs:   t.Typs,
+		}
+	case vm.LoopMark:
+		t := sourceIns.Arg.(*loopmark.Argument)
+		res.Arg = &loopmark.Argument{
 			Result: t.Result,
 			Cond:   t.Cond,
 			Typs:   t.Typs,
@@ -731,14 +737,18 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	}
 }
 
-func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onList []*plan.Expr) *mark.Argument {
+/*
+func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
-		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "mark result '%s'", expr))
+		if rel == 0 {
+			result[i] = pos
+		} else if rel == -1 {
+			result[i] = -1
+		} else {
+			panic(moerr.NewNYI(proc.Ctx, "loop mark result '%s'", expr))
 		}
-		result[i] = pos
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &mark.Argument{
@@ -746,11 +756,10 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onLis
 		Result:     result,
 		Cond:       cond,
 		Conditions: constructJoinConditions(conds, proc),
-		OnList:     onList,
+		OnList:     n.OnList,
 	}
 }
-
-var _ = constructMark
+*/
 
 func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
 	return &order.Argument{
@@ -975,6 +984,25 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
+func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *loopmark.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr, proc)
+		if rel == 0 {
+			result[i] = pos
+		} else if rel == -1 {
+			result[i] = -1
+		} else {
+			panic(moerr.NewNYI(proc.Ctx, "loop mark result '%s'", expr))
+		}
+	}
+	return &loopmark.Argument{
+		Typs:   typs,
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
+
 func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Argument {
 	switch in.Op {
 	case vm.Anti:
@@ -1051,6 +1079,12 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 		}
 	case vm.LoopSingle:
 		arg := in.Arg.(*loopsingle.Argument)
+		return &hashbuild.Argument{
+			NeedHashMap: false,
+			Typs:        arg.Typs,
+		}
+	case vm.LoopMark:
+		arg := in.Arg.(*loopmark.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
