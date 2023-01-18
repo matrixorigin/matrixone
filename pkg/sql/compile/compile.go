@@ -50,7 +50,8 @@ import (
 )
 
 const (
-	DistributedThreshold uint64 = 1 * mpool.KB
+	DistributedThreshold   uint64 = 10 * mpool.MB
+	SingleLineSizeEstimate uint64 = 100 * mpool.B
 )
 
 // New is used to new an object of compile
@@ -277,6 +278,14 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 	return nil, moerr.NewNYI(ctx, fmt.Sprintf("query '%s'", pn))
 }
 
+func (c *Compile) cnListStrategy() {
+	if len(c.cnList) == 0 {
+		c.cnList = append(c.cnList, engine.Node{Mcpu: c.NumCPU()})
+	} else if len(c.cnList) > c.info.CnNumbers {
+		c.cnList = c.cnList[:c.info.CnNumbers]
+	}
+}
+
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, error) {
 	if len(qry.Steps) != 1 {
 		return nil, moerr.NewNYI(ctx, fmt.Sprintf("query '%s'", qry))
@@ -294,15 +303,24 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 			}
 		}
 	}
-	if blkNum < MinBlockNum {
-		c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
-	} else {
-		if len(c.cnList) == 0 {
-			c.cnList = append(c.cnList, engine.Node{Mcpu: c.NumCPU()})
-		} else if len(c.cnList) > c.info.CnNumbers {
-			c.cnList = c.cnList[:c.info.CnNumbers]
+	switch qry.StmtType {
+	case plan.Query_INSERT:
+		c.cnListStrategy()
+		// insertNode := qry.Nodes[qry.Steps[0]]
+		// nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+		// if nodeStats.GetCost() > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
+		// 	c.cnListStrategy()
+		// } else {
+		// 	c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+		// }
+	default:
+		if blkNum < MinBlockNum {
+			c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+		} else {
+			c.cnListStrategy()
 		}
 	}
+
 	c.initAnalyze(qry)
 	ss, err := c.compilePlanScope(ctx, qry.Nodes[qry.Steps[0]], qry.Nodes)
 	if err != nil {
@@ -335,7 +353,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		}
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
 		// fmt.Println("nodeStats: cost ", nodeStats.GetCost(), "blockNumber", nodeStats.GetBlockNum())
-		if nodeStats.GetCost() > float64(DistributedThreshold) || qry.LoadTag {
+		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || true {
 			// use distributed-insert
 			arg.IsRemote = true
 			rs = c.newInsertMergeScope(arg, ss)
