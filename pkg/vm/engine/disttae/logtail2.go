@@ -30,9 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 const (
@@ -120,25 +118,48 @@ func txnTimeIsLegal(txnTime timestamp.Timestamp) bool {
 
 // tableSubscribeRecord is records this cn node's table subscription
 // the key is table-id, value is subscribed status
-var tableSubscribeRecord = &sync.Map{}
-
+// var tableSubscribeRecord = &sync.Map{}
 type subscribeID struct {
 	db  uint64
 	tbl uint64
 }
 
+//func initTableSubscribeRecord() {
+//    newM := &sync.Map{}
+//    atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(tableSubscribeRecord)), unsafe.Pointer(newM))
+//}
+//
+//func setTableSubscribe(dbId, tblId uint64) {
+//    tableSubscribeRecord.Store(subscribeID{dbId, tblId}, true)
+//}
+//
+//func getTableSubscribe(dbId, tblId uint64) bool {
+//    _, b := tableSubscribeRecord.Load(subscribeID{dbId, tblId})
+//    return b
+//}
+
+var tableSubscribeRecord = struct {
+	m     map[subscribeID]bool
+	mutex sync.RWMutex
+}{}
+
 func initTableSubscribeRecord() {
-	newM := &sync.Map{}
-	atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(tableSubscribeRecord)), unsafe.Pointer(newM))
+	tableSubscribeRecord.mutex.Lock()
+	tableSubscribeRecord.m = make(map[subscribeID]bool)
+	tableSubscribeRecord.mutex.Unlock()
 }
 
 func setTableSubscribe(dbId, tblId uint64) {
-	tableSubscribeRecord.Store(subscribeID{dbId, tblId}, true)
+	tableSubscribeRecord.mutex.Lock()
+	tableSubscribeRecord.m[subscribeID{dbId, tblId}] = true
+	tableSubscribeRecord.mutex.Unlock()
 }
 
 func getTableSubscribe(dbId, tblId uint64) bool {
-	_, b := tableSubscribeRecord.Load(subscribeID{dbId, tblId})
-	return b
+	tableSubscribeRecord.mutex.RLock()
+	_, ok := tableSubscribeRecord.m[subscribeID{dbId, tblId}]
+	tableSubscribeRecord.mutex.RUnlock()
+	return ok
 }
 
 type TableLogTailSubscriber struct {
@@ -201,7 +222,7 @@ func (logSub *TableLogTailSubscriber) newCnLogTailClient() error {
 	})
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendGoettyOptions(
-			goetty.WithSessionRWBUfferSize(1<<15, 1<<15),
+			goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
 		),
 		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-log-tail-client-backend")),
 	)
@@ -318,7 +339,6 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 						from := resp.r.GetUpdateResponse().GetFrom()
 
 						logList(logLists).Sort()
-
 						for _, l := range logLists {
 							if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &l, from); err != nil {
 								logutil.Error("cnLogTailClient : update table partition failed.")
@@ -373,7 +393,7 @@ func TryToGetTableLogTail(
 			api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 			return err
 		}
-		// wait until each partition has the legal ts (ts >= txn ts).
+		// wait until table was subscribed.
 		for {
 			if getTableSubscribe(dbId, tblId) {
 				break
@@ -473,26 +493,35 @@ func (ls logList) Less(i, j int) bool {
 }
 func (ls logList) Swap(i, j int) { ls[i], ls[j] = ls[j], ls[i] }
 func (ls logList) Sort() {
-	//str := "log into sort start\n"
-	//for i := range ls {
-	//	if ls[i].GetTable().DbId == 1 && ls[i].GetTable().TbId == 2 {
-	//		for j := range ls[i].Commands {
-	//			b := ls[i].Commands[j].GetBat()
-	//			bat, _ := batch.ProtoBatchToBatch(b)
-	//			str += fmt.Sprintf("\tlog into sort : %dth, %d\n", j, ls[i].Commands[j].EntryType)
-	//			for _, v := range bat.Vecs {
-	//				str += fmt.Sprintf("\t\tlog into sort vec: %s\n", v)
-	//			}
-	//		}
-	//	}
-	//}
-	//if len(ls) != 0 {
-	//	fmt.Printf("%slog into sort end\n", str)
-	//}
 	sort.Sort(ls)
 	return
 }
 
 func compareTableIdLess(i1, i2 uint64) bool {
 	return i1 < i2
+}
+
+func debugToPrintLogList(ls []logtail.TableLogtail) string {
+	if len(ls) == 0 {
+		return ""
+	}
+	str := "log list are:\n"
+	for i, l := range ls {
+		did, tid := l.Table.DbId, l.Table.TbId
+		str += fmt.Sprintf("\t log: %d, dn: %d, tbl: %d\n", i, did, tid)
+		if len(l.Commands) > 0 {
+			str += "\tcommands are :\n"
+		}
+		for j, command := range l.Commands {
+			typ := "insert"
+			if command.EntryType == 1 {
+				typ = "delete"
+			} else if command.EntryType == 2 {
+				typ = "update"
+			}
+			str += fmt.Sprintf("\t\t %d: [dnName: %s, tableName: %s, typ: %s]\n",
+				j, command.DatabaseName, command.TableName, typ)
+		}
+	}
+	return str
 }

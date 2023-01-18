@@ -48,6 +48,6 @@ listen-address = "127.0.0.1:32003"
 rpc-max-message-size = "16KiB"
 rpc-payload-copy-buffer-size = "16KiB"
 rpc-enable-checksum = true
-logtail-collect-interval = "5ms"
+logtail-collect-interval = "2ms"
 logtail-response-send-timeout = "10s"
 max-logtail-fetch-failure = 5
