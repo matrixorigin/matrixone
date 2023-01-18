@@ -117,8 +117,8 @@ var (
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
 
-	// defaultMetricUpdateStorageUsageInterval default: 30 min.
-	defaultMetricUpdateStorageUsageInterval = 30 * time.Minute
+	// defaultMetricUpdateStorageUsageInterval default: 15 min.
+	defaultMetricUpdateStorageUsageInterval = 15 * time.Minute
 
 	// defaultMergeCycle default: 4 hours
 	defaultMergeCycle = 4 * time.Hour
