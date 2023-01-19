@@ -90,7 +90,7 @@ func TestMultipleRowLocks(t *testing.T) {
 }
 
 func TestDeadLock(t *testing.T) {
-	l := NewLockService().(*lockTable)
+	l := NewLockService().(*service)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -128,7 +128,7 @@ func TestDeadLock(t *testing.T) {
 }
 
 func TestDeadLockWithRange(t *testing.T) {
-	l := NewLockService().(*lockTable)
+	l := NewLockService().(*service)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -167,7 +167,7 @@ func TestDeadLockWithRange(t *testing.T) {
 
 func mustAddTestLock(t *testing.T,
 	ctx context.Context,
-	l *lockTable,
+	l *service,
 	txnID []byte,
 	lock [][]byte,
 	granularity Granularity) {
@@ -183,7 +183,7 @@ func mustAddTestLock(t *testing.T,
 
 func maybeAddTestLockWithDeadlock(t *testing.T,
 	ctx context.Context,
-	l *lockTable,
+	l *service,
 	txnID []byte,
 	lock [][]byte,
 	granularity Granularity,
