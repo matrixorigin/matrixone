@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show accounts",
-		output: "show accounts",
+		input:  "select connection_id()",
+		output: "select connection_id()",
 	}
 )
 
@@ -406,6 +406,9 @@ var (
 		input:  "SELECT GROUP_CONCAT(DISTINCT 2) from t1",
 		output: "select group_concat(distinct 2, ,) from t1",
 	}, {
+		input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
+		output: "select group_concat(distinct a, ,) from t1",
+	}, {
 		input: "select variance(2) from t1",
 	}, {
 		input:  "select SQL_BIG_RESULT bit_and(col), bit_or(col) from t1 group by col;",
@@ -671,6 +674,12 @@ var (
 		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 	}, {
 		input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
+		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+	}, {
+		input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 lines",
+		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+	}, {
+		input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 rows",
 		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 	}, {
 		input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",

@@ -78,21 +78,23 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		return v.(*table), nil
 	}
-	if name == catalog.MO_DATABASE {
-		id := uint64(catalog.MO_DATABASE_ID)
-		defs := catalog.MoDatabaseTableDefs
-		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
-	}
-	if name == catalog.MO_TABLES {
-		id := uint64(catalog.MO_TABLES_ID)
-		defs := catalog.MoTablesTableDefs
-		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
-	}
-	if name == catalog.MO_COLUMNS {
-		id := uint64(catalog.MO_COLUMNS_ID)
-		defs := catalog.MoColumnsTableDefs
-		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+	if db.databaseName == "mo_catalog" {
+		if name == catalog.MO_DATABASE {
+			id := uint64(catalog.MO_DATABASE_ID)
+			defs := catalog.MoDatabaseTableDefs
+			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+		}
+		if name == catalog.MO_TABLES {
+			id := uint64(catalog.MO_TABLES_ID)
+			defs := catalog.MoTablesTableDefs
+			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+		}
+		if name == catalog.MO_COLUMNS {
+			id := uint64(catalog.MO_COLUMNS_ID)
+			defs := catalog.MoColumnsTableDefs
+			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
 
+		}
 	}
 	key := &cache.TableItem{
 		Name:       name,
@@ -102,9 +104,6 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	}
 	if ok := db.txn.catalog.GetTable(key); !ok {
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
-	}
-	if tbl, ok := db.txn.syncMap.Load(key.Id); ok {
-		return tbl.(*table), nil
 	}
 	parts := db.txn.db.getPartitions(db.databaseId, key.Id)
 	tbl := &table{
@@ -131,7 +130,6 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	}
 	tbl.meta = meta
 	tbl.updated = false
-	db.txn.syncMap.Store(key, tbl)
 	return tbl, nil
 }
 
@@ -154,7 +152,6 @@ func (db *database) Delete(ctx context.Context, name string) error {
 		}
 		id = key.Id
 	}
-	db.txn.syncMap.Delete(id)
 	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err

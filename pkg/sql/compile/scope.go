@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -132,14 +133,14 @@ func (s *Scope) MergeRun(c *Compile) error {
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		s.NodeInfo.Addr == c.addr || len(c.addr) == 0 {
+		len(c.addr) == 0 || strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
 	err := s.remoteRun(c)
 	// tell connect operator that it's over
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
-	sendToConnectOperator(arg, nil)
+	arg.Free(s.Proc, err != nil)
 	return err
 }
 
@@ -167,12 +168,14 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if err != nil {
 			return err
 		}
+		s.NodeInfo.Data = nil
 	case s.NodeInfo.Rel != nil:
 		var err error
 
 		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
+		s.NodeInfo.Data = nil
 	default:
 		var err error
 		var db engine.Database
@@ -201,6 +204,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if rds, err = rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
+		s.NodeInfo.Data = nil
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {

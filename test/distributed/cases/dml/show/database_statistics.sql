@@ -166,7 +166,7 @@ create table t2(
 col1 json
 );
 
--- @bvt:issue#7527
+
 show table_values from t2;
 
 insert into t2 values();
@@ -177,7 +177,7 @@ show table_values from t2;
 
 insert into t2 values (('{"x": [18]}'));
 show table_values from t2;
--- @bvt:issue
+
 
 create table t3(
 col1 decimal
@@ -337,7 +337,7 @@ create table t2(
 col1 json
 );
 
--- @bvt:issue#7527
+
 show table_values from t2;
 
 insert into t2 values();
@@ -348,7 +348,7 @@ show table_values from t2;
 
 insert into t2 values (('{"x": [18]}'));
 show table_values from t2;
--- @bvt:issue
+
 
 create table t3(
 col1 decimal

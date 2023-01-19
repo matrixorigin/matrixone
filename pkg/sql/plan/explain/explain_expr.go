@@ -62,6 +62,9 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions)
 		case *plan.Const_U64Val:
 			result += strconv.FormatUint(val.U64Val, 10)
 
+		case *plan.Const_Fval:
+			result += strconv.FormatFloat(float64(val.Fval), 'f', -1, 32)
+
 		case *plan.Const_Dval:
 			result += strconv.FormatFloat(val.Dval, 'f', -1, 64)
 

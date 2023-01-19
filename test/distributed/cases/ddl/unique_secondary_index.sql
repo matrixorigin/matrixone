@@ -131,9 +131,7 @@ CREATE TABLE IF NOT EXISTS `t_code_rule` (
   KEY `code_rule_no` (`code_rule_no`),
   KEY `org_no` (`org_no`)
 );
--- @bvt:issue#7581
 show create table t_code_rule;
--- @bvt:issue
 load data infile  '$resources/load_data/unique_index_file.csv' into table t_code_rule ;
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 truncate table t_code_rule;
@@ -197,9 +195,7 @@ select col2,col3 from index_table_06;
 
 --abnormal test :create not exists unique/secondary index column
 create table index_table_07 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key col10(col10),key num_id(col4));
--- @bvt:issue#7384
 create table index_table_07 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key col2(col2),key num_id(col40));
--- @bvt:issue
 
 --create unique index
 create table create_index_01 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50));
@@ -284,14 +280,15 @@ insert into create_index_15 values (1,TRUE),(2,FALSE),(3,TRUE);
 insert into create_index_15 values (1,TRUE),(2,FALSE),(3,NULL);
 select * from create_index_15;
 -- blob/json/text type not support unique index
--- @bvt:issue#7549
 create table create_index_16 (col1 bigint primary key,col2 blob,col3 blob);
 create unique index blob_index on create_index_16(col2);
+drop table create_index_16;
 create table create_index_17 (col1 bigint primary key,col2 json,col3 json);
 create unique index json_index on create_index_17(col2);
+drop table create_index_17;
 create table create_index_18 (col1 bigint primary key,col2 text,col3 text);
 create unique index text_index on create_index_18(col2);
--- @bvt:issue
+drop table create_index_18;
 
 --create unique index name test
 create table create_index_name (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1));
@@ -313,7 +310,6 @@ select * from create_index_18;
 drop index m1_index on create_index_18;
 create unique index m2_index on create_index_18(col2,col3,col4);
 truncate table create_index_18;
--- @bvt:issue#7554
 insert into create_index_18(col2,col3,col4)  select 'apple',1,'10';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'11';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
@@ -329,7 +325,6 @@ show create table create_index_18;
 drop index m3_index on create_index_18;
 drop index m4_index on create_index_18;
 drop index m5_index on create_index_18;
--- @bvt:issue
 drop table create_index_18;
 create table create_index_18(col1 int,col2 char(15));
 insert into create_index_18 values(2,'20');
@@ -352,10 +347,8 @@ select * from create_index_19;
 delete from create_index_19 where col2='apple';
 select * from create_index_19;
 truncate table create_index_19;
--- @bvt:issue#7554
 insert into create_index_19(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('apple',3,'12');
 select * from create_index_19;
--- @bvt:issue
 drop table create_index_19;
 
 --abnormal test: create not exists unique column,drop not exists index

@@ -176,7 +176,7 @@ func (m *logtailer) TableLogtail(
 			return mockLogtail(table), nil
 		}
 	}
-	return logtail.TableLogtail{Table: &table, Ts: &to}, nil
+	return logtail.TableLogtail{CkpLocation: "checkpoint", Table: &table, Ts: &to}, nil
 }
 
 func mockRuntime() runtime.Runtime {

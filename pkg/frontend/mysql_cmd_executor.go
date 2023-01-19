@@ -89,6 +89,10 @@ func abortTransactionErrorInfo() string {
 	return "Previous DML conflicts with existing constraints or data format. This transaction has to be aborted"
 }
 
+func writeWriteConflictsErrorInfo() string {
+	return "Write conflicts detected. Previous transaction need to be aborted."
+}
+
 const (
 	prefixPrepareStmtName       = "__mo_stmt_id"
 	prefixPrepareStmtSessionVar = "__mo_stmt_var"
@@ -2268,6 +2272,8 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	for i, col := range cols {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
+		c.SetOrgName(col.Name)
+		c.SetTable(col.Typ.Table)
 		c.SetOrgTable(col.Typ.Table)
 		c.SetAutoIncr(col.Typ.AutoIncr)
 		c.SetSchema(cwft.ses.GetTxnCompileCtx().DefaultDatabase())

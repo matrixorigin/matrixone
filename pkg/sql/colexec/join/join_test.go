@@ -19,11 +19,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -86,6 +85,9 @@ func TestJoin(t *testing.T) {
 	for _, tc := range tcs {
 		nb0 := tc.proc.Mp().CurrNB()
 		bat := hashBuild(t, tc)
+		if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+			jm.SetDupCount(int64(1))
+		}
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
@@ -105,79 +107,6 @@ func TestJoin(t *testing.T) {
 		nb1 := tc.proc.Mp().CurrNB()
 		require.Equal(t, nb0, nb1)
 	}
-}
-
-func TestLowCardinalityJoin(t *testing.T) {
-	tc := newTestCase([]bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(1, 0)},
-		[][]*plan.Expr{
-			{
-				newExpr(0, types.T_varchar.ToType()),
-			},
-			{
-				newExpr(0, types.T_varchar.ToType()),
-			},
-		})
-	tc.arg.Cond = nil // only numeric type can be compared
-
-	values0 := []string{"a", "b", "a", "c", "b", "c", "a", "a"}
-	v0 := testutil.NewVector(len(values0), types.T_varchar.ToType(), tc.proc.Mp(), false, values0)
-	constructIndex(t, v0, tc.proc.Mp())
-
-	// hashbuild
-	bat := hashBuildWithBatch(t, tc, testutil.NewBatchWithVectors([]*vector.Vector{v0}, nil))
-
-	values1 := []string{"c", "d", "c", "c", "b", "a", "b", "d", "a", "b"}
-	v1 := testutil.NewVector(len(values1), types.T_varchar.ToType(), tc.proc.Mp(), false, values1)
-
-	// probe
-	// only the join column of right table is indexed
-	rbat := probeWithBatches(t, tc, testutil.NewBatchWithVectors([]*vector.Vector{v1}, nil), bat)
-
-	result := rbat.Vecs[0]
-	require.NotNil(t, result.Index())
-	resultIdx := result.Index().(*index.LowCardinalityIndex)
-	require.Equal(
-		t,
-		[]uint16{3, 3, 3, 3, 3, 3, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 2},
-		vector.MustTCols[uint16](resultIdx.GetPoses()),
-	)
-}
-
-func TestLowCardinalityIndexesJoin(t *testing.T) {
-	tc := newTestCase([]bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
-		[][]*plan.Expr{
-			{
-				newExpr(0, types.T_varchar.ToType()),
-			},
-			{
-				newExpr(0, types.T_varchar.ToType()),
-			},
-		})
-	tc.arg.Cond = nil // only numeric type can be compared
-
-	values0 := []string{"a", "b", "a", "c", "b", "c", "a", "a"}
-	v0 := testutil.NewVector(len(values0), types.T_varchar.ToType(), tc.proc.Mp(), false, values0)
-	constructIndex(t, v0, tc.proc.Mp())
-
-	// hashbuild
-	bat := hashBuildWithBatch(t, tc, testutil.NewBatchWithVectors([]*vector.Vector{v0}, nil))
-
-	values1 := []string{"c", "d", "c", "c", "b", "a", "b", "d", "a", "b"}
-	v1 := testutil.NewVector(len(values1), types.T_varchar.ToType(), tc.proc.Mp(), false, values1)
-	constructIndex(t, v1, tc.proc.Mp())
-
-	// probe
-	// the join columns of both left table and right table are indexed
-	rbat := probeWithBatches(t, tc, testutil.NewBatchWithVectors([]*vector.Vector{v1}, nil), bat)
-
-	result := rbat.Vecs[0]
-	require.NotNil(t, result.Index())
-	resultIdx := result.Index().(*index.LowCardinalityIndex)
-	require.Equal(
-		t,
-		[]uint16{1, 1, 1, 1, 1, 1, 3, 3, 4, 4, 4, 4, 3, 3, 4, 4, 4, 4, 3, 3},
-		vector.MustTCols[uint16](resultIdx.GetPoses()),
-	)
 }
 
 func BenchmarkJoin(b *testing.B) {
@@ -324,28 +253,7 @@ func hashBuildWithBatch(t *testing.T, tc joinTestCase, bat *batch.Batch) *batch.
 	return tc.proc.Reg.InputBatch
 }
 
-func probeWithBatches(t *testing.T, tc joinTestCase, l, r *batch.Batch) *batch.Batch {
-	err := Prepare(tc.proc, tc.arg)
-	require.NoError(t, err)
-	tc.proc.Reg.MergeReceivers[0].Ch <- l
-	tc.proc.Reg.MergeReceivers[1].Ch <- r
-	ok, err := Call(0, tc.proc, tc.arg, false, false)
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	return tc.proc.Reg.InputBatch
-}
-
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
-
-func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
-	idx, err := index.New(v.Typ, m)
-	require.NoError(t, err)
-
-	err = idx.InsertBatch(v)
-	require.NoError(t, err)
-
-	v.SetIndex(idx)
 }
