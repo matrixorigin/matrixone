@@ -363,6 +363,28 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	}
 	tableInfo.updateColOffset = updateColsOffset
 
+	// origin table values to their position
+	oldColPosMap := make([]map[string]int, len(tableInfo.tableDefs))
+	// insert/update values to their position
+	newColPosMap := make([]map[string]int, len(tableInfo.tableDefs))
+
+	projectSeq := 0
+	for idx, tableDef := range tableInfo.tableDefs {
+		oldColPosMap[idx] = make(map[string]int)
+		newColPosMap[idx] = make(map[string]int)
+		for j, coldef := range tableDef.Cols {
+			oldColPosMap[idx][coldef.Name] = projectSeq + j
+			if pos, ok := updateColsOffset[idx][coldef.Name]; ok {
+				newColPosMap[idx][coldef.Name] = pos
+			} else {
+				newColPosMap[idx][coldef.Name] = projectSeq + j
+			}
+		}
+		projectSeq += getTableValidColsSize(tableDef)
+	}
+	tableInfo.oldColPosMap = oldColPosMap
+	tableInfo.newColPosMap = newColPosMap
+
 	selectAst := &tree.Select{
 		Select: &tree.SelectClause{
 			Distinct: false,
