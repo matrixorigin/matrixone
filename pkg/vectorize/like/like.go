@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
-	"strings"
 	"unicode/utf8"
 	"unsafe"
 
@@ -231,7 +230,7 @@ func convert(expr []byte) string {
 func replace(s string) string {
 	var oldCharactor rune
 
-	r := make([]byte, len(s)+strings.Count(s, `%`))
+	r := make([]byte, len(s)*2)
 	w := 0
 	start := 0
 	for len(s) > start {
@@ -247,6 +246,10 @@ func replace(s string) string {
 			w += copy(r[w:], []byte{'.'})
 		case '%':
 			w += copy(r[w:], []byte{'.', '*'})
+		case '(':
+			w += copy(r[w:], []byte{'\\', '('})
+		case ')':
+			w += copy(r[w:], []byte{'\\', ')'})
 		case '\\':
 		default:
 			w += copy(r[w:], s[start:start+wid])

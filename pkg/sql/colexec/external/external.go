@@ -473,9 +473,9 @@ func getCompressType(param *tree.ExternParam) string {
 	}
 	tail := string([]byte(param.Filepath)[index+1:])
 	switch tail {
-	case "gz":
+	case "gz", "gzip":
 		return tree.GZIP
-	case "bz2":
+	case "bz2", "bzip2":
 		return tree.BZIP2
 	case "lz4":
 		return tree.LZ4
@@ -488,13 +488,13 @@ func getUnCompressReader(param *tree.ExternParam, r io.ReadCloser) (io.ReadClose
 	switch strings.ToLower(getCompressType(param)) {
 	case tree.NOCOMPRESS:
 		return r, nil
-	case tree.GZIP:
+	case tree.GZIP, tree.GZ:
 		r, err := gzip.NewReader(r)
 		if err != nil {
 			return nil, err
 		}
 		return r, nil
-	case tree.BZIP2:
+	case tree.BZIP2, tree.BZ2:
 		return io.NopCloser(bzip2.NewReader(r)), nil
 	case tree.FLATE:
 		r = flate.NewReader(r)
