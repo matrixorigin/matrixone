@@ -65,7 +65,7 @@ func (jm *JoinMap) Dup() *JoinMap {
 		keys:          make([][]byte, UnitLimit),
 		strHashStates: make([][3]uint64, UnitLimit),
 	}
-	return &JoinMap{
+	jm0 := &JoinMap{
 		mp:      m0,
 		expr:    jm.expr,
 		sels:    jm.sels,
@@ -73,16 +73,30 @@ func (jm *JoinMap) Dup() *JoinMap {
 		cnt:     jm.cnt,
 		idx:     jm.idx,
 	}
+	if atomic.AddInt64(jm.dupCnt, -1) == 0 {
+		jm.mp = nil
+		jm.sels = nil
+	}
+	return jm0
 }
 
 func (jm *JoinMap) IncRef(ref int64) {
 	atomic.AddInt64(jm.cnt, ref)
 }
 
+func (jm *JoinMap) SetDupCount(ref int64) {
+	jm.dupCnt = new(int64)
+	atomic.AddInt64(jm.dupCnt, ref)
+}
+
 func (jm *JoinMap) Free() {
 	if atomic.AddInt64(jm.cnt, -1) != 0 {
 		return
 	}
+	for i := range jm.sels {
+		jm.sels[i] = nil
+	}
+	jm.sels = nil
 	jm.mp.Free()
 }
 

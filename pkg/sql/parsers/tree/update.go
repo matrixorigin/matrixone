@@ -109,7 +109,9 @@ const (
 	AUTO       = "auto"
 	NOCOMPRESS = "none"
 	GZIP       = "gzip"
-	BZIP2      = "bz2"
+	GZ         = "gz" // alias of gzip
+	BZIP2      = "bzip2"
+	BZ2        = "bz2" // alias for bzip2
 	FLATE      = "flate"
 	LZW        = "lzw"
 	ZLIB       = "zlib"
@@ -145,7 +147,9 @@ type ExternParam struct {
 	S3Param      *S3Parameter
 	Ctx          context.Context
 	LoadFile     bool
+	Local        bool
 	QueryResult  bool
+	SysTable     bool
 }
 
 type S3Parameter struct {

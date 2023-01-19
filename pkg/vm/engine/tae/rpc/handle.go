@@ -403,12 +403,16 @@ func (h *Handle) startLoadJobs(
 				fmt.Sprintf("load-deleted-rowid-%s", req.DeltaLocs[i]))
 		}
 	}
-	//start loading jobs
+	//start loading jobs asynchronously,should create a new root context.
+	nctx := context.Background()
+	if deadline, ok := ctx.Deadline(); ok {
+		nctx, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
+	}
 	for i, v := range locations {
-		ctx := context.WithValue(ctx, db.LocationKey{}, v)
+		nctx = context.WithValue(nctx, db.LocationKey{}, v)
 		req.Jobs[i] = tasks.NewJob(
 			jobIds[i],
-			ctx,
+			nctx,
 			func(ctx context.Context) (jobR *tasks.JobResult) {
 				jobR = &tasks.JobResult{}
 				loc, ok := ctx.Value(db.LocationKey{}).(string)
@@ -485,12 +489,19 @@ func (h *Handle) EvaluateTxnRequest(
 					}
 					if r.Schema.HasPK() {
 						//start to load primary keys
-						return h.startLoadJobs(ctx, meta, r)
+						err = h.startLoadJobs(ctx, meta, r)
+						if err != nil {
+							return
+						}
 					}
-					return
+					continue
 				}
 				//start to load deleted row ids
-				return h.startLoadJobs(ctx, meta, r)
+				err = h.startLoadJobs(ctx, meta, r)
+				if err != nil {
+					return
+				}
+
 			}
 		}
 	}
@@ -787,6 +798,11 @@ func (h *Handle) HandleWrite(
 	meta txn.TxnMeta,
 	req *db.WriteReq,
 	resp *db.WriteResp) (err error) {
+	defer func() {
+		if req.Cancel != nil {
+			req.Cancel()
+		}
+	}()
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {

@@ -1167,6 +1167,7 @@ var (
 		"system":             0,
 		"system_metrics":     0,
 		"mysql":              0,
+		"mo_task":            0,
 	}
 
 	// the privileges that can not be granted or revoked
@@ -3629,6 +3630,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
+	case *tree.AlterDataBaseConfig:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	case *tree.CreateFunction:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -4043,51 +4047,6 @@ func getSqlForPrivilege2(ses *Session, roleId int64, entry privilegeEntry, pl pr
 	return getSqlForPrivilege(ses.GetRequestContext(), roleId, entry, pl)
 }
 
-// verifyAccountCanOperateClusterTable determines the account can operate
-// the cluster table
-func verifyAccountCanOperateClusterTable(account *TenantInfo,
-	dbName string,
-	clusterTableOperation clusterTableOperationType) bool {
-	if account.IsSysTenant() {
-		//sys account can do anything on the cluster table.
-		if dbName == moCatalog {
-			return true
-		}
-	} else {
-		//the general account can only read the cluster table
-		if dbName == moCatalog {
-			switch clusterTableOperation {
-			case clusterTableNone, clusterTableSelect:
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// isRealUserModifiesMoCatalog determines if a real user outside MO is
-// modifying the tables in the mo_catalog
-func isRealUserModifiesMoCatalog(ses *Session, dbName string,
-	writeDBTableDirect bool,
-	isClusterTable bool,
-	clusterTableOperation clusterTableOperationType) bool {
-	if ses.GetFromRealUser() && writeDBTableDirect {
-		if len(dbName) == 0 {
-			dbName = ses.GetDatabaseName()
-		}
-		//check cluster table
-		if isClusterTable {
-			if verifyAccountCanOperateClusterTable(ses.GetTenantInfo(), dbName, clusterTableOperation) {
-				return false
-			}
-		}
-		if ok2 := isBannedDatabase(dbName); ok2 {
-			return ok2
-		}
-	}
-	return false
-}
-
 // verifyPrivilegeEntryInMultiPrivilegeLevels checks the privilege
 // with multi-privilege levels exists or not
 func verifyPrivilegeEntryInMultiPrivilegeLevels(
@@ -4142,7 +4101,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 	var pls []privilegeLevelType
 
 	var yes bool
-	var operateCatalog bool
+	var yes2 bool
 	//there is no privilege needs, just approve
 	if len(priv.entries) == 0 {
 		return false, nil
@@ -4158,18 +4117,19 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					return false, err
 				}
 
-				yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls)
-				if err != nil {
-					return false, err
-				}
-				operateCatalog = isRealUserModifiesMoCatalog(ses,
+				yes2 = verifyLightPrivilege(ses,
 					entry.databaseName,
 					priv.writeDatabaseAndTableDirectly,
 					priv.isClusterTable,
 					priv.clusterTableOperation)
-				if operateCatalog {
-					yes = false
+
+				if yes2 {
+					yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls)
+					if err != nil {
+						return false, err
+					}
 				}
+
 				if yes {
 					return true, nil
 				}
@@ -4212,18 +4172,18 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								return false, err
 							}
 
-							//At least there is one success
-							yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, tempEntry, pls)
-							if err != nil {
-								return false, err
-							}
-							operateCatalog = isRealUserModifiesMoCatalog(ses,
+							yes2 = verifyLightPrivilege(ses,
 								tempEntry.databaseName,
 								priv.writeDatabaseAndTableDirectly,
 								mi.isClusterTable,
 								mi.clusterTableOperation)
-							if operateCatalog {
-								yes = false
+
+							if yes2 {
+								//At least there is one success
+								yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, tempEntry, pls)
+								if err != nil {
+									return false, err
+								}
 							}
 						}
 						if !yes {
@@ -6087,6 +6047,55 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	}
 
 	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
+	var err error
+	var deleteSql string
+	var insertSql string
+	datname := ad.DbName
+	update_config := "'" + ad.UpdateConfig.String() + "'"
+
+	//verify the update_config
+	if !isInvalidConfigInput(update_config) {
+		return moerr.NewInvalidInput(ctx, "invalid input %s for alter database config", update_config)
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//first delete the record
+	deleteSql = getSqlForDeleteMysqlCompatbilityMode(datname)
+	err = bh.Exec(ctx, deleteSql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//second insert a new record
+	insertSql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, datname, update_config)
+	err = bh.Exec(ctx, insertSql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")

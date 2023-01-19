@@ -143,6 +143,22 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side 
 	return
 }
 
+func hasTag(expr *plan.Expr, tag int32) bool {
+	var ret bool
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			ret = ret || hasTag(arg, tag)
+		}
+
+	case *plan.Expr_Col:
+		ret = exprImpl.Col.RelPos == tag
+	}
+
+	return ret
+}
+
 func containsTag(expr *plan.Expr, tag int32) bool {
 	var ret bool
 
@@ -962,7 +978,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if err != nil {
 		return nil, err
 	}
-	c := rule.GetConstantValue(vec)
+	c := rule.GetConstantValue(vec, false)
 	vec.Free(proc.Mp())
 	if c == nil {
 		return e, nil
@@ -1171,6 +1187,9 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal >= 0
 		case types.T_varchar:
 			return true
+		case types.T_float32:
+			//float32 has 6-7 significant digits.
+			return constVal <= 100000 && constVal >= -100000
 		default:
 			return false
 		}
@@ -1197,6 +1216,9 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal <= math.MaxUint32
 		case types.T_uint64:
 			return true
+		case types.T_float32:
+			//float32 has 6-7 significant digits.
+			return constVal <= 100000
 		default:
 			return false
 		}

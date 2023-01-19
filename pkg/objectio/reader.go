@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -49,34 +50,52 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 
 	metas := &fileservice.IOVector{
 		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, 0, l),
+		Entries:  make([]fileservice.IOEntry, 1, l),
 	}
-	for _, extent := range extents {
-		extent := extent
-		metas.Entries = append(metas.Entries, fileservice.IOEntry{
-			Offset: int64(extent.offset),
-			Size:   int64(extent.originSize),
 
-			ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
-				// unmarshal to block
+	metas.Entries[0] = fileservice.IOEntry{
+		Offset: int64(extents[0].offset),
+		Size:   int64(extents[0].originSize),
+
+		ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
+			if len(data) == 0 {
+				var err error
+				data, err = io.ReadAll(reader)
+				if err != nil {
+					return nil, 0, err
+				}
+			}
+			dataLen := len(data)
+			blocks := make([]*Block, 0)
+			size := uint32(0)
+			i := uint32(0)
+			for {
+				if size == uint32(dataLen) {
+					break
+				}
+				extent := Extent{
+					id:         i,
+					offset:     extents[0].offset,
+					length:     extents[0].length,
+					originSize: extents[0].originSize,
+				}
 				block := &Block{
 					object: r.object,
 					extent: extent,
 					name:   r.name,
 				}
-				if len(data) == 0 {
-					var err error
-					data, err = io.ReadAll(reader)
-					if err != nil {
-						return nil, 0, err
-					}
-				}
-				if err := block.UnMarshalMeta(data); err != nil {
+				cache := data[size:dataLen]
+				unSize, err := block.UnMarshalMeta(cache)
+				if err != nil {
+					logutil.Infof("UnMarshalMeta failed: %v, extent %v", err.Error(), extents[0])
 					return nil, 0, err
 				}
-				return block, int64(len(data)), nil
-			},
-		})
+				i++
+				size += unSize
+				blocks = append(blocks, block)
+			}
+			return blocks, int64(len(data)), nil
+		},
 	}
 
 	err := r.object.fs.Read(ctx, metas)
@@ -85,8 +104,9 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 	}
 
 	blocks := make([]BlockObject, 0, l)
-	for _, entry := range metas.Entries {
-		block := entry.Object.(*Block)
+
+	for _, extent := range extents {
+		block := metas.Entries[0].Object.([]*Block)[extent.id]
 		blocks = append(blocks, block)
 	}
 	return blocks, err

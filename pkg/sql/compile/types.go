@@ -36,6 +36,10 @@ type (
 	TxnOperator = client.TxnOperator
 )
 
+const (
+	MinBlockNum = 200
+)
+
 // type of scope
 const (
 	Merge = iota

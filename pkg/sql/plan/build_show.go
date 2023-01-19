@@ -160,11 +160,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr += pkStr
 	}
 
-	uIndexDef, _ := buildIndexDefs(tableDef.Defs)
+	uIndexDef, sIndexDef := buildIndexDefs(tableDef.Defs)
 	if uIndexDef != nil {
 		for i, name := range uIndexDef.IndexNames {
-			uIStr := "UNIQUE KEY"
-			uIStr += fmt.Sprintf("`%s`(", name)
+			uIStr := "UNIQUE KEY "
+			uIStr += fmt.Sprintf("`%s` (", name)
 			for num, part := range uIndexDef.Fields[i].Parts {
 				if num == len(uIndexDef.Fields[i].Parts)-1 {
 					uIStr += fmt.Sprintf("`%s`", part)
@@ -173,6 +173,32 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 				}
 			}
 			uIStr += ")"
+			if uIndexDef.Comments[i] != "" {
+				uIStr += fmt.Sprintf(" COMMENT `%s`", uIndexDef.Comments[i])
+			}
+			if rowCount != 0 {
+				createStr += ",\n"
+			}
+			createStr += uIStr
+		}
+
+	}
+
+	if sIndexDef != nil {
+		for i, name := range sIndexDef.IndexNames {
+			uIStr := "KEY "
+			uIStr += fmt.Sprintf("`%s` (", name)
+			for num, part := range sIndexDef.Fields[i].Parts {
+				if num == len(sIndexDef.Fields[i].Parts)-1 {
+					uIStr += fmt.Sprintf("`%s`", part)
+				} else {
+					uIStr += fmt.Sprintf("`%s`,", part)
+				}
+			}
+			uIStr += ")"
+			if sIndexDef.Comments[i] != "" {
+				uIStr += fmt.Sprintf(" COMMENT `%s`", sIndexDef.Comments[i])
+			}
 			if rowCount != 0 {
 				createStr += ",\n"
 			}
@@ -450,6 +476,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 
 	sql := "SELECT"
 	tableCols := tableDef.Cols
+	isAllNull := true
 	for i := range tableCols {
 		colName := tableCols[i].Name
 		if types.T(tableCols[i].GetTyp().Id) == types.T_json {
@@ -458,10 +485,15 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 		} else {
 			sql += " max(%s), min(%s),"
 			sql = fmt.Sprintf(sql, colName, colName)
+			isAllNull = false
 		}
 	}
 	sql = sql[:len(sql)-1]
 	sql += " FROM %s"
+
+	if isAllNull {
+		sql += " LIMIT 1"
+	}
 	sql = fmt.Sprintf(sql, tblName)
 
 	return returnByRewriteSQL(ctx, sql, ddlType)

@@ -149,8 +149,6 @@ type Transaction struct {
 	tableMap *sync.Map
 	// use to cache database
 	databaseMap *sync.Map
-	// used to mark whether a table has been synchronized with logtail
-	syncMap *sync.Map
 }
 
 // Entry represents a delete/insert

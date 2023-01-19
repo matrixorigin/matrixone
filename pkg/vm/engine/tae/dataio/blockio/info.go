@@ -61,6 +61,10 @@ func DecodeMetaLocToMeta(metaLoc string) (*Meta, error) {
 	if err != nil {
 		return nil, err
 	}
+	id, err := strconv.ParseUint(location[3], 10, 32)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := strconv.ParseUint(info[2], 10, 32)
 	if err != nil {
 		return nil, err
@@ -69,7 +73,7 @@ func DecodeMetaLocToMeta(metaLoc string) (*Meta, error) {
 	if err != nil {
 		return nil, err
 	}
-	extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
+	extent := objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
 	meta := &Meta{
 		key:        name,
 		loc:        extent,
@@ -80,13 +84,16 @@ func DecodeMetaLocToMeta(metaLoc string) (*Meta, error) {
 }
 
 func EncodeMetalocFromMetas(name string, blks []objectio.BlockObject) string {
+	offset := blks[0].GetExtent().Offset()
+	length := blks[0].GetExtent().Length()
 	var buf bytes.Buffer
 	_, _ = buf.WriteString(name)
 	for _, blk := range blks {
-		_, _ = buf.WriteString(fmt.Sprintf(":%d_%d_%d",
-			blk.GetExtent().Offset(),
-			blk.GetExtent().Length(),
-			blk.GetExtent().OriginSize()))
+		_, _ = buf.WriteString(fmt.Sprintf(":%d_%d_%d_%d",
+			offset,
+			length,
+			length,
+			blk.GetExtent().Id()))
 	}
 	return buf.String()
 }
@@ -109,7 +116,11 @@ func DecodeMetaLocToMetas(metaLoc string) (string, []objectio.Extent, error) {
 		if err != nil {
 			return "", nil, err
 		}
-		extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
+		id, err := strconv.ParseUint(location[3], 10, 32)
+		if err != nil {
+			return "", nil, err
+		}
+		extent := objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
 		extents = append(extents, extent)
 	}
 	return name, extents, nil
@@ -135,7 +146,7 @@ func DecodeDeltaLocToDelta(metaLoc string) (*Delta, error) {
 	if err != nil {
 		return nil, err
 	}
-	extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
+	extent := objectio.NewExtent(0, uint32(offset), uint32(size), uint32(osize))
 	delta := &Delta{
 		key:        name,
 		loc:        extent,

@@ -80,4 +80,4 @@ func (k *Kill) Format(ctx *FmtCtx) {
 }
 
 func (k *Kill) GetStatementType() string { return "kill" }
-func (k *Kill) GetQueryType() string     { return QueryTypeDCL }
+func (k *Kill) GetQueryType() string     { return QueryTypeOth }
