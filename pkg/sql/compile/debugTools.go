@@ -48,6 +48,7 @@ var debugInstructionNames = map[int]string{
 	vm.LoopSemi:     "loop semi",
 	vm.LoopAnti:     "loop anti",
 	vm.LoopSingle:   "loop single",
+	vm.LoopMark:     "loop mark",
 	vm.MergeTop:     "merge top",
 	vm.MergeLimit:   "merge limit",
 	vm.MergeOrder:   "merge order",

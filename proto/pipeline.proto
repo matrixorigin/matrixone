@@ -129,15 +129,11 @@ message MarkJoin {
   uint64 ibucket = 1;
   uint64 nbucket = 2;
   repeated int32 result = 3;
-  repeated plan.Expr left_cond = 4;
-  repeated plan.Expr right_cond = 5;
-  repeated plan.Type types = 6;
-  plan.Expr cond = 7;
+  plan.Expr expr = 4;
+  repeated plan.Type types = 5;
+  repeated plan.Expr left_cond = 6;
+  repeated plan.Expr right_cond = 7;
   repeated plan.Expr on_list = 8;
-  bool output_null = 9;
-  bool output_mark = 10;
-  bool output_anyway = 11;
-  bool mark_meaning = 12;
 }
 
 message Product {
