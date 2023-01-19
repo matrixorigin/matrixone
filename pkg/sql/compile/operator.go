@@ -328,8 +328,11 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		if regMap != nil {
 			sourceArg := sourceIns.Arg.(*dispatch.Argument)
 			arg := &dispatch.Argument{
-				All:       sourceArg.All,
-				LocalRegs: make([]*process.WaitRegister, len(sourceArg.LocalRegs)),
+				All:        sourceArg.All,
+				CrossCN:    sourceArg.CrossCN,
+				SendFunc:   sourceArg.SendFunc,
+				LocalRegs:  make([]*process.WaitRegister, len(sourceArg.LocalRegs)),
+				RemoteRegs: make([]colexec.WrapperNode, len(sourceArg.RemoteRegs)),
 			}
 			for j := range arg.LocalRegs {
 				sourceReg := sourceArg.LocalRegs[j]
@@ -337,8 +340,18 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 					panic("nonexistent wait register")
 				}
 			}
+			for j := range arg.RemoteRegs {
+				arg.RemoteRegs[j] = sourceArg.RemoteRegs[j]
+			}
 			res.Arg = arg
+
+			if sourceArg.CrossCN {
+				fmt.Printf("[Dup instruction] dup a cross-cn Dispatch, with remote reg len = %d\n", len(arg.RemoteRegs))
+			}
+		} else {
+			fmt.Printf("[Dup instruction] dup a empty dispatch")
 		}
+
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -876,7 +889,6 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 	fmt.Printf("[constructShuffleJoinDispatch] currentCNAddr = %s\n", currentCNAddr)
 	arg := new(dispatch.Argument)
 	arg.All = true
-	arg.CrossCN = true
 
 	scopeLen := len(ss)
 	arg.RemoteRegs = make([]colexec.WrapperNode, 0, scopeLen)
@@ -923,8 +935,11 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 			})
 		}
 	}
+	if len(arg.RemoteRegs) != 0 {
+		arg.CrossCN = true
+	}
 
-	sendFunc := func(streams []*dispatch.WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, proc *process.Process) error {
+	sendFunc := func(streams []*dispatch.WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, ctxs []context.Context, proc *process.Process) error {
 		// TODO: seperate to different goroutine?
 		// send bat to streams
 		//fmt.Printf("[dispatch.SendFunc()] begin ...\n")
@@ -950,10 +965,12 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 						message.Uuid = uuid[:]
 					}
 					// TODO: change the ctx
-					errSend := stream.Stream.Send(proc.Ctx, message)
+					errSend := stream.Stream.Send(ctxs[i], message)
 					if errSend != nil {
+						fmt.Printf("[dispatch.SendFunc()] stream sender[%d] send failed\n", i)
 						return errSend
 					}
+					fmt.Printf("[dispatch.SendFunc()] stream sender[%d] send success\n", i)
 				}
 			}
 		}

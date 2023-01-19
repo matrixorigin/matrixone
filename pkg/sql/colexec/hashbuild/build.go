@@ -90,13 +90,15 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	var err error
 
 	for {
+		fmt.Printf("[hashbuild] waiting ... reg = %p\n", &proc.Reg.MergeReceivers[0].Ch)
 		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
 		anal.WaitStop(start)
 
-		fmt.Printf("[hashbuild] received batch\n")
+		fmt.Printf("[hashbuild] received batch, reg = %p\n", &proc.Reg.MergeReceivers[0].Ch)
 
 		if bat == nil {
+			fmt.Printf("[hashbuild] received nil batch, reg = %p\n", &proc.Reg.MergeReceivers[0].Ch)
 			break
 		}
 		if bat.Length() == 0 {

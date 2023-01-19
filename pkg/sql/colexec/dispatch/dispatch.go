@@ -16,8 +16,10 @@ package dispatch
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -37,15 +39,20 @@ func Prepare(proc *process.Process, arg any) error {
 	if ap.CrossCN {
 		fmt.Printf("Prepare cross-cn, length of RemoteReg = %d\n", len(ap.RemoteRegs))
 		ap.ctr.streams = make([]*WrapperStream, 0, len(ap.RemoteRegs))
+		ap.ctr.c = make([]context.Context, 0, len(ap.RemoteRegs))
 		for i := range ap.RemoteRegs {
 			stream, errStream := cnclient.GetStreamSender(ap.RemoteRegs[i].NodeAddr)
 			if errStream != nil {
 				return errStream
 			}
-			fmt.Printf("stream[%d] get success. proc = %p\n", i, proc)
+			fmt.Printf("stream[%d] get success. streamid = %d\n", i, stream.ID())
 			ap.ctr.streams = append(ap.ctr.streams, &WrapperStream{
 				Stream: stream,
 				Uuids:  ap.RemoteRegs[i].Uuids})
+
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			_ = cancel
+			ap.ctr.c = append(ap.ctr.c, timeoutCtx)
 		}
 	}
 	return nil
@@ -59,7 +66,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 
 	if ap.CrossCN {
-		if err := ap.SendFunc(ap.ctr.streams, bat, ap.LocalRegs, proc); err != nil {
+		if err := ap.SendFunc(ap.ctr.streams, bat, ap.LocalRegs, ap.ctr.c, proc); err != nil {
 			return false, err
 		}
 		return false, nil
@@ -123,8 +130,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func CloseStreams(streams []*WrapperStream, proc *process.Process) error {
-	fmt.Printf("[CloseStreams] proc = %p", proc)
-	fmt.Printf("close streams. stream len = %d\n", len(streams))
+	fmt.Printf("[CloseStreams] close streams. stream len = %d\n", len(streams))
+	c, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+	_ = cancel
+
 	for i, stream := range streams {
 		if len(stream.Uuids) == 0 {
 			fmt.Printf("no uuid in stream[%d]\n", i)
@@ -135,23 +144,24 @@ func CloseStreams(streams []*WrapperStream, proc *process.Process) error {
 			{
 				message.Id = streams[i].Stream.ID()
 				message.Cmd = 12345
-				message.Sid = pipeline.MessageEnd
+				message.Sid = pipeline.DirectBatchEndMessage
 				message.Uuid = uuid[:]
 			}
-			fmt.Printf("uuid %s close message begin to send ...\n", uuid)
-			if err := streams[i].Stream.Send(proc.Ctx, message); err != nil {
-				fmt.Printf("uuid %s close message send failed", uuid)
+			fmt.Printf("[CloseStreams] uuid %s close message begin to send\n", uuid)
+			if err := streams[i].Stream.Send(c, message); err != nil {
+				fmt.Printf("[CloseStreams] uuid %s close message send failed: %s\n", uuid, err)
 				return err
 			}
 
-			fmt.Printf("uuid %s close message send\n", uuid)
+			fmt.Printf("[CloseStreams] uuid %s close message send\n", uuid)
 		}
 	}
 	for i := range streams {
 		if err := streams[i].Stream.Close(); err != nil {
+			fmt.Printf("[CloseStreams] stream[%d] close failed. err: %s\n", i, err)
 			return err
 		}
+		fmt.Printf("[CloseStreams] stream[%d] close success\n", i)
 	}
-
 	return nil
 }

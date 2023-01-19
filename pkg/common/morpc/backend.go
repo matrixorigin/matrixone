@@ -798,6 +798,7 @@ func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.id = id
 	s.sequence = 0
 	s.unlockAfterClose = unlockAfterClose
+	s.lastReceivedSequence = 0
 	s.mu.closed = false
 	for {
 		select {

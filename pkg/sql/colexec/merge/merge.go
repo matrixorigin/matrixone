@@ -16,6 +16,7 @@ package merge
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"time"
 
@@ -33,6 +34,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr = new(container)
 	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
 	for i, mr := range proc.Reg.MergeReceivers {
+		fmt.Println()
 		ap.ctr.receiverListener[i] = reflect.SelectCase{
 			Dir:  reflect.SelectRecv,
 			Chan: reflect.ValueOf(mr.Ch),
@@ -51,13 +53,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	for {
 		if ctr.aliveMergeReceiver == 0 {
+			fmt.Printf("[colexecMerge] merge end. proc = %p, idx = %d\n", &proc, idx)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
 
+		fmt.Printf("[colexecMerge] merge wait ... proc = %p, idx = %d\n", &proc, idx)
 		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
+			fmt.Printf("[colexecMerge] pipeline closed unexpectedly\n")
 			return false, moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
 		}
 		anal.WaitStop(start)
@@ -65,6 +70,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		pointer := value.UnsafePointer()
 		bat := (*batch.Batch)(pointer)
 		if bat == nil {
+			fmt.Printf("[colexecMerge] nil batch, close the channel. proc = %p, idx = %d\n", &proc, idx)
 			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
 			ctr.aliveMergeReceiver--
 			continue

@@ -62,6 +62,7 @@ type Argument struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
+		//fmt.Printf("[joinjoin] join end. proc = %p\n", proc)
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanEvalVectors(mp)

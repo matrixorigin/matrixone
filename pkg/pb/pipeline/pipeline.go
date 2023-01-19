@@ -25,6 +25,7 @@ const (
 	BatchEnd = iota
 	MessageEnd
 	WaitingNext
+	DirectBatchEndMessage
 )
 
 func (m *Message) Size() int {
@@ -50,6 +51,10 @@ func (m *Message) DebugString() string {
 
 func (m *Message) IsEndMessage() bool {
 	return m.Sid == MessageEnd
+}
+
+func (m *Message) IsDirectBatchEnd() bool {
+	return m.Sid == DirectBatchEndMessage
 }
 
 func (m *Message) WaitingNextToMerge() bool {

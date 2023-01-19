@@ -15,6 +15,9 @@
 package dispatch
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,6 +32,8 @@ type WrapperStream struct {
 type container struct {
 	i       int
 	streams []*WrapperStream
+
+	c []context.Context
 }
 
 type Argument struct {
@@ -46,11 +51,14 @@ type Argument struct {
 	RemoteRegs []colexec.WrapperNode
 
 	// streams is the stream which connect local CN with remote CN.
-	SendFunc func(streams []*WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, proc *process.Process) error
+	SendFunc func(streams []*WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, ctxs []context.Context, proc *process.Process) error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if arg.CrossCN {
+		if pipelineFailed {
+			fmt.Printf("[CloseStreams] pipeline failed!\n")
+		}
 		CloseStreams(arg.ctr.streams, proc)
 	}
 

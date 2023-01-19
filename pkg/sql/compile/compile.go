@@ -127,7 +127,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 
 	// XXX PrintScope has a none-trivial amount of logging
 	// PrintScope(nil, []*Scope{c.scope})
-	fmt.Printf("%s\n", DebugShowScopes([]*Scope{c.scope}))
+	fmt.Printf("Compile.Run()\n%s\n", DebugShowScopes([]*Scope{c.scope}))
 
 	switch c.scope.Magic {
 	case Normal:
@@ -853,6 +853,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 	}
 	switch joinTyp {
 	case plan.Node_INNER:
+		fmt.Printf("[compileJoin] joinType = Inner\n")
 		if len(n.OnList) == 0 {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
@@ -879,6 +880,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_SEMI:
+		fmt.Printf("[compileJoin] joinType = Node_SEMI\n")
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -895,6 +897,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_LEFT:
+		fmt.Printf("[compileJoin] joinType = Node_LEFT\n")
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -911,6 +914,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_SINGLE:
+		fmt.Printf("[compileJoin] joinType = Node_SINGLE\n")
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -927,6 +931,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_ANTI:
+		fmt.Printf("[compileJoin] joinType = Node_ANTI\n")
 		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
 			if isEq && len(conds) == 1 {
@@ -1284,6 +1289,7 @@ func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 	len := len(ss)
 	rs := make([]*Scope, len)
+	idx := 0
 	for i := range ss {
 		if ss[i].IsEnd {
 			rs[i] = ss[i]
@@ -1293,6 +1299,9 @@ func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Sco
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = ss[i].NodeInfo
+		if isCurrentCN(rs[i].NodeInfo.Addr, c.addr) {
+			idx = i
+		}
 		rs[i].PreScopes = []*Scope{ss[i]}
 		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].appendInstruction(vm.Instruction{
@@ -1307,9 +1316,9 @@ func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Sco
 	mergeChildren := c.newMergeScope(children)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructShuffleJoinDispatch(1, rs, c.addr),
+		Arg: constructShuffleJoinDispatch(1, rs, rs[idx].NodeInfo.Addr),
 	})
-	rs[0].PreScopes = append(rs[0].PreScopes, mergeChildren)
+	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 
 	return rs
 }
@@ -1571,6 +1580,12 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 		last := len(s.Instructions) - 1
 		s.Instructions[last].IsLast = true
 	}
+}
+
+func isCurrentCN(addr string, currentCNAddr string) bool {
+	// TODO: add strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
+	return addr == currentCNAddr
+
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
