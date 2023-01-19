@@ -695,6 +695,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 		}
+	case "trim":
+		astArgs = astArgs[1:]
 	}
 	// bind ast function's args
 	args := make([]*Expr, len(astArgs))
