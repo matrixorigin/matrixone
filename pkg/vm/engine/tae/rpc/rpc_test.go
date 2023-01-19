@@ -71,12 +71,13 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	taeBat := catalog.MockBatch(schema, 30)
+	taeBat := catalog.MockBatch(schema, 40)
 	defer taeBat.Close()
-	taeBats := taeBat.Split(3)
+	taeBats := taeBat.Split(4)
 	taeBats[0] = taeBats[0].CloneWindow(0, 10)
 	taeBats[1] = taeBats[1].CloneWindow(0, 10)
 	taeBats[2] = taeBats[2].CloneWindow(0, 10)
+	taeBats[3] = taeBats[3].CloneWindow(0, 10)
 
 	//sort by primary key
 	_, err = mergesort.SortBlockColumns(taeBats[0].Vecs, 1)
@@ -86,15 +87,16 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	_, err = mergesort.SortBlockColumns(taeBats[2].Vecs, 1)
 	assert.Nil(t, err)
 
-	moBats := make([]*batch.Batch, 3)
+	moBats := make([]*batch.Batch, 4)
 	moBats[0] = containers.CopyToMoBatch(taeBats[0])
 	moBats[1] = containers.CopyToMoBatch(taeBats[1])
 	moBats[2] = containers.CopyToMoBatch(taeBats[2])
+	moBats[3] = containers.CopyToMoBatch(taeBats[3])
 
-	//write two blocks into file service
+	//write moBats[0], moBats[1] two blocks into file service
 	id := 1
-	objName := fmt.Sprintf("%d.seg", id)
-	objectWriter, err := objectio.NewObjectWriter(objName, service)
+	objName1 := fmt.Sprintf("%d.seg", id)
+	objectWriter, err := objectio.NewObjectWriter(objName1, service)
 	assert.Nil(t, err)
 	for i, bat := range moBats {
 		if i == 2 {
@@ -127,6 +129,34 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	metaLoc2, err := blockio.EncodeMetaLocWithObject(
 		blocks[1].GetExtent(),
 		uint32(moBats[1].Vecs[0].Length()),
+		blocks,
+	)
+	assert.Nil(t, err)
+	//write moBats[3] into file service
+	id += 1
+	objName2 := fmt.Sprintf("%d.seg", id)
+	objectWriter, err = objectio.NewObjectWriter(objName2, service)
+	assert.Nil(t, err)
+	fd, err := objectWriter.Write(moBats[3])
+	assert.Nil(t, err)
+	for i, mvec := range moBats[3].Vecs {
+		bloomFilter, zoneMap, err := getIndexDataFromVec(uint16(i), mvec)
+		assert.Nil(t, err)
+		if bloomFilter != nil {
+			err = objectWriter.WriteIndex(fd, bloomFilter)
+			assert.Nil(t, err)
+		}
+		if zoneMap != nil {
+			err = objectWriter.WriteIndex(fd, zoneMap)
+			assert.Nil(t, err)
+		}
+	}
+	blocks, err = objectWriter.WriteEnd(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(blocks))
+	metaLoc3, err := blockio.EncodeMetaLocWithObject(
+		blocks[0].GetExtent(),
+		uint32(moBats[3].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
@@ -206,18 +236,27 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	nullable := []bool{false}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
-	metaLocBat := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
-	metaLocBat.Vecs[0].Append([]byte(metaLoc1))
-	metaLocBat.Vecs[0].Append([]byte(metaLoc2))
-	metaLocMoBat := containers.CopyToMoBatch(metaLocBat)
-	addS3BlkEntry, err := makePBEntry(INSERT, dbTestID,
-		tbTestID, dbName, schema.Name, objName, metaLocMoBat)
+	metaLocBat1 := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+	metaLocBat1.Vecs[0].Append([]byte(metaLoc1))
+	metaLocBat1.Vecs[0].Append([]byte(metaLoc2))
+	metaLocMoBat1 := containers.CopyToMoBatch(metaLocBat1)
+	addS3BlkEntry1, err := makePBEntry(INSERT, dbTestID,
+		tbTestID, dbName, schema.Name, objName1, metaLocMoBat1)
 	assert.NoError(t, err)
-	loc1 := vector.GetStrVectorValues(metaLocMoBat.GetVector(0))[0]
-	loc2 := vector.GetStrVectorValues(metaLocMoBat.GetVector(0))[1]
+	loc1 := vector.GetStrVectorValues(metaLocMoBat1.GetVector(0))[0]
+	loc2 := vector.GetStrVectorValues(metaLocMoBat1.GetVector(0))[1]
 	assert.Equal(t, metaLoc1, loc1)
 	assert.Equal(t, metaLoc2, loc2)
-	entries = append(entries, addS3BlkEntry)
+	entries = append(entries, addS3BlkEntry1)
+
+	//add one block from S3 into "tbtest" table
+	metaLocBat2 := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
+	metaLocBat2.Vecs[0].Append([]byte(metaLoc3))
+	metaLocMoBat2 := containers.CopyToMoBatch(metaLocBat2)
+	addS3BlkEntry2, err := makePBEntry(INSERT, dbTestID,
+		tbTestID, dbName, schema.Name, objName2, metaLocMoBat2)
+	assert.NoError(t, err)
+	entries = append(entries, addS3BlkEntry2)
 
 	err = handle.HandlePreCommit(
 		context.TODO(),
@@ -281,8 +320,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//write deleted row ids into FS
 	id += 1
-	objName = fmt.Sprintf("%d.del", id)
-	objectWriter, err = objectio.NewObjectWriter(objName, service)
+	objName3 := fmt.Sprintf("%d.del", id)
+	objectWriter, err = objectio.NewObjectWriter(objName3, service)
 	assert.Nil(t, err)
 	for _, bat := range hideBats {
 		_, err := objectWriter.Write(bat)
@@ -290,7 +329,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	}
 	blocks, err = objectWriter.WriteEnd(context.Background())
 	assert.Nil(t, err)
-	assert.Equal(t, 3, len(blocks))
+	assert.Equal(t, len(hideBats), len(blocks))
 	delLoc1, err := blockio.EncodeMetaLocWithObject(
 		blocks[0].GetExtent(),
 		uint32(hideBats[0].Vecs[0].Length()),
@@ -309,6 +348,12 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		blocks,
 	)
 	assert.Nil(t, err)
+	delLoc4, err := blockio.EncodeMetaLocWithObject(
+		blocks[3].GetExtent(),
+		uint32(hideBats[3].Vecs[0].Length()),
+		blocks,
+	)
+	assert.Nil(t, err)
 
 	//prepare delete locations.
 	attrs = []string{catalog2.BlockMeta_DeltaLoc}
@@ -321,10 +366,12 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	delLocBat.Vecs[0].Append([]byte(delLoc1))
 	delLocBat.Vecs[0].Append([]byte(delLoc2))
 	delLocBat.Vecs[0].Append([]byte(delLoc3))
+	delLocBat.Vecs[0].Append([]byte(delLoc4))
+
 	delLocMoBat := containers.CopyToMoBatch(delLocBat)
 	var delApiEntries []*api.Entry
 	deleteS3BlkEntry, err := makePBEntry(DELETE, dbTestID,
-		tbTestID, dbName, schema.Name, objName, delLocMoBat)
+		tbTestID, dbName, schema.Name, objName3, delLocMoBat)
 	assert.NoError(t, err)
 	delApiEntries = append(delApiEntries, deleteS3BlkEntry)
 
@@ -343,7 +390,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 	err = handle.HandleCommit(context.TODO(), txn)
 	assert.Nil(t, err)
-	//Now, the "tbtest" table has fifteen rows left.
+	//Now, the "tbtest" table has 20 rows left.
 	txnR, err = txnEngine.StartTxn(nil)
 	assert.NoError(t, err)
 	dbHandle, err = txnEngine.GetDatabase(context.TODO(), dbName, txnR)
@@ -364,7 +411,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 			rows += vector.Length(bat.Vecs[0])
 		}
 	}
-	assert.Equal(t, 15, rows)
+	assert.Equal(t, len(taeBats)*taeBats[0].Length()-5*len(taeBats), rows)
 	err = txnR.Commit()
 	assert.Nil(t, err)
 }
