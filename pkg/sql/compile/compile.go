@@ -501,7 +501,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		c.SetAnalyzeCurrent(children, curr)
 		return c.compileSort(n, c.compileUnionAll(n, ss, children)), nil
 	case plan.Node_DELETE:
-		if n.DeleteTablesCtx[0].CanTruncate {
+		if n.DeleteCtx.CanTruncate {
 			return nil, nil
 		}
 		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
@@ -1558,15 +1558,31 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 	if rowCount == 0 {
 		return nil, moerr.NewInternalError(ctx, "rowsetData do not have rows")
 	}
-	typ := plan2.MakeTypeByPlan2Type(exprs[0].Typ)
-	vec := vector.New(typ)
+	var typ types.Type
+	var vec *vector.Vector
+	for _, e := range exprs {
+		if e.Typ.Id != int32(types.T_any) {
+			typ = plan2.MakeTypeByPlan2Type(exprs[0].Typ)
+			vec = vector.New(typ)
+			break
+		}
+	}
+	if vec == nil {
+		typ = types.T_int32.ToType()
+		vec = vector.New(typ)
+	}
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
+	defer bat.Clean(proc.Mp())
 
 	for _, e := range exprs {
 		tmp, err := colexec.EvalExpr(bat, proc, e)
 		if err != nil {
 			return nil, err
+		}
+		if tmp.IsScalarNull() {
+			vec.Append(vector.GetInitConstVal(typ), true, proc.Mp())
+			continue
 		}
 		switch typ.Oid {
 		case types.T_bool:

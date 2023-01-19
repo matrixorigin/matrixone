@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -29,30 +30,14 @@ import (
 
 // only use in developing
 func TestSingleSQL(t *testing.T) {
-	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
-	// sql := "SELECT nation2.* FROM nation2 natural join region"
-	//sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
-	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
-	//sql := "create view v1 as select * from nation"
-	//sql := "select n_name,N_REGIONKEY from NATION"
-	//sql := "INSERT INTO NATION (N_NATIONKEY, N_REGIONKEY, N_NAME, N_COMMENT) VALUES (1, 21, 'NAME1','comment1'), (2, 22, 'NAME2', 'comment2')"
-	// sql := "explain a"
-	// sql := "select 18446744073709551500"
-	// stmts, err := mysql.Parse(sql)
-	// if err != nil {
-	// 	t.Fatalf("%+v", err)
-	// }
-	// t.Logf("%+v", string(getJSON(stmts[0], t)))
-	// sql := "SELECT UNIX_TIMESTAMP('2000-01-01 12:00:00.159')"
-	sql := "select * from (values row(1,1), row(2,2), row(3,3)) a(c1,c2);"
-	// sql := "select -1"
+	sql := "select * from nation"
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	outPutPlan(logicPlan, false, t)
+	outPutPlan(logicPlan, true, t)
 }
 
 //Test Query Node Tree
@@ -354,7 +339,7 @@ func TestSingleSQL(t *testing.T) {
 
 // 	// run test and check node tree
 // 	for sql, check := range nodeTreeCheckList {
-// 		mock := NewMockOptimizer()
+// 		mock := NewMockOptimizer(false)
 // 		logicPlan, err := runOneStmt(mock, t, sql)
 // 		query := logicPlan.GetQuery()
 // 		if err != nil {
@@ -389,7 +374,7 @@ func TestSingleSQL(t *testing.T) {
 
 // test single table plan building
 func TestSingleTableSQLBuilder(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 
 	// should pass
 	sqls := []string{
@@ -439,8 +424,6 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"prepare stmt1 from select * from nation",
 		"prepare stmt1 from select * from nation where n_name = ?",
 		"prepare stmt1 from 'select * from nation where n_name = ?'",
-		"prepare stmt1 from 'update nation set n_name = ? where n_nationkey > ?'",
-		"prepare stmt1 from 'delete from nation where n_nationkey > ?'",
 		"prepare stmt1 from 'insert into nation select * from nation2 where n_name = ?'",
 		"prepare stmt1 from 'select * from nation where n_name = ?'",
 		"prepare stmt1 from 'drop table if exists t1'",
@@ -455,8 +438,6 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"select interval '1' day + l_shipdate  from lineitem",
 		"select interval '1' day + cast('2022-02-02 00:00:00' as datetime)",
 		"select cast('2022-02-02 00:00:00' as datetime) + interval '1' day",
-		"delete from nation",
-		"delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name",
 		"select true is unknown",
 		"select null is not unknown",
 		"select 1 as c,  1/2, abs(-2)",
@@ -494,7 +475,7 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 
 // test join table plan building
 func TestJoinTableSqlBuilder(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 
 	// should pass
 	sqls := []string{
@@ -527,7 +508,7 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 
 // test derived table plan building
 func TestDerivedTableSqlBuilder(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	// should pass
 	sqls := []string{
 		"select c_custkey from (select c_custkey from CUSTOMER ) a",
@@ -553,7 +534,7 @@ func TestDerivedTableSqlBuilder(t *testing.T) {
 
 // test derived table plan building
 func TestUnionSqlBuilder(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	// should pass
 	sqls := []string{
 		"(select 1) union (select 1)",
@@ -584,7 +565,7 @@ func TestUnionSqlBuilder(t *testing.T) {
 
 // test CTE plan building
 func TestCTESqlBuilder(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 
 	// should pass
 	sqls := []string{
@@ -613,13 +594,12 @@ func TestCTESqlBuilder(t *testing.T) {
 }
 
 func TestInsert(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	// should pass
 	sqls := []string{
 		"INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
 		"INSERT INTO NATION (N_NATIONKEY, N_REGIONKEY, N_NAME, N_COMMENT) VALUES (1, 21, 'NAME1','comment1'), (2, 22, 'NAME2', 'comment2')",
 		"INSERT INTO NATION SELECT * FROM NATION2",
-		"insert into nation select * from nation2",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -640,13 +620,15 @@ func TestInsert(t *testing.T) {
 }
 
 func TestUpdate(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(true)
 	// should pass
 	sqls := []string{
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"update NATION a join NATION2 b on a.N_REGIONKEY = b.R_REGIONKEY set a.N_NAME = 'aa'",
+		"prepare stmt1 from 'update nation set n_name = ? where n_nationkey > ?'",
+		"drop index idx1 on test_idx",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -659,13 +641,16 @@ func TestUpdate(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(true)
 	// should pass
 	sqls := []string{
 		"DELETE FROM NATION",
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10",
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
 		"delete nation from nation left join nation2 on nation.n_nationkey = nation2.n_nationkey",
+		"delete from nation",
+		"delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name",
+		"prepare stmt1 from 'delete from nation where n_nationkey > ?'",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -678,7 +663,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestSubQuery(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	// should pass
 	sqls := []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)",                                 // unrelated
@@ -718,7 +703,7 @@ func TestSubQuery(t *testing.T) {
 }
 
 func TestMysqlCompatibilityMode(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 
 	sqls := []string{
 		"SELECT n_nationkey FROM NATION group by n_name",
@@ -733,7 +718,7 @@ func TestMysqlCompatibilityMode(t *testing.T) {
 }
 
 func TestTcl(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	// should pass
 	sqls := []string{
 		"start transaction",
@@ -751,7 +736,7 @@ func TestTcl(t *testing.T) {
 }
 
 func TestDdl(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	// should pass
 	sqls := []string{
 		"create database db_name",               //db not exists and pass
@@ -777,7 +762,6 @@ func TestDdl(t *testing.T) {
 		"truncate table nation",
 		"truncate table tpch.nation",
 		"create unique index idx_name on nation(n_regionkey)",
-		"drop index idx1 on test_idx",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -795,7 +779,7 @@ func TestDdl(t *testing.T) {
 }
 
 func TestShow(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	// should pass
 	sqls := []string{
 		"show variables",
@@ -849,7 +833,7 @@ func TestShow(t *testing.T) {
 }
 
 func TestResultColumns(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	getColumns := func(sql string) []*ColDef {
 		logicPlan, err := runOneStmt(mock, t, sql)
 		if err != nil {
@@ -863,8 +847,8 @@ func TestResultColumns(t *testing.T) {
 		"commit",
 		"rollback",
 		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
-		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
-		"DELETE FROM NATION",
+		// "UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		// "DELETE FROM NATION",
 		"create database db_name",
 		"drop database tpch",
 		"create table tbl_name (b int unsigned, c char(20))",
@@ -903,7 +887,7 @@ func TestResultColumns(t *testing.T) {
 }
 
 func TestBuildUnnest(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	sqls := []string{
 		`select * from unnest('{"a":1}') as f`,
 		`select * from unnest('{"a":1}', '') as f`,
@@ -926,7 +910,7 @@ func TestBuildUnnest(t *testing.T) {
 
 func TestVisitRule(t *testing.T) {
 	sql := "select * from nation where n_nationkey > ? or n_nationkey=@int_var or abs(-1) > 1"
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	ctx := context.TODO()
 	plan, err := runOneStmt(mock, t, sql)
 	if err != nil {

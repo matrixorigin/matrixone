@@ -45,7 +45,7 @@ func TestSingleDDLPartition(t *testing.T) {
 			PARTITION BY KEY()
 			PARTITIONS 2;`
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	logicPlan, err := buildSingleStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -95,7 +95,7 @@ func TestKeyPartition(t *testing.T) {
 			PARTITIONS 2;`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		t.Log(sql)
 		logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -137,7 +137,7 @@ func TestKeyPartitionError(t *testing.T) {
 		PARTITION BY KEY()
 		PARTITIONS 2;`,
 	}
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		_, err := buildSingleStmt(mock, t, sql)
 		t.Log(sql)
@@ -210,7 +210,7 @@ func TestHashPartition(t *testing.T) {
 			PARTITIONS 4;`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		t.Log(sql)
 		logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -274,7 +274,7 @@ func TestHashPartitionError(t *testing.T) {
 		PARTITIONS 4;`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		_, err := buildSingleStmt(mock, t, sql)
 		t.Log(sql)
@@ -463,7 +463,7 @@ func TestRangePartition(t *testing.T) {
 		);`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		t.Log(sql)
 		logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -560,7 +560,7 @@ func TestRangePartitionError(t *testing.T) {
 		);`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		_, err := buildSingleStmt(mock, t, sql)
 		t.Log(sql)
@@ -647,7 +647,7 @@ func TestRangeColumnsPartition(t *testing.T) {
 				PARTITION p3 VALUES LESS THAN (65,30)
          );`,
 	}
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		t.Log(sql)
 		logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -708,7 +708,7 @@ func TestRangeColumnsPartitionError(t *testing.T) {
          );`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		_, err := buildSingleStmt(mock, t, sql)
 		t.Log(sql)
@@ -772,7 +772,7 @@ func TestListPartition(t *testing.T) {
 		);`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		t.Log(sql)
 		logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -815,7 +815,7 @@ func TestListPartitionError(t *testing.T) {
 		);`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		_, err := buildSingleStmt(mock, t, sql)
 		t.Log(sql)
@@ -896,7 +896,7 @@ func TestListColumnsPartition(t *testing.T) {
 			);`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		t.Log(sql)
 		logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -938,7 +938,7 @@ func TestListColumnsPartitionError(t *testing.T) {
 		);`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		_, err := buildSingleStmt(mock, t, sql)
 		t.Log(sql)
@@ -1024,7 +1024,7 @@ func TestPartitioningKeysUniqueKeys(t *testing.T) {
 			PARTITIONS 4;`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		t.Log(sql)
 		logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -1109,7 +1109,7 @@ func TestPartitioningKeysUniqueKeysError(t *testing.T) {
 		PARTITIONS 2;`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		_, err := buildSingleStmt(mock, t, sql)
 		t.Log(sql)
@@ -1175,7 +1175,7 @@ func TestPartitioningKeysPrimaryKeys(t *testing.T) {
 		PARTITIONS 2;`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		t.Log(sql)
 		logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -1231,7 +1231,7 @@ func TestPartitioningKeysPrimaryKeysError(t *testing.T) {
 		PARTITIONS 4;`,
 	}
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		_, err := buildSingleStmt(mock, t, sql)
 		t.Log(sql)
@@ -1327,7 +1327,7 @@ func TestPartitionKeysShouldShowError(t *testing.T) {
 			PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
 			);`,
 	}
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
 		_, err := buildSingleStmt(mock, t, sql)
 		t.Log(sql)
