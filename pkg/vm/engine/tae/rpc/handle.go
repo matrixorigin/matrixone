@@ -489,12 +489,19 @@ func (h *Handle) EvaluateTxnRequest(
 					}
 					if r.Schema.HasPK() {
 						//start to load primary keys
-						return h.startLoadJobs(ctx, meta, r)
+						err = h.startLoadJobs(ctx, meta, r)
+						if err != nil {
+							return
+						}
 					}
-					return
+					continue
 				}
 				//start to load deleted row ids
-				return h.startLoadJobs(ctx, meta, r)
+				err = h.startLoadJobs(ctx, meta, r)
+				if err != nil {
+					return
+				}
+
 			}
 		}
 	}

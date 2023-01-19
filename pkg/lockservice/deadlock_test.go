@@ -49,12 +49,15 @@ func TestCheckWithDeadlock(t *testing.T) {
 
 	assert.NoError(t, d.check(txn1))
 	assert.Equal(t, txn1, <-abortC)
+	d.txnClosed(txn1)
 
 	assert.NoError(t, d.check(txn2))
 	assert.Equal(t, txn2, <-abortC)
+	d.txnClosed(txn2)
 
 	assert.NoError(t, d.check(txn3))
 	assert.Equal(t, txn3, <-abortC)
+	d.txnClosed(txn3)
 
 	assert.NoError(t, d.check(txn4))
 	select {
