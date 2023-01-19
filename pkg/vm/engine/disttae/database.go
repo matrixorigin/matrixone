@@ -183,7 +183,6 @@ func (db *database) Truncate(ctx context.Context, name string) (uint64, error) {
 		v.(*table).tableId = newId
 	} else if v, ok := db.txn.tableMap.Load(k); ok {
 		oldId = v.(*table).tableId
-		v.(*table).tableId = newId
 	} else {
 		key := &cache.TableItem{
 			Name:       name,
