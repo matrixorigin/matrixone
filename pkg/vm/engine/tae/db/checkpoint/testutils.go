@@ -121,6 +121,9 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context) (err error) {
 		op,
 		r.options.forceFlushTimeout,
 		r.options.forceFlushCheckInterval, false)
+	if err != nil {
+		return moerr.NewInternalError(ctx, "force flush failed: %v", err)
+	}
 	return
 }
 
