@@ -355,55 +355,96 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 }
 
 func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
-	count := len(n.DeleteTablesCtx)
-	ds := make([]*deletion.DeleteCtx, count)
-	for i := 0; i < count; i++ {
-		var dbSource engine.Database
-		var relation engine.Relation
-		var err error
-		var isTemp bool
-		var tblName string
-		var dbName string
-		dbSource, err = eg.Database(proc.Ctx, n.DeleteTablesCtx[i].DbName, proc.TxnOperator)
-		if err != nil {
-			return nil, err
-		}
-		relation, err = dbSource.Relation(proc.Ctx, n.DeleteTablesCtx[i].TblName)
-		if err != nil {
-			var e error
-			dbSource, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-			if e != nil {
+	oldCtx := n.DeleteCtx
+	delCtx := &deletion.DeleteCtx{
+		DelSource: make([]engine.Relation, len(oldCtx.Ref)),
+		DelRef:    oldCtx.Ref,
+
+		ParentSource: make([][]engine.Relation, len(oldCtx.ParentIds)),
+
+		DelIdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
+		DelIdxIdx:    make([]int32, len(oldCtx.IdxIdx)),
+
+		OnRestrictIdx: make([]int32, len(oldCtx.OnRestrictIdx)),
+
+		OnCascadeIdx:    make([]int32, len(oldCtx.OnCascadeIdx)),
+		OnCascadeSource: make([]engine.Relation, len(oldCtx.OnCascadeRef)),
+
+		OnSetSource: make([]engine.Relation, len(oldCtx.OnSetRef)),
+		OnSetIdx:    make([][]int32, len(oldCtx.OnSetIdx)),
+		OnSetAttrs:  make([][]string, len(oldCtx.OnSetAttrs)),
+
+		CanTruncate: oldCtx.CanTruncate,
+	}
+
+	if delCtx.CanTruncate {
+		for i, ref := range oldCtx.Ref {
+			rel, err := getRel(proc, eg, ref)
+			if err != nil {
 				return nil, err
 			}
-
-			relation, e = dbSource.Relation(proc.Ctx, engine.GetTempTableName(n.DeleteTablesCtx[i].DbName, n.DeleteTablesCtx[i].TblName))
-			if e != nil {
+			delCtx.DelSource[i] = rel
+		}
+		for i, idList := range oldCtx.ParentIds {
+			rels := make([]engine.Relation, len(idList.List))
+			for j, id := range idList.List {
+				ref := &plan.ObjectRef{
+					Obj: id,
+				}
+				rel, err := getRel(proc, eg, ref)
+				if err != nil {
+					return nil, err
+				}
+				rels[j] = rel
+			}
+			delCtx.ParentSource[i] = rels
+		}
+	} else {
+		copy(delCtx.DelIdxIdx, oldCtx.IdxIdx)
+		copy(delCtx.OnRestrictIdx, oldCtx.OnRestrictIdx)
+		copy(delCtx.OnCascadeIdx, oldCtx.OnCascadeIdx)
+		for i, list := range oldCtx.OnSetIdx {
+			delCtx.OnSetIdx[i] = make([]int32, len(list.List))
+			for j, id := range list.List {
+				delCtx.OnSetIdx[i][j] = int32(id)
+			}
+		}
+		for i, list := range oldCtx.OnSetAttrs {
+			delCtx.OnSetAttrs[i] = make([]string, len(list.List))
+			copy(delCtx.OnSetAttrs[i], list.List)
+		}
+		for i, ref := range oldCtx.Ref {
+			rel, err := getRel(proc, eg, ref)
+			if err != nil {
 				return nil, err
 			}
-			isTemp = true
+			delCtx.DelSource[i] = rel
 		}
-
-		if isTemp {
-			dbName = defines.TEMPORARY_DBNAME
-			tblName = engine.GetTempTableName(n.DeleteTablesCtx[i].DbName, n.DeleteTablesCtx[i].TblName)
-		} else {
-			dbName = n.DeleteTablesCtx[i].DbName
-			tblName = n.DeleteTablesCtx[i].TblName
+		for i, ref := range oldCtx.IdxRef {
+			rel, err := getRel(proc, eg, ref)
+			if err != nil {
+				return nil, err
+			}
+			delCtx.DelIdxSource[i] = rel
 		}
-
-		ds[i] = &deletion.DeleteCtx{
-			TableSource:        relation,
-			TableName:          tblName,
-			DbName:             dbName,
-			UseDeleteKey:       n.DeleteTablesCtx[i].UseDeleteKey,
-			CanTruncate:        n.DeleteTablesCtx[i].CanTruncate,
-			ColIndex:           n.DeleteTablesCtx[i].ColIndex,
-			IsIndexTableDelete: n.DeleteTablesCtx[i].IsIndexTableDelete,
+		for i, ref := range oldCtx.OnCascadeRef {
+			rel, err := getRel(proc, eg, ref)
+			if err != nil {
+				return nil, err
+			}
+			delCtx.OnCascadeSource[i] = rel
+		}
+		for i, ref := range oldCtx.OnSetRef {
+			rel, err := getRel(proc, eg, ref)
+			if err != nil {
+				return nil, err
+			}
+			delCtx.OnSetSource[i] = rel
 		}
 	}
 
 	return &deletion.Argument{
-		DeleteCtxs: ds,
+		DeleteCtx: delCtx,
 	}, nil
 }
 
@@ -1254,4 +1295,31 @@ func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.
 		}
 	}
 	return uIdxDef, sIdxDef
+}
+
+func getRel(proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (rel engine.Relation, err error) {
+	var dbSource engine.Database
+	if ref.SchemaName != "" {
+		dbSource, err = eg.Database(proc.Ctx, ref.SchemaName, proc.TxnOperator)
+		if err != nil {
+			return nil, err
+		}
+		rel, err = dbSource.Relation(proc.Ctx, ref.ObjName)
+		if err == nil {
+			return
+		}
+
+		dbSource, err = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+		if err != nil {
+			return nil, err
+		}
+		newObjeName := engine.GetTempTableName(ref.SchemaName, ref.ObjName)
+		newSchemaName := defines.TEMPORARY_DBNAME
+		ref.SchemaName = newSchemaName
+		ref.ObjName = newObjeName
+		return dbSource.Relation(proc.Ctx, newObjeName)
+	} else {
+		_, _, rel, err = eg.GetRelationById(proc.Ctx, proc.TxnOperator, uint64(ref.Obj))
+		return
+	}
 }
