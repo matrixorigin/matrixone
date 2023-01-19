@@ -26,7 +26,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1168,10 +1167,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
 		colCount := len(valuesClause.Rows[0])
+		for j := 1; j < rowCount; j++ {
+			if len(valuesClause.Rows[j]) != colCount {
+				return 0, moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("have different column count in row '%v'", j))
+			}
+		}
+
 		ctx.hasSingleRow = rowCount == 1
-		proc := builder.compCtx.GetProcess()
-		emptyBatch := batch.NewWithSize(0)
-		emptyBatch.Zs = []int64{1}
 		rowSetData := &plan.RowsetData{
 			Cols: make([]*plan.ColData, colCount),
 		}
@@ -1183,38 +1185,54 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		ctx.binder = NewWhereBinder(builder, ctx)
 		for i := 0; i < colCount; i++ {
 			rows := make([]*plan.Expr, rowCount)
+			var colTyp *plan.Type
+			var tmpArgsType []types.Type
 			for j := 0; j < rowCount; j++ {
 				planExpr, err := ctx.binder.BindExpr(valuesClause.Rows[j][i], 0, true)
 				if err != nil {
 					return 0, err
 				}
-				colExpr, err := ConstantFold(emptyBatch, planExpr, proc)
+				if planExpr.Typ.Id != int32(types.T_any) {
+					tmpArgsType = append(tmpArgsType, makeTypeByPlan2Expr(planExpr))
+				}
+				rows[j] = planExpr
+			}
+
+			if len(tmpArgsType) > 0 {
+				_, _, argsCastType, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 				if err != nil {
 					return 0, err
 				}
-				rows[j] = colExpr
-
-				if j == 0 {
-					colName := fmt.Sprintf("column_%d", i) // like MySQL
-					selectList = append(selectList, tree.SelectExpr{
-						Expr: &tree.UnresolvedName{
-							NumParts: 1,
-							Star:     false,
-							Parts:    [4]string{colName, "", "", ""},
-						},
-						As: tree.UnrestrictedIdentifier(colName),
-					})
-					ctx.headings = append(ctx.headings, colName)
-					tableDef.Cols[i] = &plan.ColDef{
-						ColId: 0,
-						Name:  colName,
-						Typ:   colExpr.Typ,
-					}
-				} else {
-					if !isSameColumnType(tableDef.Cols[i].Typ, colExpr.Typ) {
-						return 0, moerr.NewInternalError(builder.GetContext(), "col of values should have the same type")
+				if len(argsCastType) > 0 {
+					colTyp = makePlan2Type(&argsCastType[0])
+					for j := 0; j < rowCount; j++ {
+						if rows[j].Typ.Id != int32(types.T_any) && rows[j].Typ.Id != colTyp.Id {
+							rows[j], err = appendCastBeforeExpr(builder.GetContext(), rows[j], colTyp)
+							if err != nil {
+								return 0, err
+							}
+						}
 					}
 				}
+			}
+			if colTyp == nil {
+				colTyp = rows[0].Typ
+			}
+
+			colName := fmt.Sprintf("column_%d", i) // like MySQL
+			selectList = append(selectList, tree.SelectExpr{
+				Expr: &tree.UnresolvedName{
+					NumParts: 1,
+					Star:     false,
+					Parts:    [4]string{colName, "", "", ""},
+				},
+				As: tree.UnrestrictedIdentifier(colName),
+			})
+			ctx.headings = append(ctx.headings, colName)
+			tableDef.Cols[i] = &plan.ColDef{
+				ColId: 0,
+				Name:  colName,
+				Typ:   colTyp,
 			}
 			rowSetData.Cols[i] = &plan.ColData{
 				Data: rows,

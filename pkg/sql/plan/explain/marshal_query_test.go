@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"testing"
+
 	"github.com/google/uuid"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"testing"
 )
 
 func TestSimpleQueryToJson(t *testing.T) {
@@ -49,7 +50,7 @@ func TestSimpleQueryToJson(t *testing.T) {
 		"select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
 	}
 
-	mock := plan.NewMockOptimizer()
+	mock := plan.NewMockOptimizer(false)
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -120,7 +121,7 @@ func TestSingleTableQueryToJson(t *testing.T) {
 		//"delete from nation",
 		//"delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name",
 	}
-	mock := plan.NewMockOptimizer()
+	mock := plan.NewMockOptimizer(false)
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -142,7 +143,7 @@ func TestJoinQueryToJson(t *testing.T) {
 		"select n_name from nation intersect select n_name from nation2",
 		"select n_name from nation minus select n_name from nation2",
 	}
-	mock := plan.NewMockOptimizer()
+	mock := plan.NewMockOptimizer(false)
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -173,7 +174,7 @@ func TestNestedQueryToJson(t *testing.T) {
 				l_partkey = p_partkey
 		);`, //tpch q17
 	}
-	mock := plan.NewMockOptimizer()
+	mock := plan.NewMockOptimizer(false)
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -195,7 +196,7 @@ func TestCollectionQueryToJson(t *testing.T) {
 		"SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPMODE IN ('AIR','AIR REG') EXCEPT SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPINSTRUCT='DELIVER IN PERSON'",
 	}
 
-	mock := plan.NewMockOptimizer()
+	mock := plan.NewMockOptimizer(false)
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -211,7 +212,7 @@ func TestDerivedTableQueryToJson(t *testing.T) {
 		"select a.* from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
 		"select * from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
 	}
-	mock := plan.NewMockOptimizer()
+	mock := plan.NewMockOptimizer(false)
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -223,7 +224,7 @@ func TestDMLToJson(t *testing.T) {
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10",
 		"DELETE FROM a1, a2 USING NATION AS a1 INNER JOIN NATION2 AS a2 WHERE a1.N_NATIONKEY=a2.N_NATIONKEY",
 	}
-	mock := plan.NewMockOptimizer()
+	mock := plan.NewMockOptimizer(true)
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
@@ -231,8 +232,7 @@ func buildPlanMarshalTest(opt plan.Optimizer, t *testing.T, sqls []string) {
 	ctx := context.TODO()
 	for _, sql := range sqls {
 		t.Logf("sql: %s \n", sql)
-		mock := plan.NewMockOptimizer()
-		plan, err := runSingleSql(mock, t, sql)
+		plan, err := runSingleSql(opt, t, sql)
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
