@@ -1899,6 +1899,26 @@ var (
 			input:  "create table test (`col` varchar(255) DEFAULT b'0')",
 			output: "create table test (col varchar(255) default 0)",
 		},
+		{
+			input:  "select trim('a')",
+			output: "select trim(both,  , a)",
+		},
+		{
+			input:  "select trim('a' from 'a')",
+			output: "select trim(both, a, a)",
+		},
+		{
+			input:  "select trim(LEADING 'a' from 'a')",
+			output: "select trim(leading, a, a)",
+		},
+		{
+			input:  "select trim(TRAILING 'a' from 'a')",
+			output: "select trim(trailing, a, a)",
+		},
+		{
+			input: "select trim(BOTH a from b) from t",
+			output: "select trim(both, a, b) from t",
+		},
 	}
 )
 

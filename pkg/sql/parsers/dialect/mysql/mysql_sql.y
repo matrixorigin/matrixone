@@ -6563,26 +6563,30 @@ function_call_generic:
 |   TRIM '(' expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg1 := tree.NewNumValWithType(constant.MakeString("both"), "both", false, tree.P_char)
+        arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$3},
+            Exprs: tree.Exprs{arg1, arg2, $3},
         }
     }
 |   TRIM '(' expression FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg1 := tree.NewNumValWithType(constant.MakeString("both"), "both", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$3},
+            Exprs: tree.Exprs{arg1, $3, $5},
         }
     }
 |   TRIM '(' trim_direction FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{arg1, $5},
+            Exprs: tree.Exprs{arg1, arg2, $5},
         }
     }
 |   TRIM '(' trim_direction expression FROM expression ')'
