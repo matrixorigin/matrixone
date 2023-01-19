@@ -153,7 +153,7 @@ type AlterDataBaseConfig struct {
 
 func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter ")
-	ctx.WriteString("database configuration ")
+	ctx.WriteString("account configuration ")
 
 	ctx.WriteString("for ")
 	ctx.WriteString(fmt.Sprintf("%s ", node.AccountName))
