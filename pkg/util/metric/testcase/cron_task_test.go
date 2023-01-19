@@ -2,9 +2,9 @@ package testcase
 
 import (
 	"context"
-	"fmt"
-	"github.com/golang/mock/gomock"
-	"github.com/lni/goutils/leaktest"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -14,12 +14,13 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+
+	"github.com/golang/mock/gomock"
+	"github.com/lni/goutils/leaktest"
 	"github.com/prashantv/gostub"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	"testing"
-	"time"
 )
 
 const defaultTestTimeout = 3 * time.Minute
@@ -81,7 +82,8 @@ func TestCalculateStorageUsage(t *testing.T) {
 	}
 
 	qStub := gostub.Stub(&metric.QuitableWait, func(ctx2 context.Context) (*time.Ticker, error) {
-		return nil, fmt.Errorf("quit")
+		cancel()
+		return nil, ctx2.Err()
 	})
 	defer qStub.Reset()
 
