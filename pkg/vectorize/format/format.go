@@ -272,6 +272,9 @@ func formatDECH(number string, precision string) (string, error) {
 func format(number string, precision string, comma, decimalPoint []byte) (string, error) {
 	var buffer bytes.Buffer
 
+	if len(number) == 0 {
+		return "", nil
+	}
 	//handle precision
 	if unicode.IsDigit(rune(precision[0])) {
 		for i, v := range precision {

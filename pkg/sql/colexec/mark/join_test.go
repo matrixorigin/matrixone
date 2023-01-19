@@ -126,8 +126,8 @@ func TestMark(t *testing.T) {
 
 func TestHandleResultType(t *testing.T) {
 	ctr := new(container)
-	ctr.joinFlags = make([]bool, 3)
-	ctr.Nsp = nulls.NewWithSize(3)
+	ctr.markVals = make([]bool, 3)
+	ctr.markNulls = nulls.NewWithSize(3)
 	ctr.handleResultType(0, condTrue)
 	ctr.handleResultType(1, condFalse)
 	ctr.handleResultType(2, condUnkown)

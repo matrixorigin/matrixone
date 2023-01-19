@@ -130,11 +130,11 @@ null
 null
 create table index_13 (col1 bigint auto_increment primary key,col2 datetime,col3 datetime,unique key d1(col2),key d2(col3));
 insert into index_13(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
-Duplicate entry '2013-01-01 12:00:00' for key '__mo_index_idx_col'
+Duplicate entry '2013-01-01 12:00:00.000000' for key '__mo_index_idx_col'
 insert into index_13(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
 create table index_14 (col1 bigint auto_increment primary key,col2 timestamp,col3 timestamp,unique key d1(col2),key d2(col3));
 insert into index_14(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
-Duplicate entry '2013-01-01 12:00:00.000000 UTC' for key '__mo_index_idx_col'
+Duplicate entry '2013-01-01 12:00:00.000000' for key '__mo_index_idx_col'
 insert into index_14(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
 create table index_15 (col1 bigint primary key,col2 bool,unique key c2(col2));
 insert into index_15 values (1,TRUE),(2,FALSE),(3,TRUE);
@@ -146,11 +146,11 @@ col1    col2
 2    false
 3    null
 create table index_16 (col1 bigint primary key,col2 blob,col3 blob,unique key d1(col2),key d2(col3));
-not supported: blob type in index
+not supported: BLOB column 'col2' cannot be in index
 create table index_17 (col1 bigint primary key,col2 json,col3 json,unique key d1(col2),key d2(col3));
 not supported: JSON column 'col2' cannot be in index
 create table index_18 (col1 bigint primary key,col2 text,col3 text,unique key d1(col2),key d2(col3));
-not supported: text type in index
+not supported: TEXT column 'col2' cannot be in index
 create table index_name (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key 123(col2),key num_id(col4));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 108 near " 123(col2),key num_id(col4));";
 create table index_name (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key abs@123.abc(col2),key num_id(col4));
@@ -217,7 +217,7 @@ KEY `org_no` (`org_no`)
 );
 show create table t_code_rule;
 Table    Create Table
-t_code_rule    CREATE TABLE `t_code_rule` (\n`code_id` BIGINT NOT NULL,\n`code_no` VARCHAR(50) NOT NULL,\n`org_no` VARCHAR(50) NOT NULL,\n`org_name` VARCHAR(50) NOT NULL,\n`ancestors` VARCHAR(255) NOT NULL,\n`code_rule_no` VARCHAR(50) NOT NULL,\n`code_rule_name` VARCHAR(50) NOT NULL,\n`code_name` VARCHAR(50) NOT NULL,\n`code_type` INT DEFAULT NULL,\n`split` VARCHAR(50) DEFAULT null,\n`remark` VARCHAR(255) DEFAULT NULL,\n`create_time` DATETIME NOT NULL,\n`create_user` VARCHAR(50) DEFAULT null,\n`last_update_time` DATETIME DEFAULT null,\n`last_update_user` VARCHAR(50) DEFAULT null,\n`is_system_code` VARCHAR(20) DEFAULT 'N',\nPRIMARY KEY (`code_id`),\nUNIQUE KEY`code_type`(`code_type`)\n)
+t_code_rule    CREATE TABLE `t_code_rule` (\n`code_id` BIGINT NOT NULL,\n`code_no` VARCHAR(50) NOT NULL,\n`org_no` VARCHAR(50) NOT NULL,\n`org_name` VARCHAR(50) NOT NULL,\n`ancestors` VARCHAR(255) NOT NULL,\n`code_rule_no` VARCHAR(50) NOT NULL,\n`code_rule_name` VARCHAR(50) NOT NULL,\n`code_name` VARCHAR(50) NOT NULL,\n`code_type` INT DEFAULT NULL,\n`split` VARCHAR(50) DEFAULT null,\n`remark` VARCHAR(255) DEFAULT NULL,\n`create_time` DATETIME NOT NULL,\n`create_user` VARCHAR(50) DEFAULT null,\n`last_update_time` DATETIME DEFAULT null,\n`last_update_user` VARCHAR(50) DEFAULT null,\n`is_system_code` VARCHAR(20) DEFAULT 'N',\nPRIMARY KEY (`code_id`),\nUNIQUE KEY `code_type` (`code_type`),\nKEY `code_no` (`code_no`),\nKEY `code_rule_no` (`code_rule_no`),\nKEY `org_no` (`org_no`)\n)
 load data infile  '$resources/load_data/unique_index_file.csv' into table t_code_rule ;
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 code_id    code_type    code_no    code_rule_no    org_no
@@ -336,7 +336,7 @@ write    null
 create table index_table_07 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key col10(col10),key num_id(col4));
 invalid input: column 'col10' is not exist
 create table index_table_07 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key col2(col2),key num_id(col40));
-[unknown result because it is related to issue#7384]
+invalid input: column 'col40' is not exist
 create table create_index_01 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50));
 create unique index varchar_index on create_index_01(col2) comment 'create varchar index';
 insert into create_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23'),(3,NULL,100.00,'23');
@@ -478,12 +478,12 @@ insert into create_index_12(col2,col3) values (NULL,'2014-02-01'),(NULL,NULL);
 create table create_index_13 (col1 bigint auto_increment primary key,col2 datetime,col3 datetime);
 create unique index datetime_index on create_index_13(col2);
 insert into create_index_13(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
-Duplicate entry '2013-01-01 12:00:00' for key '__mo_index_idx_col'
+Duplicate entry '2013-01-01 12:00:00.000000' for key '__mo_index_idx_col'
 insert into create_index_13(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
 create table create_index_14 (col1 bigint auto_increment primary key,col2 timestamp,col3 timestamp);
 create unique index timestamp_index on create_index_14(col2);
 insert into create_index_14(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
-Duplicate entry '2013-01-01 12:00:00.000000 UTC' for key '__mo_index_idx_col'
+Duplicate entry '2013-01-01 12:00:00.000000' for key '__mo_index_idx_col'
 insert into create_index_14(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
 create table create_index_15 (col1 bigint primary key,col2 bool);
 create unique index bool_index on create_index_15(col2);
@@ -496,17 +496,17 @@ col1    col2
 2    false
 3    null
 create table create_index_16 (col1 bigint primary key,col2 blob,col3 blob);
-[unknown result because it is related to issue#7549]
 create unique index blob_index on create_index_16(col2);
-[unknown result because it is related to issue#7549]
+not supported: BLOB column 'col2' cannot be in index
+drop table create_index_16;
 create table create_index_17 (col1 bigint primary key,col2 json,col3 json);
-[unknown result because it is related to issue#7549]
 create unique index json_index on create_index_17(col2);
-[unknown result because it is related to issue#7549]
+not supported: JSON column 'col2' cannot be in index
+drop table create_index_17;
 create table create_index_18 (col1 bigint primary key,col2 text,col3 text);
-[unknown result because it is related to issue#7549]
 create unique index text_index on create_index_18(col2);
-[unknown result because it is related to issue#7549]
+not supported: TEXT column 'col2' cannot be in index
+drop table create_index_18;
 create table create_index_name (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1));
 create unique index 123 on create_index_name(col2);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 23 near " 123 on create_index_name(col2);";
@@ -534,35 +534,37 @@ drop index m1_index on create_index_18;
 create unique index m2_index on create_index_18(col2,col3,col4);
 truncate table create_index_18;
 insert into create_index_18(col2,col3,col4)  select 'apple',1,'10';
-[unknown result because it is related to issue#7554]
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'11';
-[unknown result because it is related to issue#7554]
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
-[unknown result because it is related to issue#7554]
 insert into create_index_18(col2,col3,col4)  select NULL,NULL,'13';
-[unknown result because it is related to issue#7554]
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
-[unknown result because it is related to issue#7554]
+Duplicate entry '46016170706c65003a15024601313200' for key '__mo_index_idx_col'
 select * from create_index_18;
-[unknown result because it is related to issue#7554]
+col1    col2    col3    col4
+1    apple    1    10
+2    apple    2    11
+3    apple    2    12
+4    null    null    13
 drop index m2_index on create_index_18;
-[unknown result because it is related to issue#7554]
 create unique index m3_index on create_index_18(col2);
-[unknown result because it is related to issue#7554]
+Duplicate entry 'apple' for key '__mo_index_idx_col'
 create unique index m4_index on create_index_18(col3);
-[unknown result because it is related to issue#7554]
+Duplicate entry '2' for key '__mo_index_idx_col'
 create unique index m5_index on create_index_18(col4);
-[unknown result because it is related to issue#7554]
 select * from create_index_18;
-[unknown result because it is related to issue#7554]
+col1    col2    col3    col4
+1    apple    1    10
+2    apple    2    11
+3    apple    2    12
+4    null    null    13
 show create table create_index_18;
-[unknown result because it is related to issue#7554]
+Table    Create Table
+create_index_18    CREATE TABLE `create_index_18` (\n`col1` BIGINT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `m5_index` (`col4`)\n)
 drop index m3_index on create_index_18;
-[unknown result because it is related to issue#7554]
+internal error: not found index: m3_index
 drop index m4_index on create_index_18;
-[unknown result because it is related to issue#7554]
+internal error: not found index: m4_index
 drop index m5_index on create_index_18;
-[unknown result because it is related to issue#7554]
 drop table create_index_18;
 create table create_index_18(col1 int,col2 char(15));
 insert into create_index_18 values(2,'20');
@@ -601,7 +603,7 @@ col1    col2    col3    col4
 2    chart    2    11
 truncate table create_index_19;
 insert into create_index_19(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('apple',3,'12');
-
+Duplicate entry 'apple' for key '__mo_index_idx_col'
 select * from create_index_19;
 col1    col2    col3    col4
 drop table create_index_19;

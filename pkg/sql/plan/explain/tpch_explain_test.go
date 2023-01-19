@@ -32,7 +32,7 @@ import (
 func Test_TPCH_Plan2(t *testing.T) {
 	ctx := context.TODO()
 
-	mock := plan.NewMockOptimizer()
+	mock := plan.NewMockOptimizer(false)
 	es := &ExplainOptions{
 		Verbose: true,
 		Analyze: false,
