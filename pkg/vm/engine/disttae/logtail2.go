@@ -55,8 +55,8 @@ const (
 	// reconnectDeadTime if the time of losing response with dn reaches reconnectDeadTime, we will reconnect.
 	reconnectDeadTime = 5 * time.Minute
 
-	// defaultPeriodToSubscribeTable if ctx without a dead time. we will set it 2 minute to send a subscribe-table message.
-	defaultPeriodToSubscribeTable = 2 * time.Minute
+	// defaultTimeOutToSubscribeTable if ctx without a dead time. we will set it 2 minute to send a subscribe-table message.
+	defaultTimeOutToSubscribeTable = 2 * time.Minute
 )
 
 // cnLogTailTimestamp each cn-node will hold one global log time.
@@ -285,7 +285,7 @@ func (logSub *TableLogTailSubscriber) connectToLogTailServer(
 func (logSub *TableLogTailSubscriber) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
 	if _, ok := ctx.Deadline(); !ok {
-		nctx, _ := context.WithTimeout(ctx, defaultPeriodToSubscribeTable)
+		nctx, _ := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
 		return logSub.logTailClient.Subscribe(nctx, tblId)
 	}
 	return logSub.logTailClient.Subscribe(ctx, tblId)

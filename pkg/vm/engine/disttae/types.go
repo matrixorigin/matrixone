@@ -90,6 +90,11 @@ type Engine struct {
 	catalog           *cache.CatalogCache
 	// minimum heap of currently active transactions
 	txnHeap *transactionHeap
+
+	// XXX related to cn push model
+	subscriber         *logTailSubscriber
+	receiveLogTailTime syncLogTailTimestamp
+	subscribed         subscribedTable
 }
 
 // DB is implementataion of cache
