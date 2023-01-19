@@ -330,11 +330,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 					},
 				},
 			})
-
-			break
-		}
-
-		if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
+		} else if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
 			childProjList = builder.qry.Nodes[rightID].ProjectList
 			for i, globalRef := range rightRemapping.localToGlobal {
 				if colRefCnt[globalRef] == 0 {
@@ -1347,9 +1343,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					return 0, err
 				}
 
-				if expr != nil {
-					newFilterList = append(newFilterList, expr)
-				}
+				newFilterList = append(newFilterList, expr)
 			}
 
 			nodeID = builder.appendNode(&plan.Node{
@@ -1519,9 +1513,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					return 0, err
 				}
 
-				if expr != nil {
-					newFilterList = append(newFilterList, expr)
-				}
+				newFilterList = append(newFilterList, expr)
 			}
 
 			nodeID = builder.appendNode(&plan.Node{
@@ -1545,11 +1537,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx)
 		if err != nil {
 			return 0, err
-		}
-
-		if proj == nil {
-			// TODO: implement MARK join to better support non-scalar subqueries
-			return 0, moerr.NewNYI(builder.GetContext(), "non-scalar subquery in SELECT clause")
 		}
 
 		ctx.projects[i] = proj
@@ -2264,7 +2251,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				}
 			}
 
-			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT && rejectsNull(filter, builder.compCtx.GetProcess()) {
+			if canTurnInner && node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0 && rejectsNull(filter, builder.compCtx.GetProcess()) {
 				for _, cond := range node.OnList {
 					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
 				}
@@ -2317,6 +2304,32 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				case plan.Node_INNER:
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
 					rightPushdown = append(rightPushdown, filter)
+
+				case plan.Node_MARK:
+					if tryMark, ok := filter.Expr.(*plan.Expr_Col); ok {
+						if tryMark.Col.RelPos == node.BindingTags[0] {
+							node.JoinType = plan.Node_SEMI
+							node.BindingTags = nil
+							break
+						}
+					} else if fExpr, ok := filter.Expr.(*plan.Expr_F); ok {
+						if filter.Typ.NotNullable && fExpr.F.Func.ObjName == "not" {
+							arg := fExpr.F.Args[0]
+							if tryMark, ok := arg.Expr.(*plan.Expr_Col); ok {
+								if tryMark.Col.RelPos == node.BindingTags[0] {
+									node.JoinType = plan.Node_ANTI
+									node.BindingTags = nil
+									break
+								}
+							}
+						}
+					}
+
+					if hasTag(filter, node.BindingTags[0]) {
+						cantPushdown = append(cantPushdown, filter)
+					} else {
+						leftPushdown = append(leftPushdown, filter)
+					}
 
 				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
 					leftPushdown = append(leftPushdown, filter)

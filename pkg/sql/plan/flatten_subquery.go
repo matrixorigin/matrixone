@@ -59,8 +59,6 @@ func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ct
 }
 
 func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.SubqueryRef, ctx *BindContext) (int32, *plan.Expr, error) {
-	// TODO: use MARK JOIN for quantified subquery
-
 	subID := subquery.NodeId
 	subCtx := builder.ctxByNode[subID]
 
@@ -155,14 +153,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			joinPreds = append(joinPreds, constTrue)
 		}
 
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeID, subID},
-			JoinType: plan.Node_SEMI,
-			OnList:   joinPreds,
-		}, ctx)
-
-		return nodeID, nil, nil
+		return builder.insertMarkJoin(nodeID, subID, joinPreds, nil, false, ctx)
 
 	case plan.SubqueryRef_NOT_EXISTS:
 		// Uncorrelated subquery
@@ -170,91 +161,96 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			joinPreds = append(joinPreds, constTrue)
 		}
 
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeID, subID},
-			JoinType: plan.Node_ANTI,
-			OnList:   joinPreds,
-		}, ctx)
-
-		return nodeID, nil, nil
+		return builder.insertMarkJoin(nodeID, subID, joinPreds, nil, true, ctx)
 
 	case plan.SubqueryRef_IN:
-		expr, err := builder.generateComparison("=", subquery.Child, subCtx)
+		outerPred, err := builder.generateComparison("=", subquery.Child, subCtx)
 		if err != nil {
 			return 0, nil, err
 		}
 
-		joinPreds = append(joinPreds, expr)
-
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeID, subID},
-			JoinType: plan.Node_SEMI,
-			OnList:   joinPreds,
-		}, ctx)
-
-		return nodeID, nil, nil
+		return builder.insertMarkJoin(nodeID, subID, joinPreds, outerPred, false, ctx)
 
 	case plan.SubqueryRef_NOT_IN:
-		expr, err := builder.generateComparison("=", subquery.Child, subCtx)
+		outerPred, err := builder.generateComparison("=", subquery.Child, subCtx)
 		if err != nil {
 			return 0, nil, err
 		}
 
-		joinPreds = append(joinPreds, expr)
-
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeID, subID},
-			JoinType: plan.Node_ANTI,
-			OnList:   joinPreds,
-		}, ctx)
-
-		return nodeID, nil, nil
+		return builder.insertMarkJoin(nodeID, subID, joinPreds, outerPred, true, ctx)
 
 	case plan.SubqueryRef_ANY:
-		expr, err := builder.generateComparison(subquery.Op, subquery.Child, subCtx)
+		outerPred, err := builder.generateComparison(subquery.Op, subquery.Child, subCtx)
 		if err != nil {
 			return 0, nil, err
 		}
 
-		joinPreds = append(joinPreds, expr)
-
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeID, subID},
-			JoinType: plan.Node_SEMI,
-			OnList:   joinPreds,
-		}, ctx)
-
-		return nodeID, nil, nil
+		return builder.insertMarkJoin(nodeID, subID, joinPreds, outerPred, false, ctx)
 
 	case plan.SubqueryRef_ALL:
-		expr, err := builder.generateComparison(subquery.Op, subquery.Child, subCtx)
+		outerPred, err := builder.generateComparison(subquery.Op, subquery.Child, subCtx)
 		if err != nil {
 			return 0, nil, err
 		}
 
-		expr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{expr})
+		outerPred, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{outerPred})
 		if err != nil {
 			return 0, nil, err
 		}
 
-		joinPreds = append(joinPreds, expr)
-
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeID, subID},
-			JoinType: plan.Node_ANTI,
-			OnList:   joinPreds,
-		}, ctx)
-
-		return nodeID, nil, nil
+		return builder.insertMarkJoin(nodeID, subID, joinPreds, outerPred, true, ctx)
 
 	default:
 		return 0, nil, moerr.NewNotSupported(builder.GetContext(), "%s subquery not supported", subquery.Typ.String())
 	}
+}
+
+func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
+	markTag := builder.genNewTag()
+
+	for i, pred := range joinPreds {
+		if !pred.Typ.NotNullable {
+			joinPreds[i], err = bindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{pred})
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	notNull := true
+
+	if outerPred != nil {
+		joinPreds = append(joinPreds, outerPred)
+		notNull = outerPred.Typ.NotNullable
+	}
+
+	nodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_JOIN,
+		Children:    []int32{left, right},
+		BindingTags: []int32{markTag},
+		JoinType:    plan.Node_MARK,
+		OnList:      joinPreds,
+	}, ctx)
+
+	markExpr = &plan.Expr{
+		Typ: &plan.Type{
+			Id:          int32(types.T_bool),
+			NotNullable: notNull,
+			Size:        1,
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: markTag,
+				ColPos: 0,
+			},
+		},
+	}
+
+	if negate {
+		markExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{markExpr})
+	}
+
+	return
 }
 
 func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx *BindContext) (*plan.Expr, error) {
