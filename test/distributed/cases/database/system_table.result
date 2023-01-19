@@ -2,8 +2,8 @@ SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
 character_set_name    default_collate_name    description    maxlen
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
 table_catalog    table_schema    table_name    column_name    ordinal_position    column_default    is_nullable    data_type    character_maximum_length    character_octet_length    numeric_precision    numeric_scale    datetime_precision    character_set_name    collation_name    column_type    column_key    extra    PRIVILEGES    column_comment    generation_expression    srs_id
-def    mo_catalog    mo_tables    rel_id    0    null    NO    BIGINT UNSIGNED    90    90    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(0)    PRI        select,insert,update,references            0
-def    mo_catalog    mo_tables    relname    1    null    NO    VARCHAR    94    94    0    0    0    utf8    utf8_bin    VARCHAR(5000)            select,insert,update,references            0
+def    mo_catalog    mo_tables    rel_id    1    null    NO    BIGINT UNSIGNED    90    90    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(0)    PRI        select,insert,update,references            0
+def    mo_catalog    mo_tables    relname    2    null    NO    VARCHAR    94    94    0    0    0    utf8    utf8_bin    VARCHAR(5000)            select,insert,update,references            0
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 constraint_catalog    constraint_schema    constraint_name    table_catalog    table_schema    table_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_schema    referenced_table_name    referenced_column_name
 SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;

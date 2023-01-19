@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mark
+package loopmark
 
 import (
 	"bytes"
@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -37,7 +36,7 @@ const (
 )
 
 // add unit tests for cases
-type markTestCase struct {
+type joinTestCase struct {
 	arg    *Argument
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
@@ -47,29 +46,13 @@ type markTestCase struct {
 }
 
 var (
-	tcs []markTestCase
+	tcs []joinTestCase
 )
 
 func init() {
-	tcs = []markTestCase{
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
-				},
-				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
-				},
-			}),
-		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
-				},
-				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
-				},
-			}),
+	tcs = []joinTestCase{
+		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0, -1}),
+		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0, -1}),
 	}
 }
 
@@ -80,15 +63,19 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestMark(t *testing.T) {
-	/* XXX There are some problems with the mark join code for handling null. Modify later
+func TestPrepare(t *testing.T) {
+	for _, tc := range tcs {
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
+	}
+}
+
+func TestJoin(t *testing.T) {
 	for _, tc := range tcs {
 		bat := hashBuild(t, tc)
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		batWithNull := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		batWithNull.Vecs[0].Nsp.Np.Add(0)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batWithNull
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
@@ -96,14 +83,13 @@ func TestMark(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- bat
 		for {
-			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
+			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
 				break
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
-	*/
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
@@ -122,38 +108,14 @@ func TestMark(t *testing.T) {
 		}
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+
 }
 
-func TestHandleResultType(t *testing.T) {
-	ctr := new(container)
-	ctr.markVals = make([]bool, 3)
-	ctr.markNulls = nulls.NewWithSize(3)
-	ctr.handleResultType(0, condTrue)
-	ctr.handleResultType(1, condFalse)
-	ctr.handleResultType(2, condUnkown)
-}
-
-func BenchmarkMark(b *testing.B) {
+func BenchmarkJoin(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		tcs = []markTestCase{
-			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
-				[][]*plan.Expr{
-					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
-					},
-					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
-					},
-				}),
-			newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
-				[][]*plan.Expr{
-					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
-					},
-					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
-					},
-				}),
+		tcs = []joinTestCase{
+			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0, -1}),
+			newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0, -1}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -177,23 +139,7 @@ func BenchmarkMark(b *testing.B) {
 	}
 }
 
-func newExpr(pos int32, typ types.Type) *plan.Expr {
-	return &plan.Expr{
-		Typ: &plan.Type{
-			Size:  typ.Size,
-			Scale: typ.Scale,
-			Width: typ.Width,
-			Id:    int32(typ.Oid),
-		},
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				ColPos: pos,
-			},
-		},
-	}
-}
-
-func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) markTestCase {
+func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -203,7 +149,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *batch.Batch, 4),
 	}
 	fid := function.EncodeOverloadID(function.EQUAL, 4)
 	args := make([]*plan.Expr, 0, 2)
@@ -243,29 +189,23 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 			},
 		},
 	}
-
-	c := markTestCase{
+	return joinTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
-			Typs:       ts,
-			Result:     rp,
-			Conditions: cs,
-			Cond:       cond,
-			OnList:     []*plan.Expr{cond},
+			Typs:   ts,
+			Cond:   cond,
+			Result: rp,
 		},
 		barg: &hashbuild.Argument{
-			Typs:        ts,
-			NeedHashMap: true,
-			Conditions:  cs[1],
+			Typs: ts,
 		},
 	}
-	return c
 }
 
-func hashBuild(t *testing.T, tc markTestCase) *batch.Batch {
+func hashBuild(t *testing.T, tc joinTestCase) *batch.Batch {
 	err := hashbuild.Prepare(tc.proc, tc.barg)
 	require.NoError(t, err)
 	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
@@ -278,5 +218,5 @@ func hashBuild(t *testing.T, tc markTestCase) *batch.Batch {
 
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, true, int(rows), proc.Mp())
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }

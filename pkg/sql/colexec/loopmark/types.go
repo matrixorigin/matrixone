@@ -12,41 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package deletion
+package loopmark
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type Argument struct {
-	Ts           uint64
-	DeleteCtx    *DeleteCtx
-	AffectedRows uint64
-	IsRemote     bool
+const (
+	Build = iota
+	Probe
+	End
+)
+
+type container struct {
+	state int
+	bat   *batch.Batch
 }
 
-type DeleteCtx struct {
-	CanTruncate bool
-
-	ParentSource [][]engine.Relation
-
-	DelSource []engine.Relation
-	DelRef    []*plan.ObjectRef
-
-	DelIdxSource []engine.Relation
-	DelIdxIdx    []int32
-
-	OnRestrictIdx []int32
-
-	OnCascadeSource []engine.Relation
-	OnCascadeIdx    []int32
-
-	OnSetSource []engine.Relation
-	OnSetIdx    [][]int32
-	OnSetAttrs  [][]string
+type Argument struct {
+	ctr    *container
+	Cond   *plan.Expr
+	Typs   []types.Type
+	Result []int32
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ctr := arg.ctr
+	if ctr != nil {
+		ctr.cleanBatch(proc.Mp())
+	}
+}
+
+func (ctr *container) cleanBatch(mp *mpool.MPool) {
+	if ctr.bat != nil {
+		ctr.bat.Clean(mp)
+		ctr.bat = nil
+	}
 }

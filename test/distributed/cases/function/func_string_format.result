@@ -502,3 +502,66 @@ invalid argument function format, bad value [DATETIME BIGINT]
 select dt, format(dt, length("123456789")) from t order by dt desc;
 invalid argument function format, bad value [DATETIME BIGINT]
 drop table t;
+drop table if exists t;
+create table t(
+i int,
+b bigint,
+primary key (i)
+);
+insert into t values (-1, null), (0000000000000000, 1);
+select b, format(b, 1) from t order by b desc;
+b    format(b, 1)
+1    1.0
+null    null
+select b, format(b, 0) from t order by b desc;
+b    format(b, 0)
+1    1
+null    null
+select b, format(b, -1) from t order by b desc;
+b    format(b, -1)
+1    1
+null    null
+select b, format(b, '1') from t order by b desc;
+b    format(b, 1)
+1    1.0
+null    null
+select b, format(b, '-1') from t order by b desc;
+b    format(b, -1)
+1    1
+null    null
+select b, format(b, '0') from t order by b desc;
+b    format(b, 0)
+1    1
+null    null
+select b, format(b, 'x') from t order by b desc;
+b    format(b, x)
+1    1
+null    null
+drop table t;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(
+c1 int,
+c2 bigint,
+primary key (c1)
+);
+create table t2(
+i int,
+b bigint,
+primary key (i)
+);
+insert into t1 values ('111', '222'), ('000', '111'), ('-111', null);
+insert into t2 values (111, 999999), (0,0000000), (-1, null), (11111, 1);
+select c1, format(c1,1), i, format(i,1) from t1 left join t2 on t1.c1 = t2.i order by c1 desc;
+c1    format(c1, 1)    i    format(i, 1)
+111    111.0    111    111.0
+0    0.0    0    0.0
+-111    -111.0    null    null
+select c1, format(c1,1), i, format(i,1) from t1 right join t2 on t1.c1 = t2.i order by c1 desc;
+c1    format(c1, 1)    i    format(i, 1)
+111    111.0    111    111.0
+0    0.0    0    0.0
+null    null    -1    -1.0
+null    null    11111    11,111.0
+drop table t1;
+drop table t2;

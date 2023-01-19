@@ -31,6 +31,9 @@ true
 select '**' like '*^' as result;
 result
 false
+select '(_a)' like '(_a)';
+result
+true
 drop table if exists t1;
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
