@@ -127,9 +127,8 @@ create table time_02 (t1 int,t2 time primary key,t3 varchar(25))partition by has
 SQL syntax error: type TIME not allowed in partition clause
 create table time_03 (t1 int,t2 time primary key,t3 varchar(25));
 insert into time_03 values (30,"101412","yellow");
-
 insert into time_03 values (40,"101412","apple");
-Duplicate entry '10:14:12' for key 't2'
+Duplicate entry '10:14:12.000000' for key 't2'
 select * from time_03;
 t1    t2    t3
 30    10:14:12    yellow
