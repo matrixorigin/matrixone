@@ -113,7 +113,7 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 	return rs, rids
 }
 
-func (cc *CatalogCache) GetTableById(databaseId, tblId uint64, ts timestamp.Timestamp) *TableItem {
+func (cc *CatalogCache) GetTableById(databaseId, tblId uint64) *TableItem {
 	var rel *TableItem
 
 	key := &TableItem{

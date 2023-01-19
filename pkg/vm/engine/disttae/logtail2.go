@@ -101,7 +101,7 @@ func WaitUntilTxnTimeIsLegal(ctx context.Context,
 			// XXX I'm not sure if it is a good error info.
 			return moerr.NewTxnError(ctx, "start txn failed due to txn timestamp. please retry.")
 		}
-		if txnTimeIsLegal(txnTime) {
+		if timeLessOrEqualGlobal(txnTime) {
 			return nil
 		}
 		time.Sleep(periodToCheckTxnTimestamp)
@@ -109,11 +109,18 @@ func WaitUntilTxnTimeIsLegal(ctx context.Context,
 	}
 }
 
-func txnTimeIsLegal(txnTime timestamp.Timestamp) bool {
+func timeLessOrEqualGlobal(txnTime timestamp.Timestamp) bool {
 	cnLogTailTimestamp.RLock()
 	t := cnLogTailTimestamp.t
 	cnLogTailTimestamp.RUnlock()
 	return txnTime.LessEq(t)
+}
+
+func timeLessGlobal(txnTime timestamp.Timestamp) bool {
+	cnLogTailTimestamp.RLock()
+	t := cnLogTailTimestamp.t
+	cnLogTailTimestamp.RUnlock()
+	return txnTime.Less(t)
 }
 
 // tableSubscribeRecord is records this cn node's table subscription
@@ -326,7 +333,7 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 						tbl := lt.GetTable()
 						dbId, tblId := tbl.DbId, tbl.TbId
 
-						if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &lt, logTs); err != nil {
+						if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &lt, *logTs); err != nil {
 							needReconnect = true
 							break
 						}
@@ -336,11 +343,10 @@ func (logSub *TableLogTailSubscriber) StartReceiveTableLogTail() {
 					case resp.r.GetUpdateResponse() != nil:
 						logLists := resp.r.GetUpdateResponse().GetLogtailList()
 						to := resp.r.GetUpdateResponse().GetTo()
-						from := resp.r.GetUpdateResponse().GetFrom()
 
 						logList(logLists).Sort()
 						for _, l := range logLists {
-							if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &l, from); err != nil {
+							if err := updatePartition2(ctx, logSub.dnNodeID, logSub.engine, &l, *l.Ts); err != nil {
 								logutil.Error("cnLogTailClient : update table partition failed.")
 								needReconnect = true
 								break
@@ -407,14 +413,14 @@ func TryToGetTableLogTail(
 func updatePartition2(
 	ctx context.Context,
 	dnId int,
-	e *Engine, tl *logtail.TableLogtail, ts *timestamp.Timestamp) (err error) {
+	e *Engine, tl *logtail.TableLogtail, ts timestamp.Timestamp) (err error) {
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
 	partitions := e.db.getPartitions(dbId, tblId)
 	partition := partitions[dnId]
 
-	key := e.catalog.GetTableById(dbId, tblId, *ts)
+	key := e.catalog.GetTableById(dbId, tblId)
 	tbl := &table{
 		db: &database{
 			databaseId:   dbId,

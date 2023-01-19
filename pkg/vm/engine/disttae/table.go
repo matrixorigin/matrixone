@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -214,9 +213,9 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
 		}
 	*/
-	if tbl.tableName == "t" {
-		fmt.Printf("txn time is %v\n", tbl.db.txn.meta.SnapshotTS)
-	}
+	//if tbl.tableName == "t" {
+	//	fmt.Printf("txn time is %v\n", tbl.db.txn.meta.SnapshotTS)
+	//}
 
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	for i := range tbl.db.txn.writes {
