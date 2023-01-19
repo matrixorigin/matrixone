@@ -21,19 +21,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
-
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
-
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -42,7 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
@@ -51,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
@@ -69,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -188,7 +186,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	if err != nil {
 		return nil, err
 	}
-	refactorScope(c, c.ctx, s)
+	s = refactorScope(c, c.ctx, s)
 
 	err = s.ParallelRun(c, s.IsRemote)
 	if err != nil {
@@ -208,6 +206,9 @@ const maxMessageSizeToMoRpc = 64 * mpool.MB
 
 // sendBackBatchToCnClient send back the result batch to cn client.
 func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint64, mHelper *messageHandleHelper, cs morpc.ClientSession) error {
+	if b == nil {
+		return nil
+	}
 	encodeData, errEncode := types.Encode(b)
 	if errEncode != nil {
 		return errEncode
@@ -249,6 +250,9 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyz
 		case <-c.ctx.Done():
 			return moerr.NewRPCTimeout(c.ctx)
 		case val = <-mChan:
+		}
+		if val == nil {
+			return nil
 		}
 		m := val.(*pipeline.Message)
 
@@ -441,17 +445,14 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, e
 	return result, nil
 }
 
-func refactorScope(c *Compile, _ context.Context, s *Scope) {
-	// adjust Remote to Parallel
-	s.Magic = Parallel
-	// refactor the scope, set an output instruction at the last of scope.
-	s.Instructions = append(s.Instructions, vm.Instruction{
+func refactorScope(c *Compile, _ context.Context, s *Scope) *Scope {
+	rs := c.newMergeScope([]*Scope{s})
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,
 		Idx: -1, // useless
 		Arg: &output.Argument{Data: nil, Func: c.fill},
 	})
-	c.proc = s.Proc
-	c.scope = s
+	return rs
 }
 
 // fillPipeline convert the scope to pipeline.Pipeline structure through 2 iterations.
@@ -877,7 +878,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 			Types:     convertToPlanTypes(t.Typs),
-			Cond:      t.Cond,
+			Expr:      t.Cond,
 			OnList:    t.OnList,
 		}
 	case *table_function.Argument:
@@ -1010,6 +1011,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Cond:   t.Expr,
 			Typs:   convertToTypes(t.Types),
 		}
+	case vm.LoopMark:
+		t := opr.GetMarkJoin()
+		v.Arg = &loopmark.Argument{
+			Result: t.Result,
+			Cond:   t.Expr,
+			Typs:   convertToTypes(t.Types),
+		}
 	case vm.Offset:
 		v.Arg = &offset.Argument{Offset: opr.Offset}
 	case vm.Order:
@@ -1052,7 +1060,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Result:     t.Result,
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 			Typs:       convertToTypes(t.Types),
-			Cond:       t.Cond,
+			Cond:       t.Expr,
 			OnList:     t.OnList,
 		}
 	case vm.Top:
@@ -1198,8 +1206,11 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 		target.analInfos[i].TimeConsumed += n.TimeConsumed
 		target.analInfos[i].WaitTimeConsumed += n.WaitTimeConsumed
 		target.analInfos[i].DiskIO += n.DiskIO
-		target.analInfos[i].S3IO += n.S3IO
+		target.analInfos[i].S3IOByte += n.S3IOByte
+		target.analInfos[i].S3IOCount += n.S3IOCount
 		target.analInfos[i].NetworkIO += n.NetworkIO
+		target.analInfos[i].ScanTime += n.ScanTime
+		target.analInfos[i].InsertTime += n.InsertTime
 	}
 }
 
@@ -1309,6 +1320,7 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 		ConnectionID: sei.ConnectionId,
 		Database:     sei.Database,
 		Version:      sei.Version,
+		Account:      sei.Account,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
@@ -1329,8 +1341,11 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 		MemorySize:       info.MemorySize,
 		WaitTimeConsumed: info.WaitTimeConsumed,
 		DiskIO:           info.DiskIO,
-		S3IO:             info.S3IO,
+		S3IOByte:         info.S3IOByte,
+		S3IOCount:        info.S3IOCount,
 		NetworkIO:        info.NetworkIO,
+		ScanTime:         info.ScanTime,
+		InsertTime:       info.InsertTime,
 	}
 }
 

@@ -154,7 +154,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ie.proto, mp, ie.pu, gSysVariables, true)
+	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true)
 	sess.SetRequestContext(ctx)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
@@ -367,3 +367,7 @@ func (ip *internalProtocol) ResetStatistics() {
 }
 
 func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }
+
+func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
+	return nil
+}

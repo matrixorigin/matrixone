@@ -23,11 +23,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 func TestSessionManger(t *testing.T) {
@@ -36,22 +38,23 @@ func TestSessionManger(t *testing.T) {
 	ctx := context.Background()
 
 	// constructs mocker
-	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
-	pooler := mockResponsePooler()
-	notifier := mockSessionErrorNotifier(logger)
+	logger := mockMOLogger()
+	pooler := NewResponsePool()
+	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
+	chunkSize := 1024
 
 	/* ---- 1. register sessioin A ---- */
-	csA := mockNormalClientSession(logger)
-	streamA := mockMorpcStream(csA, 10)
+	csA := mockNormalClientSession(logger.RawLogger())
+	streamA := mockMorpcStream(csA, 10, chunkSize)
 	sessionA := sm.GetSession(ctx, logger, sendTimeout, pooler, notifier, streamA, poisionTime)
 	require.NotNil(t, sessionA)
 	require.Equal(t, 1, len(sm.ListSession()))
 
 	/* ---- 2. register sessioin B ---- */
-	csB := mockNormalClientSession(logger)
-	streamB := mockMorpcStream(csB, 11)
+	csB := mockNormalClientSession(logger.RawLogger())
+	streamB := mockMorpcStream(csB, 11, chunkSize)
 	sessionB := sm.GetSession(ctx, logger, sendTimeout, pooler, notifier, streamB, poisionTime)
 	require.NotNil(t, sessionB)
 	require.Equal(t, 2, len(sm.ListSession()))
@@ -68,11 +71,11 @@ func TestSessionError(t *testing.T) {
 	defer cancel()
 
 	// constructs mocker
-	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
-	pooler := mockResponsePooler()
-	notifier := mockSessionErrorNotifier(logger)
+	logger := mockMOLogger()
+	pooler := NewResponsePool()
+	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	cs := mockBrokenClientSession()
-	stream := mockMorpcStream(cs, 10)
+	stream := mockMorpcStream(cs, 10, 1024)
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
 
@@ -106,11 +109,11 @@ func TestPoisionSession(t *testing.T) {
 	defer cancel()
 
 	// constructs mocker
-	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
-	pooler := mockResponsePooler()
-	notifier := mockSessionErrorNotifier(logger)
+	logger := mockMOLogger()
+	pooler := NewResponsePool()
+	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	cs := mockBlockStream()
-	stream := mockMorpcStream(cs, 10)
+	stream := mockMorpcStream(cs, 10, 1024)
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
 
@@ -139,11 +142,11 @@ func TestSession(t *testing.T) {
 	defer cancel()
 
 	// constructs mocker
-	logger := logutil.GetGlobalLogger().Named(LogtailServiceRPCName)
-	pooler := mockResponsePooler()
-	notifier := mockSessionErrorNotifier(logger)
-	cs := mockNormalClientSession(logger)
-	stream := mockMorpcStream(cs, 10)
+	logger := mockMOLogger()
+	pooler := NewResponsePool()
+	notifier := mockSessionErrorNotifier(logger.RawLogger())
+	cs := mockNormalClientSession(logger.RawLogger())
+	stream := mockMorpcStream(cs, 10, 1024)
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
 
@@ -291,28 +294,8 @@ func mockNormalClientSession(logger *zap.Logger) morpc.ClientSession {
 }
 
 func (m *normalStream) Write(ctx context.Context, message morpc.Message) error {
-	response := message.(*LogtailResponse)
-	if resp := response.GetError(); resp != nil {
-		m.logger.Info(
-			"receive error response",
-			zap.String("content", resp.String()),
-		)
-	} else if resp := response.GetUpdateResponse(); resp != nil {
-		m.logger.Info(
-			"receive update response",
-			zap.String("content", resp.String()),
-		)
-	} else if resp := response.GetSubscribeResponse(); resp != nil {
-		m.logger.Info(
-			"receive subscription response",
-			zap.String("content", resp.String()),
-		)
-	} else if resp := response.GetUnsubscribeResponse(); resp != nil {
-		m.logger.Info(
-			"receive unsubscription response",
-			zap.String("content", resp.String()),
-		)
-	}
+	response := message.(*LogtailResponseSegment)
+	m.logger.Info("write response segment:", zap.String("segment", response.String()))
 	return nil
 }
 
@@ -337,29 +320,6 @@ func (m *notifySessionError) NotifySessionError(ss *Session, err error) {
 	}
 }
 
-type respPooler struct {
-	pool *sync.Pool
-}
-
-func mockResponsePooler() ResponsePooler {
-	return &respPooler{
-		pool: &sync.Pool{
-			New: func() any {
-				return &LogtailResponse{}
-			},
-		},
-	}
-}
-
-func (m *respPooler) AcquireResponse() *LogtailResponse {
-	return m.pool.Get().(*LogtailResponse)
-}
-
-func (m *respPooler) ReleaseResponse(resp *LogtailResponse) {
-	resp.Reset()
-	m.pool.Put(resp)
-}
-
 func mockWrapLogtail(table api.TableID) wrapLogtail {
 	return wrapLogtail{
 		id: TableID(table.String()),
@@ -371,13 +331,29 @@ func mockWrapLogtail(table api.TableID) wrapLogtail {
 
 func mockLogtail(table api.TableID) logtail.TableLogtail {
 	return logtail.TableLogtail{
-		Table: &table,
+		CkpLocation: "checkpoint",
+		Table:       &table,
 	}
 }
 
-func mockMorpcStream(cs morpc.ClientSession, id uint64) morpcStream {
+func mockMorpcStream(
+	cs morpc.ClientSession, id uint64, maxMessageSize int,
+) morpcStream {
+	segments := NewSegmentPool(maxMessageSize)
+
 	return morpcStream{
-		id: id,
-		cs: cs,
+		streamID: id,
+		limit:    segments.LeastEffectiveCapacity(),
+		logger:   mockMOLogger(),
+		cs:       cs,
+		segments: segments,
 	}
+}
+
+func mockMOLogger() *log.MOLogger {
+	return log.GetServiceLogger(
+		logutil.GetGlobalLogger().Named(LogtailServiceRPCName),
+		metadata.ServiceType_DN,
+		"uuid",
+	)
 }

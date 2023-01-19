@@ -326,6 +326,9 @@ type Relation interface {
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)
+
+	//max and min values
+	MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error)
 }
 
 type Reader interface {
@@ -384,3 +387,9 @@ type Hints struct {
 }
 
 type GetClusterDetailsFunc = func() (logservicepb.ClusterDetails, error)
+
+// EntireEngine is a wrapper for Engine to support temporary table
+type EntireEngine struct {
+	Engine     Engine // original engine
+	TempEngine Engine // new engine for temporarily table
+}

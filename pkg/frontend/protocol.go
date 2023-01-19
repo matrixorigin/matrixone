@@ -39,6 +39,8 @@ const (
 	EoFResponse
 	// ResultResponse result message
 	ResultResponse
+	// LocalInfileRequest local infile message
+	LocalInfileRequest
 )
 
 type Request struct {
@@ -308,7 +310,6 @@ func (pi *ProtocolImpl) ConnectionID() uint32 {
 // before calling NewMysqlClientProtocol, tcpConn.Connected() must be true
 // please check goetty/application.go::doStart() and goetty/application.go::NewIOSession(...) for details
 func (pi *ProtocolImpl) Quit() {
-	var err error
 	pi.m.Lock()
 	defer pi.m.Unlock()
 	//if it was quit, do nothing
@@ -316,13 +317,8 @@ func (pi *ProtocolImpl) Quit() {
 		return
 	}
 	if pi.tcpConn != nil {
-		err = pi.tcpConn.Disconnect()
-		if err != nil {
+		if err := pi.tcpConn.Disconnect(); err != nil {
 			return
-		}
-		err = pi.tcpConn.Close()
-		if err != nil {
-			logutil.Errorf("close tcp conn failed. error:%v", err)
 		}
 	}
 }
@@ -429,6 +425,9 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 			return mp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), uint16(resp.status), mer.Warnings(), "")
 		}
 		return mp.sendResultSet(ctx, mer.Mrs(), resp.cmd, mer.Warnings(), uint16(resp.status))
+	case LocalInfileRequest:
+		s, _ := resp.data.(string)
+		return mp.sendLocalInfileRequest(s)
 	default:
 		return moerr.NewInternalError(ctx, "unsupported response:%d ", resp.category)
 	}
@@ -444,6 +443,7 @@ const (
 type FakeProtocol struct {
 	username string
 	database string
+	ioses    goetty.IOSession
 }
 
 func (fp *FakeProtocol) GetCapability() uint32 {
@@ -463,7 +463,7 @@ func (fp *FakeProtocol) HandleHandshake(ctx context.Context, payload []byte) (bo
 }
 
 func (fp *FakeProtocol) GetTcpConnection() goetty.IOSession {
-	return nil
+	return fp.ioses
 }
 
 func (fp *FakeProtocol) GetConciseProfile() string {
@@ -565,3 +565,7 @@ func (fp *FakeProtocol) SetUserName(s string) {
 }
 
 func (fp *FakeProtocol) Quit() {}
+
+func (fp *FakeProtocol) sendLocalInfileRequest(filename string) error {
+	return nil
+}

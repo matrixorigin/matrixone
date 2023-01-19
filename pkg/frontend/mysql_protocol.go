@@ -173,6 +173,8 @@ type MysqlProtocol interface {
 	//the OK or EOF packet thread safe
 	sendEOFOrOkPacket(warnings uint16, status uint16) error
 
+	sendLocalInfileRequest(filename string) error
+
 	ResetStatistics()
 
 	GetStats() string
@@ -1571,6 +1573,19 @@ func (mp *MysqlProtocolImpl) makeOKPayloadWithEof(affectedRows, lastInsertId uin
 	return data[:pos]
 }
 
+func (mp *MysqlProtocolImpl) makeLocalInfileRequestPayload(filename string) []byte {
+	data := make([]byte, HeaderOffset+1+len(filename)+1)
+	pos := HeaderOffset
+	pos = mp.io.WriteUint8(data, pos, defines.LocalInFileHeader)
+	pos = mp.writeStringFix(data, pos, filename, len(filename))
+	return data[:pos]
+}
+
+func (mp *MysqlProtocolImpl) sendLocalInfileRequest(filename string) error {
+	req := mp.makeLocalInfileRequestPayload(filename)
+	return mp.writePackets(req)
+}
+
 func (mp *MysqlProtocolImpl) sendOKPacketWithEof(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
 	okPkt := mp.makeOKPayloadWithEof(affectedRows, lastInsertId, status, warnings, message)
 	return mp.writePackets(okPkt)
@@ -2571,7 +2586,6 @@ func generate_salt(n int) []byte {
 func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	rand.Seed(time.Now().UTC().UnixNano())
 	salt := generate_salt(20)
-	tcp.Ref()
 	mysql := &MysqlProtocolImpl{
 		ProtocolImpl: ProtocolImpl{
 			io:           NewIOPackage(true),

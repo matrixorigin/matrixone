@@ -65,15 +65,15 @@ type Merge struct {
 	datetime    time.Time               // see Main
 	pathBuilder table.PathBuilder       // const as NewAccountDatePathBuilder()
 
-	// MaxFileSize 控制合并后最大文件大小, default: 128 MB
+	// MaxFileSize 控制合并后最大文件大小，default: 128 MB
 	MaxFileSize int64 // WithMaxFileSize
-	// MaxMergeJobs 允许进行的Merge的任务个数，default: 16
+	// MaxMergeJobs 允许进行的 Merge 的任务个数，default: 16
 	MaxMergeJobs int64 // WithMaxMergeJobs
-	// MinFilesMerge 控制Merge最少合并文件个数，default：2
+	// MinFilesMerge 控制 Merge 最少合并文件个数，default：2
 	//
 	// Deprecated: useless in Merge all in one file
 	MinFilesMerge int // WithMinFilesMerge
-	// FileCacheSize 控制Merge 过程中, 允许缓存的文件大小，default: 32 MB
+	// FileCacheSize 控制 Merge 过程中，允许缓存的文件大小，default: 32 MB
 	FileCacheSize int64
 
 	// logger
@@ -308,7 +308,6 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, paths []string
 		// open reader
 		reader, err = newETLReader(m.ctx, m.FS, path)
 		if err != nil {
-			reader.Close()
 			m.logger.Error(fmt.Sprintf("merge file meet read failed: %v", err))
 			return err
 		}
@@ -460,6 +459,10 @@ func (s *ContentReader) Close() {
 	for idx := range s.content {
 		s.content[idx] = nil
 	}
+	if s.raw != nil {
+		_ = s.raw.Close()
+		s.raw = nil
+	}
 }
 
 func newETLReader(ctx context.Context, fs fileservice.FileService, path string) (ETLReader, error) {
@@ -470,6 +473,9 @@ func newETLReader(ctx context.Context, fs fileservice.FileService, path string) 
 	}
 }
 
+// NewCSVReader create new csv reader.
+// success case return: ok_reader, nil error
+// failed case return: nil_reader, error
 func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) (ETLReader, error) {
 	// external.ReadFile
 	var reader io.ReadCloser
@@ -697,7 +703,7 @@ const ParamSeparator = " "
 func MergeTaskMetadata(id task.TaskCode, args ...string) task.TaskMetadata {
 	return task.TaskMetadata{
 		ID:       path.Join("ETL_merge_task", path.Join(args...)),
-		Executor: uint32(id),
+		Executor: id,
 		Context:  []byte(strings.Join(args, ParamSeparator)),
 	}
 }

@@ -90,10 +90,6 @@ func Test_Prepare(t *testing.T) {
 	convey.Convey("external Prepare", t, func() {
 		for _, tcs := range cases {
 			param := tcs.arg.Es
-			err := Prepare(tcs.proc, tcs.arg)
-			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(param.extern, convey.ShouldNotBeNil)
-			convey.So(param.Fileparam.End, convey.ShouldBeTrue)
 			extern := &tree.ExternParam{
 				Filepath: "",
 				Tail: &tree.TailParameter{
@@ -110,8 +106,9 @@ func Test_Prepare(t *testing.T) {
 				panic(err)
 			}
 			param.CreateSql = string(json_byte)
+			tcs.arg.Es.Extern = extern
 			err = Prepare(tcs.proc, tcs.arg)
-			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err, convey.ShouldBeNil)
 			convey.So(param.FileList, convey.ShouldBeNil)
 			convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
 
@@ -120,7 +117,7 @@ func Test_Prepare(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			param.CreateSql = string(json_byte)
 			err = Prepare(tcs.proc, tcs.arg)
-			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			if tcs.format == tree.JSONLINE {
 				extern = &tree.ExternParam{
@@ -146,7 +143,7 @@ func Test_Prepare(t *testing.T) {
 				param.CreateSql = string(json_byte)
 
 				err = Prepare(tcs.proc, tcs.arg)
-				convey.So(err, convey.ShouldNotBeNil)
+				convey.So(err, convey.ShouldBeNil)
 			}
 		}
 	})
@@ -166,7 +163,7 @@ func Test_Call(t *testing.T) {
 				JsonData:    tcs.jsondata,
 				Ctx:         context.Background(),
 			}
-			param.extern = extern
+			param.Extern = extern
 			param.Fileparam.End = false
 			param.FileList = []string{"abc.txt"}
 			end, err := Call(1, tcs.proc, tcs.arg, false, false)
@@ -433,7 +430,7 @@ func Test_GetBatchData(t *testing.T) {
 		param := &ExternalParam{
 			Attrs: atrrs,
 			Cols:  cols,
-			extern: &tree.ExternParam{
+			Extern: &tree.ExternParam{
 				Tail: &tree.TailParameter{
 					Fields: &tree.Fields{},
 				},
@@ -482,7 +479,7 @@ func Test_GetBatchData(t *testing.T) {
 			convey.So(err, convey.ShouldNotBeNil)
 		}
 
-		param.extern.Tail.Fields.EnclosedBy = 't'
+		param.Extern.Tail.Fields.EnclosedBy = 't'
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -504,8 +501,8 @@ func Test_GetBatchData(t *testing.T) {
 		}
 
 		//test jsonline
-		param.extern.Format = tree.JSONLINE
-		param.extern.JsonData = tree.OBJECT
+		param.Extern.Format = tree.JSONLINE
+		param.Extern.JsonData = tree.OBJECT
 		param.Attrs = atrrs
 		param.Cols = cols
 		plh.simdCsvLineArray = [][]string{jsonline_object}
@@ -518,17 +515,27 @@ func Test_GetBatchData(t *testing.T) {
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		param.extern.Format = tree.CSV
+		param.Extern.Format = tree.CSV
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		param.extern.Format = tree.JSONLINE
-		param.extern.JsonData = tree.ARRAY
+		param.Extern.Format = tree.JSONLINE
+		param.Extern.JsonData = tree.ARRAY
+		param.prevStr = ""
 		plh.simdCsvLineArray = [][]string{jsonline_array}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
+		prevStr, str := jsonline_array[0][:len(jsonline_array[0])-2], jsonline_array[0][len(jsonline_array[0])-2:]
+		plh.simdCsvLineArray = [][]string{{prevStr}}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(param.prevStr, convey.ShouldEqual, prevStr)
 
-		param.extern.JsonData = "test"
+		plh.simdCsvLineArray = [][]string{{str}}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldBeNil)
+
+		param.Extern.JsonData = "test"
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -549,6 +556,7 @@ func Test_GetBatchData(t *testing.T) {
 
 func TestReadDirSymlink(t *testing.T) {
 	root := t.TempDir()
+	ctx := context.Background()
 
 	// create a/b/c
 	err := os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0755)
@@ -569,7 +577,7 @@ func TestReadDirSymlink(t *testing.T) {
 	fooPathInB := filepath.Join(root, "a", "b", "d", "foo")
 	files, err := ReadDir(&tree.ExternParam{
 		Filepath: fooPathInB,
-		Ctx:      context.Background(),
+		Ctx:      ctx,
 	})
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(files))
@@ -578,6 +586,7 @@ func TestReadDirSymlink(t *testing.T) {
 	path1 := root + "/a//b/./../b/c/foo"
 	files1, err := ReadDir(&tree.ExternParam{
 		Filepath: path1,
+		Ctx:      ctx,
 	})
 	assert.Nil(t, err)
 	pathWant1 := root + "/a/b/c/foo"

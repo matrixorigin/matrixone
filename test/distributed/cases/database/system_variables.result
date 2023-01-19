@@ -71,11 +71,11 @@ Variable_name    Value
 system_time_zone    
 show variables like 'trans%';
 Variable_name    Value
-transaction_isolation    SNAPSHOT-ISOLATION
+transaction_isolation    REPEATABLE-READ
 transaction_read_only    0
 show variables like 'transaction_isolation';
 Variable_name    Value
-transaction_isolation    SNAPSHOT-ISOLATION
+transaction_isolation    REPEATABLE-READ
 show variables like 'wait%';
 Variable_name    Value
 wait_timeout    28800
@@ -429,11 +429,11 @@ Variable_name    Value
 character_set_server    utf8mb4
 show variables like 'transaction_isolation';
 Variable_name    Value
-transaction_isolation    SNAPSHOT-ISOLATION
+transaction_isolation    REPEATABLE-READ
 set transaction_isolation = default;
 show variables like 'transaction_isolation';
 Variable_name    Value
-transaction_isolation    SNAPSHOT-ISOLATION
+transaction_isolation    REPEATABLE-READ
 show variables like 'tx_isolation';
 Variable_name    Value
 tx_isolation    REPEATABLE-READ
@@ -456,3 +456,25 @@ set @@sql_mode = default;
 select @@sql_mode;
 @@sql_mode
 ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+drop database if exists test;
+create database test;
+select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+configuration
+{"lower_case_table_names": 0, "transaction_ioslation": "SNAPSHOT_ISOLATION"}
+drop database test;
+select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+null
+drop database if exists test;
+create database test;
+select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+configuration
+{"lower_case_table_names": 0, "transaction_ioslation": "SNAPSHOT_ISOLATION"}
+alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 0}';
+select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+configuration
+{"lower_case_table_names": 0, "transaction_isolation": "REPEATABLE-READ"}
+alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 1}';
+select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+configuration
+{"lower_case_table_names": 1, "transaction_isolation": "REPEATABLE-READ"}
+drop database test;

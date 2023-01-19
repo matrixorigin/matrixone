@@ -242,11 +242,12 @@ create temporary table dis_temp_01(a int,b varchar(100),primary key(a));
 begin ;
 insert into dis_temp_01 values (233,'uuuu');
 select * from dis_temp_01;
-a    b
+SQL parser error: table "dis_temp_01" does not exist
 select * from dis_temp_01;
 a    b
 233    uuuu
 truncate table dis_temp_01;
+no such table isolation_2.dis_temp_01
 rollback ;
 select * from dis_temp_01;
 a    b
@@ -420,10 +421,11 @@ a    b    c
 commit;
 commit;
 update dis_table_04 set b=(select 'kkkk')  where a=879;
+Duplicate entry 'kkkk' for key '__mo_index_idx_col'
 select * from dis_table_04;
 a    b    c
 6666    kkkk    2010-11-25 00:00:00
-879    kkkk    2011-11-26 00:00:00
+879    uuyyy    2011-11-26 00:00:00
 begin ;
 use isolation_2;
 create temporary table dis_table_05(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
@@ -438,8 +440,7 @@ select * from dis_table_05;
 a    b    c
 8900    kkkk77    1772-04-20 00:00:00
 select * from dis_table_05;
-a    b    c
-8900    kkkk77    1772-04-20 00:00:00
+SQL parser error: table "dis_table_05" does not exist
 drop table dis_table_05;
 use isolation_2;
 create table dis_table_06(a int auto_increment primary key,b varchar(25),c double default 0.0);

@@ -812,7 +812,7 @@ type GlobalSystemVariables struct {
 }
 
 // the set of variables
-var gSysVariables = &GlobalSystemVariables{
+var GSysVariables = &GlobalSystemVariables{
 	sysVars: make(map[string]interface{}),
 }
 
@@ -916,7 +916,7 @@ func (gsv *GlobalSystemVariables) SetGlobalSysVar(ctx context.Context, name stri
 }
 
 func init() {
-	InitGlobalSystemVariables(gSysVariables)
+	InitGlobalSystemVariables(GSysVariables)
 }
 
 // definitions of system variables
@@ -1167,8 +1167,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemSystemEnumType("transaction_isolation", "SNAPSHOT-ISOLATION"),
-		Default:           "SNAPSHOT-ISOLATION",
+		Type:              InitSystemSystemEnumType("transaction_isolation", "READ-UNCOMMITTED", "READ-COMMITTED", "REPEATABLE-READ", "SERIALIZABLE"),
+		Default:           "REPEATABLE-READ",
 	},
 	"wait_timeout": {
 		Name:              "wait_timeout",
@@ -1239,15 +1239,15 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableUintType("query_result_timeout", 1, 18446744073709551615),
+		Type:              InitSystemVariableUintType("query_result_timeout", 0, 18446744073709551615),
 		Default:           uint64(24),
 	},
 	"query_result_maxsize": {
-		Name:              "sql_select_limit",
+		Name:              "query_result_maxsize",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableUintType("query_result_maxsize", 1, 18446744073709551615),
+		Type:              InitSystemVariableUintType("query_result_maxsize", 0, 18446744073709551615),
 		Default:           uint64(100),
 	},
 }

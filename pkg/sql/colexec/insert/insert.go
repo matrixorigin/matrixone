@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -53,7 +54,9 @@ type Argument struct {
 	UniqueIndexDef       *plan.UniqueIndexDef
 	SecondaryIndexTables []engine.Relation
 	SecondaryIndexDef    *plan.SecondaryIndexDef
+	ClusterByDef         *plan.ClusterByDef
 	ClusterTable         *plan.ClusterTable
+	HasAutoCol           bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -195,7 +198,8 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 	return false, nil
 }
 
-func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+	t1 := time.Now()
 	n := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil {
@@ -209,7 +213,11 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	if clusterTable.GetIsClusterTable() {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
-	defer bat.Clean(proc.Mp())
+	defer func() {
+		bat.Clean(proc.Mp())
+		anal := proc.GetAnalyze(idx)
+		anal.AddInsertTime(t1)
+	}()
 	{
 		for i := range bat.Vecs {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
@@ -327,8 +335,11 @@ func writeBatch(ctx context.Context,
 	n *Argument,
 	proc *process.Process,
 	bat *batch.Batch) (bool, error) {
-	if err := colexec.UpdateInsertBatch(n.Engine, ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
-		return false, err
+
+	if n.HasAutoCol {
+		if err := colexec.UpdateInsertBatch(n.Engine, ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
+			return false, err
+		}
 	}
 	if n.CPkeyColDef != nil {
 		err := util.FillCompositePKeyBatch(bat, n.CPkeyColDef, proc)
@@ -345,6 +356,8 @@ func writeBatch(ctx context.Context,
 			}
 
 		}
+	} else if n.ClusterByDef != nil && util.JudgeIsCompositeClusterByColumn(n.ClusterByDef.Name) {
+		util.FillCompositeClusterByBatch(bat, n.ClusterByDef.Name, proc)
 	}
 	// set null value's data
 	for i := range bat.Vecs {

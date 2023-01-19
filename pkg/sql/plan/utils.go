@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -141,6 +141,22 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side 
 	}
 
 	return
+}
+
+func hasTag(expr *plan.Expr, tag int32) bool {
+	var ret bool
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			ret = ret || hasTag(arg, tag)
+		}
+
+	case *plan.Expr_Col:
+		ret = exprImpl.Col.RelPos == tag
+	}
+
+	return ret
 }
 
 func containsTag(expr *plan.Expr, tag int32) bool {
@@ -955,14 +971,14 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 			return nil, err
 		}
 	}
-	if !isConstant(e) {
+	if !rule.IsConstant(e) {
 		return e, nil
 	}
 	vec, err := colexec.EvalExpr(bat, proc, e)
 	if err != nil {
 		return nil, err
 	}
-	c := getConstantValue(vec)
+	c := rule.GetConstantValue(vec, false)
 	vec.Free(proc.Mp())
 	if c == nil {
 		return e, nil
@@ -972,106 +988,6 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	}
 	e.Expr = ec
 	return e, nil
-}
-
-func getConstantValue(vec *vector.Vector) *plan.Const {
-	if nulls.Any(vec.Nsp) {
-		return &plan.Const{Isnull: true}
-	}
-	switch vec.Typ.Oid {
-	case types.T_bool:
-		return &plan.Const{
-			Value: &plan.Const_Bval{
-				Bval: vec.Col.([]bool)[0],
-			},
-		}
-	case types.T_int8:
-		return &plan.Const{
-			Value: &plan.Const_I8Val{
-				I8Val: int32(vec.Col.([]int8)[0]),
-			},
-		}
-	case types.T_int16:
-		return &plan.Const{
-			Value: &plan.Const_I16Val{
-				I16Val: int32(vec.Col.([]int16)[0]),
-			},
-		}
-	case types.T_int32:
-		return &plan.Const{
-			Value: &plan.Const_I32Val{
-				I32Val: vec.Col.([]int32)[0],
-			},
-		}
-	case types.T_int64:
-		return &plan.Const{
-			Value: &plan.Const_I64Val{
-				I64Val: vec.Col.([]int64)[0],
-			},
-		}
-	case types.T_uint8:
-		return &plan.Const{
-			Value: &plan.Const_U8Val{
-				U8Val: uint32(vec.Col.([]uint8)[0]),
-			},
-		}
-	case types.T_uint16:
-		return &plan.Const{
-			Value: &plan.Const_U16Val{
-				U16Val: uint32(vec.Col.([]uint16)[0]),
-			},
-		}
-	case types.T_uint32:
-		return &plan.Const{
-			Value: &plan.Const_U32Val{
-				U32Val: vec.Col.([]uint32)[0],
-			},
-		}
-	case types.T_uint64:
-		return &plan.Const{
-			Value: &plan.Const_U64Val{
-				U64Val: vec.Col.([]uint64)[0],
-			},
-		}
-	case types.T_float64:
-		return &plan.Const{
-			Value: &plan.Const_Dval{
-				Dval: vec.Col.([]float64)[0],
-			},
-		}
-	case types.T_varchar, types.T_char, types.T_text:
-		return &plan.Const{
-			Value: &plan.Const_Sval{
-				Sval: vec.GetString(0),
-			},
-		}
-	default:
-		return nil
-	}
-}
-
-func isConstant(e *plan.Expr) bool {
-	switch ef := e.Expr.(type) {
-	case *plan.Expr_C, *plan.Expr_T:
-		return true
-	case *plan.Expr_F:
-		overloadID := ef.F.Func.GetObj()
-		f, exists := function.GetFunctionByIDWithoutError(overloadID)
-		if !exists {
-			return false
-		}
-		if f.Volatile { // function cannot be fold
-			return false
-		}
-		for i := range ef.F.Args {
-			if !isConstant(ef.F.Args[i]) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
-	}
 }
 
 func rewriteTableFunction(tblFunc *tree.TableFunction, leftCtx *BindContext) error {
@@ -1271,6 +1187,9 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal >= 0
 		case types.T_varchar:
 			return true
+		case types.T_float32:
+			//float32 has 6-7 significant digits.
+			return constVal <= 100000 && constVal >= -100000
 		default:
 			return false
 		}
@@ -1297,6 +1216,9 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal <= math.MaxUint32
 		case types.T_uint64:
 			return true
+		case types.T_float32:
+			//float32 has 6-7 significant digits.
+			return constVal <= 100000
 		default:
 			return false
 		}

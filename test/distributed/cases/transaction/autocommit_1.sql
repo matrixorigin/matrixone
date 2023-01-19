@@ -53,10 +53,11 @@ create database db;
 show databases like 'db';
 use db;
 create table tab1(a int, b int);
-create index index_tab1 on tab1(a);
 create view view_tab1 as select * from tab1;
 insert into tab1 values (2000, 3000);
 rollback;
+select * from tab1;
+commit;
 
 
 -- Test implicit transaction commit
@@ -65,9 +66,6 @@ create database db;
 show databases like 'db';
 use db;
 create table tab1(a int, b int);
-
--- not support error
-create index index_tab1 on tab1(a);
 
 -- test table tab1 DML and commit; rollback;
 insert into tab1 values (2000, 3000);
@@ -89,29 +87,12 @@ commit;
 select * from tab1;
 
 
--- test view view_tab1 DML and commit; rollback;
+-- test view view_tab1 DML and commit; rollback;(view nonsupport insert/delete/update)
 create view view_tab1 as select * from tab1;
 select * from view_tab1;
-
+commit;
 
 insert into view_tab1 values (200, 300);
-insert into view_tab1 values (10, 10);
-commit;
-select * from view_tab1;
-update view_tab1 set a=100000 where b=3000;
-select * from view_tab1;
-rollback;
-select * from view_tab1;
-update view_tab1 set a=100000 where b=3000;
-commit;
-select * from view_tab1;
-delete from view_tab1 where a=10;
-rollback;
-select * from view_tab1;
-delete from view_tab1 where a=10;
-
-commit;
-select * from view_tab1;
 commit;
 
 drop database db;
@@ -266,9 +247,8 @@ begin;
 create database db;
 show databases like 'db';
 use db;
-    
+
 create table table3(a int, b int);
-create index index_table3 on tab1(a);
 insert into table3 values (2000, 3000);
 create view view_table3 as select * from table3;
 select * from table3;
@@ -289,8 +269,6 @@ show databases like 'db';
 use db;
 create table table3(a int, b int);
 
--- not support error
-create index index_table3 on table3(a);
 
 -- test table table3 DML and commit; rollback;
 insert into table3 values (2000, 3000);
@@ -370,13 +348,13 @@ rollback;
 select * from t5;
 
 drop table t5
-    
+
 
 
 -- Test explicit transactions  include set command;
-start transaction;
+    start transaction;
 -- execute error
-set @@a=0;  
+set @@a=0;
 rollback;
 
 set @@b=0;
@@ -393,9 +371,6 @@ create database db;
 show databases like 'db';
 use db;
 create table t6(a int, b int);
-
--- not support error
-create index index_t6 on t6(a);
 
 -- test table t6 DML and commit; rollback;
 insert into t6 values (2000, 3000);

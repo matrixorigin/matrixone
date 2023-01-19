@@ -70,12 +70,14 @@ func EncodeMetaLocWithObject(
 		return "", err
 	}
 	meta := blocks[0].GetMeta()
+	metaLen := blocks[0].GetExtent().Length()
 	name := meta.GetName()
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d:%d",
+	metaLoc := fmt.Sprintf("%s:%d_%d_%d_%d:%d:%d",
 		name,
-		extent.Offset(),
-		extent.Length(),
-		extent.OriginSize(),
+		blocks[0].GetExtent().Offset(),
+		metaLen,
+		metaLen,
+		extent.Id(),
 		rows,
 		size,
 	)
@@ -98,11 +100,15 @@ func DecodeMetaLoc(metaLoc string) (string, objectio.Extent, uint32) {
 	if err != nil {
 		panic(any(err))
 	}
+	id, err := strconv.ParseUint(location[3], 10, 32)
+	if err != nil {
+		panic(any(err))
+	}
 	rows, err := strconv.ParseUint(info[2], 10, 32)
 	if err != nil {
 		panic(any(err))
 	}
-	extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
+	extent := objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
 	return name, extent, uint32(rows)
 }
 

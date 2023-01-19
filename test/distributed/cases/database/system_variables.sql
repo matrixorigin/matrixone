@@ -149,3 +149,18 @@ set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 select @@sql_mode;
 set @@sql_mode = default;
 select @@sql_mode;
+
+drop database if exists test;
+create database test;
+select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+drop database test;
+select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+
+drop database if exists test;
+create database test;
+select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 0}';
+select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 1}';
+select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+drop database test;

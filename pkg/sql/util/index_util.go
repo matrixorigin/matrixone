@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,7 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func BuildIndexTableName(ctx context.Context, unique bool, indexName string) (string, error) {
+var SerialWithCompacted = serialWithCompacted
+var CompactSingleIndexCol = compactSingleIndexCol
+var CompactPrimaryCol = compactPrimaryCol
+
+func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 	var name string
 	name = catalog.PrefixIndexTableName
 	if unique {
@@ -35,12 +40,10 @@ func BuildIndexTableName(ctx context.Context, unique bool, indexName string) (st
 	} else {
 		name += "secondary_"
 	}
-	name += indexName
 	id, err := uuid.NewUUID()
 	if err != nil {
 		return "", moerr.NewInternalError(ctx, "newuuid failed")
 	}
-	name += "_"
 	name += id.String()
 	return name, nil
 }

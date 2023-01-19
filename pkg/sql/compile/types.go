@@ -36,6 +36,10 @@ type (
 	TxnOperator = client.TxnOperator
 )
 
+const (
+	MinBlockNum = 200
+)
+
 // type of scope
 const (
 	Merge = iota
@@ -175,4 +179,9 @@ type Compile struct {
 	cnList engine.Nodes
 	// ast
 	stmt tree.Statement
+
+	// when we construct the scope, compileTableScan will new a scope, the magic is
+	// remote, but now the tempEngine is just standlone. So for now use this to read
+	// table locally. But int the future, this will disappear.
+	isTemporaryScan bool
 }

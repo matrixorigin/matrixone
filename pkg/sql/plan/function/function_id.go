@@ -244,10 +244,17 @@ const (
 	ICULIBVERSION
 	LAST_INSERT_ID
 	LAST_QUERY_ID
+	LAST_UUID
 	ROLES_GRAPHML
 	ROW_COUNT
 	VERSION
 	COLLATION
+	CURRENT_ACCOUNT_ID
+	CURRENT_ACCOUNT_NAME
+	CURRENT_ROLE_ID
+	CURRENT_ROLE_NAME
+	CURRENT_USER_ID
+	CURRENT_USER_NAME
 
 	TIMESTAMP    // TIMESTAMP
 	DATE_FORMAT  // DATE_FORMAT
@@ -277,6 +284,11 @@ const (
 	MO_CTL
 
 	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
+
+	MO_TABLE_ROWS    // table rows
+	MO_TABLE_SIZE    // table size
+	MO_TABLE_COL_MAX // table column max value
+	MO_TABLE_COL_MIN // table column min value
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -431,11 +443,18 @@ var functionIdRegister = map[string]int32{
 	"current_user":                   USER,
 	"connection_id":                  CONNECTION_ID,
 	"charset":                        CHARSET,
+	"current_account_id":             CURRENT_ACCOUNT_ID,
+	"current_account_name":           CURRENT_ACCOUNT_NAME,
 	"current_role":                   CURRENT_ROLE,
+	"current_role_id":                CURRENT_ROLE_ID,
+	"current_role_name":              CURRENT_ROLE_NAME,
+	"current_user_id":                CURRENT_USER_ID,
+	"current_user_name":              CURRENT_USER_NAME,
 	"found_rows":                     FOUND_ROWS,
 	"icu_version":                    ICULIBVERSION,
 	"last_insert_id":                 LAST_INSERT_ID,
 	"last_query_id":                  LAST_QUERY_ID,
+	"last_uuid":                      LAST_QUERY_ID,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
 	"version":                        VERSION,
@@ -478,6 +497,10 @@ var functionIdRegister = map[string]int32{
 	"json_unquote":                   JSON_UNQUOTE,
 	"ascii":                          ASCII,
 	"replace":                        REPLACE,
+	"mo_table_rows":                  MO_TABLE_ROWS,
+	"mo_table_size":                  MO_TABLE_SIZE,
+	"mo_table_col_max":               MO_TABLE_COL_MAX,
+	"mo_table_col_min":               MO_TABLE_COL_MIN,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

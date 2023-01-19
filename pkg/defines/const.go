@@ -27,3 +27,14 @@ const (
 	LocalFileServiceName  = "LOCAL"
 	ETLFileServiceName    = "ETL"
 )
+
+const (
+	// TEMPORARY_DBNAME used to store all temporary table created by session.
+	// when a user tries to create a database with this name, will be rejected at the plan stage.
+	TEMPORARY_DBNAME = "%!%mo_temp_db"
+
+	// TEMPORARY_TABLE_DN_ADDR marked as virtual dn address only for temporary table
+	// When a TargetDN.address in TxnRequest is TEMPORARY_TABLE_DN_ADDR, this TxnRequest is for temporary table
+	// and execution flow will go to the func in handleTemp
+	TEMPORARY_TABLE_DN_ADDR = "%!%mo_temp_db_dn_address"
+)

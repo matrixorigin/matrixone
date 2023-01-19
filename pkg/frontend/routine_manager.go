@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"os"
 	"sync"
 	"time"
@@ -95,7 +96,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.getProtocol(), nil, pu, gSysVariables, true)
+	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true)
 	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
 	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
@@ -107,7 +108,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
 	if err != nil {
-		logError(pro.GetConciseProfile(), "failed to handshake with server, quiting routine...")
+		logErrorf(pro.GetConciseProfile(), "failed to handshake with server, quiting routine... %s", err)
 		routine.killConnection(true)
 		return
 	}
@@ -133,6 +134,14 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	if rt != nil {
 		ses := rt.getSession()
 		if ses != nil {
+			rt.decreaseCount(func() {
+				account := ses.GetTenantInfo()
+				accountName := sysAccountName
+				if account != nil {
+					accountName = account.GetTenant()
+				}
+				metric.ConnectionCounter(accountName).Dec()
+			})
 			logDebugf(ses.GetConciseProfile(), "the io session was closed.")
 		}
 		rt.cleanup()
@@ -294,6 +303,15 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}
 
 	return nil
+}
+
+// clientCount returns the count of the clients
+func (rm *RoutineManager) clientCount() int {
+	var count int
+	rm.mu.Lock()
+	count = len(rm.clients)
+	rm.mu.Unlock()
+	return count
 }
 
 func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineManager, error) {

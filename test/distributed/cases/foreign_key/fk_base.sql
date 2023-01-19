@@ -1,9 +1,33 @@
--- @bvt:issue#7357
-create table f1(a int primary key, b int);
+create table f1(b int, a int primary key);
+create table f2(b int, aa varchar primary key);
 create table c1 (a int, b int, foreign key f_a(a) references f1(c));
 create table c1 (a int, b int, foreign key f_a(a) references f1(b));
+create table c1 (a int, b int, foreign key f_a(a) references f2(aa));
 create table c1 (a int, b int, foreign key f_a(a) references f1(a));
 select * from f1;
 select * from c1;
 drop table f1;
--- @bvt:issue
+truncate f1;
+truncate c1;
+drop table f1;
+drop table c1;
+drop table f1;
+
+create table f1(a int primary key, b int unique key);
+create table c1 (a int, b int, foreign key f_a(a) references f1(a));
+insert into f1 values (1,1), (2,2), (3,3);
+insert into c1 values (1,1), (2,2), (3,3);
+delete from f1 where a > 1;
+drop table c1;
+create table c1 (a int, b int, foreign key f_a(a) references f1(a) on delete set null);
+insert into c1 values (1,1), (2,2), (3,3);
+delete from f1 where a > 1;
+select * from c1;
+drop table c1;
+insert into f1 values (2,2), (3,3);
+create table c1 (a int, b int, foreign key f_a(a) references f1(a) on delete cascade);
+insert into c1 values (1,1), (2,2), (3,3);
+delete from f1 where a > 1;
+select * from c1;
+drop table c1;
+drop table f1;

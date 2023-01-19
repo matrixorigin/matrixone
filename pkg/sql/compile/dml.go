@@ -43,50 +43,75 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 
-	// If the first table (original table) in the deletion context can be truncated,
-	// subsequent index tables also need to be truncated
-	if arg.DeleteCtxs[0].CanTruncate {
+	if arg.DeleteCtx.CanTruncate {
+		var err error
 		var affectRows int64
-		for _, deleteCtx := range arg.DeleteCtxs {
-			if deleteCtx.CanTruncate {
-				dbSource, err := c.e.Database(c.ctx, deleteCtx.DbName, c.proc.TxnOperator)
+
+		for i, rel := range arg.DeleteCtx.DelSource {
+			_, err = rel.Ranges(c.ctx, nil)
+			if err != nil {
+				return 0, err
+			}
+			affectRow, err := rel.Rows(s.Proc.Ctx)
+			if err != nil {
+				return 0, err
+			}
+			affectRows = affectRows + affectRow
+
+			dbName := arg.DeleteCtx.DelRef[i].SchemaName
+			tblName := arg.DeleteCtx.DelRef[i].ObjName
+			oldId := uint64(arg.DeleteCtx.DelRef[i].Obj)
+			dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+			if err != nil {
+				return 0, err
+			}
+
+			// truncate origin table
+			newId, err := dbSource.Truncate(c.ctx, tblName)
+			if err != nil {
+				return 0, err
+			}
+
+			// truncate autoIncr table
+			err = colexec.MoveAutoIncrCol(c.e, c.ctx, tblName, dbSource, c.proc, oldId, newId, dbName)
+			if err != nil {
+				return 0, err
+			}
+
+			// reset constraint
+			for _, fkRel := range arg.DeleteCtx.ParentSource[i] {
+				fkTableDef, err := fkRel.TableDefs(c.ctx)
 				if err != nil {
 					return 0, err
 				}
-
-				var rel engine.Relation
-				if rel, err = dbSource.Relation(c.ctx, deleteCtx.TableName); err != nil {
-					return 0, err
+				var oldCt *engine.ConstraintDef
+				for _, def := range fkTableDef {
+					if ct, ok := def.(*engine.ConstraintDef); ok {
+						oldCt = ct
+						break
+					}
 				}
-				_, err = rel.Ranges(c.ctx, nil)
+				for _, ct := range oldCt.Cts {
+					if def, ok := ct.(*engine.RefChildTableDef); ok {
+						for idx, refTable := range def.Tables {
+							if refTable == oldId {
+								def.Tables[idx] = newId
+								break
+							}
+						}
+						break
+					}
+				}
 				if err != nil {
 					return 0, err
 				}
-				affectRow, err := rel.Rows(s.Proc.Ctx)
+				err = fkRel.UpdateConstraint(c.ctx, oldCt)
 				if err != nil {
 					return 0, err
 				}
-
-				tableID := rel.GetTableID(c.ctx)
-
-				newId, err := dbSource.Truncate(c.ctx, deleteCtx.TableName)
-				if err != nil {
-					return 0, err
-				}
-
-				err = colexec.MoveAutoIncrCol(c.e, c.ctx, deleteCtx.TableName, dbSource, c.proc, tableID, newId, deleteCtx.DbName)
-				if err != nil {
-					return 0, err
-				}
-
-				if deleteCtx.IsIndexTableDelete {
-					continue
-				} else {
-					affectRows += affectRow
-				}
-
 			}
 		}
+
 		return uint64(affectRows), nil
 	}
 
@@ -115,6 +140,11 @@ func (s *Scope) Update(c *Compile) (uint64, error) {
 }
 
 func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
+
+	var err error
+	var dbSource engine.Database
+	var relation engine.Relation
+	var isTemp bool
 	p := s.Plan.GetIns()
 
 	ctx := c.ctx
@@ -122,22 +152,26 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	if clusterTable.GetIsClusterTable() {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
-
-	dbSource, err := c.e.Database(ctx, p.DbName, c.proc.TxnOperator)
+	dbSource, err = c.e.Database(c.ctx, p.DbName, c.proc.TxnOperator)
 	if err != nil {
 		return 0, err
 	}
-	relation, err := dbSource.Relation(ctx, p.TblName)
+	relation, err = dbSource.Relation(ctx, p.TblName)
 	if err != nil {
-		return 0, err
+		var e error // avoid contamination of error messages
+		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		if e != nil {
+			return 0, e
+		}
+		relation, e = dbSource.Relation(c.ctx, engine.GetTempTableName(p.DbName, p.TblName))
+		if e != nil {
+			return 0, err
+		}
+		isTemp = true
 	}
 
 	bat := makeInsertBatch(p)
 	defer bat.Clean(c.proc.Mp())
-
-	if p.OtherCols != nil {
-		p.ExplicitCols = append(p.ExplicitCols, p.OtherCols...)
-	}
 
 	insertRows := stmt.Rows.Select.(*tree.ValuesClause).Rows
 	if err = fillBatch(ctx, bat, p, insertRows, c.proc); err != nil {
@@ -206,14 +240,14 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 				}
 			}
 
-			if err = writeBatch(ctx, dbSource, relation, c, p, bat); err != nil {
+			if err = writeBatch(ctx, dbSource, relation, c, p, bat, isTemp); err != nil {
 				return 0, err
 			}
 		}
 		//the count of insert rows x the count of accounts
 		return uint64(len(p.Columns[0].Column)) * uint64(len(clusterTable.GetAccountIDs())), nil
 	} else {
-		if err = writeBatch(ctx, dbSource, relation, c, p, bat); err != nil {
+		if err = writeBatch(ctx, dbSource, relation, c, p, bat, isTemp); err != nil {
 			return 0, err
 		}
 		return uint64(len(p.Columns[0].Column)), nil
@@ -227,8 +261,11 @@ func writeBatch(ctx context.Context,
 	relation engine.Relation,
 	c *Compile,
 	p *plan.InsertValues,
-	bat *batch.Batch) error {
+	bat *batch.Batch,
+	isTemp bool) error {
 	var err error
+	var oldDbName string
+
 	/**
 	Null value check:
 	There are two cases to validate for not null
@@ -248,10 +285,19 @@ func writeBatch(ctx context.Context,
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
-	//update the auto increment table
-	if err = colexec.UpdateInsertValueBatch(c.e, ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
-		return err
+	if isTemp {
+		oldDbName = p.DbName
+		p.TblName = engine.GetTempTableName(p.DbName, p.TblName)
+		p.DbName = defines.TEMPORARY_DBNAME
 	}
+
+	if p.HasAutoCol {
+		//update the auto increment table
+		if err = colexec.UpdateInsertValueBatch(c.e, ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
+			return err
+		}
+	}
+
 	//complement composite primary key
 	if p.CompositePkey != nil {
 		err := util.FillCompositePKeyBatch(bat, p.CompositePkey, c.proc)
@@ -267,13 +313,21 @@ func writeBatch(ctx context.Context,
 				}
 			}
 		}
+	} else if p.Cb != nil && util.JudgeIsCompositeClusterByColumn(p.Cb.Name) {
+		util.FillCompositeClusterByBatch(bat, p.Cb.Name, c.proc)
 	}
+
 	//update unique index table
 	if p.UniqueIndexDef != nil {
 		primaryKeyName := update.GetTablePriKeyName(p.ExplicitCols, p.CompositePkey)
 		for i := range p.UniqueIndexDef.IndexNames {
+			var indexRelation engine.Relation
 			if p.UniqueIndexDef.TableExists[i] {
-				indexRelation, err := dbSource.Relation(ctx, p.UniqueIndexDef.TableNames[i])
+				if isTemp {
+					indexRelation, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, p.UniqueIndexDef.TableNames[i]))
+				} else {
+					indexRelation, err = dbSource.Relation(ctx, p.UniqueIndexDef.TableNames[i])
+				}
 				if err != nil {
 					return err
 				}
@@ -359,18 +413,11 @@ func makeInsertBatch(p *plan.InsertValues) *batch.Batch {
 	for _, col := range p.ExplicitCols {
 		attrs = append(attrs, col.Name)
 	}
-	for _, col := range p.OtherCols {
-		attrs = append(attrs, col.Name)
-	}
 
 	bat := batch.NewWithSize(len(attrs))
 	bat.SetAttributes(attrs)
 	idx := 0
 	for _, col := range p.ExplicitCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
-		idx++
-	}
-	for _, col := range p.OtherCols {
 		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}

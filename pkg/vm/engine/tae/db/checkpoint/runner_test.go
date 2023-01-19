@@ -15,6 +15,7 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -43,11 +44,15 @@ func TestCkpCheck(t *testing.T) {
 		location: "loc-100",
 	})
 
-	loc, e := r.CollectCheckpointsInRange(types.BuildTS(4, 0), types.BuildTS(5, 0))
+	ctx := context.Background()
+
+	loc, e, err := r.CollectCheckpointsInRange(ctx, types.BuildTS(4, 0), types.BuildTS(5, 0))
+	assert.NoError(t, err)
 	assert.True(t, e.Equal(types.BuildTS(9, 0)))
 	assert.Equal(t, "loc-0", loc)
 
-	loc, e = r.CollectCheckpointsInRange(types.BuildTS(12, 0), types.BuildTS(25, 0))
+	loc, e, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(12, 0), types.BuildTS(25, 0))
+	assert.NoError(t, err)
 	assert.True(t, e.Equal(types.BuildTS(29, 0)))
 	assert.Equal(t, "loc-10;loc-20", loc)
 }
@@ -79,43 +84,50 @@ func TestGetCheckpoints1(t *testing.T) {
 		r.storage.entries.Set(entry)
 	}
 
+	ctx := context.Background()
 	// [0,10]
-	location, checkpointed := r.CollectCheckpointsInRange(types.BuildTS(0, 1), types.BuildTS(10, 0))
+	location, checkpointed, err := r.CollectCheckpointsInRange(ctx, types.BuildTS(0, 1), types.BuildTS(10, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp0", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(10, 0)))
 
 	// [45,50]
-	location, checkpointed = r.CollectCheckpointsInRange(types.BuildTS(45, 0), types.BuildTS(50, 0))
+	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(45, 0), types.BuildTS(50, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "", location)
 	assert.True(t, checkpointed.IsEmpty())
 
 	// [30,45]
-	location, checkpointed = r.CollectCheckpointsInRange(types.BuildTS(30, 1), types.BuildTS(45, 0))
+	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(30, 1), types.BuildTS(45, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
 
 	// [25,45]
-	location, checkpointed = r.CollectCheckpointsInRange(types.BuildTS(25, 1), types.BuildTS(45, 0))
+	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(25, 1), types.BuildTS(45, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp2;ckp3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
 
 	// [22,25]
-	location, checkpointed = r.CollectCheckpointsInRange(types.BuildTS(22, 1), types.BuildTS(25, 0))
+	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(22, 1), types.BuildTS(25, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp2", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(30, 0)))
 
 	// [22,35]
-	location, checkpointed = r.CollectCheckpointsInRange(types.BuildTS(22, 1), types.BuildTS(35, 0))
+	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(22, 1), types.BuildTS(35, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp2;ckp3", location)
@@ -166,50 +178,58 @@ func TestGetCheckpoints2(t *testing.T) {
 		r.storage.entries.Set(entry)
 	}
 
+	ctx := context.Background()
 	// [0,10]
-	location, checkpointed := r.CollectCheckpointsInRange(types.BuildTS(0, 1), types.BuildTS(10, 0))
+	location, checkpointed, err := r.CollectCheckpointsInRange(ctx, types.BuildTS(0, 1), types.BuildTS(10, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "global3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(30, 1)))
 
 	// [45,50]
-	location, checkpointed = r.CollectCheckpointsInRange(types.BuildTS(45, 0), types.BuildTS(50, 0))
+	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(45, 0), types.BuildTS(50, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "", location)
 	assert.True(t, checkpointed.IsEmpty())
 
 	// [30,45]
-	location, checkpointed = r.CollectCheckpointsInRange(types.BuildTS(30, 2), types.BuildTS(45, 0))
+	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(30, 2), types.BuildTS(45, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
 
 	// [25,45]
-	location, checkpointed = r.CollectCheckpointsInRange(types.BuildTS(25, 1), types.BuildTS(45, 0))
+	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(25, 1), types.BuildTS(45, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "global3;ckp3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
 
 	// [22,25]
-	location, checkpointed = r.CollectCheckpointsInRange(types.BuildTS(22, 1), types.BuildTS(25, 0))
+	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(22, 1), types.BuildTS(25, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "global3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(30, 1)))
 
 	// [22,35]
-	location, checkpointed = r.CollectCheckpointsInRange(types.BuildTS(22, 1), types.BuildTS(35, 0))
+	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(22, 1), types.BuildTS(35, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "global3;ckp3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
 
 	// [22,29]
-	location, checkpointed = r.CollectCheckpointsInRange(types.BuildTS(22, 1), types.BuildTS(29, 0))
+	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(22, 1), types.BuildTS(29, 0))
+	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "global3", location)

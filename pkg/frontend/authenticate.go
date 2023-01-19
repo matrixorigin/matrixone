@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 
@@ -691,28 +692,30 @@ var (
 		"system_metrics":     0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_user":                  0,
-		"mo_account":               0,
-		"mo_role":                  0,
-		"mo_user_grant":            0,
-		"mo_role_grant":            0,
-		"mo_role_privs":            0,
-		"mo_user_defined_function": 0,
-		`%!%mo_increment_columns`:  0,
+		"mo_user":                    0,
+		"mo_account":                 0,
+		"mo_role":                    0,
+		"mo_user_grant":              0,
+		"mo_role_grant":              0,
+		"mo_role_privs":              0,
+		"mo_user_defined_function":   0,
+		"mo_mysql_compatbility_mode": 0,
+		`%!%mo_increment_columns`:    0,
 	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
-		"mo_database":              0,
-		"mo_tables":                0,
-		"mo_columns":               0,
-		"mo_account":               0,
-		"mo_user":                  0,
-		"mo_role":                  0,
-		"mo_user_grant":            0,
-		"mo_role_grant":            0,
-		"mo_role_privs":            0,
-		"mo_user_defined_function": 0,
-		"%!%mo_increment_columns":  0,
+		"mo_database":                0,
+		"mo_tables":                  0,
+		"mo_columns":                 0,
+		"mo_account":                 0,
+		"mo_user":                    0,
+		"mo_role":                    0,
+		"mo_user_grant":              0,
+		"mo_role_grant":              0,
+		"mo_role_privs":              0,
+		"mo_user_defined_function":   0,
+		"mo_mysql_compatbility_mode": 0,
+		"%!%mo_increment_columns":    0,
 	}
 	createAutoTableSql = "create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);"
 	//the sqls creating many tables for the tenant.
@@ -792,6 +795,12 @@ var (
 				database_collation varchar(64),
 				primary key(function_id)
 			);`,
+		`create table mo_mysql_compatbility_mode(
+				configuration_id int auto_increment,
+				dat_name     varchar(5000),
+				configuration  json,
+				primary key(configuration_id)
+			);`,
 	}
 
 	//drop tables for the tenant
@@ -804,22 +813,26 @@ var (
 		//"drop table if exists mo_catalog.`%!%mo_increment_columns`;",
 	}
 
+	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
+		dat_name,
+		configuration) values ("%s",%s);`
+
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
-		name,
-		args,
-		retType,
-		body,
-		language,
-		db,
-		definer,
-		modified_time,
-		created_time,
-		type,
-		security_type,
-		comment,
-		character_set_client,
-		collation_connection,
-		database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			name,
+			args,
+			retType,
+			body,
+			language,
+			db,
+			definer,
+			modified_time,
+			created_time,
+			type,
+			security_type,
+			comment,
+			character_set_client,
+			collation_connection,
+			database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
@@ -1132,6 +1145,9 @@ const (
 
 	// delete user defined function from mo_user_defined_function
 	deleteUserDefinedFunctionFormat = `delete from mo_catalog.mo_user_defined_function where function_id = %d;`
+
+	// delete a tuple from mo_mysql_compatbility_mode when drop a database
+	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
 )
 
 var (
@@ -1151,6 +1167,7 @@ var (
 		"system":             0,
 		"system_metrics":     0,
 		"mysql":              0,
+		"mo_task":            0,
 	}
 
 	// the privileges that can not be granted or revoked
@@ -1355,6 +1372,10 @@ func getSqlForDeleteUser(userId int64) []string {
 		fmt.Sprintf(deleteUserFromMoUserFormat, userId),
 		fmt.Sprintf(deleteUserFromMoUserGrantFormat, userId),
 	}
+}
+
+func getSqlForDeleteMysqlCompatbilityMode(dtname string) string {
+	return fmt.Sprintf(deleteMysqlCompatbilityModeFormat, dtname)
 }
 
 // isClusterTable decides a table is the index table or not
@@ -3609,6 +3630,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
+	case *tree.AlterDataBaseConfig:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	case *tree.CreateFunction:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -3669,10 +3693,17 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
-		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
-		*tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowLocks, *tree.ShowFunctionStatus:
+		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
+		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
+		*tree.ShowTableNumber, *tree.ShowColumnNumber,
+		*tree.ShowTableValues, *tree.ShowNodeList,
+		*tree.ShowLocks, *tree.ShowFunctionStatus:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.ShowAccounts:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -4016,51 +4047,6 @@ func getSqlForPrivilege2(ses *Session, roleId int64, entry privilegeEntry, pl pr
 	return getSqlForPrivilege(ses.GetRequestContext(), roleId, entry, pl)
 }
 
-// verifyAccountCanOperateClusterTable determines the account can operate
-// the cluster table
-func verifyAccountCanOperateClusterTable(account *TenantInfo,
-	dbName string,
-	clusterTableOperation clusterTableOperationType) bool {
-	if account.IsSysTenant() {
-		//sys account can do anything on the cluster table.
-		if dbName == moCatalog {
-			return true
-		}
-	} else {
-		//the general account can only read the cluster table
-		if dbName == moCatalog {
-			switch clusterTableOperation {
-			case clusterTableNone, clusterTableSelect:
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// isRealUserModifiesMoCatalog determines if a real user outside MO is
-// modifying the tables in the mo_catalog
-func isRealUserModifiesMoCatalog(ses *Session, dbName string,
-	writeDBTableDirect bool,
-	isClusterTable bool,
-	clusterTableOperation clusterTableOperationType) bool {
-	if ses.GetFromRealUser() && writeDBTableDirect {
-		if len(dbName) == 0 {
-			dbName = ses.GetDatabaseName()
-		}
-		//check cluster table
-		if isClusterTable {
-			if verifyAccountCanOperateClusterTable(ses.GetTenantInfo(), dbName, clusterTableOperation) {
-				return false
-			}
-		}
-		if ok2 := isBannedDatabase(dbName); ok2 {
-			return ok2
-		}
-	}
-	return false
-}
-
 // verifyPrivilegeEntryInMultiPrivilegeLevels checks the privilege
 // with multi-privilege levels exists or not
 func verifyPrivilegeEntryInMultiPrivilegeLevels(
@@ -4115,7 +4101,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 	var pls []privilegeLevelType
 
 	var yes bool
-	var operateCatalog bool
+	var yes2 bool
 	//there is no privilege needs, just approve
 	if len(priv.entries) == 0 {
 		return false, nil
@@ -4131,18 +4117,19 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					return false, err
 				}
 
-				yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls)
-				if err != nil {
-					return false, err
-				}
-				operateCatalog = isRealUserModifiesMoCatalog(ses,
+				yes2 = verifyLightPrivilege(ses,
 					entry.databaseName,
 					priv.writeDatabaseAndTableDirectly,
 					priv.isClusterTable,
 					priv.clusterTableOperation)
-				if operateCatalog {
-					yes = false
+
+				if yes2 {
+					yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls)
+					if err != nil {
+						return false, err
+					}
 				}
+
 				if yes {
 					return true, nil
 				}
@@ -4185,18 +4172,18 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								return false, err
 							}
 
-							//At least there is one success
-							yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, tempEntry, pls)
-							if err != nil {
-								return false, err
-							}
-							operateCatalog = isRealUserModifiesMoCatalog(ses,
+							yes2 = verifyLightPrivilege(ses,
 								tempEntry.databaseName,
 								priv.writeDatabaseAndTableDirectly,
 								mi.isClusterTable,
 								mi.clusterTableOperation)
-							if operateCatalog {
-								yes = false
+
+							if yes2 {
+								//At least there is one success
+								yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, tempEntry, pls)
+								if err != nil {
+									return false, err
+								}
 							}
 						}
 						if !yes {
@@ -5007,6 +4994,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsAdminRole(), nil
 		}
 
+		checkShowAccountsPrivilege := func() (bool, error) {
+			//only the moAdmin and accountAdmin can execute the show accounts.
+			return tenant.IsAdminRole(), nil
+		}
+
 		switch gp := stmt.(type) {
 		case *tree.Grant:
 			if gp.Typ == tree.GrantTypePrivilege {
@@ -5032,6 +5024,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			}
 		case *tree.RevokePrivilege:
 			return checkRevokePrivilege()
+		case *tree.ShowAccounts:
+			return checkShowAccountsPrivilege()
 		}
 	}
 
@@ -5591,9 +5585,9 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 
 	var err error
 	sqls := make([]string, 0)
-	sqls = append(sqls, "create database "+trace.SystemDBConst+";")
-	sqls = append(sqls, "use "+trace.SystemDBConst+";")
-	traceTables := trace.GetSchemaForAccount(ctx, newTenant.GetTenant())
+	sqls = append(sqls, "create database "+motrace.SystemDBConst+";")
+	sqls = append(sqls, "use "+motrace.SystemDBConst+";")
+	traceTables := motrace.GetSchemaForAccount(ctx, newTenant.GetTenant())
 	sqls = append(sqls, traceTables...)
 	sqls = append(sqls, "create database "+metric.MetricDBConst+";")
 	sqls = append(sqls, "use "+metric.MetricDBConst+";")
@@ -6053,6 +6047,55 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	}
 
 	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
+	var err error
+	var deleteSql string
+	var insertSql string
+	datname := ad.DbName
+	update_config := "'" + ad.UpdateConfig.String() + "'"
+
+	//verify the update_config
+	if !isInvalidConfigInput(update_config) {
+		return moerr.NewInvalidInput(ctx, "invalid input %s for alter database config", update_config)
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//first delete the record
+	deleteSql = getSqlForDeleteMysqlCompatbilityMode(datname)
+	err = bh.Exec(ctx, deleteSql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//second insert a new record
+	insertSql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, datname, update_config)
+	err = bh.Exec(ctx, insertSql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")

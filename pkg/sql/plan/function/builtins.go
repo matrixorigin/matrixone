@@ -18,6 +18,9 @@ import (
 	"context"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
@@ -1985,6 +1988,13 @@ var builtins = map[int]Functions{
 				Volatile:  true,
 				Args:      []types.T{},
 				ReturnTyp: types.T_varchar,
+				Fn:        unary.LastQueryIDWithoutParam,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_varchar,
 				Fn:        unary.LastQueryID,
 			},
 		},
@@ -2735,6 +2745,24 @@ var builtins = map[int]Functions{
 		Id:     FORMAT,
 		Flag:   plan.Function_STRICT,
 		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			l := len(inputs)
+			if l < 2 {
+				return wrongFunctionParameters, nil
+			}
+
+			//if the first param's type is timeType, return wrongFunctionParameters
+			timeType := [...]types.T{types.T_date, types.T_datetime, types.T_timestamp, types.T_time}
+			timeTypeSet := make(map[types.T]bool)
+			for _, v := range timeType {
+				timeTypeSet[v] = true
+			}
+			if timeTypeSet[inputs[0]] {
+				return wrongFunctionParameters, nil
+			}
+
+			return normalTypeCheck(overloads, inputs)
+		},
 		Overloads: []Function{
 			{
 				Index:     0,
@@ -2886,6 +2914,168 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.AsciiUint[uint64],
+			},
+		},
+	},
+	MO_TABLE_ROWS: {
+		Id:     MO_TABLE_ROWS,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MoTableRows,
+			},
+		},
+	},
+	MO_TABLE_SIZE: {
+		Id:     MO_TABLE_SIZE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MoTableSize,
+			},
+		},
+	},
+	CURRENT_ACCOUNT_ID: {
+		Id:     CURRENT_ACCOUNT_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_uint32,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[uint32](result)
+					return res.Append(proc.SessionInfo.AccountId, false)
+				},
+			},
+		},
+	},
+	CURRENT_ACCOUNT_NAME: {
+		Id:     CURRENT_ACCOUNT_NAME,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_varchar,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[types.Varlena](result)
+					return res.AppendStr([]byte(proc.SessionInfo.Account), false)
+				},
+			},
+		},
+	},
+	CURRENT_ROLE_ID: {
+		Id:     CURRENT_ROLE_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_uint32,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[uint32](result)
+					return res.Append(proc.SessionInfo.RoleId, false)
+				},
+			},
+		},
+	},
+	CURRENT_ROLE_NAME: {
+		Id:     CURRENT_ROLE_NAME,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_varchar,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[types.Varlena](result)
+					return res.AppendStr([]byte(proc.SessionInfo.Role), false)
+				},
+			},
+		},
+	},
+	CURRENT_USER_ID: {
+		Id:     CURRENT_USER_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_uint32,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[uint32](result)
+					return res.Append(proc.SessionInfo.UserId, false)
+				},
+			},
+		},
+	},
+	CURRENT_USER_NAME: {
+		Id:     CURRENT_USER_NAME,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_varchar,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[types.Varlena](result)
+					return res.AppendStr([]byte(proc.SessionInfo.User), false)
+				},
+			},
+		},
+	},
+	MO_TABLE_COL_MAX: {
+		Id:     MO_TABLE_COL_MAX,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_varchar,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MoTableColMax,
+			},
+		},
+	},
+	MO_TABLE_COL_MIN: {
+		Id:     MO_TABLE_COL_MIN,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_varchar,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MoTableColMin,
 			},
 		},
 	},

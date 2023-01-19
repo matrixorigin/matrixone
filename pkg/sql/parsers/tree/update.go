@@ -15,9 +15,7 @@
 package tree
 
 import (
-	"bufio"
 	"context"
-	"os"
 	"strconv"
 	"strings"
 
@@ -111,7 +109,9 @@ const (
 	AUTO       = "auto"
 	NOCOMPRESS = "none"
 	GZIP       = "gzip"
-	BZIP2      = "bz2"
+	GZ         = "gz" // alias of gzip
+	BZIP2      = "bzip2"
+	BZ2        = "bz2" // alias for bzip2
 	FLATE      = "flate"
 	LZW        = "lzw"
 	ZLIB       = "zlib"
@@ -147,15 +147,20 @@ type ExternParam struct {
 	S3Param      *S3Parameter
 	Ctx          context.Context
 	LoadFile     bool
+	Local        bool
 	QueryResult  bool
+	SysTable     bool
 }
 
 type S3Parameter struct {
-	Endpoint  string `json:"s3-test-endpoint"`
-	Region    string `json:"s3-test-region"`
-	APIKey    string `json:"s3-test-key"`
-	APISecret string `json:"s3-test-secret"`
-	Bucket    string `json:"s3-test-bucket"`
+	Endpoint   string `json:"s3-test-endpoint"`
+	Region     string `json:"s3-test-region"`
+	APIKey     string `json:"s3-test-key"`
+	APISecret  string `json:"s3-test-secret"`
+	Bucket     string `json:"s3-test-bucket"`
+	Provider   string `json:"s3-test-rovider"`
+	RoleArn    string `json:"s3-test-rolearn"`
+	ExternalId string `json:"s3-test-externalid"`
 }
 
 type TailParameter struct {
@@ -444,12 +449,10 @@ type LoadColumn interface {
 }
 
 type ExportParam struct {
-	// file handler
-	File *os.File
-	// bufio.writer
-	Writer *bufio.Writer
 	// outfile flag
 	Outfile bool
+	// query id
+	QueryId string
 	// filename path
 	FilePath string
 	// Fields
@@ -458,27 +461,25 @@ type ExportParam struct {
 	Lines *Lines
 	// fileSize
 	MaxFileSize uint64
-	// curFileSize
-	CurFileSize uint64
-	Rows        uint64
-	FileCnt     uint
 	// header flag
 	Header     bool
 	ForceQuote []string
-	ColumnFlag []bool
-	Symbol     [][]byte
-
-	// default flush size
-	DefaultBufSize int64
-	OutputStr      []byte
-	LineSize       uint64
 }
 
 func (ep *ExportParam) Format(ctx *FmtCtx) {
 	if ep.FilePath == "" {
 		return
 	}
-	ctx.WriteString("into outfile " + ep.FilePath)
+	ep.format(ctx, true)
+}
+
+func (ep *ExportParam) format(ctx *FmtCtx, withOutfile bool) {
+	ctx.WriteString("into")
+	if withOutfile {
+		ctx.WriteString(" outfile")
+	}
+	ctx.WriteByte(' ')
+	ctx.WriteString(ep.FilePath)
 	if ep.Fields != nil {
 		ctx.WriteByte(' ')
 		ep.Fields.Format(ctx)

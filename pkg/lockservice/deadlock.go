@@ -32,9 +32,9 @@ type detector struct {
 	c                 chan []byte
 	waitTxnsFetchFunc func([]byte, *waiters) bool
 	waitTxnAbortFunc  func([]byte)
+	ignoreTxns        sync.Map // txnID -> any
 	stopper           *stopper.Stopper
-
-	mu struct {
+	mu                struct {
 		sync.RWMutex
 		closed bool
 	}
@@ -67,6 +67,11 @@ func (d *detector) close() {
 	close(d.c)
 }
 
+func (d *detector) txnClosed(txnID []byte) {
+	v := unsafeByteSliceToString(txnID)
+	d.ignoreTxns.Delete(v)
+}
+
 func (d *detector) check(txnID []byte) error {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -79,14 +84,16 @@ func (d *detector) check(txnID []byte) error {
 }
 
 func (d *detector) doCheck(ctx context.Context) {
-	w := &waiters{}
+	w := &waiters{ignoreTxns: &d.ignoreTxns}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case txnID := <-d.c:
 			w.reset(txnID)
+			v := string(txnID)
 			if !d.checkDeadlock(w) {
+				d.ignoreTxns.Store(v, struct{}{})
 				d.waitTxnAbortFunc(txnID)
 			}
 		}
@@ -109,8 +116,9 @@ func (d *detector) checkDeadlock(w *waiters) bool {
 }
 
 type waiters struct {
-	waitTxns [][]byte
-	pos      int
+	ignoreTxns *sync.Map
+	waitTxns   [][]byte
+	pos        int
 }
 
 func (w *waiters) getCheckTargetTxn() []byte {
@@ -124,6 +132,10 @@ func (w *waiters) next() {
 func (w *waiters) add(txnID []byte) bool {
 	if bytes.Equal(w.waitTxns[0], txnID) {
 		return false
+	}
+	v := unsafeByteSliceToString(txnID)
+	if _, ok := w.ignoreTxns.Load(v); ok {
+		return true
 	}
 	w.waitTxns = append(w.waitTxns, txnID)
 	return true

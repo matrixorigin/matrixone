@@ -19,13 +19,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/constant"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -329,11 +329,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 					},
 				},
 			})
-
-			break
-		}
-
-		if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
+		} else if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
 			childProjList = builder.qry.Nodes[rightID].ProjectList
 			for i, globalRef := range rightRemapping.localToGlobal {
 				if colRefCnt[globalRef] == 0 {
@@ -414,6 +410,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			})
 		}
 
+		groupSize := int32(len(node.GroupBy))
 		for idx, expr := range node.AggList {
 			decreaseRefCnt(expr, colRefCnt)
 			err := builder.remapExpr(expr, childRemapping.globalToLocal)
@@ -433,7 +430,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -2,
-						ColPos: int32(idx),
+						ColPos: int32(idx) + groupSize,
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -441,7 +438,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		if len(node.ProjectList) == 0 {
-			if len(node.GroupBy) > 0 {
+			if groupSize > 0 {
 				globalRef := [2]int32{groupTag, 0}
 				remapping.addColRef(globalRef)
 
@@ -1170,10 +1167,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
 		colCount := len(valuesClause.Rows[0])
+		for j := 1; j < rowCount; j++ {
+			if len(valuesClause.Rows[j]) != colCount {
+				return 0, moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("have different column count in row '%v'", j))
+			}
+		}
+
 		ctx.hasSingleRow = rowCount == 1
-		proc := builder.compCtx.GetProcess()
-		emptyBatch := batch.NewWithSize(0)
-		emptyBatch.Zs = []int64{1}
 		rowSetData := &plan.RowsetData{
 			Cols: make([]*plan.ColData, colCount),
 		}
@@ -1185,38 +1185,54 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		ctx.binder = NewWhereBinder(builder, ctx)
 		for i := 0; i < colCount; i++ {
 			rows := make([]*plan.Expr, rowCount)
+			var colTyp *plan.Type
+			var tmpArgsType []types.Type
 			for j := 0; j < rowCount; j++ {
 				planExpr, err := ctx.binder.BindExpr(valuesClause.Rows[j][i], 0, true)
 				if err != nil {
 					return 0, err
 				}
-				colExpr, err := ConstantFold(emptyBatch, planExpr, proc)
+				if planExpr.Typ.Id != int32(types.T_any) {
+					tmpArgsType = append(tmpArgsType, makeTypeByPlan2Expr(planExpr))
+				}
+				rows[j] = planExpr
+			}
+
+			if len(tmpArgsType) > 0 {
+				_, _, argsCastType, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 				if err != nil {
 					return 0, err
 				}
-				rows[j] = colExpr
-
-				if j == 0 {
-					colName := fmt.Sprintf("column_%d", i) // like MySQL
-					selectList = append(selectList, tree.SelectExpr{
-						Expr: &tree.UnresolvedName{
-							NumParts: 1,
-							Star:     false,
-							Parts:    [4]string{colName, "", "", ""},
-						},
-						As: tree.UnrestrictedIdentifier(colName),
-					})
-					ctx.headings = append(ctx.headings, colName)
-					tableDef.Cols[i] = &plan.ColDef{
-						ColId: 0,
-						Name:  colName,
-						Typ:   colExpr.Typ,
-					}
-				} else {
-					if !isSameColumnType(tableDef.Cols[i].Typ, colExpr.Typ) {
-						return 0, moerr.NewInternalError(builder.GetContext(), "col of values should have the same type")
+				if len(argsCastType) > 0 {
+					colTyp = makePlan2Type(&argsCastType[0])
+					for j := 0; j < rowCount; j++ {
+						if rows[j].Typ.Id != int32(types.T_any) && rows[j].Typ.Id != colTyp.Id {
+							rows[j], err = appendCastBeforeExpr(builder.GetContext(), rows[j], colTyp)
+							if err != nil {
+								return 0, err
+							}
+						}
 					}
 				}
+			}
+			if colTyp == nil {
+				colTyp = rows[0].Typ
+			}
+
+			colName := fmt.Sprintf("column_%d", i) // like MySQL
+			selectList = append(selectList, tree.SelectExpr{
+				Expr: &tree.UnresolvedName{
+					NumParts: 1,
+					Star:     false,
+					Parts:    [4]string{colName, "", "", ""},
+				},
+				As: tree.UnrestrictedIdentifier(colName),
+			})
+			ctx.headings = append(ctx.headings, colName)
+			tableDef.Cols[i] = &plan.ColDef{
+				ColId: 0,
+				Name:  colName,
+				Typ:   colTyp,
 			}
 			rowSetData.Cols[i] = &plan.ColData{
 				Data: rows,
@@ -1345,9 +1361,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					return 0, err
 				}
 
-				if expr != nil {
-					newFilterList = append(newFilterList, expr)
-				}
+				newFilterList = append(newFilterList, expr)
 			}
 
 			nodeID = builder.appendNode(&plan.Node{
@@ -1517,9 +1531,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					return 0, err
 				}
 
-				if expr != nil {
-					newFilterList = append(newFilterList, expr)
-				}
+				newFilterList = append(newFilterList, expr)
 			}
 
 			nodeID = builder.appendNode(&plan.Node{
@@ -1543,11 +1555,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx)
 		if err != nil {
 			return 0, err
-		}
-
-		if proj == nil {
-			// TODO: implement MARK join to better support non-scalar subqueries
-			return 0, moerr.NewNYI(builder.GetContext(), "non-scalar subquery in SELECT clause")
 		}
 
 		ctx.projects[i] = proj
@@ -1881,37 +1888,63 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 		err = builder.addBinding(nodeID, tbl.As, ctx)
 
-		tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+		//tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+		midNode := builder.qry.Nodes[nodeID]
 		//if it is the non-sys account and reads the cluster table,
 		//we add an account_id filter to make sure that the non-sys account
 		//can only read its own data.
-		if tableDef != nil &&
-			builder.compCtx.GetAccountId() != catalog.System_Account &&
-			util.TableIsClusterTable(tableDef.GetTableType()) {
-			var accountFilterExprs []*plan.Expr
-			ctx.binder = NewWhereBinder(builder, ctx)
-			left := &tree.UnresolvedName{
-				NumParts: 1,
-				Parts:    tree.NameParts{},
+		if midNode.NodeType == plan.Node_TABLE_SCAN && builder.compCtx.GetAccountId() != catalog.System_Account {
+			// add account filter for system table scan
+			dbName := midNode.ObjRef.SchemaName
+			tableName := midNode.TableDef.Name
+			currentAccountId := builder.compCtx.GetAccountId()
+			if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
+				modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountId))
+				ctx.binder = NewWhereBinder(builder, ctx)
+				accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, ctx)
+				if err != nil {
+					return 0, err
+				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+			} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
+				motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountId))
+				ctx.binder = NewWhereBinder(builder, ctx)
+				accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
+				if err != nil {
+					return 0, err
+				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+			} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
+				moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountId))
+				ctx.binder = NewWhereBinder(builder, ctx)
+				accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, ctx)
+				if err != nil {
+					return 0, err
+				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+			} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
+				ctx.binder = NewWhereBinder(builder, ctx)
+				left := &tree.UnresolvedName{
+					NumParts: 1,
+					Parts:    tree.NameParts{util.GetClusterTableAttributeName()},
+				}
+				currentAccountId := builder.compCtx.GetAccountId()
+				right := tree.NewNumVal(constant.MakeUint64(uint64(currentAccountId)), strconv.Itoa(int(currentAccountId)), false)
+				right.ValType = tree.P_uint64
+				//account_id = the accountId of the non-sys account
+				accountFilter := &tree.ComparisonExpr{
+					Op:    tree.EQUAL,
+					Left:  left,
+					Right: right,
+				}
+				accountFilterExprs, err := splitAndBindCondition(accountFilter, ctx)
+				if err != nil {
+					return 0, err
+				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
-			left.Parts[0] = util.GetClusterTableAttributeName()
-			right := tree.NewNumVal(constant.MakeUint64(uint64(builder.compCtx.GetAccountId())), "", false)
-			right.ValType = tree.P_uint64
-			//account_id = the accountId of the non-sys account
-			accountFilter := &tree.ComparisonExpr{
-				Op:    tree.EQUAL,
-				Left:  left,
-				Right: right,
-			}
-			accountFilterExprs, err = splitAndBindCondition(accountFilter, ctx)
-			if err != nil {
-				return 0, err
-			}
-			builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 		}
-
 		return
-
 	case *tree.StatementSource:
 		return 0, moerr.NewParseError(builder.GetContext(), "unsupport table expr: %T", stmt)
 
@@ -2236,7 +2269,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				}
 			}
 
-			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT && rejectsNull(filter, builder.compCtx.GetProcess()) {
+			if canTurnInner && node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0 && rejectsNull(filter, builder.compCtx.GetProcess()) {
 				for _, cond := range node.OnList {
 					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
 				}
@@ -2289,6 +2322,32 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				case plan.Node_INNER:
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
 					rightPushdown = append(rightPushdown, filter)
+
+				case plan.Node_MARK:
+					if tryMark, ok := filter.Expr.(*plan.Expr_Col); ok {
+						if tryMark.Col.RelPos == node.BindingTags[0] {
+							node.JoinType = plan.Node_SEMI
+							node.BindingTags = nil
+							break
+						}
+					} else if fExpr, ok := filter.Expr.(*plan.Expr_F); ok {
+						if filter.Typ.NotNullable && fExpr.F.Func.ObjName == "not" {
+							arg := fExpr.F.Args[0]
+							if tryMark, ok := arg.Expr.(*plan.Expr_Col); ok {
+								if tryMark.Col.RelPos == node.BindingTags[0] {
+									node.JoinType = plan.Node_ANTI
+									node.BindingTags = nil
+									break
+								}
+							}
+						}
+					}
+
+					if hasTag(filter, node.BindingTags[0]) {
+						cantPushdown = append(cantPushdown, filter)
+					} else {
+						leftPushdown = append(leftPushdown, filter)
+					}
 
 				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
 					leftPushdown = append(leftPushdown, filter)
@@ -2475,6 +2534,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, childId)
 	case "meta_scan":
 		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, childId)
+	case "current_account":
+		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}

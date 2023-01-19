@@ -721,7 +721,6 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		TableName:    e.tableName,
 		DatabaseName: e.databaseName,
 		FileName:     e.fileName,
-		BlockId:      e.blockId,
 	}, nil
 }
 
@@ -831,7 +830,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			}
 		}
 	}
-	var num int32 = 0
+	var num int32 = 1
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
 		attrDef, ok := def.(*engine.AttributeDef)
@@ -854,6 +853,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			num:          num,
 			comment:      attrDef.Attr.Comment,
 		}
+		attrDef.Attr.ID = uint64(num)
 		col.hasDef = 0
 		if attrDef.Attr.Default != nil {
 			defaultExpr, err := types.Encode(attrDef.Attr.Default)

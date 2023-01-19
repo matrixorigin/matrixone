@@ -33,9 +33,11 @@ var colName1, colName2 = "DATABASE()", "VARIABLE_VALUE"
 func Test_initExportFileParam(t *testing.T) {
 	var oq = &outputQueue{
 		mrs: &MysqlResultSet{},
-		ep: &tree.ExportParam{
-			Lines:  &tree.Lines{},
-			Fields: &tree.Fields{},
+		ep: &ExportParam{
+			ExportParam: &tree.ExportParam{
+				Lines:  &tree.Lines{},
+				Fields: &tree.Fields{},
+			},
 		},
 	}
 	initExportFileParam(oq.ep, oq.mrs)
@@ -56,11 +58,13 @@ func Test_openNewFile(t *testing.T) {
 	convey.Convey("openNewFile failed", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 			},
 		}
 		stubs := gostub.StubFunc(&OpenFile, nil, moerr.NewInternalError(context.TODO(), "can not open file"))
@@ -71,11 +75,13 @@ func Test_openNewFile(t *testing.T) {
 	convey.Convey("openNewFile succ", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 				LineSize: 1,
 			},
 		}
@@ -101,11 +107,13 @@ func Test_formatOutputString(t *testing.T) {
 	convey.Convey("openNewFile failed", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 				LineSize: 1,
 			},
 		}
@@ -123,11 +131,13 @@ func Test_writeToCSVFile(t *testing.T) {
 	convey.Convey("writeToCSVFile case", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 				LineSize: 1,
 				Writer:   &bufio.Writer{},
 			},
@@ -191,11 +201,13 @@ func Test_writeDataToCSVFile(t *testing.T) {
 	convey.Convey("writeDataToCSVFile case", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 				LineSize: 1,
 				Writer:   &bufio.Writer{},
 			},
@@ -217,11 +229,13 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataToCSVFile succ", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 				LineSize: 1,
 				Writer:   &bufio.Writer{},
 			},
@@ -265,11 +279,13 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataToCSVFile fail", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 				LineSize: 1,
 				Writer:   &bufio.Writer{},
 			},

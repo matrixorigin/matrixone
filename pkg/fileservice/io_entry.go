@@ -16,28 +16,37 @@ package fileservice
 
 import (
 	"bytes"
+	"context"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type ioEntriesReader struct {
+	ctx     context.Context
 	entries []IOEntry
 	offset  int64
 }
 
 var _ io.Reader = new(ioEntriesReader)
 
-func newIOEntriesReader(entries []IOEntry) *ioEntriesReader {
+func newIOEntriesReader(ctx context.Context, entries []IOEntry) *ioEntriesReader {
 	es := make([]IOEntry, len(entries))
 	copy(es, entries)
 	return &ioEntriesReader{
+		ctx:     ctx,
 		entries: es,
 	}
 }
 
 func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 	for {
+
+		select {
+		case <-i.ctx.Done():
+			return n, i.ctx.Err()
+		default:
+		}
 
 		// no more data
 		if len(i.entries) == 0 {

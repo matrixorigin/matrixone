@@ -18,6 +18,7 @@ import (
 	"context"
 	"math/rand"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
 var _ engine.Relation = new(table)
@@ -145,6 +147,59 @@ func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	return rows, nil
 }
 
+func (tbl *table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
+	cols := tbl.getTableDef().GetCols()
+	dataLength := len(cols) - 1
+	//dateType of each column for table
+	tableTypes := make([]uint8, dataLength)
+	dataTypes := make([]types.Type, dataLength)
+
+	columns := make([]int, dataLength)
+	for i := 0; i < dataLength; i++ {
+		columns[i] = i
+	}
+	//minimum --- maximum
+	tableVal := make([][2]any, dataLength)
+
+	if tbl.meta == nil {
+		return nil, nil, moerr.NewInvalidInputNoCtx("table meta is nil")
+	}
+
+	var init bool
+	for _, blks := range tbl.meta.blocks {
+		for _, blk := range blks {
+			blkVal, blkTypes, err := getZonemapDataFromMeta(ctx, columns, blk, tbl.getTableDef())
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if !init {
+				//init the tableVal
+				init = true
+
+				for i := range blkVal {
+					tableVal[i][0] = blkVal[i][0]
+					tableVal[i][1] = blkVal[i][1]
+					dataTypes[i] = types.T(blkTypes[i]).ToType()
+				}
+
+				tableTypes = blkTypes
+			} else {
+				for i := range blkVal {
+					if compute.CompareGeneric(blkVal[i][0], tableVal[i][0], dataTypes[i]) < 0 {
+						tableVal[i][0] = blkVal[i][0]
+					}
+
+					if compute.CompareGeneric(blkVal[i][1], tableVal[i][1], dataTypes[i]) > 0 {
+						tableVal[i][1] = blkVal[i][1]
+					}
+				}
+			}
+		}
+	}
+	return tableVal, tableTypes, nil
+}
+
 func (tbl *table) Size(ctx context.Context, name string) (int64, error) {
 	// TODO
 	return 0, nil
@@ -189,7 +244,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	default:
 		tbl.dnList = dnList
 	}
-	_, created := tbl.db.txn.tableMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
+	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
 	if !created && !tbl.updated {
 		if err := tbl.db.txn.db.Update(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
 			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
@@ -239,7 +294,8 @@ func (tbl *table) getTableDef() *plan.TableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
 				name2index[attr.Attr.Name] = i
 				cols = append(cols, &plan.ColDef{
-					Name: attr.Attr.Name,
+					Name:  attr.Attr.Name,
+					ColId: attr.Attr.ID,
 					Typ: &plan.Type{
 						Id:        int32(attr.Attr.Type.Oid),
 						Width:     attr.Attr.Type.Width,
