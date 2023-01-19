@@ -8,16 +8,22 @@ import (
 	"strings"
 )
 
-func trimBoth(source, cutset []byte) []byte {
-	return []byte(strings.Trim(string(source), string(cutset)))
+func trimBoth(src, cuts string) string {
+	return trimLeading(trimTrailing(src, cuts), cuts)
 }
 
-func trimLeading(source, cutset []byte) []byte {
-	return []byte(strings.TrimLeft(string(source), string(cutset)))
+func trimLeading(src, cuts string) string {
+	for strings.HasPrefix(src, cuts) {
+		src = src[len(cuts):]
+	}
+	return src
 }
 
-func trimTrailing(source, cutset []byte) []byte {
-	return []byte(strings.TrimRight(string(source), string(cutset)))
+func trimTrailing(src, cuts string) string {
+	for strings.HasSuffix(src, cuts) {
+		src = src[:len(src)-len(cuts)]
+	}
+	return src
 }
 
 func Trim(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
@@ -34,7 +40,7 @@ func Trim(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc
 	}
 }
 
-func trim(parameters []*vector.Vector, result vector.FunctionResultWrapper, length int, trimFn func([]byte, []byte) []byte) error {
+func trim(parameters []*vector.Vector, result vector.FunctionResultWrapper, length int, trimFn func(string, string) string) error {
 	cutsets := vector.GenerateFunctionStrParameter(parameters[0])
 	origin := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -47,7 +53,7 @@ func trim(parameters []*vector.Vector, result vector.FunctionResultWrapper, leng
 			}
 			continue
 		}
-		if err := rs.AppendStr(trimFn(orig, cutset), false); err != nil {
+		if err := rs.AppendStr([]byte(trimFn(string(orig), string(cutset))), false); err != nil {
 			return err
 		}
 	}
