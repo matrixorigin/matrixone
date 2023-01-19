@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
+	"fmt"
 	"math"
 	"runtime"
 	"sync"
@@ -368,6 +369,8 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.delTransaction(txn)
 		return err
 	}
+	fmt.Printf("cn gloabl timestamp: %v, newTxn timestamp: %v",
+		getCnLogTimestamp())
 	return nil
 }
 
