@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -126,6 +127,10 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context, forceDuration time
 		r.options.forceFlushCheckInterval, false)
 	if err != nil {
 		return moerr.NewInternalError(ctx, "force flush failed: %v", err)
+	}
+	_, sarg, _ := fault.TriggerFault("tae: flush timeout")
+	if sarg != "" {
+		err = moerr.NewInternalError(ctx, sarg)
 	}
 	return
 }
