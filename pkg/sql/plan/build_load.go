@@ -16,8 +16,9 @@ package plan
 
 import (
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -200,30 +201,39 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 
 func InitNullMap(stmt *tree.Load, ctx CompilerContext) error {
 	stmt.Param.NullMap = make(map[string][]string)
+
 	for i := 0; i < len(stmt.Param.Tail.Assignments); i++ {
 		expr, ok := stmt.Param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
 		if !ok {
-			return moerr.NewInvalidInput(ctx.GetContext(), "the load set list is not FuncExpr form")
+			stmt.Param.Tail.Assignments[i].Expr = nil
+			return nil
 		}
 		if len(expr.Exprs) != 2 {
-			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func need two paramaters")
+			stmt.Param.Tail.Assignments[i].Expr = nil
+			return nil
 		}
 
-		expr2, ok := expr.Exprs[0].(*tree.UnresolvedName)
+		expr2, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
+		if !ok || expr2.Parts[0] != "nullif" {
+			stmt.Param.Tail.Assignments[i].Expr = nil
+			return nil
+		}
+
+		expr3, ok := expr.Exprs[0].(*tree.UnresolvedName)
 		if !ok {
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param is not UnresolvedName form")
 		}
 
-		expr3, ok := expr.Exprs[1].(*tree.NumVal)
+		expr4, ok := expr.Exprs[1].(*tree.NumVal)
 		if !ok {
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func second param is not NumVal form")
 		}
 		for j := 0; j < len(stmt.Param.Tail.Assignments[i].Names); j++ {
 			col := stmt.Param.Tail.Assignments[i].Names[j].Parts[0]
-			if col != expr2.Parts[0] {
+			if col != expr3.Parts[0] {
 				return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param must equal to colName")
 			}
-			stmt.Param.NullMap[col] = append(stmt.Param.NullMap[col], strings.ToLower(expr3.String()))
+			stmt.Param.NullMap[col] = append(stmt.Param.NullMap[col], strings.ToLower(expr4.String()))
 		}
 		stmt.Param.Tail.Assignments[i].Expr = nil
 	}

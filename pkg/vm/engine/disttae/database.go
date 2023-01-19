@@ -30,7 +30,7 @@ var _ engine.Database = new(database)
 func (db *database) Relations(ctx context.Context) ([]string, error) {
 	var rels []string
 
-	db.txn.tableMap.Range(func(k, _ any) bool {
+	db.txn.createMap.Range(func(k, _ any) bool {
 		key := k.(tableKey)
 		if key.databaseId == db.databaseId {
 			rels = append(rels, key.name)
@@ -44,7 +44,7 @@ func (db *database) Relations(ctx context.Context) ([]string, error) {
 
 func (db *database) getTableNameById(ctx context.Context, id uint64) string {
 	tblName := ""
-	db.txn.tableMap.Range(func(k, _ any) bool {
+	db.txn.createMap.Range(func(k, _ any) bool {
 		key := k.(tableKey)
 		if key.databaseId == db.databaseId && key.tableId == id {
 			tblName = key.name
@@ -78,21 +78,26 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		return v.(*table), nil
 	}
-	if name == catalog.MO_DATABASE {
-		id := uint64(catalog.MO_DATABASE_ID)
-		defs := catalog.MoDatabaseTableDefs
-		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
+		return v.(*table), nil
 	}
-	if name == catalog.MO_TABLES {
-		id := uint64(catalog.MO_TABLES_ID)
-		defs := catalog.MoTablesTableDefs
-		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
-	}
-	if name == catalog.MO_COLUMNS {
-		id := uint64(catalog.MO_COLUMNS_ID)
-		defs := catalog.MoColumnsTableDefs
-		return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+	if db.databaseName == "mo_catalog" {
+		if name == catalog.MO_DATABASE {
+			id := uint64(catalog.MO_DATABASE_ID)
+			defs := catalog.MoDatabaseTableDefs
+			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+		}
+		if name == catalog.MO_TABLES {
+			id := uint64(catalog.MO_TABLES_ID)
+			defs := catalog.MoTablesTableDefs
+			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+		}
+		if name == catalog.MO_COLUMNS {
+			id := uint64(catalog.MO_COLUMNS_ID)
+			defs := catalog.MoColumnsTableDefs
+			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
 
+		}
 	}
 	key := &cache.TableItem{
 		Name:       name,
@@ -102,9 +107,6 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	}
 	if ok := db.txn.catalog.GetTable(key); !ok {
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
-	}
-	if tbl, ok := db.txn.syncMap.Load(key.Id); ok {
-		return tbl.(*table), nil
 	}
 	parts := db.txn.db.getPartitions(db.databaseId, key.Id)
 	tbl := &table{
@@ -131,7 +133,7 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	}
 	tbl.meta = meta
 	tbl.updated = false
-	db.txn.syncMap.Store(key, tbl)
+	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }
 
@@ -139,9 +141,12 @@ func (db *database) Delete(ctx context.Context, name string) error {
 	var id uint64
 
 	k := genTableKey(ctx, name, db.databaseId)
-	if _, ok := db.txn.tableMap.Load(k); ok {
-		db.txn.tableMap.Delete(k)
+	if _, ok := db.txn.createMap.Load(k); ok {
+		db.txn.createMap.Delete(k)
 		return nil
+	} else if v, ok := db.txn.tableMap.Load(k); ok {
+		id = v.(*table).tableId
+		db.txn.tableMap.Delete(k)
 	} else {
 		key := &cache.TableItem{
 			Name:       name,
@@ -154,7 +159,6 @@ func (db *database) Delete(ctx context.Context, name string) error {
 		}
 		id = key.Id
 	}
-	db.txn.syncMap.Delete(id)
 	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err
@@ -173,10 +177,12 @@ func (db *database) Truncate(ctx context.Context, name string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	key := genTableKey(ctx, name, db.databaseId)
-	if v, ok := db.txn.tableMap.Load(key); ok {
+	k := genTableKey(ctx, name, db.databaseId)
+	if v, ok := db.txn.createMap.Load(k); ok {
 		oldId = v.(*table).tableId
 		v.(*table).tableId = newId
+	} else if v, ok := db.txn.tableMap.Load(k); ok {
+		oldId = v.(*table).tableId
 	} else {
 		key := &cache.TableItem{
 			Name:       name,
@@ -282,7 +288,7 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 	tbl.tableId = tableId
 	tbl.parts = db.txn.db.getPartitions(db.databaseId, tableId)
 	tbl.getTableDef()
-	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
+	db.txn.createMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return nil
 }
 

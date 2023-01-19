@@ -38,6 +38,12 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
+	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
+	ap.ctr.bat.Zs = proc.Mp().GetSels()
+	for i, typ := range ap.Typs {
+		ap.ctr.bat.Vecs[i] = vector.New(typ)
+	}
+
 	ap.ctr.buildEqVec = make([]*vector.Vector, len(ap.Conditions[1]))
 	ap.ctr.buildEqEvecs = make([]evalVector, len(ap.Conditions[1]))
 	return nil
@@ -81,7 +87,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			ctr.state = Probe
 
 		case Probe:
-			var err error
 			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			anal.WaitStop(start)
@@ -94,12 +99,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast)
+				if err := ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+					ap.Free(proc, true)
+					return true, err
+				}
 			} else {
-				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
+				if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+					ap.Free(proc, true)
+					return true, err
+				}
 			}
-			bat.Clean(proc.Mp())
-			return false, err
+			return false, nil
 
 		default:
 			ap.Free(proc, false)
@@ -110,12 +120,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	var err error
 	start := time.Now()
 	bat := <-proc.Reg.MergeReceivers[1].Ch
 	anal.WaitStop(start)
 
 	if bat != nil {
+		var err error
 		joinMap := bat.Ht.(*hashmap.JoinMap)
 		ctr.evalNullSels(bat)
 		ctr.nullWithBatch, err = DumpBatch(bat, proc, ctr.nullSels)
@@ -128,71 +138,48 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		ctr.rewriteCond = colexec.RewriteFilterExprList(ap.OnList)
 		ctr.bat = bat
 		ctr.mp = joinMap.Dup()
-		ctr.hasNull = ctr.mp.HasNull()
+		//ctr.bat = bat
+		//ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		//anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result) + 1)
-	rbat.Zs = proc.Mp().GetSels()
-	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
-	}
-	rbat.Vecs[len(ap.Result)] = vector.New(types.T_bool.ToType())
-	ctr.joinFlags = make([]bool, bat.Length())
-	if ap.OutputMark {
-		ctr.Nsp = nulls.NewWithSize(bat.Length())
-		// add mark flag, the initial
-		rbat.Vecs[len(ap.Result)] = vector.NewWithFixed(types.T_bool.ToType(), ctr.joinFlags, ctr.Nsp, proc.Mp())
-	}
+	rbat := batch.NewWithSize(len(ap.Result))
 	count := bat.Length()
-	for i := 0; i < count; i += hashmap.UnitLimit {
-		n := count - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
-		}
-		for k := 0; k < n; k++ {
-			if ap.MarkMeaning == ctr.joinFlags[i+k] {
-				for j, pos := range ap.Result {
-					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
-						return err
-					}
-				}
-				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
-			}
+	for i, rp := range ap.Result {
+		if rp >= 0 {
+			rbat.Vecs[i] = bat.Vecs[rp]
+			bat.Vecs[rp] = nil
+		} else {
+			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), count, false, proc.Mp())
 		}
 	}
-	if !ap.OutputMark {
-		rbat.Vecs = rbat.Vecs[:len(rbat.Vecs)-1]
-	}
-	rbat.ExpandNulls()
+	rbat.Zs = bat.Zs
+	bat.Zs = nil
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result) + 1)
-	// vector.UnionBatch()
-	rbat.Zs = proc.Mp().GetSels()
-	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
-	}
-	lastIndex := len(rbat.Vecs) - 1
-	rbat.Vecs[lastIndex] = vector.New(types.T_bool.ToType())
-	ctr.joinFlags = make([]bool, bat.Length())
-	ctr.Nsp = nulls.NewWithSize(bat.Length())
+	rbat := batch.NewWithSize(len(ap.Result))
+	ctr.markVals = make([]bool, bat.Length())
+	ctr.markNulls = nulls.NewWithSize(bat.Length())
 	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc, anal); err != nil {
+		rbat.Clean(proc.Mp())
 		return err
 	}
+
 	count := bat.Length()
-	itr := ctr.mp.Map().NewIterator()
 	mSels := ctr.mp.Sels()
+	itr := ctr.mp.Map().NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -222,9 +209,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					return err
 				}
 				if condState == condTrue { // 2.2.1.1 : condNonEq is condTrue in JoinMap
-					ctr.joinFlags[i+k] = true
+					ctr.markVals[i+k] = true
 				} else if condState == condUnkown { // 2.2.1.2 : condNonEq is condUnkown in JoinMap
-					ctr.Nsp.Np.Add(uint64(i + k))
+					nulls.Add(ctr.markNulls, uint64(i+k))
 				} else { // 2.2.1.3 : condNonEq is condFalse in JoinMap, further check in nullSels
 					if len(ctr.nullSels) == 0 {
 						ctr.handleResultType(i+k, condFalse)
@@ -250,31 +237,18 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				ctr.handleResultType(i+k, condState)
 			}
 		}
-		// add mark flag, the initial
-		rbat.Vecs[len(ap.Result)] = vector.NewWithFixed(types.T_bool.ToType(), ctr.joinFlags, ctr.Nsp, proc.Mp())
-		markVec := vector.NewWithFixed(types.T_bool.ToType(), ctr.joinFlags, ctr.Nsp, proc.Mp())
-		for k := 0; k < n; k++ {
-			if ap.OutputAnyway || (ctr.Nsp.Np.Contains(uint64(i+k)) && ap.OutputNull || !ctr.Nsp.Np.Contains(uint64(i+k)) && ctr.joinFlags[i+k] == ap.MarkMeaning) {
-				for j, pos := range ap.Result {
-					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
-						return err
-					}
-				}
-				if ap.OutputMark {
-					if err := vector.UnionOne(rbat.Vecs[lastIndex], markVec, int64(i+k), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
-						return err
-					}
-				}
-				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
-			}
+	}
+	for i, pos := range ap.Result {
+		if pos >= 0 {
+			rbat.Vecs[i] = bat.Vecs[pos]
+			bat.Vecs[pos] = nil
+		} else {
+			rbat.Vecs[i] = vector.NewWithFixed(types.T_bool.ToType(), ctr.markVals, ctr.markNulls, proc.Mp())
 		}
 	}
-	if !ap.OutputMark {
-		rbat.Vecs = rbat.Vecs[:len(rbat.Vecs)-1]
-	}
-	rbat.ExpandNulls()
+	rbat.Zs = bat.Zs
+	bat.Zs = nil
+	//rbat.ExpandNulls()
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -398,11 +372,11 @@ func (ctr *container) evalNullSels(bat *batch.Batch) {
 func (ctr *container) handleResultType(idx int, r resultType) {
 	switch r {
 	case condTrue:
-		ctr.joinFlags[idx] = true
+		ctr.markVals[idx] = true
 	case condFalse:
-		ctr.joinFlags[idx] = false
+		ctr.markVals[idx] = false
 	case condUnkown:
-		ctr.Nsp.Np.Add(uint64(idx))
+		nulls.Add(ctr.markNulls, uint64(idx))
 	}
 }
 

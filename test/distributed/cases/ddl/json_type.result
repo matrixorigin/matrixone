@@ -355,7 +355,7 @@ j1    col    seq    key    path    index    value    this
 {"key1": "value1", "key2": "value2"}    json_table_6.j1    0    key1    $.key1    null    "value1"    {"key1": "value1", "key2": "value2"}
 select seq,value from json_table_6,unnest(json_table_6.j1,"$.a") as u where u.`path` like "%a";
 seq    value
-create table unnest_table_1(col0 json,col1 varchar(255),col2 int,col3 varchar(255),col4 varchar(255),col5 int,col6 varchar(255),col7 varchar(255));
+create table unnest_table_1(col0 json,col1 varchar(255),col2 int,col3 varchar(255),col4 varchar(255),col5 int,col6 json,col7 json);
 insert into unnest_table_1 select * from json_table_6,unnest(json_table_6.j1,"$.*") as u;
 select * from unnest_table_1;
 col0    col1    col2    col3    col4    col5    col6    col7

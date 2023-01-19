@@ -1,11 +1,11 @@
 SELECT EXISTS(SELECT 1+1);
-[unknown result because it is related to issue#3312]
+exists (select 1 + 1)
+true
 create view v1 as SELECT EXISTS(SELECT 1+1);
-[unknown result because it is related to issue#3312]
 select * from v1;
-[unknown result because it is related to issue#3312]
+exists (select 1 + 1)
+true
 drop view v1;
-[unknown result because it is related to issue#3312]
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -548,41 +548,53 @@ drop table if exists t2;
 CREATE TABLE t1 ( a int, b int );
 INSERT INTO t1 VALUES (1,1),(2,2),(3,3);
 SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a > t1.a) IS NULL from t1 a;
-[unknown result because it is related to issue#3312]
+exists (select a from t1 where b = 2 and a.a > t1.a) is null
+false
+false
+false
 SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a < t1.a) IS NOT NULL from t1 a;
-[unknown result because it is related to issue#3312]
+exists (select a from t1 where b = 2 and a.a < t1.a) is not null
+true
+true
+true
 SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a = t1.a) IS NULL from t1 a;
-[unknown result because it is related to issue#3312]
+exists (select a from t1 where b = 2 and a.a = t1.a) is null
+false
+false
+false
 create view v1 as SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a > t1.a) IS NULL from t1 a;
-[unknown result because it is related to issue#3312]
 create view v2 as SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a < t1.a) IS NOT NULL from t1 a;
-[unknown result because it is related to issue#3312]
 create view v3 as SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a = t1.a) IS NULL from t1 a;
-[unknown result because it is related to issue#3312]
 select * from v1;
-[unknown result because it is related to issue#3312]
+exists (select a from t1 where b = 2 and a.a > t1.a) is null
+false
+false
+false
 select * from v2;
-[unknown result because it is related to issue#3312]
+exists (select a from t1 where b = 2 and a.a < t1.a) is not null
+true
+true
+true
 select * from v3;
-[unknown result because it is related to issue#3312]
+exists (select a from t1 where b = 2 and a.a = t1.a) is null
+false
+false
+false
 drop view v1;
-[unknown result because it is related to issue#3312]
 drop view v2;
-[unknown result because it is related to issue#3312]
 drop view v3;
-[unknown result because it is related to issue#3312]
 drop table if exists t1;
 drop table if exists t1;
 create table t1 (df decimal(5,1));
 insert into t1 values(1.1);
 select 1.1 * exists(select * from t1);
-[unknown result because it is related to issue#3312]
+invalid argument operator *, bad value [DECIMAL128 BOOL]
 create view v1 as select 1.1 * exists(select * from t1);
-[unknown result because it is related to issue#3312]
+invalid argument operator *, bad value [DECIMAL128 BOOL]
 select * from v1;
-[unknown result because it is related to issue#3312]
+SQL parser error: table "v1" does not exist
 drop view v1;
-[unknown result because it is related to issue#3312]
+invalid view 'view-subquery-with-exists.v1'
 drop table if exists t1;
 drop table if exists t1;
 CREATE TABLE t1 (i INT);
