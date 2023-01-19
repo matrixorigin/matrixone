@@ -26,4 +26,4 @@ account
 query_tae_table    insert into query_tae_table values (1)
 select span_kind from system.rawlog where `raw_item` = "span_info" and span_name = "NOT_EXIST_SPAN" limit 1;
 span_kind
-
+drop account `query_tae_table`;

@@ -23,3 +23,6 @@ select account, statement from system.statement_info where statement = 'insert i
 
 -- case: select span_kind issue #7571
 select span_kind from system.rawlog where `raw_item` = "span_info" and span_name = "NOT_EXIST_SPAN" limit 1;
+
+-- clean
+drop account `query_tae_table`;
