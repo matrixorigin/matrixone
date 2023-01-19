@@ -486,19 +486,28 @@ message WindowSpec {
 }
 
 message UpdateCtx {
-	string db_name = 1;
-	string tbl_name = 2;
-	string hide_key = 3;
-	int32 hide_key_idx = 4;
-	repeated ColDef update_cols = 5;
-	repeated string other_attrs = 6;
-	repeated string order_attrs = 7;
-	ColDef composite_pkey = 8;
-	bool is_index_table_update = 9;
-	repeated int32 uniqueIndexPos = 10;
-	repeated int32	secondaryIndexPos = 11;
-	repeated string indexParts = 12;
-	ClusterByDef clusterByDef = 13;
+	repeated ObjectRef ref 				= 1;
+	repeated IdList idx 				= 2;
+	repeated Attrs attr 				= 3;
+	repeated TableDef tableDefs 		= 4;
+	repeated bool has_auto_col     		= 5;
+
+	repeated ObjectRef idx_ref 			= 6;
+	repeated int32 idx_idx 				= 7;
+	repeated IdList idx_val 			= 8;
+	repeated int32 idx_pk 				= 9;
+
+	repeated ObjectRef on_restrict_ref 	= 10;
+	repeated int32 on_restrict_idx 		= 11;
+	repeated ObjectRef on_cascade_ref 	= 12;
+	repeated Attrs on_cascade_attrs 	= 13;
+	repeated IdList on_cascade_idx 		= 14;
+	repeated ObjectRef on_set_ref 		= 15;
+	repeated Attrs on_set_attrs 		= 16;
+	repeated IdList on_set_idx 			= 17;
+
+	repeated ObjectRef parent_ref 	= 18;
+	repeated int32 parent_idx 		= 19;
 }
 
 message AnalyzeInfo {
@@ -611,7 +620,7 @@ message Node {
 	repeated Expr grouping_set = 10;
 	repeated Expr agg_list = 11;
 	repeated OrderBySpec order_by = 12;
-	repeated UpdateCtx update_ctxs = 13;
+	UpdateCtx update_ctx = 13;
 	WindowSpec win_spec = 14;
 	Expr limit = 15;
 	Expr offset = 16;

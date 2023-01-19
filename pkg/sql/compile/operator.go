@@ -549,99 +549,197 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		HasAutoCol:           hasAutoCol,
 	}, nil
 }
-
 func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
-	updateCtxs := make([]*update.UpdateCtx, len(n.UpdateCtxs))
-	tableIDs := make([]uint64, len(n.UpdateCtxs))
-	dbs := make([]engine.Database, len(n.UpdateCtxs))
-	dbNames := make([]string, len(n.UpdateCtxs))
-	tblNames := make([]string, len(n.UpdateCtxs))
-	hasAtuoCol := make([]bool, len(n.UpdateCtxs))
-	for i, updateCtx := range n.UpdateCtxs {
-		var dbSource engine.Database
-		var relation engine.Relation
-		var err error
-		var isTemp bool
-		dbSource, err = eg.Database(proc.Ctx, updateCtx.DbName, proc.TxnOperator)
+	oldCtx := n.UpdateCtx
+	updateCtx := &update.UpdateCtx2{
+		Source:     make([]engine.Relation, len(oldCtx.Ref)),
+		Attrs:      make([][]string, len(oldCtx.Attr)),
+		Idxs:       make([][]int32, len(oldCtx.Idx)),
+		TableDefs:  oldCtx.TableDefs,
+		Ref:        oldCtx.Ref,
+		HasAutoCol: oldCtx.HasAutoCol,
+
+		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
+		IdxVal:    make([][]int32, len(oldCtx.IdxVal)),
+		IdxPk:     oldCtx.IdxPk,
+
+		OnRestrictIdx: oldCtx.OnRestrictIdx,
+
+		OnCascadeIdx:    make([][]int32, len(oldCtx.OnCascadeIdx)),
+		OnCascadeSource: make([]engine.Relation, len(oldCtx.OnCascadeRef)),
+		OnCascadeAttrs:  make([][]string, len(oldCtx.OnSetAttrs)),
+
+		OnSetSource: make([]engine.Relation, len(oldCtx.OnSetRef)),
+		OnSetIdx:    make([][]int32, len(oldCtx.OnSetIdx)),
+		OnSetAttrs:  make([][]string, len(oldCtx.OnSetAttrs)),
+
+		ParentIdx: oldCtx.ParentIdx,
+	}
+
+	for i, list := range oldCtx.Idx {
+		updateCtx.Idxs[i] = make([]int32, len(list.List))
+		for j, id := range list.List {
+			updateCtx.Idxs[i][j] = int32(id)
+		}
+	}
+	for i, list := range oldCtx.IdxVal {
+		updateCtx.IdxVal[i] = make([]int32, len(list.List)+1)
+		updateCtx.IdxVal[i][0] = oldCtx.IdxIdx[i]
+		for j, id := range list.List {
+			updateCtx.IdxVal[i][j+1] = int32(id)
+		}
+	}
+	for i, list := range oldCtx.OnSetIdx {
+		updateCtx.OnSetIdx[i] = make([]int32, len(list.List))
+		for j, id := range list.List {
+			updateCtx.OnSetIdx[i][j] = int32(id)
+		}
+	}
+	for i, list := range oldCtx.Attr {
+		updateCtx.Attrs[i] = make([]string, len(list.List))
+		copy(updateCtx.Attrs[i], list.List)
+	}
+	for i, list := range oldCtx.OnSetAttrs {
+		updateCtx.OnSetAttrs[i] = make([]string, len(list.List))
+		copy(updateCtx.OnSetAttrs[i], list.List)
+	}
+	for i, list := range oldCtx.OnCascadeIdx {
+		updateCtx.OnCascadeIdx[i] = make([]int32, len(list.List))
+		for j, id := range list.List {
+			updateCtx.OnCascadeIdx[i][j] = int32(id)
+		}
+	}
+	for i, list := range oldCtx.OnCascadeAttrs {
+		updateCtx.OnCascadeAttrs[i] = make([]string, len(list.List))
+		copy(updateCtx.OnCascadeAttrs[i], list.List)
+	}
+	for i, ref := range oldCtx.Ref {
+		rel, err := getRel(proc, eg, ref)
 		if err != nil {
 			return nil, err
 		}
-		relation, err = dbSource.Relation(proc.Ctx, updateCtx.TblName)
-		dbs[i] = dbSource
+		updateCtx.Source[i] = rel
+	}
+	for i, ref := range oldCtx.IdxRef {
+		rel, err := getRel(proc, eg, ref)
 		if err != nil {
-			var e error
-			dbSource, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-			if e != nil {
-				return nil, err
-			}
-			relation, e = dbSource.Relation(proc.Ctx, engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName))
-			if e != nil {
-				return nil, err
-			}
-			isTemp = true
+			return nil, err
 		}
-		tableIDs[i] = relation.GetTableID(proc.Ctx)
-
-		if isTemp {
-			dbNames[i] = defines.TEMPORARY_DBNAME
-			tblNames[i] = engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName)
-		} else {
-			dbNames[i] = updateCtx.DbName
-			tblNames[i] = updateCtx.TblName
+		updateCtx.IdxSource[i] = rel
+	}
+	for i, ref := range oldCtx.OnCascadeRef {
+		rel, err := getRel(proc, eg, ref)
+		if err != nil {
+			return nil, err
 		}
-		tableIDs[i] = relation.GetTableID(proc.Ctx)
-
-		colNames := make([]string, 0, len(updateCtx.UpdateCols))
-		for _, col := range updateCtx.UpdateCols {
-			colNames = append(colNames, col.Name)
+		updateCtx.OnCascadeSource[i] = rel
+	}
+	for i, ref := range oldCtx.OnSetRef {
+		rel, err := getRel(proc, eg, ref)
+		if err != nil {
+			return nil, err
 		}
-
-		updateCtxs[i] = &update.UpdateCtx{
-			HideKey:            updateCtx.HideKey,
-			HideKeyIdx:         updateCtx.HideKeyIdx,
-			UpdateAttrs:        colNames,
-			OtherAttrs:         updateCtx.OtherAttrs,
-			OrderAttrs:         updateCtx.OrderAttrs,
-			TableSource:        relation,
-			CPkeyColDef:        updateCtx.CompositePkey,
-			IsIndexTableUpdate: updateCtx.IsIndexTableUpdate,
-			IndexParts:         updateCtx.IndexParts,
-			ClusterByDef:       updateCtx.ClusterByDef,
-		}
-
-		if !updateCtx.IsIndexTableUpdate {
-			if len(updateCtx.UniqueIndexPos) > 0 {
-				for _, pos := range updateCtx.UniqueIndexPos {
-					updateCtxs[i].UniqueIndexPos = append(updateCtxs[i].UniqueIndexPos, int(pos))
-				}
-			}
-
-			if len(updateCtx.SecondaryIndexPos) > 0 {
-				for _, pos := range updateCtx.SecondaryIndexPos {
-					updateCtxs[i].SecondaryIndexPos = append(updateCtxs[i].SecondaryIndexPos, int(pos))
-				}
-			}
-		}
-		for j := 0; j < len(n.TableDefVec[i].Cols); j++ {
-			if n.TableDefVec[i].Cols[j].Typ.AutoIncr {
-				hasAtuoCol[i] = true
-				break
-			}
-		}
-
+		updateCtx.OnSetSource[i] = rel
 	}
 
 	return &update.Argument{
-		UpdateCtxs:  updateCtxs,
-		Engine:      eg,
-		DB:          dbs,
-		TableID:     tableIDs,
-		DBName:      dbNames,
-		TblName:     tblNames,
-		TableDefVec: n.TableDefVec,
-		HasAutoCol:  hasAtuoCol,
+		UpdateCtx2: updateCtx,
+		Engine:     eg,
 	}, nil
 }
+
+// func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
+// 	updateCtxs := make([]*update.UpdateCtx, len(n.UpdateCtxs))
+// 	tableIDs := make([]uint64, len(n.UpdateCtxs))
+// 	dbs := make([]engine.Database, len(n.UpdateCtxs))
+// 	dbNames := make([]string, len(n.UpdateCtxs))
+// 	tblNames := make([]string, len(n.UpdateCtxs))
+// 	hasAtuoCol := make([]bool, len(n.UpdateCtxs))
+// 	for i, updateCtx := range n.UpdateCtxs {
+// 		var dbSource engine.Database
+// 		var relation engine.Relation
+// 		var err error
+// 		var isTemp bool
+// 		dbSource, err = eg.Database(proc.Ctx, updateCtx.DbName, proc.TxnOperator)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		relation, err = dbSource.Relation(proc.Ctx, updateCtx.TblName)
+// 		dbs[i] = dbSource
+// 		if err != nil {
+// 			var e error
+// 			dbSource, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+// 			if e != nil {
+// 				return nil, err
+// 			}
+// 			relation, e = dbSource.Relation(proc.Ctx, engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName))
+// 			if e != nil {
+// 				return nil, err
+// 			}
+// 			isTemp = true
+// 		}
+// 		tableIDs[i] = relation.GetTableID(proc.Ctx)
+
+// 		if isTemp {
+// 			dbNames[i] = defines.TEMPORARY_DBNAME
+// 			tblNames[i] = engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName)
+// 		} else {
+// 			dbNames[i] = updateCtx.DbName
+// 			tblNames[i] = updateCtx.TblName
+// 		}
+// 		tableIDs[i] = relation.GetTableID(proc.Ctx)
+
+// 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
+// 		for _, col := range updateCtx.UpdateCols {
+// 			colNames = append(colNames, col.Name)
+// 		}
+
+// 		updateCtxs[i] = &update.UpdateCtx{
+// 			HideKey:            updateCtx.HideKey,
+// 			HideKeyIdx:         updateCtx.HideKeyIdx,
+// 			UpdateAttrs:        colNames,
+// 			OtherAttrs:         updateCtx.OtherAttrs,
+// 			OrderAttrs:         updateCtx.OrderAttrs,
+// 			TableSource:        relation,
+// 			CPkeyColDef:        updateCtx.CompositePkey,
+// 			IsIndexTableUpdate: updateCtx.IsIndexTableUpdate,
+// 			IndexParts:         updateCtx.IndexParts,
+// 			ClusterByDef:       updateCtx.ClusterByDef,
+// 		}
+
+// 		if !updateCtx.IsIndexTableUpdate {
+// 			if len(updateCtx.UniqueIndexPos) > 0 {
+// 				for _, pos := range updateCtx.UniqueIndexPos {
+// 					updateCtxs[i].UniqueIndexPos = append(updateCtxs[i].UniqueIndexPos, int(pos))
+// 				}
+// 			}
+
+// 			if len(updateCtx.SecondaryIndexPos) > 0 {
+// 				for _, pos := range updateCtx.SecondaryIndexPos {
+// 					updateCtxs[i].SecondaryIndexPos = append(updateCtxs[i].SecondaryIndexPos, int(pos))
+// 				}
+// 			}
+// 		}
+// 		for j := 0; j < len(n.TableDefVec[i].Cols); j++ {
+// 			if n.TableDefVec[i].Cols[j].Typ.AutoIncr {
+// 				hasAtuoCol[i] = true
+// 				break
+// 			}
+// 		}
+
+// 	}
+
+// 	return &update.Argument{
+// 		UpdateCtxs:  updateCtxs,
+// 		Engine:      eg,
+// 		DB:          dbs,
+// 		TableID:     tableIDs,
+// 		DBName:      dbNames,
+// 		TblName:     tblNames,
+// 		TableDefVec: n.TableDefVec,
+// 		HasAutoCol:  hasAtuoCol,
+// 	}, nil
+// }
 
 func constructProjection(n *plan.Node) *projection.Argument {
 	return &projection.Argument{

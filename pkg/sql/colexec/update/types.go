@@ -23,32 +23,59 @@ import (
 type Argument struct {
 	Ts           uint64
 	AffectedRows uint64
-	UpdateCtxs   []*UpdateCtx
-	TableDefVec  []*plan.TableDef
-	Engine       engine.Engine
-	DB           []engine.Database
-	TableID      []uint64
-	DBName       []string
-	TblName      []string
-	HasAutoCol   []bool
+	// UpdateCtxs   []*UpdateCtx
+	// TableDefVec []*plan.TableDef
+	Engine engine.Engine
+	// DB          []engine.Database
+	// TableID     []uint64
+	// DBName      []string
+	// TblName     []string
+	// HasAutoCol  []bool
+
+	UpdateCtx2 *UpdateCtx2
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
-type UpdateCtx struct {
-	HideKey     string
-	HideKeyIdx  int32
-	UpdateAttrs []string
-	OtherAttrs  []string
-	OrderAttrs  []string
-	TableSource engine.Relation
-	// for not index table
-	CPkeyColDef        *plan.ColDef
-	IsIndexTableUpdate bool
-	// for index table
-	UniqueIndexPos    []int
-	SecondaryIndexPos []int
-	IndexParts        []string
-	ClusterByDef      *plan.ClusterByDef
+type UpdateCtx2 struct {
+	Source     []engine.Relation
+	Idxs       [][]int32
+	Attrs      [][]string
+	Ref        []*plan.ObjectRef
+	TableDefs  []*plan.TableDef
+	HasAutoCol []bool
+
+	IdxSource []engine.Relation
+	IdxPk     []int32
+	IdxVal    [][]int32
+
+	OnRestrictIdx []int32
+
+	OnCascadeSource []engine.Relation
+	OnCascadeIdx    [][]int32
+	OnCascadeAttrs  [][]string
+
+	OnSetSource []engine.Relation
+	OnSetIdx    [][]int32
+	OnSetAttrs  [][]string
+
+	ParentIdx []int32
 }
+
+// type UpdateCtx struct {
+// 	HideKey     string
+// 	HideKeyIdx  int32
+// 	UpdateAttrs []string
+// 	OtherAttrs  []string
+// 	OrderAttrs  []string
+// 	TableSource engine.Relation
+// 	// for not index table
+// 	CPkeyColDef        *plan.ColDef
+// 	IsIndexTableUpdate bool
+// 	// for index table
+// 	UniqueIndexPos    []int
+// 	SecondaryIndexPos []int
+// 	IndexParts        []string
+// 	ClusterByDef      *plan.ClusterByDef
+// }
