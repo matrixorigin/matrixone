@@ -117,7 +117,6 @@ func doInsertUniqueTable(proc *process.Process, rel engine.Relation, updateBatch
 		ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName})
 		if colCount == 1 {
 			vec, _ = util.CompactSingleIndexCol(updateBatch.Vecs[0], proc)
-			ukBatch.SetVector(0, vec)
 		} else {
 			vec, _ = util.SerialWithCompacted(updateBatch.Vecs, proc)
 		}

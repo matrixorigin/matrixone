@@ -152,10 +152,27 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	}
 	for alias, columns := range usedTbl {
 		idx := tblInfo.alias[alias]
+		tblDef := tblInfo.tableDefs[idx]
 		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
-		newTblInfo.tableDefs = append(newTblInfo.tableDefs, tblInfo.tableDefs[idx])
+		newTblInfo.tableDefs = append(newTblInfo.tableDefs, tblDef)
+		newTblInfo.isClusterTable = append(newTblInfo.isClusterTable, tblInfo.isClusterTable[idx])
 		newTblInfo.alias[alias] = len(newTblInfo.tableDefs) - 1
 		newTblInfo.updateKeys = append(newTblInfo.updateKeys, columns)
+
+		if !newTblInfo.haveConstraint {
+			if len(tblDef.RefChildTbls) > 0 {
+				newTblInfo.haveConstraint = true
+			} else if len(tblDef.Fkeys) > 0 {
+				newTblInfo.haveConstraint = true
+			} else {
+				for _, def := range tblDef.Defs {
+					if _, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+						newTblInfo.haveConstraint = true
+						break
+					}
+				}
+			}
+		}
 	}
 	for idx, ref := range newTblInfo.objRef {
 		key := ref.SchemaName + "." + ref.ObjName
@@ -336,7 +353,7 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	columnsSize := 0
 	for alias, i := range tableInfo.alias {
 		e, _ := tree.NewUnresolvedNameWithStar(builder.GetContext(), alias)
-		columnsSize += len(tableInfo.tableDefs[i].Cols)
+		columnsSize += getTableValidColsSize(tableInfo.tableDefs[i])
 		selectList[i] = tree.SelectExpr{
 			Expr: e,
 		}
@@ -859,7 +876,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 	typMap := make(map[string]*plan.Type)
 	id2name := make(map[uint64]string)
 
-	updateKeys := info.tblInfo.updateKeys[rewriteIdx]
 	pkPos := int32(-1)
 	compositePkey := ""
 	if tableDef.CompositePkey != nil {
@@ -960,7 +976,8 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 							},
 						},
 					}
-					idxValList = append(idxValList, int64(newColPosMap[orginIndexColumnName]))
+					// we use final projectlist's index to insert. the index is equal oldColPosMap
+					idxValList = append(idxValList, int64(oldColPosMap[orginIndexColumnName]))
 				} else {
 					args := make([]*Expr, partsLength)
 					for i, column := range idxDef.UIdx.Fields[idx].Parts {
@@ -974,7 +991,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 								},
 							},
 						}
-						idxValList = append(idxValList, int64(newColPosMap[column]))
+						idxValList = append(idxValList, int64(oldColPosMap[column]))
 					}
 					leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 					if err != nil {
@@ -1048,7 +1065,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 						updateRefColumn := false
 						for _, colId := range fk.ForeignCols {
 							updateName := id2name[colId]
-							if _, ok := updateKeys[updateName]; ok {
+							if _, ok := info.tblInfo.updateKeys[rewriteIdx][updateName]; ok {
 								updateRefColumn = true
 								break
 							}
@@ -1249,7 +1266,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 				updateRefColumn := false
 				for _, colId := range fk.Cols {
 					updateName := id2name[colId]
-					if _, ok := updateKeys[updateName]; ok {
+					if _, ok := info.tblInfo.updateKeys[rewriteIdx][updateName]; ok {
 						updateRefColumn = true
 						break
 					}

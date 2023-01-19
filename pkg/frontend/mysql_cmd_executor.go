@@ -2601,14 +2601,14 @@ GetComputationWrapper gets the execs from the computation engine
 */
 var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(sql); cached != nil {
-		for i, stmt := range cached.stmts {
-			tcw := InitTxnComputationWrapper(ses, *stmt, proc)
-			tcw.plan = cached.plans[i]
-			cw = append(cw, tcw)
-		}
-		return cw, nil
-	}
+	// if cached := ses.getCachedPlan(sql); cached != nil {
+	// 	for i, stmt := range cached.stmts {
+	// 		tcw := InitTxnComputationWrapper(ses, *stmt, proc)
+	// 		tcw.plan = cached.plans[i]
+	// 		cw = append(cw, tcw)
+	// 	}
+	// 	return cw, nil
+	// }
 
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
