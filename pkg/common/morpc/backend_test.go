@@ -765,6 +765,13 @@ func (b *testBackend) Send(ctx context.Context, request Message) (*Future, error
 	return f, nil
 }
 
+func (b *testBackend) SendInternal(ctx context.Context, request Message) (*Future, error) {
+	b.active()
+	f := newFuture(nil)
+	f.init(request.GetID(), ctx)
+	return f, nil
+}
+
 func (b *testBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	b.active()
 	st := newStream(make(chan Message, 1),
