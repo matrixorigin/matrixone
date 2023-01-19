@@ -17,10 +17,12 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"unsafe"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -205,6 +207,8 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 	b *api.Batch, needCheck bool) error {
+	moprobe.DisttaePartitionInsert(uintptr(unsafe.Pointer(b)))
+	defer moprobe.DisttaePartitionInsertRet(uintptr(unsafe.Pointer(b)))
 	bat, err := batch.ProtoBatchToBatch(b)
 	if err != nil {
 		return err
