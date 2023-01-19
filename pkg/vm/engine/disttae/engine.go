@@ -364,7 +364,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
 
-	if err = WaitUntilTxnTimeIsLegal(ctx, txn.meta.SnapshotTS, 0); err != nil {
+	if err = e.receiveLogTailTime.blockUntilTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
 		e.delTransaction(txn)
 		return err
 	}

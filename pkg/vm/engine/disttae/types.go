@@ -103,6 +103,8 @@ type DB struct {
 	dnMap      map[string]int
 	metaTables map[string]Partitions
 	tables     map[[2]uint64]Partitions
+
+	cnE *Engine
 }
 
 type Partitions []*Partition

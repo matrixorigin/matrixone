@@ -292,5 +292,6 @@ func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
 }
 
 func (db *DB) Update(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
-	return TryToGetTableLogTail(ctx, ts, databaseId, tableId)
+	// XXX can not get Engine here.
+	return db.cnE.tryToGetTableLogTail(ctx, databaseId, tableId)
 }
