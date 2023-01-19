@@ -54,17 +54,17 @@ type dmlSelectInfo struct {
 }
 
 type dmlTableInfo struct {
-	objRef          []*ObjectRef
-	tableDefs       []*TableDef
-	isClusterTable  []bool
-	haveConstraint  bool
-	updateColOffset []map[string]int       // This slice index correspond to tableDefs
-	updateKeys      []map[string]tree.Expr // This slice index correspond to tableDefs
-	oldColPosMap    []map[string]int       // origin table values to their position
-	newColPosMap    []map[string]int       // insert/update values to their position
-	nameToIdx       map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
-	idToName        map[uint64]string      // Mapping of tableId to full path name of table
-	alias           map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
+	objRef         []*ObjectRef
+	tableDefs      []*TableDef
+	isClusterTable []bool
+	haveConstraint bool
+	// updateColOffset []map[string]int       // This slice index correspond to tableDefs
+	updateKeys   []map[string]tree.Expr // This slice index correspond to tableDefs
+	oldColPosMap []map[string]int       // origin table values to their position
+	newColPosMap []map[string]int       // insert/update values to their position
+	nameToIdx    map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
+	idToName     map[uint64]string      // Mapping of tableId to full path name of table
+	alias        map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
 }
 
 func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
@@ -310,13 +310,19 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, aliasMap m
 // Get the number of columns in the table definition,
 // exclude the hidden columns of the composite primary key and the hidden columns of the composite cluster by
 func getTableValidColsSize(tableDef *TableDef) int {
-	counter := 0
-	for _, coldef := range tableDef.Cols {
-		if util.JudgeIsCompositePrimaryKeyColumn(coldef.Name) || util.JudgeIsCompositeClusterByColumn(coldef.Name) {
-			continue
-		}
-		counter++
+	counter := len(tableDef.Cols)
+	if tableDef.CompositePkey != nil {
+		counter--
 	}
+	if tableDef.ClusterBy != nil {
+		counter--
+	}
+	// for _, coldef := range tableDef.Cols {
+	// 	if util.JudgeIsCompositePrimaryKeyColumn(coldef.Name) || util.JudgeIsCompositeClusterByColumn(coldef.Name) {
+	// 		continue
+	// 	}
+	// 	counter++
+	// }
 	return counter
 }
 
@@ -325,51 +331,40 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 		Tables: stmt.Tables,
 	}
 	selectList := make([]tree.SelectExpr, len(tableInfo.tableDefs))
+
+	// append  table.* to project list
 	columnsSize := 0
 	for alias, i := range tableInfo.alias {
 		e, _ := tree.NewUnresolvedNameWithStar(builder.GetContext(), alias)
-		columnsSize += getTableValidColsSize(tableInfo.tableDefs[i])
+		columnsSize += len(tableInfo.tableDefs[i].Cols)
 		selectList[i] = tree.SelectExpr{
 			Expr: e,
 		}
 	}
 
+	// append  [update expr] to project list
 	counter := 0
 	updateColsOffset := make([]map[string]int, len(tableInfo.updateKeys))
 	for idx, tbUpdateMap := range tableInfo.updateKeys {
-		tableDef := tableInfo.tableDefs[idx]
 		updateColsOffset[idx] = make(map[string]int)
-
 		for colName, updateCol := range tbUpdateMap {
 			valuePos := columnsSize + counter
 			// Add update expression after select list
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: updateCol,
 			})
-
-			found := false
-			for _, coldef := range tableDef.Cols {
-				if colName == coldef.Name {
-					found = true
-					updateColsOffset[idx][colName] = valuePos
-					break
-				}
-			}
-			if !found {
-				return -1, moerr.NewInvalidInput(builder.GetContext(), "Column '%s' does not exist in the table", colName)
-			}
+			updateColsOffset[idx][colName] = valuePos
 			counter++
 		}
 	}
-	tableInfo.updateColOffset = updateColsOffset
 
 	// origin table values to their position
 	oldColPosMap := make([]map[string]int, len(tableInfo.tableDefs))
 	// insert/update values to their position
 	newColPosMap := make([]map[string]int, len(tableInfo.tableDefs))
-
 	projectSeq := 0
 	for idx, tableDef := range tableInfo.tableDefs {
+		//append update
 		oldColPosMap[idx] = make(map[string]int)
 		newColPosMap[idx] = make(map[string]int)
 		for j, coldef := range tableDef.Cols {
@@ -403,216 +398,216 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	return builder.buildSelect(selectAst, bindCtx, false)
 }
 
-func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) error {
-	var err error
-	tableDef := info.tblInfo.tableDefs[0]
-	compositePkey := ""
-	if tableDef.CompositePkey != nil {
-		compositePkey = tableDef.CompositePkey.Name
-	}
-	clusterByKey := ""
-	if tableDef.ClusterBy != nil {
-		clusterByKey = tableDef.ClusterBy.Name
-	}
+// func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) error {
+// 	var err error
+// 	tableDef := info.tblInfo.tableDefs[0]
+// 	compositePkey := ""
+// 	if tableDef.CompositePkey != nil {
+// 		compositePkey = tableDef.CompositePkey.Name
+// 	}
+// 	clusterByKey := ""
+// 	if tableDef.ClusterBy != nil {
+// 		clusterByKey = tableDef.ClusterBy.Name
+// 	}
 
-	syntaxHasColumnNames := false
-	var updateColumns []string
-	if stmt.Columns != nil {
-		syntaxHasColumnNames = true
-		for _, column := range stmt.Columns {
-			updateColumns = append(updateColumns, string(column))
-		}
-	} else {
-		for _, col := range tableDef.Cols {
-			if col.Name == catalog.Row_ID || col.Name == compositePkey || col.Name == clusterByKey {
-				continue
-			}
-			updateColumns = append(updateColumns, col.Name)
-		}
-	}
+// 	syntaxHasColumnNames := false
+// 	var updateColumns []string
+// 	if stmt.Columns != nil {
+// 		syntaxHasColumnNames = true
+// 		for _, column := range stmt.Columns {
+// 			updateColumns = append(updateColumns, string(column))
+// 		}
+// 	} else {
+// 		for _, col := range tableDef.Cols {
+// 			if col.Name == catalog.Row_ID || col.Name == compositePkey || col.Name == clusterByKey {
+// 				continue
+// 			}
+// 			updateColumns = append(updateColumns, col.Name)
+// 		}
+// 	}
 
-	var astSlt *tree.Select
-	// var isInsertValues := false
-	switch slt := stmt.Rows.Select.(type) {
-	case *tree.ValuesClause:
-		// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
-		isAllDefault := false
-		if slt.Rows[0] == nil {
-			isAllDefault = true
-		}
-		// isInsertValues = true
-		//example1:insert into a(a) values ();
-		//but it does not work at the case:
-		//insert into a(a) values (0),();
-		if isAllDefault && syntaxHasColumnNames {
-			return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
-		}
+// 	var astSlt *tree.Select
+// 	// var isInsertValues := false
+// 	switch slt := stmt.Rows.Select.(type) {
+// 	case *tree.ValuesClause:
+// 		// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
+// 		isAllDefault := false
+// 		if slt.Rows[0] == nil {
+// 			isAllDefault = true
+// 		}
+// 		// isInsertValues = true
+// 		//example1:insert into a(a) values ();
+// 		//but it does not work at the case:
+// 		//insert into a(a) values (0),();
+// 		if isAllDefault && syntaxHasColumnNames {
+// 			return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+// 		}
 
-		slt.RowWord = true
-		astSlt = &tree.Select{
-			Select: &tree.SelectClause{
-				Exprs: []tree.SelectExpr{
-					{
-						Expr: tree.UnqualifiedStar{},
-					},
-				},
-				From: &tree.From{
-					Tables: []tree.TableExpr{
-						&tree.JoinTableExpr{
-							JoinType: tree.JOIN_TYPE_CROSS,
-							Left: &tree.AliasedTableExpr{
-								As: tree.AliasClause{},
-								Expr: &tree.ParenTableExpr{
-									Expr: &tree.Select{Select: slt},
-								},
-							},
-						},
-					},
-				},
-			},
-		}
-	case *tree.SelectClause:
-		astSlt = stmt.Rows
-	case *tree.ParenSelect:
-		astSlt = slt.Select
-	default:
-		return moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
-	}
+// 		slt.RowWord = true
+// 		astSlt = &tree.Select{
+// 			Select: &tree.SelectClause{
+// 				Exprs: []tree.SelectExpr{
+// 					{
+// 						Expr: tree.UnqualifiedStar{},
+// 					},
+// 				},
+// 				From: &tree.From{
+// 					Tables: []tree.TableExpr{
+// 						&tree.JoinTableExpr{
+// 							JoinType: tree.JOIN_TYPE_CROSS,
+// 							Left: &tree.AliasedTableExpr{
+// 								As: tree.AliasClause{},
+// 								Expr: &tree.ParenTableExpr{
+// 									Expr: &tree.Select{Select: slt},
+// 								},
+// 							},
+// 						},
+// 					},
+// 				},
+// 			},
+// 		}
+// 	case *tree.SelectClause:
+// 		astSlt = stmt.Rows
+// 	case *tree.ParenSelect:
+// 		astSlt = slt.Select
+// 	default:
+// 		return moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
+// 	}
 
-	subCtx := NewBindContext(builder, bindCtx)
-	info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
-	if err != nil {
-		return err
-	}
-	err = builder.addBinding(info.rootId, tree.AliasClause{
-		Alias: derivedTableName,
-	}, bindCtx)
-	if err != nil {
-		return err
-	}
+// 	subCtx := NewBindContext(builder, bindCtx)
+// 	info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	err = builder.addBinding(info.rootId, tree.AliasClause{
+// 		Alias: derivedTableName,
+// 	}, bindCtx)
+// 	if err != nil {
+// 		return err
+// 	}
 
-	lastNode := builder.qry.Nodes[info.rootId]
-	// have not row_id now. but we need it for on duplicate/replace
-	if len(updateColumns) != len(lastNode.ProjectList) {
-		return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
-	}
+// 	lastNode := builder.qry.Nodes[info.rootId]
+// 	// have not row_id now. but we need it for on duplicate/replace
+// 	if len(updateColumns) != len(lastNode.ProjectList) {
+// 		return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+// 	}
 
-	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
-	info.derivedTableId = info.rootId
-	oldProject := append([]*Expr{}, lastNode.ProjectList...)
+// 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
+// 	info.derivedTableId = info.rootId
+// 	oldProject := append([]*Expr{}, lastNode.ProjectList...)
 
-	colToIdx := make(map[string]int)
-	for i, col := range tableDef.Cols {
-		colToIdx[col.Name] = i
-	}
+// 	colToIdx := make(map[string]int)
+// 	for i, col := range tableDef.Cols {
+// 		colToIdx[col.Name] = i
+// 	}
 
-	insertColToExpr := make(map[string]*Expr)
-	for i, column := range updateColumns {
-		colIdx, exists := colToIdx[column]
-		if !exists {
-			return moerr.NewInvalidInput(builder.GetContext(), "insert value into unknown column '%s'", column)
-		}
-		projExpr := &plan.Expr{
-			Typ: oldProject[i].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: tag,
-					ColPos: int32(i),
-				},
-			},
-		}
-		if !isSameColumnType(projExpr.Typ, tableDef.Cols[colIdx].Typ) {
-			projExpr, err = makePlan2CastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
-			if err != nil {
-				return err
-			}
-		}
-		insertColToExpr[column] = projExpr
-	}
+// 	insertColToExpr := make(map[string]*Expr)
+// 	for i, column := range updateColumns {
+// 		colIdx, exists := colToIdx[column]
+// 		if !exists {
+// 			return moerr.NewInvalidInput(builder.GetContext(), "insert value into unknown column '%s'", column)
+// 		}
+// 		projExpr := &plan.Expr{
+// 			Typ: oldProject[i].Typ,
+// 			Expr: &plan.Expr_Col{
+// 				Col: &plan.ColRef{
+// 					RelPos: tag,
+// 					ColPos: int32(i),
+// 				},
+// 			},
+// 		}
+// 		if !isSameColumnType(projExpr.Typ, tableDef.Cols[colIdx].Typ) {
+// 			projExpr, err = makePlan2CastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+// 			if err != nil {
+// 				return err
+// 			}
+// 		}
+// 		insertColToExpr[column] = projExpr
+// 	}
 
-	getSerFunExpr := func(colNames []string) (*Expr, error) {
-		args := make([]*Expr, len(colNames))
-		for _, colName := range colNames {
-			if oldExpr, exists := insertColToExpr[colName]; exists {
-				args = append(args, oldExpr)
-			} else {
-				col := tableDef.Cols[colToIdx[colName]]
-				defExpr, err := getDefaultExpr(builder.GetContext(), col)
-				if err != nil {
-					return nil, err
-				}
-				args = append(args, defExpr)
-			}
-		}
-		return bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
-	}
+// 	getSerFunExpr := func(colNames []string) (*Expr, error) {
+// 		args := make([]*Expr, len(colNames))
+// 		for _, colName := range colNames {
+// 			if oldExpr, exists := insertColToExpr[colName]; exists {
+// 				args = append(args, oldExpr)
+// 			} else {
+// 				col := tableDef.Cols[colToIdx[colName]]
+// 				defExpr, err := getDefaultExpr(builder.GetContext(), col)
+// 				if err != nil {
+// 					return nil, err
+// 				}
+// 				args = append(args, defExpr)
+// 			}
+// 		}
+// 		return bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+// 	}
 
-	// have tables : t1(a default 0, b int, pk(a,b)) ,  t2(j int,k int)
-	// rewrite 'insert into t1 select * from t2' to
-	// select 'select _t.j, _t.k, ser(_t.j, _t.k) from (select * from t2) _t
-	// --------
-	// rewrite 'insert into t1(b) values (1)' to
-	// select 'select 0, _t.column_0, ser(_t.j, _t.k) from (select * from values (1)) _t
-	projectList := make([]*Expr, 0, len(tableDef.Cols)-1)
-	for _, col := range tableDef.Cols {
-		if col.Name == catalog.Row_ID {
-			continue
-		} else if col.Name == compositePkey {
-			// append composite primary key
-			colNames := util.SplitCompositePrimaryKeyColumnName(compositePkey)
-			serFunExpr, err := getSerFunExpr(colNames)
-			if err != nil {
-				return err
-			}
-			projectList = append(projectList, serFunExpr)
+// 	// have tables : t1(a default 0, b int, pk(a,b)) ,  t2(j int,k int)
+// 	// rewrite 'insert into t1 select * from t2' to
+// 	// select 'select _t.j, _t.k, ser(_t.j, _t.k) from (select * from t2) _t
+// 	// --------
+// 	// rewrite 'insert into t1(b) values (1)' to
+// 	// select 'select 0, _t.column_0, ser(_t.j, _t.k) from (select * from values (1)) _t
+// 	projectList := make([]*Expr, 0, len(tableDef.Cols)-1)
+// 	for _, col := range tableDef.Cols {
+// 		if col.Name == catalog.Row_ID {
+// 			continue
+// 		} else if col.Name == compositePkey {
+// 			// append composite primary key
+// 			colNames := util.SplitCompositePrimaryKeyColumnName(compositePkey)
+// 			serFunExpr, err := getSerFunExpr(colNames)
+// 			if err != nil {
+// 				return err
+// 			}
+// 			projectList = append(projectList, serFunExpr)
 
-		} else if col.Name == clusterByKey {
-			// append composite cluster key
-			colNames := util.SplitCompositeClusterByColumnName(clusterByKey)
-			serFunExpr, err := getSerFunExpr(colNames)
-			if err != nil {
-				return err
-			}
-			projectList = append(projectList, serFunExpr)
+// 		} else if col.Name == clusterByKey {
+// 			// append composite cluster key
+// 			colNames := util.SplitCompositeClusterByColumnName(clusterByKey)
+// 			serFunExpr, err := getSerFunExpr(colNames)
+// 			if err != nil {
+// 				return err
+// 			}
+// 			projectList = append(projectList, serFunExpr)
 
-		} else {
-			if oldExpr, exists := insertColToExpr[col.Name]; exists {
-				projectList = append(projectList, oldExpr)
-			} else {
-				defExpr, err := getDefaultExpr(builder.GetContext(), col)
-				if err != nil {
-					return err
-				}
-				projectList = append(projectList, defExpr)
-			}
-		}
-	}
-	// append ProjectNode
-	lastTag := builder.genNewTag()
-	info.rootId = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		ProjectList: projectList,
-		Children:    []int32{info.rootId},
-		BindingTags: []int32{lastTag},
-	}, bindCtx)
+// 		} else {
+// 			if oldExpr, exists := insertColToExpr[col.Name]; exists {
+// 				projectList = append(projectList, oldExpr)
+// 			} else {
+// 				defExpr, err := getDefaultExpr(builder.GetContext(), col)
+// 				if err != nil {
+// 					return err
+// 				}
+// 				projectList = append(projectList, defExpr)
+// 			}
+// 		}
+// 	}
+// 	// append ProjectNode
+// 	lastTag := builder.genNewTag()
+// 	info.rootId = builder.appendNode(&plan.Node{
+// 		NodeType:    plan.Node_PROJECT,
+// 		ProjectList: projectList,
+// 		Children:    []int32{info.rootId},
+// 		BindingTags: []int32{lastTag},
+// 	}, bindCtx)
 
-	info.projectList = make([]*Expr, len(projectList))
-	info.derivedTableId = info.rootId
-	for i, e := range projectList {
-		info.projectList[i] = &plan.Expr{
-			Typ: e.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: lastTag,
-					ColPos: int32(i),
-				},
-			},
-		}
-	}
-	info.idx = int32(len(info.projectList))
+// 	info.projectList = make([]*Expr, len(projectList))
+// 	info.derivedTableId = info.rootId
+// 	for i, e := range projectList {
+// 		info.projectList[i] = &plan.Expr{
+// 			Typ: e.Typ,
+// 			Expr: &plan.Expr_Col{
+// 				Col: &plan.ColRef{
+// 					RelPos: lastTag,
+// 					ColPos: int32(i),
+// 				},
+// 			},
+// 		}
+// 	}
+// 	info.idx = int32(len(info.projectList))
 
-	return nil
-}
+// 	return nil
+// }
 
 func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool) (int32, error) {
 	var selectList []tree.SelectExpr
@@ -685,9 +680,38 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 	}
 
 	lastNode := builder.qry.Nodes[info.rootId]
-	info.idx = int32(len(info.tblInfo.objRef))
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
 	info.derivedTableId = info.rootId
+
+	// origin table values to their position
+	oldColPosMap := make([]map[string]int, len(info.tblInfo.tableDefs))
+	// insert/update values to their position
+	newColPosMap := make([]map[string]int, len(info.tblInfo.tableDefs))
+	projectSeq := 0
+	for idx, tableDef := range info.tblInfo.tableDefs {
+		oldColPosMap[idx] = make(map[string]int)
+		newColPosMap[idx] = make(map[string]int)
+		for j, coldef := range tableDef.Cols {
+			pos := projectSeq + j
+			oldColPosMap[idx][coldef.Name] = pos
+			newColPosMap[idx][coldef.Name] = pos
+			if coldef.Name == catalog.Row_ID {
+				info.projectList = append(info.projectList, &plan.Expr{
+					Typ: coldef.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: tag,
+							ColPos: int32(pos),
+						},
+					},
+				})
+			}
+		}
+		projectSeq += getTableValidColsSize(tableDef)
+	}
+	info.tblInfo.oldColPosMap = oldColPosMap
+	info.tblInfo.newColPosMap = newColPosMap
+
 	for idx, expr := range lastNode.ProjectList {
 		if expr.Typ.Id == int32(types.T_Rowid) {
 			info.projectList = append(info.projectList, &plan.Expr{
@@ -701,6 +725,7 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 			})
 		}
 	}
+	info.idx = int32(len(info.projectList))
 	return nil
 }
 
@@ -725,7 +750,8 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 
 	idx := 0
 	for i, tableDef := range info.tblInfo.tableDefs {
-		updateOffsetMap := info.tblInfo.updateColOffset[i]
+		updateKeysMap := info.tblInfo.updateKeys[i]
+		newColPosMap := info.tblInfo.newColPosMap[i]
 		nameToIdx := make(map[string]int32)
 		for j, coldef := range tableDef.Cols {
 			nameToIdx[coldef.Name] = int32(j)
@@ -734,7 +760,7 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 		getHiddenColumnExpr := func(colNames []string) (*Expr, error) {
 			changeCol := false
 			for _, colName := range colNames {
-				if _, ok := updateOffsetMap[colName]; ok {
+				if _, ok := updateKeysMap[colName]; ok {
 					changeCol = true
 					break
 				}
@@ -783,7 +809,8 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 		}
 
 		for _, coldef := range tableDef.Cols {
-			if pos, ok := updateOffsetMap[coldef.Name]; ok {
+			if _, ok := updateKeysMap[coldef.Name]; ok {
+				pos := newColPosMap[coldef.Name]
 				posExpr := lastNode.ProjectList[pos]
 				projExpr := &plan.Expr{
 					Typ: posExpr.Typ,
@@ -856,6 +883,8 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 		}
 
 	} else {
+		oldColPosMap = make(map[string]int)
+		newColPosMap = make(map[string]int)
 		// unsupport deep level, no test
 		for idx, col := range tableDef.Cols {
 			if col.Name == compositePkey {
