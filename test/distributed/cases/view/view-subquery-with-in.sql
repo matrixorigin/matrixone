@@ -3,13 +3,11 @@
 -- @case
 -- @desc:test for [in] subquery with constant operand
 -- @label:bvt
--- @bvt:issue#3312
 SELECT 1 IN (SELECT 1);
 
 create view v1 as SELECT 1 IN (SELECT 1);
 select * from v1;
 drop view v1;
--- @bvt:issue
 -- @bvt:issue#3307
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 IN (SELECT (SELECT a));
 create view v1 as SELECT 1 FROM (SELECT 1 as a) b WHERE 1 IN (SELECT (SELECT a));
@@ -34,12 +32,10 @@ select * from v3;
 drop view v1;
 drop view v2;
 drop view v3;
--- @bvt:issue#3312
 SELECT ((0,1) NOT IN (SELECT NULL,1)) IS NULL;
 create view v1 as SELECT ((0,1) NOT IN (SELECT NULL,1)) IS NULL;
 select * from v1;
 drop view v1;
--- @bvt:issue
 
 -- @case
 -- @desc:test for [in] subquery with operand-is-column
@@ -68,12 +64,10 @@ select * from v3;
 drop view v1;
 drop view v2;
 drop view v3;
--- @bvt:issue#3312
 SELECT 0 IN (SELECT 1 FROM t1 a);
 create view v1 as SELECT 0 IN (SELECT 1 FROM t1 a);
 select * from v1;
 drop view v1;
--- @bvt:issue
 select * from t3 where a in (select a,b from t2);
 select * from t3 where a in (select * from t2);
 create view v1 as select * from t3 where a in (select a,b from t2);
@@ -90,7 +84,6 @@ create table t1 (s1 char(5), index s1(s1));
 create table t2 (s1 char(5), index s1(s1));
 insert into t1 values ('a1'),('a2'),('a3');
 insert into t2 values ('a1'),('a2');
--- @bvt:issue#3312
 select s1, s1 NOT IN (SELECT s1 FROM t2) from t1;
 select s1, s1 NOT IN (SELECT s1 FROM t2 WHERE s1 < 'a2') from t1;
 create view v1 as select s1, s1 NOT IN (SELECT s1 FROM t2) from t1;
@@ -99,7 +92,6 @@ select * from v1;
 select * from v2;
 drop view v1;
 drop view v2;
--- @bvt:issue
 
 drop table if exists t1;
 drop table if exists t2;
@@ -148,12 +140,10 @@ INSERT INTO t1 VALUES (1), (3), (5), (7);
 INSERT INTO t1 VALUES (NULL);
 CREATE TABLE t2(a int);
 INSERT INTO t2 VALUES (1),(2),(3);
--- @bvt:issue#3312
 SELECT a, a IN (SELECT a FROM t1) FROM t2;
 create view v1 as SELECT a, a IN (SELECT a FROM t1) FROM t2;
 select * from v1;
 drop view v1;
--- @bvt:issue
 
 drop table if exists t1;
 drop table if exists t2;
@@ -300,7 +290,6 @@ create table t2 (oref int, a int);
 insert into t2 values(1, 1),(2, 2),(3, 3), (4, NULL),(2, NULL);
 create table t3 (a int);
 insert into t3 values (NULL), (NULL);
--- @bvt:issue#3312
 select a, oref, a in (select max(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 select a, oref from t2 where a in (select max(ie) from t1 where oref=t2.oref group by grp);
 select a, oref, a in (
@@ -324,7 +313,6 @@ drop view v1;
 drop view v2;
 drop view v3;
 drop view v4;
--- @bvt:issue
 
 
 -- @case
@@ -354,7 +342,9 @@ select * from v3;
 select * from v4;
 select * from v5;
 select * from v6;
+-- @bvt:issue
 drop view v1;
+-- @bvt:issue#4354
 drop view v2;
 drop view v3;
 drop view v4;
@@ -369,7 +359,6 @@ drop table if exists t1;
 drop table if exists t2;
 create table t1 (a int);
 insert into t1 values (1),(2),(3);
--- @bvt:issue#3312
 select 1 IN (SELECT * from t1);
 select 10 IN (SELECT * from t1);
 select NULL IN (SELECT * from t1);
@@ -398,18 +387,15 @@ drop view v5;
 drop view v6;	
 drop view v7;	
 
--- @bvt:issue
-
 DROP TABLE IF EXISTS t1;
 create table t1 (a varchar(20));
 insert into t1 values ('A'),('BC'),('DEF');
--- @bvt:issue#3312
 select 'A' IN (SELECT * from t1);
 select 'XYZS' IN (SELECT * from t1);
 select NULL IN (SELECT * from t1);
-create view v11 as select 'A' IN (SELECT * from t1);
-create view v12 as select 'XYZS' IN (SELECT * from t1);
-create view v13 as select NULL IN (SELECT * from t1);
+create view v1 as select 'A' IN (SELECT * from t1);
+create view v2 as select 'XYZS' IN (SELECT * from t1);
+create view v3 as select NULL IN (SELECT * from t1);
 select * from v1;
 select * from v2;
 select * from v3;
@@ -417,28 +403,23 @@ drop view v1;
 drop view v2;	
 drop view v3;
 
--- @bvt:issue
 update t1 set a=NULL where a='BC';
--- @bvt:issue#3312
 select 'A' IN (SELECT * from t1);
 select 'DEF' IN (SELECT * from t1);
 select 'XYZS' IN (SELECT * from t1);
-create view v11 as select 'A' IN (SELECT * from t1);
-create view v12 as select 'DEF' IN (SELECT * from t1);
-create view v13 as select 'XYZS' IN (SELECT * from t1);
+create view v1 as select 'A' IN (SELECT * from t1);
+create view v2 as select 'DEF' IN (SELECT * from t1);
+create view v3 as select 'XYZS' IN (SELECT * from t1);
 select * from v1;
 select * from v2;
 select * from v3;
 drop view v1;	
 drop view v2;	
 drop view v3;
-
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 create table t1 (a float);
 insert into t1 values (1.5),(2.5),(3.5);
--- @bvt:issue#3312
 select 1.5 IN (SELECT * from t1);
 select 10.5 IN (SELECT * from t1);
 select NULL IN (SELECT * from t1);
@@ -451,9 +432,7 @@ select * from v3;
 drop view v1;	
 drop view v2;	
 drop view v3;
--- @bvt:issue
 update t1 set a=NULL where a=2.5;
--- @bvt:issue#3312
 select 1.5 IN (SELECT * from t1);
 select 3.5 IN (SELECT * from t1);
 select 10.5 IN (SELECT * from t1);
@@ -466,7 +445,6 @@ select * from v3;
 drop view v1;	
 drop view v2;	
 drop view v3;
--- @bvt:issue
 
 drop table if exists t1;
 drop table if exists t2;
@@ -476,7 +454,6 @@ CREATE TABLE t3 (a int(11) default 0);
 INSERT INTO t3 VALUES (1),(2),(3);
 INSERT INTO t1 VALUES (1),(2),(3),(4);
 INSERT INTO t2 VALUES (1),(2),(3);
--- @bvt:issue#3312
 SELECT t1.a, t1.a in (select t2.a from t2) FROM t1;
 SELECT t1.a, t1.a in (select t2.a from t2,t3 where t3.a=t2.a) FROM t1;
 create view v1 as SELECT t1.a, t1.a in (select t2.a from t2) FROM t1;
@@ -485,39 +462,42 @@ select * from v1;
 select * from v2;
 drop view v1;	
 drop view v2;
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
 
 create table t1 (a int);
 insert into t1 values (-1), (-4), (-2), (NULL);
--- @bvt:issue#3312
 select -10 IN (select a from t1);
 create view v1 as select -10 IN (select a from t1);
 select * from v1;
 drop view v1;
--- @bvt:issue
 DROP TABLE IF EXISTS t1;
 
 -- @case
 -- @desc:test for [in] subquery with limit
 -- @label:bvt
 create table t1 (a float);
--- @bvt:issue#3312
 select 10.5 IN (SELECT * from t1 LIMIT 1);
+-- @bvt:issue#4354
 select 10.5 IN (SELECT * from t1 LIMIT 1 UNION SELECT 1.5);
+-- @bvt:issue
 select 10.5 IN (SELECT * from t1 UNION SELECT 1.5 LIMIT 1);
 create view v1 as select 10.5 IN (SELECT * from t1 LIMIT 1);
+-- @bvt:issue#4354
 create view v2 as select 10.5 IN (SELECT * from t1 LIMIT 1 UNION SELECT 1.5);
+-- @bvt:issue
 create view v3 as select 10.5 IN (SELECT * from t1 UNION SELECT 1.5 LIMIT 1);
 select * from v1;
+-- @bvt:issue#4354
 select * from v2;
+-- @bvt:issue
 select * from v3;
 drop view v1;	
+-- @bvt:issue#4354
 drop view v2;	
-drop view v3;
 -- @bvt:issue
+drop view v3;
 
 -- @case
 -- @desc:test for [in] subquery with Multi tuple
@@ -525,7 +505,6 @@ drop view v3;
 DROP TABLE IF EXISTS t1;
 create table t1 (a int, b real, c varchar(10));
 insert into t1 values (1, 1, 'a'), (2,2,'b'), (NULL, 2, 'b');
--- @bvt:issue#3312
 select (1, 1, 'a') IN (select a,b,c from t1);
 select (1, 2, 'a') IN (select a,b,c from t1);
 select (1, 1, 'a') IN (select b,a,c from t1);
@@ -569,11 +548,10 @@ drop view v8;
 drop view v9;
 drop view v10;
 
--- @bvt:issue
 DROP TABLE IF EXISTS t1;
 
 create table t1 (a integer, b integer);
--- @bvt:issue#3312
+-- @bvt:issue#7691
 select (1,(2,2)) in (select * from t1 );
 select (1,(2,2)) = (select * from t1 );
 select (select * from t1) = (1,(2,2));
@@ -596,12 +574,10 @@ INSERT INTO t1 VALUES (100, 200);
 INSERT INTO t1 VALUES (101, 201);
 INSERT INTO t2 VALUES (101, 201);
 INSERT INTO t2 VALUES (103, 203);
--- @bvt:issue#3312
 SELECT ((a1,a2) IN (SELECT * FROM t2 WHERE b2 > 0)) IS NULL FROM t1;
 create view v1 as SELECT ((a1,a2) IN (SELECT * FROM t2 WHERE b2 > 0)) IS NULL FROM t1;
 select * from v1;
 drop view v1;
--- @bvt:issue
 
 
 DROP TABLE IF EXISTS t1;
@@ -611,26 +587,22 @@ create table t1 (a int, b int);
 insert into t1 values (0,0), (2,2), (3,3);
 create table t2 (a int, b int);
 insert into t2 values (1,1), (3,3);
--- @bvt:issue#3312
 select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 create view v1 as select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 select * from v1;
 drop view v1;	
--- @bvt:issue
 insert into t2 values (NULL,4);
--- @bvt:issue#3312
 select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 create view v1 as select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 select * from v1;
 drop view v1;	
--- @bvt:issue
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 (a INT);
 INSERT INTO t1 VALUES (1), (2), (11);
--- @bvt:issue#3312
+-- @bvt:issue#7691
 SELECT a, (11, 12) = (SELECT a, 22), (11, 12) IN (SELECT a, 22) FROM t1 GROUP BY t1.a;
 SELECT a, (11, 12) = (SELECT a, 12), (11, 12) IN (SELECT a, 12) FROM t1 GROUP BY t1.a;
 SELECT a, (11, 12) = (SELECT a, 22), (11, 12) IN (SELECT a, 22) FROM t1;
@@ -659,7 +631,7 @@ drop view v5;
 drop view v6;
 -- @bvt:issue
 DROP TABLE IF EXISTS t1;
--- @bvt:issue#3312
+-- @bvt:issue#7691
 SELECT (1,2) = (SELECT NULL, NULL), (1,2) IN (SELECT NULL, NULL);
 SELECT (1,2) = (SELECT   1,  NULL), (1,2) IN (SELECT    1, NULL);
 SELECT (1,2) = (SELECT NULL,    2), (1,2) IN (SELECT NULL,    2);

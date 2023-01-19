@@ -877,6 +877,7 @@ func (m *Type) GetTable() string {
 type Const struct {
 	Isnull bool `protobuf:"varint,1,opt,name=isnull,proto3" json:"isnull,omitempty"`
 	// Types that are valid to be assigned to Value:
+	//
 	//	*Const_I8Val
 	//	*Const_I16Val
 	//	*Const_I32Val
@@ -1914,6 +1915,7 @@ func (m *Function) GetArgs() []*Expr {
 type Expr struct {
 	Typ *Type `protobuf:"bytes,1,opt,name=typ,proto3" json:"typ,omitempty"`
 	// Types that are valid to be assigned to Expr:
+	//
 	//	*Expr_C
 	//	*Expr_P
 	//	*Expr_V
@@ -3872,6 +3874,7 @@ func (m *TableDef) GetCompositePkey() *ColDef {
 // XXX: Deprecated and to be removed soon.
 type TableDef_DefType struct {
 	// Types that are valid to be assigned to Def:
+	//
 	//	*TableDef_DefType_Pk
 	//	*TableDef_DefType_Properties
 	//	*TableDef_DefType_Partition
@@ -4053,18 +4056,18 @@ func (m *TableFunction) GetParam() []byte {
 }
 
 type Stats struct {
-	//for scan, number of blocks to read from S3
-	//for other nodes, it's meaningless
+	// for scan, number of blocks to read from S3
+	// for other nodes, it's meaningless
 	BlockNum int32 `protobuf:"varint,1,opt,name=block_num,json=blockNum,proto3" json:"block_num,omitempty"`
-	//for scan, cost of reading from S3, basically the read lines
-	//for other nodes, it means the estimated cost of current node
+	// for scan, cost of reading from S3, basically the read lines
+	// for other nodes, it means the estimated cost of current node
 	Cost float64 `protobuf:"fixed64,2,opt,name=cost,proto3" json:"cost,omitempty"`
-	//number of output lines
+	// number of output lines
 	Outcnt float64 `protobuf:"fixed64,3,opt,name=outcnt,proto3" json:"outcnt,omitempty"`
 	// average size of one row, currently not used
 	Rowsize float64 `protobuf:"fixed64,4,opt,name=rowsize,proto3" json:"rowsize,omitempty"`
 	// hashmap size for nodes which build a hashmap
-	//for other nodes, it's meaningless
+	// for other nodes, it's meaningless
 	HashmapSize          float64  `protobuf:"fixed64,5,opt,name=hashmap_size,json=hashmapSize,proto3" json:"hashmap_size,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -5092,9 +5095,10 @@ func (m *Query) GetLoadTag() bool {
 }
 
 type TransationControl struct {
-	//TransationControl type
+	// TransationControl type
 	TclType TransationControl_TclType `protobuf:"varint,1,opt,name=tcl_type,json=tclType,proto3,enum=plan.TransationControl_TclType" json:"tcl_type,omitempty"`
 	// Types that are valid to be assigned to Action:
+	//
 	//	*TransationControl_Begin
 	//	*TransationControl_Commit
 	//	*TransationControl_Rollback
@@ -5344,6 +5348,7 @@ func (m *TransationRollback) GetCompletionType() TransationCompletionType {
 
 type Plan struct {
 	// Types that are valid to be assigned to Plan:
+	//
 	//	*Plan_Query
 	//	*Plan_Tcl
 	//	*Plan_Ddl
@@ -5652,9 +5657,10 @@ func (m *Column) GetColumn() []*Expr {
 }
 
 type DataControl struct {
-	//DataDefinition type
+	// DataDefinition type
 	DclType DataControl_DclType `protobuf:"varint,1,opt,name=dcl_type,json=dclType,proto3,enum=plan.DataControl_DclType" json:"dcl_type,omitempty"`
 	// Types that are valid to be assigned to Control:
+	//
 	//	*DataControl_SetVariables
 	//	*DataControl_Prepare
 	//	*DataControl_Execute
@@ -5775,13 +5781,14 @@ func (*DataControl) XXX_OneofWrappers() []interface{} {
 }
 
 type DataDefinition struct {
-	//DataDefinition type
+	// DataDefinition type
 	DdlType DataDefinition_DdlType `protobuf:"varint,1,opt,name=ddl_type,json=ddlType,proto3,enum=plan.DataDefinition_DdlType" json:"ddl_type,omitempty"`
-	//other show statement we will rewrite to a select statement
-	//then we will get a Query
-	//eg: 'show databases' will rewrite to 'select md.datname as `Database` from mo_database md'
+	// other show statement we will rewrite to a select statement
+	// then we will get a Query
+	// eg: 'show databases' will rewrite to 'select md.datname as `Database` from mo_database md'
 	Query *Query `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
 	// Types that are valid to be assigned to Definition:
+	//
 	//	*DataDefinition_CreateDatabase
 	//	*DataDefinition_AlterDatabase
 	//	*DataDefinition_DropDatabase

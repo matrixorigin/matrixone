@@ -39,11 +39,9 @@ select count(`index`),`index`,sum(`index`) from t1, unnest(t1.a, "$") u where u.
 with u_table as (select * from t1,unnest(t1.a,"$.b",true) u where seq>1) select a,`index` from u_table where b=1;
 with myt as (select a from t1 where t1.b>1) select * from myt,unnest(myt.a) u;
 
--- @bvt:issue#7253
-with myt as (select a from t1 where t1.b>1) select * from myt,unnest(myt.a) u where `value`='false' or `index`=5;
+with myt as (select a from t1 where t1.b>1) select * from myt,unnest(myt.a) u where json_unquote(value)='false' or `index`=5;
 create view v1 as (select * from t1,unnest(t1.a) u);
-select count(seq),seq from v1 where `index` is null or `value`='false' group by seq;
--- @bvt:issue
+select count(seq),seq from v1 where `index` is null or json_unquote(value)='false' group by seq;
 
 select `key`,path,value from unnest(substring('{"a":1}...',1,7), '$') u;
 drop table if exists t2;
