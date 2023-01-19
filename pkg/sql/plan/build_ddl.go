@@ -1190,7 +1190,20 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	createIndex.Index = index
 	createIndex.Table = tableName
 
-	// use "insert into `index table` select serial(`index keys`) from table" to fill data
+	if sIdx != nil {
+		return &Plan{
+			Plan: &plan.Plan_Ddl{
+				Ddl: &plan.DataDefinition{
+					DdlType: plan.DataDefinition_CREATE_INDEX,
+					Definition: &plan.DataDefinition_CreateIndex{
+						CreateIndex: createIndex,
+					},
+				},
+			},
+		}, nil
+	}
+
+	// use "insert into `index table` select serial(`index keys`) from table" to fill data for unique index
 
 	// build select plan
 	indexCols := make(tree.Exprs, len(stmt.KeyParts))

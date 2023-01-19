@@ -346,7 +346,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if err := d.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
 			return err
 		}
-
+		err = colexec.CreateAutoIncrCol(c.e, c.ctx, d, c.proc, def.GetCols(), qry.Database, def.GetName())
+		if err != nil {
+			return err
+		}
 	}
 	// build and update constraint def
 	defs, err := planDefsToExeDefs(qry.GetIndex().GetTableDef())
@@ -375,20 +378,25 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 
-	// compile insert plan
-	c.info = plan2.GetExecTypeFromPlan(qry.DataInsertion)
-	insertScope, err := c.compileScope(c.ctx, qry.DataInsertion)
-	if err != nil {
+	// insert data into index table
+	switch qry.GetIndex().GetTableDef().Defs[0].Def.(type) {
+	case *plan.TableDef_DefType_UIdx:
+		// compile insert plan
+		c.info = plan2.GetExecTypeFromPlan(qry.DataInsertion)
+		insertScope, err := c.compileScope(c.ctx, qry.DataInsertion)
+		if err != nil {
+			return err
+		}
+		c.scope = insertScope
+		c.scope.Plan = qry.DataInsertion
+
+		// start insert data into index
+		insertScope.Magic = Merge
+		err = insertScope.MergeRun(c)
 		return err
 	}
-	c.scope = insertScope
-	c.scope.Plan = qry.DataInsertion
 
-	// start insert data into index
-	insertScope.Magic = Merge
-	err = insertScope.MergeRun(c)
-
-	return err
+	return nil
 }
 
 func (s *Scope) DropIndex(c *Compile) error {

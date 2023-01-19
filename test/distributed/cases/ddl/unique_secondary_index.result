@@ -532,39 +532,44 @@ col1    col2    col3    col4
 4    null    null    13
 drop index m1_index on create_index_18;
 create unique index m2_index on create_index_18(col2,col3,col4);
+constraint violation: Column '__mo_index_idx_col' cannot be null
 truncate table create_index_18;
 insert into create_index_18(col2,col3,col4)  select 'apple',1,'10';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'11';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
 insert into create_index_18(col2,col3,col4)  select NULL,NULL,'13';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
-Duplicate entry '46016170706c65003a15024601313200' for key '__mo_index_idx_col'
 select * from create_index_18;
 col1    col2    col3    col4
 1    apple    1    10
 2    apple    2    11
 3    apple    2    12
 4    null    null    13
+5    apple    2    12
 drop index m2_index on create_index_18;
+internal error: not found index: m2_index
 create unique index m3_index on create_index_18(col2);
-Duplicate entry 'apple' for key '__mo_index_idx_col'
+constraint violation: Column '__mo_index_idx_col' cannot be null
 create unique index m4_index on create_index_18(col3);
-Duplicate entry '2' for key '__mo_index_idx_col'
+constraint violation: Column '__mo_index_idx_col' cannot be null
 create unique index m5_index on create_index_18(col4);
+Duplicate entry '12' for key '__mo_index_idx_col'
 select * from create_index_18;
 col1    col2    col3    col4
 1    apple    1    10
 2    apple    2    11
 3    apple    2    12
 4    null    null    13
+5    apple    2    12
 show create table create_index_18;
 Table    Create Table
-create_index_18    CREATE TABLE `create_index_18` (\n`col1` BIGINT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `m5_index` (`col4`)\n)
+create_index_18    CREATE TABLE `create_index_18` (\n`col1` BIGINT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 drop index m3_index on create_index_18;
 internal error: not found index: m3_index
 drop index m4_index on create_index_18;
 internal error: not found index: m4_index
 drop index m5_index on create_index_18;
+internal error: not found index: m5_index
 drop table create_index_18;
 create table create_index_18(col1 int,col2 char(15));
 insert into create_index_18 values(2,'20');
