@@ -9079,7 +9079,7 @@ yydefault:
 //line mysql_sql.y:2157
 		{
 			yyLOCAL = &tree.AlterDataBaseConfig{
-				DbName:       yyDollar[4].str,
+				AccountName:  yyDollar[4].str,
 				UpdateConfig: yyDollar[8].exprUnion(),
 			}
 		}

@@ -6083,7 +6083,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	var err error
 	var deleteSql string
 	var insertSql string
-	datname := ad.DbName
+	accountName := ad.AccountName
 	update_config := "'" + ad.UpdateConfig.String() + "'"
 
 	//verify the update_config
@@ -6100,14 +6100,14 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	}
 
 	//first delete the record
-	deleteSql = getSqlForDeleteMysqlCompatbilityMode(datname)
+	deleteSql = getSqlForDeleteMysqlCompatbilityMode(accountName)
 	err = bh.Exec(ctx, deleteSql)
 	if err != nil {
 		goto handleFailed
 	}
 
 	//second insert a new record
-	insertSql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, datname, update_config)
+	insertSql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountName, update_config)
 	err = bh.Exec(ctx, insertSql)
 	if err != nil {
 		goto handleFailed

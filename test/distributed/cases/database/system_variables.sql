@@ -150,17 +150,15 @@ select @@sql_mode;
 set @@sql_mode = default;
 select @@sql_mode;
 
-drop database if exists test;
-create database test;
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
-drop database test;
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
+drop account if exists test_account;
+create account test_account admin_name = 'test_user' identified by '111';
+select configuration_content from mo_catalog.mo_mysql_compatbility_mode where account_name = "test_account";
+drop account test_account;
+select configuration_content from mo_catalog.mo_mysql_compatbility_mode where account_name = "test_account";
 
-drop database if exists test;
-create database test;
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
-alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 0}';
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
-alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 1}';
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
-drop database test;
+drop account if exists test_account;
+create account test_account admin_name = 'test_user' identified by '111';
+select configuration_content from mo_catalog.mo_mysql_compatbility_mode where account_name = "test_account";
+alter account configuration test_account set MYSQL_COMPATBILITY_MODE = '{"version_compatibility": "0.7"}';
+select configuration_content from mo_catalog.mo_mysql_compatbility_mode where account_name = "test_account";
+drop account test_account;

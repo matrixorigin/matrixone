@@ -2156,7 +2156,7 @@ alter_database_config_stmt:
      ALTER ACCOUNT CONFIGURATION account_name SET MYSQL_COMPATBILITY_MODE '=' expression
      {
         $$ = &tree.AlterDataBaseConfig{
-            DbName:$4,
+            AccountName:$4,
             UpdateConfig: $8,
         }
      }

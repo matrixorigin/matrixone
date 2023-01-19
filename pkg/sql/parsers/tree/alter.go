@@ -147,7 +147,7 @@ func (node *AlterView) GetQueryType() string     { return QueryTypeDDL }
 // alter configuration for mo_mysql_compatbility_mode
 type AlterDataBaseConfig struct {
 	statementImpl
-	DbName       string
+	AccountName  string
 	UpdateConfig Expr
 }
 
@@ -156,7 +156,7 @@ func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
 	ctx.WriteString("database configuration ")
 
 	ctx.WriteString("for ")
-	ctx.WriteString(fmt.Sprintf("%s ", node.DbName))
+	ctx.WriteString(fmt.Sprintf("%s ", node.AccountName))
 
 	ctx.WriteString("as ")
 	ctx.WriteString(fmt.Sprintf("%s ", node.UpdateConfig.String()))
