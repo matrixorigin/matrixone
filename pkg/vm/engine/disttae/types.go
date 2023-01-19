@@ -149,6 +149,8 @@ type Transaction struct {
 	tableMap *sync.Map
 	// use to cache database
 	databaseMap *sync.Map
+	// use to cache created table
+	createMap *sync.Map
 }
 
 // Entry represents a delete/insert
