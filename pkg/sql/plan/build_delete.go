@@ -24,7 +24,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	for _, tbl := range stmt.TableRefs {
 		getAliasToName(ctx, tbl, "", aliasMap)
 	}
-	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, aliasMap)
+	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, aliasMap)
 	if err != nil {
 		return nil, err
 	}

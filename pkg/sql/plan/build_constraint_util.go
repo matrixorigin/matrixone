@@ -15,6 +15,9 @@
 package plan
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -89,7 +92,7 @@ func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, alia
 }
 
 func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, error) {
-	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, nil)
+	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +190,7 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	return newTblInfo, nil
 }
 
-func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo *dmlTableInfo, aliasMap map[string][2]string) error {
+func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo *dmlTableInfo, aliasMap map[string][2]string, withMap map[string]struct{}) error {
 	var tblName, dbName, alias string
 
 	if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
@@ -196,12 +199,12 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	if jionTbl, ok := tbl.(*tree.JoinTableExpr); ok {
-		err := setTableExprToDmlTableInfo(ctx, jionTbl.Left, tblInfo, aliasMap)
+		err := setTableExprToDmlTableInfo(ctx, jionTbl.Left, tblInfo, aliasMap, withMap)
 		if err != nil {
 			return err
 		}
 		if jionTbl.Right != nil {
-			return setTableExprToDmlTableInfo(ctx, jionTbl.Right, tblInfo, aliasMap)
+			return setTableExprToDmlTableInfo(ctx, jionTbl.Right, tblInfo, aliasMap, withMap)
 		}
 		return nil
 	}
@@ -209,6 +212,10 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	if baseTbl, ok := tbl.(*tree.TableName); ok {
 		tblName = string(baseTbl.ObjectName)
 		dbName = string(baseTbl.SchemaName)
+	}
+
+	if _, exist := withMap[tblName]; exist {
+		return nil
 	}
 
 	if aliasNames, exist := aliasMap[tblName]; exist {
@@ -311,15 +318,22 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	return nil
 }
 
-func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, aliasMap map[string][2]string) (*dmlTableInfo, error) {
+func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string) (*dmlTableInfo, error) {
 	tblInfo := &dmlTableInfo{
 		nameToIdx: make(map[string]int),
 		idToName:  make(map[uint64]string),
 		alias:     make(map[string]int),
 	}
 
+	cteMap := make(map[string]struct{})
+	if with != nil {
+		for _, cte := range with.CTEs {
+			cteMap[string(cte.Name.Alias)] = struct{}{}
+		}
+	}
+
 	for _, tbl := range tableExprs {
-		err := setTableExprToDmlTableInfo(ctx, tbl, tblInfo, aliasMap)
+		err := setTableExprToDmlTableInfo(ctx, tbl, tblInfo, aliasMap, cteMap)
 		if err != nil {
 			return nil, err
 		}
@@ -754,6 +768,36 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 	return nil
 }
 
+func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColDef) error {
+	isConstantNull := false
+	if ef, ok := expr.Expr.(*plan.Expr_C); ok {
+		isConstantNull = ef.C.Isnull
+	}
+	if !isConstantNull {
+		return nil
+	}
+
+	if col.NotNull {
+		return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+	}
+
+	if (col.Primary && !col.Typ.AutoIncr) ||
+		(col.Default != nil && !col.Default.NullAbility) {
+		return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+	}
+
+	if tableDef.CompositePkey != nil {
+		names := util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)
+		for _, name := range names {
+			if name == col.Name {
+				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", name))
+			}
+		}
+	}
+
+	return nil
+}
+
 func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, stmt *tree.Update) error {
 	var err error
 	subCtx := NewBindContext(builder, bindCtx)
@@ -801,7 +845,7 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: tag,
-							ColPos: nameToIdx[colName],
+							ColPos: int32(newColPosMap[colName]),
 						},
 					},
 				}
@@ -837,6 +881,17 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 			if _, ok := updateKeysMap[coldef.Name]; ok {
 				pos := newColPosMap[coldef.Name]
 				posExpr := lastNode.ProjectList[pos]
+				if posExpr.Typ == nil { // set col = default
+					lastNode.ProjectList[pos], err = getDefaultExpr(builder.GetContext(), coldef)
+					if err != nil {
+						return err
+					}
+					posExpr = lastNode.ProjectList[pos]
+				}
+				err = checkNotNull(builder.GetContext(), posExpr, tableDef, coldef)
+				if err != nil {
+					return err
+				}
 				if !isSameColumnType(posExpr.Typ, coldef.Typ) {
 					lastNode.ProjectList[pos], err = makePlan2CastExpr(builder.GetContext(), posExpr, coldef.Typ)
 					if err != nil {
@@ -844,7 +899,7 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 					}
 				}
 				projExpr := &plan.Expr{
-					Typ: posExpr.Typ,
+					Typ: coldef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: tag,
@@ -861,6 +916,16 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 				info.projectList = append(info.projectList, ClusterByExpr)
 
 			} else {
+				if coldef.OnUpdate != nil && coldef.OnUpdate.Expr != nil {
+					lastNode.ProjectList[idx] = coldef.OnUpdate.Expr
+				}
+				if !isSameColumnType(lastNode.ProjectList[idx].Typ, coldef.Typ) {
+					lastNode.ProjectList[idx], err = makePlan2CastExpr(builder.GetContext(), lastNode.ProjectList[idx], coldef.Typ)
+					if err != nil {
+						return err
+					}
+				}
+
 				info.projectList = append(info.projectList, &plan.Expr{
 					Typ: coldef.Typ,
 					Expr: &plan.Expr_Col{
