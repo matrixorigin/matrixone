@@ -359,6 +359,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		fileMap:     make(map[string]uint64),
 		tableMap:    new(sync.Map),
 		databaseMap: new(sync.Map),
+		createMap:   new(sync.Map),
 		catalog:     e.catalog,
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
@@ -526,12 +527,8 @@ func (e *Engine) delTransaction(txn *Transaction) {
 			txn.writes[i][j].bat.Clean(e.mp)
 		}
 	}
-	txn.tableMap.Range(func(_, val any) bool {
-		tbl := val.(*table)
-		tbl.meta = nil
-		return true
-	})
 	txn.tableMap = nil
+	txn.createMap = nil
 	txn.databaseMap = nil
 	e.Lock()
 	defer e.Unlock()

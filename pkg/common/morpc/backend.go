@@ -244,14 +244,23 @@ func (rb *remoteBackend) adjust() {
 }
 
 func (rb *remoteBackend) Send(ctx context.Context, request Message) (*Future, error) {
+	return rb.send(ctx, request, false)
+}
+
+func (rb *remoteBackend) SendInternal(ctx context.Context, request Message) (*Future, error) {
+	return rb.send(ctx, request, true)
+}
+
+func (rb *remoteBackend) send(ctx context.Context, request Message, internal bool) (*Future, error) {
 	rb.active()
 	request.SetID(rb.nextID())
 
 	f := rb.newFuture()
 	f.init(request.GetID(), ctx)
 	rb.addFuture(f)
+
 	if err := rb.doSend(backendSendMessage{
-		message:   RPCMessage{Ctx: ctx, Message: request},
+		message:   RPCMessage{Ctx: ctx, Message: request, internal: internal},
 		completed: f.writeCompleted,
 	}); err != nil {
 		f.Close()

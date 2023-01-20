@@ -1,6 +1,6 @@
 SELECT 1 IN (SELECT 1);
 1 IN (SELECT 1)
-1
+true
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 IN (SELECT (SELECT a));
 1
 1
@@ -15,7 +15,7 @@ SELECT * FROM (SELECT 1) b WHERE 1 IN (SELECT *);
 SQL parser error: No tables used
 SELECT ((0,1) NOT IN (SELECT NULL,1)) IS NULL;
 ((0,1) NOT IN (SELECT NULL,1)) IS NULL
-1
+true
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -35,7 +35,7 @@ select * from t3 where a not in (select b from t2);
 a
 SELECT 0 IN (SELECT 1 FROM t1 a);
 0 IN (SELECT 1 FROM t1 a)
-0
+false
 select * from t3 where a in (select a,b from t2);
 invalid input: subquery returns more than 1 column
 select * from t3 where a in (select * from t2);
@@ -49,14 +49,14 @@ insert into t1 values ('a1'),('a2'),('a3');
 insert into t2 values ('a1'),('a2');
 select s1, s1 NOT IN (SELECT s1 FROM t2) from t1;
 s1	s1 NOT IN (SELECT s1 FROM t2)
-a1	0
-a2	0
-a3	1
+a1	false
+a2	false
+a3	true
 select s1, s1 NOT IN (SELECT s1 FROM t2 WHERE s1 < 'a2') from t1;
 s1	s1 NOT IN (SELECT s1 FROM t2 WHERE s1 < 'a2')
-a1	0
-a2	1
-a3	1
+a1	false
+a2	true
+a3	true
 drop table if exists t1;
 drop table if exists t2;
 create table t1(val varchar(10));
@@ -106,9 +106,9 @@ CREATE TABLE t2(a int);
 INSERT INTO t2 VALUES (1),(2),(3);
 SELECT a, a IN (SELECT a FROM t1) FROM t2;
 a	a IN (SELECT a FROM t1)
-1	1
+1	true
 2	null
-3	1
+3	true
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -229,10 +229,10 @@ create table t3 (a int);
 insert into t3 values (NULL), (NULL);
 select a, oref, a in (select max(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 a	oref	Z
-1	1	1
-2	2	0
+1	1	true
+2	2	false
 3	3	null
-null	4	0
+null	4	false
 null	2	null
 select a, oref from t2 where a in (select max(ie) from t1 where oref=t2.oref group by grp);
 a	oref
@@ -241,11 +241,16 @@ select a, oref, a in (
 select max(ie) from t1 where oref=t2.oref group by grp union
 select max(ie) from t1 where oref=t2.oref group by grp
 ) Z from t2;
-'union' will be supported in future version.
+a	oref	z
+1	1	true
+2	2	false
+3	3	null
+null	4	false
+null	2	null
 select a in (select max(ie) from t1 where oref=4 group by grp) from t3;
 a in (select max(ie) from t1 where oref=4 group by grp)
-0
-0
+false
+false
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -255,10 +260,10 @@ create table t2 (a int, oref int);
 insert into t2 values (1, 1), (2,2), (NULL, 3), (NULL, 4);
 select oref, a, a in (select a from t1 where oref=t2.oref) Z from t2;
 oref	a	Z
-1	1	1
-2	2	0
+1	1	true
+2	2	false
 3	null	null
-4	null	0
+4	null	false
 select oref, a from t2 where a in (select a from t1 where oref=t2.oref);
 oref	a
 1	1
@@ -266,10 +271,10 @@ delete from t2;
 insert into t2 values (NULL, 0),(NULL, 0), (NULL, 0), (NULL, 0);
 select oref, a, a in (select a from t1 where oref=t2.oref) Z from t2;
 oref	a	Z
-0	null	0
-0	null	0
-0	null	0
-0	null	0
+0	null	false
+0	null	false
+0	null	false
+0	null	false
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t1;
@@ -296,20 +301,20 @@ create table t1 (a int);
 insert into t1 values (1),(2),(3);
 select 1 IN (SELECT * from t1);
 1 IN (SELECT * from t1)
-1
+true
 select 10 IN (SELECT * from t1);
 10 IN (SELECT * from t1)
-0
+false
 select NULL IN (SELECT * from t1);
 NULL IN (SELECT * from t1)
 null
 update t1 set a=NULL where a=2;
 select 1 IN (SELECT * from t1);
 1 IN (SELECT * from t1)
-1
+true
 select 3 IN (SELECT * from t1);
 3 IN (SELECT * from t1)
-1
+true
 select 10 IN (SELECT * from t1);
 10 IN (SELECT * from t1)
 null
@@ -318,20 +323,20 @@ create table t1 (a varchar(20));
 insert into t1 values ('A'),('BC'),('DEF');
 select 'A' IN (SELECT * from t1);
 'A' IN (SELECT * from t1)
-1
+true
 select 'XYZS' IN (SELECT * from t1);
 'XYZS' IN (SELECT * from t1)
-0
+false
 select NULL IN (SELECT * from t1);
 NULL IN (SELECT * from t1)
 null
 update t1 set a=NULL where a='BC';
 select 'A' IN (SELECT * from t1);
 'A' IN (SELECT * from t1)
-1
+true
 select 'DEF' IN (SELECT * from t1);
 'DEF' IN (SELECT * from t1)
-1
+true
 select 'XYZS' IN (SELECT * from t1);
 'XYZS' IN (SELECT * from t1)
 null
@@ -340,20 +345,20 @@ create table t1 (a float);
 insert into t1 values (1.5),(2.5),(3.5);
 select 1.5 IN (SELECT * from t1);
 1.5 IN (SELECT * from t1)
-1
+true
 select 10.5 IN (SELECT * from t1);
 10.5 IN (SELECT * from t1)
-0
+false
 select NULL IN (SELECT * from t1);
 NULL IN (SELECT * from t1)
 null
 update t1 set a=NULL where a=2.5;
 select 1.5 IN (SELECT * from t1);
 1.5 IN (SELECT * from t1)
-1
+true
 select 3.5 IN (SELECT * from t1);
 3.5 IN (SELECT * from t1)
-1
+true
 select 10.5 IN (SELECT * from t1);
 10.5 IN (SELECT * from t1)
 null
@@ -367,16 +372,16 @@ INSERT INTO t1 VALUES (1),(2),(3),(4);
 INSERT INTO t2 VALUES (1),(2),(3);
 SELECT t1.a, t1.a in (select t2.a from t2) FROM t1;
 a	t1.a in (select t2.a from t2)
-1	1
-2	1
-3	1
-4	0
+1	true
+2	true
+3	true
+4	false
 SELECT t1.a, t1.a in (select t2.a from t2,t3 where t3.a=t2.a) FROM t1;
 a	t1.a in (select t2.a from t2,t3 where t3.a=t2.a)
-1	1
-2	1
-3	1
-4	0
+1	true
+2	true
+3	true
+4	false
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -388,43 +393,46 @@ null
 DROP TABLE IF EXISTS t1;
 create table t1 (a float);
 select 10.5 IN (SELECT * from t1 LIMIT 1);
-This version of MySQL doesn't yet support 'LIMIT & IN/ALL/ANY/SOME subquery'
+10.5 in (select * from t1 limit 1)
+false
 select 10.5 IN (SELECT * from t1 LIMIT 1 UNION SELECT 1.5);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 47 near 'union';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 46 near " UNION SELECT 1.5);";
 select 10.5 IN (SELECT * from t1 UNION SELECT 1.5 LIMIT 1);
-'union' will be supported in future version.
+10.5 in (select * from t1 union select 1.5 limit 1)
+false
 DROP TABLE IF EXISTS t1;
 create table t1 (a int, b real, c varchar(10));
 insert into t1 values (1, 1, 'a'), (2,2,'b'), (NULL, 2, 'b');
 select (1, 1, 'a') IN (select a,b,c from t1);
 (1, 1, 'a') IN (select a,b,c from t1)
-1
+true
 select (1, 2, 'a') IN (select a,b,c from t1);
 (1, 2, 'a') IN (select a,b,c from t1)
-0
+false
 select (1, 1, 'a') IN (select b,a,c from t1);
 (1, 1, 'a') IN (select b,a,c from t1)
-1
+true
 select (1, 1, 'a') IN (select a,b,c from t1 where a is not null);
 (1, 1, 'a') IN (select a,b,c from t1 where a is not null)
-1
+true
 select (1, 2, 'a') IN (select a,b,c from t1 where a is not null);
 (1, 2, 'a') IN (select a,b,c from t1 where a is not null)
-0
+false
 select (1, 1, 'a') IN (select b,a,c from t1 where a is not null);
 (1, 1, 'a') IN (select b,a,c from t1 where a is not null)
-1
+true
 select (1, 1, 'a') IN (select a,b,c from t1 where c='b' or c='a');
 (1, 1, 'a') IN (select a,b,c from t1 where c='b' or c='a')
-1
+true
 select (1, 2, 'a') IN (select a,b,c from t1 where c='b' or c='a');
 (1, 2, 'a') IN (select a,b,c from t1 where c='b' or c='a')
-0
+false
 select (1, 1, 'a') IN (select b,a,c from t1 where c='b' or c='a');
 (1, 1, 'a') IN (select b,a,c from t1 where c='b' or c='a')
-1
+true
 select (1, 1, 'a') IN (select b,a,c from t1 limit 2);
-This version of MySQL doesn't yet support 'LIMIT & IN/ALL/ANY/SOME subquery'
+(1, 1, a) in (select b, a, c from t1 limit 2)
+true
 DROP TABLE IF EXISTS t1;
 create table t1 (a integer, b integer);
 select (1,(2,2)) in (select * from t1 );
@@ -443,8 +451,8 @@ INSERT INTO t2 VALUES (101, 201);
 INSERT INTO t2 VALUES (103, 203);
 SELECT ((a1,a2) IN (SELECT * FROM t2 WHERE b2 > 0)) IS NULL FROM t1;
 ((a1,a2) IN (SELECT * FROM t2 WHERE b2 > 0)) IS NULL
-0
-0
+false
+false
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 CREATE TABLE t1 (
@@ -470,15 +478,15 @@ create table t2 (a int, b int);
 insert into t2 values (1,1), (3,3);
 select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 a	b	Z
-0	0	0
-2	2	0
-3	3	1
+0	0	false
+2	2	false
+3	3	true
 insert into t2 values (NULL,4);
 select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 a	b	Z
-0	0	0
-2	2	0
-3	3	1
+0	0	false
+2	2	false
+3	3	true
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 DROP TABLE IF EXISTS t1;
@@ -486,34 +494,28 @@ CREATE TABLE t1 (a INT);
 INSERT INTO t1 VALUES (1), (2), (11);
 SELECT a, (11, 12) = (SELECT a, 22), (11, 12) IN (SELECT a, 22) FROM t1 GROUP BY t1.a;
 a	(11, 12) = (SELECT a, 22)	(11, 12) IN (SELECT a, 22)
-1	0	0
-2	0	0
-11	0	0
+1	0	false
+2	0	false
+11	0	false
 SELECT a, (11, 12) = (SELECT a, 12), (11, 12) IN (SELECT a, 12) FROM t1 GROUP BY t1.a;
 a	(11, 12) = (SELECT a, 12)	(11, 12) IN (SELECT a, 12)
-1	0	0
-2	0	0
-11	1	1
+1	0	false
+2	0	false
+11	1	true
 SELECT a, (11, 12) = (SELECT a, 22), (11, 12) IN (SELECT a, 22) FROM t1;
 a	(11, 12) = (SELECT a, 22)	(11, 12) IN (SELECT a, 22)
-1	0	0
-2	0	0
-11	0	0
+1	0	false
+2	0	false
+11	0	false
 SELECT a, (11, 12) = (SELECT a, 12), (11, 12) IN (SELECT a, 12) FROM t1;
 a	(11, 12) = (SELECT a, 12)	(11, 12) IN (SELECT a, 12)
-1	0	0
-2	0	0
-11	1	1
+1	0	false
+2	0	false
+11	1	true
 SELECT a AS x, (11, 12) = (SELECT MAX(x), 22), (11, 12) IN (SELECT MAX(x), 22) FROM t1;
-x	(11, 12) = (SELECT MAX(x), 22)	(11, 12) IN (SELECT MAX(x), 22)
-1	0	0
-2	0	0
-11	0	0
+invalid input: column x does not exist
 SELECT a AS x, (11, 12) = (SELECT MAX(x), 12), (11, 12) IN (SELECT MAX(x), 12) FROM t1;
-x	(11, 12) = (SELECT MAX(x), 12)	(11, 12) IN (SELECT MAX(x), 12)
-1	0	0
-2	0	0
-11	1	1
+invalid input: column x does not exist
 DROP TABLE IF EXISTS t1;
 SELECT (1,2) = (SELECT NULL, NULL), (1,2) IN (SELECT NULL, NULL);
 (1,2) = (SELECT NULL, NULL)	(1,2) IN (SELECT NULL, NULL)
@@ -526,13 +528,13 @@ SELECT (1,2) = (SELECT NULL,    2), (1,2) IN (SELECT NULL,    2);
 null	null
 SELECT (1,2) = (SELECT NULL,    1), (1,2) IN (SELECT NULL,    1);
 (1,2) = (SELECT NULL,    1)	(1,2) IN (SELECT NULL,    1)
-0	0
+false	false
 SELECT (1,2) = (SELECT    1,    1), (1,2) IN (SELECT    1,    1);
 (1,2) = (SELECT    1,    1)	(1,2) IN (SELECT    1,    1)
-0	0
+false	false
 SELECT (1,2) = (SELECT    1,    2), (1,2) IN (SELECT    1,    2);
 (1,2) = (SELECT    1,    2)	(1,2) IN (SELECT    1,    2)
-1	1
+true	true
 create table t_out (subcase char(3),a1 char(2), b1 char(2), c1 char(2));
 create table t_in  (a2 char(2), b2 char(2), c2 char(2));
 insert into t_out values ('A.1','2a', NULL, '2a');
@@ -551,7 +553,7 @@ select subcase,
 (a1, b1, c1) NOT IN (select * from t_in where a2 = 'no_match') pred_not_in
 from t_out where subcase = 'A.1';
 subcase	pred_in	pred_not_in
-A.1	0	1
+A.1	false	true
 select subcase,
 (a1, b1, c1)     IN (select * from t_in) pred_in,
 (a1, b1, c1) NOT IN (select * from t_in) pred_not_in
@@ -563,19 +565,19 @@ select subcase,
 (a1, b1, c1) NOT IN (select * from t_in) pred_not_in
 from t_out where subcase = 'A.4';
 subcase	pred_in	pred_not_in
-A.4	0	1
+A.4	false	true
 select subcase,
 (a1, b1, c1)     IN (select * from t_in where a2 = 'no_match') pred_in,
 (a1, b1, c1) NOT IN (select * from t_in where a2 = 'no_match') pred_not_in
 from t_out where subcase = 'B.1';
 subcase	pred_in	pred_not_in
-B.1	0	1
+B.1	false	true
 select subcase,
 (a1, b1, c1)     IN (select * from t_in) pred_in,
 (a1, b1, c1) NOT IN (select * from t_in) pred_not_in
 from t_out where subcase = 'B.2';
 subcase	pred_in	pred_not_in
-B.2	1	0
+B.2	true	false
 select subcase,
 (a1, b1, c1)     IN (select * from t_in) pred_in,
 (a1, b1, c1) NOT IN (select * from t_in) pred_not_in
@@ -587,7 +589,7 @@ select subcase,
 (a1, b1, c1) NOT IN (select * from t_in) pred_not_in
 from t_out where subcase = 'B.4';
 subcase	pred_in	pred_not_in
-B.4	0	1
+B.4	false	true
 select case when count(*) > 0 then 'T' else 'F' end as pred_in from t_out
 where subcase = 'A.1' and
 (a1, b1, c1) IN (select * from t_in where a1 = 'no_match');
@@ -822,7 +824,8 @@ WHERE a IN (SELECT 4 FROM t1 AS x2)
 )
 ) AS result
 FROM t1 AS x3;
-Can not issue SELECT via executeUpdate() or executeLargeUpdate().
+result
+false
 SELECT
 (
 (36, (SELECT 1 IN (SELECT 1 FROM t1 AS x1)))
@@ -833,7 +836,8 @@ WHERE a IN (SELECT 4 FROM t1 AS x2)
 )
 ) AS result
 FROM t1 AS x3;
-Can not issue SELECT via executeUpdate() or executeLargeUpdate().
+result
+false
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 CREATE TABLE t1 (
@@ -924,10 +928,10 @@ CREATE TABLE t2 (placeholder CHAR(11));
 INSERT INTO t2 VALUES("placeholder");
 SELECT (1, 2) IN (SELECT t1.a, 2)         FROM t1 GROUP BY t1.a;
 (1, 2) IN (SELECT t1.a, 2)
-1
+true
 SELECT (1, 2) IN (SELECT t1.a, 2 FROM t2) FROM t1 GROUP BY t1.a;
 (1, 2) IN (SELECT t1.a, 2 FROM t2)
-1
+true
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 CREATE TABLE t1 (a INT);
@@ -983,9 +987,9 @@ create table t3 (a int, oref int);
 insert into t3 values (1, 1), (NULL,1), (NULL,0);
 select a, oref,t3.a in (select t1.a from t1, t2 where t1.b=t2.a and t2.b=t3.oref) Z from t3;
 a	oref	Z
-1	1	1
+1	1	true
 null	1	null
-null	0	0
+null	0	false
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -998,9 +1002,9 @@ create table t3 (a int, oref int);
 insert into t3 values (1, 1), (NULL,1), (NULL,0);
 select a, oref,t3.a in (select t1.a from t1, t2 where t1.b=t2.a and t2.b=t3.oref) Z from t3;
 a	oref	Z
-1	1	1
+1	1	true
 null	1	null
-null	0	0
+null	0	false
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -1017,13 +1021,17 @@ insert into t1 values (1,1), (3,1),(100,1);
 create table t2 (a int, b int);
 insert into t2 values (1,1),(2,1),(NULL,1),(NULL,0);
 select a,b, a in (select a from t1 where t1.b = t2.b union select a from t1 where t1.b = t2.b) Z from t2 ;
-'union' will be supported in future version.
+a	b	z
+1	1	true
+2	1	false
+null	1	null
+null	0	false
 select a,b, a in (select a from t1 where t1.b = t2.b) Z from t2 ;
 a	b	Z
-1	1	1
-2	1	0
+1	1	true
+2	1	false
 null	1	null
-null	0	0
+null	0	false
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -1038,7 +1046,7 @@ create table t4 (x int);
 insert into t4 select A.a + 10*B.a from t1 A, t1 B;
 select a,b, oref, (a,b) in (select a,b from t1 where c=t2.oref) z from t2;
 a	b	oref	z
-null	1	100	0
+null	1	100	false
 null	2	100	null
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
@@ -1065,11 +1073,11 @@ insert into t2 values('ee', NULL),('bb', 2),('ff', 2),('cc', 3),('aa', 1),('dd',
 select oref, a, a in (select ie from t1 where oref=t2.oref) Z from t2;
 oref	a	Z
 ee	null	null
-bb	2	0
-ff	2	1
+bb	2	false
+ff	2	true
 cc	3	null
-aa	1	1
-dd	null	0
+aa	1	true
+dd	null	false
 bb	null	null
 select oref, a from t2 where a in (select ie from t1 where oref=t2.oref);
 oref	a
@@ -1082,11 +1090,11 @@ dd	null
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 oref	a	Z
 ee	null	null
-bb	2	0
-ff	2	0
+bb	2	false
+ff	2	false
 cc	3	null
-aa	1	1
-dd	null	0
+aa	1	true
+dd	null	false
 bb	null	null
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref group by grp);
 oref	a
@@ -1100,11 +1108,11 @@ update t1 set ie=3 where oref='ff' and ie=1;
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 oref	a	Z
 ee	null	null
-bb	2	0
-ff	2	1
+bb	2	false
+ff	2	true
 cc	3	null
-aa	1	1
-dd	null	0
+aa	1	true
+dd	null	false
 bb	null	null
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref group by grp);
 oref	a
@@ -1116,12 +1124,12 @@ bb	2
 dd	null
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp having min(ie) > 1) Z from t2;
 oref	a	Z
-ee	null	0
-bb	2	0
-ff	2	1
-cc	3	0
-aa	1	0
-dd	null	0
+ee	null	false
+bb	2	false
+ff	2	true
+cc	3	false
+aa	1	false
+dd	null	false
 bb	null	null
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref group by grp having min(ie) > 1);
 oref	a
@@ -1142,12 +1150,12 @@ insert into t2 values('ee', NULL, 1),('bb', 2, 1), ('ff', 2, 2),('cc', 3, NULL),
 select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) Z from t2;
 oref	a	b	Z
 ee	null	1	null
-bb	2	1	0
-ff	2	2	1
+bb	2	1	false
+ff	2	2	true
 cc	3	null	null
 bb	null	null	null
-aa	1	1	1
-dd	1	null	0
+aa	1	1	true
+dd	1	null	false
 select oref, a, b from t2 where (a,b) in (select ie1,ie2 from t1 where oref=t2.oref);
 oref	a	b
 ff	2	2
@@ -1158,13 +1166,13 @@ bb	2	1
 dd	1	null
 select oref, a, b,(a,b) in (select min(ie1),max(ie2) from t1 where oref=t2.oref group by grp) Z from t2;
 oref	a	b	Z
-ee	null	1	0
-bb	2	1	0
-ff	2	2	0
+ee	null	1	false
+bb	2	1	false
+ff	2	2	false
 cc	3	null	null
 bb	null	null	null
-aa	1	1	1
-dd	1	null	0
+aa	1	1	true
+dd	1	null	false
 select oref, a, b from t2 where (a,b) in (select min(ie1), max(ie2) from t1 where oref=t2.oref group by grp);
 oref	a	b
 aa	1	1
@@ -1182,12 +1190,12 @@ create table t2 (oref char(4), a int);
 insert into t2 values  ('ee', NULL),('bb', 2),('cc', 5),('cc', 2),('cc', NULL),('aa', 1),('bb', NULL);
 select oref, a, a in (select ie from t1 where oref=t2.oref) z from t2;
 oref	a	z
-ee	null	0
-bb	2	0
-cc	5	1
-cc	2	0
+ee	null	false
+bb	2	false
+cc	5	true
+cc	2	false
 cc	null	null
-aa	1	1
+aa	1	true
 bb	null	null
 select oref, a from t2 where a in (select ie from t1 where oref=t2.oref);
 oref	a
@@ -1200,12 +1208,12 @@ bb	2
 cc	2
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) z from t2;
 oref	a	z
-ee	null	0
-bb	2	0
-cc	5	1
-cc	2	0
+ee	null	false
+bb	2	false
+cc	5	true
+cc	2	false
 cc	null	null
-aa	1	1
+aa	1	true
 bb	null	null
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
@@ -1235,10 +1243,10 @@ null
 1
 SELECT (t1.id IN (SELECT t2.id FROM t2,t3  WHERE t3.name='xxx' AND t2.id=t3.id)) AS x FROM t1;
 x
-0
-0
-0
-0
+false
+false
+false
+false
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -1489,7 +1497,8 @@ SELECT NULL IN (SELECT 1 FROM t1);
 NULL IN (SELECT 1 FROM t1)
 null
 SELECT (NULL AND 1) IN (SELECT 1 FROM t1);
-non-scalar subquery in SELECT clause will be supported in future version.
+(null and 1) in (select 1 from t1)
+null
 SELECT (NULL, 1) IN (SELECT 1,1 FROM t1);
 (NULL, 1) IN (SELECT 1,1 FROM t1)
 null
@@ -1497,25 +1506,30 @@ SELECT (NULL, NULL) IN (SELECT 1,1 FROM t1);
 (NULL, NULL) IN (SELECT 1,1 FROM t1)
 null
 SELECT (NULL OR 1) IN (SELECT 1 FROM t1);
-Operator '=' with parameters [BOOL BIGINT] will be implemented in future version.
+(null or 1) in (select 1 from t1)
+true
 SELECT (NULL IS NULL) IN  (SELECT 1 FROM t1);
-non-scalar subquery in SELECT clause is not yet implemented
+(null is null) in (select 1 from t1)
+true
 DELETE FROM t1;
 SELECT NULL IN (SELECT 1 FROM t1);
 NULL IN (SELECT 1 FROM t1)
-0
+false
 SELECT (NULL AND 1) IN (SELECT 1 FROM t1);
-non-scalar subquery in SELECT clause is not yet implemented
+(null and 1) in (select 1 from t1)
+false
 SELECT (NULL, 1) IN (SELECT 1,1 FROM t1);
 (NULL, 1) IN (SELECT 1,1 FROM t1)
-0
+false
 SELECT (NULL, NULL) IN (SELECT 1,1 FROM t1);
 (NULL, NULL) IN (SELECT 1,1 FROM t1)
-0
+false
 SELECT (NULL OR 1) IN (SELECT 1 FROM t1);
-non-scalar subquery in SELECT clause is not yet implemented
+(null or 1) in (select 1 from t1)
+false
 SELECT (NULL IS NULL) IN  (SELECT 1 FROM t1);
-non-scalar subquery in SELECT clause is not yet implemented
+(null is null) in (select 1 from t1)
+false
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 (a INTEGER);
 INSERT INTO t1 VALUES (1), (2), (3);

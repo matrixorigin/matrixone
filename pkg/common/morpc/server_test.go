@@ -219,7 +219,10 @@ func BenchmarkSend(b *testing.B) {
 			}
 		}
 	}, WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
-		messagePool.Put(i.(RPCMessage).Message)
+		msg := i.(RPCMessage)
+		if !msg.InternalMessage() {
+			messagePool.Put(msg.Message)
+		}
 	})))
 }
 
@@ -243,4 +246,18 @@ func newTestClient(t assert.TestingT, options ...ClientOption) RPCClient {
 	c, err := NewClient(bf, options...)
 	assert.NoError(t, err)
 	return c
+}
+
+func TestPing(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		c := newTestClient(t)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+
+		assert.NoError(t, c.Ping(ctx, testAddr))
+	})
 }

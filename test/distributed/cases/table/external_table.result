@@ -302,7 +302,7 @@ invalid input: cannot insert into external table
 update ex_table_yccs set char_1="cat123";
 internal error: the external table is not support update operation
 delete from ex_table_yccs;
-invalid input: cannot delete from external table
+invalid input: cannot insert/update/delete from external table
 
 create table table_16(a int);
 insert into table_16 values(99);
