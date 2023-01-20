@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var SerialWithCompacted = serialWithCompacted
+var CompactSingleIndexCol = compactSingleIndexCol
+var CompactPrimaryCol = compactPrimaryCol
 
 func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 	var name string

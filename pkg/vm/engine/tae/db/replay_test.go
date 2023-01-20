@@ -15,6 +15,7 @@
 package db
 
 import (
+	"context"
 	"math/rand"
 	"sync"
 	"testing"
@@ -460,6 +461,8 @@ func TestReplay2(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit())
 
+	err = tae2.BGCheckpointRunner.ForceFlush(tae2.TxnMgr.StatMaxCommitTS(), context.Background())
+	assert.NoError(t, err)
 	err = tae2.BGCheckpointRunner.ForceIncrementalCheckpoint(tae2.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
 
@@ -817,6 +820,8 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
+	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background())
+	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -837,6 +842,8 @@ func TestReplay5(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit())
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
+	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background())
+	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
 
@@ -868,6 +875,8 @@ func TestReplay5(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	assert.NoError(t, txn.Commit())
 
+	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background())
+	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
 	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
@@ -925,6 +934,8 @@ func TestReplay6(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 	mergeBlocks(t, 0, tae, defaultTestDB, schema, false)
+	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background())
+	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
 
@@ -1099,7 +1110,10 @@ func TestReplay8(t *testing.T) {
 	_ = txn.Rollback()
 
 	tae.compactBlocks(false)
-	tae.checkpointCatalog()
+	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background())
+	assert.NoError(t, err)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 	tae.restart()
 
 	txn, rel = tae.getRelation()
