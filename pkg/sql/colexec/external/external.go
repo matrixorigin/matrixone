@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -381,6 +382,7 @@ func IsSysTable(dbName string, tableName string) bool {
 	return false
 }
 
+// ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	filePath := strings.TrimSpace(param.Filepath)
 	if strings.HasPrefix(filePath, "etl:") {
@@ -879,10 +881,28 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 		dir, _ := filepath.Split(param.Extern.Filepath)
 		var service fileservice.FileService
 		var err error
+		var p fileservice.Path
+
 		if param.Extern.QueryResult {
 			service = param.Extern.FileService
 		} else {
-			service, _, err = GetForETLWithType(param.Extern, param.Extern.Filepath)
+
+			// format filepath for local file
+			fp := param.Extern.Filepath
+			if p, err = fileservice.ParsePath(param.Extern.Filepath); err != nil {
+				return nil, err
+			} else if p.Service == "" {
+				if os.IsPathSeparator(filepath.Clean(param.Extern.Filepath)[0]) {
+					// absolute path
+					fp = "/"
+				} else {
+					// relative path.
+					// PS: this loop never trigger, caused by ReadDir() only support local file with absolute path
+					fp = "."
+				}
+			}
+
+			service, _, err = GetForETLWithType(param.Extern, fp)
 			if err != nil {
 				return nil, err
 			}
