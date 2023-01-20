@@ -207,8 +207,18 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 	b *api.Batch, needCheck bool) error {
-	moprobe.DisttaePartitionInsert(uintptr(unsafe.Pointer(b)))
-	defer moprobe.DisttaePartitionInsertRet(uintptr(unsafe.Pointer(b)))
+
+	// As an example, lets probe this function.  First we want to find a tag so that
+	// if several go routine call this function at the same time, we will not mix them.
+	// the pointer b works.
+	tag := int64(uintptr(unsafe.Pointer(b)))
+
+	// enter probe, only need tag.  Adding an extra arg just for demo purpose.
+	moprobe.DisttaePartitionInsert(tag, 1)
+
+	// defer, this is the return probe.  Use same tag value
+	defer moprobe.DisttaePartitionInsertRet(tag, 0x1020304050607080)
+
 	bat, err := batch.ProtoBatchToBatch(b)
 	if err != nil {
 		return err
