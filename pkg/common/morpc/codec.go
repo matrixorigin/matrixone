@@ -29,8 +29,7 @@ import (
 )
 
 const (
-	flagNothing byte = 1 << iota
-	flagHashPayload
+	flagHashPayload byte = 1 << iota
 	flagChecksumEnabled
 	flagHasCustomHeader
 	flagCompressEnabled
