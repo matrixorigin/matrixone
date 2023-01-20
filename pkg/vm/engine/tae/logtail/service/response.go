@@ -42,7 +42,7 @@ func (r *LogtailResponse) GetID() uint64 {
 	return r.ResponseId
 }
 func (r *LogtailResponse) DebugString() string {
-	return r.LogtailResponse.String()
+	return ""
 }
 
 func (r *LogtailResponse) Size() int {
