@@ -67,9 +67,15 @@ type RPCMessage struct {
 	// Message raw rpc message
 	Message Message
 
+	internal       bool
 	cancel         context.CancelFunc
 	stream         bool
 	streamSequence uint32
+}
+
+// InternalMessage returns true means the rpc message is the internal message in morpc.
+func (m RPCMessage) InternalMessage() bool {
+	return m.internal
 }
 
 // RPCClient morpc is not a normal remote method call, rather it is a message-based asynchronous
@@ -83,6 +89,9 @@ type RPCClient interface {
 	// If the underlying connection is reset during the duration of the stream, then the stream will
 	// be closed.
 	NewStream(backend string, lock bool) (Stream, error)
+	// Ping is used to check if the remote service is available. The remote service will reply with
+	// a pong when it receives the ping.
+	Ping(ctx context.Context, backend string) error
 	// Close close the client
 	Close() error
 }
@@ -139,9 +148,11 @@ type Backend interface {
 	// Send send the request for future to the corresponding backend.
 	// moerr.ErrBackendClosed returned if backend is closed.
 	Send(ctx context.Context, request Message) (*Future, error)
+	// SendInternal is similar to Send, but perform on internal message
+	SendInternal(ctx context.Context, request Message) (*Future, error)
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
-	// If the underlying connection is reset during the duration of the stream, then the stream will
-	// be closed.
+	// If the underlying connection is reset during the duration of the stream, then the stream
+	// will be closed.
 	NewStream(unlockAfterClose bool) (Stream, error)
 	// Close close the backend.
 	Close()
