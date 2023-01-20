@@ -132,15 +132,18 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		} else {
 			colName := parts.Parts[0]
 			tblName := ""
+			found := false
 			for alias, colulmns := range allColumns {
 				if _, colExists := colulmns[colName]; colExists {
 					if tblName != "" {
 						return nil, moerr.NewInternalError(ctx.GetContext(), "Column '%v' in field list is ambiguous", colName)
 					}
+					found = true
 					appendToTbl(alias, colName, expr)
-				} else {
-					return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table %s", colName, tblName)
 				}
+			}
+			if !found {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table %s", colName, tblName)
 			}
 		}
 	}

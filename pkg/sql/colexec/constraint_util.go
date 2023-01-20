@@ -285,7 +285,7 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 			}
 		} else {
 			toVec = vector.New(bat.Vecs[idx].Typ)
-			if rowSkip != nil {
+			if rowSkip == nil {
 				for j := 0; j < fromVec.Length(); j++ {
 					vector.UnionOne(toVec, fromVec, int64(j), proc.Mp())
 				}
