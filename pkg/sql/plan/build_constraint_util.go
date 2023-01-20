@@ -829,6 +829,12 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 			if _, ok := updateKeysMap[coldef.Name]; ok {
 				pos := newColPosMap[coldef.Name]
 				posExpr := lastNode.ProjectList[pos]
+				if !isSameColumnType(posExpr.Typ, coldef.Typ) {
+					lastNode.ProjectList[pos], err = makePlan2CastExpr(builder.GetContext(), posExpr, coldef.Typ)
+					if err != nil {
+						return err
+					}
+				}
 				projExpr := &plan.Expr{
 					Typ: posExpr.Typ,
 					Expr: &plan.Expr_Col{
@@ -838,13 +844,6 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 						},
 					},
 				}
-				if !isSameColumnType(posExpr.Typ, coldef.Typ) {
-					projExpr, err = makePlan2CastExpr(builder.GetContext(), projExpr, coldef.Typ)
-					if err != nil {
-						return err
-					}
-				}
-
 				info.projectList = append(info.projectList, projExpr)
 
 			} else if coldef.Name == compositePkey && compositePkeyExpr != nil {
