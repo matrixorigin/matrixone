@@ -33,22 +33,21 @@ import (
 )
 
 const (
-	// we check if txn is legal in a period of periodToCheckTxnTimestamp
+	// we check if (txn time <= global log time) in a period of periodToCheckTxnTimestamp
 	// when we open a new transaction.
 	periodToCheckTxnTimestamp = 1 * time.Millisecond
 
-	// we check if we subscribe a table succeed
-	// in a period of periodToCheckTableSubscribeSucceed when we first time subscribe a table.
+	// period to check if table was subscribed succeed when first time to subscribe.
 	periodToCheckTableSubscribeSucceed = 1 * time.Millisecond
 
-	// we try to reconnect to log tail server in a period of periodToReconnectDnLogServer.
+	// period to try to reconnect to log tail server if we
+	// reconnect to dn log tail server failed
 	periodToReconnectDnLogServer = 10 * time.Second
 
-	// maxTimeToCheckTxnTimestamp is the max duration we open a new txn.
-	// if over, return error.
-	maxTimeToCheckTxnTimestamp = 5 * time.Minute
+	// max wait time to open a new txn.
+	maxTimeToOpenTxn = 5 * time.Minute
 
-	// maxSubscribeRequestPerSecond record how many client request
+	// maxSubscribeRequestPerSecond records how many client request
 	// we supported to subscribe table per second.
 	maxSubscribeRequestPerSecond = 10000
 
@@ -57,7 +56,7 @@ const (
 	maxTimeToWaitServerResponse = 10 * time.Second
 
 	// defaultTimeOutToSubscribeTable
-	// if ctx without a dead time. we will set it 2 minute to send a subscribe-table message.
+	// if ctx without a deadline. we will set it as deadline to send a rpc message.
 	defaultTimeOutToSubscribeTable = 2 * time.Minute
 )
 
@@ -114,16 +113,14 @@ func (r *syncLogTailTimestamp) updateTimestamp(newTimestamp timestamp.Timestamp)
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
-	r.RLock()
-	t := r.t
-	r.RUnlock()
+	t := r.getTimestamp()
 	return txnTime.LessEq(t)
 }
 
 func (r *syncLogTailTimestamp) blockUntilTxnTimeIsLegal(
 	ctx context.Context, txnTime timestamp.Timestamp) error {
 	// if block time is too long, return error.
-	maxBlockTime := maxTimeToCheckTxnTimestamp
+	maxBlockTime := maxTimeToOpenTxn
 	for {
 		if maxBlockTime < 0 {
 			return moerr.NewTxnError(ctx,
@@ -146,21 +143,22 @@ func (s *logTailSubscriber) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
 	// set a default deadline for ctx if it doesn't have.
 	if _, ok := ctx.Deadline(); !ok {
-		newCtx, _ := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
+		newCtx, cancel := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
+		_ = cancel
 		return s.logTailClient.Subscribe(newCtx, tblId)
 	}
 	return s.logTailClient.Subscribe(ctx, tblId)
 }
 
-func (s *logTailSubscriber) unSubscribeTable(
-	ctx context.Context, tblId api.TableID) error {
-	// set a default deadline for ctx if it doesn't have.
-	if _, ok := ctx.Deadline(); !ok {
-		newCtx, _ := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
-		return s.logTailClient.Unsubscribe(newCtx, tblId)
-	}
-	return s.logTailClient.Unsubscribe(ctx, tblId)
-}
+//func (s *logTailSubscriber) unSubscribeTable(
+//	ctx context.Context, tblId api.TableID) error {
+//	// set a default deadline for ctx if it doesn't have.
+//	if _, ok := ctx.Deadline(); !ok {
+//		newCtx, _ := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
+//		return s.logTailClient.Unsubscribe(newCtx, tblId)
+//	}
+//	return s.logTailClient.Unsubscribe(ctx, tblId)
+//}
 
 func (e *Engine) InitLogTailPushModel(
 	ctx context.Context) error {
@@ -205,14 +203,17 @@ func (e *Engine) initTableLogTailSubscriber() error {
 		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-log-tail-client-backend")),
 	)
 
-	c, err := morpc.NewClient(factory,
+	c, err1 := morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(10000),
 		morpc.WithClientTag("cn-log-tail-client"),
 	)
+	if err1 != nil {
+		return err1
+	}
 
-	s, err := c.NewStream(dnLogTailServerBackend, true)
-	if err != nil {
-		return err
+	s, err2 := c.NewStream(dnLogTailServerBackend, true)
+	if err2 != nil {
+		return err2
 	}
 	// new the log tail client.
 	e.subscriber.logTailClient, err = service.NewLogtailClient(s,
@@ -367,7 +368,7 @@ func (e *Engine) StartToReceiveTableLogTail() {
 func updatePartition2(
 	ctx context.Context,
 	dnId int,
-	e *Engine, tl *logtail.TableLogtail, ts timestamp.Timestamp) (err error) {
+	e *Engine, tl *logtail.TableLogtail, _ timestamp.Timestamp) (err error) {
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
@@ -460,6 +461,8 @@ func (ls logList) Sort() {
 func compareTableIdLess(i1, i2 uint64) bool {
 	return i1 < i2
 }
+
+var _ = debugToPrintLogList
 
 func debugToPrintLogList(ls []logtail.TableLogtail) string {
 	if len(ls) == 0 {

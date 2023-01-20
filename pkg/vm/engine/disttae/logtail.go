@@ -32,6 +32,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
+var _ = updatePartition
+var _ = genSyncLogTailReq
+
+// updatePartition the old method of log tail pull model.
 func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	ctx context.Context, op client.TxnOperator, db *DB,
 	mvcc MVCC, dn DNStore, req api.SyncLogTailReq) error {
@@ -102,24 +106,6 @@ func consumeLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 func consumeEntry(idx, primaryIdx int, tbl *table,
 	ctx context.Context, db *DB, mvcc MVCC, e *api.Entry) error {
 	if e.EntryType == api.Entry_Insert {
-		//{
-		//	if tbl.tableName == "t" {
-		//		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		//		fmt.Printf("+++++++insert meta table into tbl: %v\n", e.TableName)
-		//		for i, vec := range bat.Vecs {
-		//			fmt.Printf("\t[%v] = %v\n", i, vec)
-		//		}
-		//		timeVec, err := vector.ProtoVectorToVector(e.Bat.Vecs[1])
-		//		if err != nil {
-		//			return err
-		//		}
-		//		timestamps := vector.MustTCols[types.TS](timeVec)
-		//		for i, tt := range timestamps {
-		//			fmt.Printf("\t source: %v, [%v] = %v\n", tt,
-		//				i, tt.ToTimestamp())
-		//		}
-		//	}
-		//}
 		if isMetaTable(e.TableName) {
 			vec, err := vector.ProtoVectorToVector(e.Bat.Vecs[catalog.BLOCKMETA_ID_IDX+MO_PRIMARY_OFF])
 			if err != nil {
@@ -156,24 +142,6 @@ func consumeEntry(idx, primaryIdx int, tbl *table,
 		}
 		return mvcc.Insert(ctx, primaryIdx, e.Bat, false)
 	}
-	//{
-	//	if tbl.tableName == "t" {
-	//		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-	//		fmt.Printf("+++++++delete meta table into tbl: %v\n", e.TableName)
-	//		for i, vec := range bat.Vecs {
-	//			fmt.Printf("\t[%v] = %v\n", i, vec)
-	//		}
-	//		timeVec, err := vector.ProtoVectorToVector(e.Bat.Vecs[1])
-	//		if err != nil {
-	//			return err
-	//		}
-	//		timestamps := vector.MustTCols[types.TS](timeVec)
-	//		for i, tt := range timestamps {
-	//			fmt.Printf("\t source: %v, [%v] = %v\n", tt,
-	//				i, tt.ToTimestamp())
-	//		}
-	//	}
-	//}
 	if isMetaTable(e.TableName) {
 		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
 	}
