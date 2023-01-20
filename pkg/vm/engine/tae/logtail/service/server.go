@@ -184,8 +184,10 @@ func NewLogtailServer(
 		morpc.WithServerLogger(s.logger.RawLogger()),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
-				m := v.(morpc.RPCMessage)
-				s.pool.segments.Release(m.Message.(*LogtailResponseSegment))
+				msg := v.(morpc.RPCMessage)
+				if !msg.InternalMessage() {
+					s.pool.segments.Release(msg.Message.(*LogtailResponseSegment))
+				}
 			}),
 		),
 	)
