@@ -307,3 +307,22 @@ func TestEncodeWithLargeMessageMustReturnError(t *testing.T) {
 	err := codec.Encode(msg, buf1, buf2)
 	assert.Error(t, err)
 }
+
+func TestEncodeAndDecodeInternal(t *testing.T) {
+	codec := newTestCodec()
+	buf := buf.NewByteBuf(1)
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+
+	msg := RPCMessage{Ctx: ctx, Message: &flagOnlyMessage{flag: flagPing}, internal: true}
+	err := codec.Encode(msg, buf, nil)
+	assert.NoError(t, err)
+
+	v, ok, err := codec.Decode(buf)
+	assert.True(t, ok)
+	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
+	assert.NoError(t, err)
+	assert.NotNil(t, v.(RPCMessage).Ctx)
+	assert.NotNil(t, v.(RPCMessage).cancel)
+}

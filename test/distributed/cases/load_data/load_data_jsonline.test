@@ -5,4 +5,8 @@ load data infile {'filepath'='$resources/load_data/jsonline_object.jl','format'=
 select * from t1;
 delete from t1;
 load data infile {'filepath'='$resources/load_data/jsonline_array.jl','format'='jsonline','jsondata'='array'} into table t1;
+load data infile {'filepath'='$resources/load_data/jsonline_array.jl.bz2','format'='jsonline','jsondata'='array','compression'='bzip2'} into table t1;
+load data infile {'filepath'='$resources/load_data/jsonline_array.jl.gz','format'='jsonline','jsondata'='array','compression'='gzip'} into table t1;
+load data infile {'filepath'='$resources/load_data/jsonline_array.jl.bz2','jsondata'='array'} into table t1;
+load data infile {'filepath'='$resources/load_data/jsonline_array.jl.gz','jsondata'='array'} into table t1;
 select * from t1;

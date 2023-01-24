@@ -899,6 +899,12 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_decimal128,
 				Fn:        multi.CeilDecimal128,
 			},
+			{
+				Index:     7,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_float64,
+				Fn:        multi.CeilStr,
+			},
 		},
 	},
 	FLOOR: {
@@ -947,6 +953,12 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
 				Fn:        multi.FloorDecimal128,
+			},
+			{
+				Index:     7,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_float64,
+				Fn:        multi.FloorStr,
 			},
 		},
 	},
@@ -2745,6 +2757,24 @@ var builtins = map[int]Functions{
 		Id:     FORMAT,
 		Flag:   plan.Function_STRICT,
 		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			l := len(inputs)
+			if l < 2 {
+				return wrongFunctionParameters, nil
+			}
+
+			//if the first param's type is timeType, return wrongFunctionParameters
+			timeType := [...]types.T{types.T_date, types.T_datetime, types.T_timestamp, types.T_time}
+			timeTypeSet := make(map[types.T]bool)
+			for _, v := range timeType {
+				timeTypeSet[v] = true
+			}
+			if timeTypeSet[inputs[0]] {
+				return wrongFunctionParameters, nil
+			}
+
+			return normalTypeCheck(overloads, inputs)
+		},
 		Overloads: []Function{
 			{
 				Index:     0,

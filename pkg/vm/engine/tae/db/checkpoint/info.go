@@ -33,11 +33,11 @@ type RunnerReader interface {
 	MaxLSN() uint64
 }
 
-func (r *runner) collectCheckpointMetadata() *containers.Batch {
+func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batch {
 	bat := makeRespBatchFromSchema(CheckpointSchema)
 	entries := r.GetAllIncrementalCheckpoints()
 	for _, entry := range entries {
-		if !entry.IsFinished() {
+		if !entry.IsFinished() && !entry.end.Equal(end) {
 			continue
 		}
 		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start)
@@ -47,7 +47,7 @@ func (r *runner) collectCheckpointMetadata() *containers.Batch {
 	}
 	entries = r.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
-		if !entry.IsFinished() {
+		if !entry.IsFinished() && !entry.end.Equal(end) {
 			continue
 		}
 		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start)
