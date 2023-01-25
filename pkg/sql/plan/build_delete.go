@@ -38,7 +38,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	}
 
 	canTruncate := false
-	parentIds := make([]*plan.IdList, len(tblInfo.tableDefs))
+	parentIdx := make([]*plan.IdList, len(tblInfo.tableDefs))
 	if tblInfo.haveConstraint {
 		bindCtx.groupTag = builder.genNewTag()
 		bindCtx.aggregateTag = builder.genNewTag()
@@ -76,7 +76,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 						idList = append(idList, int64(fk.ForeignTbl))
 					}
 				}
-				parentIds[i] = &plan.IdList{
+				parentIdx[i] = &plan.IdList{
 					List: idList,
 				}
 			}
@@ -96,17 +96,19 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	// append delete node
 	deleteCtx := &plan.DeleteCtx{
 		CanTruncate:   canTruncate,
-		ParentIds:     parentIds,
+		ParentIdx:     parentIdx,
 		Ref:           rewriteInfo.tblInfo.objRef,
 		IdxRef:        rewriteInfo.onIdxTbl,
 		IdxIdx:        rewriteInfo.onIdx,
 		OnRestrictRef: rewriteInfo.onRestrictTbl,
 		OnRestrictIdx: rewriteInfo.onRestrict,
-		OnCascadeRef:  rewriteInfo.onCascadeTbl,
+		OnCascadeRef:  rewriteInfo.onCascadeRef,
 		OnCascadeIdx:  make([]int32, len(rewriteInfo.onCascade)),
-		OnSetRef:      rewriteInfo.onSetTbl,
-		OnSetIdx:      make([]*plan.IdList, len(rewriteInfo.onSet)),
-		OnSetAttrs:    make([]*plan.Attrs, len(rewriteInfo.onSetAttr)),
+
+		OnSetRef:       rewriteInfo.onSetRef,
+		OnSetIdx:       make([]*plan.IdList, len(rewriteInfo.onSet)),
+		OnSetDef:       rewriteInfo.onSetTableDef,
+		OnSetUpdateCol: make([]*plan.ColPosMap, len(rewriteInfo.onSetUpdateCol)),
 	}
 	for i, idxList := range rewriteInfo.onCascade {
 		deleteCtx.OnCascadeIdx[i] = int32(idxList[0])
@@ -116,9 +118,9 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 			List: setList,
 		}
 	}
-	for i, attrs := range rewriteInfo.onSetAttr {
-		deleteCtx.OnSetAttrs[i] = &plan.Attrs{
-			List: attrs,
+	for i, idxMap := range rewriteInfo.onSetUpdateCol {
+		deleteCtx.OnSetUpdateCol[i] = &plan.ColPosMap{
+			Map: idxMap,
 		}
 	}
 

@@ -488,26 +488,27 @@ message WindowSpec {
 message UpdateCtx {
 	repeated ObjectRef ref 				= 1;
 	repeated IdList idx 				= 2;
-	repeated Attrs attr 				= 3;
-	repeated TableDef tableDefs 		= 4;
-	repeated bool has_auto_col     		= 5;
+	repeated TableDef tableDefs 		= 3;
+	repeated ColPosMap update_col 		= 4; 
 
-	repeated ObjectRef idx_ref 			= 6;
-	repeated int32 idx_idx 				= 7;
-	repeated IdList idx_val 			= 8;
-	repeated int32 idx_pk 				= 9;
+	repeated ObjectRef idx_ref 			= 5;
+	repeated int32 idx_idx 				= 6;
 
-	repeated ObjectRef on_restrict_ref 	= 10;
-	repeated int32 on_restrict_idx 		= 11;
-	repeated ObjectRef on_cascade_ref 	= 12;
-	repeated Attrs on_cascade_attrs 	= 13;
-	repeated IdList on_cascade_idx 		= 14;
-	repeated ObjectRef on_set_ref 		= 15;
-	repeated Attrs on_set_attrs 		= 16;
-	repeated IdList on_set_idx 			= 17;
+	repeated ObjectRef on_restrict_ref 	= 7;
+	repeated int32 on_restrict_idx 		= 8;
 
-	repeated ObjectRef parent_ref 	= 18;
-	repeated int32 parent_idx 		= 19;
+	repeated ObjectRef on_cascade_ref 			= 9;
+	repeated IdList on_cascade_idx 				= 10;
+	repeated TableDef on_cascade_def			= 11;
+	repeated ColPosMap on_cascade_update_col 	= 12; 
+
+	repeated ObjectRef on_set_ref 			= 13;
+	repeated IdList on_set_idx 				= 14;
+	repeated TableDef on_set_def			= 15;
+	repeated ColPosMap on_set_update_col 	= 16; 
+
+	repeated ObjectRef parent_ref 	= 17;
+	repeated int32 parent_idx 		= 18;
 }
 
 message AnalyzeInfo {
@@ -648,8 +649,8 @@ message IdList {
 	repeated int64 list = 1;
 }
 
-message Attrs {
-	repeated string list = 1;
+message ColPosMap {
+	map<string, int32> map = 1;
 }
 
 message DeleteCtx {
@@ -660,13 +661,17 @@ message DeleteCtx {
 
 	repeated ObjectRef on_restrict_ref 	= 4;
 	repeated int32 on_restrict_idx 		= 5;
+
 	repeated ObjectRef on_cascade_ref 	= 6;
 	repeated int32 on_cascade_idx 		= 7;
-	repeated ObjectRef on_set_ref 		= 8;
-	repeated Attrs on_set_attrs 		= 9;
-	repeated IdList on_set_idx 			= 10;
-	bool can_truncate 					= 11;
-	repeated IdList parent_ids 			= 12;
+
+	repeated ObjectRef on_set_ref 			= 8;
+	repeated TableDef on_set_def 			= 9;
+	repeated IdList on_set_idx 				= 10;
+	repeated ColPosMap on_set_update_col 	= 11; 
+	
+	bool can_truncate 					= 12;
+	repeated IdList parent_idx 			= 13;
 }
 
 message Query {

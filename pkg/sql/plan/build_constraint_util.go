@@ -36,21 +36,21 @@ type dmlSelectInfo struct {
 	rootId         int32
 	derivedTableId int32
 
-	onIdx    []int32   //remove these row
-	onIdxVal [][]int64 //insert these value
-	onIdxPk  []int32   //origin table's pk. -1 means origin table have no pk
+	onIdx    []int32 //remove these row
 	onIdxTbl []*ObjectRef
 
 	onRestrict    []int32 // check these, not all null then throw error
 	onRestrictTbl []*ObjectRef
 
-	onSet     [][]int64
-	onSetAttr [][]string
-	onSetTbl  []*ObjectRef
+	onSet          [][]int64
+	onSetTableDef  []*TableDef
+	onSetRef       []*ObjectRef
+	onSetUpdateCol []map[string]int32 // name=updated col.Name  value=col position in TableDef.Cols
 
-	onCascade     [][]int64
-	onCascadeAttr [][]string
-	onCascadeTbl  []*ObjectRef
+	onCascade          [][]int64
+	onCascadeTableDef  []*TableDef
+	onCascadeRef       []*ObjectRef
+	onCascadeUpdateCol []map[string]int32 // name=updated col.Name  value=col position in TableDef.Cols
 
 	parentTbl []*ObjectRef
 	parentIdx []int32
@@ -61,11 +61,10 @@ type dmlTableInfo struct {
 	tableDefs      []*TableDef
 	isClusterTable []bool
 	haveConstraint bool
-	// updateColOffset []map[string]int       // This slice index correspond to tableDefs
+	updateCol      []map[string]int32     // name=updated col.Name  value=col position in TableDef.Cols
 	updateKeys     []map[string]tree.Expr // This slice index correspond to tableDefs
 	oldColPosMap   []map[string]int       // origin table values to their position in derived table
 	newColPosMap   []map[string]int       // insert/update values to their position in derived table
-	finalColPosMap []map[string]int       // insert/update values to their position in last node's projectlist
 	nameToIdx      map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
 	idToName       map[uint64]string      // Mapping of tableId to full path name of table
 	alias          map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
@@ -250,39 +249,39 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
 	}
 
-	if tableDef.CompositePkey != nil {
-		tableDef.Cols = append(tableDef.Cols, &ColDef{
-			Name: tableDef.CompositePkey.Name,
-			Alg:  plan.CompressType_Lz4,
-			Typ: &Type{
-				Id:    int32(types.T_varchar),
-				Size:  types.VarlenaSize,
-				Width: types.MaxVarcharLen,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		})
-	}
+	// if tableDef.CompositePkey != nil {
+	// 	tableDef.Cols = append(tableDef.Cols, &ColDef{
+	// 		Name: tableDef.CompositePkey.Name,
+	// 		Alg:  plan.CompressType_Lz4,
+	// 		Typ: &Type{
+	// 			Id:    int32(types.T_varchar),
+	// 			Size:  types.VarlenaSize,
+	// 			Width: types.MaxVarcharLen,
+	// 		},
+	// 		Default: &plan.Default{
+	// 			NullAbility:  false,
+	// 			Expr:         nil,
+	// 			OriginString: "",
+	// 		},
+	// 	})
+	// }
 
-	if tableDef.ClusterBy != nil {
-		tableDef.Cols = append(tableDef.Cols, &ColDef{
-			Name: tableDef.ClusterBy.Name,
-			Alg:  plan.CompressType_Lz4,
-			Typ: &Type{
-				Id:    int32(types.T_varchar),
-				Size:  types.VarlenaSize,
-				Width: types.MaxVarcharLen,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		})
-	}
+	// if tableDef.ClusterBy != nil {
+	// 	tableDef.Cols = append(tableDef.Cols, &ColDef{
+	// 		Name: tableDef.ClusterBy.Name,
+	// 		Alg:  plan.CompressType_Lz4,
+	// 		Typ: &Type{
+	// 			Id:    int32(types.T_varchar),
+	// 			Size:  types.VarlenaSize,
+	// 			Width: types.MaxVarcharLen,
+	// 		},
+	// 		Default: &plan.Default{
+	// 			NullAbility:  false,
+	// 			Expr:         nil,
+	// 			OriginString: "",
+	// 		},
+	// 	})
+	// }
 
 	if !tblInfo.haveConstraint {
 		if len(tableDef.RefChildTbls) > 0 {
@@ -344,22 +343,22 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree
 
 // Get the number of columns in the table definition,
 // exclude the hidden columns of the composite primary key and the hidden columns of the composite cluster by
-func getTableValidColsSize(tableDef *TableDef) int {
-	counter := len(tableDef.Cols)
-	if tableDef.CompositePkey != nil {
-		counter--
-	}
-	if tableDef.ClusterBy != nil {
-		counter--
-	}
-	// for _, coldef := range tableDef.Cols {
-	// 	if util.JudgeIsCompositePrimaryKeyColumn(coldef.Name) || util.JudgeIsCompositeClusterByColumn(coldef.Name) {
-	// 		continue
-	// 	}
-	// 	counter++
-	// }
-	return counter
-}
+// func getTableValidColsSize(tableDef *TableDef) int {
+// 	counter := len(tableDef.Cols)
+// 	if tableDef.CompositePkey != nil {
+// 		counter--
+// 	}
+// 	if tableDef.ClusterBy != nil {
+// 		counter--
+// 	}
+// 	// for _, coldef := range tableDef.Cols {
+// 	// 	if util.JudgeIsCompositePrimaryKeyColumn(coldef.Name) || util.JudgeIsCompositeClusterByColumn(coldef.Name) {
+// 	// 		continue
+// 	// 	}
+// 	// 	counter++
+// 	// }
+// 	return counter
+// }
 
 func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo, haveConstraint bool) (int32, error) {
 	fromTables := &tree.From{
@@ -371,7 +370,7 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	columnsSize := 0
 	for alias, i := range tableInfo.alias {
 		e, _ := tree.NewUnresolvedNameWithStar(builder.GetContext(), alias)
-		columnsSize += getTableValidColsSize(tableInfo.tableDefs[i])
+		columnsSize += len(tableInfo.tableDefs[i].Cols)
 		selectList[i] = tree.SelectExpr{
 			Expr: e,
 		}
@@ -397,30 +396,27 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 	oldColPosMap := make([]map[string]int, len(tableInfo.tableDefs))
 	// insert/update values to their position in derived table
 	newColPosMap := make([]map[string]int, len(tableInfo.tableDefs))
-	// insert/update values to their position in last node's projectlist
-	finalColPosMap := make([]map[string]int, len(tableInfo.tableDefs))
 	projectSeq := 0
-	finalSeq := 0
+	updateCol := make([]map[string]int32, len(tableInfo.updateKeys))
 	for idx, tableDef := range tableInfo.tableDefs {
 		//append update
 		oldColPosMap[idx] = make(map[string]int)
 		newColPosMap[idx] = make(map[string]int)
-		finalColPosMap[idx] = make(map[string]int)
+		updateCol[idx] = make(map[string]int32)
 		for j, coldef := range tableDef.Cols {
 			oldColPosMap[idx][coldef.Name] = projectSeq + j
-			finalColPosMap[idx][coldef.Name] = finalSeq + j
 			if pos, ok := updateColsOffset[idx][coldef.Name]; ok {
 				newColPosMap[idx][coldef.Name] = pos
+				updateCol[idx][coldef.Name] = int32(j)
 			} else {
 				newColPosMap[idx][coldef.Name] = projectSeq + j
 			}
 		}
-		finalSeq += len(tableDef.Cols)
-		projectSeq += getTableValidColsSize(tableDef)
+		projectSeq += len(tableDef.Cols)
 	}
 	tableInfo.oldColPosMap = oldColPosMap
 	tableInfo.newColPosMap = newColPosMap
-	tableInfo.finalColPosMap = finalColPosMap
+	tableInfo.updateCol = updateCol
 
 	selectAst := &tree.Select{
 		Select: &tree.SelectClause{
@@ -745,11 +741,10 @@ func initDeleteStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 				})
 			}
 		}
-		projectSeq += getTableValidColsSize(tableDef)
+		projectSeq += len(tableDef.Cols)
 	}
 	info.tblInfo.oldColPosMap = oldColPosMap
-	info.tblInfo.newColPosMap = oldColPosMap   //we donot need this field in delete statement
-	info.tblInfo.finalColPosMap = oldColPosMap //we donot need this field in delete statement
+	info.tblInfo.newColPosMap = oldColPosMap //we donot need this field in delete statement
 
 	for idx, expr := range lastNode.ProjectList {
 		if expr.Typ.Id == int32(types.T_Rowid) {
@@ -826,57 +821,6 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 			nameToIdx[coldef.Name] = int32(j)
 		}
 
-		getHiddenColumnExpr := func(colNames []string) (*Expr, error) {
-			changeCol := false
-			for _, colName := range colNames {
-				if _, ok := updateKeysMap[colName]; ok {
-					changeCol = true
-					break
-				}
-			}
-			if !changeCol {
-				return nil, nil
-			}
-			args := make([]*Expr, len(colNames))
-			for j, colName := range colNames {
-				coldef := tableDef.Cols[nameToIdx[colName]]
-				args[j] = &plan.Expr{
-					Typ: coldef.Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: tag,
-							ColPos: int32(newColPosMap[colName]),
-						},
-					},
-				}
-			}
-			return bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
-		}
-
-		var compositePkeyExpr *Expr
-		var compositePkey string
-		if tableDef.CompositePkey != nil {
-			compositePkey = tableDef.CompositePkey.Name
-			colNames := util.SplitCompositePrimaryKeyColumnName(compositePkey)
-			// check if update composite key
-			compositePkeyExpr, err = getHiddenColumnExpr(colNames)
-			if err != nil {
-				return err
-			}
-		}
-
-		var ClusterByExpr *Expr
-		var clusterByKey string
-		if tableDef.ClusterBy != nil {
-			clusterByKey = tableDef.ClusterBy.Name
-			colNames := util.SplitCompositeClusterByColumnName(clusterByKey)
-			// check if update cluster by key
-			ClusterByExpr, err = getHiddenColumnExpr(colNames)
-			if err != nil {
-				return err
-			}
-		}
-
 		for _, coldef := range tableDef.Cols {
 			if _, ok := updateKeysMap[coldef.Name]; ok {
 				pos := newColPosMap[coldef.Name]
@@ -909,16 +853,11 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 				}
 				info.projectList = append(info.projectList, projExpr)
 
-			} else if coldef.Name == compositePkey && compositePkeyExpr != nil {
-				info.projectList = append(info.projectList, compositePkeyExpr)
-
-			} else if coldef.Name == clusterByKey && ClusterByExpr != nil {
-				info.projectList = append(info.projectList, ClusterByExpr)
-
 			} else {
 				if coldef.OnUpdate != nil && coldef.OnUpdate.Expr != nil {
 					lastNode.ProjectList[idx] = coldef.OnUpdate.Expr
 				}
+
 				if !isSameColumnType(lastNode.ProjectList[idx].Typ, coldef.Typ) {
 					lastNode.ProjectList[idx], err = makePlan2CastExpr(builder.GetContext(), lastNode.ProjectList[idx], coldef.Typ)
 					if err != nil {
@@ -948,26 +887,24 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 	typMap := make(map[string]*plan.Type)
 	id2name := make(map[uint64]string)
 
-	pkPos := int32(-1)
-	compositePkey := ""
-	if tableDef.CompositePkey != nil {
-		compositePkey = tableDef.CompositePkey.Name
-	}
+	// pkPos := int32(-1)
+	// compositePkey := ""
+	// if tableDef.CompositePkey != nil {
+	// 	compositePkey = tableDef.CompositePkey.Name
+	// }
 
 	//use origin query as left, we need add prefix pos
 	var oldColPosMap map[string]int
 	var newColPosMap map[string]int
-	var finalColPosMap map[string]int
 	if rewriteIdx > -1 {
 		oldColPosMap = info.tblInfo.oldColPosMap[rewriteIdx]
 		newColPosMap = info.tblInfo.newColPosMap[rewriteIdx]
-		finalColPosMap = info.tblInfo.finalColPosMap[rewriteIdx]
-		for idx, col := range tableDef.Cols {
-			if col.Name == compositePkey {
-				pkPos = int32(idx)
-			} else if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
-				pkPos = int32(idx)
-			}
+		for _, col := range tableDef.Cols {
+			// if col.Name == compositePkey {
+			// 	pkPos = int32(idx)
+			// } else if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
+			// 	pkPos = int32(idx)
+			// }
 			typMap[col.Name] = col.Typ
 			id2name[col.ColId] = col.Name
 		}
@@ -976,17 +913,14 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 		// unsupport deep level, no test
 		oldColPosMap = make(map[string]int)
 		newColPosMap = make(map[string]int)
-		finalColPosMap = make(map[string]int)
 		for idx, col := range tableDef.Cols {
-			if col.Name == compositePkey {
-				pkPos = int32(idx)
-			} else if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
-				pkPos = int32(idx)
-			}
-
+			// if col.Name == compositePkey {
+			// 	pkPos = int32(idx)
+			// } else if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
+			// 	pkPos = int32(idx)
+			// }
 			oldColPosMap[col.Name] = idx
 			newColPosMap[col.Name] = idx
-			finalColPosMap[col.Name] = int(info.idx) + idx
 			typMap[col.Name] = col.Typ
 			id2name[col.ColId] = col.Name
 		}
@@ -1038,7 +972,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 				// append join node
 				var joinConds []*Expr
 				var leftExpr *Expr
-				var idxValList []int64 //we need insert new value
 				partsLength := len(idxDef.UIdx.Fields[idx].Parts)
 				if partsLength == 1 {
 					orginIndexColumnName := idxDef.UIdx.Fields[idx].Parts[0]
@@ -1052,7 +985,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 							},
 						},
 					}
-					idxValList = append(idxValList, int64(finalColPosMap[orginIndexColumnName]))
 				} else {
 					args := make([]*Expr, partsLength)
 					for i, column := range idxDef.UIdx.Fields[idx].Parts {
@@ -1066,7 +998,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 								},
 							},
 						}
-						idxValList = append(idxValList, int64(finalColPosMap[column]))
 					}
 					leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 					if err != nil {
@@ -1097,8 +1028,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 				info.onIdxTbl = append(info.onIdxTbl, idxRef)
 				info.onIdx = append(info.onIdx, info.idx)
-				info.onIdxVal = append(info.onIdxVal, idxValList)
-				info.onIdxPk = append(info.onIdxPk, pkPos)
 				info.idx = info.idx + 1
 			}
 		}
@@ -1117,14 +1046,10 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 			childPosMap := make(map[string]int32)
 			childTypMap := make(map[string]*plan.Type)
 			childId2name := make(map[uint64]string)
-			var childAttrs []string
 			for idx, col := range childTableDef.Cols {
 				childPosMap[col.Name] = int32(idx)
 				childTypMap[col.Name] = col.Typ
 				childId2name[col.ColId] = col.Name
-				if col.Name != catalog.Row_ID {
-					childAttrs = append(childAttrs, col.Name)
-				}
 			}
 
 			objRef := &plan.ObjectRef{
@@ -1222,6 +1147,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 					case plan.ForeignKeyDef_CASCADE:
 						// for update ,we need to reset column's value of child table, just like set null
+						updateCol := make(map[string]int32)
 						if info.typ == "update" {
 							fkIdMap := make(map[uint64]struct{})
 							for _, colId := range fk.Cols {
@@ -1241,6 +1167,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 											},
 										},
 									})
+									updateCol[col.Name] = int32(j)
 								} else {
 									info.projectList = append(info.projectList, &plan.Expr{
 										Typ: col.Typ,
@@ -1256,8 +1183,9 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 								info.idx = info.idx + 1
 							}
 							info.onCascade = append(info.onCascade, setIdxs)
-							info.onCascadeTbl = append(info.onCascadeTbl, objRef)
-							info.onCascadeAttr = append(info.onCascadeAttr, childAttrs)
+							info.onCascadeRef = append(info.onCascadeRef, objRef)
+							info.onCascadeTableDef = append(info.onCascadeTableDef, childTableDef)
+							info.onCascadeUpdateCol = append(info.onCascadeUpdateCol, updateCol)
 						} else {
 							// for delete, we only get row_id and delete the rows
 							info.projectList = append(info.projectList, &plan.Expr{
@@ -1271,12 +1199,14 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 							})
 							info.onCascade = append(info.onCascade, []int64{int64(info.idx)})
 							info.idx = info.idx + 1
-							info.onCascadeTbl = append(info.onCascadeTbl, objRef)
+							info.onCascadeRef = append(info.onCascadeRef, objRef)
+							info.onCascadeUpdateCol = append(info.onCascadeUpdateCol, updateCol)
 						}
 
 						// needRecursionCall = true
 
 					case plan.ForeignKeyDef_SET_NULL:
+						updateCol := make(map[string]int32)
 						fkIdMap := make(map[uint64]struct{})
 						for _, colId := range fk.Cols {
 							fkIdMap[colId] = struct{}{}
@@ -1292,6 +1222,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 										},
 									},
 								})
+								updateCol[col.Name] = int32(j)
 							} else {
 								info.projectList = append(info.projectList, &plan.Expr{
 									Typ: col.Typ,
@@ -1307,8 +1238,9 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 							info.idx = info.idx + 1
 						}
 						info.onSet = append(info.onSet, setIdxs)
-						info.onSetTbl = append(info.onSetTbl, objRef)
-						info.onSetAttr = append(info.onSetAttr, childAttrs)
+						info.onSetRef = append(info.onSetRef, objRef)
+						info.onSetTableDef = append(info.onSetTableDef, childTableDef)
+						info.onSetUpdateCol = append(info.onSetUpdateCol, updateCol)
 						// needRecursionCall = true
 					}
 

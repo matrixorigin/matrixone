@@ -41,24 +41,27 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 type UpdateCtx2 struct {
 	Source     []engine.Relation
 	Idxs       [][]int32
-	Attrs      [][]string
 	Ref        []*plan.ObjectRef
 	TableDefs  []*plan.TableDef
 	HasAutoCol []bool
+	UpdateCol  []map[string]int32
 
 	IdxSource []engine.Relation
-	IdxPk     []int32
-	IdxVal    [][]int32
+	IdxIdx    []int32
 
 	OnRestrictIdx []int32
 
-	OnCascadeSource []engine.Relation
-	OnCascadeIdx    [][]int32
-	OnCascadeAttrs  [][]string
+	OnCascadeSource    []engine.Relation
+	OnCascadeIdx       [][]int32
+	OnCascadeRef       []*plan.ObjectRef
+	OnCascadeTableDef  []*plan.TableDef
+	OnCascadeUpdateCol []map[string]int32
 
-	OnSetSource []engine.Relation
-	OnSetIdx    [][]int32
-	OnSetAttrs  [][]string
+	OnSetSource    []engine.Relation
+	OnSetIdx       [][]int32
+	OnSetRef       []*plan.ObjectRef
+	OnSetTableDef  []*plan.TableDef
+	OnSetUpdateCol []map[string]int32
 
 	ParentIdx []int32
 }

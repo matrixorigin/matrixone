@@ -71,7 +71,8 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 
 	// update child table(which ref on delete set null)
-	_, err = colexec.FilterAndUpdateByRowId(proc, bat, delCtx.OnSetIdx, delCtx.OnSetSource, delCtx.OnSetAttrs, nil, nil, nil, nil)
+	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, delCtx.OnSetIdx, delCtx.OnSetSource,
+		delCtx.OnSetRef, delCtx.OnSetTableDef, delCtx.OnSetUpdateCol)
 	if err != nil {
 		return false, err
 	}

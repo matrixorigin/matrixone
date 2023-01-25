@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -95,8 +94,7 @@ func FillCompositePKeyBatch(bat *batch.Batch, p *plan.ColDef, proc *process.Proc
 			return moerr.NewConstraintViolation(proc.Ctx, "composite pkey don't support null value")
 		}
 	}
-	// vec, _ := serialWithCompacted(vs, proc)
-	vec, _ := multi.Serial(vs, proc)
+	vec, _ := serialWithCompacted(vs, proc)
 	bat.Attrs = append(bat.Attrs, p.Name)
 	bat.Vecs = append(bat.Vecs, vec)
 	return nil

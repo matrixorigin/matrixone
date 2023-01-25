@@ -69,34 +69,36 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		}
 	}
 
-	// check OnRestrict, if is not all null, throw error
+	// check child on restrict, if is not all null, throw error
 	for _, idx := range updateCtx.OnRestrictIdx {
 		if bat.Vecs[idx].Length() != bat.Vecs[idx].Nsp.Np.Count() {
 			return false, moerr.NewInternalError(proc.Ctx, "Cannot delete or update a parent row: a foreign key constraint fails")
 		}
 	}
 
-	// delete old unique index & insert new unique index
-	_, err = colexec.FilterAndUpdateUniqueKeyByRowId(proc, bat, updateCtx.IdxVal, updateCtx.IdxSource, updateCtx.IdxPk)
+	// delete old unique index
+	_, err = colexec.FilterAndDelByRowId(proc, bat, updateCtx.IdxIdx, updateCtx.IdxSource)
 	if err != nil {
 		return false, err
 	}
 
 	// update child table(which ref on delete cascade)
-	_, err = colexec.FilterAndUpdateByRowId(proc, bat, updateCtx.OnCascadeIdx, updateCtx.OnCascadeSource, updateCtx.OnCascadeAttrs, nil, nil, nil, nil)
+	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.OnCascadeIdx, updateCtx.OnCascadeSource,
+		updateCtx.OnCascadeRef, updateCtx.OnCascadeTableDef, updateCtx.OnCascadeUpdateCol)
 	if err != nil {
 		return false, err
 	}
 
 	// update child table(which ref on delete set null)
-	_, err = colexec.FilterAndUpdateByRowId(proc, bat, updateCtx.OnSetIdx, updateCtx.OnSetSource, updateCtx.OnSetAttrs, nil, nil, nil, nil)
+	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.OnSetIdx, updateCtx.OnSetSource,
+		updateCtx.OnSetRef, updateCtx.OnSetTableDef, updateCtx.OnSetUpdateCol)
 	if err != nil {
 		return false, err
 	}
 
 	// update origin table
-	affectedRows, err = colexec.FilterAndUpdateByRowId(proc, bat, updateCtx.Idxs, updateCtx.Source, updateCtx.Attrs,
-		updateCtx.HasAutoCol, updateCtx.Ref, updateCtx.TableDefs, p.Engine)
+	affectedRows, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.Idxs, updateCtx.Source,
+		updateCtx.Ref, updateCtx.TableDefs, updateCtx.UpdateCol)
 	if err != nil {
 		return false, err
 	}

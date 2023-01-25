@@ -47,7 +47,122 @@ func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int3
 	return affectedRows, nil
 }
 
-func FilterAndUpdateUniqueKeyByRowId(proc *process.Process, bat *batch.Batch, idxList [][]int32, rels []engine.Relation, pkList []int32) (uint64, error) {
+// func FilterAndUpdateUniqueKeyByRowId(proc *process.Process, bat *batch.Batch, idxList [][]int32, rels []engine.Relation, pkList []int32) (uint64, error) {
+// 	var affectedRows uint64
+// 	var delBatch *batch.Batch
+// 	var updateBatch *batch.Batch
+// 	var err error
+// 	defer func() {
+// 		if delBatch != nil {
+// 			delBatch.Clean(proc.Mp())
+// 		}
+// 		if updateBatch != nil {
+// 			updateBatch.Clean(proc.Mp())
+// 		}
+// 	}()
+
+// 	for i, setIdxList := range idxList {
+// 		if pkList[i] != -1 {
+// 			setIdxList = append(setIdxList, pkList[i])
+// 		}
+// 		attrs := make([]string, len(setIdxList)-1)
+// 		delBatch, updateBatch, err = filterRowIdForInsert(proc, bat, setIdxList, attrs)
+// 		if err != nil {
+// 			return 0, err
+// 		}
+
+// 		if delBatch != nil {
+// 			affectedRows = affectedRows + uint64(delBatch.Length())
+// 			err = rels[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
+// 			if err != nil {
+// 				return 0, err
+// 			}
+// 		}
+
+// 		if updateBatch != nil {
+// 			affectedRows = affectedRows + uint64(updateBatch.Length())
+// 			err = doInsertUniqueTable(proc, rels[i], updateBatch, pkList[i])
+// 			if err != nil {
+// 				return 0, err
+// 			}
+// 		}
+// 	}
+// 	return affectedRows, nil
+// }
+
+// func InsertUniqueKeyToTable(proc *process.Process, bat *batch.Batch, idxList [][]int32, rels []engine.Relation, pkList []int32) (uint64, error) {
+// 	var affectedRows uint64
+// 	for i, getIdxList := range idxList {
+// 		if pkList[i] != -1 {
+// 			getIdxList = append(getIdxList, pkList[i])
+// 		}
+
+// 		attrs := make([]string, len(pkList))
+// 		batLen := bat.Vecs[0].Length()
+// 		affectedRows = affectedRows + uint64(batLen)
+// 		updateBatch, err := GetUpdateBatch(proc, bat, getIdxList, batLen, attrs, nil)
+// 		if err != nil {
+// 			return 0, err
+// 		}
+
+// 		err = doInsertUniqueTable(proc, rels[i], updateBatch, pkList[i])
+// 		if err != nil {
+// 			updateBatch.Clean(proc.Mp())
+// 			return 0, err
+// 		}
+// 	}
+// 	return affectedRows, nil
+// }
+
+// func doInsertUniqueTable(proc *process.Process, rel engine.Relation, updateBatch *batch.Batch, pkPos int32) error {
+// 	//updateBatch 、 pk的情况，重新构造一个要Insert的batch，
+// 	var ukBatch *batch.Batch
+// 	var bitMap *nulls.Nulls
+// 	var vec *vector.Vector
+// 	colCount := len(updateBatch.Vecs)
+// 	if pkPos == -1 {
+// 		//have no pk
+// 		ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName})
+// 		if colCount == 1 {
+// 			vec, _ = util.CompactSingleIndexCol(updateBatch.Vecs[0], proc)
+// 		} else {
+// 			vec, _ = util.SerialWithCompacted(updateBatch.Vecs, proc)
+// 		}
+// 		ukBatch.SetVector(0, vec)
+// 		ukBatch.SetZs(vec.Length(), proc.Mp())
+// 	} else {
+// 		ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName})
+// 		// the last idx is pk
+// 		if colCount == 2 {
+// 			vec, bitMap = util.CompactSingleIndexCol(updateBatch.Vecs[0], proc)
+// 		} else {
+// 			vs := make([]*vector.Vector, 0)
+// 			for j := 0; j < colCount-1; j++ {
+// 				vs = append(vs, updateBatch.Vecs[j])
+// 			}
+// 			vec, bitMap = util.SerialWithCompacted(vs, proc)
+// 		}
+// 		ukBatch.SetVector(0, vec)
+// 		ukBatch.SetZs(vec.Length(), proc.Mp())
+// 		// append pk vector
+// 		vec = util.CompactPrimaryCol(updateBatch.Vecs[len(updateBatch.Vecs)-1], bitMap, proc)
+// 		ukBatch.SetVector(1, vec)
+// 	}
+
+// 	// insert new unique key
+// 	return rel.Write(proc.Ctx, ukBatch)
+// }
+
+func FilterAndUpdateByRowId(
+	eg engine.Engine,
+	proc *process.Process,
+	bat *batch.Batch,
+	idxList [][]int32,
+	rels []engine.Relation,
+	ref []*plan.ObjectRef,
+	tableDefs []*plan.TableDef,
+	updateCols []map[string]int32,
+) (uint64, error) {
 	var affectedRows uint64
 	var delBatch *batch.Batch
 	var updateBatch *batch.Batch
@@ -62,114 +177,44 @@ func FilterAndUpdateUniqueKeyByRowId(proc *process.Process, bat *batch.Batch, id
 	}()
 
 	for i, setIdxList := range idxList {
-		if pkList[i] != -1 {
-			setIdxList = append(setIdxList, pkList[i])
-		}
-		attrs := make([]string, len(setIdxList)-1)
-		delBatch, updateBatch, err = filterRowIdForInsert(proc, bat, setIdxList, attrs)
-		if err != nil {
-			return 0, err
-		}
+		// get attrs, hasAutoCol
+		tableDef := tableDefs[i]
+		updateCol := updateCols[i]
+		attrs := make([]string, len(tableDef.Cols)-1)
 
-		if delBatch != nil {
-			affectedRows = affectedRows + uint64(delBatch.Length())
-			err = rels[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
-			if err != nil {
-				return 0, err
+		// prepare some data for update batch
+		hasAutoCol := false
+		pkPos := -1
+		compositePkey := ""
+		if tableDef.CompositePkey != nil {
+			compositePkey = tableDef.CompositePkey.Name
+		}
+		clusterBy := ""
+		if tableDef.ClusterBy != nil {
+			clusterBy = tableDef.ClusterBy.Name
+		}
+		updateNameToPos := make(map[string]int)
+		pos := 0
+		for j, col := range tableDef.Cols {
+			if col.Typ.AutoIncr {
+				if _, ok := updateCol[col.Name]; ok {
+					hasAutoCol = true
+				}
+			}
+			if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
+				pkPos = j
+			}
+			if col.Name != catalog.Row_ID {
+				attrs[pos] = col.Name
+				updateNameToPos[col.Name] = pos
+				pos++
 			}
 		}
-
-		if updateBatch != nil {
-			affectedRows = affectedRows + uint64(updateBatch.Length())
-			err = doInsertUniqueTable(proc, rels[i], updateBatch, pkList[i])
-			if err != nil {
-				return 0, err
-			}
-		}
-	}
-	return affectedRows, nil
-}
-
-func InsertUniqueKeyToTable(proc *process.Process, bat *batch.Batch, idxList [][]int32, rels []engine.Relation, pkList []int32) (uint64, error) {
-	var affectedRows uint64
-	for i, getIdxList := range idxList {
-		if pkList[i] != -1 {
-			getIdxList = append(getIdxList, pkList[i])
+		if compositePkey != "" {
+			pkPos = pos
 		}
 
-		attrs := make([]string, len(pkList))
-		batLen := bat.Vecs[0].Length()
-		affectedRows = affectedRows + uint64(batLen)
-		updateBatch, err := GetUpdateBatch(proc, bat, getIdxList, batLen, attrs, nil)
-		if err != nil {
-			return 0, err
-		}
-
-		err = doInsertUniqueTable(proc, rels[i], updateBatch, pkList[i])
-		if err != nil {
-			updateBatch.Clean(proc.Mp())
-			return 0, err
-		}
-	}
-	return affectedRows, nil
-}
-
-func doInsertUniqueTable(proc *process.Process, rel engine.Relation, updateBatch *batch.Batch, pkPos int32) error {
-	//updateBatch 、 pk的情况，重新构造一个要Insert的batch，
-	var ukBatch *batch.Batch
-	var bitMap *nulls.Nulls
-	var vec *vector.Vector
-	colCount := len(updateBatch.Vecs)
-	if pkPos == -1 {
-		//have no pk
-		ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName})
-		if colCount == 1 {
-			vec, _ = util.CompactSingleIndexCol(updateBatch.Vecs[0], proc)
-		} else {
-			vec, _ = util.SerialWithCompacted(updateBatch.Vecs, proc)
-		}
-		ukBatch.SetVector(0, vec)
-		ukBatch.SetZs(vec.Length(), proc.Mp())
-	} else {
-		ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName})
-		// the last idx is pk
-		if colCount == 2 {
-			vec, bitMap = util.CompactSingleIndexCol(updateBatch.Vecs[0], proc)
-		} else {
-			vs := make([]*vector.Vector, 0)
-			for j := 0; j < colCount-1; j++ {
-				vs = append(vs, updateBatch.Vecs[j])
-			}
-			vec, bitMap = util.SerialWithCompacted(vs, proc)
-		}
-		ukBatch.SetVector(0, vec)
-		ukBatch.SetZs(vec.Length(), proc.Mp())
-		// append pk vector
-		vec = util.CompactPrimaryCol(updateBatch.Vecs[len(updateBatch.Vecs)-1], bitMap, proc)
-		ukBatch.SetVector(1, vec)
-	}
-
-	// insert new unique key
-	return rel.Write(proc.Ctx, ukBatch)
-}
-
-func FilterAndUpdateByRowId(proc *process.Process, bat *batch.Batch, idxList [][]int32, rels []engine.Relation, attrsList [][]string,
-	hasAutoCol []bool, ref []*plan.ObjectRef, tableDef []*plan.TableDef, eg engine.Engine) (uint64, error) {
-	var affectedRows uint64
-	var delBatch *batch.Batch
-	var updateBatch *batch.Batch
-	var err error
-	defer func() {
-		if delBatch != nil {
-			delBatch.Clean(proc.Mp())
-		}
-		if updateBatch != nil {
-			updateBatch.Clean(proc.Mp())
-		}
-	}()
-
-	for i, setIdxList := range idxList {
-		delBatch, updateBatch, err = filterRowIdForUpdate(proc, bat, setIdxList, attrsList[i])
+		delBatch, updateBatch, err = filterRowIdForUpdate(proc, bat, setIdxList, attrs)
 		if err != nil {
 			return 0, err
 		}
@@ -178,24 +223,37 @@ func FilterAndUpdateByRowId(proc *process.Process, bat *batch.Batch, idxList [][
 		}
 		affectedRows = affectedRows + uint64(delBatch.Length())
 		if delBatch.Length() > 0 {
-			if tableDef != nil {
-				err := batchDataNotNullCheck(updateBatch, tableDef[i], proc.Ctx)
-				if err != nil {
-					return 0, err
-				}
-			}
-
-			if hasAutoCol != nil && hasAutoCol[i] {
-				if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef[i].Cols, updateBatch, uint64(ref[i].Obj), ref[i].SchemaName, tableDef[i].Name); err != nil {
-					return 0, err
-				}
-			}
-
+			// delete old rows
 			err = rels[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
 			if err != nil {
 				return 0, err
 			}
 
+			// check new rows not null
+			err := batchDataNotNullCheck(updateBatch, tableDef, proc.Ctx)
+			if err != nil {
+				return 0, err
+			}
+
+			// fill auto incr column
+			if hasAutoCol {
+				if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, updateBatch, uint64(ref[i].Obj), ref[i].SchemaName, tableDef.Name); err != nil {
+					return 0, err
+				}
+			}
+
+			//  append hidden columns
+			if compositePkey != "" {
+				util.FillCompositeClusterByBatch(updateBatch, compositePkey, proc)
+			}
+			if clusterBy != "" {
+				util.FillCompositeClusterByBatch(updateBatch, clusterBy, proc)
+			}
+
+			// write unique key table
+			writeUniqueTable(eg, proc, updateBatch, tableDef, ref[i].SchemaName, updateNameToPos, pkPos)
+
+			// write origin table
 			err = rels[i].Write(proc.Ctx, updateBatch)
 			if err != nil {
 				return 0, err
@@ -203,6 +261,72 @@ func FilterAndUpdateByRowId(proc *process.Process, bat *batch.Batch, idxList [][
 		}
 	}
 	return affectedRows, nil
+}
+
+func writeUniqueTable(eg engine.Engine, proc *process.Process, updateBatch *batch.Batch,
+	tableDef *plan.TableDef, dbName string, updateNameToPos map[string]int, pkPos int) error {
+	var ukBatch *batch.Batch
+
+	defer func() {
+		if ukBatch != nil {
+			ukBatch.Clean(proc.Mp())
+		}
+	}()
+
+	for _, def := range tableDef.Defs {
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+			// how to get relation?
+			for idx, tblName := range idxDef.UIdx.TableNames {
+				db, err := eg.Database(proc.Ctx, dbName, proc.TxnOperator)
+				if err != nil {
+					return err
+				}
+				rel, err := db.Relation(proc.Ctx, tblName)
+				if err != nil {
+					return err
+				}
+				partsLength := len(idxDef.UIdx.Fields[idx].Parts)
+				uniqueColumnPos := make([]int, partsLength)
+				for p, column := range idxDef.UIdx.Fields[idx].Parts {
+					uniqueColumnPos[p] = updateNameToPos[column]
+				}
+
+				colCount := len(uniqueColumnPos)
+				if pkPos == -1 {
+					//have no pk
+					ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName})
+				} else {
+					ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName})
+				}
+
+				var vec *vector.Vector
+				var bitMap *nulls.Nulls
+				if colCount == 1 {
+					idx := uniqueColumnPos[0]
+					vec, bitMap = util.CompactSingleIndexCol(updateBatch.Vecs[idx], proc)
+				} else {
+					vs := make([]*vector.Vector, colCount)
+					for vIdx, pIdx := range uniqueColumnPos {
+						vs[vIdx] = updateBatch.Vecs[pIdx]
+					}
+					vec, bitMap = util.SerialWithCompacted(vs, proc)
+				}
+				ukBatch.SetVector(0, vec)
+				ukBatch.SetZs(vec.Length(), proc.Mp())
+
+				if pkPos != -1 {
+					// have pk, append pk vector
+					vec = util.CompactPrimaryCol(updateBatch.Vecs[pkPos], bitMap, proc)
+					ukBatch.SetVector(1, vec)
+				}
+				err = rel.Write(proc.Ctx, ukBatch)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func filterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.Batch {
@@ -332,14 +456,15 @@ func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx con
 	}
 
 	for j := range tmpBat.Vecs {
+		nsp := tmpBat.Vecs[j].Nsp
 		if (tableDef.Cols[j].Primary && !tableDef.Cols[j].Typ.AutoIncr) ||
 			(tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility) {
-			if nulls.Any(tmpBat.Vecs[j].Nsp) {
+			if nulls.Any(nsp) {
 				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
 			}
 		}
 		if _, ok := compNameMap[tmpBat.Attrs[j]]; ok {
-			if nulls.Any(tmpBat.Vecs[j].Nsp) {
+			if nulls.Any(nsp) {
 				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
 			}
 		}
@@ -347,59 +472,59 @@ func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx con
 	return nil
 }
 
-func filterRowIdForInsert(proc *process.Process, bat *batch.Batch, idxList []int32, attrs []string) (*batch.Batch, *batch.Batch, error) {
-	rowIdMap := make(map[types.Rowid]struct{})
-	var rowSkip []bool
-	var err error
-	foundRowId := false
-	insertBatLen := 0
-	for i, idx := range idxList {
-		if bat.Vecs[idx].Typ.Oid == types.T_Rowid {
-			for j, r := range vector.MustTCols[types.Rowid](bat.Vecs[idx]) {
-				if bat.Vecs[idx].Nsp.Contains(uint64(j)) {
-					rowSkip = append(rowSkip, false)
-					insertBatLen++
-				} else {
-					rowSkip = append(rowSkip, true)
-					rowIdMap[r] = struct{}{}
-				}
-			}
-			foundRowId = true
-			idxList = append(idxList[:i], idxList[i+1:]...)
-			break
-		}
-	}
-	if !foundRowId {
-		return nil, nil, moerr.NewInternalError(proc.Ctx, "need rowid vector for update")
-	}
-	var delBatch *batch.Batch
-	var updateBatch *batch.Batch
+// func filterRowIdForInsert(proc *process.Process, bat *batch.Batch, idxList []int32, attrs []string) (*batch.Batch, *batch.Batch, error) {
+// 	rowIdMap := make(map[types.Rowid]struct{})
+// 	var rowSkip []bool
+// 	var err error
+// 	foundRowId := false
+// 	insertBatLen := 0
+// 	for i, idx := range idxList {
+// 		if bat.Vecs[idx].Typ.Oid == types.T_Rowid {
+// 			for j, r := range vector.MustTCols[types.Rowid](bat.Vecs[idx]) {
+// 				if bat.Vecs[idx].Nsp.Contains(uint64(j)) {
+// 					rowSkip = append(rowSkip, false)
+// 					insertBatLen++
+// 				} else {
+// 					rowSkip = append(rowSkip, true)
+// 					rowIdMap[r] = struct{}{}
+// 				}
+// 			}
+// 			foundRowId = true
+// 			idxList = append(idxList[:i], idxList[i+1:]...)
+// 			break
+// 		}
+// 	}
+// 	if !foundRowId {
+// 		return nil, nil, moerr.NewInternalError(proc.Ctx, "need rowid vector for update")
+// 	}
+// 	var delBatch *batch.Batch
+// 	var updateBatch *batch.Batch
 
-	batLen := len(rowIdMap)
-	if batLen > 0 {
-		// get delete batch
-		delVec := vector.New(types.T_Rowid.ToType())
-		rowIdList := make([]types.Rowid, len(rowIdMap))
-		i := 0
-		for rowId := range rowIdMap {
-			rowIdList[i] = rowId
-			i++
-		}
-		mp := proc.Mp()
-		vector.AppendFixed(delVec, rowIdList, mp)
-		delBatch = batch.New(true, []string{catalog.Row_ID})
-		delBatch.SetVector(0, delVec)
-		delBatch.SetZs(batLen, mp)
-	}
+// 	batLen := len(rowIdMap)
+// 	if batLen > 0 {
+// 		// get delete batch
+// 		delVec := vector.New(types.T_Rowid.ToType())
+// 		rowIdList := make([]types.Rowid, len(rowIdMap))
+// 		i := 0
+// 		for rowId := range rowIdMap {
+// 			rowIdList[i] = rowId
+// 			i++
+// 		}
+// 		mp := proc.Mp()
+// 		vector.AppendFixed(delVec, rowIdList, mp)
+// 		delBatch = batch.New(true, []string{catalog.Row_ID})
+// 		delBatch.SetVector(0, delVec)
+// 		delBatch.SetZs(batLen, mp)
+// 	}
 
-	// get update batch
-	if insertBatLen == 0 {
-		return delBatch, nil, nil
-	}
-	updateBatch, err = GetUpdateBatch(proc, bat, idxList, insertBatLen, attrs, rowSkip)
-	if err != nil {
-		delBatch.Clean(proc.Mp())
-		return nil, nil, err
-	}
-	return delBatch, updateBatch, nil
-}
+// 	// get update batch
+// 	if insertBatLen == 0 {
+// 		return delBatch, nil, nil
+// 	}
+// 	updateBatch, err = GetUpdateBatch(proc, bat, idxList, insertBatLen, attrs, rowSkip)
+// 	if err != nil {
+// 		delBatch.Clean(proc.Mp())
+// 		return nil, nil, err
+// 	}
+// 	return delBatch, updateBatch, nil
+// }

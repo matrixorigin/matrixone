@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -67,57 +66,45 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 
 	// append delete node
 	updateCtx := &plan.UpdateCtx{
-		Ref:        rewriteInfo.tblInfo.objRef,
-		Idx:        make([]*plan.IdList, len(rewriteInfo.tblInfo.objRef)),
-		Attr:       make([]*plan.Attrs, len(rewriteInfo.tblInfo.objRef)),
-		TableDefs:  make([]*plan.TableDef, len(rewriteInfo.tblInfo.tableDefs)),
-		HasAutoCol: make([]bool, len(rewriteInfo.tblInfo.objRef)),
+		Ref:       rewriteInfo.tblInfo.objRef,
+		TableDefs: rewriteInfo.tblInfo.tableDefs,
+		Idx:       make([]*plan.IdList, len(rewriteInfo.tblInfo.objRef)),
+		UpdateCol: make([]*plan.ColPosMap, len(rewriteInfo.tblInfo.updateCol)),
 
 		IdxRef: rewriteInfo.onIdxTbl,
 		IdxIdx: rewriteInfo.onIdx,
-		IdxPk:  rewriteInfo.onIdxPk,
-		IdxVal: make([]*plan.IdList, len(rewriteInfo.onIdxVal)),
 
-		OnRestrictRef:  rewriteInfo.onRestrictTbl,
-		OnRestrictIdx:  rewriteInfo.onRestrict,
-		OnCascadeRef:   rewriteInfo.onCascadeTbl,
-		OnCascadeAttrs: make([]*plan.Attrs, len(rewriteInfo.onCascadeAttr)),
-		OnCascadeIdx:   make([]*plan.IdList, len(rewriteInfo.onCascade)),
-		OnSetRef:       rewriteInfo.onSetTbl,
-		OnSetAttrs:     make([]*plan.Attrs, len(rewriteInfo.onSetAttr)),
+		OnRestrictRef: rewriteInfo.onRestrictTbl,
+		OnRestrictIdx: rewriteInfo.onRestrict,
+
+		OnCascadeRef:       rewriteInfo.onCascadeRef,
+		OnCascadeDef:       rewriteInfo.onCascadeTableDef,
+		OnCascadeIdx:       make([]*plan.IdList, len(rewriteInfo.onCascade)),
+		OnCascadeUpdateCol: make([]*plan.ColPosMap, len(rewriteInfo.onCascadeUpdateCol)),
+
+		OnSetRef:       rewriteInfo.onSetRef,
+		OnSetDef:       rewriteInfo.onCascadeTableDef,
 		OnSetIdx:       make([]*plan.IdList, len(rewriteInfo.onSet)),
+		OnSetUpdateCol: make([]*plan.ColPosMap, len(rewriteInfo.onSetUpdateCol)),
 
 		ParentRef: rewriteInfo.parentTbl,
 		ParentIdx: rewriteInfo.parentIdx,
 	}
 	idx := int64(0)
 	for i, tableDef := range rewriteInfo.tblInfo.tableDefs {
-		updateCtx.TableDefs[i] = DeepCopyTableDef(tableDef)
-		updateCtx.HasAutoCol[i] = false
+		updateCtx.TableDefs[i] = tableDef
 		idxList := make([]int64, len(tableDef.Cols))
-		attrs := make([]string, 0, len(tableDef.Cols)-1)
-		for j, col := range tableDef.Cols {
-			if col.Typ.AutoIncr {
-				if _, ok := rewriteInfo.tblInfo.updateKeys[i][col.Name]; ok {
-					updateCtx.HasAutoCol[i] = true
-				}
-			}
-			if col.Name != catalog.Row_ID {
-				attrs = append(attrs, col.Name)
-			}
+		for j := range tableDef.Cols {
 			idxList[j] = idx
 			idx++
 		}
 		updateCtx.Idx[i] = &plan.IdList{
 			List: idxList,
 		}
-		updateCtx.Attr[i] = &plan.Attrs{
-			List: attrs,
-		}
 	}
-	for i, idxList := range rewriteInfo.onIdxVal {
-		updateCtx.IdxVal[i] = &plan.IdList{
-			List: idxList,
+	for i, idxMap := range rewriteInfo.tblInfo.updateCol {
+		updateCtx.UpdateCol[i] = &plan.ColPosMap{
+			Map: idxMap,
 		}
 	}
 	for i, idxList := range rewriteInfo.onCascade {
@@ -125,19 +112,19 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 			List: idxList,
 		}
 	}
+	for i, idxMap := range rewriteInfo.onCascadeUpdateCol {
+		updateCtx.OnCascadeUpdateCol[i] = &plan.ColPosMap{
+			Map: idxMap,
+		}
+	}
 	for i, idxList := range rewriteInfo.onSet {
 		updateCtx.OnSetIdx[i] = &plan.IdList{
 			List: idxList,
 		}
 	}
-	for i, attrs := range rewriteInfo.onCascadeAttr {
-		updateCtx.OnCascadeAttrs[i] = &plan.Attrs{
-			List: attrs,
-		}
-	}
-	for i, attrs := range rewriteInfo.onSetAttr {
-		updateCtx.OnSetAttrs[i] = &plan.Attrs{
-			List: attrs,
+	for i, idxMap := range rewriteInfo.onSetUpdateCol {
+		updateCtx.OnSetUpdateCol[i] = &plan.ColPosMap{
+			Map: idxMap,
 		}
 	}
 

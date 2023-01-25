@@ -360,7 +360,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		DelSource: make([]engine.Relation, len(oldCtx.Ref)),
 		DelRef:    oldCtx.Ref,
 
-		ParentSource: make([][]engine.Relation, len(oldCtx.ParentIds)),
+		ParentSource: make([][]engine.Relation, len(oldCtx.ParentIdx)),
 
 		DelIdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
 		DelIdxIdx:    make([]int32, len(oldCtx.IdxIdx)),
@@ -370,9 +370,11 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		OnCascadeIdx:    make([]int32, len(oldCtx.OnCascadeIdx)),
 		OnCascadeSource: make([]engine.Relation, len(oldCtx.OnCascadeRef)),
 
-		OnSetSource: make([]engine.Relation, len(oldCtx.OnSetRef)),
-		OnSetIdx:    make([][]int32, len(oldCtx.OnSetIdx)),
-		OnSetAttrs:  make([][]string, len(oldCtx.OnSetAttrs)),
+		OnSetSource:    make([]engine.Relation, len(oldCtx.OnSetRef)),
+		OnSetIdx:       make([][]int32, len(oldCtx.OnSetIdx)),
+		OnSetTableDef:  oldCtx.OnSetDef,
+		OnSetRef:       oldCtx.OnSetRef,
+		OnSetUpdateCol: make([]map[string]int32, len(oldCtx.OnSetUpdateCol)),
 
 		CanTruncate: oldCtx.CanTruncate,
 	}
@@ -385,7 +387,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			}
 			delCtx.DelSource[i] = rel
 		}
-		for i, idList := range oldCtx.ParentIds {
+		for i, idList := range oldCtx.ParentIdx {
 			rels := make([]engine.Relation, len(idList.List))
 			for j, id := range idList.List {
 				ref := &plan.ObjectRef{
@@ -408,10 +410,6 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			for j, id := range list.List {
 				delCtx.OnSetIdx[i][j] = int32(id)
 			}
-		}
-		for i, list := range oldCtx.OnSetAttrs {
-			delCtx.OnSetAttrs[i] = make([]string, len(list.List))
-			copy(delCtx.OnSetAttrs[i], list.List)
 		}
 		for i, ref := range oldCtx.Ref {
 			rel, err := getRel(proc, eg, ref)
@@ -441,10 +439,14 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			}
 			delCtx.OnSetSource[i] = rel
 		}
+		for i, idxMap := range oldCtx.OnSetUpdateCol {
+			delCtx.OnSetUpdateCol[i] = idxMap.Map
+		}
 	}
 
 	return &deletion.Argument{
 		DeleteCtx: delCtx,
+		Engine:    eg,
 	}, nil
 }
 
@@ -552,41 +554,39 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
 	oldCtx := n.UpdateCtx
 	updateCtx := &update.UpdateCtx2{
-		Source:     make([]engine.Relation, len(oldCtx.Ref)),
-		Attrs:      make([][]string, len(oldCtx.Attr)),
-		Idxs:       make([][]int32, len(oldCtx.Idx)),
-		TableDefs:  oldCtx.TableDefs,
-		Ref:        oldCtx.Ref,
-		HasAutoCol: oldCtx.HasAutoCol,
+		Source:    make([]engine.Relation, len(oldCtx.Ref)),
+		Idxs:      make([][]int32, len(oldCtx.Idx)),
+		TableDefs: oldCtx.TableDefs,
+		Ref:       oldCtx.Ref,
+		UpdateCol: make([]map[string]int32, len(oldCtx.UpdateCol)),
 
 		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
-		IdxVal:    make([][]int32, len(oldCtx.IdxVal)),
-		IdxPk:     oldCtx.IdxPk,
+		IdxIdx:    oldCtx.IdxIdx,
 
 		OnRestrictIdx: oldCtx.OnRestrictIdx,
 
-		OnCascadeIdx:    make([][]int32, len(oldCtx.OnCascadeIdx)),
-		OnCascadeSource: make([]engine.Relation, len(oldCtx.OnCascadeRef)),
-		OnCascadeAttrs:  make([][]string, len(oldCtx.OnSetAttrs)),
+		OnCascadeIdx:       make([][]int32, len(oldCtx.OnCascadeIdx)),
+		OnCascadeSource:    make([]engine.Relation, len(oldCtx.OnCascadeRef)),
+		OnCascadeRef:       oldCtx.OnCascadeRef,
+		OnCascadeTableDef:  oldCtx.OnCascadeDef,
+		OnCascadeUpdateCol: make([]map[string]int32, len(oldCtx.OnCascadeUpdateCol)),
 
-		OnSetSource: make([]engine.Relation, len(oldCtx.OnSetRef)),
-		OnSetIdx:    make([][]int32, len(oldCtx.OnSetIdx)),
-		OnSetAttrs:  make([][]string, len(oldCtx.OnSetAttrs)),
+		OnSetSource:    make([]engine.Relation, len(oldCtx.OnSetRef)),
+		OnSetIdx:       make([][]int32, len(oldCtx.OnSetIdx)),
+		OnSetRef:       oldCtx.OnSetRef,
+		OnSetTableDef:  oldCtx.OnSetDef,
+		OnSetUpdateCol: make([]map[string]int32, len(oldCtx.OnSetUpdateCol)),
 
 		ParentIdx: oldCtx.ParentIdx,
 	}
 
+	for i, idxMap := range oldCtx.UpdateCol {
+		updateCtx.UpdateCol[i] = idxMap.Map
+	}
 	for i, list := range oldCtx.Idx {
 		updateCtx.Idxs[i] = make([]int32, len(list.List))
 		for j, id := range list.List {
 			updateCtx.Idxs[i][j] = int32(id)
-		}
-	}
-	for i, list := range oldCtx.IdxVal {
-		updateCtx.IdxVal[i] = make([]int32, len(list.List)+1)
-		updateCtx.IdxVal[i][0] = oldCtx.IdxIdx[i]
-		for j, id := range list.List {
-			updateCtx.IdxVal[i][j+1] = int32(id)
 		}
 	}
 	for i, list := range oldCtx.OnSetIdx {
@@ -595,23 +595,11 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 			updateCtx.OnSetIdx[i][j] = int32(id)
 		}
 	}
-	for i, list := range oldCtx.Attr {
-		updateCtx.Attrs[i] = make([]string, len(list.List))
-		copy(updateCtx.Attrs[i], list.List)
-	}
-	for i, list := range oldCtx.OnSetAttrs {
-		updateCtx.OnSetAttrs[i] = make([]string, len(list.List))
-		copy(updateCtx.OnSetAttrs[i], list.List)
-	}
 	for i, list := range oldCtx.OnCascadeIdx {
 		updateCtx.OnCascadeIdx[i] = make([]int32, len(list.List))
 		for j, id := range list.List {
 			updateCtx.OnCascadeIdx[i][j] = int32(id)
 		}
-	}
-	for i, list := range oldCtx.OnCascadeAttrs {
-		updateCtx.OnCascadeAttrs[i] = make([]string, len(list.List))
-		copy(updateCtx.OnCascadeAttrs[i], list.List)
 	}
 	for i, ref := range oldCtx.Ref {
 		rel, err := getRel(proc, eg, ref)
@@ -640,6 +628,12 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 			return nil, err
 		}
 		updateCtx.OnSetSource[i] = rel
+	}
+	for i, idxMap := range oldCtx.OnCascadeUpdateCol {
+		updateCtx.OnCascadeUpdateCol[i] = idxMap.Map
+	}
+	for i, idxMap := range oldCtx.OnSetUpdateCol {
+		updateCtx.OnSetUpdateCol[i] = idxMap.Map
 	}
 
 	return &update.Argument{
