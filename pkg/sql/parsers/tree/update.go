@@ -109,7 +109,9 @@ const (
 	AUTO       = "auto"
 	NOCOMPRESS = "none"
 	GZIP       = "gzip"
-	BZIP2      = "bz2"
+	GZ         = "gz" // alias of gzip
+	BZIP2      = "bzip2"
+	BZ2        = "bz2" // alias for bzip2
 	FLATE      = "flate"
 	LZW        = "lzw"
 	ZLIB       = "zlib"

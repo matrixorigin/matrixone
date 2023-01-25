@@ -675,6 +675,12 @@ func TestLockedStream(t *testing.T) {
 	)
 }
 
+func TestIssue7678(t *testing.T) {
+	s := &stream{lastReceivedSequence: 10}
+	s.init(0, false)
+	assert.Equal(t, uint32(0), s.lastReceivedSequence)
+}
+
 func testBackendSend(t *testing.T,
 	handleFunc func(goetty.IOSession, interface{}, uint64) error,
 	testFunc func(b *remoteBackend),
@@ -753,6 +759,13 @@ type testBackend struct {
 }
 
 func (b *testBackend) Send(ctx context.Context, request Message) (*Future, error) {
+	b.active()
+	f := newFuture(nil)
+	f.init(request.GetID(), ctx)
+	return f, nil
+}
+
+func (b *testBackend) SendInternal(ctx context.Context, request Message) (*Future, error) {
 	b.active()
 	f := newFuture(nil)
 	f.init(request.GetID(), ctx)
