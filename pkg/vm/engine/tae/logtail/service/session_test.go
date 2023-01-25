@@ -43,19 +43,26 @@ func TestSessionManger(t *testing.T) {
 	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
+	heartbeatInterval := 50 * time.Millisecond
 	chunkSize := 1024
 
 	/* ---- 1. register sessioin A ---- */
 	csA := mockNormalClientSession(logger.RawLogger())
 	streamA := mockMorpcStream(csA, 10, chunkSize)
-	sessionA := sm.GetSession(ctx, logger, sendTimeout, pooler, notifier, streamA, poisionTime)
+	sessionA := sm.GetSession(
+		ctx, logger, pooler, notifier, streamA,
+		sendTimeout, poisionTime, heartbeatInterval,
+	)
 	require.NotNil(t, sessionA)
 	require.Equal(t, 1, len(sm.ListSession()))
 
 	/* ---- 2. register sessioin B ---- */
 	csB := mockNormalClientSession(logger.RawLogger())
 	streamB := mockMorpcStream(csB, 11, chunkSize)
-	sessionB := sm.GetSession(ctx, logger, sendTimeout, pooler, notifier, streamB, poisionTime)
+	sessionB := sm.GetSession(
+		ctx, logger, pooler, notifier, streamB,
+		sendTimeout, poisionTime, heartbeatInterval,
+	)
 	require.NotNil(t, sessionB)
 	require.Equal(t, 2, len(sm.ListSession()))
 
@@ -78,9 +85,13 @@ func TestSessionError(t *testing.T) {
 	stream := mockMorpcStream(cs, 10, 1024)
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
+	heartbeatInterval := 50 * time.Millisecond
 
 	tableA := mockTable(1, 2, 3)
-	ss := NewSession(ctx, logger, sendTimeout, pooler, notifier, stream, poisionTime)
+	ss := NewSession(
+		ctx, logger, pooler, notifier, stream,
+		sendTimeout, poisionTime, heartbeatInterval,
+	)
 
 	/* ---- 1. send subscription response ---- */
 	err := ss.SendSubscriptionResponse(
@@ -116,9 +127,13 @@ func TestPoisionSession(t *testing.T) {
 	stream := mockMorpcStream(cs, 10, 1024)
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
+	heartbeatInterval := 50 * time.Millisecond
 
 	tableA := mockTable(1, 2, 3)
-	ss := NewSession(ctx, logger, sendTimeout, pooler, notifier, stream, poisionTime)
+	ss := NewSession(
+		ctx, logger, pooler, notifier, stream,
+		sendTimeout, poisionTime, heartbeatInterval,
+	)
 
 	/* ---- 1. send response repeatedly ---- */
 	for i := 0; i < cap(ss.sendChan)+2; i++ {
@@ -149,14 +164,18 @@ func TestSession(t *testing.T) {
 	stream := mockMorpcStream(cs, 10, 1024)
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
+	heartbeatInterval := 50 * time.Millisecond
 
 	// constructs tables
 	tableA := mockTable(1, 2, 3)
-	idA := TableID(tableA.String())
+	idA := MarshalTableID(&tableA)
 	tableB := mockTable(1, 4, 3)
-	idB := TableID(tableB.String())
+	idB := MarshalTableID(&tableB)
 
-	ss := NewSession(ctx, logger, sendTimeout, pooler, notifier, stream, poisionTime)
+	ss := NewSession(
+		ctx, logger, pooler, notifier, stream,
+		sendTimeout, poisionTime, heartbeatInterval,
+	)
 	defer ss.PostClean()
 
 	// no table resigered now
@@ -322,7 +341,7 @@ func (m *notifySessionError) NotifySessionError(ss *Session, err error) {
 
 func mockWrapLogtail(table api.TableID) wrapLogtail {
 	return wrapLogtail{
-		id: TableID(table.String()),
+		id: MarshalTableID(&table),
 		tail: logtail.TableLogtail{
 			Table: &table,
 		},

@@ -68,6 +68,22 @@ func TestService(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
+	/* ---- generate incremental logtail ---- */
+	go func() {
+		for {
+			now, _ := rt.Clock().Now()
+			if err := logtailServer.NotifyLogtail(
+				now,
+				mockLogtail(tableA),
+				mockLogtail(tableB),
+				mockLogtail(tableC),
+			); err != nil {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
 	/* ---- construct logtail client ---- */
 	codec := morpc.NewMessageCodec(func() morpc.Message { return &LogtailResponseSegment{} },
 		morpc.WithCodecPayloadCopyBufferSize(16*mpool.KB),
@@ -90,7 +106,7 @@ func TestService(t *testing.T) {
 
 	/* ---- send subscription request via logtail client ---- */
 	{
-		t.Log("send subscription request via logtail client")
+		t.Log("===> send subscription request via logtail client")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		err := logtailClient.Subscribe(ctx, tableA)
@@ -99,7 +115,7 @@ func TestService(t *testing.T) {
 
 	/* ---- wait subscription response via logtail client ---- */
 	{
-		t.Log("wait subscription response via logtail client")
+		t.Log("===> wait subscription response via logtail client")
 		resp, err := logtailClient.Receive()
 		require.NoError(t, err)
 		require.NotNil(t, resp.GetSubscribeResponse())
@@ -108,7 +124,7 @@ func TestService(t *testing.T) {
 
 	/* ---- wait update response via logtail client ---- */
 	{
-		t.Log("wait update response via logtail client")
+		t.Log("===> wait update response via logtail client")
 		resp, err := logtailClient.Receive()
 		require.NoError(t, err)
 		require.NotNil(t, resp.GetUpdateResponse())
@@ -118,16 +134,16 @@ func TestService(t *testing.T) {
 
 	/* ---- send unsubscription request via logtail client ---- */
 	{
-		t.Log("send unsubscription request via logtail client")
+		t.Log("===> send unsubscription request via logtail client")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		err := logtailClient.Unsubscribe(ctx, tableA)
 		require.NoError(t, err)
 	}
 
-	/* ---- wait subscription response via logtail client ---- */
+	/* ---- wait unsubscription response via logtail client ---- */
 	{
-		t.Log("wait unsubscription response via logtail client")
+		t.Log("===> wait unsubscription response via logtail client")
 		for {
 			resp, err := logtailClient.Receive()
 			require.NoError(t, err)
@@ -136,15 +152,6 @@ func TestService(t *testing.T) {
 				break
 			}
 		}
-	}
-
-	/* ---- wait update response via logtail client ---- */
-	{
-		t.Log("wait update response via logtail client")
-		resp, err := logtailClient.Receive()
-		require.NoError(t, err)
-		require.NotNil(t, resp.GetUpdateResponse())
-		require.Equal(t, 0, len(resp.GetUpdateResponse().LogtailList))
 	}
 }
 

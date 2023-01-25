@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -40,10 +39,9 @@ const (
 
 	// minimal duration to detect slow morpc stream
 	minStreamPoisionTime = 5 * time.Millisecond
+	// maximum duration to detect slow morpc stream
+	maxStreamPoisionTime = 500 * time.Millisecond
 )
-
-// TableID is type for api.TableID
-type TableID string
 
 type ServerOption func(*LogtailServer)
 
@@ -118,16 +116,16 @@ type LogtailServer struct {
 
 	rt     runtime.Runtime
 	logger *log.MOLogger
-	clock  clock.Clock
 
+	// TODO: change s.cfg.LogtailCollectInterval as hearbeat interval
 	cfg *options.LogtailServerCfg
 
-	ssmgr      *SessionManager
-	waterline  *Waterliner
-	subscribed *TableStacker
+	ssmgr     *SessionManager
+	waterline *Waterliner
 
 	errChan chan sessionError // errChan has no buffer in order to improve sensitivity.
 	subChan chan subscription
+	event   *Notifier
 
 	logtail taelogtail.Logtailer
 
@@ -143,16 +141,14 @@ func NewLogtailServer(
 	address string, cfg *options.LogtailServerCfg, logtail taelogtail.Logtailer, rt runtime.Runtime, opts ...ServerOption,
 ) (*LogtailServer, error) {
 	s := &LogtailServer{
-		rt:         rt,
-		logger:     rt.Logger(),
-		clock:      rt.Clock(),
-		cfg:        cfg,
-		ssmgr:      NewSessionManager(),
-		waterline:  NewWaterliner(rt.Clock()),
-		subscribed: NewTableStacker(),
-		errChan:    make(chan sessionError),
-		subChan:    make(chan subscription, 10),
-		logtail:    logtail,
+		rt:        rt,
+		logger:    rt.Logger(),
+		cfg:       cfg,
+		ssmgr:     NewSessionManager(),
+		waterline: NewWaterliner(),
+		errChan:   make(chan sessionError),
+		subChan:   make(chan subscription, 10),
+		logtail:   logtail,
 	}
 
 	for _, opt := range opts {
@@ -206,6 +202,9 @@ func NewLogtailServer(
 		LogtailServiceRPCName, stopper.WithLogger(s.logger.RawLogger()),
 	)
 
+	// receive logtail on event
+	s.event = NewNotifier(s.rootCtx, eventBufferSize)
+
 	return s, nil
 }
 
@@ -257,9 +256,12 @@ func (s *LogtailServer) onSubscription(
 ) error {
 	logger := s.logger
 
-	tableID := TableID(req.Table.String())
+	tableID := MarshalTableID(req.Table)
 	session := s.ssmgr.GetSession(
-		s.rootCtx, logger, s.cfg.ResponseSendTimeout, s.pool.responses, s, stream, s.streamPoisionTime(),
+		s.rootCtx, logger, s.pool.responses, s, stream,
+		s.cfg.ResponseSendTimeout,
+		s.streamPoisionTime(),
+		s.cfg.LogtailCollectInterval,
 	)
 
 	repeated := session.Register(tableID, *req.Table)
@@ -296,18 +298,17 @@ func (s *LogtailServer) onSubscription(
 func (s *LogtailServer) onUnsubscription(
 	sendCtx context.Context, stream morpcStream, req *logtail.UnsubscribeRequest,
 ) error {
-	tableID := TableID(req.Table.String())
+	tableID := MarshalTableID(req.Table)
 	session := s.ssmgr.GetSession(
-		s.rootCtx, s.logger, s.cfg.ResponseSendTimeout, s.pool.responses, s, stream, s.streamPoisionTime(),
+		s.rootCtx, s.logger, s.pool.responses, s, stream,
+		s.cfg.ResponseSendTimeout,
+		s.streamPoisionTime(),
+		s.cfg.LogtailCollectInterval,
 	)
 
 	state := session.Unregister(tableID)
 	if state == TableNotFound {
 		return nil
-	}
-
-	if state == TableSubscribed {
-		s.subscribed.Unregister(tableID)
 	}
 
 	return session.SendUnsubscriptionResponse(sendCtx, *req.Table)
@@ -318,6 +319,9 @@ func (s *LogtailServer) streamPoisionTime() time.Duration {
 	duration := s.cfg.LogtailCollectInterval * 2
 	if duration < minStreamPoisionTime {
 		duration = minStreamPoisionTime
+	}
+	if duration > maxStreamPoisionTime {
+		duration = maxStreamPoisionTime
 	}
 	return duration
 }
@@ -353,20 +357,15 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 			if e.err != nil {
 				e.session.PostClean()
 				s.ssmgr.DeleteSession(e.session.stream)
-				s.subscribed.Unregister(e.session.ListSubscribedTable()...)
 			}
 		}
 	}
 }
 
-// logtailSender sends total or additional logtail.
+// logtailSender sends total or incremental logtail.
 func (s *LogtailServer) logtailSender(ctx context.Context) {
 	logger := s.logger
 
-	publishTicker := time.NewTicker(s.cfg.LogtailCollectInterval)
-	defer publishTicker.Stop()
-
-	risk := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -419,46 +418,36 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 				// mark table as subscribed
 				sub.session.AdvanceState(sub.tableID)
-
-				// register subscribed table
-				s.subscribed.Register(sub.tableID, table)
 			}
 
 			subscriptionFunc(sub)
 
-		case <-publishTicker.C:
+		case e, ok := <-s.event.C:
+			if !ok {
+				logger.Info("publishemtn channel closed")
+				return
+			}
+
 			publishmentFunc := func() {
-				defer func() {
-					if risk >= s.cfg.MaxLogtailFetchFailure {
-						panic("fail to fetch additional logtail many times")
-					}
-				}()
-
 				from := s.waterline.Waterline()
-				to, _ := s.clock.Now()
+				to := e.to
 
-				tables := s.subscribed.ListTable()
-				wraps := make([]wrapLogtail, 0, len(tables))
-				for _, t := range tables {
-					tail, err := s.logtail.TableLogtail(ctx, t.table, from, to)
-					if err != nil {
-						logger.Error("fail to fetch additional logtail", zap.Error(err), zap.Any("table", t.table))
-						risk += 1
-						return
-					}
+				wraps := make([]wrapLogtail, 0, len(e.logtails))
+				for _, tail := range e.logtails {
 					// skip empty logtail
 					if tail.CkpLocation == "" && len(tail.Commands) == 0 {
 						continue
 					}
-					wraps = append(wraps, wrapLogtail{id: t.id, tail: tail})
+					wraps = append(wraps, wrapLogtail{
+						id:   MarshalTableID(tail.GetTable()),
+						tail: tail,
+					})
 				}
 
-				logger.Debug("publish additional logtail", zap.Any("From", from.String()), zap.Any("To", to.String()))
-
-				// publish additional logtail for all subscribed tables
+				// publish incremental logtail for all subscribed tables
 				for _, session := range s.ssmgr.ListSession() {
 					if err := session.Publish(ctx, from, to, wraps...); err != nil {
-						logger.Error("fail to publish additional logtail", zap.Error(err), zap.Uint64("stream-id", session.stream.streamID))
+						logger.Error("fail to publish incremental logtail", zap.Error(err), zap.Uint64("stream-id", session.stream.streamID))
 						continue
 					}
 				}
@@ -494,4 +483,11 @@ func (s *LogtailServer) Start() error {
 	}
 
 	return s.rpc.Start()
+}
+
+// NotifyLogtail provides incremental logtail for server.
+func (s *LogtailServer) NotifyLogtail(
+	to timestamp.Timestamp, tails ...logtail.TableLogtail,
+) error {
+	return s.event.NotifyLogtail(to, tails...)
 }

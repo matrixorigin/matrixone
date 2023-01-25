@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -53,18 +54,20 @@ func NewSessionManager() *SessionManager {
 func (sm *SessionManager) GetSession(
 	rootCtx context.Context,
 	logger *log.MOLogger,
-	sendTimeout time.Duration,
 	responses ResponsePool,
 	notifier SessionErrorNotifier,
 	stream morpcStream,
+	sendTimeout time.Duration,
 	poisionTime time.Duration,
+	heartbeatInterval time.Duration,
 ) *Session {
 	sm.Lock()
 	defer sm.Unlock()
 
 	if _, ok := sm.clients[stream]; !ok {
 		sm.clients[stream] = NewSession(
-			rootCtx, logger, sendTimeout, responses, notifier, stream, poisionTime,
+			rootCtx, logger, responses, notifier, stream,
+			sendTimeout, poisionTime, heartbeatInterval,
 		)
 	}
 	return sm.clients[stream]
@@ -162,8 +165,15 @@ type Session struct {
 	poisionTime time.Duration
 	sendChan    chan message
 
+	active int32
+
 	mu     sync.RWMutex
 	tables map[TableID]TableState
+
+	heartbeatInterval time.Duration
+	heartbeatTimer    *time.Timer
+	exactFrom         timestamp.Timestamp
+	publishInit       sync.Once
 }
 
 type SessionErrorNotifier interface {
@@ -174,24 +184,27 @@ type SessionErrorNotifier interface {
 func NewSession(
 	rootCtx context.Context,
 	logger *log.MOLogger,
-	sendTimeout time.Duration,
 	responses ResponsePool,
 	notifier SessionErrorNotifier,
 	stream morpcStream,
+	sendTimeout time.Duration,
 	poisionTime time.Duration,
+	heartbeatInterval time.Duration,
 ) *Session {
 	ctx, cancel := context.WithCancel(rootCtx)
 	ss := &Session{
-		sessionCtx:  ctx,
-		cancelFunc:  cancel,
-		logger:      logger,
-		sendTimeout: sendTimeout,
-		responses:   responses,
-		notifier:    notifier,
-		stream:      stream,
-		poisionTime: poisionTime,
-		sendChan:    make(chan message, 16), // buffer response for morpc client session
-		tables:      make(map[TableID]TableState),
+		sessionCtx:        ctx,
+		cancelFunc:        cancel,
+		logger:            logger,
+		sendTimeout:       sendTimeout,
+		responses:         responses,
+		notifier:          notifier,
+		stream:            stream,
+		poisionTime:       poisionTime,
+		sendChan:          make(chan message, 16), // buffer response for morpc client session
+		tables:            make(map[TableID]TableState),
+		heartbeatInterval: heartbeatInterval,
+		heartbeatTimer:    time.NewTimer(heartbeatInterval),
 	}
 
 	sender := func() {
@@ -290,15 +303,46 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 	return qualified
 }
 
-// Publish publishes additional logtail.
+// Publish publishes incremental logtail.
 func (ss *Session) Publish(
 	ctx context.Context, from, to timestamp.Timestamp, wraps ...wrapLogtail,
 ) error {
+	// no need to send incremental logtail if no table subscribed
+	if atomic.LoadInt32(&ss.active) <= 0 {
+		return nil
+	}
+
+	// keep `logtail.UpdateResponse.From` monotonous
+	ss.publishInit.Do(func() {
+		ss.exactFrom = from
+	})
+
 	sendCtx, cancel := context.WithTimeout(ctx, ss.sendTimeout)
 	defer cancel()
 
 	qualified := ss.FilterLogtail(wraps...)
-	return ss.SendUpdateResponse(sendCtx, from, to, qualified...)
+	// if there's no incremental logtail, heartbeat by interval
+	if len(qualified) == 0 {
+		select {
+		case <-ss.heartbeatTimer.C:
+			break
+		default:
+			return nil
+		}
+	}
+
+	ss.logger.Debug("publish incremental logtail",
+		zap.Any("From", from.String()),
+		zap.Any("To", to.String()),
+		zap.Uint64("stream-id", ss.stream.streamID),
+	)
+
+	err := ss.SendUpdateResponse(sendCtx, ss.exactFrom, to, qualified...)
+	if err == nil {
+		ss.heartbeatTimer.Reset(ss.heartbeatInterval)
+		ss.exactFrom = to
+	}
+	return err
 }
 
 // TransitionState marks table as subscribed.
@@ -329,7 +373,11 @@ func (ss *Session) SendSubscriptionResponse(
 ) error {
 	resp := ss.responses.Acquire()
 	resp.Response = newSubscritpionResponse(tail)
-	return ss.SendResponse(sendCtx, resp)
+	err := ss.SendResponse(sendCtx, resp)
+	if err == nil {
+		atomic.AddInt32(&ss.active, 1)
+	}
+	return err
 }
 
 // SendUnsubscriptionResponse sends unsubscription response.
@@ -338,7 +386,11 @@ func (ss *Session) SendUnsubscriptionResponse(
 ) error {
 	resp := ss.responses.Acquire()
 	resp.Response = newUnsubscriptionResponse(table)
-	return ss.SendResponse(sendCtx, resp)
+	err := ss.SendResponse(sendCtx, resp)
+	if err == nil {
+		atomic.AddInt32(&ss.active, -1)
+	}
+	return err
 }
 
 // SendUpdateResponse sends publishment response.
