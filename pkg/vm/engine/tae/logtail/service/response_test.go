@@ -23,7 +23,7 @@ import (
 
 func TestResponseSize(t *testing.T) {
 	maxMessageSize := 1024
-	pool := NewSegmentPool(maxMessageSize)
+	pool := NewLogtailServerSegmentPool(maxMessageSize)
 
 	/* --- Fetch a segment --- */
 	prev := pool.Acquire()

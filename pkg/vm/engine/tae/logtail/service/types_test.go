@@ -17,8 +17,9 @@ package service
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
 func TestTableID(t *testing.T) {

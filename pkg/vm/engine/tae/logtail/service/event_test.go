@@ -30,10 +30,9 @@ func TestPublisher(t *testing.T) {
 
 	go func() {
 		for i := 1; i <= eventNum; i++ {
-			err := event.NotifyLogtail(
-				mockTimestamp(int64(i), 0),
-				mockLogtail(mockTable(uint64(i), uint64(i), uint64(i))),
-			)
+			ts := mockTimestamp(int64(i), 0)
+			table := mockTable(uint64(i), uint64(i), uint64(i))
+			err := event.NotifyLogtail(ts, mockLogtail(table, ts))
 			require.NoError(t, err)
 		}
 	}()

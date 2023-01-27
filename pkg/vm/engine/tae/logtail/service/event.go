@@ -21,8 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
-// FIXME: make buffer size configurable
 const (
+	// FIXME: do we need to make event buffer size configurable?
 	eventBufferSize = 6 * 1024
 )
 

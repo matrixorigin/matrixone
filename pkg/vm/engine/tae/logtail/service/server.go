@@ -79,6 +79,7 @@ func WithServerSendTimeout(timeout time.Duration) ServerOption {
 	}
 }
 
+// FIXME: is MaxLogtailFetchFailure necessary?
 func WithServerMaxLogtailFetchFailure(max int) ServerOption {
 	return func(s *LogtailServer) {
 		s.cfg.MaxLogtailFetchFailure = max
@@ -108,16 +109,16 @@ type subscription struct {
 // LogtailServer handles logtail push logic.
 type LogtailServer struct {
 	pool struct {
-		requests  RequestPool
-		responses ResponsePool
-		segments  SegmentPool
+		requests  LogtailRequestPool
+		responses LogtailResponsePool
+		segments  LogtailServerSegmentPool
 	}
 	maxChunkSize int
 
 	rt     runtime.Runtime
 	logger *log.MOLogger
 
-	// TODO: change s.cfg.LogtailCollectInterval as hearbeat interval
+	// FIXME: change s.cfg.LogtailCollectInterval as hearbeat interval
 	cfg *options.LogtailServerCfg
 
 	ssmgr     *SessionManager
@@ -155,12 +156,11 @@ func NewLogtailServer(
 		opt(s)
 	}
 
-	s.logger = s.logger.Named(LogtailServiceRPCName).
-		With(zap.String("server-id", uuid.NewString()))
+	s.logger = s.logger.With(zap.String("server-id", uuid.NewString()))
 
-	s.pool.requests = NewRequestPool()
-	s.pool.responses = NewResponsePool()
-	s.pool.segments = NewSegmentPool(int(s.cfg.RpcMaxMessageSize))
+	s.pool.requests = NewLogtailRequestPool()
+	s.pool.responses = NewLogtailResponsePool()
+	s.pool.segments = NewLogtailServerSegmentPool(int(s.cfg.RpcMaxMessageSize))
 	s.maxChunkSize = s.pool.segments.LeastEffectiveCapacity()
 	if s.maxChunkSize <= 0 {
 		panic("rpc max message size isn't enough")
@@ -174,7 +174,9 @@ func NewLogtailServer(
 	if s.cfg.RpcEnableChecksum {
 		codecOpts = append(codecOpts, morpc.WithCodecEnableChecksum())
 	}
-	codec := morpc.NewMessageCodec(s.pool.requests.Acquire, codecOpts...)
+	codec := morpc.NewMessageCodec(func() morpc.Message {
+		return s.pool.requests.Acquire()
+	}, codecOpts...)
 
 	rpc, err := morpc.NewRPCServer(LogtailServiceRPCName, address, codec,
 		morpc.WithServerLogger(s.logger.RawLogger()),

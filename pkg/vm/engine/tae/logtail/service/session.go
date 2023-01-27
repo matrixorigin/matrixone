@@ -20,13 +20,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"go.uber.org/zap"
 )
 
 type TableState int
@@ -54,7 +55,7 @@ func NewSessionManager() *SessionManager {
 func (sm *SessionManager) GetSession(
 	rootCtx context.Context,
 	logger *log.MOLogger,
-	responses ResponsePool,
+	responses LogtailResponsePool,
 	notifier SessionErrorNotifier,
 	stream morpcStream,
 	sendTimeout time.Duration,
@@ -104,7 +105,7 @@ type morpcStream struct {
 	limit    int
 	logger   *log.MOLogger
 	cs       morpc.ClientSession
-	segments SegmentPool
+	segments LogtailServerSegmentPool
 }
 
 // Close closes morpc client session.
@@ -158,7 +159,7 @@ type Session struct {
 
 	logger      *log.MOLogger
 	sendTimeout time.Duration
-	responses   ResponsePool
+	responses   LogtailResponsePool
 	notifier    SessionErrorNotifier
 
 	stream      morpcStream
@@ -184,7 +185,7 @@ type SessionErrorNotifier interface {
 func NewSession(
 	rootCtx context.Context,
 	logger *log.MOLogger,
-	responses ResponsePool,
+	responses LogtailResponsePool,
 	notifier SessionErrorNotifier,
 	stream morpcStream,
 	sendTimeout time.Duration,

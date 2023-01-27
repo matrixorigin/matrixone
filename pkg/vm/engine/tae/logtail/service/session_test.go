@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 func TestSessionManger(t *testing.T) {
@@ -39,7 +40,7 @@ func TestSessionManger(t *testing.T) {
 
 	// constructs mocker
 	logger := mockMOLogger()
-	pooler := NewResponsePool()
+	pooler := NewLogtailResponsePool()
 	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	sendTimeout := 5 * time.Second
 	poisionTime := 10 * time.Millisecond
@@ -79,7 +80,7 @@ func TestSessionError(t *testing.T) {
 
 	// constructs mocker
 	logger := mockMOLogger()
-	pooler := NewResponsePool()
+	pooler := NewLogtailResponsePool()
 	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	cs := mockBrokenClientSession()
 	stream := mockMorpcStream(cs, 10, 1024)
@@ -121,7 +122,7 @@ func TestPoisionSession(t *testing.T) {
 
 	// constructs mocker
 	logger := mockMOLogger()
-	pooler := NewResponsePool()
+	pooler := NewLogtailResponsePool()
 	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	cs := mockBlockStream()
 	stream := mockMorpcStream(cs, 10, 1024)
@@ -158,7 +159,7 @@ func TestSession(t *testing.T) {
 
 	// constructs mocker
 	logger := mockMOLogger()
-	pooler := NewResponsePool()
+	pooler := NewLogtailResponsePool()
 	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	cs := mockNormalClientSession(logger.RawLogger())
 	stream := mockMorpcStream(cs, 10, 1024)
@@ -245,14 +246,18 @@ func TestSession(t *testing.T) {
 	require.NoError(t, err)
 
 	/* ---- 8. send update response ---- */
-	err = ss.SendUpdateResponse(
-		context.Background(),
-		mockTimestamp(1, 0),
-		mockTimestamp(2, 0),
-		mockLogtail(tableA),
-		mockLogtail(tableB),
-	)
-	require.NoError(t, err)
+	{
+		from := mockTimestamp(1, 0)
+		to := mockTimestamp(2, 0)
+		err = ss.SendUpdateResponse(
+			context.Background(),
+			from,
+			to,
+			mockLogtail(tableA, to),
+			mockLogtail(tableB, to),
+		)
+		require.NoError(t, err)
+	}
 
 	/* ---- 9. publish update response ---- */
 	err = ss.Publish(
@@ -348,17 +353,18 @@ func mockWrapLogtail(table api.TableID) wrapLogtail {
 	}
 }
 
-func mockLogtail(table api.TableID) logtail.TableLogtail {
+func mockLogtail(table api.TableID, ts timestamp.Timestamp) logtail.TableLogtail {
 	return logtail.TableLogtail{
 		CkpLocation: "checkpoint",
 		Table:       &table,
+		Ts:          &ts,
 	}
 }
 
 func mockMorpcStream(
 	cs morpc.ClientSession, id uint64, maxMessageSize int,
 ) morpcStream {
-	segments := NewSegmentPool(maxMessageSize)
+	segments := NewLogtailServerSegmentPool(maxMessageSize)
 
 	return morpcStream{
 		streamID: id,

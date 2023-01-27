@@ -49,8 +49,8 @@ func (r *LogtailResponse) Size() int {
 	return r.ProtoSize()
 }
 
-// ResponsePool acquires or releases LogtailResponse.
-type ResponsePool interface {
+// LogtailResponsePool acquires or releases LogtailResponse.
+type LogtailResponsePool interface {
 	// Acquire fetches item from pool.
 	Acquire() *LogtailResponse
 
@@ -62,7 +62,7 @@ type responsePool struct {
 	pool *sync.Pool
 }
 
-func NewResponsePool() ResponsePool {
+func NewLogtailResponsePool() LogtailResponsePool {
 	return &responsePool{
 		pool: &sync.Pool{
 			New: func() any {
@@ -104,25 +104,53 @@ func (s *LogtailResponseSegment) Size() int {
 	return s.ProtoSize()
 }
 
-// SegmentPool acquires or releases LogtailResponseSegment.
-type SegmentPool interface {
+// LogtailResponseSegmentPool acquires or releases LogtailResponseSegment.
+type LogtailResponseSegmentPool interface {
 	// Acquire fetches item from pool.
 	Acquire() *LogtailResponseSegment
 
 	// Release puts item back to pool.
 	Release(*LogtailResponseSegment)
-
-	// LeastEffectiveCapacity evaluates least payload limit.
-	LeastEffectiveCapacity() int
 }
 
 type segmentPool struct {
+	pool *sync.Pool
+}
+
+func NewLogtailResponseSegmentPool() LogtailResponseSegmentPool {
+	return &segmentPool{
+		pool: &sync.Pool{
+			New: func() any {
+				return &LogtailResponseSegment{}
+			},
+		},
+	}
+}
+
+func (p *segmentPool) Acquire() *LogtailResponseSegment {
+	return p.pool.Get().(*LogtailResponseSegment)
+}
+
+func (p *segmentPool) Release(seg *LogtailResponseSegment) {
+	seg.Reset()
+	p.pool.Put(seg)
+}
+
+// LogtailServerSegmentPool describes segment pool for logtail server.
+type LogtailServerSegmentPool interface {
+	LogtailResponseSegmentPool
+
+	// LeastEffectiveCapacity evaluates least effective payload size.
+	LeastEffectiveCapacity() int
+}
+
+type serverSegmentPool struct {
 	maxMessageSize int
 	pool           *sync.Pool
 }
 
-func NewSegmentPool(maxMessageSize int) SegmentPool {
-	s := &segmentPool{
+func NewLogtailServerSegmentPool(maxMessageSize int) LogtailServerSegmentPool {
+	s := &serverSegmentPool{
 		maxMessageSize: maxMessageSize,
 		pool: &sync.Pool{
 			New: func() any {
@@ -135,18 +163,18 @@ func NewSegmentPool(maxMessageSize int) SegmentPool {
 	return s
 }
 
-func (s *segmentPool) Acquire() *LogtailResponseSegment {
+func (s *serverSegmentPool) Acquire() *LogtailResponseSegment {
 	return s.pool.Get().(*LogtailResponseSegment)
 }
 
-func (s *segmentPool) Release(seg *LogtailResponseSegment) {
+func (s *serverSegmentPool) Release(seg *LogtailResponseSegment) {
 	buf := seg.Payload
 	seg.Reset()
 	seg.Payload = buf[:cap(buf)]
 	s.pool.Put(seg)
 }
 
-func (s *segmentPool) LeastEffectiveCapacity() int {
+func (s *serverSegmentPool) LeastEffectiveCapacity() int {
 	segment := s.Acquire()
 	defer s.Release(segment)
 
