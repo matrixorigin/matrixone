@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -115,13 +116,15 @@ func (h *mergedBlkBuilder) finish() []*catalog.BlockEntry {
 type deletableSegBuilder struct {
 	segHasNonDropBlk bool
 	maxSegId         uint64
-	candidates       []*catalog.SegmentEntry
+	segCandids       []*catalog.SegmentEntry // appendable
+	nsegCandids      []*catalog.SegmentEntry // non-appendable
 }
 
 func (d *deletableSegBuilder) reset() {
 	d.segHasNonDropBlk = false
 	d.maxSegId = 0
-	d.candidates = d.candidates[:0]
+	d.segCandids = d.segCandids[:0]
+	d.nsegCandids = d.nsegCandids[:0]
 }
 
 func (d *deletableSegBuilder) resetForNewSeg() {
@@ -135,26 +138,36 @@ func (d *deletableSegBuilder) hintNonDropBlock() {
 }
 
 func (d *deletableSegBuilder) push(entry *catalog.SegmentEntry) {
-	if d.maxSegId < entry.ID {
+	isAppendable := entry.IsAppendable()
+	if isAppendable && d.maxSegId < entry.ID {
 		d.maxSegId = entry.ID
 	}
+	if d.segHasNonDropBlk {
+		return
+	}
 	// all blocks has been dropped
-	if !d.segHasNonDropBlk {
-		d.candidates = append(d.candidates, entry)
+	if isAppendable {
+		d.segCandids = append(d.segCandids, entry)
+	} else {
+		d.nsegCandids = append(d.nsegCandids, entry)
 	}
 }
 
 // copy out segment entries expect the one with max segment id.
 func (d *deletableSegBuilder) finish() []*catalog.SegmentEntry {
-	sort.Slice(d.candidates, func(i, j int) bool { return d.candidates[i].ID < d.candidates[j].ID })
-	if last := len(d.candidates) - 1; last >= 0 && d.candidates[last].ID == d.maxSegId {
-		d.candidates = d.candidates[:last]
+	sort.Slice(d.segCandids, func(i, j int) bool { return d.segCandids[i].ID < d.segCandids[j].ID })
+	if last := len(d.segCandids) - 1; last >= 0 && d.segCandids[last].ID == d.maxSegId {
+		d.segCandids = d.segCandids[:last]
 	}
-	if len(d.candidates) == 0 {
+	if len(d.segCandids) == 0 {
 		return nil
 	}
-	ret := make([]*catalog.SegmentEntry, len(d.candidates))
-	copy(ret, d.candidates)
+	ret := make([]*catalog.SegmentEntry, len(d.segCandids)+len(d.nsegCandids))
+	copy(ret[:len(d.segCandids)], d.segCandids)
+	copy(ret[len(d.segCandids):], d.nsegCandids)
+	if cnt := len(d.nsegCandids); cnt != 0 {
+		logutil.Info("deletable nseg", zap.Int("cnt", cnt))
+	}
 	return ret
 }
 
@@ -247,7 +260,8 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 			stats: make(map[uint64]*stat),
 		},
 		segBuilder: &deletableSegBuilder{
-			candidates: make([]*catalog.SegmentEntry, 0),
+			segCandids:  make([]*catalog.SegmentEntry, 0),
+			nsegCandids: make([]*catalog.SegmentEntry, 0),
 		},
 		blkBuilder: &mergedBlkBuilder{
 			blocks: make(itemSet, 0, constHeapCapacity),
@@ -323,7 +337,7 @@ func (s *MergeTaskBuilder) PostExecute() error {
 
 func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if !tableEntry.IsActive() {
-		err = moerr.GetOkStopCurrRecur()
+		return moerr.GetOkStopCurrRecur()
 	}
 	s.trySchedMergeTask()
 	s.resetForTable(tableEntry.ID)
@@ -331,9 +345,13 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 }
 
 func (s *MergeTaskBuilder) onSegment(segmentEntry *catalog.SegmentEntry) (err error) {
-	if !segmentEntry.IsActive() || !segmentEntry.IsAppendable() {
-		err = moerr.GetOkStopCurrRecur()
+	if !segmentEntry.IsActive() || (!segmentEntry.IsAppendable() && segmentEntry.IsSorted()) {
+		return moerr.GetOkStopCurrRecur()
 	}
+	if !segmentEntry.IsAppendable() {
+		logutil.Info("Mergeblocks scan nseg", zap.Uint64("seg", segmentEntry.ID))
+	}
+	// handle appendable segs and unsorted non-appendable segs(which was written by cn)
 	s.segBuilder.resetForNewSeg()
 	return
 }

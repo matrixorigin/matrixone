@@ -431,7 +431,7 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 }
 
 func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
-	bat := r.collectCheckpointMetadata()
+	bat := r.collectCheckpointMetadata(start, end)
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
 	writer := blockio.NewWriter(context.Background(), r.fs, name)
 	if _, err = writer.WriteBlock(bat); err != nil {
