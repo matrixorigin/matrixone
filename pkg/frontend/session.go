@@ -1719,6 +1719,10 @@ func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
 	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
 }
 
+func (tcc *TxnCompilerContext) GetEngine() engine.Engine {
+	return tcc.GetTxnHandler().GetStorage()
+}
+
 func (tcc *TxnCompilerContext) GetQueryType() QueryType {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
