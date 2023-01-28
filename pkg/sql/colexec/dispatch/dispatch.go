@@ -142,8 +142,8 @@ func CloseStreams(streams []*WrapperStream, proc *process.Process, ctr container
 			message := cnclient.AcquireMessage()
 			{
 				message.Id = streams[i].Stream.ID()
-				message.Cmd = 12345
-				message.Sid = pipeline.DirectBatchEndMessage
+				message.Cmd = pipeline.BatchMessage
+				message.Sid = pipeline.BatchMessageEnd
 				message.Uuid = uuid[:]
 				message.BatchCnt = uint64(ctr.cnts[i][j])
 			}

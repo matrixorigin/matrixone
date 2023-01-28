@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -941,7 +942,7 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 	arg.RemoteRegs = make([]colexec.WrapperNode, 0, scopeLen)
 	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
 
-	for i, s := range ss {
+	for _, s := range ss {
 		if s.IsEnd {
 			continue
 		}
@@ -999,7 +1000,7 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 					message := cnclient.AcquireMessage()
 					{
 						message.Id = stream.Stream.ID()
-						message.Cmd = 12345
+						message.Cmd = pipeline.BatchMessage
 						message.Data = encodeBatch
 						message.Uuid = uuid[:]
 					}

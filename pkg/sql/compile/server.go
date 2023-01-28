@@ -32,34 +32,33 @@ func NewServer(addr string) *Server {
 		return srv
 	}
 	srv = &Server{
-		mp:          make(map[uint64]*process.WaitRegister),
-		uuidMap:     make(map[uuid.UUID]*process.WaitRegister),
-		batchCntMap: make(map[uuid.UUID]uint64),
+		idMap:       RelationMap{id: 0, mp: make(map[uint64]*process.WaitRegister)},
+		uuidMap:     UuidMap{mp: make(map[uuid.UUID]*process.WaitRegister)},
+		batchCntMap: BatchCntMap{mp: make(map[uuid.UUID]uint64)},
 		chanBufMp:   new(sync.Map),
 	}
 	return srv
 }
 
 func (srv *Server) GetConnector(id uint64) *process.WaitRegister {
-	srv.Lock()
-	defer srv.Unlock()
-	defer func() { delete(srv.mp, id) }()
-	return srv.mp[id]
+	srv.idMap.Lock()
+	defer srv.idMap.Unlock()
+	defer func() { delete(srv.idMap.mp, id) }()
+	return srv.idMap.mp[id]
 }
 
 func (srv *Server) RegistConnector(reg *process.WaitRegister) uint64 {
-	srv.Lock()
-	defer srv.Unlock()
-	srv.mp[srv.id] = reg
-	defer func() { srv.id++ }()
-	return srv.id
+	srv.idMap.Lock()
+	defer srv.idMap.Unlock()
+	srv.idMap.mp[srv.idMap.id] = reg
+	defer func() { srv.idMap.id++ }()
+	return srv.idMap.id
 }
 
 func (srv *Server) GetRegFromUuidMap(u uuid.UUID) (*process.WaitRegister, bool) {
-	srv.Lock()
-	defer srv.Unlock()
-	defer func() { delete(srv.uuidMap, u) }()
-	r, ok := srv.uuidMap[u]
+	srv.uuidMap.RLock()
+	defer srv.uuidMap.RUnlock()
+	r, ok := srv.uuidMap.mp[u]
 	if !ok {
 		return nil, false
 	}
@@ -67,43 +66,44 @@ func (srv *Server) GetRegFromUuidMap(u uuid.UUID) (*process.WaitRegister, bool) 
 }
 
 func (srv *Server) PutRegFromUuidMap(u uuid.UUID, reg *process.WaitRegister) error {
-	srv.Lock()
-	defer srv.Unlock()
-	if r, ok := srv.uuidMap[u]; ok {
+	srv.uuidMap.Lock()
+	defer srv.uuidMap.Unlock()
+	if r, ok := srv.uuidMap.mp[u]; ok {
 		if reg != r {
 			return moerr.NewInternalErrorNoCtx("PutRegFromUuidMap error! the uuid has exsit with different reg!")
 		}
 		return nil
 	}
-	srv.uuidMap[u] = reg
+	srv.uuidMap.mp[u] = reg
+	return nil
+}
+
+func (srv *Server) RemoveUuidFromUuidMap(u uuid.UUID) error {
+	srv.uuidMap.Lock()
+	defer srv.uuidMap.Unlock()
+	delete(srv.uuidMap.mp, u)
 	return nil
 }
 
 func (srv *Server) ReceiveNormalBatch(u uuid.UUID) {
-	srv.Lock()
-	defer srv.Unlock()
-	if _, ok := srv.batchCntMap[u]; !ok {
-		srv.batchCntMap[u] = 0
+	srv.batchCntMap.Lock()
+	defer srv.batchCntMap.Unlock()
+	if _, ok := srv.batchCntMap.mp[u]; !ok {
+		srv.batchCntMap.mp[u] = 0
 	}
-	srv.batchCntMap[u]++
+	srv.batchCntMap.mp[u]++
 }
 
 func (srv *Server) IsEndStatus(u uuid.UUID, requireCnt uint64) bool {
-	srv.Lock()
-	defer srv.Unlock()
-	if cnt, ok := srv.batchCntMap[u]; ok {
+	srv.batchCntMap.Lock()
+	defer srv.batchCntMap.Unlock()
+	if cnt, ok := srv.batchCntMap.mp[u]; ok {
 		if cnt == requireCnt {
-			delete(srv.batchCntMap, u)
+			delete(srv.batchCntMap.mp, u)
 			return true
 		}
 	}
 	return false
-}
-
-func (srv *Server) UpdateRegFromUuidMap(u uuid.UUID, reg *process.WaitRegister) {
-	srv.Lock()
-	defer srv.Unlock()
-	srv.uuidMap[u] = reg
 }
 
 func (srv *Server) HandleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {

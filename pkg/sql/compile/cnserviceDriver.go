@@ -136,9 +136,8 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		panic("unexpected message type for cn-server")
 	}
 	// it's a Batch
-	if m.GetCmd() == 12345 {
-		var v any
-		//var dataBuffer []byte
+	if m.IsBatchMessage() {
+		var wg *process.WaitRegister
 		var ok bool
 		opUuid, err := uuid.FromBytes(m.GetUuid())
 		if err != nil {
@@ -146,36 +145,28 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		}
 
 		for {
-			if v, ok = srv.chanBufMp.Load(opUuid); !ok {
+			if wg, ok = srv.GetRegFromUuidMap(opUuid); !ok {
 				runtime.Gosched()
 			} else {
 				break
 			}
 		}
-		//if dataBuffer, ok := srv.chanBufMp.Load(m.GetID()); !ok {
-		//srv.chanBufMp.Store(m.GetID(), dataBuffer)
-		//}
-		wg := v.(*process.WaitRegister)
 
-		if m.IsDirectBatchEnd() {
+		if m.IsBatchMessageEnd() {
 			requireCnt := m.GetBatchCnt()
 			for {
 				if srv.IsEndStatus(opUuid, requireCnt) {
 					wg.Ch <- nil
 					srv.chanBufMp.Delete(m.GetID())
 					close(wg.Ch)
+
 					break
 				} else {
+					runtime.Gosched()
 				}
 			}
 			return nil, err
 		} else {
-			//if len(dataBuffer) == 0 {
-			//dataBuffer = m.Data
-			//} else {
-			//dataBuffer = append(dataBuffer, m.Data...)
-			//}
-
 			if m.WaitingNextToMerge() {
 				return nil, nil
 			}
@@ -188,7 +179,6 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 				return nil, err
 			}
 			wg.Ch <- bat
-			//srv.chanBufMp.Store(m.GetID(), []byte{})
 			srv.ReceiveNormalBatch(opUuid)
 			return nil, nil
 		}
@@ -669,18 +659,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
 	for _, u := range s.UuidToRegIdx {
-		srv.chanBufMp.Store(u.Uuid, s.Proc.Reg.MergeReceivers[u.Idx])
-		//v, ok := srv.chanBufMp.Load(u.Uuid)
-		//if !ok {
-		//fmt.Printf("[generateScope] put srv.chanBufMp uuid [%s]'s reg:(%d)\n", u.Uuid, &s.Proc.Reg.MergeReceivers[u.Idx])
-		//srv.chanBufMp.Store(u.Uuid, s.Proc.Reg.MergeReceivers[u.Idx])
-		//} else {
-		//fmt.Printf("[generateScope] update uuid [%s]'s reg:(%d)\n", u.Uuid, &v)
-		//wg := v.(*process.WaitRegister)
-		//wg.Ctx = s.Proc.Ctx
-		//srv.chanBufMp.Store(u.Uuid, wg)
-		//}
-		//fmt.Printf("[generateScope] uuid 2 register mapping success! uuid -> reg: %s -> (%d, %d)\n", u.Uuid, u.Idx, &v)
+		srv.PutRegFromUuidMap(u.Uuid, s.Proc.Reg.MergeReceivers[u.Idx])
 	}
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
