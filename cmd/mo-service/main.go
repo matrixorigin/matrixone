@@ -287,13 +287,14 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
+		collector := export.NewMOCollector(ctx)
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
 			if ctx, err = motrace.Init(ctx,
 				motrace.WithMOVersion(SV.MoVersion),
 				motrace.WithNode(UUID, nodeRole),
 				motrace.EnableTracer(!SV.DisableTrace),
 				motrace.WithBatchProcessMode(SV.BatchProcessor),
-				motrace.WithBatchProcessor(export.NewMOCollector(ctx)),
+				motrace.WithBatchProcessor(collector),
 				motrace.WithFSWriterFactory(export.GetFSWriterFactory4Trace(fs, UUID, nodeRole)),
 				motrace.WithExportInterval(SV.TraceExportInterval),
 				motrace.WithLongQueryTime(SV.LongQueryTime),
@@ -312,10 +313,14 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		initWG.Wait()
 	}
 	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, &SV, UUID, nodeRole, metric.WithWriterFactory(writerFactory),
-			metric.WithExportInterval(SV.MetricExportInterval),
-			metric.WithUpdateInterval(SV.MetricUpdateStorageUsageInterval.Duration),
-			metric.WithMultiTable(SV.MetricMultiTable))
+		stopper.RunNamedTask("metric", func(ctx context.Context) {
+			metric.InitMetric(ctx, nil, &SV, UUID, nodeRole, metric.WithWriterFactory(writerFactory),
+				metric.WithExportInterval(SV.MetricExportInterval),
+				metric.WithUpdateInterval(SV.MetricUpdateStorageUsageInterval.Duration),
+				metric.WithMultiTable(SV.MetricMultiTable))
+			<-ctx.Done()
+			metric.StopMetricSync()
+		})
 	}
 	if err = export.InitMerge(ctx, SV.MergeCycle.Duration, SV.MergeMaxFileSize); err != nil {
 		return err
