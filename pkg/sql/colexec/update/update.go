@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 
@@ -63,11 +62,12 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	updateCtx := p.UpdateCtx
 
 	// check parent, if have any null, throw error
-	for _, idx := range updateCtx.ParentIdx {
-		if nulls.Any(bat.Vecs[idx].Nsp) {
-			return false, moerr.NewInternalError(proc.Ctx, "Cannot add or update a child row: a foreign key constraint fails")
-		}
-	}
+	// can not check here.  because 'update c1 set a = null where a =1' is ok. that's not constraint fail
+	// for _, idx := range updateCtx.ParentIdx {
+	// 	if nulls.Any(bat.Vecs[idx].Nsp) {
+	// 		return false, moerr.NewInternalError(proc.Ctx, "Cannot add or update a child row: a foreign key constraint fails")
+	// 	}
+	// }
 
 	// check child on restrict, if is not all null, throw error
 	for _, idx := range updateCtx.OnRestrictIdx {
@@ -84,21 +84,21 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 
 	// update child table(which ref on delete cascade)
 	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.OnCascadeIdx, updateCtx.OnCascadeSource,
-		updateCtx.OnCascadeRef, updateCtx.OnCascadeTableDef, updateCtx.OnCascadeUpdateCol)
+		updateCtx.OnCascadeRef, updateCtx.OnCascadeTableDef, updateCtx.OnCascadeUpdateCol, updateCtx.ParentIdx)
 	if err != nil {
 		return false, err
 	}
 
 	// update child table(which ref on delete set null)
 	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.OnSetIdx, updateCtx.OnSetSource,
-		updateCtx.OnSetRef, updateCtx.OnSetTableDef, updateCtx.OnSetUpdateCol)
+		updateCtx.OnSetRef, updateCtx.OnSetTableDef, updateCtx.OnSetUpdateCol, updateCtx.ParentIdx)
 	if err != nil {
 		return false, err
 	}
 
 	// update origin table
 	affectedRows, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.Idxs, updateCtx.Source,
-		updateCtx.Ref, updateCtx.TableDefs, updateCtx.UpdateCol)
+		updateCtx.Ref, updateCtx.TableDefs, updateCtx.UpdateCol, updateCtx.ParentIdx)
 	if err != nil {
 		return false, err
 	}

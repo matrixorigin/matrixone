@@ -1096,15 +1096,15 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 						// for update ,we need to reset column's value of child table, just like set null
 						updateCol := make(map[string]int32)
 						if info.typ == "update" {
-							fkIdMap := make(map[uint64]struct{})
-							for _, colId := range fk.Cols {
-								fkIdMap[colId] = struct{}{}
+							fkIdMap := make(map[uint64]uint64)
+							for j, colId := range fk.Cols {
+								fkIdMap[colId] = fk.ForeignCols[j]
 							}
 
 							var setIdxs []int64
 							for j, col := range childTableDef.Cols {
-								if _, ok := fkIdMap[col.ColId]; ok {
-									originName := id2name[col.ColId]
+								if pIdx, ok := fkIdMap[col.ColId]; ok {
+									originName := id2name[pIdx]
 									info.projectList = append(info.projectList, &plan.Expr{
 										Typ: col.Typ,
 										Expr: &plan.Expr_Col{

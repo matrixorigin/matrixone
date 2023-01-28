@@ -162,6 +162,7 @@ func FilterAndUpdateByRowId(
 	ref []*plan.ObjectRef,
 	tableDefs []*plan.TableDef,
 	updateCols []map[string]int32,
+	parentIdxs []int32,
 ) (uint64, error) {
 	var affectedRows uint64
 	var delBatch *batch.Batch
@@ -180,6 +181,10 @@ func FilterAndUpdateByRowId(
 		// get attrs, hasAutoCol
 		tableDef := tableDefs[i]
 		updateCol := updateCols[i]
+		parentIdx := int32(-1) //-1 means don't need check parent constraint
+		if len(parentIdxs) > 0 {
+			parentIdx = parentIdxs[i]
+		}
 		attrs := make([]string, len(tableDef.Cols)-1)
 
 		// prepare some data for update batch
@@ -214,7 +219,7 @@ func FilterAndUpdateByRowId(
 			pkPos = pos
 		}
 
-		delBatch, updateBatch, err = filterRowIdForUpdate(proc, bat, setIdxList, attrs)
+		delBatch, updateBatch, err = filterRowIdForUpdate(proc, bat, setIdxList, attrs, parentIdx, updateCol)
 		if err != nil {
 			return 0, err
 		}
@@ -350,7 +355,7 @@ func filterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.
 	return retBatch
 }
 
-func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int32, attrs []string) (*batch.Batch, *batch.Batch, error) {
+func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int32, attrs []string, parentIdx int32, updateCol map[string]int32) (*batch.Batch, *batch.Batch, error) {
 	rowIdMap := make(map[types.Rowid]struct{})
 	var rowSkip []bool
 	foundRowId := false
@@ -394,7 +399,7 @@ func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int
 	delBatch.SetZs(batLen, mp)
 
 	// get update batch
-	updateBatch, err := GetUpdateBatch(proc, bat, idxList, batLen, attrs, rowSkip)
+	updateBatch, err := GetUpdateBatch(proc, bat, idxList, batLen, attrs, rowSkip, parentIdx, updateCol)
 	if err != nil {
 		delBatch.Clean(proc.Mp())
 		return nil, nil, err
@@ -403,11 +408,34 @@ func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int
 	return delBatch, updateBatch, nil
 }
 
-func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, batLen int, attrs []string, rowSkip []bool) (*batch.Batch, error) {
+func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, batLen int, attrs []string, rowSkip []bool, parentIdx int32, updateCol map[string]int32) (*batch.Batch, error) {
 	updateBatch := batch.New(true, attrs)
 	var toVec *vector.Vector
+	var err error
+
 	for i, idx := range idxList {
 		fromVec := bat.Vecs[idx]
+		colName := attrs[i]
+		// if update values is not null, but parent is null, throw error
+		if _, exists := updateCol[colName]; exists && parentIdx > -1 {
+			parentVec := bat.Vecs[parentIdx]
+			if fromVec.IsConst() {
+				if !fromVec.IsScalarNull() {
+					for j := 0; j < batLen; j++ {
+						if !rowSkip[j] && parentVec.Nsp.Contains(uint64(j)) {
+							return nil, moerr.NewInternalError(proc.Ctx, "Cannot add or update a child row: a foreign key constraint fails")
+						}
+					}
+				}
+			} else {
+				for j := 0; j < fromVec.Length(); j++ {
+					if !rowSkip[j] && !fromVec.Nsp.Contains(uint64(j)) && parentVec.Nsp.Contains(uint64(j)) {
+						return nil, moerr.NewInternalError(proc.Ctx, "Cannot add or update a child row: a foreign key constraint fails")
+					}
+				}
+			}
+		}
+
 		if fromVec.IsConst() {
 			toVec = vector.New(bat.Vecs[idx].Typ)
 			if fromVec.IsScalarNull() {
@@ -420,7 +448,7 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 					}
 				}
 			} else {
-				err := vector.CopyConst(toVec, fromVec, batLen, proc.Mp())
+				err = vector.CopyConst(toVec, fromVec, batLen, proc.Mp())
 				if err != nil {
 					updateBatch.Clean(proc.Mp())
 					return nil, err
