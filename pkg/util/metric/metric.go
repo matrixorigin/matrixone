@@ -126,7 +126,9 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		logutil.Infof("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
 	}
 
+	SetUpdateStorageUsageInterval(initOpts.updateInterval)
 	logutil.Infof("metric with ExportInterval: %v", initOpts.exportInterval)
+	logutil.Infof("metric with UpdateStorageUsageInterval: %v", initOpts.updateInterval)
 }
 
 func StopMetricSync() {
@@ -310,6 +312,9 @@ type InitOptions struct {
 	multiTable bool // see WithMultiTable
 	// exportInterval
 	exportInterval time.Duration // see WithExportInterval
+	// updateInterval, update StorageUsage interval
+	// set by WithUpdateInterval
+	updateInterval time.Duration
 }
 
 type InitOption func(*InitOptions)
@@ -339,6 +344,12 @@ func WithMultiTable(multi bool) InitOption {
 func WithExportInterval(sec int) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.exportInterval = time.Second * time.Duration(sec)
+	})
+}
+
+func WithUpdateInterval(interval time.Duration) InitOption {
+	return InitOption(func(opts *InitOptions) {
+		opts.updateInterval = interval
 	})
 }
 
