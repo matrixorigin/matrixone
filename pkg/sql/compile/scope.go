@@ -284,6 +284,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	s.PreScopes = append(s.PreScopes, chp...)
 	s.PreScopes = append(s.PreScopes, left)
 	s.PreScopes = append(s.PreScopes, right)
+	fmt.Printf("join run: %s\n", DebugShowScopes([]*Scope{s}))
 	return s.MergeRun(c)
 }
 
@@ -418,7 +419,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 		s.Instructions[0] = vm.Instruction{
 			Op:  vm.Merge,
 			Idx: s.Instructions[0].Idx, // TODO: remove it
-			Arg: &merge.Argument{},
+			Arg: &merge.Argument{Addr: s.NodeInfo.Addr},
 		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
 		s.Instructions = s.Instructions[:2]
@@ -437,7 +438,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 		for i := 0; i < cnt; i++ {
 			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Ctx: s.Proc.Ctx,
-				Ch:  make(chan *batch.Batch, 1),
+				Ch:  make(chan *batch.Batch, 2),
 			}
 		}
 	}
@@ -447,7 +448,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			ss[i].appendInstruction(vm.Instruction{
 				Op: vm.Connector,
 				Arg: &connector.Argument{
-					Reg: s.Proc.Reg.MergeReceivers[i],
+					Reg: s.Proc.Reg.MergeReceivers[j],
 				},
 			})
 			j++

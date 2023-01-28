@@ -32,6 +32,7 @@ func String(_ any, buf *bytes.Buffer) {
 }
 
 func Prepare(proc *process.Process, arg any) error {
+	fmt.Printf("[joinjoin] prepare join, proc = %p\n", proc)
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
@@ -56,18 +57,18 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			ctr.state = Probe
 
 		case Probe:
-			fmt.Printf("[joinjoin] waiting ... reg(0) = %p\n", &proc.Reg.MergeReceivers[0].Ch)
+			fmt.Printf("[joinjoin] waiting ... reg(0) = %p. proc = %p\n", &proc.Reg.MergeReceivers[0].Ch, proc)
 			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			anal.WaitStop(start)
 
 			if bat == nil {
-				fmt.Printf("[joinjoin] receive nil batch. reg(0) = %p\n", &proc.Reg.MergeReceivers[0].Ch)
+				fmt.Printf("[joinjoin] receive nil batch. reg(0) = %p. proc = %p\n", &proc.Reg.MergeReceivers[0].Ch, proc)
 				ctr.state = End
 				continue
 			}
 			if bat.Length() == 0 {
-				fmt.Printf("[joinjoin] receive empty batch. reg(0) = %p\n", &proc.Reg.MergeReceivers[0].Ch)
+				fmt.Printf("[joinjoin] receive empty batch. reg(0) = %p. proc = %p\n", &proc.Reg.MergeReceivers[0].Ch, proc)
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
@@ -81,7 +82,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			return false, nil
 
 		default:
-			fmt.Printf("[joinjoin] join end. proc = %p\n", &proc)
+			fmt.Printf("[joinjoin] join end. proc = %p\n", proc)
 			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
@@ -90,18 +91,18 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	fmt.Printf("[joinjoin] waiting ... reg(1) = %p\n", &proc.Reg.MergeReceivers[1].Ch)
+	fmt.Printf("[joinjoin] waiting ... reg(1) = %p. proc = %p\n", &proc.Reg.MergeReceivers[1].Ch, proc)
 	start := time.Now()
 	bat := <-proc.Reg.MergeReceivers[1].Ch
 	anal.WaitStop(start)
 
 	if bat != nil {
-		fmt.Printf("[joinjoin] receive batch. reg(1) = %p\n", &proc.Reg.MergeReceivers[1].Ch)
+		fmt.Printf("[joinjoin] receive batch. reg(1) = %p. proc = %p\n", &proc.Reg.MergeReceivers[1].Ch, proc)
 		ctr.bat = bat
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
 		anal.Alloc(ctr.mp.Map().Size())
 	}
-	fmt.Printf("[joinjoin] receive nil batch. reg(1) = %p\n", &proc.Reg.MergeReceivers[1].Ch)
+	fmt.Printf("[joinjoin] receive nil batch. reg(1) = %p. proc = %p\n", &proc.Reg.MergeReceivers[1].Ch, proc)
 	return nil
 }
 

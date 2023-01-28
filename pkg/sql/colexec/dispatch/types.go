@@ -34,6 +34,8 @@ type container struct {
 	streams []*WrapperStream
 
 	c []context.Context
+
+	cnts [][]uint
 }
 
 type Argument struct {
@@ -51,15 +53,16 @@ type Argument struct {
 	RemoteRegs []colexec.WrapperNode
 
 	// streams is the stream which connect local CN with remote CN.
-	SendFunc func(streams []*WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, ctxs []context.Context, proc *process.Process) error
+	SendFunc func(streams []*WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, ctxs []context.Context, cnts [][]uint, proc *process.Process) error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	fmt.Printf("[dispatch] close dispatch %p , pipelineFailed = %t\n", proc, pipelineFailed)
 	if arg.CrossCN {
 		if pipelineFailed {
 			fmt.Printf("[CloseStreams] pipeline failed!\n")
 		}
-		CloseStreams(arg.ctr.streams, proc)
+		CloseStreams(arg.ctr.streams, proc, *arg.ctr)
 	}
 
 	if pipelineFailed {

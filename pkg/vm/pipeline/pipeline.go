@@ -16,6 +16,7 @@ package pipeline
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -140,8 +141,10 @@ func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
 			return end, err
 		}
 		if end {
+			fmt.Printf("[pipelinerun] pipeline end, cleanup. proc = %p\n", proc)
 			proc.Cancel()
 			p.cleanup(proc, false)
+			fmt.Printf("[pipelinerun] pipeline end, cleanup done. proc = %p\n", proc)
 			return end, nil
 		}
 	}

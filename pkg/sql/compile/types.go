@@ -144,6 +144,7 @@ type Server struct {
 
 	uuidMap map[uuid.UUID]*process.WaitRegister
 
+	batchCntMap map[uuid.UUID]uint64
 	// chanMp will be used in two ways
 	// 1. uuid --> WaitRegister, we need to know the batch which is recieved from
 	// remote CN should be filled into which chan

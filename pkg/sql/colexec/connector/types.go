@@ -15,6 +15,8 @@
 package connector
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -24,6 +26,7 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	fmt.Printf("[colexecConnector] begin connector free. proc = %p, pipelineFailed = %t\n", proc, pipelineFailed)
 	if pipelineFailed {
 		for len(arg.Reg.Ch) > 0 {
 			bat := <-arg.Reg.Ch
@@ -36,7 +39,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 	select {
 	case arg.Reg.Ch <- nil:
+		fmt.Printf("[colexecConnector] put nil to ch %p. proc = %p\n", &(arg.Reg.Ch), proc)
 	case <-arg.Reg.Ctx.Done():
+		fmt.Printf("[colexecConnector] ctx done. proc = %p\n", proc)
 	}
 	close(arg.Reg.Ch)
+	fmt.Printf("[colexecConnector] connector close done. proc = %p\n", proc)
 }

@@ -399,6 +399,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		if err != nil {
 			return nil, err
 		}
+		// RelationName
+		fmt.Printf("[compilePlanScope] table scan (table: %s) idx = %d\n", ss[0].DataSource.RelationName, c.anal.curr)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_FILTER:
 		curr := c.anal.curr
@@ -411,6 +413,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_PROJECT:
 		curr := c.anal.curr
+		fmt.Printf("[compilePlanScope] node project idx = %d\n", c.anal.curr)
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
 		if err != nil {
@@ -854,7 +857,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 	}
 	switch joinTyp {
 	case plan.Node_INNER:
-		fmt.Printf("[compileJoin] joinType = Inner\n")
+		fmt.Printf("[compileJoin] joinType = Inner, idx = %d\n", c.anal.curr)
 		if len(n.OnList) == 0 {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1193,7 +1196,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		Op:      vm.Merge,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
-		Arg:     &merge.Argument{},
+		Arg:     &merge.Argument{Addr: c.addr},
 	})
 	c.anal.isFirst = false
 
@@ -1348,7 +1351,7 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 		Op:      vm.Merge,
 		Idx:     s.Instructions[0].Idx,
 		IsFirst: true,
-		Arg:     &merge.Argument{},
+		Arg:     &merge.Argument{Addr: s.NodeInfo.Addr},
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
@@ -1377,6 +1380,19 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[1]
+	fmt.Printf("[newRightScope] set chan[0] = %p\n", &rs.Proc.Reg.MergeReceivers[0].Ch)
+
+	for i, u := range s.UuidToRegIdx {
+		if u.Idx == 1 {
+			rs.UuidToRegIdx = append(rs.UuidToRegIdx, UuidToRegIdx{
+				Uuid: u.Uuid,
+				Idx:  0,
+			})
+			s.UuidToRegIdx = append(s.UuidToRegIdx[:i], s.UuidToRegIdx[i+1:]...)
+			break
+		}
+	}
+
 	return rs
 }
 

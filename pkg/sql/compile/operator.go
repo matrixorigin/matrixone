@@ -244,7 +244,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			NBucket: t.NBucket,
 		}
 	case vm.Merge:
-		res.Arg = &merge.Argument{}
+		t := sourceIns.Arg.(*merge.Argument)
+		res.Arg = &merge.Argument{Addr: t.Addr}
 	case vm.MergeGroup:
 		t := sourceIns.Arg.(*mergegroup.Argument)
 		res.Arg = &mergegroup.Argument{
@@ -992,7 +993,7 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 		arg.CrossCN = true
 	}
 
-	sendFunc := func(streams []*dispatch.WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, ctxs []context.Context, proc *process.Process) error {
+	sendFunc := func(streams []*dispatch.WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, ctxs []context.Context, cnts [][]uint, proc *process.Process) error {
 		// TODO: seperate to different goroutine?
 		// send bat to streams
 		//fmt.Printf("[dispatch.SendFunc()] begin ...\n")
@@ -1009,7 +1010,7 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 				fmt.Printf("[dispatch.SendFunc()] stream sender[%d] proc = %p. \n", i, proc)
 				// seperate different uuid into different message
 				// TODO: gather them in same message and handle in receiver?
-				for _, uuid := range stream.Uuids {
+				for j, uuid := range stream.Uuids {
 					message := cnclient.AcquireMessage()
 					{
 						message.Id = stream.Stream.ID()
@@ -1024,6 +1025,7 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 						return errSend
 					}
 					fmt.Printf("[dispatch.SendFunc()] stream sender[%d] send success\n", i)
+					cnts[i][j]++
 				}
 			}
 		}

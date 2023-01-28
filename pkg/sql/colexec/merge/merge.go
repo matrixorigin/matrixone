@@ -33,13 +33,22 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
+	ap.ctr.idxs = make([]int, len(proc.Reg.MergeReceivers))
+	str := "("
 	for i, mr := range proc.Reg.MergeReceivers {
-		fmt.Println()
+		if i != 0 {
+			str += ", "
+		}
+		str += fmt.Sprintf("%p", &(mr.Ch))
 		ap.ctr.receiverListener[i] = reflect.SelectCase{
 			Dir:  reflect.SelectRecv,
 			Chan: reflect.ValueOf(mr.Ch),
 		}
+		ap.ctr.idxs[i] = i
 	}
+	str += ")"
+	fmt.Printf("[colexecMerge] prepare add = %s. proc = %p. ch = %s\n", ap.Addr, proc, str)
+
 	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
 	return nil
 }
@@ -53,12 +62,22 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	for {
 		if ctr.aliveMergeReceiver == 0 {
-			fmt.Printf("[colexecMerge] merge end. proc = %p, idx = %d\n", &proc, idx)
+			fmt.Printf("[colexecMerge] merge end. proc = %p, idx = %d\n", proc, idx)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
 
-		fmt.Printf("[colexecMerge] merge wait ... proc = %p, idx = %d\n", &proc, idx)
+		str := "["
+		for i, n := range ctr.idxs {
+			if i != 0 {
+				str += " ,"
+			}
+			str += fmt.Sprintf("%d", n)
+		}
+		str += "]"
+
+		fmt.Printf("[colexecMerge] merge wait (left = %s) ... proc = %p, idx = %d\n", str, proc, idx)
+
 		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
@@ -70,11 +89,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		pointer := value.UnsafePointer()
 		bat := (*batch.Batch)(pointer)
 		if bat == nil {
-			fmt.Printf("[colexecMerge] nil batch, close the channel. proc = %p, idx = %d\n", &proc, idx)
+			fmt.Printf("[colexecMerge] nil batch, close channel ch[%d]. proc = %p, idx = %d\n", ctr.idxs[chosen], proc, idx)
 			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
+			ctr.idxs = append(ctr.idxs[:chosen], ctr.idxs[chosen+1:]...)
 			ctr.aliveMergeReceiver--
 			continue
 		}
+		fmt.Printf("[colexecMerge] merge received batch from channel ch[%d] ... proc = %p, idx = %d\n", chosen, proc, idx)
 		if bat.Length() == 0 {
 			continue
 		}

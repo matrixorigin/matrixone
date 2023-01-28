@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/google/uuid"
@@ -32,8 +33,10 @@ func NewServer(addr string) *Server {
 		return srv
 	}
 	srv = &Server{
-		mp:        make(map[uint64]*process.WaitRegister),
-		chanBufMp: new(sync.Map),
+		mp:          make(map[uint64]*process.WaitRegister),
+		uuidMap:     make(map[uuid.UUID]*process.WaitRegister),
+		batchCntMap: make(map[uuid.UUID]uint64),
+		chanBufMp:   new(sync.Map),
 	}
 	return srv
 }
@@ -75,6 +78,28 @@ func (srv *Server) PutRegFromUuidMap(u uuid.UUID, reg *process.WaitRegister) err
 	}
 	srv.uuidMap[u] = reg
 	return nil
+}
+
+func (srv *Server) ReceiveNormalBatch(u uuid.UUID) {
+	srv.Lock()
+	defer srv.Unlock()
+	if _, ok := srv.batchCntMap[u]; !ok {
+		srv.batchCntMap[u] = 0
+	}
+	srv.batchCntMap[u]++
+}
+
+func (srv *Server) IsEndStatus(u uuid.UUID, requireCnt uint64) bool {
+	srv.Lock()
+	defer srv.Unlock()
+	if cnt, ok := srv.batchCntMap[u]; ok {
+		fmt.Printf("[end message] IsEndStatus. current = %d, require = %d\n", cnt, requireCnt)
+		if cnt == requireCnt {
+			delete(srv.batchCntMap, u)
+			return true
+		}
+	}
+	return false
 }
 
 func (srv *Server) UpdateRegFromUuidMap(u uuid.UUID, reg *process.WaitRegister) {

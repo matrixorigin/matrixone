@@ -165,11 +165,20 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		fmt.Printf("get wg done. %s => %p\n", opUuid, &(wg.Ch))
 
 		if m.IsDirectBatchEnd() {
-			fmt.Printf("receive batch end message\n")
-			fmt.Printf("[end message] Put the batch into wg.Ch %d\n", &(wg.Ch))
-			wg.Ch <- nil
-			fmt.Printf("[end message] put the batch to wg.Ch done\n")
-			srv.chanBufMp.Delete(m.GetID())
+			requireCnt := m.GetBatchCnt()
+			fmt.Printf("receive batch end message . require cnt = %d\n", requireCnt)
+			for {
+				if srv.IsEndStatus(opUuid, requireCnt) {
+					fmt.Printf("[end message] Put the batch into wg.Ch %p\n", &(wg.Ch))
+					wg.Ch <- nil
+					fmt.Printf("[end message] put the batch to wg.Ch done\n")
+					srv.chanBufMp.Delete(m.GetID())
+					close(wg.Ch)
+					break
+				} else {
+					runtime.Gosched()
+				}
+			}
 			return nil, err
 		} else {
 			//if len(dataBuffer) == 0 {
@@ -196,6 +205,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 			wg.Ch <- bat
 			//srv.chanBufMp.Store(m.GetID(), []byte{})
 			fmt.Printf("put the batch to wg.Ch done\n")
+			srv.ReceiveNormalBatch(opUuid)
 			return nil, nil
 		}
 	}

@@ -16,6 +16,7 @@ package connector
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -25,7 +26,7 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("pipe connector")
 }
 
-func Prepare(_ *process.Process, _ any) error {
+func Prepare(proc *process.Process, _ any) error {
 	return nil
 }
 
@@ -34,11 +35,13 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	reg := ap.Reg
 	bat := proc.InputBatch()
 	if bat == nil {
+		fmt.Printf("[colexecConnector] received nil batch. proc = %p (ch = %p)\n", proc, &(ap.Reg.Ch))
 		return true, nil
 	}
 	if bat.Length() == 0 {
 		return false, nil
 	}
+	fmt.Printf("[colexecConnector] received normal batch. proc = %p (ch = %p)\n", proc, &(ap.Reg.Ch))
 
 	// do not send the source batch to remote node.
 	for i := range bat.Vecs {
@@ -54,9 +57,11 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 
 	select {
 	case <-reg.Ctx.Done():
+		fmt.Printf("[colexecConnector] no send. ctx done. proc = %p (ch = %p)\n", proc, &(ap.Reg.Ch))
 		bat.Clean(proc.Mp())
 		return true, nil
 	case reg.Ch <- bat:
+		fmt.Printf("[colexecConnector] send success. proc = %p (ch = %p)\n", proc, &(ap.Reg.Ch))
 		proc.SetInputBatch(nil)
 		return false, nil
 	}

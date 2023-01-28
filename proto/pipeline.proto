@@ -34,6 +34,7 @@ message Message {
   bytes   analyse = 6;
   uint64  id = 7;
   bytes   uuid = 8;
+  uint64  batch_cnt = 9;
 }
 
 message Connector {
