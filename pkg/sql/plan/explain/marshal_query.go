@@ -327,17 +327,17 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 				Value: updateTableNames,
 			})
 
-			// updateCols := make([]string, 0)
-			// for _, ctx := range m.node.UpdateCtx {
-			// 	if ctx.UpdateCols != nil {
-			// 		upcols := GetUpdateTableColsLableValue(ctx.UpdateCols, ctx.DbName, ctx.TblName, options)
-			// 		updateCols = append(updateCols, upcols...)
-			// 	}
-			// }
-			// labels = append(labels, Label{
-			// 	Name:  "Update columns",
-			// 	Value: updateCols,
-			// })
+			updateCols := make([]string, 0)
+			for i, ctx := range m.node.UpdateCtx.Ref {
+				if m.node.UpdateCtx.UpdateCol[i] != nil {
+					upcols := GetUpdateTableColsLableValue(m.node.UpdateCtx.UpdateCol[i].Map, ctx.SchemaName, ctx.ObjName, options)
+					updateCols = append(updateCols, upcols...)
+				}
+			}
+			labels = append(labels, Label{
+				Name:  "Update columns",
+				Value: updateCols,
+			})
 		} else {
 			return nil, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
@@ -702,10 +702,12 @@ func GetTableColsLableValue(ctx context.Context, cols []*plan.ColDef, options *E
 	return columns
 }
 
-func GetUpdateTableColsLableValue(cols []*plan.ColDef, db string, tname string, options *ExplainOptions) []string {
+func GetUpdateTableColsLableValue(cols map[string]int32, db string, tname string, options *ExplainOptions) []string {
 	columns := make([]string, len(cols))
-	for i, col := range cols {
-		columns[i] = db + "." + tname + "." + col.Name
+	i := 0
+	for col := range cols {
+		columns[i] = db + "." + tname + "." + col
+		i++
 	}
 	return columns
 }

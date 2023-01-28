@@ -575,18 +575,18 @@ type UpdateCtxsDescribeImpl struct {
 
 func (u *UpdateCtxsDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Update Columns: "
-	// first := true
-	// for i, ctx := range u.UpdateCtx.Ref {
-	// 	if ctx.UpdateCols != nil {
-	// 		for _, col := range ctx.UpdateCols {
-	// 			if !first {
-	// 				result += ", "
-	// 			} else {
-	// 				first = false
-	// 			}
-	// 			result += ctx.DbName + "." + ctx.TblName + "." + col.Name
-	// 		}
-	// 	}
-	// }
+	first := true
+	for i, ctx := range u.UpdateCtx.Ref {
+		if u.UpdateCtx.UpdateCol[i] != nil {
+			for colName := range u.UpdateCtx.UpdateCol[i].Map {
+				if !first {
+					result += ", "
+				} else {
+					first = false
+				}
+				result += ctx.SchemaName + "." + ctx.ObjName + "." + colName
+			}
+		}
+	}
 	return result, nil
 }
