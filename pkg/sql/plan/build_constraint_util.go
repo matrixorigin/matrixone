@@ -249,40 +249,6 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
 	}
 
-	// if tableDef.CompositePkey != nil {
-	// 	tableDef.Cols = append(tableDef.Cols, &ColDef{
-	// 		Name: tableDef.CompositePkey.Name,
-	// 		Alg:  plan.CompressType_Lz4,
-	// 		Typ: &Type{
-	// 			Id:    int32(types.T_varchar),
-	// 			Size:  types.VarlenaSize,
-	// 			Width: types.MaxVarcharLen,
-	// 		},
-	// 		Default: &plan.Default{
-	// 			NullAbility:  false,
-	// 			Expr:         nil,
-	// 			OriginString: "",
-	// 		},
-	// 	})
-	// }
-
-	// if tableDef.ClusterBy != nil {
-	// 	tableDef.Cols = append(tableDef.Cols, &ColDef{
-	// 		Name: tableDef.ClusterBy.Name,
-	// 		Alg:  plan.CompressType_Lz4,
-	// 		Typ: &Type{
-	// 			Id:    int32(types.T_varchar),
-	// 			Size:  types.VarlenaSize,
-	// 			Width: types.MaxVarcharLen,
-	// 		},
-	// 		Default: &plan.Default{
-	// 			NullAbility:  false,
-	// 			Expr:         nil,
-	// 			OriginString: "",
-	// 		},
-	// 	})
-	// }
-
 	if !tblInfo.haveConstraint {
 		if len(tableDef.RefChildTbls) > 0 {
 			tblInfo.haveConstraint = true
@@ -340,25 +306,6 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree
 
 	return tblInfo, nil
 }
-
-// Get the number of columns in the table definition,
-// exclude the hidden columns of the composite primary key and the hidden columns of the composite cluster by
-// func getTableValidColsSize(tableDef *TableDef) int {
-// 	counter := len(tableDef.Cols)
-// 	if tableDef.CompositePkey != nil {
-// 		counter--
-// 	}
-// 	if tableDef.ClusterBy != nil {
-// 		counter--
-// 	}
-// 	// for _, coldef := range tableDef.Cols {
-// 	// 	if util.JudgeIsCompositePrimaryKeyColumn(coldef.Name) || util.JudgeIsCompositeClusterByColumn(coldef.Name) {
-// 	// 		continue
-// 	// 	}
-// 	// 	counter++
-// 	// }
-// 	return counter
-// }
 
 func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo, haveConstraint bool) (int32, error) {
 	fromTables := &tree.From{
@@ -1163,7 +1110,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 										Expr: &plan.Expr_Col{
 											Col: &plan.ColRef{
 												RelPos: baseNodeTag,
-												ColPos: int32(oldColPosMap[originName]),
+												ColPos: int32(newColPosMap[originName]),
 											},
 										},
 									})

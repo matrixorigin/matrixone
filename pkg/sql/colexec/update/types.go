@@ -23,22 +23,14 @@ import (
 type Argument struct {
 	Ts           uint64
 	AffectedRows uint64
-	// UpdateCtxs   []*UpdateCtx
-	// TableDefVec []*plan.TableDef
-	Engine engine.Engine
-	// DB          []engine.Database
-	// TableID     []uint64
-	// DBName      []string
-	// TblName     []string
-	// HasAutoCol  []bool
-
-	UpdateCtx2 *UpdateCtx2
+	Engine       engine.Engine
+	UpdateCtx    *UpdateCtx
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
-type UpdateCtx2 struct {
+type UpdateCtx struct {
 	Source     []engine.Relation
 	Idxs       [][]int32
 	Ref        []*plan.ObjectRef
@@ -65,20 +57,3 @@ type UpdateCtx2 struct {
 
 	ParentIdx []int32
 }
-
-// type UpdateCtx struct {
-// 	HideKey     string
-// 	HideKeyIdx  int32
-// 	UpdateAttrs []string
-// 	OtherAttrs  []string
-// 	OrderAttrs  []string
-// 	TableSource engine.Relation
-// 	// for not index table
-// 	CPkeyColDef        *plan.ColDef
-// 	IsIndexTableUpdate bool
-// 	// for index table
-// 	UniqueIndexPos    []int
-// 	SecondaryIndexPos []int
-// 	IndexParts        []string
-// 	ClusterByDef      *plan.ClusterByDef
-// }

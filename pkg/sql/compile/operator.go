@@ -551,9 +551,10 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		HasAutoCol:           hasAutoCol,
 	}, nil
 }
+
 func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
 	oldCtx := n.UpdateCtx
-	updateCtx := &update.UpdateCtx2{
+	updateCtx := &update.UpdateCtx{
 		Source:    make([]engine.Relation, len(oldCtx.Ref)),
 		Idxs:      make([][]int32, len(oldCtx.Idx)),
 		TableDefs: oldCtx.TableDefs,
@@ -637,103 +638,10 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 	}
 
 	return &update.Argument{
-		UpdateCtx2: updateCtx,
-		Engine:     eg,
+		UpdateCtx: updateCtx,
+		Engine:    eg,
 	}, nil
 }
-
-// func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
-// 	updateCtxs := make([]*update.UpdateCtx, len(n.UpdateCtxs))
-// 	tableIDs := make([]uint64, len(n.UpdateCtxs))
-// 	dbs := make([]engine.Database, len(n.UpdateCtxs))
-// 	dbNames := make([]string, len(n.UpdateCtxs))
-// 	tblNames := make([]string, len(n.UpdateCtxs))
-// 	hasAtuoCol := make([]bool, len(n.UpdateCtxs))
-// 	for i, updateCtx := range n.UpdateCtxs {
-// 		var dbSource engine.Database
-// 		var relation engine.Relation
-// 		var err error
-// 		var isTemp bool
-// 		dbSource, err = eg.Database(proc.Ctx, updateCtx.DbName, proc.TxnOperator)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 		relation, err = dbSource.Relation(proc.Ctx, updateCtx.TblName)
-// 		dbs[i] = dbSource
-// 		if err != nil {
-// 			var e error
-// 			dbSource, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-// 			if e != nil {
-// 				return nil, err
-// 			}
-// 			relation, e = dbSource.Relation(proc.Ctx, engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName))
-// 			if e != nil {
-// 				return nil, err
-// 			}
-// 			isTemp = true
-// 		}
-// 		tableIDs[i] = relation.GetTableID(proc.Ctx)
-
-// 		if isTemp {
-// 			dbNames[i] = defines.TEMPORARY_DBNAME
-// 			tblNames[i] = engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName)
-// 		} else {
-// 			dbNames[i] = updateCtx.DbName
-// 			tblNames[i] = updateCtx.TblName
-// 		}
-// 		tableIDs[i] = relation.GetTableID(proc.Ctx)
-
-// 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
-// 		for _, col := range updateCtx.UpdateCols {
-// 			colNames = append(colNames, col.Name)
-// 		}
-
-// 		updateCtxs[i] = &update.UpdateCtx{
-// 			HideKey:            updateCtx.HideKey,
-// 			HideKeyIdx:         updateCtx.HideKeyIdx,
-// 			UpdateAttrs:        colNames,
-// 			OtherAttrs:         updateCtx.OtherAttrs,
-// 			OrderAttrs:         updateCtx.OrderAttrs,
-// 			TableSource:        relation,
-// 			CPkeyColDef:        updateCtx.CompositePkey,
-// 			IsIndexTableUpdate: updateCtx.IsIndexTableUpdate,
-// 			IndexParts:         updateCtx.IndexParts,
-// 			ClusterByDef:       updateCtx.ClusterByDef,
-// 		}
-
-// 		if !updateCtx.IsIndexTableUpdate {
-// 			if len(updateCtx.UniqueIndexPos) > 0 {
-// 				for _, pos := range updateCtx.UniqueIndexPos {
-// 					updateCtxs[i].UniqueIndexPos = append(updateCtxs[i].UniqueIndexPos, int(pos))
-// 				}
-// 			}
-
-// 			if len(updateCtx.SecondaryIndexPos) > 0 {
-// 				for _, pos := range updateCtx.SecondaryIndexPos {
-// 					updateCtxs[i].SecondaryIndexPos = append(updateCtxs[i].SecondaryIndexPos, int(pos))
-// 				}
-// 			}
-// 		}
-// 		for j := 0; j < len(n.TableDefVec[i].Cols); j++ {
-// 			if n.TableDefVec[i].Cols[j].Typ.AutoIncr {
-// 				hasAtuoCol[i] = true
-// 				break
-// 			}
-// 		}
-
-// 	}
-
-// 	return &update.Argument{
-// 		UpdateCtxs:  updateCtxs,
-// 		Engine:      eg,
-// 		DB:          dbs,
-// 		TableID:     tableIDs,
-// 		DBName:      dbNames,
-// 		TblName:     tblNames,
-// 		TableDefVec: n.TableDefVec,
-// 		HasAutoCol:  hasAtuoCol,
-// 	}, nil
-// }
 
 func constructProjection(n *plan.Node) *projection.Argument {
 	return &projection.Argument{
