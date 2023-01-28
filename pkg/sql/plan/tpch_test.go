@@ -50,7 +50,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		}
 	}
 
-	mock = NewMockOptimizer()
+	mock = NewMockOptimizer(false)
 	// test simple sql
 	qf, err := os.ReadFile(dir + "/tpch/simple.sql")
 	if err != nil {

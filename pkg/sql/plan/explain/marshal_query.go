@@ -189,13 +189,13 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 			return result, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_DELETE:
-		if m.node.DeleteTablesCtx != nil {
+		if m.node.DeleteCtx != nil {
 			first := true
-			for _, ctx := range m.node.DeleteTablesCtx {
+			for _, ctx := range m.node.DeleteCtx.Ref {
 				if !first {
 					result += ", "
 				}
-				result += ctx.DbName + "." + ctx.TblName
+				result += ctx.SchemaName + "." + ctx.ObjName
 				if first {
 					first = false
 				}
@@ -342,8 +342,8 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			return nil, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_DELETE:
-		if m.node.DeleteTablesCtx != nil {
-			deleteTableNames := GetDeleteTableLableValue(ctx, m.node.DeleteTablesCtx, options)
+		if m.node.DeleteCtx != nil {
+			deleteTableNames := GetDeleteTableLableValue(ctx, m.node.DeleteCtx, options)
 			labels = append(labels, Label{
 				Name:  "Full table name",
 				Value: deleteTableNames,
@@ -672,13 +672,13 @@ func GettOrderByLabelValue(ctx context.Context, orderbyList []*plan.OrderBySpec,
 	return result, nil
 }
 
-func GetDeleteTableLableValue(ctx context.Context, deleteCtxs []*plan.DeleteTableCtx, options *ExplainOptions) []string {
-	if deleteCtxs == nil {
+func GetDeleteTableLableValue(ctx context.Context, deleteCtx *plan.DeleteCtx, options *ExplainOptions) []string {
+	if deleteCtx == nil {
 		return make([]string, 0)
 	}
 	result := make([]string, 0)
-	for _, ctx := range deleteCtxs {
-		result = append(result, ctx.DbName+"."+ctx.TblName)
+	for _, ctx := range deleteCtx.Ref {
+		result = append(result, ctx.SchemaName+"."+ctx.ObjName)
 	}
 	return result
 }

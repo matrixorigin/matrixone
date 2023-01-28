@@ -130,6 +130,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
+		if types.IsFloat(typ.Oid) && col.Typ.Precision != -1 {
+			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Precision)
+		}
 
 		updateOpt := ""
 		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
