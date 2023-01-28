@@ -401,16 +401,16 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	return
 }
 
-func (entry *DBEntry) Close() {
-	tbls := entry.getAllTablesLocked()
+func (e *DBEntry) Close() {
+	tbls := e.getAllTablesLocked()
 	for _, tbl := range tbls {
-		entry.RemoveEntry(tbl)
+		e.RemoveEntry(tbl)
 	}
 }
 
-func (entry *DBEntry) getAllTablesLocked() []*TableEntry {
+func (e *DBEntry) getAllTablesLocked() []*TableEntry {
 	tbls := make([]*TableEntry, 0)
-	it := entry.MakeTableIt(false)
+	it := e.MakeTableIt(false)
 	for it.Valid() {
 		tbls = append(tbls, it.Get().GetPayload())
 		it.Next()
