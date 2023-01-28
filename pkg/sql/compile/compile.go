@@ -124,7 +124,6 @@ func (c *Compile) Run(_ uint64) (err error) {
 
 	// XXX PrintScope has a none-trivial amount of logging
 	// PrintScope(nil, []*Scope{c.scope})
-	fmt.Printf("Compile.Run()\n%s\n", DebugShowScopes([]*Scope{c.scope}))
 
 	switch c.scope.Magic {
 	case Normal:
@@ -400,7 +399,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 			return nil, err
 		}
 		// RelationName
-		fmt.Printf("[compilePlanScope] table scan (table: %s) idx = %d\n", ss[0].DataSource.RelationName, c.anal.curr)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_FILTER:
 		curr := c.anal.curr
@@ -413,7 +411,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_PROJECT:
 		curr := c.anal.curr
-		fmt.Printf("[compilePlanScope] node project idx = %d\n", c.anal.curr)
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
 		if err != nil {
@@ -654,7 +651,6 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	nodes, err := c.generateNodes(n)
-	//fmt.Printf("[compile table scan] node nums = %d \n", len(nodes))
 	if err != nil {
 		return nil, err
 	}
@@ -857,7 +853,6 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 	}
 	switch joinTyp {
 	case plan.Node_INNER:
-		fmt.Printf("[compileJoin] joinType = Inner, idx = %d\n", c.anal.curr)
 		if len(n.OnList) == 0 {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
@@ -884,7 +879,6 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_SEMI:
-		fmt.Printf("[compileJoin] joinType = Node_SEMI\n")
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -901,7 +895,6 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_LEFT:
-		fmt.Printf("[compileJoin] joinType = Node_LEFT\n")
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -918,7 +911,6 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_SINGLE:
-		fmt.Printf("[compileJoin] joinType = Node_SINGLE\n")
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -935,7 +927,6 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_ANTI:
-		fmt.Printf("[compileJoin] joinType = Node_ANTI\n")
 		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
 			if isEq && len(conds) == 1 {
@@ -1380,7 +1371,6 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[1]
-	fmt.Printf("[newRightScope] set chan[0] = %p\n", &rs.Proc.Reg.MergeReceivers[0].Ch)
 
 	for i, u := range s.UuidToRegIdx {
 		if u.Idx == 1 {
@@ -1498,7 +1488,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 		return nodes, nil
 	}
-	fmt.Printf("ranges's length = %d, cnList's length = %d\n", len(ranges), len(c.cnList))
 	// ranges[0] means memtable
 	if len(ranges[0]) == 0 {
 		if c.info.Typ == plan2.ExecTypeTP {

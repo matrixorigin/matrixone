@@ -353,12 +353,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 				arg.RemoteRegs[j] = sourceArg.RemoteRegs[j]
 			}
 			res.Arg = arg
-
-			if sourceArg.CrossCN {
-				fmt.Printf("[Dup instruction] dup a cross-cn Dispatch, with remote reg len = %d\n", len(arg.RemoteRegs))
-			}
-		} else {
-			fmt.Printf("[Dup instruction] dup a empty dispatch")
 		}
 
 	default:
@@ -940,7 +934,6 @@ func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argumen
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
 func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *dispatch.Argument {
-	fmt.Printf("[constructShuffleJoinDispatch] currentCNAddr = %s\n", currentCNAddr)
 	arg := new(dispatch.Argument)
 	arg.All = true
 
@@ -950,17 +943,14 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 
 	for i, s := range ss {
 		if s.IsEnd {
-			fmt.Printf("s[%d] IsEnd = true, continue ...\n", i)
 			continue
 		}
 		// TODO: add strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
 		if len(s.NodeInfo.Addr) == 0 || s.NodeInfo.Addr == currentCNAddr || len(currentCNAddr) == 0 {
-			fmt.Printf("s[%d] is local\n", i)
 			// Local reg.
 			// Put them into arg.Regs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 		} else {
-			fmt.Printf("s[%d] is remote\n", i)
 			// Remote reg.
 			// Generate uuid for them and put them into arg.RemoteRegs
 			// Length of RemoteRegs must be very small, so find the same NodeAddr with traversal
@@ -996,18 +986,13 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 	sendFunc := func(streams []*dispatch.WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, ctxs []context.Context, cnts [][]uint, proc *process.Process) error {
 		// TODO: seperate to different goroutine?
 		// send bat to streams
-		//fmt.Printf("[dispatch.SendFunc()] begin ...\n")
 		{
-			fmt.Printf("[dispatch.SendFunc()] stream send begin ...\n")
 			// TODO: handle refCountAdd of batch's hashmap and batch?
-
 			encodeBatch, err := types.Encode(bat)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("[dispatch.SendFunc()] encodeBatch's len = %d\n", len(encodeBatch))
 			for i, stream := range streams {
-				fmt.Printf("[dispatch.SendFunc()] stream sender[%d] proc = %p. \n", i, proc)
 				// seperate different uuid into different message
 				// TODO: gather them in same message and handle in receiver?
 				for j, uuid := range stream.Uuids {
@@ -1021,10 +1006,8 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 					// TODO: change the ctx
 					errSend := stream.Stream.Send(ctxs[i], message)
 					if errSend != nil {
-						fmt.Printf("[dispatch.SendFunc()] stream sender[%d] send failed\n", i)
 						return errSend
 					}
-					fmt.Printf("[dispatch.SendFunc()] stream sender[%d] send success\n", i)
 					cnts[i][j]++
 				}
 			}
@@ -1032,7 +1015,6 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 
 		// send bat to localChans
 		{
-			fmt.Printf("[dispatch.SendFunc()] local send begin ...\n")
 			for i, vec := range bat.Vecs {
 				if vec.IsOriginal() {
 					cloneVec, err := vector.Dup(vec, proc.Mp())
@@ -1050,8 +1032,7 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 				jm.IncRef(refCountAdd)
 			}
 
-			for i, reg := range localChans {
-				fmt.Printf("[dispatch.SendFunc()] local sender[%d]. \n", i)
+			for _, reg := range localChans {
 				select {
 				case <-reg.Ctx.Done():
 					return moerr.NewInternalError(proc.Ctx, "pipeline context has done.")

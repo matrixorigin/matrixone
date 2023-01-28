@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -71,12 +70,10 @@ func (s *Scope) Run(c *Compile) (err error) {
 func (s *Scope) MergeRun(c *Compile) error {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	errChan := make(chan error, len(s.PreScopes))
-	fmt.Printf("[MergeRun] pre scopes len = %d\n", len(s.PreScopes))
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
 		case Normal:
 			go func(cs *Scope) {
-				fmt.Printf("[MergeRun] from MergeRun -> NormalRun()\n")
 				var err error
 				defer func() {
 					errChan <- err
@@ -85,7 +82,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 			}(s.PreScopes[i])
 		case Merge:
 			go func(cs *Scope) {
-				fmt.Printf("[MergeRun] from MergeRun -> MergeRun()\n")
 				var err error
 				defer func() {
 					errChan <- err
@@ -94,7 +90,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 			}(s.PreScopes[i])
 		case Remote:
 			go func(cs *Scope) {
-				fmt.Printf("[MergeRun] from MergeRun -> RemoteRun()\n")
 				var err error
 				defer func() {
 					errChan <- err
@@ -103,7 +98,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 			}(s.PreScopes[i])
 		case Parallel:
 			go func(cs *Scope) {
-				fmt.Printf("[MergeRun] from MergeRun -> ParallelRun()\n")
 				var err error
 				defer func() {
 					errChan <- err
@@ -138,14 +132,10 @@ func (s *Scope) MergeRun(c *Compile) error {
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
 	// TODO: add strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
-	fmt.Printf("[RemoteRun] s.node.addr = %s, c.addr = %s, isReady = %t\n", s.NodeInfo.Addr, c.addr, cnclient.IsCNClientReady())
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
 		len(c.addr) == 0 || c.addr == s.NodeInfo.Addr {
-		fmt.Printf("[RemoteRun] Local parallel run. addr = %s\n", s.NodeInfo.Addr)
 		return s.ParallelRun(c, s.IsRemote)
 	}
-	fmt.Printf("[RemoteRun] Remote run -> addr: %s\n", s.NodeInfo.Addr)
-	fmt.Printf("[RemoteRun]: %s\n", DebugShowScopes([]*Scope{s}))
 
 	err := s.remoteRun(c)
 	// tell connect operator that it's over
@@ -160,11 +150,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	if s.IsJoin {
-		fmt.Printf("[ParallelRun] ParallelRun -> JoinRun\n")
 		return s.JoinRun(c)
 	}
 	if s.DataSource == nil {
-		fmt.Printf("[ParallelRun] ParallelRun -> MergeRun\n")
 		return s.MergeRun(c)
 	}
 	mcpu := s.NodeInfo.Mcpu
@@ -219,7 +207,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		s.NodeInfo.Data = nil
 	}
 	ss := make([]*Scope, mcpu)
-	fmt.Printf("[parallel run]: mcpu = %d\n", mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
 			Magic: Normal,
@@ -234,7 +221,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
 	newScope := newParallelScope(c, s, ss)
-	fmt.Printf("parallel run: %s\n", DebugShowScopes([]*Scope{newScope}))
 	return newScope.MergeRun(c)
 }
 
@@ -284,7 +270,6 @@ func (s *Scope) JoinRun(c *Compile) error {
 	s.PreScopes = append(s.PreScopes, chp...)
 	s.PreScopes = append(s.PreScopes, left)
 	s.PreScopes = append(s.PreScopes, right)
-	fmt.Printf("join run: %s\n", DebugShowScopes([]*Scope{s}))
 	return s.MergeRun(c)
 }
 

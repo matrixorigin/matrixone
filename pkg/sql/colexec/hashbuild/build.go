@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -82,7 +81,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 			} else {
 				proc.SetInputBatch(nil)
 			}
-			fmt.Printf("[hashbuild] hashbuild close. proc = %p\n", proc)
 			ap.Free(proc, false)
 			return true, nil
 		}
@@ -93,15 +91,11 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	var err error
 
 	for {
-		fmt.Printf("[hashbuild] waiting ... reg = %p\n", &proc.Reg.MergeReceivers[0].Ch)
 		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
 		anal.WaitStop(start)
 
-		fmt.Printf("[hashbuild] received batch, reg = %p\n", &proc.Reg.MergeReceivers[0].Ch)
-
 		if bat == nil {
-			fmt.Printf("[hashbuild] received nil batch, reg = %p. proc = %p\n", &proc.Reg.MergeReceivers[0].Ch, proc)
 			break
 		}
 		if bat.Length() == 0 {

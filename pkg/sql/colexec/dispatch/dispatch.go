@@ -17,7 +17,6 @@ package dispatch
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -37,7 +36,6 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	if ap.CrossCN {
-		fmt.Printf("Prepare cross-cn dispatch, length of RemoteReg = %d, proc = %p\n", len(ap.RemoteRegs), proc)
 		ap.ctr.streams = make([]*WrapperStream, 0, len(ap.RemoteRegs))
 		ap.ctr.c = make([]context.Context, 0, len(ap.RemoteRegs))
 		for i := range ap.RemoteRegs {
@@ -45,7 +43,6 @@ func Prepare(proc *process.Process, arg any) error {
 			if errStream != nil {
 				return errStream
 			}
-			fmt.Printf("stream[%d] get success. streamid = %d\n", i, stream.ID())
 			ap.ctr.streams = append(ap.ctr.streams, &WrapperStream{
 				Stream: stream,
 				Uuids:  ap.RemoteRegs[i].Uuids})
@@ -56,8 +53,6 @@ func Prepare(proc *process.Process, arg any) error {
 			_ = cancel
 			ap.ctr.c = append(ap.ctr.c, timeoutCtx)
 		}
-	} else {
-		fmt.Printf("Prepare normal dispatch, length of LocalReg = %d, proc = %p\n", len(ap.LocalRegs), proc)
 	}
 
 	return nil
@@ -98,15 +93,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			jm.SetDupCount(int64(len(ap.LocalRegs)))
 		}
 
-		for i, reg := range ap.LocalRegs {
+		for _, reg := range ap.LocalRegs {
 			select {
 			case <-reg.Ctx.Done():
 				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
 			case reg.Ch <- bat:
-				fmt.Printf("[dispatch] send to all. ch[%d] done. proc = %p\n", i, proc)
 			}
 		}
-		fmt.Printf("[dispatch] send to all done. proc = %p\n", proc)
 		return false, nil
 	}
 	// send to any one
@@ -130,7 +123,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 		case reg.Ch <- bat:
 			proc.SetInputBatch(nil)
-			fmt.Printf("[dispatch] send to ch[%d] donw. proc = %p\n", ap.ctr.i, proc)
 			ap.ctr.i++
 			return false, nil
 		}
@@ -139,13 +131,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func CloseStreams(streams []*WrapperStream, proc *process.Process, ctr container) error {
-	fmt.Printf("[CloseStreams] close streams. stream len = %d\n", len(streams))
 	c, cancel := context.WithTimeout(context.Background(), time.Second*10000)
 	_ = cancel
 
 	for i, stream := range streams {
 		if len(stream.Uuids) == 0 {
-			fmt.Printf("no uuid in stream[%d]\n", i)
 			return moerr.NewInternalErrorNoCtx("no uuid in stream[%d]", i)
 		}
 		for j, uuid := range stream.Uuids {
@@ -157,21 +147,15 @@ func CloseStreams(streams []*WrapperStream, proc *process.Process, ctr container
 				message.Uuid = uuid[:]
 				message.BatchCnt = uint64(ctr.cnts[i][j])
 			}
-			fmt.Printf("[CloseStreams] uuid %s close message begin to send. batCnt = %d\n", uuid, ctr.cnts[i][j])
 			if err := streams[i].Stream.Send(c, message); err != nil {
-				fmt.Printf("[CloseStreams] uuid %s close message send failed: %s\n", uuid, err)
 				return err
 			}
-
-			fmt.Printf("[CloseStreams] uuid %s close message send\n", uuid)
 		}
 	}
 	for i := range streams {
 		if err := streams[i].Stream.Close(); err != nil {
-			fmt.Printf("[CloseStreams] stream[%d] close failed. err: %s\n", i, err)
 			return err
 		}
-		fmt.Printf("[CloseStreams] stream[%d] close success\n", i)
 	}
 	return nil
 }

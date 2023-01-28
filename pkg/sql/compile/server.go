@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/google/uuid"
@@ -93,7 +92,6 @@ func (srv *Server) IsEndStatus(u uuid.UUID, requireCnt uint64) bool {
 	srv.Lock()
 	defer srv.Unlock()
 	if cnt, ok := srv.batchCntMap[u]; ok {
-		fmt.Printf("[end message] IsEndStatus. current = %d, require = %d\n", cnt, requireCnt)
 		if cnt == requireCnt {
 			delete(srv.batchCntMap, u)
 			return true

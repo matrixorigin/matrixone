@@ -15,8 +15,6 @@
 package join
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -64,7 +62,6 @@ type Argument struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
-		fmt.Printf("[joinjoin] join free. proc = %p\n", proc)
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanEvalVectors(mp)

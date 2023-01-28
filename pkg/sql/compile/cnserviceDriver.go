@@ -112,7 +112,6 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	// decode message and run it, get final analysis information and err info.
 	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
 	if err != nil {
-		fmt.Printf("[CnServerMessageHandler] message error\n")
 		errData = pipeline.EncodedMessageError(ctx, err)
 	}
 	// batch data, not scope
@@ -136,7 +135,6 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	if !ok {
 		panic("unexpected message type for cn-server")
 	}
-	fmt.Printf("received message from stream %d: sid = %d, cmd = %d\n", m.Id, m.Sid, m.Cmd)
 	// it's a Batch
 	if m.GetCmd() == 12345 {
 		var v any
@@ -144,17 +142,13 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		var ok bool
 		opUuid, err := uuid.FromBytes(m.GetUuid())
 		if err != nil {
-			fmt.Printf("[pipelineMessageHandle] get uuid failed, err: %s\n", err)
 			return nil, err
 		}
-		fmt.Printf("get a batch message for uuid - %s\n", opUuid)
-		defer fmt.Printf("handle uuid %s message done\n", opUuid)
 
 		for {
 			if v, ok = srv.chanBufMp.Load(opUuid); !ok {
 				runtime.Gosched()
 			} else {
-				fmt.Printf("load success. break. \n")
 				break
 			}
 		}
@@ -162,21 +156,16 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		//srv.chanBufMp.Store(m.GetID(), dataBuffer)
 		//}
 		wg := v.(*process.WaitRegister)
-		fmt.Printf("get wg done. %s => %p\n", opUuid, &(wg.Ch))
 
 		if m.IsDirectBatchEnd() {
 			requireCnt := m.GetBatchCnt()
-			fmt.Printf("receive batch end message . require cnt = %d\n", requireCnt)
 			for {
 				if srv.IsEndStatus(opUuid, requireCnt) {
-					fmt.Printf("[end message] Put the batch into wg.Ch %p\n", &(wg.Ch))
 					wg.Ch <- nil
-					fmt.Printf("[end message] put the batch to wg.Ch done\n")
 					srv.chanBufMp.Delete(m.GetID())
 					close(wg.Ch)
 					break
 				} else {
-					runtime.Gosched()
 				}
 			}
 			return nil, err
@@ -192,44 +181,34 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 			}
 			mp, err := mpool.NewMPool("cnservice_handle_batch", 0, mpool.NoFixed)
 			if err != nil {
-				fmt.Printf("[pipelineMessageHandle] NewPool err: %s\n", err)
 				return nil, err
 			}
-			fmt.Printf("m.Data's len = %d\n", len(m.Data))
 			bat, err := decodeBatch(mp, m.Data)
 			if err != nil {
-				fmt.Printf("[pipelineMessageHandle] decode batch err: %s\n", err)
 				return nil, err
 			}
-			fmt.Printf("Put the batch into wg.Ch %p\n", &wg.Ch)
 			wg.Ch <- bat
 			//srv.chanBufMp.Store(m.GetID(), []byte{})
-			fmt.Printf("put the batch to wg.Ch done\n")
 			srv.ReceiveNormalBatch(opUuid)
 			return nil, nil
 		}
 	}
-	fmt.Printf("get a pipeline message, sid = %d, , cmd = %d\n", m.Sid, m.Cmd)
 	// generate Compile-structure to run scope.
 	procHelper, err = generateProcessHelper(m.GetProcInfoData(), cli)
 	if err != nil {
 		return nil, err
 	}
 	c = newCompile(ctx, message, procHelper, messageHelper, cs)
-	fmt.Printf("new compile done.\n")
 
 	// decode and run the scope.
 	s, err = decodeScope(m.GetData(), c.proc, true)
 	if err != nil {
-		fmt.Printf("[pipelineMessageHandle] decode scope failed, err: %s\n", err)
 		return nil, err
 	}
 	s = refactorScope(c, c.ctx, s)
-	fmt.Printf("decode scope done.\n")
 
 	err = s.ParallelRun(c, s.IsRemote)
 	if err != nil {
-		fmt.Printf("[pipelineMessageHandle] ParallelRun failed, err: %s\n", err)
 		return nil, err
 	}
 	// encode analysis info and return.
@@ -246,9 +225,7 @@ const maxMessageSizeToMoRpc = 64 * mpool.MB
 
 // sendBackBatchToCnClient send back the result batch to cn client.
 func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint64, mHelper *messageHandleHelper, cs morpc.ClientSession) error {
-	fmt.Printf("[output] sendBackBatchToCnClient\n")
 	if b == nil {
-		fmt.Printf("[output] receive nil batch\n")
 		return nil
 	}
 	encodeData, errEncode := types.Encode(b)
@@ -257,14 +234,12 @@ func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint
 	}
 
 	if len(encodeData) <= maxMessageSizeToMoRpc {
-		fmt.Printf("[output] <= maxMessageSizeToMoRpc, send back directly\n")
 		m := mHelper.acquirer().(*pipeline.Message)
 		m.Id = messageId
 		m.Data = encodeData
 		return cs.Write(ctx, m)
 	}
 	// if data is too large, it should be split into small blocks.
-	fmt.Printf("[output] > maxMessageSizeToMoRpc, seperate\n")
 	start := 0
 	for start < len(encodeData) {
 		end := start + maxMessageSizeToMoRpc
@@ -346,9 +321,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	n := len(s.Instructions) - 1
 	con := s.Instructions[n]
 	s.Instructions = s.Instructions[:n]
-	fmt.Printf("begin to encode scope ...\n")
 	sData, errEncode := encodeScope(s)
-	fmt.Printf("encode scope done.\n")
 	if errEncode != nil {
 		return errEncode
 	}
@@ -365,7 +338,6 @@ func (s *Scope) remoteRun(c *Compile) error {
 	if errStream != nil {
 		return errStream
 	}
-	fmt.Printf("[remote run] get streamSender success, streamid = %d\n", streamSender.ID())
 	defer func(streamSender morpc.Stream) {
 		_ = streamSender.Close()
 	}(streamSender)
@@ -386,13 +358,10 @@ func (s *Scope) remoteRun(c *Compile) error {
 		message.Cmd = 0
 	}
 
-	fmt.Printf("[remote run] send pipeline msg ...sid = %d, cmd = %d, Data len = %d\n", message.Sid, message.Cmd, len(message.Data))
 	errSend := streamSender.Send(c.ctx, message)
 	if errSend != nil {
-		fmt.Printf("[remote run] send error: %s\n", errSend)
 		return errSend
 	}
-	fmt.Printf("send pipeline msg done\n")
 	messagesReceive, errReceive := streamSender.Receive()
 	if errReceive != nil {
 		return errReceive
@@ -434,7 +403,6 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool) (*Scope, err
 		return nil, err
 	}
 
-	fmt.Printf("decode scope done.\n%s\n", DebugShowScopes([]*Scope{s}))
 	return s, nil
 }
 
@@ -635,7 +603,6 @@ func convertPipelineUuid(p *pipeline.Pipeline) ([]UuidToRegIdx, error) {
 			Uuid: uid,
 			Idx:  int(u.GetIdx()),
 		}
-		fmt.Printf("[convertPipelineUuid] uuid->index: %s -> %d\n", uid, u.GetIdx())
 	}
 	return ret, nil
 }
@@ -647,7 +614,6 @@ func convertScopeUuids(s *Scope) (ret []*pipeline.UuidToRegIdx) {
 			Uuid: u.Uuid[:],
 			Idx:  int32(u.Idx),
 		}
-		fmt.Printf("[convertScopeUuids] uuid->index: %s -> %d\n", u.Uuid, u.Idx)
 	}
 	return ret
 }
@@ -703,7 +669,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
 	for _, u := range s.UuidToRegIdx {
-		fmt.Printf("[generateScope] mapping %s => (%d)%p\n", u.Uuid, u.Idx, &(s.Proc.Reg.MergeReceivers[u.Idx].Ch))
 		srv.chanBufMp.Store(u.Uuid, s.Proc.Reg.MergeReceivers[u.Idx])
 		//v, ok := srv.chanBufMp.Load(u.Uuid)
 		//if !ok {
@@ -735,7 +700,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			return nil, err
 		}
 	}
-	//fmt.Printf("%s\n", DebugShowScopes())
 	return s, nil
 }
 
@@ -1465,9 +1429,7 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := new(batch.Batch)
 	//mp := proc.Mp()
 	err := types.Decode(data, bat)
-	if err != nil {
-		fmt.Printf("[decodeBatch] err1: %s\n", err)
-	}
+
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
 		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)
@@ -1475,7 +1437,6 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 			for j := 0; j < i; j++ {
 				bat.Vecs[j].Free(mp)
 			}
-			fmt.Printf("[decodeBatch] err2: %s\n", err)
 			return nil, err
 		}
 	}
@@ -1489,7 +1450,6 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 			for j := range bat.Vecs {
 				bat.Vecs[j].Free(mp)
 			}
-			fmt.Printf("[decodeBatch] err3: %s\n", err)
 			return nil, err
 		}
 	}

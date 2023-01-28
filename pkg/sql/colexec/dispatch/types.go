@@ -16,7 +16,6 @@ package dispatch
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -57,11 +56,7 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	fmt.Printf("[dispatch] close dispatch %p , pipelineFailed = %t\n", proc, pipelineFailed)
 	if arg.CrossCN {
-		if pipelineFailed {
-			fmt.Printf("[CloseStreams] pipeline failed!\n")
-		}
 		CloseStreams(arg.ctr.streams, proc, *arg.ctr)
 	}
 
