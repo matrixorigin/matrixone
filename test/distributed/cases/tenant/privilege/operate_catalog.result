@@ -91,11 +91,11 @@ invalid input: cannot insert into view 'error_info'
 insert into system.error_info values ("2022-10-09 00:00:00", "1", "1", "1", "1", "1");
 invalid input: cannot insert into view 'error_info'
 delete from error_info;
-invalid input: cannot delete from view
+invalid input: cannot insert/update/delete from view
 delete from system.error_info;
-invalid input: cannot delete from view
+invalid input: cannot insert/update/delete from view
 delete from system.statement_info;
-invalid input: cannot delete from external table
+invalid input: cannot insert/update/delete from external table
 use system_metrics;
 drop table sql_statement_total;
 internal error: do not have privilege to execute the statement

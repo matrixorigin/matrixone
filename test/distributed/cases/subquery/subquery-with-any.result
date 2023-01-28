@@ -55,19 +55,19 @@ insert into t1 values ('a1'),('a2'),('a3');
 insert into t2 values ('a1'),('a2');
 select s1, s1 = ANY (SELECT s1 FROM t2) from t1;
 s1	s1 = ANY (SELECT s1 FROM t2)
-a1	1
-a2	1
-a3	0
+a1	true
+a2	true
+a3	false
 select s1, s1 < ANY (SELECT s1 FROM t2) from t1;
 s1	s1 < ANY (SELECT s1 FROM t2)
-a1	1
-a2	0
-a3	0
+a1	true
+a2	false
+a3	false
 select s1, s1 = ANY (SELECT s1 FROM t2) from t1;
 s1	s1 = ANY (SELECT s1 FROM t2)
-a1	1
-a2	1
-a3	0
+a1	true
+a2	true
+a3	false
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
@@ -212,7 +212,8 @@ select * from t1 where (s1+1 = ANY (select s1 from t1));
 s1
 1
 select * from t1 where NOT(s1+1 = ANY (select s1 from t1));
-"ANY" subquery as non-root expression is not yet implemented
+s1
+2
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 CREATE TABLE t1 (s1 CHAR(1));
@@ -231,10 +232,10 @@ select (select 1,2) = (select * from t1);
 null
 select  (1,2) = ANY (select * from t1);
 (1,2) = ANY (select * from t1)
-0
+false
 select  (1,2) != ALL (select * from t1);
 (1,2) != ALL (select * from t1)
-1
+true
 DROP TABLE IF EXISTS t1;
 select 1 from dual where 1 < any (select 2);
 1
@@ -439,7 +440,7 @@ select 1 > ANY (SELECT * from t1);
 null
 select 10 > ANY (SELECT * from t1);
 10 > ANY (SELECT * from t1)
-1
+true
 DROP TABLE IF EXISTS t1;
 create table t1 (a varchar(20));
 insert into t1 values ('A'),('BC'),('DEF');
@@ -449,7 +450,7 @@ select 'A' > ANY (SELECT * from t1);
 null
 select 'XYZS' > ANY (SELECT * from t1);
 'XYZS' > ANY (SELECT * from t1)
-1
+true
 DROP TABLE IF EXISTS t1;
 create table t1 (a float);
 insert into t1 values (1.5),(2.5),(3.5);
@@ -459,7 +460,7 @@ select 1.5 > ANY (SELECT * from t1);
 null
 select 10.5 > ANY (SELECT * from t1);
 10.5 > ANY (SELECT * from t1)
-1
+true
 DROP TABLE IF EXISTS t1;
 create table t1 (s1 int);
 insert into t1 values (1),(null);
@@ -467,7 +468,7 @@ select * from t1 where s1 < all (select s1 from t1);
 s1
 select s1, s1 < all (select s1 from t1) from t1;
 s1	s1 < all (select s1 from t1)
-1	0
+1	false
 null	null
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1( a INT );

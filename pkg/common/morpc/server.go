@@ -201,6 +201,19 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		cs.cancelWrite()
 		return moerr.NewStreamClosedNoCtx()
 	}
+
+	// handle internal message
+	if request.internal {
+		if m, ok := request.Message.(*flagOnlyMessage); ok {
+			switch m.flag {
+			case flagPing:
+				return cs.Write(request.Ctx, &flagOnlyMessage{flag: flagPong, id: m.id})
+			default:
+				panic(fmt.Sprintf("invalid internal message, flag %d", m.flag))
+			}
+		}
+	}
+
 	if err := s.handler(request.Ctx, request.Message, sequence, cs); err != nil {
 		s.logger.Error("handle request failed",
 			zap.Uint64("sequence", sequence),

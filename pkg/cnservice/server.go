@@ -110,7 +110,9 @@ func NewService(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
 				m := v.(morpc.RPCMessage)
-				srv.releaseMessage(m.Message.(*pipeline.Message))
+				if !m.InternalMessage() {
+					srv.releaseMessage(m.Message.(*pipeline.Message))
+				}
 			}),
 		),
 		morpc.WithServerDisableAutoCancelContext())

@@ -253,9 +253,6 @@ func GetFunctionByID(ctx context.Context, overloadID int64) (*Function, error) {
 // this message helps optimization sometimes
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	function, _ := GetFunctionByIDWithoutError(overloadID)
-	if function.TestFlag(plan.Function_PRODUCE_NULL) {
-		return false
-	}
 	if function.TestFlag(plan.Function_PRODUCE_NO_NULL) {
 		return true
 	}

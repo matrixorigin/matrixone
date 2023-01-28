@@ -65,7 +65,6 @@ create table t1 (s1 char(5));
 create table t2 (s1 char(5));
 insert into t1 values ('a1'),('a2'),('a3');
 insert into t2 values ('a1'),('a2');
--- @bvt:issue#3312
 select s1, s1 = ANY (SELECT s1 FROM t2) from t1;
 select s1, s1 < ANY (SELECT s1 FROM t2) from t1;
 select s1, s1 = ANY (SELECT s1 FROM t2) from t1;
@@ -75,11 +74,14 @@ create view v3 as select s1, s1 = ANY (SELECT s1 FROM t2) from t1;
 select * from v1;
 select * from v2;
 select * from v3;
--- @bvt:issue
+drop view v1;
+drop view v2;
+drop view v3;
 
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
+
 create table t2 (a int, b int);
 create table t3 (a int);
 insert into t3 values (6),(7),(3);
@@ -283,10 +285,8 @@ create table t1 (s1 char);
 insert into t1 values ('1'),('2');
 select * from t1 where (s1 < any (select s1 from t1));
 create view v1 as select * from t1 where (s1 < any (select s1 from t1));
--- @bvt:issue#3312
 select * from t1 where not (s1 < any (select s1 from t1));
 create view v2 as select * from t1 where not (s1 < any (select s1 from t1));
--- @bvt:issue
 select * from t1 where (s1+1 = ANY (select s1 from t1));
 select * from t1 where NOT(s1+1 = ANY (select s1 from t1));
 
@@ -319,27 +319,33 @@ DROP TABLE IF EXISTS t2;
 -- @desc:test for [any] subquery with with * and mutil tuple
 -- @label:bvt
 create table t1 (a integer, b integer);
--- @bvt:issue#3312
+-- @bvt:issue#7691
 select (select * from t1) = (select 1,2);
 select (select 1,2) = (select * from t1);
+-- @bvt:issue
 select  (1,2) = ANY (select * from t1);
 select  (1,2) != ALL (select * from t1);
+-- @bvt:issue#7691
 create view v1 as select (select * from t1) = (select 1,2);
 create view v2 as select (select 1,2) = (select * from t1);
+-- @bvt:issue
 create view v3 as select  (1,2) = ANY (select * from t1);
 create view v4 as select  (1,2) != ALL (select * from t1);
 
+-- @bvt:issue#7691
 select * from v1;
 select * from v2;
+-- @bvt:issue
 select * from v3;
 select * from v4;
 
+-- @bvt:issue#7691
 drop view v1;
 drop view v2;
+-- @bvt:issue
 drop view v3;
 drop view v4;
 
--- @bvt:issue
 DROP TABLE IF EXISTS t1;
 
 -- @case
@@ -589,7 +595,6 @@ DROP TABLE IF EXISTS t1;
 create table t1 (a int);
 insert into t1 values (1),(2),(3);
 update t1 set a=NULL where a=2;
--- @bvt:issue#3312
 select 1 > ANY (SELECT * from t1);
 select 10 > ANY (SELECT * from t1);
 create view v1 as select 1 > ANY (SELECT * from t1);
@@ -598,13 +603,11 @@ select * from v1;
 select * from v2;
 drop view v1;
 drop view v2;
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 create table t1 (a varchar(20));
 insert into t1 values ('A'),('BC'),('DEF');
 update t1 set a=NULL where a='BC';
--- @bvt:issue#3312
 select 'A' > ANY (SELECT * from t1);
 select 'XYZS' > ANY (SELECT * from t1);
 
@@ -614,13 +617,11 @@ select * from v1;
 select * from v2;
 drop view v1;
 drop view v2;
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 create table t1 (a float);
 insert into t1 values (1.5),(2.5),(3.5);
 update t1 set a=NULL where a=2.5;
--- @bvt:issue#3312
 select 1.5 > ANY (SELECT * from t1);
 select 10.5 > ANY (SELECT * from t1);
 create view v1 as select 1.5 > ANY (SELECT * from t1);
@@ -629,21 +630,18 @@ select * from v1;
 select * from v2;
 drop view v1;
 drop view v2;
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 create table t1 (s1 int);
 insert into t1 values (1),(null);
 select * from t1 where s1 < all (select s1 from t1);
 create view v1 as select * from t1 where s1 < all (select s1 from t1);
--- @bvt:issue#3312
 select * from t1 where s1 < all (select s1 from t1);
 create view v2 as select * from t1 where s1 < all (select s1 from t1);
 select * from v1;
 select * from v2;
 drop view v1;
 drop view v2;
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1( a INT );

@@ -143,6 +143,22 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side 
 	return
 }
 
+func hasTag(expr *plan.Expr, tag int32) bool {
+	var ret bool
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			ret = ret || hasTag(arg, tag)
+		}
+
+	case *plan.Expr_Col:
+		ret = exprImpl.Col.RelPos == tag
+	}
+
+	return ret
+}
+
 func containsTag(expr *plan.Expr, tag int32) bool {
 	var ret bool
 

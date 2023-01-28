@@ -244,7 +244,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	default:
 		tbl.dnList = dnList
 	}
-	_, created := tbl.db.txn.tableMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
+	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
 	if !created && !tbl.updated {
 		if err := tbl.db.txn.db.Update(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
 			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
