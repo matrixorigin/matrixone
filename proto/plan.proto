@@ -485,6 +485,21 @@ message WindowSpec {
 	int32 lag  = 4;
 }
 
+message InsertCtx {
+	ObjectRef ref 					= 1;
+	repeated int64 idx 				= 2;
+	TableDef table_def 				= 3;
+	map<string, int32> update_col 	= 4; 
+
+	repeated ObjectRef idx_ref 		= 5;
+	repeated int32 idx_idx 			= 6;
+
+	repeated ObjectRef parent_ref 	= 7;
+	repeated int32 parent_idx 		= 8;
+
+	ClusterTable cluster_table = 9;
+}
+
 message UpdateCtx {
 	string db_name = 1;
 	string tbl_name = 2;
@@ -633,6 +648,7 @@ message Node {
     int32   parallelism = 26;
 
 	ClusterTable cluster_table = 27;
+	InsertCtx insert_ctx = 28;
 }
 
 message IdList {

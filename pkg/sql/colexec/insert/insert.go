@@ -57,6 +57,22 @@ type Argument struct {
 	ClusterByDef         *plan.ClusterByDef
 	ClusterTable         *plan.ClusterTable
 	HasAutoCol           bool
+
+	InsertCtx InsertCtx
+}
+
+type InsertCtx struct {
+	Source    engine.Relation
+	Idx       []int32
+	Ref       *plan.ObjectRef
+	TableDefs *plan.TableDef
+
+	IdxSource []engine.Relation
+	IdxIdx    []int32
+
+	ParentIdx []int32
+
+	ClusterTable *plan.ClusterTable
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -196,6 +212,43 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 		return false, err
 	}
 	return false, nil
+}
+
+func Call2(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+	// var err error
+	t1 := time.Now()
+	n := arg.(*Argument)
+	bat := proc.Reg.InputBatch
+	if bat == nil {
+		return true, nil
+	}
+	if len(bat.Zs) == 0 {
+		return false, nil
+	}
+	ctx := proc.Ctx
+	clusterTable := n.ClusterTable
+	if clusterTable.GetIsClusterTable() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+
+	var insertBat *batch.Batch
+	defer func() {
+		bat.Clean(proc.Mp())
+		if insertBat != nil {
+			insertBat.Clean(proc.Mp())
+		}
+		anal := proc.GetAnalyze(idx)
+		anal.AddInsertTime(t1)
+	}()
+
+	// insertCtx := n.InsertCtx
+	// ref := insertCtx.Ref
+
+	// do insert
+	if !proc.LoadTag {
+		return false, handleWrite(n, proc, ctx, bat)
+	}
+	return handleLoadWrite(n, proc, ctx, bat)
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
