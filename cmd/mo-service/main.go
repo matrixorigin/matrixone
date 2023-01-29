@@ -306,7 +306,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 			initWG.Done()
 			<-ctx.Done()
 			// flush trace/log/error framework
-			if err = motrace.Shutdown(motrace.DefaultContext()); err != nil {
+			if err = motrace.Shutdown(ctx); err != nil {
 				logutil.Warn("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
 			}
 		})

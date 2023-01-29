@@ -110,11 +110,7 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 			return
 		}
 		if _, err := req.writer.WriteString(req.content); err != nil {
-			if err == context.Canceled {
-				logutil.Infof("[Trace] failed to write, caused by service stopped")
-			} else {
-				logutil.Error(fmt.Sprintf("[Trace] failed to write. err: %v", err), logutil.NoReportFiled())
-			}
+			logutil.Error(fmt.Sprintf("[Trace] failed to write. err: %v", err), logutil.NoReportFiled())
 		}
 	}
 
@@ -202,7 +198,7 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer) an
 
 	reqs := make(CSVRequests, 0, len(buffer))
 	for account, buf := range buffer {
-		writer := GetTracerProvider().writerFactory(DefaultContext(), row.Table.Database, row.Table,
+		writer := GetTracerProvider().writerFactory(ctx, row.Table.Database, row.Table,
 			WriteFactoryConfig{Account: account, Ts: ts, PathBuilder: row.Table.PathBuilder})
 		reqs = append(reqs, NewCSVRequest(writer, buf.String()))
 	}

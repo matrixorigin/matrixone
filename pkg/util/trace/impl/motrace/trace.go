@@ -67,10 +67,10 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 
 	// init DefaultContext / DefaultSpanContext
 	var spanId trace.SpanID
-	serviceCtx := context.Background()
 	spanId.SetByUUID(config.getNodeResource().NodeUuid)
 	sc := trace.SpanContextWithIDs(trace.NilTraceID, spanId)
 	SetDefaultSpanContext(&sc)
+	serviceCtx := context.Background()
 	SetDefaultContext(trace.ContextWithSpanContext(serviceCtx, sc))
 
 	// init Exporter

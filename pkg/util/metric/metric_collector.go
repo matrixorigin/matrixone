@@ -287,11 +287,7 @@ func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch 
 	return func(batchs motrace.CSVRequests) {
 		for _, batch := range batchs {
 			if _, err := batch.Handle(); err != nil {
-				if err == context.Canceled {
-					logutil.Infof("[Metric] failed to write, caused by service stopped")
-				} else {
-					logutil.Errorf("[Metric] failed to write, err: %v", err)
-				}
+				logutil.Errorf("[Metric] failed to write, err: %v", err)
 			}
 		}
 	}
@@ -440,7 +436,7 @@ func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) m
 
 	reqs := make([]*motrace.CSVRequest, 0, len(buffer))
 	for account, buf := range buffer {
-		writer := s.writerFactory(motrace.DefaultContext(), SingleMetricTable.Database, SingleMetricTable,
+		writer := s.writerFactory(ctx, SingleMetricTable.Database, SingleMetricTable,
 			export.WithAccount(account), export.WithTimestamp(ts), export.WithPathBuilder(SingleMetricTable.PathBuilder))
 		reqs = append(reqs, motrace.NewCSVRequest(writer, buf.String()))
 	}
