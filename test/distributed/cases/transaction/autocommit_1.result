@@ -456,7 +456,7 @@ select * from view_t6;
 a    b
 100000    3000
 delete from view_t6 where a=10;
-invalid input: cannot delete from view
+invalid input: cannot insert/update/delete from view
 select * from view_t6;
 a    b
 100000    3000

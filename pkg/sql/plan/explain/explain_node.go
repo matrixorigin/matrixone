@@ -142,13 +142,13 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 			}
 		case plan.Node_DELETE:
 			result += " on "
-			if ndesc.Node.DeleteTablesCtx != nil {
+			if ndesc.Node.DeleteCtx != nil {
 				first := true
-				for _, ctx := range ndesc.Node.DeleteTablesCtx {
+				for _, ctx := range ndesc.Node.DeleteCtx.Ref {
 					if !first {
 						result += ", "
 					}
-					result += ctx.DbName + "." + ctx.TblName
+					result += ctx.SchemaName + "." + ctx.ObjName
 					if first {
 						first = false
 					}

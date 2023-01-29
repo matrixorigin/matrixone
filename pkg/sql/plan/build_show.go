@@ -130,6 +130,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
+		if types.IsFloat(typ.Oid) && col.Typ.Precision != -1 {
+			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Precision)
+		}
 
 		updateOpt := ""
 		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -396,10 +399,10 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 		clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
+		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
 			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
 	} else {
-		sql = fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'",
+		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'",
 			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%")
 	}
 

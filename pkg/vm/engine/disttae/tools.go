@@ -830,7 +830,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			}
 		}
 	}
-	var num int32 = 0
+	var num int32 = 1
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
 		attrDef, ok := def.(*engine.AttributeDef)
