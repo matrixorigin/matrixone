@@ -12,6 +12,7 @@ truncate c1;
 drop table f1;
 drop table c1;
 drop table f1;
+drop table f2;
 
 create table f1(a int primary key, b int unique key);
 create table c1 (a int, b int, foreign key f_a(a) references f1(a));
@@ -97,7 +98,7 @@ update t_dept set id = 50 where name = 'ACCOUNTING';
 delete from t_dept where name = 'ACCOUNTING';
 update t_emp set deptId = 50 where salary <  1500;
 update t_emp set deptId = null where salary <  1500;
-select * from t_emp;
+select * from t_emp order by salary;
 select * from t_dept;
 drop table t_emp;
 drop table t_dept;
@@ -196,3 +197,14 @@ update t_emp2 set deptId = null where salary < 1500;
 
 drop table t_emp2;
 drop table t_dept2;
+
+create table f1(a int primary key, b int unique key);
+create table f2(aa int primary key, bb int unique key);
+create table c1 (aaa int, bbb int, foreign key f_a(aaa) references f1(a), foreign key f_b(bbb) references f2(aa));
+insert into f1 values (1,1), (2,2), (3,3);
+insert into f2 values (11,11), (22,22), (33,33);
+insert into c1 values (1,11), (2,22), (3,33);
+update c1 set aaa=2, bbb=12 where bbb=11;
+update c1 set aaa=4, bbb=22 where bbb=11;
+update c1 set aaa=2, bbb=33 where bbb=11;
+select * from c1 order by bbb;

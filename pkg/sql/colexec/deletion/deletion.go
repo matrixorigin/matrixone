@@ -59,7 +59,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 
 	// delete unique index
-	_, err = colexec.FilterAndDelByRowId(proc, bat, delCtx.DelIdxIdx, delCtx.DelIdxSource)
+	_, err = colexec.FilterAndDelByRowId(proc, bat, delCtx.IdxIdx, delCtx.IdxSource)
 	if err != nil {
 		return false, err
 	}

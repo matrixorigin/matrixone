@@ -52,10 +52,6 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		return false, nil
 	}
 
-	// for i := range bat.Vecs {
-	// 	bat.Vecs[i] = bat.Vecs[i].ConstExpand(false, proc.Mp())
-	// }
-
 	defer bat.Clean(proc.Mp())
 	var affectedRows uint64
 	var err error
@@ -84,14 +80,14 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 
 	// update child table(which ref on delete cascade)
 	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.OnCascadeIdx, updateCtx.OnCascadeSource,
-		updateCtx.OnCascadeRef, updateCtx.OnCascadeTableDef, updateCtx.OnCascadeUpdateCol, updateCtx.ParentIdx)
+		updateCtx.OnCascadeRef, updateCtx.OnCascadeTableDef, updateCtx.OnCascadeUpdateCol, nil)
 	if err != nil {
 		return false, err
 	}
 
 	// update child table(which ref on delete set null)
 	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.OnSetIdx, updateCtx.OnSetSource,
-		updateCtx.OnSetRef, updateCtx.OnSetTableDef, updateCtx.OnSetUpdateCol, updateCtx.ParentIdx)
+		updateCtx.OnSetRef, updateCtx.OnSetTableDef, updateCtx.OnSetUpdateCol, nil)
 	if err != nil {
 		return false, err
 	}

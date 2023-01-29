@@ -507,8 +507,7 @@ message UpdateCtx {
 	repeated TableDef on_set_def			= 15;
 	repeated ColPosMap on_set_update_col 	= 16; 
 
-	repeated ObjectRef parent_ref 	= 17;
-	repeated int32 parent_idx 		= 18;
+	repeated ColPosMap parent_idx = 17;
 }
 
 message AnalyzeInfo {
@@ -670,8 +669,7 @@ message DeleteCtx {
 	repeated IdList on_set_idx 				= 10;
 	repeated ColPosMap on_set_update_col 	= 11; 
 	
-	bool can_truncate 					= 12;
-	repeated IdList parent_idx 			= 13;
+	bool can_truncate = 12;
 }
 
 message Query {

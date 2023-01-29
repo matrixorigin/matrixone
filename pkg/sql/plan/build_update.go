@@ -87,8 +87,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 		OnSetIdx:       make([]*plan.IdList, len(rewriteInfo.onSet)),
 		OnSetUpdateCol: make([]*plan.ColPosMap, len(rewriteInfo.onSetUpdateCol)),
 
-		ParentRef: rewriteInfo.parentTbl,
-		ParentIdx: rewriteInfo.parentIdx,
+		ParentIdx: make([]*plan.ColPosMap, len(rewriteInfo.parentIdx)),
 	}
 	idx := int64(0)
 	for i, tableDef := range rewriteInfo.tblInfo.tableDefs {
@@ -124,6 +123,11 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 	}
 	for i, idxMap := range rewriteInfo.onSetUpdateCol {
 		updateCtx.OnSetUpdateCol[i] = &plan.ColPosMap{
+			Map: idxMap,
+		}
+	}
+	for i, idxMap := range rewriteInfo.parentIdx {
+		updateCtx.ParentIdx[i] = &plan.ColPosMap{
 			Map: idxMap,
 		}
 	}

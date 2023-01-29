@@ -20,6 +20,7 @@ drop table f1;
 internal error: can not drop table 'f1' referenced by some foreign key constraint
 drop table c1;
 drop table f1;
+drop table f2;
 create table f1(a int primary key, b int unique key);
 create table c1 (a int, b int, foreign key f_a(a) references f1(a));
 insert into f1 values (1,1), (2,2), (3,3);
@@ -125,16 +126,15 @@ internal error: Cannot delete or update a parent row: a foreign key constraint f
 update t_emp set deptId = 50 where salary <  1500;
 internal error: Cannot add or update a child row: a foreign key constraint fails
 update t_emp set deptId = null where salary <  1500;
-invalid argument cast to int, bad value NEW YORK
-select * from t_emp;
+select * from t_emp order by salary;
 id    name    deptid    salary
-7369    SMITH    20    1300.0
+7521    WARD     null    1250.0
+1234    MEIXI    null    1250.0
+7369    SMITH    null    1300.0
 7499    ALLEN    30    1600.0
-7521    WARD     30    1250.0
-7566    JONES    20    3475.0
-1234    MEIXI    30    1250.0
 7698    BLAKE    30    2850.0
 7782    CLARK    10    2950.0
+7566    JONES    20    3475.0
 7788    SCOTT    20    3500.0
 select * from t_dept;
 id    name    location
@@ -207,7 +207,6 @@ id    name    deptid    salary
 update t_emp1 set deptId = 50 where salary < 1500;
 internal error: Cannot add or update a child row: a foreign key constraint fails
 update t_emp1 set deptId = null where salary < 1500;
-invalid argument cast to int, bad value DALLAS
 drop table t_emp1;
 drop table t_dept1;
 drop table if exists t_dept2;
@@ -274,6 +273,21 @@ id    name    deptid    salary
 update t_emp2 set deptId = 50 where salary < 1500;
 internal error: Cannot add or update a child row: a foreign key constraint fails
 update t_emp2 set deptId = null where salary < 1500;
-invalid argument cast to int, bad value DALLAS
 drop table t_emp2;
 drop table t_dept2;
+create table f1(a int primary key, b int unique key);
+create table f2(aa int primary key, bb int unique key);
+create table c1 (aaa int, bbb int, foreign key f_a(aaa) references f1(a), foreign key f_b(bbb) references f2(aa));
+insert into f1 values (1,1), (2,2), (3,3);
+insert into f2 values (11,11), (22,22), (33,33);
+insert into c1 values (1,11), (2,22), (3,33);
+update c1 set aaa=2, bbb=12 where bbb=11;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+update c1 set aaa=4, bbb=22 where bbb=11;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+update c1 set aaa=2, bbb=33 where bbb=11;
+select * from c1 order by bbb;
+aaa	bbbb
+2	22
+3	33
+2	33

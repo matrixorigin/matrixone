@@ -52,8 +52,7 @@ type dmlSelectInfo struct {
 	onCascadeRef       []*ObjectRef
 	onCascadeUpdateCol []map[string]int32 // name=updated col.Name  value=col position in TableDef.Cols
 
-	parentTbl []*ObjectRef
-	parentIdx []int32
+	parentIdx []map[string]int32
 }
 
 type dmlTableInfo struct {
@@ -834,12 +833,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 	typMap := make(map[string]*plan.Type)
 	id2name := make(map[uint64]string)
 
-	// pkPos := int32(-1)
-	// compositePkey := ""
-	// if tableDef.CompositePkey != nil {
-	// 	compositePkey = tableDef.CompositePkey.Name
-	// }
-
 	//use origin query as left, we need add prefix pos
 	var oldColPosMap map[string]int
 	var newColPosMap map[string]int
@@ -847,11 +840,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 		oldColPosMap = info.tblInfo.oldColPosMap[rewriteIdx]
 		newColPosMap = info.tblInfo.newColPosMap[rewriteIdx]
 		for _, col := range tableDef.Cols {
-			// if col.Name == compositePkey {
-			// 	pkPos = int32(idx)
-			// } else if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
-			// 	pkPos = int32(idx)
-			// }
 			typMap[col.Name] = col.Typ
 			id2name[col.ColId] = col.Name
 		}
@@ -861,11 +849,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 		oldColPosMap = make(map[string]int)
 		newColPosMap = make(map[string]int)
 		for idx, col := range tableDef.Cols {
-			// if col.Name == compositePkey {
-			// 	pkPos = int32(idx)
-			// } else if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
-			// 	pkPos = int32(idx)
-			// }
 			oldColPosMap[col.Name] = idx
 			newColPosMap[col.Name] = idx
 			typMap[col.Name] = col.Typ
@@ -1221,19 +1204,27 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 	// check parent table
 	if info.typ != "delete" {
+		parentIdx := make(map[string]int32)
+
 		for _, fk := range tableDef.Fkeys {
 			// in update statement. only add left join logic when update the column in foreign key
 			if info.typ == "update" {
 				updateRefColumn := false
 				for _, colId := range fk.Cols {
 					updateName := id2name[colId]
+					parentIdx[updateName] = info.idx
 					if _, ok := info.tblInfo.updateKeys[rewriteIdx][updateName]; ok {
 						updateRefColumn = true
-						break
 					}
 				}
 				if !updateRefColumn {
 					continue
+				}
+			} else {
+				// insert statement, we will alsways check parent ref
+				for _, colId := range fk.Cols {
+					updateName := id2name[colId]
+					parentIdx[updateName] = info.idx
 				}
 			}
 
@@ -1247,11 +1238,11 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 				parentId2name[col.ColId] = col.Name
 			}
 
-			objRef := &plan.ObjectRef{
-				Obj:        int64(parentTableDef.TblId),
-				SchemaName: builder.compCtx.DefaultDatabase(),
-				ObjName:    parentTableDef.Name,
-			}
+			// objRef := &plan.ObjectRef{
+			// 	Obj:        int64(parentTableDef.TblId),
+			// 	SchemaName: builder.compCtx.DefaultDatabase(),
+			// 	ObjName:    parentTableDef.Name,
+			// }
 
 			// append table scan node
 			rightCtx := NewBindContext(builder, bindCtx)
@@ -1266,27 +1257,27 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 			// build join conds
 			joinConds := make([]*Expr, len(fk.Cols))
-			for i, colId := range fk.Cols {
+			for i, colId := range fk.ForeignCols {
 				for _, col := range parentTableDef.Cols {
 					if col.ColId == colId {
-						childColumnName := col.Name
-						originColumnName := id2name[fk.ForeignCols[i]]
+						parentColumnName := col.Name
+						childColumnName := id2name[fk.Cols[i]]
 
 						leftExpr := &Expr{
-							Typ: typMap[originColumnName],
+							Typ: typMap[childColumnName],
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									RelPos: baseNodeTag,
-									ColPos: int32(newColPosMap[originColumnName]),
+									ColPos: int32(newColPosMap[childColumnName]),
 								},
 							},
 						}
 						rightExpr := &plan.Expr{
-							Typ: parentTypMap[childColumnName],
+							Typ: parentTypMap[parentColumnName],
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									RelPos: rightTag,
-									ColPos: parentPosMap[childColumnName],
+									ColPos: parentPosMap[parentColumnName],
 								},
 							},
 						}
@@ -1310,9 +1301,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					},
 				},
 			})
-			info.parentIdx = append(info.parentIdx, info.idx)
 			info.idx = info.idx + 1
-			info.parentTbl = append(info.parentTbl, objRef)
 
 			// append join node
 			leftCtx := builder.ctxByNode[info.rootId]
@@ -1331,6 +1320,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 			info.rootId = newRootId
 		}
 
+		info.parentIdx = append(info.parentIdx, parentIdx)
 		// todo check for OnDuplicateUpdate
 
 		// todo check for replace

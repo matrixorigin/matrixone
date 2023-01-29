@@ -55,5 +55,5 @@ type UpdateCtx struct {
 	OnSetTableDef  []*plan.TableDef
 	OnSetUpdateCol []map[string]int32
 
-	ParentIdx []int32
+	ParentIdx []map[string]int32
 }

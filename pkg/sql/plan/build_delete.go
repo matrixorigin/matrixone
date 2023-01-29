@@ -38,7 +38,6 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	}
 
 	canTruncate := false
-	parentIdx := make([]*plan.IdList, len(tblInfo.tableDefs))
 	if tblInfo.haveConstraint {
 		bindCtx.groupTag = builder.genNewTag()
 		bindCtx.aggregateTag = builder.genNewTag()
@@ -69,17 +68,6 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		// if delete table have no constraint
 		if stmt.Where == nil && stmt.Limit == nil {
 			canTruncate = true
-			for i, def := range tblInfo.tableDefs {
-				var idList []int64
-				for _, fk := range def.Fkeys {
-					if _, existInDelTable := tblInfo.idToName[fk.ForeignTbl]; !existInDelTable {
-						idList = append(idList, int64(fk.ForeignTbl))
-					}
-				}
-				parentIdx[i] = &plan.IdList{
-					List: idList,
-				}
-			}
 		}
 		rewriteInfo.rootId, err = deleteToSelect(builder, bindCtx, stmt, false)
 		if err != nil {
@@ -95,11 +83,12 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 
 	// append delete node
 	deleteCtx := &plan.DeleteCtx{
-		CanTruncate:   canTruncate,
-		ParentIdx:     parentIdx,
-		Ref:           rewriteInfo.tblInfo.objRef,
-		IdxRef:        rewriteInfo.onIdxTbl,
-		IdxIdx:        rewriteInfo.onIdx,
+		CanTruncate: canTruncate,
+		Ref:         rewriteInfo.tblInfo.objRef,
+
+		IdxRef: rewriteInfo.onIdxTbl,
+		IdxIdx: rewriteInfo.onIdx,
+
 		OnRestrictRef: rewriteInfo.onRestrictTbl,
 		OnRestrictIdx: rewriteInfo.onRestrict,
 		OnCascadeRef:  rewriteInfo.onCascadeRef,

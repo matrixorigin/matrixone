@@ -31,13 +31,11 @@ type Argument struct {
 type DeleteCtx struct {
 	CanTruncate bool
 
-	ParentSource [][]engine.Relation
-
 	DelSource []engine.Relation
 	DelRef    []*plan.ObjectRef
 
-	DelIdxSource []engine.Relation
-	DelIdxIdx    []int32
+	IdxSource []engine.Relation
+	IdxIdx    []int32
 
 	OnRestrictIdx []int32
 

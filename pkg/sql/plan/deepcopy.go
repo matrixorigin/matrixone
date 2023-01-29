@@ -72,8 +72,6 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		OnSetDef:       make([]*plan.TableDef, len(ctx.OnSetDef)),
 		OnSetIdx:       make([]*plan.IdList, len(ctx.OnSetIdx)),
 		OnSetUpdateCol: make([]*plan.ColPosMap, len(ctx.OnSetUpdateCol)),
-
-		ParentIdx: make([]*plan.IdList, len(ctx.ParentIdx)),
 	}
 
 	copy(newCtx.OnRestrictIdx, ctx.OnRestrictIdx)
@@ -113,14 +111,6 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		}
 		newCtx.OnSetUpdateCol[i] = &plan.ColPosMap{Map: newMap}
 	}
-	for i, list := range ctx.ParentIdx {
-		if list != nil {
-			newCtx.ParentIdx[i] = &plan.IdList{
-				List: make([]int64, len(list.List)),
-			}
-			copy(newCtx.ParentIdx[i].List, list.List)
-		}
-	}
 	return newCtx
 }
 
@@ -150,10 +140,8 @@ func DeepCopyUpdateCtx(ctx *plan.UpdateCtx) *plan.UpdateCtx {
 		OnSetDef:       make([]*plan.TableDef, len(ctx.OnSetDef)),
 		OnSetUpdateCol: make([]*plan.ColPosMap, len(ctx.OnSetUpdateCol)),
 
-		ParentRef: make([]*plan.ObjectRef, len(ctx.ParentRef)),
-		ParentIdx: make([]int32, len(ctx.ParentIdx)),
+		ParentIdx: make([]*plan.ColPosMap, len(ctx.ParentIdx)),
 	}
-	copy(newCtx.ParentIdx, ctx.ParentIdx)
 
 	for i, ref := range ctx.Ref {
 		newCtx.Ref[i] = DeepCopyObjectRef(ref)
@@ -231,10 +219,13 @@ func DeepCopyUpdateCtx(ctx *plan.UpdateCtx) *plan.UpdateCtx {
 		newCtx.OnCascadeUpdateCol[i] = &plan.ColPosMap{Map: newMap}
 	}
 
-	for i, ref := range ctx.ParentRef {
-		newCtx.ParentRef[i] = DeepCopyObjectRef(ref)
+	for i, m := range ctx.ParentIdx {
+		newMap := make(map[string]int32)
+		for k, v := range m.Map {
+			newMap[k] = v
+		}
+		newCtx.ParentIdx[i] = &plan.ColPosMap{Map: newMap}
 	}
-	copy(newCtx.ParentIdx, ctx.ParentIdx)
 	return newCtx
 }
 

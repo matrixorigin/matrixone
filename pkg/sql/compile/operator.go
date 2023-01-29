@@ -360,10 +360,8 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		DelSource: make([]engine.Relation, len(oldCtx.Ref)),
 		DelRef:    oldCtx.Ref,
 
-		ParentSource: make([][]engine.Relation, len(oldCtx.ParentIdx)),
-
-		DelIdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
-		DelIdxIdx:    make([]int32, len(oldCtx.IdxIdx)),
+		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
+		IdxIdx:    make([]int32, len(oldCtx.IdxIdx)),
 
 		OnRestrictIdx: make([]int32, len(oldCtx.OnRestrictIdx)),
 
@@ -387,22 +385,8 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			}
 			delCtx.DelSource[i] = rel
 		}
-		for i, idList := range oldCtx.ParentIdx {
-			rels := make([]engine.Relation, len(idList.List))
-			for j, id := range idList.List {
-				ref := &plan.ObjectRef{
-					Obj: id,
-				}
-				rel, err := getRel(proc, eg, ref)
-				if err != nil {
-					return nil, err
-				}
-				rels[j] = rel
-			}
-			delCtx.ParentSource[i] = rels
-		}
 	} else {
-		copy(delCtx.DelIdxIdx, oldCtx.IdxIdx)
+		copy(delCtx.IdxIdx, oldCtx.IdxIdx)
 		copy(delCtx.OnRestrictIdx, oldCtx.OnRestrictIdx)
 		copy(delCtx.OnCascadeIdx, oldCtx.OnCascadeIdx)
 		for i, list := range oldCtx.OnSetIdx {
@@ -423,7 +407,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			if err != nil {
 				return nil, err
 			}
-			delCtx.DelIdxSource[i] = rel
+			delCtx.IdxSource[i] = rel
 		}
 		for i, ref := range oldCtx.OnCascadeRef {
 			rel, err := getRel(proc, eg, ref)
@@ -578,7 +562,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 		OnSetTableDef:  oldCtx.OnSetDef,
 		OnSetUpdateCol: make([]map[string]int32, len(oldCtx.OnSetUpdateCol)),
 
-		ParentIdx: oldCtx.ParentIdx,
+		ParentIdx: make([]map[string]int32, len(oldCtx.ParentIdx)),
 	}
 
 	for i, idxMap := range oldCtx.UpdateCol {
@@ -635,6 +619,9 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 	}
 	for i, idxMap := range oldCtx.OnSetUpdateCol {
 		updateCtx.OnSetUpdateCol[i] = idxMap.Map
+	}
+	for i, idxMap := range oldCtx.ParentIdx {
+		updateCtx.ParentIdx[i] = idxMap.Map
 	}
 
 	return &update.Argument{
