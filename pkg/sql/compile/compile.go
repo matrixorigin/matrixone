@@ -559,6 +559,7 @@ func (c *Compile) ConstructScope() *Scope {
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	mcpu := c.cnList[0].Mcpu
+	mcpu = 2
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 	if param.Local {
@@ -584,6 +585,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
 	var fileList []string
+	var fileSize []int64
 	if !param.Local {
 		if param.QueryResult {
 			fileList = strings.Split(param.Filepath, ",")
@@ -591,12 +593,12 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 				fileList[i] = strings.TrimSpace(fileList[i])
 			}
 		} else {
-			fileList, err = external.ReadDir(param)
+			fileList, fileSize, err = external.ReadDir(param)
 			if err != nil {
 				return nil, err
 			}
 		}
-		fileList, err = external.FliterFileList(n, c.proc, fileList)
+		fileList, fileSize, err = external.FliterFileList(n, c.proc, fileList, fileSize)
 		if err != nil {
 			return nil, err
 		}
@@ -606,6 +608,17 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	} else {
 		fileList = []string{param.Filepath}
 	}
+
+	var fileOffset [][][2]int
+	for i := 0; i < len(fileList); i++ {
+		param.Filepath = fileList[i]
+		arr, err := external.ReadFile2(param, c.proc, mcpu, fileSize[i])
+		fileOffset = append(fileOffset, arr)
+		if err != nil {
+			fmt.Println("wangjian sqlC is", err)
+		}
+	}
+
 	cnt := len(fileList) / mcpu
 	tag := len(fileList) % mcpu
 	index := 0
@@ -621,12 +634,19 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			fileListTmp = fileList[index : index+cnt]
 			index += cnt
 		}
+		offset := make([][2]int, 0)
+		for j := 0; j < len(fileOffset); j++ {
+			offset = append(offset, [2]int{fileOffset[j][i][0], fileOffset[j][i][1]})
+		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.External,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructExternal(n, param, c.ctx, fileListTmp),
+			Arg:     constructExternal(n, param, c.ctx, fileListTmp, offset),
 		})
+		if param.Parallel {
+			ss[i].Instructions[0].Arg.(*external.Argument).Es.FileList = fileList
+		}
 	}
 	c.anal.isFirst = false
 	return ss, nil

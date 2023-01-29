@@ -363,8 +363,8 @@ func writeBatch(ctx context.Context,
 	for i := range bat.Vecs {
 		bat.Vecs[i] = vector.CheckInsertVector(bat.Vecs[i], proc.Mp())
 	}
-	if !proc.LoadTag {
-		return false, handleWrite(n, proc, ctx, bat)
-	}
+	//if !proc.LoadTag {
+		//return false, handleWrite(n, proc, ctx, bat)
+	//}
 	return handleLoadWrite(n, proc, ctx, bat)
 }

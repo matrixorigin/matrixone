@@ -150,6 +150,7 @@ type ExternParam struct {
 	Local        bool
 	QueryResult  bool
 	SysTable     bool
+	Parallel     bool
 }
 
 type S3Parameter struct {
