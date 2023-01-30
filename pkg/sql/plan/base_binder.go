@@ -735,6 +735,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if err != nil {
 		return nil, err
 	}
+	defer engine.Rollback(b.GetContext(), txn)
+	defer txn.Rollback(b.GetContext())
 	db, err := engine.Database(b.GetContext(), catalog.MO_CATALOG, txn)
 	if err != nil {
 		return nil, err
