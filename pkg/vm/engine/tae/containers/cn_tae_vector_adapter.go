@@ -335,6 +335,14 @@ func (vec CnTaeVector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 	return vec.ForeachWindow(0, vec.Length(), op, sels)
 }
 
+func (vec CnTaeVector[T]) Capacity() int {
+	// TODO: Not sure if it correct
+	if vec.downstreamVector.Col != nil {
+		return cap(vec.downstreamVector.Col.([]T))
+	}
+	return 0
+}
+
 // No Idea
 
 func (vec CnTaeVector[T]) SlicePtr() unsafe.Pointer {
@@ -375,13 +383,6 @@ func (vec CnTaeVector[T]) Delete(i int) {
 	// TODO: resize the buffer
 	//size := len(vec.downstreamVector.data) - stl.Sizeof[T]()
 	//vec.buf = vec.buf[:size]
-}
-
-func (vec CnTaeVector[T]) Capacity() int {
-	if vec.downstreamVector.Col != nil {
-		return cap(vec.downstreamVector.Col.([]T))
-	}
-	return 0
 }
 
 func (vec CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
