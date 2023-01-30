@@ -108,8 +108,9 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	}
 
 	// start the data flow
-	moCollector.Start(ctx)
-	moExporter.Start(ctx)
+	serviceCtx := context.Background()
+	moCollector.Start(serviceCtx)
+	moExporter.Start(serviceCtx)
 
 	if getExportToProm() {
 		// http.HandleFunc("/query", makeDebugHandleFunc(ieFactory))
