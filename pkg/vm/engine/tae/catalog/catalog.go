@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -144,7 +145,7 @@ func (catalog *Catalog) InitSystemDB() {
 		panic(err)
 	}
 }
-func (catalog *Catalog) GCCatalog(ts types.TS) {
+func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	logutil.Infof("GC Catalog %v", ts.ToString())
 	processor := LoopProcessor{}
 	processor.DatabaseFn = func(d *DBEntry) error {

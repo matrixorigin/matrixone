@@ -4243,7 +4243,7 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 
 	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	err := tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+	err := tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
 	assert.NoError(t, err)
 
 	testutils.WaitExpect(10000, func() bool {
@@ -4765,7 +4765,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	t.Logf("Checkpointed: %d", tae.Scheduler.GetCheckpointedLSN())
 	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
-	err := manager.JobFactory(context.Background())
+	err := manager.GC(context.Background())
 	assert.Nil(t, err)
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	num := len(entries)
@@ -4820,7 +4820,7 @@ func TestGCDropDB(t *testing.T) {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	t.Log(time.Since(now))
-	err = manager.JobFactory(context.Background())
+	err = manager.GC(context.Background())
 	assert.Nil(t, err)
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	num := len(entries)
@@ -4891,7 +4891,7 @@ func TestGCDropTable(t *testing.T) {
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetDeleteAt())
 	t.Log(time.Since(now))
-	err = manager.JobFactory(context.Background())
+	err = manager.GC(context.Background())
 	assert.Nil(t, err)
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	num := len(entries)
@@ -5410,7 +5410,7 @@ func TestGCCheckpoint1(t *testing.T) {
 
 	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	t.Log(gcTS.ToString())
-	tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+	tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
 
 	maxGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
 
@@ -5539,7 +5539,7 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCCatalog(txn2.GetCommitTS().Next())
+	tae.Catalog.GCByTS(context.Background(), txn2.GetCommitTS().Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
@@ -5570,7 +5570,7 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCCatalog(txn3.GetCommitTS().Next())
+	tae.Catalog.GCByTS(context.Background(), txn3.GetCommitTS().Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
@@ -5597,7 +5597,7 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCCatalog(txn4.GetCommitTS().Next())
+	tae.Catalog.GCByTS(context.Background(), txn4.GetCommitTS().Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
@@ -5620,7 +5620,7 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCCatalog(txn5.GetCommitTS().Next())
+	tae.Catalog.GCByTS(context.Background(), txn5.GetCommitTS().Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
