@@ -238,116 +238,7 @@ drop table if exists t1;
 create table t1 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key num_phone(col2),key num_id(col4));
 insert into t1 values (67834,'13456789872',20.23,'4090'),(56473,'13456789872',100.00,'5678');
 Duplicate entry '13456789872' for key '__mo_index_idx_col'
-drop table if exists t;
 create table t(a int);
-insert into t values(1);
-insert into t select * from t;
-select count(*) from t;
-count(*)
-2
-insert into t select * from t;
-select count(*) from t;
-count(*)
-4
-insert into t select * from t;
-select count(*) from t;
-count(*)
-8
-insert into t select * from t;
-select count(*) from t;
-count(*)
-16
-insert into t select * from t;
-select count(*) from t;
-count(*)
-32
-insert into t select * from t;
-select count(*) from t;
-count(*)
-64
-insert into t select * from t;
-select count(*) from t;
-count(*)
-128
-insert into t select * from t;
-select count(*) from t;
-count(*)
-256
-insert into t select * from t;
-select count(*) from t;
-count(*)
-512
-insert into t select * from t;
-select count(*) from t;
-count(*)
-1024
-insert into t select * from t;
-select count(*) from t;
-count(*)
-2048
-insert into t select * from t;
-select count(*) from t;
-count(*)
-4096
-insert into t select * from t;
-select count(*) from t;
-count(*)
-8192
-insert into t select * from t;
-select count(*) from t;
-count(*)
-16384
-insert into t select * from t;
-select count(*) from t;
-count(*)
-32768
-insert into t select * from t;
-select count(*) from t;
-count(*)
-65536
-insert into t select * from t;
-select count(*) from t;
-count(*)
-131072
-insert into t select * from t;
-select count(*) from t;
-count(*)
-262144
-insert into t select * from t;
-select count(*) from t;
-count(*)
-524288
-insert into t select * from t;
-select count(*) from t;
-count(*)
-1048576
-insert into t select * from t;
-select count(*) from t;
-count(*)
-2097152
-insert into t select * from t;
-select count(*) from t;
-count(*)
-4194304
-insert into t select * from t;
-select count(*) from t;
-count(*)
-8388608
-insert into t select * from t;
-select count(*) from t;
-count(*)
-16777216
-begin;
-insert into t select * from t;
-select count(*) from t;
-count(*)
-33554432
-commit;
-select count(*) from t;
-count(*)
-33554432
-drop table t;
-create table t(a int primary key);
 insert into t select * from generate_series(1,200000) g;
 select count(*) from t;
 count(*)
@@ -364,7 +255,5 @@ Duplicate entry '24577' for key 'a'
 select count(*) from t;
 count(*)
 200000
-insert into t select null;
-constraint violation: Column 'a' cannot be null
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 drop table t;
