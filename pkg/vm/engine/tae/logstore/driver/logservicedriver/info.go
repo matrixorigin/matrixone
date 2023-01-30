@@ -62,6 +62,12 @@ func newDriverInfo() *driverInfo {
 	}
 }
 
+func (d *LogServiceDriver) GetCurrSeqNum() uint64 {
+	d.driverLsnMu.Lock()
+	lsn := d.driverLsn
+	d.driverLsnMu.Unlock()
+	return lsn
+}
 func (info *driverInfo) PreReplay() {
 	info.inReplay = true
 }
