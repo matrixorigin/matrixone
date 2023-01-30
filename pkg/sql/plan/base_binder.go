@@ -774,7 +774,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	default:
 		rds, _ = table.NewReader(b.GetContext(), 1, expr, ret)
 	}
-	reader, err := table.NewReader(b.GetContext(), 1, expr, ret)
+	reader := rds
 	if err != nil {
 		return nil, err
 	}
