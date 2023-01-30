@@ -111,11 +111,26 @@ func Prepare(proc *process.Process, arg any) error {
 		Name2ColIndex: param.Name2ColIndex,
 	}
 	var columns []int
-	param.Filter.columnMap, columns, param.Filter.columnTypes, param.Filter.maxCol = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
+	param.Filter.columnMap, columns, param.Filter.maxCol = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.columns = make([]uint16, len(columns))
+	param.Filter.columnTypes = make([]int, len(columns))
 	for i := 0; i < len(columns); i++ {
 		param.Filter.columns[i] = uint16(columns[i])
 	}
+	for i := 0; i < len(columns); i++ {
+		exist := false
+		for _, col := range param.Cols {
+			if col.ColId == uint64(columns[i]) {
+				param.Filter.columnTypes[i] = int(col.Typ.Id)
+				exist = true
+				break
+			}
+		}
+		if !exist {
+			return moerr.NewInternalError(proc.Ctx, "column not found")
+		}
+	}
+
 	param.Filter.exprMono = plan2.CheckExprIsMonotonic(proc.Ctx, param.Filter.FilterExpr)
 	param.Filter.File2Size = make(map[string]int64)
 	return nil
@@ -831,7 +846,7 @@ func needRead(param *ExternalParam, proc *process.Process, objectReader objectio
 	defer bat.Clean(proc.Mp())
 	for k, v := range param.Filter.columnMap {
 		for i, realIdx := range param.Filter.columns {
-			if int(realIdx) == v[0] {
+			if int(realIdx) == v {
 				bat.SetVector(int32(k), buildVectors[i])
 				break
 			}
