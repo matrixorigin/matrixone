@@ -742,6 +742,14 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 				nulls.Add(vecTmp.Nsp, uint64(j))
 			}
 		} else if catalog.ContainExternalHidenCol(param.Attrs[i]) {
+			if rows == 0 {
+				vecTmp = vector.New(makeType([]*plan.ColDef{{Typ: param.FirstColType}}, 0))
+				err = vecTmp.Read(vec.Entries[i].Object.([]byte))
+				if err != nil {
+					return nil, err
+				}
+				rows = vecTmp.Length()
+			}
 			vecTmp = vector.New(makeType(param.Cols, i))
 			vector.PreAlloc(vecTmp, rows, rows, proc.GetMPool())
 			for j := 0; j < rows; j++ {

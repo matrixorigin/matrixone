@@ -35,6 +35,7 @@ func ColumnCntLargerErrorInfo() string {
 type ExternalParam struct {
 	Attrs         []string
 	Cols          []*plan.ColDef
+	FirstColType  *plan.Type
 	Name2ColIndex map[string]int32
 	CreateSql     string
 	Ctx           context.Context

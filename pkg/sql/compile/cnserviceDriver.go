@@ -1143,6 +1143,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Es: &external.ExternalParam{
 				Attrs:         t.Attrs,
 				Cols:          t.Cols,
+				FirstColType:  t.FirstColType,
 				CreateSql:     t.CreateSql,
 				Name2ColIndex: name2ColIndex,
 				Fileparam:     new(external.ExternalFileparam),
