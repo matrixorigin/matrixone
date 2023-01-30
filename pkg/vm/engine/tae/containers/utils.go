@@ -183,6 +183,17 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 
 func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(v.Typ, nullable)
+	bs := MoVecToBytes(v)
+	var np *roaring64.Bitmap
+	if v.Nsp.Np != nil {
+		np = roaring64.New()
+		np.AddMany(v.Nsp.Np.ToArray())
+	}
+	vec.ResetWithData(bs, np)
+	return vec
+}
+
+func MoVecToBytes(v *movec.Vector) *Bytes {
 	var bs *Bytes
 
 	switch v.Typ.Oid {
@@ -234,13 +245,7 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	default:
 		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.Typ.String())))
 	}
-	var np *roaring64.Bitmap
-	if v.Nsp.Np != nil {
-		np = roaring64.New()
-		np.AddMany(v.Nsp.Np.ToArray())
-	}
-	vec.ResetWithData(bs, np)
-	return vec
+	return bs
 }
 
 func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
