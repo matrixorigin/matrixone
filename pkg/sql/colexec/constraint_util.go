@@ -303,3 +303,89 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 	updateBatch.SetZs(batLen, proc.Mp())
 	return updateBatch, nil
 }
+
+func InsertBatch(
+	eg engine.Engine,
+	proc *process.Process,
+	bat *batch.Batch,
+	rel engine.Relation,
+	ref *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	parentIdx map[string]int32) (uint64, error) {
+	var insertBatch *batch.Batch
+	var err error
+	affectedRows := bat.Vecs[0].Length()
+	defer func() {
+		if insertBatch != nil {
+			insertBatch.Clean(proc.Mp())
+		}
+		bat.Clean(proc.Mp())
+	}()
+
+	// prepare some data for insert batch
+	attrs := make([]string, len(tableDef.Cols))
+	hasAutoCol := false
+	pkPos := -1
+	compositePkey := ""
+	if tableDef.CompositePkey != nil {
+		compositePkey = tableDef.CompositePkey.Name
+	}
+	clusterBy := ""
+	if tableDef.ClusterBy != nil {
+		clusterBy = tableDef.ClusterBy.Name
+	}
+	updateNameToPos := make(map[string]int)
+	idxList := make([]int32, len(tableDef.Cols))
+	for j, col := range tableDef.Cols {
+		if col.Typ.AutoIncr {
+			hasAutoCol = true
+		}
+		if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
+			pkPos = j
+		}
+		attrs[j] = col.Name
+		updateNameToPos[col.Name] = j
+		idxList[j] = int32(j)
+	}
+	if compositePkey != "" {
+		pkPos = len(tableDef.Cols)
+	}
+
+	//get insert batch
+	insertBatch, err = GetUpdateBatch(proc, bat, idxList, bat.Length(), attrs, nil, parentIdx)
+	if err != nil {
+		return 0, err
+	}
+
+	// check new rows not null
+	err = batchDataNotNullCheck(insertBatch, tableDef, proc.Ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	// fill auto incr column
+	if hasAutoCol {
+		if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, insertBatch, uint64(ref.Obj), ref.SchemaName, tableDef.Name); err != nil {
+			return 0, err
+		}
+	}
+
+	// append hidden columns
+	if compositePkey != "" {
+		util.FillCompositeClusterByBatch(insertBatch, compositePkey, proc)
+	}
+	if clusterBy != "" {
+		util.FillCompositeClusterByBatch(insertBatch, clusterBy, proc)
+	}
+
+	// write unique key table
+	writeUniqueTable(eg, proc, insertBatch, tableDef, ref.SchemaName, updateNameToPos, pkPos)
+
+	// write origin table
+	err = rel.Write(proc.Ctx, insertBatch)
+	if err != nil {
+		return 0, err
+	}
+
+	return uint64(affectedRows), nil
+}

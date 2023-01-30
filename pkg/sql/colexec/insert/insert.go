@@ -58,19 +58,19 @@ type Argument struct {
 	ClusterTable         *plan.ClusterTable
 	HasAutoCol           bool
 
-	InsertCtx InsertCtx
+	InsertCtx *InsertCtx
 }
 
 type InsertCtx struct {
-	Source    engine.Relation
-	Idx       []int32
-	Ref       *plan.ObjectRef
-	TableDefs *plan.TableDef
+	Source   engine.Relation
+	Idx      []int32
+	Ref      *plan.ObjectRef
+	TableDef *plan.TableDef
 
 	IdxSource []engine.Relation
 	IdxIdx    []int32
 
-	ParentIdx []int32
+	ParentIdx map[string]int32
 
 	ClusterTable *plan.ClusterTable
 }
@@ -215,9 +215,10 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 }
 
 func Call2(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
-	// var err error
+	var err error
+	var affectedRows uint64
 	t1 := time.Now()
-	n := arg.(*Argument)
+	insertArg := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil {
 		return true, nil
@@ -226,7 +227,7 @@ func Call2(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (
 		return false, nil
 	}
 	ctx := proc.Ctx
-	clusterTable := n.ClusterTable
+	clusterTable := insertArg.ClusterTable
 	if clusterTable.GetIsClusterTable() {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
@@ -241,14 +242,119 @@ func Call2(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (
 		anal.AddInsertTime(t1)
 	}()
 
-	// insertCtx := n.InsertCtx
-	// ref := insertCtx.Ref
+	insertCtx := insertArg.InsertCtx
 
-	// do insert
-	if !proc.LoadTag {
-		return false, handleWrite(n, proc, ctx, bat)
+	// delete old unique index
+	_, err = colexec.FilterAndDelByRowId(proc, bat, insertCtx.IdxIdx, insertCtx.IdxSource)
+	if err != nil {
+		return false, err
 	}
-	return handleLoadWrite(n, proc, ctx, bat)
+
+	insertRows := func() error {
+		var affectedRow uint64
+		if proc.LoadTag {
+			proc.TxnOperator, err = NewTxn(insertArg, proc, ctx)
+			if err != nil {
+				return err
+			}
+
+			insertCtx.Source, err = GetNewRelation(insertArg, proc.TxnOperator, proc, ctx)
+			if err != nil {
+				return err
+			}
+
+			affectedRow, err = colexec.InsertBatch(insertArg.Engine, proc, bat, insertCtx.Source,
+				insertCtx.Ref, insertCtx.TableDef, insertCtx.ParentIdx)
+			if err != nil {
+				err2 := RolllbackTxn(insertArg, proc.TxnOperator, ctx)
+				if err2 != nil {
+					return err2
+				}
+				return err
+			}
+
+			if err = CommitTxn(insertArg, proc.TxnOperator, ctx); err != nil {
+				return err
+			}
+		} else {
+			affectedRow, err = colexec.InsertBatch(insertArg.Engine, proc, bat, insertCtx.Source,
+				insertCtx.Ref, insertCtx.TableDef, insertCtx.ParentIdx)
+			if err != nil {
+				return err
+			}
+		}
+
+		affectedRows = affectedRows + affectedRow
+		return nil
+	}
+
+	if clusterTable.GetIsClusterTable() {
+		accountIdColumnDef := insertCtx.TableDef.Cols[clusterTable.GetColumnIndexOfAccountId()]
+		accountIdExpr := accountIdColumnDef.GetDefault().GetExpr()
+		accountIdConst := accountIdExpr.GetC()
+
+		vecLen := vector.Length(bat.Vecs[0])
+		tmpBat := batch.NewWithSize(0)
+		tmpBat.Zs = []int64{1}
+		//save auto_increment column if necessary
+		savedAutoIncrVectors := make([]*vector.Vector, 0)
+		defer func() {
+			for _, vec := range savedAutoIncrVectors {
+				vector.Clean(vec, proc.Mp())
+			}
+		}()
+		for i, colDef := range insertCtx.TableDef.Cols {
+			if colDef.GetTyp().GetAutoIncr() {
+				vec2, err := vector.Dup(bat.Vecs[i], proc.Mp())
+				if err != nil {
+					return false, err
+				}
+				savedAutoIncrVectors = append(savedAutoIncrVectors, vec2)
+			}
+		}
+		for idx, accountId := range clusterTable.GetAccountIDs() {
+			//update accountId in the accountIdExpr
+			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
+			accountIdVec := bat.Vecs[clusterTable.GetColumnIndexOfAccountId()]
+			//clean vector before fill it
+			vector.Clean(accountIdVec, proc.Mp())
+			//the i th row
+			for i := 0; i < vecLen; i++ {
+				err := fillRow(tmpBat, accountIdExpr, accountIdVec, proc)
+				if err != nil {
+					return false, err
+				}
+			}
+			if idx != 0 { //refill the auto_increment column vector
+				j := 0
+				for colIdx, colDef := range insertCtx.TableDef.Cols {
+					if colDef.GetTyp().GetAutoIncr() {
+						targetVec := bat.Vecs[colIdx]
+						vector.Clean(targetVec, proc.Mp())
+						for k := int64(0); k < int64(vecLen); k++ {
+							err := vector.UnionOne(targetVec, savedAutoIncrVectors[j], k, proc.Mp())
+							if err != nil {
+								return false, err
+							}
+						}
+						j++
+					}
+				}
+			}
+
+			err := insertRows()
+			if err != nil {
+				return false, err
+			}
+		}
+	} else {
+		err := insertRows()
+		if err != nil {
+			return false, err
+		}
+	}
+	atomic.AddUint64(&insertArg.Affected, affectedRows)
+	return false, nil
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {

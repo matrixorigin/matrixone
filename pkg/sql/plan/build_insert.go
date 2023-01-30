@@ -53,10 +53,10 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	bindCtx.aggregateTag = builder.genNewTag()
 	bindCtx.projectTag = builder.genNewTag()
 
-	// err = initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
-	// if err != nil {
-	// 	return nil, err
-	// }
+	err = initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	if err != nil {
+		return nil, err
+	}
 
 	// if tblInfo.haveConstraint {
 	// 	for i, tableDef := range tblInfo.tableDefs {
@@ -86,21 +86,21 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	insertCtx := &plan.InsertCtx{
 		Ref:      rewriteInfo.tblInfo.objRef[0],
 		TableDef: rewriteInfo.tblInfo.tableDefs[0],
-		Idx:      make([]int64, len(rewriteInfo.tblInfo.tableDefs[0].Cols)),
+		Idx:      make([]int32, len(rewriteInfo.tblInfo.tableDefs[0].Cols)),
 		// UpdateCol: rewriteInfo.tblInfo.updateCol[0],
 
 		IdxRef: rewriteInfo.onIdxTbl,
 		IdxIdx: rewriteInfo.onIdx,
 
-		// ParentIdx: make([]*plan.ColPosMap, len(rewriteInfo.parentIdx)),
+		// ParentIdx: rewriteInfo.parentIdx[0],
 		ClusterTable: clusterTable,
 	}
 	for j := range tblDef.Cols {
-		insertCtx.Idx[j] = int64(j)
+		insertCtx.Idx[j] = int32(j)
 	}
 
 	node := &Node{
-		NodeType:  plan.Node_UPDATE,
+		NodeType:  plan.Node_INSERT,
 		ObjRef:    nil,
 		TableDef:  nil,
 		Children:  []int32{query.Steps[len(query.Steps)-1]},

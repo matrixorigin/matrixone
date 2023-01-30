@@ -448,6 +448,42 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	}, nil
 }
 
+func constructInsert2(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
+	oldCtx := n.InsertCtx
+	ctx := proc.Ctx
+	if oldCtx.GetClusterTable().GetIsClusterTable() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	newCtx := &insert.InsertCtx{
+		Idx:      oldCtx.Idx,
+		Ref:      oldCtx.Ref,
+		TableDef: oldCtx.TableDef,
+
+		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
+		IdxIdx:    oldCtx.IdxIdx,
+
+		ParentIdx: oldCtx.ParentIdx,
+	}
+
+	rel, err := getRel(proc, eg, oldCtx.Ref, ctx)
+	if err != nil {
+		return nil, err
+	}
+	newCtx.Source = rel
+	for i, ref := range oldCtx.IdxRef {
+		rel, err := getRel(proc, eg, ref, ctx)
+		if err != nil {
+			return nil, err
+		}
+		newCtx.IdxSource[i] = rel
+	}
+
+	return &insert.Argument{
+		InsertCtx: newCtx,
+		Engine:    eg,
+	}, nil
+}
+
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
 	var db engine.Database
 	var relation engine.Relation
@@ -1297,19 +1333,22 @@ func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.
 	return uIdxDef, sIdxDef
 }
 
-func getRel(proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (rel engine.Relation, err error) {
+func getRel(proc *process.Process, eg engine.Engine, ref *plan.ObjectRef, ctx context.Context) (rel engine.Relation, err error) {
 	var dbSource engine.Database
+	if ctx == nil {
+		ctx = proc.Ctx
+	}
 	if ref.SchemaName != "" {
-		dbSource, err = eg.Database(proc.Ctx, ref.SchemaName, proc.TxnOperator)
+		dbSource, err = eg.Database(ctx, ref.SchemaName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
-		rel, err = dbSource.Relation(proc.Ctx, ref.ObjName)
+		rel, err = dbSource.Relation(ctx, ref.ObjName)
 		if err == nil {
 			return
 		}
 
-		dbSource, err = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+		dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -1317,9 +1356,9 @@ func getRel(proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (rel e
 		newSchemaName := defines.TEMPORARY_DBNAME
 		ref.SchemaName = newSchemaName
 		ref.ObjName = newObjeName
-		return dbSource.Relation(proc.Ctx, newObjeName)
+		return dbSource.Relation(ctx, newObjeName)
 	} else {
-		_, _, rel, err = eg.GetRelationById(proc.Ctx, proc.TxnOperator, uint64(ref.Obj))
+		_, _, rel, err = eg.GetRelationById(ctx, proc.TxnOperator, uint64(ref.Obj))
 		return
 	}
 }
