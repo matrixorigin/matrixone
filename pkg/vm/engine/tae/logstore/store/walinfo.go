@@ -199,7 +199,7 @@ func (w *StoreInfo) getDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err 
 	return
 }
 
-func (w *StoreInfo) logCheckpointInfo(info *entry.Info) any {
+func (w *StoreInfo) logCheckpointInfo(info *entry.Info) {
 	switch info.Group {
 	case GroupCKP:
 		for _, intervals := range info.Checkpoints {
@@ -218,14 +218,11 @@ func (w *StoreInfo) logCheckpointInfo(info *entry.Info) any {
 			w.ckpMu.Unlock()
 		}
 	case GroupInternal:
-		if info.Group == GroupInternal {
-			w.checkpointedMu.Lock()
-			w.checkpointed[GroupCKP] = info.TargetLsn
-			w.checkpointed[GroupInternal] = info.GroupLSN - 1
-			w.checkpointedMu.Unlock()
-		}
+		w.checkpointedMu.Lock()
+		w.checkpointed[GroupCKP] = info.TargetLsn
+		w.checkpointed[GroupInternal] = info.GroupLSN - 1
+		w.checkpointedMu.Unlock()
 	}
-	return nil
 }
 
 func (w *StoreInfo) onCheckpoint() {

@@ -27,7 +27,6 @@ func (w *StoreImpl) FuzzyCheckpoint(gid uint32, indexes []*Index) (ckpEntry entr
 	if drentry == nil {
 		panic(err)
 	}
-	w.ckpCkp()
 	_, err = w.checkpointQueue.Enqueue(drentry)
 	if err != nil {
 		panic(err)
@@ -96,7 +95,6 @@ func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry ent
 	if err != nil {
 		panic(err)
 	}
-	w.ckpCkp()
 	_, err = w.checkpointQueue.Enqueue(drentry)
 	if err != nil {
 		panic(err)
@@ -132,10 +130,7 @@ func (w *StoreImpl) onLogCKPInfoQueue(items ...any) {
 
 func (w *StoreImpl) onCheckpoint() {
 	w.StoreInfo.onCheckpoint()
-	_, err := w.truncatingQueue.Enqueue(struct{}{})
-	if err != nil {
-		panic(err)
-	}
+	w.ckpCkp()
 }
 
 func (w *StoreImpl) ckpCkp() {
@@ -147,7 +142,7 @@ func (w *StoreImpl) ckpCkp() {
 	if err != nil {
 		panic(err)
 	}
-	w.checkpointQueue.Enqueue(driverEntry)
+	w.truncatingQueue.Enqueue(driverEntry)
 	err = e.WaitDone()
 	if err != nil {
 		panic(err)
@@ -156,6 +151,14 @@ func (w *StoreImpl) ckpCkp() {
 }
 
 func (w *StoreImpl) onTruncatingQueue(items ...any) {
+	for _, item := range items {
+		e := item.(*driverEntry.Entry)
+		err := e.WaitDone()
+		if err != nil {
+			panic(err)
+		}
+		w.logCheckpointInfo(e.Info)
+	}
 	gid, driverLsn := w.getDriverCheckpointed()
 	if gid == 0 {
 		return
