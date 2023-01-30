@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	engine2 "github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
@@ -745,11 +746,34 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	expr := getUdfNameMatchExpr(name)
+	var rds []engine2.Reader
 	ret, err := table.Ranges(b.GetContext(), expr)
 	if err != nil {
 		return nil, err
 	}
-
+	switch {
+	case len(ret) == 0:
+		if rds, err = table.NewReader(b.GetContext(), 1, expr, nil); err != nil {
+			return nil, err
+		}
+	case len(ret) == 1 && len(ret[0]) == 0:
+		if rds, err = table.NewReader(b.GetContext(), 1, expr, nil); err != nil {
+			return nil, err
+		}
+	case len(ret[0]) == 0:
+		rds0, err := table.NewReader(b.GetContext(), 1, expr, nil)
+		if err != nil {
+			return nil, err
+		}
+		rds1, err := table.NewReader(b.GetContext(), 1, expr, ret[1:])
+		if err != nil {
+			return nil, err
+		}
+		rds = append(rds, rds0...)
+		rds = append(rds, rds1...)
+	default:
+		rds, _ = table.NewReader(b.GetContext(), 1, expr, ret)
+	}
 	reader, err := table.NewReader(b.GetContext(), 1, expr, ret)
 	if err != nil {
 		return nil, err
