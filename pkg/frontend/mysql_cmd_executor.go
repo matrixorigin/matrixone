@@ -468,11 +468,7 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 				return err
 			}
 			row[1] = typ.DescString()
-			if d[2].(int8) == 0 {
-				row[2] = "NO"
-			} else {
-				row[2] = "YES"
-			}
+			row[2] = d[2]
 			row[3] = d[3]
 			if value, ok := row[3].([]uint8); ok {
 				if len(value) != 0 {
@@ -515,11 +511,7 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 			}
 			row[1] = typ.DescString()
 			row[2] = "NULL"
-			if d[3].(int8) == 0 {
-				row[3] = "NO"
-			} else {
-				row[3] = "YES"
-			}
+			row[3] = d[3]
 			row[4] = d[4]
 			if value, ok := row[4].([]uint8); ok {
 				if len(value) != 0 {
@@ -3383,6 +3375,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
+		Session:       ses,
 	}
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
@@ -4213,6 +4206,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
+		Session:       ses,
 	}
 
 	if ses.GetTenantInfo() != nil {
