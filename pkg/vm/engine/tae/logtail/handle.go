@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -122,14 +121,23 @@ func HandleSyncLogTailReq(
 	resp, err = visitor.BuildResp()
 
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
-		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
-		if (forceFlush && name == tableEntry.GetSchema().Name) || resp.ProtoSize() > Size90M {
+		if resp.ProtoSize() > Size90M {
 			_ = ckpClient.FlushTable(did, tid, end)
 			// try again after flushing
 			newResp, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
 			logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)
 			return newResp, err
 		}
+		/*
+			_, name, forceFlush := fault.TriggerFault("logtail_max_size")
+			if (forceFlush && name == tableEntry.GetSchema().Name) || resp.ProtoSize() > Size90M {
+				_ = ckpClient.FlushTable(did, tid, end)
+				// try again after flushing
+				newResp, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
+				logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)
+				return newResp, err
+			}
+		*/
 	}
 	return
 }
