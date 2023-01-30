@@ -29,7 +29,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ...")
 	}
 	if isReplace {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE statement")
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
 	}
 
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil)
@@ -92,9 +92,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		IdxRef: rewriteInfo.onIdxTbl,
 		IdxIdx: rewriteInfo.onIdx,
 
-		// ParentRef: rewriteInfo.parentTbl,
-		// ParentIdx: rewriteInfo.parentIdx,
-
+		// ParentIdx: make([]*plan.ColPosMap, len(rewriteInfo.parentIdx)),
 		ClusterTable: clusterTable,
 	}
 	for j := range tblDef.Cols {

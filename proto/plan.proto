@@ -494,10 +494,9 @@ message InsertCtx {
 	repeated ObjectRef idx_ref 		= 5;
 	repeated int32 idx_idx 			= 6;
 
-	repeated ObjectRef parent_ref 	= 7;
-	repeated int32 parent_idx 		= 8;
+	//repeated ColPosMap parent_idx 	= 7;
 
-	ClusterTable cluster_table = 9;
+	ClusterTable cluster_table = 8;
 }
 
 message UpdateCtx {

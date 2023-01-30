@@ -51,6 +51,34 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 	}
 }
 
+func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
+	if ctx == nil {
+		return nil
+	}
+	newCtx := &plan.InsertCtx{
+		Ref:          DeepCopyObjectRef(ctx.Ref),
+		Idx:          make([]int64, len(ctx.Idx)),
+		TableDef:     DeepCopyTableDef(ctx.TableDef),
+		UpdateCol:    make(map[string]int32),
+		IdxRef:       make([]*plan.ObjectRef, len(ctx.IdxRef)),
+		IdxIdx:       make([]int32, len(ctx.IdxIdx)),
+		ClusterTable: DeepCopyClusterTable(ctx.ClusterTable),
+	}
+
+	copy(newCtx.Idx, ctx.Idx)
+	copy(newCtx.IdxIdx, ctx.IdxIdx)
+
+	for i, ref := range ctx.IdxRef {
+		newCtx.IdxRef[i] = DeepCopyObjectRef(ref)
+	}
+
+	for k, v := range ctx.UpdateCol {
+		newCtx.UpdateCol[k] = v
+	}
+
+	return newCtx
+}
+
 func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 	if ctx == nil {
 		return nil
@@ -128,6 +156,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
+		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
 	}
 
 	copy(newNode.Children, node.Children)
