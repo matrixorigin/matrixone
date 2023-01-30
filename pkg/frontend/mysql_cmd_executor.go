@@ -1686,8 +1686,12 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 
 	var hasLike = false
 	var likePattern = ""
+	var isIlike = false
 	if sv.Like != nil {
 		hasLike = true
+		if sv.Like.Op == tree.ILIKE {
+			isIlike = true
+		}
 		likePattern = strings.ToLower(sv.Like.Right.String())
 	}
 
@@ -1703,8 +1707,14 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 
 	rows := make([][]interface{}, 0, len(sysVars))
 	for name, value := range sysVars {
-		if hasLike && !WildcardMatch(likePattern, name) {
-			continue
+		if hasLike {
+			s := name
+			if isIlike {
+				s = strings.ToLower(s)
+			}
+			if !WildcardMatch(likePattern, s) {
+				continue
+			}
 		}
 		row := make([]interface{}, 2)
 		row[0] = name
