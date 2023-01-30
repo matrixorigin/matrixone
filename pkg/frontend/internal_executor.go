@@ -176,7 +176,6 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 
 	t, _ := GetTenantInfo(ctx, DefaultTenantMoAdmin)
 	sess.SetTenantInfo(t)
-  
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
 	return sess
