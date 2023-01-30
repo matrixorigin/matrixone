@@ -187,15 +187,15 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 		}
 	case types.T_datetime:
 		for i := 1; i <= rows; i++ {
-			vec.Append(types.FromClock(int32(i*100), 1, 1, 1, 1, 1, 1))
+			vec.Append(types.DatetimeFromClock(int32(i*100), 1, 1, 1, 1, 1, 1))
 		}
 	case types.T_date:
 		for i := 1; i <= rows; i++ {
-			vec.Append(types.FromCalendar(int32(i)*100, 1, 1))
+			vec.Append(types.DateFromCalendar(int32(i)*100, 1, 1))
 		}
 	case types.T_time:
 		for i := 1; i <= rows; i++ {
-			vec.Append(types.FromTimeClock(false, 1, 1, 1, 1))
+			vec.Append(types.TimeFromClock(false, 1, 1, 1, 1))
 		}
 	case types.T_timestamp:
 		for i := int32(1); i <= int32(rows); i++ {

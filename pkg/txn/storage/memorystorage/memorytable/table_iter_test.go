@@ -59,4 +59,16 @@ func TestTableIter(t *testing.T) {
 	assert.Equal(t, num/2, n)
 	assert.Nil(t, iter.Close())
 
+	// seek invalid
+	iter, err = table.NewIter(tx)
+	assert.Nil(t, err)
+	n = 0
+	for ok := iter.Seek(Int(num * 10)); ok; ok = iter.Next() {
+		n++
+		iter.Read()
+	}
+	if n != 0 {
+		t.Fatalf("got %v", n)
+	}
+
 }

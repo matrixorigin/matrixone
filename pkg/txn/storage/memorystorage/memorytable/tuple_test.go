@@ -14,19 +14,27 @@
 
 package memorytable
 
-type Index[
-	K Ordered[K],
-	V any,
-] interface {
-	Copy() Index[K, V]
-	Delete(*IndexEntry[K, V])
-	Set(*IndexEntry[K, V])
-	Iter() IndexIter[K, V]
+import (
+	"bytes"
+	"testing"
+)
+
+func BenchmarkTupleLess(b *testing.B) {
+	x := Tuple{Int(1)}
+	y := Tuple{Int(2)}
+	for i := 0; i < b.N; i++ {
+		if y.Less(x) {
+			b.Fatal()
+		}
+	}
 }
 
-type IndexIter[
-	K Ordered[K],
-	V any,
-] interface {
-	SeekIter[*IndexEntry[K, V]]
+func BenchmarkBytesCompare(b *testing.B) {
+	x := []byte{1}
+	y := []byte{2}
+	for i := 0; i < b.N; i++ {
+		if bytes.Compare(x, y) >= 0 {
+			b.Fatal()
+		}
+	}
 }

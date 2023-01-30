@@ -33,12 +33,19 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 type unnestParam struct {
-	Filters []string `json:"filters"`
-	ColName string   `json:"colName"`
+	FilterMap map[string]struct{} `json:"filterMap"`
+	ColName   string              `json:"colName"`
 }
 
 var (
 	unnestDeniedFilters = []string{"col", "seq"}
+	defaultFilterMap    = map[string]struct{}{
+		"key":   {},
+		"path":  {},
+		"index": {},
+		"value": {},
+		"this":  {},
+	}
 )
 
 const (

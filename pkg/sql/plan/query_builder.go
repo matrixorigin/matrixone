@@ -18,10 +18,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/constant"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -644,10 +648,44 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_VALUE_SCAN:
 		// VALUE_SCAN always have one column now
-		node.ProjectList = append(node.ProjectList, &plan.Expr{
-			Typ:  &plan.Type{Id: int32(types.T_int64)},
-			Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_I64Val{I64Val: 0}}},
-		})
+		if node.TableDef == nil { // like select 1,2
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ:  &plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_I64Val{I64Val: 0}}},
+			})
+		} else {
+			internalRemapping := &ColRefRemapping{
+				globalToLocal: make(map[[2]int32][2]int32),
+			}
+
+			tag := node.BindingTags[0]
+			for i := range node.TableDef.Cols {
+				globalRef := [2]int32{tag, int32(i)}
+				if colRefCnt[globalRef] == 0 {
+					continue
+				}
+				internalRemapping.addColRef(globalRef)
+			}
+
+			for i, col := range node.TableDef.Cols {
+				if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
+					continue
+				}
+
+				remapping.addColRef(internalRemapping.localToGlobal[i])
+
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: col.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: int32(i),
+							Name:   col.Name,
+						},
+					},
+				})
+			}
+		}
 
 	default:
 		return nil, moerr.NewInternalError(builder.GetContext(), "unsupport node type")
@@ -1065,6 +1103,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	var clause *tree.SelectClause
+	var valuesClause *tree.ValuesClause
+	var nodeID int32
+	var err error
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
 
@@ -1100,43 +1141,162 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	case *tree.UnionClause:
 		return builder.buildUnion(selectClause, astOrderBy, astLimit, ctx, isRoot)
 	case *tree.ValuesClause:
-		return 0, moerr.NewNYI(builder.GetContext(), "'SELECT FROM VALUES'")
+		valuesClause = selectClause
 	default:
 		return 0, moerr.NewNYI(builder.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
 	}
 
-	// build FROM clause
-	nodeID, err := builder.buildFrom(clause.From.Tables, ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	ctx.binder = NewWhereBinder(builder, ctx)
-	// unfold stars and generate headings
+	var projectionBinder *ProjectionBinder
+	var havingList []*plan.Expr
 	var selectList tree.SelectExprs
-	for _, selectExpr := range clause.Exprs {
-		switch expr := selectExpr.Expr.(type) {
-		case tree.UnqualifiedStar:
-			cols, names, err := ctx.unfoldStar(builder.GetContext(), "")
-			if err != nil {
-				return 0, err
-			}
-			selectList = append(selectList, cols...)
-			ctx.headings = append(ctx.headings, names...)
+	var resultLen int
+	var havingBinder *HavingBinder
 
-		case *tree.UnresolvedName:
-			if expr.Star {
-				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0])
+	if clause == nil {
+		rowCount := len(valuesClause.Rows)
+		if len(valuesClause.Rows) == 0 {
+			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
+		}
+		colCount := len(valuesClause.Rows[0])
+		ctx.hasSingleRow = rowCount == 1
+		proc := builder.compCtx.GetProcess()
+		emptyBatch := batch.NewWithSize(0)
+		emptyBatch.Zs = []int64{1}
+		rowSetData := &plan.RowsetData{
+			Cols: make([]*plan.ColData, colCount),
+		}
+		tableDef := &plan.TableDef{
+			TblId: 0,
+			Name:  "",
+			Cols:  make([]*plan.ColDef, colCount),
+		}
+		ctx.binder = NewWhereBinder(builder, ctx)
+		for i := 0; i < colCount; i++ {
+			rows := make([]*plan.Expr, rowCount)
+			for j := 0; j < rowCount; j++ {
+				planExpr, err := ctx.binder.BindExpr(valuesClause.Rows[j][i], 0, true)
+				if err != nil {
+					return 0, err
+				}
+				colExpr, err := ConstantFold(emptyBatch, planExpr, proc)
+				if err != nil {
+					return 0, err
+				}
+				rows[j] = colExpr
+
+				if j == 0 {
+					colName := fmt.Sprintf("column_%d", i) // like MySQL
+					selectList = append(selectList, tree.SelectExpr{
+						Expr: &tree.UnresolvedName{
+							NumParts: 1,
+							Star:     false,
+							Parts:    [4]string{colName, "", "", ""},
+						},
+						As: tree.UnrestrictedIdentifier(colName),
+					})
+					ctx.headings = append(ctx.headings, colName)
+					tableDef.Cols[i] = &plan.ColDef{
+						ColId: 0,
+						Name:  colName,
+						Typ:   colExpr.Typ,
+					}
+				} else {
+					if !isSameColumnType(tableDef.Cols[i].Typ, colExpr.Typ) {
+						return 0, moerr.NewInternalError(builder.GetContext(), "col of values should have the same type")
+					}
+				}
+			}
+			rowSetData.Cols[i] = &plan.ColData{
+				Data: rows,
+			}
+		}
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_VALUE_SCAN,
+			RowsetData:  rowSetData,
+			TableDef:    tableDef,
+			BindingTags: []int32{builder.genNewTag()},
+		}, ctx)
+
+		err = builder.addBinding(nodeID, tree.AliasClause{
+			Alias: "_ValueScan",
+		}, ctx)
+		if err != nil {
+			return 0, err
+		}
+	} else {
+		// build FROM clause
+		nodeID, err = builder.buildFrom(clause.From.Tables, ctx)
+		if err != nil {
+			return 0, err
+		}
+
+		ctx.binder = NewWhereBinder(builder, ctx)
+		// unfold stars and generate headings
+		for _, selectExpr := range clause.Exprs {
+			switch expr := selectExpr.Expr.(type) {
+			case tree.UnqualifiedStar:
+				cols, names, err := ctx.unfoldStar(builder.GetContext(), "", builder.compCtx.GetAccountId() == catalog.System_Account)
 				if err != nil {
 					return 0, err
 				}
 				selectList = append(selectList, cols...)
 				ctx.headings = append(ctx.headings, names...)
-			} else {
+
+			case *tree.UnresolvedName:
+				if expr.Star {
+					cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0], builder.compCtx.GetAccountId() == catalog.System_Account)
+					if err != nil {
+						return 0, err
+					}
+					selectList = append(selectList, cols...)
+					ctx.headings = append(ctx.headings, names...)
+				} else {
+					if len(selectExpr.As) > 0 {
+						ctx.headings = append(ctx.headings, string(selectExpr.As))
+					} else {
+						ctx.headings = append(ctx.headings, expr.Parts[0])
+					}
+
+					newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
+					if err != nil {
+						return 0, err
+					}
+
+					selectList = append(selectList, tree.SelectExpr{
+						Expr: newExpr,
+						As:   selectExpr.As,
+					})
+				}
+			case *tree.NumVal:
+				if expr.ValType == tree.P_null {
+					expr.ValType = tree.P_nulltext
+				}
+
 				if len(selectExpr.As) > 0 {
 					ctx.headings = append(ctx.headings, string(selectExpr.As))
 				} else {
-					ctx.headings = append(ctx.headings, expr.Parts[0])
+					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				}
+				newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
+				if err != nil {
+					return 0, err
+				}
+				selectList = append(selectList, tree.SelectExpr{
+					Expr: newExpr,
+					As:   selectExpr.As,
+				})
+			default:
+				if len(selectExpr.As) > 0 {
+					ctx.headings = append(ctx.headings, string(selectExpr.As))
+				} else {
+					for {
+						if parenExpr, ok := expr.(*tree.ParenExpr); ok {
+							expr = parenExpr.Expr
+						} else {
+							break
+						}
+					}
+					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
 				}
 
 				newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
@@ -1149,117 +1309,77 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					As:   selectExpr.As,
 				})
 			}
-		case *tree.NumVal:
-			if expr.ValType == tree.P_null {
-				expr.ValType = tree.P_nulltext
-			}
+		}
 
-			if len(selectExpr.As) > 0 {
-				ctx.headings = append(ctx.headings, string(selectExpr.As))
-			} else {
-				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
-			}
-			newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
+		if len(selectList) == 0 {
+			return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
+		}
+
+		// rewrite right join to left join
+		builder.rewriteRightJoinToLeftJoin(nodeID)
+
+		if clause.Where != nil {
+			whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
 			if err != nil {
 				return 0, err
 			}
-			selectList = append(selectList, tree.SelectExpr{
-				Expr: newExpr,
-				As:   selectExpr.As,
-			})
-		default:
-			if len(selectExpr.As) > 0 {
-				ctx.headings = append(ctx.headings, string(selectExpr.As))
-			} else {
-				for {
-					if parenExpr, ok := expr.(*tree.ParenExpr); ok {
-						expr = parenExpr.Expr
-					} else {
-						break
-					}
+
+			var newFilterList []*plan.Expr
+			var expr *plan.Expr
+
+			for _, cond := range whereList {
+				nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx)
+				if err != nil {
+					return 0, err
 				}
-				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+
+				if expr != nil {
+					newFilterList = append(newFilterList, expr)
+				}
 			}
 
-			newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
-			if err != nil {
-				return 0, err
-			}
-
-			selectList = append(selectList, tree.SelectExpr{
-				Expr: newExpr,
-				As:   selectExpr.As,
-			})
-		}
-	}
-
-	if len(selectList) == 0 {
-		return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
-	}
-
-	// rewrite right join to left join
-	builder.rewriteRightJoinToLeftJoin(nodeID)
-
-	if clause.Where != nil {
-		whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
-		if err != nil {
-			return 0, err
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{nodeID},
+				FilterList: newFilterList,
+			}, ctx)
 		}
 
-		var newFilterList []*plan.Expr
-		var expr *plan.Expr
+		ctx.groupTag = builder.genNewTag()
+		ctx.aggregateTag = builder.genNewTag()
+		ctx.projectTag = builder.genNewTag()
 
-		for _, cond := range whereList {
-			nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx)
-			if err != nil {
-				return 0, err
-			}
+		// bind GROUP BY clause
+		if clause.GroupBy != nil {
+			groupBinder := NewGroupBinder(builder, ctx)
+			for _, group := range clause.GroupBy {
+				group, err = ctx.qualifyColumnNames(group, nil, false)
+				if err != nil {
+					return 0, err
+				}
 
-			if expr != nil {
-				newFilterList = append(newFilterList, expr)
+				_, err = groupBinder.BindExpr(group, 0, true)
+				if err != nil {
+					return 0, err
+				}
 			}
 		}
 
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType:   plan.Node_FILTER,
-			Children:   []int32{nodeID},
-			FilterList: newFilterList,
-		}, ctx)
-	}
-
-	ctx.groupTag = builder.genNewTag()
-	ctx.aggregateTag = builder.genNewTag()
-	ctx.projectTag = builder.genNewTag()
-
-	// bind GROUP BY clause
-	if clause.GroupBy != nil {
-		groupBinder := NewGroupBinder(builder, ctx)
-		for _, group := range clause.GroupBy {
-			group, err = ctx.qualifyColumnNames(group, nil, false)
-			if err != nil {
-				return 0, err
-			}
-
-			_, err = groupBinder.BindExpr(group, 0, true)
+		// bind HAVING clause
+		havingBinder = NewHavingBinder(builder, ctx)
+		if clause.Having != nil {
+			ctx.binder = havingBinder
+			havingList, err = splitAndBindCondition(clause.Having.Expr, ctx)
 			if err != nil {
 				return 0, err
 			}
 		}
-	}
 
-	// bind HAVING clause
-	var havingList []*plan.Expr
-	havingBinder := NewHavingBinder(builder, ctx)
-	if clause.Having != nil {
-		ctx.binder = havingBinder
-		havingList, err = splitAndBindCondition(clause.Having.Expr, ctx)
-		if err != nil {
-			return 0, err
-		}
+		ctx.isDistinct = clause.Distinct
 	}
 
 	// bind SELECT clause (Projection List)
-	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
+	projectionBinder = NewProjectionBinder(builder, ctx, havingBinder)
 	ctx.binder = projectionBinder
 	for i, selectExpr := range selectList {
 		astExpr, err := ctx.qualifyColumnNames(selectExpr.Expr, nil, false)
@@ -1281,15 +1401,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		ctx.projects = append(ctx.projects, expr)
 	}
 
-	resultLen := len(ctx.projects)
+	resultLen = len(ctx.projects)
 	for i, proj := range ctx.projects {
 		exprStr := proj.String()
 		if _, ok := ctx.projectByExpr[exprStr]; !ok {
 			ctx.projectByExpr[exprStr] = int32(i)
 		}
 	}
-
-	ctx.isDistinct = clause.Distinct
 
 	// bind ORDER BY clause
 	var orderBys []*plan.OrderBySpec
@@ -1435,7 +1553,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}, ctx)
 
 	// append DISTINCT node
-	if clause.Distinct {
+	if ctx.isDistinct {
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_DISTINCT,
 			Children: []int32{nodeID},
@@ -1673,8 +1791,18 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					return 0, err
 				}
 				viewStmt, ok := originStmts[0].(*tree.CreateView)
+
+				// No createview stmt, check alterview stmt.
 				if !ok {
-					return 0, moerr.NewParseError(builder.GetContext(), "can not get view statement")
+					alterstmt, ok := originStmts[0].(*tree.AlterView)
+					viewStmt = &tree.CreateView{}
+					if !ok {
+						return 0, moerr.NewParseError(builder.GetContext(), "can not get view statement")
+					}
+					viewStmt.Name = alterstmt.Name
+					viewStmt.ColNames = alterstmt.ColNames
+					viewStmt.AsSource = alterstmt.AsSource
+					viewStmt.Temporary = alterstmt.Temporary
 				}
 
 				viewName := viewStmt.Name.ObjectName
@@ -1721,6 +1849,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			return builder.buildTable(tbl.Left, ctx)
 		}
 		return builder.buildJoinTable(tbl, ctx)
+
 	case *tree.TableFunction:
 		return builder.buildTableFunction(tbl, ctx)
 
@@ -1740,6 +1869,35 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		}
 
 		err = builder.addBinding(nodeID, tbl.As, ctx)
+
+		tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+		//if it is the non-sys account and reads the cluster table,
+		//we add an account_id filter to make sure that the non-sys account
+		//can only read its own data.
+		if tableDef != nil &&
+			builder.compCtx.GetAccountId() != catalog.System_Account &&
+			util.TableIsClusterTable(tableDef.GetTableType()) {
+			var accountFilterExprs []*plan.Expr
+			ctx.binder = NewWhereBinder(builder, ctx)
+			left := &tree.UnresolvedName{
+				NumParts: 1,
+				Parts:    tree.NameParts{},
+			}
+			left.Parts[0] = util.GetClusterTableAttributeName()
+			right := tree.NewNumVal(constant.MakeUint64(uint64(builder.compCtx.GetAccountId())), "", false)
+			right.ValType = tree.P_uint64
+			//account_id = the accountId of the non-sys account
+			accountFilter := &tree.ComparisonExpr{
+				Op:    tree.EQUAL,
+				Left:  left,
+				Right: right,
+			}
+			accountFilterExprs, err = splitAndBindCondition(accountFilter, ctx)
+			if err != nil {
+				return 0, err
+			}
+			builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+		}
 
 		return
 
@@ -1762,16 +1920,15 @@ func (builder *QueryBuilder) genNewTag() int32 {
 func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ctx *BindContext) error {
 	node := builder.qry.Nodes[nodeID]
 
-	if node.NodeType == plan.Node_VALUE_SCAN {
-		return nil
-	}
-
 	var cols []string
 	var types []*plan.Type
 	var binding *Binding
 	var table string
 
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN || node.NodeType == plan.Node_VALUE_SCAN {
+		if node.NodeType == plan.Node_VALUE_SCAN && node.TableDef == nil {
+			return nil
+		}
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
 		}
@@ -1806,7 +1963,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, cols, types)
+		binding = NewBinding(tag, nodeID, table, cols, types, util.TableIsClusterTable(node.TableDef.TableType))
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -1815,7 +1972,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		projects := subCtx.projects
 
 		if len(alias.Cols) > len(headings) {
-			return moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))
+			return moerr.NewSyntaxError(builder.GetContext(), "11111 table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))
 		}
 
 		table = subCtx.cteName
@@ -1844,7 +2001,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, cols, types)
+		binding = NewBinding(tag, nodeID, table, cols, types, false)
 	}
 
 	ctx.bindings = append(ctx.bindings, binding)

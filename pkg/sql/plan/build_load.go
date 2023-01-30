@@ -16,6 +16,7 @@ package plan
 
 import (
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -39,10 +40,20 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot load external table")
 	}
 
+	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
+	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can load data into the cluster table")
+	}
+	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, isClusterTable)
+	if err != nil {
+		return nil, err
+	}
+
 	tableDef.Name2ColIndex = map[string]int32{}
 	node1 := &plan.Node{}
 	node1.NodeType = plan.Node_EXTERNAL_SCAN
 	node1.Stats = &plan.Stats{}
+	node1.ClusterTable = clusterTable
 
 	node2 := &plan.Node{}
 	node2.NodeType = plan.Node_PROJECT
@@ -55,6 +66,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	node3.Stats = &plan.Stats{}
 	node3.NodeId = 2
 	node3.Children = []int32{1}
+	node3.ClusterTable = clusterTable
 
 	for i := 0; i < len(tableDef.Cols); i++ {
 		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = int32(i)
@@ -70,7 +82,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 		node1.ProjectList = append(node1.ProjectList, tmp)
 		node3.ProjectList = append(node3.ProjectList, tmp)
 	}
-	if err := GetProjectNode(stmt, ctx, node2, tableDef.Name2ColIndex); err != nil {
+	if err := GetProjectNode(stmt, ctx, node2, tableDef.Name2ColIndex, clusterTable); err != nil {
 		return nil, err
 	}
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
@@ -109,7 +121,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	return pn, nil
 }
 
-func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2ColIndex map[string]int32) error {
+func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2ColIndex map[string]int32, clusterTable *ClusterTable) error {
 	tblName := string(stmt.Table.ObjectName)
 	dbName := string(stmt.Table.SchemaName)
 	_, tableDef := ctx.Resolve(dbName, tblName)
@@ -117,7 +129,7 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 		return moerr.NewInternalError(ctx.GetContext(), "invalid table name: %s", string(stmt.Table.ObjectName))
 	}
 	if len(stmt.Param.Tail.ColumnList) > len(tableDef.Cols) {
-		return moerr.NewInternalError(ctx.GetContext(), "the load data colnum list is larger than table colnum")
+		return moerr.NewInternalError(ctx.GetContext(), "the load data column list is larger than table column")
 	}
 	colToIndex := make(map[int32]string, 0)
 	if len(stmt.Param.Tail.ColumnList) == 0 {
@@ -132,6 +144,12 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 					return moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.Parts[0])
 				}
 				colToIndex[int32(i)] = realCol.Parts[0]
+				if clusterTable.GetIsClusterTable() {
+					//user can not specify the column account_id of the cluster table in the syntax
+					if util.IsClusterTableAttribute(realCol.Parts[0]) {
+						return moerr.NewInvalidInput(ctx.GetContext(), "do not specify the attribute %s for the cluster table", util.GetClusterTableAttributeName())
+					}
+				}
 			case *tree.VarExpr:
 				//NOTE:variable like '@abc' will be passed by.
 			default:
@@ -158,11 +176,13 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 			node.ProjectList[Name2ColIndex[v]] = projectVec[i]
 		}
 	}
+	var tmp *plan.Expr
+	//var err error
 	for i := 0; i < len(tableDef.Cols); i++ {
 		if node.ProjectList[i] != nil {
 			continue
 		}
-		var tmp *plan.Expr
+
 		if tableDef.Cols[i].Default.Expr == nil || tableDef.Cols[i].Default.NullAbility {
 			tmp = makePlan2NullConstExprWithType()
 		} else {

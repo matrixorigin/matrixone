@@ -30,6 +30,17 @@ import (
 	"strconv"
 )
 
+func genFilterMap(filters []string) map[string]struct{} {
+	if filters == nil {
+		return defaultFilterMap
+	}
+	filterMap := make(map[string]struct{}, len(filters))
+	for _, f := range filters {
+		filterMap[f] = struct{}{}
+	}
+	return filterMap
+}
+
 func unnestString(arg any, buf *bytes.Buffer) {
 	buf.WriteString("unnest")
 }
@@ -53,7 +64,7 @@ func unnestPrepare(proc *process.Process, arg *Argument) error {
 			filters = append(filters, arg.Attrs[i])
 		}
 	}
-	param.Filters = filters
+	param.FilterMap = genFilterMap(filters)
 	if len(arg.Args) < 1 || len(arg.Args) > 3 {
 		return moerr.NewInvalidInput(proc.Ctx, "unnest: argument number must be 1, 2 or 3")
 	}
@@ -167,7 +178,7 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 		if err != nil {
 			return nil, err
 		}
-		ures, err = json.Unnest(path, outer, unnestRecursive, unnestMode, param.Filters)
+		ures, err = json.Unnest(path, outer, unnestRecursive, unnestMode, param.FilterMap)
 		if err != nil {
 			return nil, err
 		}
@@ -185,7 +196,7 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 		if err != nil {
 			return nil, err
 		}
-		ures, err = json.Unnest(path, outer, unnestRecursive, unnestMode, param.Filters)
+		ures, err = json.Unnest(path, outer, unnestRecursive, unnestMode, param.FilterMap)
 		if err != nil {
 			return nil, err
 		}
@@ -211,15 +222,15 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestPara
 				err = vec.Append(int32(i), false, proc.Mp())
 			case "index":
 				val, ok := ures[i][arg.Attrs[j]]
-				if !ok {
+				if !ok || val == nil {
 					err = vec.Append(int32(0), true, proc.Mp())
 				} else {
-					intVal, _ := strconv.Atoi(val)
+					intVal, _ := strconv.ParseInt(string(val), 10, 32)
 					err = vec.Append(int32(intVal), false, proc.Mp())
 				}
 			case "key", "path", "value", "this":
 				val, ok := ures[i][arg.Attrs[j]]
-				err = vec.Append([]byte(val), !ok, proc.Mp())
+				err = vec.Append(val, !ok || val == nil, proc.Mp())
 			default:
 				err = moerr.NewInvalidArg(proc.Ctx, "unnest: invalid column name:%s", arg.Attrs[j])
 			}

@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -29,25 +30,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
-	viewName := stmt.Name.ObjectName
-	createTable := &plan.CreateTable{
-		IfNotExists: stmt.IfNotExists,
-		Temporary:   stmt.Temporary,
-		TableDef: &TableDef{
-			Name: string(viewName),
-		},
-	}
-
-	// get database name
-	if len(stmt.Name.SchemaName) == 0 {
-		createTable.Database = ""
-	} else {
-		createTable.Database = string(stmt.Name.SchemaName)
-	}
+func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
+	var tableDef plan.TableDef
 
 	// check view statement
-	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.AsSource)
+	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +53,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			},
 		}
 	}
-	createTable.TableDef.Cols = cols
+	tableDef.Cols = cols
 
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            ctx.GetRootSql(),
@@ -75,7 +62,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	if err != nil {
 		return nil, err
 	}
-	createTable.TableDef.ViewSql = &plan.ViewDef{
+	tableDef.ViewSql = &plan.ViewDef{
 		View: string(viewData),
 	}
 	properties := []*plan.Property{
@@ -84,13 +71,42 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			Value: catalog.SystemViewRel,
 		},
 	}
-	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_Properties{
 			Properties: &plan.PropertiesDef{
 				Properties: properties,
 			},
 		},
 	})
+
+	return &tableDef, nil
+}
+
+func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
+	viewName := stmt.Name.ObjectName
+	createTable := &plan.CreateTable{
+		IfNotExists: stmt.IfNotExists,
+		Temporary:   stmt.Temporary,
+		TableDef: &TableDef{
+			Name: string(viewName),
+		},
+	}
+
+	// get database name
+	if len(stmt.Name.SchemaName) == 0 {
+		createTable.Database = ""
+	} else {
+		createTable.Database = string(stmt.Name.SchemaName)
+	}
+
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
+	if err != nil {
+		return nil, err
+	}
+
+	createTable.TableDef.Cols = tableDef.Cols
+	createTable.TableDef.ViewSql = tableDef.ViewSql
+	createTable.TableDef.Defs = tableDef.Defs
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -121,7 +137,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	// set tableDef
-	err := buildTableDefs(stmt.Defs, ctx, createTable)
+	err := buildTableDefs(stmt, ctx, createTable)
 	if err != nil {
 		return nil, err
 	}
@@ -209,10 +225,14 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 				},
 			}})
 	} else {
+		kind := catalog.SystemOrdinaryRel
+		if stmt.IsClusterTable {
+			kind = catalog.SystemClusterRel
+		}
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.SystemOrdinaryRel,
+				Value: kind,
 			},
 			{
 				Key:   catalog.SystemRelAttr_CreateSQL,
@@ -306,12 +326,12 @@ func buildPartitionByClause(partitionBinder *PartitionBinder, stmt *tree.CreateT
 	return err
 }
 
-func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.CreateTable) error {
+func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable) error {
 	var primaryKeys []string
 	var indexs []string
 	colMap := make(map[string]*ColDef)
 	indexInfos := make([]*tree.UniqueIndex, 0)
-	for _, item := range defs {
+	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
 			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
@@ -327,7 +347,8 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			var comment string
 			var auto_incr bool
 			for _, attr := range def.Attributes {
-				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
+				switch attribute := attr.(type) {
+				case *tree.AttributePrimaryKey:
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
@@ -338,20 +359,24 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
 					}
 					pks = append(pks, def.Name.Parts[0])
-				}
-
-				if attrComment, ok := attr.(*tree.AttributeComment); ok {
-					comment = attrComment.CMT.String()
+				case *tree.AttributeComment:
+					comment = attribute.CMT.String()
 					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
 						return moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", def.Name.Parts[0])
 					}
-				}
-
-				if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
+				case *tree.AttributeAutoIncrement:
 					auto_incr = true
 					if !operator.IsInteger(types.T(colType.GetId())) {
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
+				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					indexInfos = append(indexInfos, &tree.UniqueIndex{
+						KeyParts: []*tree.KeyPart{
+							{
+								ColName: def.Name,
+							},
+						},
+					})
 				}
 			}
 			if len(pks) > 0 {
@@ -410,14 +435,138 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				nameMap[name] = true
 				indexs = append(indexs, name)
 			}
+
 		case *tree.UniqueIndex:
 			indexInfos = append(indexInfos, def)
-		case *tree.CheckIndex, *tree.ForeignKey, *tree.FullTextIndex:
+
+		case *tree.ForeignKey:
+			refer := def.Refer
+			fkDef := &plan.ForeignKeyDef{
+				Name:        def.Name,
+				Cols:        make([]uint64, len(def.KeyParts)),
+				OnDelete:    getRefAction(refer.OnDelete),
+				OnUpdate:    getRefAction(refer.OnUpdate),
+				ForeignCols: make([]uint64, len(refer.KeyParts)),
+			}
+
+			// get fk columns of create table
+			fkCols := &plan.CreateTable_FkColName{
+				Cols: make([]string, len(def.KeyParts)),
+			}
+			for i, keyPart := range def.KeyParts {
+				getCol := false
+				colName := keyPart.ColName.Parts[0]
+				for idx, col := range createTable.TableDef.Cols {
+					if col.Name == colName {
+						// for now ColumnId is equal ColumnIndex in creating
+						// if rule change, you need to reset to ColId after created.
+						fkDef.Cols[i] = uint64(idx)
+						fkCols.Cols[i] = colName
+						getCol = true
+						break
+					}
+				}
+				if !getCol {
+					return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in the creating table '%v'", colName, createTable.TableDef.Name)
+				}
+			}
+			createTable.FkCols = append(createTable.FkCols, fkCols)
+
+			// get foreign table & their columns
+			fkTableName := string(refer.TableName.ObjectName)
+			fkDbName := string(refer.TableName.SchemaName)
+			if fkDbName == "" {
+				fkDbName = ctx.DefaultDatabase()
+			}
+			createTable.FkDbs = append(createTable.FkDbs, fkDbName)
+			createTable.FkTables = append(createTable.FkTables, fkTableName)
+
+			_, tableRef := ctx.Resolve(fkDbName, fkTableName)
+			if tableRef == nil {
+				return moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), fkTableName)
+			}
+			// TODO check circular reference. need new interface CompilerContext.ResolveByTblId
+
+			fkDef.ForeignTbl = tableRef.TblId
+			columnNames := make(map[string]uint64)
+			uniqueColumn := make(map[uint64]bool)
+			for _, col := range tableRef.Cols {
+				columnNames[col.Name] = col.ColId
+				if col.Primary {
+					uniqueColumn[col.ColId] = true
+				}
+			}
+			/// now tableRef.Indices is empty, you can not test it
+			for _, index := range tableRef.Indices {
+				if index.Unique {
+					if len(index.Parts) == 1 {
+						if colId, ok := getColIdFromExpr(index.Parts[0]); ok {
+							uniqueColumn[colId] = true
+						}
+					}
+				}
+			}
+			for i, keyPart := range refer.KeyParts {
+				getCol := false
+				colName := keyPart.ColName.Parts[0]
+				for _, col := range tableRef.Cols {
+					if col.Name == colName {
+						if _, ok := uniqueColumn[col.ColId]; ok {
+							fkDef.ForeignCols[i] = col.ColId
+							getCol = true
+						} else {
+							return moerr.NewInternalError(ctx.GetContext(), "reference column '%v' is not unique constraint(Unique index or Primary Key)", colName)
+						}
+						break
+					}
+				}
+				if !getCol {
+					return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkTableName)
+				}
+			}
+			createTable.TableDef.Fkeys = append(createTable.TableDef.Fkeys, fkDef)
+
+		case *tree.CheckIndex, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
 			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		default:
 			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		}
+	}
+
+	//add cluster table attribute
+	if stmt.IsClusterTable {
+		if _, ok := colMap[util.GetClusterTableAttributeName()]; ok {
+			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
+		}
+		colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())
+		if err != nil {
+			return err
+		}
+		colDef := &ColDef{
+			Name:    util.GetClusterTableAttributeName(),
+			Alg:     plan.CompressType_Lz4,
+			Typ:     colType,
+			NotNull: true,
+			Default: &plan.Default{
+				Expr: &Expr{
+					Expr: &plan.Expr_C{
+						C: &Const{
+							Isnull: false,
+							Value:  &plan.Const_U32Val{U32Val: catalog.System_Account},
+						},
+					},
+					Typ: &plan.Type{
+						Id:          colType.Id,
+						NotNullable: true,
+					},
+				},
+				NullAbility: false,
+			},
+			Comment: "the account_id added by the mo",
+		}
+		colMap[util.GetClusterTableAttributeName()] = colDef
+		createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 	}
 
 	pkeyName := ""
@@ -438,7 +587,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			})
 		} else {
 			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
-			createTable.TableDef.Cols = append(createTable.TableDef.Cols, &ColDef{
+			colDef := &ColDef{
 				Name: pkeyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
@@ -451,7 +600,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 					Expr:         nil,
 					OriginString: "",
 				},
-			})
+			}
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
+			colMap[pkeyName] = colDef
 			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
@@ -486,10 +637,44 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	return nil
 }
 
+func getColIdFromExpr(e *plan.Expr) (uint64, bool) {
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_F:
+		for _, expr := range exprImpl.F.Args {
+			if colId, ok := getColIdFromExpr(expr); ok {
+				return colId, ok
+			}
+		}
+		return 0, false
+	case *plan.Expr_Col:
+		return uint64(exprImpl.Col.ColPos), true
+	default:
+		return 0, false
+	}
+}
+
+func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
+	switch typ {
+	case tree.REFERENCE_OPTION_CASCADE:
+		return plan.ForeignKeyDef_CASCADE
+	case tree.REFERENCE_OPTION_NO_ACTION:
+		return plan.ForeignKeyDef_NO_ACTION
+	case tree.REFERENCE_OPTION_RESTRICT:
+		return plan.ForeignKeyDef_RESTRICT
+	case tree.REFERENCE_OPTION_SET_NULL:
+		return plan.ForeignKeyDef_SET_NULL
+	case tree.REFERENCE_OPTION_SET_DEFAULT:
+		return plan.ForeignKeyDef_SET_DEFAULT
+	default:
+		return plan.ForeignKeyDef_RESTRICT
+	}
+}
+
 func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
 	def := &plan.UniqueIndexDef{
 		Fields: make([]*plan.Field, 0),
 	}
+	nameCount := make(map[string]int)
 
 	for _, indexInfo := range indexInfos {
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), true, indexInfo.Name)
@@ -514,13 +699,14 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 
 		var keyName string
 		if len(indexInfo.KeyParts) == 1 {
-			keyName = field.Parts[0]
+			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
-					Id:   colMap[keyName].Typ.Id,
-					Size: colMap[keyName].Typ.Size,
+					Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
+					Size:  colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Size,
+					Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -538,7 +724,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			})
 			field.Cols = append(field.Cols, colDef)
 		} else {
-			keyName = util.BuildCompositePrimaryKeyColumnName(field.Parts)
+			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
@@ -563,7 +749,32 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			})
 			field.Cols = append(field.Cols, colDef)
 		}
-		def.IndexNames = append(def.IndexNames, indexInfo.Name)
+		if pkeyName != "" {
+			colDef := &ColDef{
+				Name: catalog.IndexTablePrimaryColName,
+				Alg:  plan.CompressType_Lz4,
+				Typ:  colMap[pkeyName].Typ,
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
+			field.Cols = append(field.Cols, colDef)
+		}
+		if indexInfo.Name == "" {
+			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
+			nameCount[firstPart]++
+			count := nameCount[firstPart]
+			indexName := firstPart
+			if count > 1 {
+				indexName = firstPart + "_" + strconv.Itoa(count)
+			}
+			def.IndexNames = append(def.IndexNames, indexName)
+		} else {
+			def.IndexNames = append(def.IndexNames, indexInfo.Name)
+		}
 		def.TableNames = append(def.TableNames, indexTableName)
 		def.Fields = append(def.Fields, field)
 		def.TableExists = append(def.TableExists, true)
@@ -591,6 +802,15 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	} else {
 		if tableDef.ViewSql != nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
+		}
+
+		truncateTable.ClusterTable = &plan.ClusterTable{
+			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+		}
+
+		//non-sys account can not truncate the cluster table
+		if truncateTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
 		}
 
 		uDef, sDef := buildIndexDefs(tableDef.Defs)
@@ -642,6 +862,10 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 	} else {
+		if len(tableDef.RefChildTbls) > 0 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop table '%v' referenced by some foreign key constraint", dropTable.Table)
+		}
+
 		isView := (tableDef.ViewSql != nil)
 
 		if isView && !dropTable.IfExists {
@@ -651,6 +875,16 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			// drop table if exists v0, v0 is view
 			dropTable.Table = ""
 		}
+
+		dropTable.ClusterTable = &plan.ClusterTable{
+			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+		}
+
+		//non-sys account can not drop the cluster table
+		if dropTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
+		}
+
 		uDef, sDef := buildIndexDefs(tableDef.Defs)
 		dropTable.IndexTableNames = make([]string, 0)
 		if uDef != nil {
@@ -809,6 +1043,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	createIndex.Index = index
 	createIndex.Table = tableName
 
+	oriPriKeyName := GetTablePriKeyName(tableDef.Cols, tableDef.CompositePkey)
+	createIndex.OriginTablePrimaryKey = oriPriKeyName
+
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -869,7 +1106,40 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
+// Get tabledef(col, viewsql, properties) for alterview.
 func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
-	return nil, moerr.NewNotSupported(ctx.GetContext(), "statement '%v'", tree.String(stmt, dialect.MYSQL))
-	// TODO
+	viewName := stmt.Name.ObjectName
+	alterView := &plan.AlterView{
+		IfExists:  stmt.IfExists,
+		Temporary: stmt.Temporary,
+		TableDef: &plan.TableDef{
+			Name: string(viewName),
+		},
+	}
+	// get database name
+	if len(stmt.Name.SchemaName) == 0 {
+		alterView.Database = ""
+	} else {
+		alterView.Database = string(stmt.Name.SchemaName)
+	}
+
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
+	if err != nil {
+		return nil, err
+	}
+
+	alterView.TableDef.Cols = tableDef.Cols
+	alterView.TableDef.ViewSql = tableDef.ViewSql
+	alterView.TableDef.Defs = tableDef.Defs
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_ALTER_VIEW,
+				Definition: &plan.DataDefinition_AlterView{
+					AlterView: alterView,
+				},
+			},
+		},
+	}, nil
 }

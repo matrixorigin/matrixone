@@ -44,7 +44,7 @@ type Runner interface {
 	EnqueueWait(any) error
 	Replay(catalog.DataFactory) (types.TS, error)
 
-	MockCheckpoint(end types.TS)
+	// MockCheckpoint(end types.TS)
 	FlushTable(dbID, tableID uint64, ts types.TS) error
 
 	// for test, delete in next phase

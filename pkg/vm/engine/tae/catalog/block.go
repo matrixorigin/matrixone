@@ -59,6 +59,26 @@ func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, 
 	return e
 }
 
+func NewBlockEntryWithMeta(
+	segment *SegmentEntry,
+	txn txnif.AsyncTxn,
+	state EntryState,
+	dataFactory BlockDataFactory,
+	metaLoc string,
+	deltaLoc string) *BlockEntry {
+	id := segment.GetTable().GetDB().catalog.NextBlock()
+	e := &BlockEntry{
+		MetaBaseEntry: NewMetaBaseEntry(id),
+		segment:       segment,
+		state:         state,
+	}
+	if dataFactory != nil {
+		e.blkData = dataFactory(e)
+	}
+	e.MetaBaseEntry.CreateWithTxnAndMeta(txn, metaLoc, deltaLoc)
+	return e
+}
+
 func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts types.TS) *BlockEntry {
 	e := &BlockEntry{
 		MetaBaseEntry: NewMetaBaseEntry(id),
@@ -66,6 +86,21 @@ func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts types.TS) *BlockEnt
 		state:         ES_Appendable,
 	}
 	e.MetaBaseEntry.CreateWithTS(ts)
+	return e
+}
+
+func NewStandaloneBlockWithLoc(
+	segment *SegmentEntry,
+	id uint64,
+	ts types.TS,
+	metaLoc string,
+	delLoc string) *BlockEntry {
+	e := &BlockEntry{
+		MetaBaseEntry: NewMetaBaseEntry(id),
+		segment:       segment,
+		state:         ES_Appendable,
+	}
+	e.MetaBaseEntry.CreateWithLoc(ts, metaLoc, delLoc)
 	return e
 }
 

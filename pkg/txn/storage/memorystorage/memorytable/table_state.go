@@ -15,6 +15,9 @@
 package memorytable
 
 import (
+	"bytes"
+	"encoding"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -27,25 +30,15 @@ type tableState[
 	K Ordered[K],
 	V any,
 ] struct {
-	rows  Rows[K, V]
-	log   Log[K, V]
-	index Index[K, V]
+	tree Tree[K, V]
+	log  Log[K, V]
 }
 
-func (t *tableState[K, V]) cloneWithLogs() *tableState[K, V] {
+func (t *tableState[K, V]) clone() *tableState[K, V] {
 	ret := &tableState[K, V]{
-		rows:  t.rows.Copy(),
-		log:   t.log.Copy(),
-		index: t.index.Copy(),
-	}
-	return ret
-}
-
-func (t *tableState[K, V]) cloneWithoutLogs() *tableState[K, V] {
-	ret := &tableState[K, V]{
-		rows:  t.rows.Copy(),
-		log:   NewBTreeLog[K, V](),
-		index: t.index.Copy(),
+		tree: t.tree.Copy(),
+		// log is not copied
+		log: NewSliceLog[K, V](),
 	}
 	return ret
 }
@@ -59,10 +52,10 @@ func (t *tableState[K, V]) merge(
 	error,
 ) {
 
-	t = t.cloneWithoutLogs()
+	t = t.clone()
 	var logs []*logEntry[K, V]
 
-	iter := from.log.Copy().Iter()
+	iter := from.log.Iter()
 	defer iter.Close()
 
 	for ok := iter.First(); ok; ok = iter.Next() {
@@ -72,39 +65,42 @@ func (t *tableState[K, V]) merge(
 			return nil, nil, err
 		}
 		logs = append(logs, log)
-		key := log.key
+		key := log.Key
 
-		pivot := &KVPair[K, V]{
-			Key: key,
+		pivot := TreeNode[K, V]{
+			KVPair: &KVPair[K, V]{
+				Key: key,
+			},
 		}
-		oldPair, _ := t.rows.Get(pivot)
+		oldNode, _ := t.tree.Get(pivot)
+		oldPair := oldNode.KVPair
 
-		if log.pair != nil && log.oldPair != nil {
+		if log.Pair != nil && log.OldPair != nil {
 			// update
 			if oldPair == nil {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			if oldPair.ID != log.oldPair.ID {
+			if oldPair.ID != log.OldPair.ID {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			t.setPair(log.pair, oldPair)
+			t.setPair(log.Pair, oldNode.KVPair)
 
-		} else if log.pair == nil {
+		} else if log.Pair == nil {
 			// delete
 			if oldPair == nil {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			if oldPair.ID != log.oldPair.ID {
+			if oldPair.ID != log.OldPair.ID {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			t.unsetPair(pivot, oldPair)
+			t.unsetPair(*pivot.KVPair, oldNode.KVPair)
 
-		} else if log.pair != nil && log.oldPair == nil {
+		} else if log.Pair != nil && log.OldPair == nil {
 			// insert
 			if oldPair != nil {
 				return nil, nil, moerr.NewTxnWWConflictNoCtx()
 			}
-			t.setPair(log.pair, oldPair)
+			t.setPair(log.Pair, oldNode.KVPair)
 		}
 
 	}
@@ -114,27 +110,21 @@ func (t *tableState[K, V]) merge(
 
 func (s *tableState[K, V]) dump(w io.Writer) {
 	{
-		iter := s.rows.Copy().Iter()
+		iter := s.tree.Copy().Iter()
 		for ok := iter.First(); ok; ok = iter.Next() {
-			row, err := iter.Read()
+			node, err := iter.Read()
 			if err != nil {
 				panic(err)
 			}
-			fmt.Fprintf(w, "\trow %+v\n", row)
-		}
-	}
-	{
-		iter := s.index.Copy().Iter()
-		for ok := iter.First(); ok; ok = iter.Next() {
-			entry, err := iter.Read()
-			if err != nil {
-				panic(err)
+			if node.KVPair != nil {
+				fmt.Fprintf(w, "\trow %+v\n", node.KVPair)
+			} else if node.IndexEntry != nil {
+				fmt.Fprintf(w, "\tindex %+v\n", node.IndexEntry)
 			}
-			fmt.Fprintf(w, "\tindex %+v\n", entry)
 		}
 	}
 	{
-		iter := s.log.Copy().Iter()
+		iter := s.log.Iter()
 		for ok := iter.First(); ok; ok = iter.Next() {
 			log, err := iter.Read()
 			if err != nil {
@@ -155,16 +145,20 @@ func (s *tableState[K, V]) setPair(pair *KVPair[K, V], oldPair *KVPair[K, V]) {
 	if oldPair != nil {
 		// remove indexes
 		for _, index := range oldPair.Indexes {
-			s.index.Delete(&IndexEntry[K, V]{
-				Index: index,
-				Key:   oldPair.Key,
+			s.tree.Delete(TreeNode[K, V]{
+				IndexEntry: &IndexEntry[K, V]{
+					Index: index,
+					Key:   oldPair.Key,
+				},
 			})
 		}
 	}
 
 	if pair != nil {
 		// set row
-		s.rows.Set(pair)
+		s.tree.Set(TreeNode[K, V]{
+			KVPair: pair,
+		})
 
 		// add indexes
 		for _, index := range pair.Indexes {
@@ -172,15 +166,17 @@ func (s *tableState[K, V]) setPair(pair *KVPair[K, V], oldPair *KVPair[K, V]) {
 				Index: index,
 				Key:   pair.Key,
 			}
-			s.index.Set(entry)
+			s.tree.Set(TreeNode[K, V]{
+				IndexEntry: entry,
+			})
 		}
 
 		// add log
 		log := &logEntry[K, V]{
-			key:     pair.Key,
-			serial:  atomic.AddInt64(&nextLogSerial, 1),
-			pair:    pair,
-			oldPair: oldPair,
+			Key:     pair.Key,
+			Serial:  atomic.AddInt64(&nextLogSerial, 1),
+			Pair:    pair,
+			OldPair: oldPair,
 		}
 		s.log.Set(log)
 
@@ -189,26 +185,65 @@ func (s *tableState[K, V]) setPair(pair *KVPair[K, V], oldPair *KVPair[K, V]) {
 }
 
 // unsetPair unsets a key-value pair
-func (s *tableState[K, V]) unsetPair(pivot *KVPair[K, V], oldPair *KVPair[K, V]) {
+func (s *tableState[K, V]) unsetPair(pivot KVPair[K, V], oldPair *KVPair[K, V]) {
 
 	if oldPair != nil {
 		// remove indexes
 		for _, index := range oldPair.Indexes {
-			s.index.Delete(&IndexEntry[K, V]{
-				Index: index,
-				Key:   oldPair.Key,
+			s.tree.Delete(TreeNode[K, V]{
+				IndexEntry: &IndexEntry[K, V]{
+					Index: index,
+					Key:   oldPair.Key,
+				},
 			})
 		}
 	}
 
 	// delete row
-	s.rows.Delete(pivot)
+	s.tree.Delete(TreeNode[K, V]{
+		KVPair: &pivot,
+	})
 
 	// add log
 	s.log.Set(&logEntry[K, V]{
-		key:     pivot.Key,
-		serial:  atomic.AddInt64(&nextLogSerial, 1),
-		oldPair: oldPair,
+		Key:     pivot.Key,
+		Serial:  atomic.AddInt64(&nextLogSerial, 1),
+		OldPair: oldPair,
 	})
 
+}
+
+type encodingTableState[
+	K Ordered[K],
+	V any,
+] struct {
+	Tree Tree[K, V]
+	Log  Log[K, V]
+}
+
+var _ encoding.BinaryMarshaler = new(tableState[Int, int])
+
+func (t *tableState[K, V]) MarshalBinary() ([]byte, error) {
+	gobRegister(t.tree)
+	gobRegister(t.log)
+	buf := new(bytes.Buffer)
+	if err := gob.NewEncoder(buf).Encode(encodingTableState[K, V]{
+		Log:  t.log,
+		Tree: t.tree,
+	}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+var _ encoding.BinaryUnmarshaler = new(tableState[Int, int])
+
+func (t *tableState[K, V]) UnmarshalBinary(data []byte) error {
+	var e encodingTableState[K, V]
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&e); err != nil {
+		return err
+	}
+	t.tree = e.Tree
+	t.log = e.Log
+	return nil
 }
