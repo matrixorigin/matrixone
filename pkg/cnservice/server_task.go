@@ -241,10 +241,18 @@ func (s *service) registerExecutorsLocked() {
 				return err
 			}
 
+			// init metric task
+			if err := metric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
+				return err
+			}
+
 			return nil
 		})
 
 	// init metric/log merge task executor
 	s.task.runner.RegisterExecutor(task.TaskCode_MetricLogMerge,
 		export.MergeTaskExecutorFactory(export.WithFileService(s.fileService)))
+	// init metric task
+	s.task.runner.RegisterExecutor(task.TaskCode_MetricStorageUsage,
+		metric.GetMetricStorageUsageExecutor(ieFactory))
 }

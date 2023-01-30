@@ -1,12 +1,29 @@
 create database udf_first;
 create database udf_second;
 use udf_first;
-create function helloworld () returns int language sql as 'select id from test_table limit 1';
+create table tbl1 (
+id int,
+test_val int
+);
+create table tbl2 (
+id int,
+test_val int
+);
+insert into tbl1(id, test_val) values (1, 10);
+insert into tbl1(id, test_val) values (2, 11);
+insert into tbl1(id, test_val) values (3, 12);
+insert into tbl1(id, test_val) values (4, 13);
+insert into tbl2(id, test_val) values (1, 100);
+insert into tbl2(id, test_val) values (2, 200);
+insert into tbl2(id, test_val) values (3, 300);
+insert into tbl2(id, test_val) values (4, 400);
+use udf_first;
+create function helloworld () returns int language sql as 'select id from tbl1 limit 1';
 select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'helloworld';
 args    rettype    language    db
 {}    int    sql    udf_first
 use udf_first;
-create function helloworld () returns int language sql as 'select id from test_table limit 1';
+create function helloworld () returns int language sql as 'select id from tbl1 limit 1';
 function helloworld already exists
 use udf_first;
 create function twosum (x int, y int) returns int language sql as 'select $1 + $2' ;
@@ -29,6 +46,55 @@ create function udf_second.helloworld () returns int language sql as 'select id 
 select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'helloworld' and db = 'udf_second';
 args    rettype    language    db
 {}    int    sql    udf_second
+use udf_first;
+create function mysum(s1 int, s2 int) returns int language sql as '$1 + $2';
+select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'mysum' and db = 'udf_first';
+args    rettype    language    db
+{"s1":"int","s2":"int"}    int    sql    udf_first
+use udf_first;
+create function mysumtable(x int) returns int language sql as 'select mysum(test_val, id) from tbl1 where id = $1';
+select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'mysumtable' and db = 'udf_first';
+args    rettype    language    db
+{"x":"int"}    int    sql    udf_first
+use udf_first;
+select helloworld();
+helloworld()
+1
+use udf_first;
+select helloworld(1);
+invalid argument helloworld function have invalid input args length, bad value 1
+use udf_first;
+select twosum(1, 2);
+twosum(1, 2)
+3
+use udf_first;
+select twosum(1.1, 2.2);
+twosum(1.1, 2.2)
+3.3
+use udf_first;
+select twomult(1.1, 2.2);
+not supported: function or operator 'twomult'
+use udf_first;
+select mysum(id, test_val) from tbl1 where id > 1;
+mysum(id, test_val)
+13
+15
+17
+use udf_first;
+select mysum(tbl1.test_val, tbl2.test_val) from tbl1, tbl2 where tbl1.id = tbl2.id;
+mysum(tbl1.test_val, tbl2.test_val)
+110
+211
+312
+413
+use udf_first;
+select mysumtable(id) from tbl2;
+mysumtable(id)
+11
+13
+15
+17
+use udf_first;
 drop function helloworld ();
 select args, rettype, language, db from mo_catalog.mo_user_defined_function where name = 'helloworld' and db = 'udf_first';
 args    rettype    language    db

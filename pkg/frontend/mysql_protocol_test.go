@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"math"
 	"reflect"
 	"strconv"
@@ -2615,4 +2616,26 @@ func Test_handleHandshake_Recover(t *testing.T) {
 			maxLen = Max(maxLen, len(payload2))
 		}
 	})
+}
+
+func TestMysqlProtocolImpl_Close(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ioses := mock_frontend.NewMockIOSession(ctrl)
+	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	ioses.EXPECT().Read(gomock.Any()).Return(new(Packet), nil).AnyTimes()
+	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+	ioses.EXPECT().Ref().AnyTimes()
+	ioses.EXPECT().Disconnect().AnyTimes()
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	if err != nil {
+		t.Error(err)
+	}
+
+	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+	proto.Quit()
+	assert.Nil(t, proto.GetSalt())
+	assert.Nil(t, proto.strconvBuffer)
+	assert.Nil(t, proto.lenEncBuffer)
+	assert.Nil(t, proto.binaryNullBuffer)
 }

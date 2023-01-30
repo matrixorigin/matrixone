@@ -2614,7 +2614,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) er
 			if err != nil {
 				goto handleFailed
 			}
-			logutil.Debug("argstr: " + argstr)
 			argMap := make(map[string]string)
 			json.Unmarshal([]byte(argstr), &argMap)
 			argCount := 0
