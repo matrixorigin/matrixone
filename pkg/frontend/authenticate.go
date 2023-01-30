@@ -5095,7 +5095,7 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
 // during the system is booting.
-func InitSysTenant(ctx context.Context) error {
+func InitSysTenant(ctx context.Context, autoincrcaches defines.AutoIncrCaches) error {
 	var err error
 	var exists bool
 	pu := config.GetParameterUnit(ctx)
@@ -5118,7 +5118,7 @@ func InitSysTenant(ctx context.Context) error {
 		return err
 	}
 	defer mpool.DeleteMPool(mp)
-	bh := NewBackgroundHandler(ctx, mp, pu)
+	bh := NewBackgroundHandler(ctx, mp, pu, autoincrcaches)
 	defer bh.Close()
 
 	//USE the mo_catalog
@@ -5641,7 +5641,10 @@ func checkUserExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantN
 	defer mpool.DeleteMPool(mp)
 
 	sqlForCheckUser := getSqlForPasswordOfUser(tenantName)
-	erArray, err := executeSQLInBackgroundSession(ctx, mp, pu, sqlForCheckUser)
+
+	// A mock autoIncrCaches
+	aic := defines.AutoIncrCaches{}
+	erArray, err := executeSQLInBackgroundSession(ctx, mp, pu, sqlForCheckUser, aic)
 	if err != nil {
 		return false, err
 	}

@@ -15,7 +15,7 @@ d date
 ) COMMENT='test uuid parimary key';
 show create table t2;
 Table    Create Table
-t2    CREATE TABLE `t2` (\n`a` UUID DEFAULT NULL,\n`b` INT DEFAULT NULL,\n`c` VARCHAR(20) DEFAULT NULL,\n`d` DATE DEFAULT NULL,\nPRIMARY KEY (`a`)\n) COMMENT='test uuid parimary key'
+t2    CREATE TABLE `t2` (\n`a` UUID NOT NULL,\n`b` INT DEFAULT NULL,\n`c` VARCHAR(20) DEFAULT NULL,\n`d` DATE DEFAULT NULL,\nPRIMARY KEY (`a`)\n) COMMENT='test uuid parimary key'
 INSERT INTO t2 VALUES ("6d1b1f73-2dbf-11ed-940f-000c29847904",12,'SMITH','1980-12-17');
 INSERT INTO t2 VALUES ("ad9f809f-2dbd-11ed-940f-000c29847904",34,'ALLEN','1981-02-20');
 INSERT INTO t2 VALUES ("1b50c137-2dba-11ed-940f-000c29847904",15,'WARD','1981-02-22');

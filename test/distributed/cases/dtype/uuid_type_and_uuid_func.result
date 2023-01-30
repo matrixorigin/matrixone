@@ -20,7 +20,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    UUID    NO    PRI    NULL
 show create table t2;
 Table    Create Table
-t2    CREATE TABLE `t2` (\n`a` UUID DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
+t2    CREATE TABLE `t2` (\n`a` UUID NOT NULL,\nPRIMARY KEY (`a`)\n)
 drop table t2;
 drop table if exists t3;
 create table t3(a uuid primary key );
@@ -55,9 +55,9 @@ length(cast(uuid() as text))
 CREATE TABLE ratings (   `book_id` bigint,   `user_id` bigint,   `score` tinyint,   `rated_at` datetime DEFAULT NOW(),   PRIMARY KEY (`book_id`,`user_id`) );
 desc ratings;
 Field    Type    Null    Key    Default    Extra    Comment
-book_id    BIGINT    YES        NULL
+book_id    BIGINT    NO        NULL
 rated_at    DATETIME    YES        CURRENT_TIMESTAMP
 score    TINYINT    YES        NULL
-user_id    BIGINT    YES        NULL
+user_id    BIGINT    NO        NULL
 __mo_cpkey_007book_id007user_id    VARCHAR(65535)    NO    PRI    NULL
 drop table ratings;

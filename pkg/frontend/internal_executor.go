@@ -16,11 +16,13 @@ package frontend
 
 import (
 	"context"
-	"github.com/fagongzi/goetty/v2"
 	"sync"
+
+	"github.com/fagongzi/goetty/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
@@ -48,23 +50,25 @@ type internalMiniExec interface {
 
 type internalExecutor struct {
 	sync.Mutex
-	proto        *internalProtocol
-	executor     internalMiniExec // MySqlCmdExecutor struct impls miniExec
-	pu           *config.ParameterUnit
-	baseSessOpts ie.SessionOverrideOptions
+	proto          *internalProtocol
+	executor       internalMiniExec // MySqlCmdExecutor struct impls miniExec
+	pu             *config.ParameterUnit
+	baseSessOpts   ie.SessionOverrideOptions
+	autoIncrCaches defines.AutoIncrCaches
 }
 
-func NewInternalExecutor(pu *config.ParameterUnit) *internalExecutor {
-	return newIe(pu, NewMysqlCmdExecutor())
+func NewInternalExecutor(pu *config.ParameterUnit, autoIncrCaches defines.AutoIncrCaches) *internalExecutor {
+	return newIe(pu, NewMysqlCmdExecutor(), autoIncrCaches)
 }
 
-func newIe(pu *config.ParameterUnit, inner internalMiniExec) *internalExecutor {
+func newIe(pu *config.ParameterUnit, inner internalMiniExec, autoIncrCaches defines.AutoIncrCaches) *internalExecutor {
 	proto := &internalProtocol{result: &internalExecResult{}}
 	ret := &internalExecutor{
-		proto:        proto,
-		executor:     inner,
-		pu:           pu,
-		baseSessOpts: ie.NewOptsBuilder().Finish(),
+		proto:          proto,
+		executor:       inner,
+		pu:             pu,
+		baseSessOpts:   ie.NewOptsBuilder().Finish(),
+		autoIncrCaches: autoIncrCaches,
 	}
 	return ret
 }
@@ -166,6 +170,10 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	}
 	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true)
 	sess.SetRequestContext(ctx)
+
+	// Set AutoIncrCache for this session.
+	sess.SetAutoIncrCaches(ie.autoIncrCaches)
+
 	t, _ := GetTenantInfo(ctx, DefaultTenantMoAdmin)
 	sess.SetTenantInfo(t)
 	applyOverride(sess, ie.baseSessOpts)
