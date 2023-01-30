@@ -21,6 +21,7 @@ const (
 	index_PrimaryKey         = memtable.Text("primary key")
 	index_BlockID_Time_OP    = memtable.Text("block id, time, op")
 	index_TableID_PrimaryKey = memtable.Text("table id, primary key")
+	index_RowID              = memtable.Text("row id")
 )
 
 type ColumnsIndexDef struct {

@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/btree"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -108,6 +109,7 @@ type Partition struct {
 	sync.RWMutex
 	// multi-version data of logtail, implemented with reusee's memengine
 	data             *memtable.Table[RowID, DataValue, *DataRow]
+	index            *btree.BTreeG[*PartitionIndexEntry]
 	columnsIndexDefs []ColumnsIndexDef
 	// last updated timestamp
 	ts timestamp.Timestamp

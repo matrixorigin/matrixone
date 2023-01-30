@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 
+	"github.com/google/btree"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -37,6 +38,7 @@ func NewPartition(
 ) *Partition {
 	return &Partition{
 		data:             memtable.NewTable[RowID, DataValue, *DataRow](),
+		index:            btree.NewG(2, comparePartitionIndexEntry),
 		columnsIndexDefs: columnsIndexDefs,
 	}
 }
@@ -124,19 +126,11 @@ func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error 
 	panic("unimplemented")
 }
 
-func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) bool {
-	t := memtable.Time{
-		Timestamp: ts,
-	}
-	tx := memtable.NewTransaction(
-		newMemTableTransactionID(),
-		t,
-		memtable.SnapshotIsolation,
-	)
-	if _, err := p.data.Get(tx, RowID(key)); err != nil {
-		return false
-	}
-	return true
+func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) (ret bool) {
+	entry := p.Index(index_RowID, memorytable.Tuple{
+		key,
+	}, ts)
+	return entry != nil
 }
 
 func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
@@ -148,13 +142,16 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 	txID := newMemTableTransactionID()
 
 	iter := memorytable.NewBatchIter(bat)
+	offset := -1
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
 			break
 		}
+		offset++
 
-		rowID := RowID(tuple[0].Value.(types.Rowid))
+		rowId := tuple[0].Value.(types.Rowid)
+		rowID := RowID(rowId)
 		ts := tuple[1].Value.(types.TS)
 		t := memtable.Time{
 			Timestamp: timestamp.Timestamp{
@@ -178,6 +175,20 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			index_Time,
 			ts,
 		})
+
+		{
+			entry := &PartitionIndexEntry{
+				Name: index_RowID,
+				Tuple: memorytable.Tuple{
+					rowId,
+				},
+				Timestamp: ts.ToTimestamp(),
+				Op:        opDelete,
+				Batch:     bat,
+				Offset:    offset,
+			}
+			p.index.ReplaceOrInsert(entry)
+		}
 
 		err := p.data.Upsert(tx, &DataRow{
 			rowID: rowID,
@@ -212,13 +223,16 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 	txID := newMemTableTransactionID()
 
 	iter := memorytable.NewBatchIter(bat)
+	offset := -1
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
 			break
 		}
+		offset++
 
-		rowID := RowID(tuple[0].Value.(types.Rowid))
+		rowId := tuple[0].Value.(types.Rowid)
+		rowID := RowID(rowId)
 		ts := tuple[1].Value.(types.TS)
 		t := memtable.Time{
 			Timestamp: timestamp.Timestamp{
@@ -282,6 +296,20 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 				index = append(index, memtable.ToOrdered(tuple[col].Value))
 			}
 			indexes = append(indexes, index)
+		}
+
+		{
+			entry := &PartitionIndexEntry{
+				Name: index_RowID,
+				Tuple: memorytable.Tuple{
+					rowId,
+				},
+				Timestamp: ts.ToTimestamp(),
+				Op:        opInsert,
+				Batch:     bat,
+				Offset:    offset,
+			}
+			p.index.ReplaceOrInsert(entry)
 		}
 
 		err = p.data.Upsert(tx, &DataRow{

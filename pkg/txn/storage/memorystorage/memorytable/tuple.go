@@ -15,9 +15,11 @@
 package memorytable
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 // Tuple represents multiple ordered values
@@ -109,6 +111,22 @@ func (t Tuple) Less(than Tuple) bool {
 
 		case types.TS:
 			b := b.(types.TS)
+			if a.Less(b) {
+				return true
+			} else if b.Less(a) {
+				return false
+			}
+
+		case types.Rowid:
+			b := b.(types.Rowid)
+			if res := bytes.Compare(a[:], b[:]); res < 0 {
+				return true
+			} else if res > 0 {
+				return false
+			}
+
+		case timestamp.Timestamp:
+			b := b.(timestamp.Timestamp)
 			if a.Less(b) {
 				return true
 			} else if b.Less(a) {
