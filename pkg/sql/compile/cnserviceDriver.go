@@ -21,19 +21,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
-
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
-
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -42,7 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
@@ -51,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
@@ -69,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -880,7 +878,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 			Types:     convertToPlanTypes(t.Typs),
-			Cond:      t.Cond,
+			Expr:      t.Cond,
 			OnList:    t.OnList,
 		}
 	case *table_function.Argument:
@@ -1013,6 +1011,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Cond:   t.Expr,
 			Typs:   convertToTypes(t.Types),
 		}
+	case vm.LoopMark:
+		t := opr.GetMarkJoin()
+		v.Arg = &loopmark.Argument{
+			Result: t.Result,
+			Cond:   t.Expr,
+			Typs:   convertToTypes(t.Types),
+		}
 	case vm.Offset:
 		v.Arg = &offset.Argument{Offset: opr.Offset}
 	case vm.Order:
@@ -1055,7 +1060,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Result:     t.Result,
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 			Typs:       convertToTypes(t.Types),
-			Cond:       t.Cond,
+			Cond:       t.Expr,
 			OnList:     t.OnList,
 		}
 	case vm.Top:

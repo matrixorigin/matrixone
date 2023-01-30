@@ -17,19 +17,23 @@ package plan
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"go/constant"
+	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
@@ -154,11 +158,6 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindFuncExprImplByAstExpr("xor", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
 
 	case *tree.Subquery:
-		if !isRoot && exprImpl.Exists {
-			// TODO: implement MARK join to better support non-scalar subqueries
-			return nil, moerr.NewNYI(b.GetContext(), "EXISTS subquery as non-root expression")
-		}
-
 		expr, err = b.impl.BindSubquery(exprImpl, isRoot)
 
 	case *tree.DefaultVal:
@@ -351,6 +350,11 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		if err != nil {
 			return nil, err
 		}
+	case *tree.Select:
+		nodeID, err = b.builder.buildSelect(subquery, subCtx, false)
+		if err != nil {
+			return nil, err
+		}
 
 	default:
 		return nil, moerr.NewNYI(b.GetContext(), "unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
@@ -509,11 +513,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery, ok := rightArg.Expr.(*plan.Expr_Sub); ok {
-				if !isRoot {
-					// TODO: implement MARK join to better support non-scalar subqueries
-					return nil, moerr.NewNYI(b.GetContext(), "IN subquery as non-root expression")
-				}
-
 				if list, ok := leftArg.Expr.(*plan.Expr_List); ok {
 					if len(list.List.List) != int(subquery.Sub.RowSize) {
 						return nil, moerr.NewNYI(b.GetContext(), "subquery should return %d columns", len(list.List.List))
@@ -526,6 +525,13 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 				subquery.Sub.Typ = plan.SubqueryRef_IN
 				subquery.Sub.Child = leftArg
+
+				rightArg.Typ = &plan.Type{
+					Id:          int32(types.T_bool),
+					NotNullable: leftArg.Typ.NotNullable && rightArg.Typ.NotNullable,
+					Size:        1,
+				}
+
 				return rightArg, nil
 			} else {
 				return bindFuncExprImplByPlanExpr(b.GetContext(), "in", []*plan.Expr{leftArg, rightArg})
@@ -549,11 +555,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery, ok := rightArg.Expr.(*plan.Expr_Sub); ok {
-				if !isRoot {
-					// TODO: implement MARK join to better support non-scalar subqueries
-					return nil, moerr.NewNYI(b.GetContext(), "IN subquery as non-root expression will be supported in future version")
-				}
-
 				if list, ok := leftArg.Expr.(*plan.Expr_List); ok {
 					if len(list.List.List) != int(subquery.Sub.RowSize) {
 						return nil, moerr.NewInvalidInput(b.GetContext(), "subquery should return %d columns", len(list.List.List))
@@ -566,6 +567,13 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 				subquery.Sub.Typ = plan.SubqueryRef_NOT_IN
 				subquery.Sub.Child = leftArg
+
+				rightArg.Typ = &plan.Type{
+					Id:          int32(types.T_bool),
+					NotNullable: leftArg.Typ.NotNullable && rightArg.Typ.NotNullable,
+					Size:        1,
+				}
+
 				return rightArg, nil
 			} else {
 				expr, err := bindFuncExprImplByPlanExpr(b.GetContext(), "in", []*plan.Expr{leftArg, rightArg})
@@ -596,11 +604,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 		if subquery, ok := expr.Expr.(*plan.Expr_Sub); ok {
-			if !isRoot {
-				// TODO: implement MARK join to better support non-scalar subqueries
-				return nil, moerr.NewNYI(b.GetContext(), "%q subquery as non-root expression", strings.ToUpper(astExpr.SubOp.ToString()))
-			}
-
 			if list, ok := child.Expr.(*plan.Expr_List); ok {
 				if len(list.List.List) != int(subquery.Sub.RowSize) {
 					return nil, moerr.NewInvalidInput(b.GetContext(), "subquery should return %d columns", len(list.List.List))
@@ -619,6 +622,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				subquery.Sub.Typ = plan.SubqueryRef_ANY
 			case tree.ALL:
 				subquery.Sub.Typ = plan.SubqueryRef_ALL
+			}
+
+			expr.Typ = &plan.Type{
+				Id:          int32(types.T_bool),
+				NotNullable: expr.Typ.NotNullable && child.Typ.NotNullable,
+				Size:        1,
 			}
 
 			return expr, nil
@@ -647,7 +656,6 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
-	// rewrite some ast Exprs before binding
 	switch name {
 	case "nullif":
 		// rewrite 'nullif(expr1, expr2)' to 'case when expr1=expr2 then null else expr1'
@@ -706,7 +714,190 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		args[idx] = expr
 	}
 
-	return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
+	// first look for builtin func
+	builtinExpr, err := bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
+	if err == nil {
+		return builtinExpr, nil
+	} else if !strings.Contains(err.Error(), "not supported") {
+		return nil, err
+	}
+
+	// not a builtin func, look to resolve udf
+	var rowIndex int64
+	var expectInvalidArgErr bool
+	var expectedInvalidArgLengthErr bool
+	var badValue string
+
+	cmpCtx := b.builder.compCtx
+	proc := cmpCtx.GetProcess()
+	engine := cmpCtx.GetEngine()
+	txn, err := colexec.NewTxn(engine, proc, b.GetContext())
+	if err != nil {
+		return nil, err
+	}
+	db, err := engine.Database(b.GetContext(), catalog.MO_CATALOG, txn)
+	if err != nil {
+		return nil, err
+	}
+	table, err := db.Relation(b.GetContext(), "mo_user_defined_function")
+	if err != nil {
+		return nil, err
+	}
+
+	expr := getUdfNameMatchExpr(name)
+	ret, err := table.Ranges(b.GetContext(), expr)
+	if err != nil {
+		return nil, err
+	}
+
+	reader, err := table.NewReader(b.GetContext(), 1, expr, ret)
+	if err != nil {
+		return nil, err
+	}
+
+	UDF_TABLE_COLNAME := []string{catalog.Row_ID, "name", "args", "body", "db"}
+
+	for len(reader) > 0 {
+		bat, err := reader[0].Read(b.GetContext(), UDF_TABLE_COLNAME, expr, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
+		// system table doesn't have this udf information, return err
+		if bat == nil {
+			reader[0].Close()
+			reader = reader[1:]
+			continue
+		}
+
+		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
+			funcName := bat.Vecs[1].GetString(rowIndex)
+			dbName := bat.Vecs[4].GetString(rowIndex)
+			if funcName == name && dbName == cmpCtx.DefaultDatabase() {
+				funcArgs := bat.Vecs[2].GetString(rowIndex)
+				funcBody := bat.Vecs[3].GetString(rowIndex)
+				// basic argument type check
+				argMap := make(map[string]string)
+				json.Unmarshal([]byte(funcArgs), &argMap)
+				if len(argMap) != len(args) {
+					expectedInvalidArgLengthErr = true
+					goto retry
+				}
+				i := 0
+				for _, v := range argMap {
+					switch t := int32(types.Types[v]); {
+					case (t >= 20 && t <= 29): // int family
+						if args[i].Typ.Id < 20 || args[i].Typ.Id > 29 {
+							expectInvalidArgErr = true
+							badValue = v
+							goto retry
+						}
+					case t == 10: // bool family
+						if args[i].Typ.Id != 10 {
+							expectInvalidArgErr = true
+							badValue = v
+							goto retry
+						}
+					case (t >= 30 && t <= 33): // float family
+						if args[i].Typ.Id < 30 || args[i].Typ.Id > 33 {
+							expectInvalidArgErr = true
+							badValue = v
+							goto retry
+						}
+					}
+					i++
+				}
+
+				udfExpr, err := bindFuncExprImplUdf(b, name, funcBody, astArgs, depth)
+				if err != nil {
+					return nil, err
+				}
+
+				if udfExpr != nil {
+					return udfExpr, nil
+				}
+			}
+		retry:
+			continue
+		}
+	}
+
+	if expectedInvalidArgLengthErr {
+		return nil, moerr.NewInvalidArg(b.GetContext(), name+" function have invalid input args length", len(args))
+	} else if expectInvalidArgErr {
+		return nil, moerr.NewInvalidArg(b.GetContext(), name+" function have invalid input args", badValue)
+	}
+
+	return nil, moerr.NewNotSupported(b.GetContext(), "function or operator '%s'", name)
+}
+
+func getUdfNameMatchExpr(name string) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     10,
+					ObjName: "=",
+				},
+				Args: []*plan.Expr{
+					{
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								Name: "name",
+							},
+						},
+					},
+					{
+						Expr: &plan.Expr_C{
+							C: &plan.Const{
+								Value: &plan.Const_Sval{
+									Sval: name,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func bindFuncExprImplUdf(b *baseBinder, name string, sql string, args []tree.Expr, depth int32) (*plan.Expr, error) {
+	// replace sql with actual arg value
+	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	for i := 0; i < len(args); i++ {
+		args[i].Format(fmtctx)
+		sql = strings.Replace(sql, "$"+strconv.Itoa(i+1), fmtctx.String(), 1)
+		fmtctx.Reset()
+	}
+
+	// if does not contain SELECT, an expression. In order to pass the parser,
+	// add a temporary SELECT in front of it.
+
+	var expr *plan.Expr
+
+	if !strings.Contains(sql, "select") {
+		sql = "select " + sql
+		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql)
+		if err != nil {
+			return nil, err
+		}
+		expr, err = b.impl.BindExpr(substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, depth, false)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql)
+		if err != nil {
+			return nil, err
+		}
+		subquery := tree.NewSubquery(substmts[0], false)
+		expr, err = b.impl.BindSubquery(subquery, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return expr, nil
 }
 
 func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
@@ -855,7 +1046,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(ctx, args[0], &plan.Type{
 				Id:          int32(types.T_decimal128),
-				NotNullable: true,
+				NotNullable: args[0].Typ.NotNullable,
 			})
 			if err != nil {
 				return nil, err
@@ -868,7 +1059,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(ctx, args[0], &plan.Type{
 				Id:          int32(types.T_float64),
-				NotNullable: true,
+				NotNullable: args[0].Typ.NotNullable,
 			})
 			if err != nil {
 				return nil, err

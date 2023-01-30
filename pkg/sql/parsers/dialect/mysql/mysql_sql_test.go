@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select connection_id()",
-		output: "select connection_id()",
+		input:  "select 1+1",
+		output: "select 1 + 1",
 	}
 )
 

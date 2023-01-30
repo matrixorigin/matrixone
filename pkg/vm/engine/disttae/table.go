@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -122,7 +121,7 @@ func (tbl *table) Rows(ctx context.Context) (int64, error) {
 		Timestamp: tbl.db.txn.meta.SnapshotTS,
 	}
 	tx := memtable.NewTransaction(
-		uuid.NewString(),
+		newMemTableTransactionID(),
 		t,
 		memtable.SnapshotIsolation,
 	)
@@ -244,7 +243,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	default:
 		tbl.dnList = dnList
 	}
-	_, created := tbl.db.txn.tableMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
+	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
 	if !created && !tbl.updated {
 		if err := tbl.db.txn.db.Update(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
 			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {

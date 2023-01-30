@@ -20,10 +20,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"math"
 	"os"
@@ -33,6 +29,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -1007,6 +1008,18 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			} else {
 				vs := vec.Col.([]types.Uuid)
 				row[i] = vs[rowIndex].ToString()
+			}
+		}
+	case types.T_Rowid:
+		if !nulls.Any(vec.Nsp) {
+			vs := vec.Col.([]types.Rowid)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]types.Rowid)
+				row[i] = vs[rowIndex]
 			}
 		}
 	default:
