@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -122,7 +121,7 @@ func (tbl *table) Rows(ctx context.Context) (int64, error) {
 		Timestamp: tbl.db.txn.meta.SnapshotTS,
 	}
 	tx := memtable.NewTransaction(
-		uuid.NewString(),
+		newMemTableTransactionID(),
 		t,
 		memtable.SnapshotIsolation,
 	)

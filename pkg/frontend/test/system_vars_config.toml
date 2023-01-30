@@ -1,511 +1,63 @@
-# Change this config file according to your usage.
 
-#	Name:	rootname
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	string
-#	DomainType:	set
-#	Values:	[root]
 #	Comment:	root name
-#	UpdateMode:	dynamic
 	rootname = "root"
 
-#	Name:	rootpassword
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	string
-#	DomainType:	set
-#	Values:	[]
 #	Comment:	root password
-#	UpdateMode:	dynamic
 	rootpassword = ""
 
-#	Name:	dumpuser
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	string
-#	DomainType:	set
-#	Values:	[dump]
 #	Comment:	dump user name
-#	UpdateMode:	dynamic
 	dumpuser = "dump"
 
-#	Name:	dumppassword
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	string
-#	DomainType:	set
-#	Values:	[111]
 #	Comment:	dump user password
-#	UpdateMode:	dynamic
 	dumppassword = "111"
 
-#	Name:	dumpdatabase
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	string
-#	DomainType:	set
-#	Values:	[default]
 #	Comment:	dump database name
-#	UpdateMode:	dynamic
 	dumpdatabase = "default"
 
-#	Name:	port
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	range
-#	Values:	[6001 6001 6010]
 #	Comment:	port defines which port the mo-server listens on and clients connect to
-#	UpdateMode:	dynamic
 	port = 6001
 
-#	Name:	host
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	string
-#	DomainType:	set
-#	Values:	[0.0.0.0 localhost 127.0.0.1]
 #	Comment:	listening ip
-#	UpdateMode:	dynamic
 	host = "0.0.0.0"
 
-#	Name:	sendRow
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	bool
-#	DomainType:	set
-#	Values:	[]
-#	Comment:	send data row while producing
-#	UpdateMode:	dynamic
-	sendRow = false
-
-#	Name:	dumpEnv
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	bool
-#	DomainType:	set
-#	Values:	[]
-#	Comment:	dump Environment with memEngine Null nodes for testing
-#	UpdateMode:	dynamic
-	dumpEnv = false
-
-#	Name:	hostMmuLimitation
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[1099511627776]
 #	Comment:	host mmu limitation. default: 1 << 40 = 1099511627776
-#	UpdateMode:	dynamic
 	hostMmuLimitation = 1099511627776
 
-#	Name:	guestMmuLimitation
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[1099511627776]
 #	Comment:	guest mmu limitation. default: 1 << 40 = 1099511627776
-#	UpdateMode:	dynamic
 	guestMmuLimitation = 1099511627776
 
-#	Name:	mempoolMaxSize
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[1099511627776]
 #	Comment:	mempool maxsize. default: 1 << 40 = 1099511627776
-#	UpdateMode:	dynamic
 	mempoolMaxSize = 1099511627776
 
-#	Name:	mempoolFactor
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[8]
 #	Comment:	mempool factor. default: 8
-#	UpdateMode:	dynamic
 	mempoolFactor = 8
 
-#	Name:	processLimitationSize
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[42949672960]
 #	Comment:	process.Limitation.Size. default: 10 << 32 = 42949672960
-#	UpdateMode:	dynamic
 	processLimitationSize = 42949672960
 
-#	Name:	processLimitationBatchRows
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[42949672960]
 #	Comment:	process.Limitation.BatchRows. default: 10 << 32 = 42949672960
-#	UpdateMode:	dynamic
 	processLimitationBatchRows = 42949672960
 
-#	Name:	processLimitationBatchSize
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[0]
 #	Comment:	process.Limitation.BatchSize. default: 0
-#	UpdateMode:	dynamic
 	processLimitationBatchSize = 0
 
-#	Name:	processLimitationPartitionRows
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[42949672960]
 #	Comment:	process.Limitation.PartitionRows. default: 10 << 32 = 42949672960
-#	UpdateMode:	dynamic
 	processLimitationPartitionRows = 42949672960
 
-#	Name:	countOfRowsPerSendingToClient
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	range
-#	Values:	[1000 1 10000]
-#	Comment:	send the count of rows to the client
-#	UpdateMode:	dynamic
-	countOfRowsPerSendingToClient = 10
-
-#	Name:	periodOfEpochTimer
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[5]
-#	Comment:	the period of epoch timer in second
-#	UpdateMode:	dynamic
-	periodOfEpochTimer = 5
-
-#	Name:	periodOfPersistence
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[20]
-#	Comment:	the period of persistence in second
-#	UpdateMode:	dynamic
-	periodOfPersistence = 20
-
-#	Name:	periodOfDDLDeleteTimer
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[20]
-#	Comment:	the period of the ddl delete in second
-#	UpdateMode:	dynamic
-	periodOfDDLDeleteTimer = 20
-
-#	Name:	timeoutOfHeartbeat
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[20]
-#	Comment:	the timeout of heartbeat in second. In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
-#	UpdateMode:	dynamic
-	timeoutOfHeartbeat = 20
-
-#	Name:	rejectWhenHeartbeatFromPDLeaderIsTimeout
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	bool
-#	DomainType:	set
-#	Values:	[false]
-#	Comment:	default value is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout.
-#	UpdateMode:	dynamic
-	rejectWhenHeartbeatFromPDLeaderIsTimeout = false
-
-#	Name:	enableEpochLogging
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	bool
-#	DomainType:	set
-#	Values:	[false]
-#	Comment:	default is false. Print logs when the server calls catalog service to run the ddl.
-#	UpdateMode:	dynamic
-	enableEpochLogging = false
-
-#	Name:	recordTimeElapsedOfSqlRequest
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	bool
-#	DomainType:	set
-#	Values:	[true]
-#	Comment:	record the time elapsed of executing sql request
-#	UpdateMode:	dynamic
-	recordTimeElapsedOfSqlRequest = true
-
-#	Name:	nodeID
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	range
-#	Values:	[0 0 10]
-#	Comment:	the Node ID of the cube. In a distributed setting, each node in a cluster should have a different nodeID.
-#	UpdateMode:	dynamic
-	nodeID = 0
-
-#	Name:	storePath
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	string
-#	DomainType:	set
-#	Values:	[./store]
 #	Comment:	the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
-#	UpdateMode:	dynamic
 	storePath = "./store"
 
-#	Name:	lengthOfQueryPrinted
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	range
-#	Values:	[50 -1 10000]
 #	Comment:	the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
-#	UpdateMode:	dynamic
 	lengthOfQueryPrinted = 50
 
-#	Name:	batchSizeInLoadData
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	range
-#	Values:	[40000 10 100000]
 #	Comment:	the count of rows in vector of batch in load data
-#	UpdateMode:	dynamic
 	batchSizeInLoadData = 10
 
-#	Name:	loadDataConcurrencyCount
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	range
-#	Values:	[16 1 16]
 #	Comment:	default is 16. The count of go routine writing batch into the storage.
-#	UpdateMode:	dynamic
 	loadDataConcurrencyCount = 1
 
-#	Name:	cubeLogLevel
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	string
-#	DomainType:	set
-#	Values:	[debug info error warning warn fatal]
-#	Comment:	default is debug. The log level for cube.
-#	UpdateMode:	dynamic
-	cubeLogLevel = "debug"
-
-#	Name:	enableProfileGetDataFromPipeline
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	bool
-#	DomainType:	set
-#	Values:	[]
-#	Comment:	defult is false. true for profiling the getDataFromPipeline
-#	UpdateMode:	dynamic
-	enableProfileGetDataFromPipeline = false
-
-#	Name:	maxBytesInOutbufToFlush
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	range
-#	Values:	[1024 32 3096]
 #	Comment:	KB. When the number of bytes in the outbuffer exceeds the it,the outbuffer will be flushed.
-#	UpdateMode:	dynamic
 	maxBytesInOutbufToFlush = 1024
 
-#	Name:	cubeMaxEntriesBytes
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	set
-#	Values:	[314572800]
 #	Comment:	default is 300MB. The max entries bytes for the write batch in the cube.
-#	UpdateMode:	dynamic
 	cubeMaxEntriesBytes = 314572800
-
-#default is false. With true. Server will support tls
-#enableTls = false
-
-#default is ''. Path of file that contains list of trusted SSL CAs for client
-#tlsCaFile = "test/ca.pem"
-
-#default is ''. Path of file that contains X509 certificate in PEM format for client
-#tlsCertFile = "test/server-cert2.pem"
-
-#default is ''. Path of file that contains X509 key in PEM format for client
-#tlsKeyFile = "test/server-key2.pem"
-
-# Cluster Configs
-pre-allocated-group-num = 20
-max-group-num           = 0
-
-# Logger Configs
-level = "debug" # debug, info, warn, error, fatal.
-format = "json" # json, console.
-
-# log file config
-filename = "" # log file.
-max-size = 512 # maximum log file size.
-max-days = 0 # maximum log file days kept.
-max-backups = 0 # maximum numbers of old log files to retain.
-
-# Cube Configs
-# In a distributed setting, the ip of addr-raft and addr-client should set to the ip address of the machine that mo-server runs on.
-# In a distributed setting, the shard-groups should set to 2.
-addr-raft = "localhost:10000"
-addr-client = "localhost:20000"
-dir-deploy = ""
-version = ""
-githash = ""
-capacity = 0
-use-memory-as-storage = false
-shard-groups = 1
-
-# Replication Configs
-[replication]
-# If pb scheduler doesn't hear from a node for longer than max-peer-down-time, it will ask this node to destroy itself if it comes back.
-max-peer-down-time = "30m"
-shard-split-check-duration = "30s"
-shard-state-check-duration = "1m"
-compact-log-check-duration = "60s"
-disable-shard-split = false
-allow-remove-leader = false
-shard-capacity-bytes = "96MB"
-shard-split-check-bytes = "64MB"
-
-[snapshot]
-max-concurrency-snap-chunks = 8
-snap-chunk-size = "4MB"
-
-[raft]
-enable-pre-vote = true
-# In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
-tick-interval = "1s"
-heartbeat-ticks = 2
-election-timeout-ticks = 10
-max-size-per-msg = 0
-max-inflight-msgs = 512
-max-entry-bytes = 314572800
-send-raft-batch-size = 64
-[raft.raft-log]
-disable-sync = false
-compact-duration = "30s"
-compact-threshold = 256
-max-allow-transfer-lag = 2
-ForceCompactCount = 0
-ForceCompactBytes = 0
-CompactProtectLag = 0
-
-[worker]
-raft-apply-worker = 32
-raft-msg-worker = 8
-raft-event-worker = 32
-
-# Prophet Configs
-[prophet]
-# In a distributed setting, there are three nodes act as prophet, each of which should have different names.
-name = "node0"
-data-dir = ""
-rpc-addr = "localhost:30000"
-# In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
-rpc-timeout = "10s"
-# In a distributed setting, if a node is not a prophet node(i.e., a pure prophet node), set the value prophet-node = false.
-prophet-node = true
-# In a distributed setting, if a node is a prophet node, the value external-etcd should be empty.
-# If a node is not a prophet node(i.e., the above setting prophet-node = false), the value of external-etcd should be the three prophet node's prophet.embed-etcd's peer-urls.
-external-etcd = ["", "", ""]
-lease = 0
-
-# In a distributed setting, only the three prophet nodes need to adjust this setting
-[prophet.embed-etcd]
-# For the genesis node in the three prophet, the join value should remain a empty string.
-# For the other two nodes in the prophet group, the join value should set to the genesis node's peer-urls.
-join = ""
-# In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
-client-urls = "http://localhost:40000"
-# In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
-peer-urls = "http://localhost:50000"
-advertise-client-urls = ""
-advertise-peer-urls = ""
-initial-cluster = ""
-initial-cluster-state = ""
-tick-interval = "500ms"
-election-interval = "3000ms"
-enable-prevote = true
-auto-compaction-mode = "periodic"
-auto-compaction-retention = "1h"
-quota-backend-bytes = "8GB"
-
-[prophet.schedule]
-max-snapshot-count = 3
-max-pending-peer-count = 16
-max-merge-resource-size = 0
-max-merge-resource-keys = 0
-split-merge-interval = "0s"
-enable-one-way-merge = false
-enable-cross-table-merge = false
-patrol-resource-interval = "100ms"
-max-container-down-time = "30m"
-leader-schedule-limit = 4
-leader-schedule-policy = "count"
-resource-schedule-limit = 2048
-replica-schedule-limit = 64
-merge-schedule-limit = 0
-hot-resource-schedule-limit = 4
-hot-resource-cache-hits-threshold = 3
-tolerant-size-ratio = 0.0
-low-space-ratio = 0.8
-high-space-ratio = 0.7
-resource-score-formula-version = ""
-scheduler-max-waiting-operator = 5
-enable-remove-down-replica = true
-enable-replace-offline-replica = true
-enable-make-up-replica = true
-enable-remove-extra-replica = true
-enable-location-replacement = true
-enable-debug-metrics = false
-enable-joint-consensus = true
-container-limit-mode = ""
-
-[prophet.replication]
-max-replicas = 1
-strictly-match-label = true
-enable-placement-rules = true
-isolation-level = "rack"
-
-[metric]
-addr = ""
-interval = 0
-job = ""
-instance = ""
-
-# Storage Configs
-[meta.conf]
-block-max-rows = 160000
-segment-max-blocks = 40
-
-[scheduler-cfg]
-block-writers = 8
-segment-writers = 4
-
-[cache-cfg]
-index-cache-size = 134217728        # 128M
-insert-cache-size = 4294967296      # 4G
-data-cache-size = 4294967296        # 4G
