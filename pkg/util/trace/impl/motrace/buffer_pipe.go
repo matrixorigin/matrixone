@@ -198,7 +198,7 @@ func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer) an
 
 	reqs := make(CSVRequests, 0, len(buffer))
 	for account, buf := range buffer {
-		writer := GetTracerProvider().writerFactory(DefaultContext(), row.Table.Database, row.Table,
+		writer := GetTracerProvider().writerFactory(ctx, row.Table.Database, row.Table,
 			WriteFactoryConfig{Account: account, Ts: ts, PathBuilder: row.Table.PathBuilder})
 		reqs = append(reqs, NewCSVRequest(writer, buf.String()))
 	}
