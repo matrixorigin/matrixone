@@ -16,10 +16,8 @@ package multi
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/json_extract"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -37,80 +35,67 @@ func computeString(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, err
 	return bj.Query(paths), nil
 }
 
-func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
-	defer func() {
-		if err != nil && ret != nil {
-			ret.Free(proc.Mp())
-		}
-	}()
-	jsonBytes := vectors[0]
-	pathVecs := vectors[1:]
-	maxLen := 0
-	resultType := types.T_json.ToType()
-	allScalar := true
-	for _, v := range vectors {
-		if v.Length() > maxLen {
-			maxLen = v.Length()
-		}
-		if v.IsScalarNull() {
-			ret = proc.AllocScalarNullVector(resultType)
-			return
-		}
-		if !v.IsScalar() {
-			allScalar = false
-		}
-	}
-
+func JsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	jsonVec := parameters[0]
 	var fn computeFn
-	switch jsonBytes.Typ.Oid {
+	switch jsonVec.Typ.Oid {
 	case types.T_json:
 		fn = computeJson
 	default:
 		fn = computeString
 	}
-
-	json := vector.MustBytesCols(jsonBytes)
-	paths := make([][][]byte, len(pathVecs))
-	nsps := make([]*nulls.Nulls, len(pathVecs)+1)
-	nsps[0] = jsonBytes.Nsp
-	for i, v := range pathVecs {
-		paths[i] = vector.MustBytesCols(v)
-		nsps[i+1] = v.Nsp
+	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
+	pathWrapers := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters)-1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	paths := make([]*bytejson.Path, len(parameters)-1)
+	for i := 0; i < len(parameters)-1; i++ {
+		pathWrapers[i] = vector.GenerateFunctionStrParameter(parameters[i+1])
 	}
-
-	if allScalar {
-		ret = proc.AllocScalarVector(resultType)
-		resultValues := make([]*bytejson.ByteJson, 1)
-
-		resultValues, err = json_extract.JsonExtract(json, paths, nsps, resultValues, ret.Nsp, 1, fn)
-		if err != nil {
-			return
-		}
-		if ret.Nsp.Contains(0) {
-			return
-		}
-		dt, _ := resultValues[0].Marshal()
-		err = vector.SetBytesAt(ret, 0, dt, proc.Mp())
-		return
-	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
-	if err != nil {
-		return
-	}
-	resultValues := make([]*bytejson.ByteJson, maxLen)
-	resultValues, err = json_extract.JsonExtract(json, paths, nsps, resultValues, ret.Nsp, maxLen, fn)
-	if err != nil {
-		return
-	}
-	for idx, v := range resultValues {
-		if ret.Nsp.Contains(uint64(idx)) {
+	for i := uint64(0); i < uint64(length); i++ {
+		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
+		if jIsNull {
+			err := rs.AppendStr(nil, true)
+			if err != nil {
+				return err
+			}
 			continue
 		}
-		dt, _ := v.Marshal()
-		err = vector.SetBytesAt(ret, idx, dt, proc.Mp())
+		skip := false
+		for j := 0; j < len(parameters)-1; j++ {
+			pathBytes, pIsNull := pathWrapers[j].GetStrValue(i)
+			if pIsNull {
+				skip = true
+				break
+			}
+			p, err := types.ParseStringToPath(string(pathBytes))
+			if err != nil {
+				return err
+			}
+			paths[j] = &p
+		}
+		if skip {
+			err := rs.AppendStr(nil, true)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		out, err := fn(jsonBytes, paths)
 		if err != nil {
-			return
+			return err
+		}
+		if out.IsNull() {
+			err := rs.AppendStr(nil, true)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		dt, _ := out.Marshal()
+		err = rs.AppendStr(dt, false)
+		if err != nil {
+			return err
 		}
 	}
-	return
+	return nil
 }
