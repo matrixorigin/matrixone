@@ -317,18 +317,19 @@ func TestTruncate(t *testing.T) {
 	}
 
 	currLsn := wal.GetCurrSeqNum(group)
+	drcurrLsn := driver.GetCurrSeqNum()
 	ckpEntry, err := wal.RangeCheckpoint(group, 0, currLsn)
 	assert.NoError(t, err)
 	assert.NoError(t, ckpEntry.WaitDone())
 	testutils.WaitExpect(4000, func() bool {
 		truncated, err := driver.GetTruncated()
 		assert.NoError(t, err)
-		return truncated >= currLsn
+		return truncated >= drcurrLsn
 	})
 	truncated, err := driver.GetTruncated()
 	assert.NoError(t, err)
-	t.Logf("truncated %d, current %d", truncated, currLsn)
-	assert.GreaterOrEqual(t, truncated, currLsn)
+	t.Logf("truncated %d, current %d", truncated, drcurrLsn)
+	assert.GreaterOrEqual(t, truncated, drcurrLsn)
 
 	for i := 0; i < entryCount; i++ {
 		e := mockEntry()
@@ -344,16 +345,17 @@ func TestTruncate(t *testing.T) {
 	}
 
 	currLsn = wal.GetCurrSeqNum(group)
+	drcurrLsn = driver.GetCurrSeqNum()
 	ckpEntry, err = wal.RangeCheckpoint(group, 0, currLsn)
 	assert.NoError(t, err)
 	assert.NoError(t, ckpEntry.WaitDone())
 	testutils.WaitExpect(4000, func() bool {
 		truncated, err := driver.GetTruncated()
 		assert.NoError(t, err)
-		return truncated >= currLsn
+		return truncated >= drcurrLsn
 	})
 	truncated, err = driver.GetTruncated()
 	assert.NoError(t, err)
-	t.Logf("truncated %d, current %d", truncated, currLsn)
-	assert.GreaterOrEqual(t, truncated, currLsn)
+	t.Logf("truncated %d, current %d", truncated, drcurrLsn)
+	assert.GreaterOrEqual(t, truncated, drcurrLsn)
 }
