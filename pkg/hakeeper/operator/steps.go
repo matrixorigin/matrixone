@@ -238,3 +238,18 @@ func (a CreateTaskService) IsFinish(logState pb.LogState, dnState pb.DNState, cn
 
 	return true
 }
+
+type DeleteCNStore struct {
+	StoreID string
+}
+
+func (a DeleteCNStore) String() string {
+	return fmt.Sprintf("deleting cn store %s", a.StoreID)
+}
+
+func (a DeleteCNStore) IsFinish(_ pb.LogState, _ pb.DNState, state pb.CNState) bool {
+	if _, ok := state.Stores[a.StoreID]; ok {
+		return false
+	}
+	return true
+}

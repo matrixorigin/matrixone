@@ -173,11 +173,6 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			ts,
 			memtable.Uint(opDelete),
 		})
-		// time
-		indexes = append(indexes, memtable.Tuple{
-			index_Time,
-			ts,
-		})
 
 		err := p.data.Upsert(tx, &DataRow{
 			rowID: rowID,
@@ -267,11 +262,6 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
 			memtable.Uint(opInsert),
-		})
-		// time
-		indexes = append(indexes, memtable.Tuple{
-			index_Time,
-			ts,
 		})
 		// columns indexes
 		for _, def := range p.columnsIndexDefs {
