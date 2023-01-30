@@ -21,76 +21,56 @@ import (
 )
 
 var (
-	JsonExtract func([][]byte, [][]byte, []*nulls.Nulls, []*bytejson.ByteJson, *nulls.Nulls, func([]byte, *bytejson.Path) (*bytejson.ByteJson, error)) ([]*bytejson.ByteJson, error)
+	JsonExtract func([][]byte, [][][]byte, []*nulls.Nulls, []*bytejson.ByteJson, *nulls.Nulls, int, func([]byte, []*bytejson.Path) (*bytejson.ByteJson, error)) ([]*bytejson.ByteJson, error)
 )
 
 func init() {
 	JsonExtract = jsonExtract
 }
 
-func jsonExtract(json, path [][]byte, nsps []*nulls.Nulls, result []*bytejson.ByteJson, rnsp *nulls.Nulls, compute func([]byte, *bytejson.Path) (*bytejson.ByteJson, error)) ([]*bytejson.ByteJson, error) {
-	if len(path) == 1 {
-		pStar, err := types.ParseStringToPath(string(path[0]))
-		if err != nil {
-			return nil, err
-		}
-		for i := range json {
-			if nsps[0].Contains(uint64(i)) {
-				rnsp.Set(uint64(i))
-				continue
-			}
-			ret, err := compute(json[i], &pStar)
-			if err != nil {
-				return nil, err
-			}
-			if ret.IsNull() {
-				rnsp.Set(uint64(i))
-				continue
-			}
-			result[i] = ret
-		}
-		return result, nil
-	}
-	if len(json) == 1 {
-		for i := range path {
-			if nsps[1].Contains(uint64(i)) {
-				rnsp.Set(uint64(i))
-				continue
-			}
-			pStar, err := types.ParseStringToPath(string(path[i]))
-			if err != nil {
-				return nil, err
-			}
-			ret, err := compute(json[0], &pStar)
-			if err != nil {
-				return nil, err
-			}
-			if ret.IsNull() {
-				rnsp.Set(uint64(i))
-				continue
-			}
-			result[i] = ret
-		}
-		return result, nil
-	}
-	for i := range path {
-		if nsps[0].Contains(uint64(i)) || nsps[1].Contains(uint64(i)) {
+func jsonExtract(json [][]byte, path [][][]byte, nsps []*nulls.Nulls, result []*bytejson.ByteJson, rnsp *nulls.Nulls, maxLen int, compute func([]byte, []*bytejson.Path) (*bytejson.ByteJson, error)) ([]*bytejson.ByteJson, error) {
+
+	prePaths := make([]*bytejson.Path, len(path))
+	paths := make([]*bytejson.Path, len(path))
+	var preJson, curJson []byte
+
+	for i := 0; i < maxLen; i++ {
+		if nsps[0].Contains(uint64(i)) {
 			rnsp.Set(uint64(i))
 			continue
 		}
-		pStar, err := types.ParseStringToPath(string(path[i]))
-		if err != nil {
-			return nil, err
+		if i >= len(json) {
+			curJson = preJson
+		} else {
+			curJson = json[i]
+			preJson = json[i]
 		}
-		ret, err := compute(json[i], &pStar)
-		if err != nil {
-			return nil, err
+		skip := false
+		for j := 0; j < len(path); j++ {
+			if nsps[j+1].Contains(uint64(i)) {
+				rnsp.Set(uint64(i))
+				skip = true
+				break
+			}
+			if i >= len(path[j]) {
+				paths[j] = prePaths[j]
+				continue
+			}
+			p, err := types.ParseStringToPath(string(path[j][i]))
+			if err != nil {
+				return nil, err
+			}
+			paths[j] = &p
+			prePaths[j] = &p
 		}
-		if ret.IsNull() {
-			rnsp.Set(uint64(i))
+		if skip {
 			continue
 		}
-		result[i] = ret
+		r, err := compute(curJson, paths)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = r
 	}
 	return result, nil
 }

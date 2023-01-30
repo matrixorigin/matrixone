@@ -23,18 +23,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type computeFn func([]byte, *bytejson.Path) (*bytejson.ByteJson, error)
+type computeFn func([]byte, []*bytejson.Path) (*bytejson.ByteJson, error)
 
-func computeJson(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
+func computeJson(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error) {
 	bj := types.DecodeJson(json)
-	return bj.Query(path), nil
+	return bj.Query(paths), nil
 }
-func computeString(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
+func computeString(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error) {
 	bj, err := types.ParseSliceToByteJson(json)
 	if err != nil {
 		return nil, err
 	}
-	return bj.Query(path), nil
+	return bj.Query(paths), nil
 }
 
 func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
@@ -43,15 +43,22 @@ func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.V
 			ret.Free(proc.Mp())
 		}
 	}()
-	jsonBytes, pathBytes := vectors[0], vectors[1]
-	maxLen := jsonBytes.Length()
-	if maxLen < pathBytes.Length() {
-		maxLen = pathBytes.Length()
-	}
+	jsonBytes := vectors[0]
+	pathVecs := vectors[1:]
+	maxLen := 0
 	resultType := types.T_json.ToType()
-	if jsonBytes.IsScalarNull() || pathBytes.IsScalarNull() {
-		ret = proc.AllocConstNullVector(resultType, maxLen)
-		return
+	allScalar := true
+	for _, v := range vectors {
+		if v.Length() > maxLen {
+			maxLen = v.Length()
+		}
+		if v.IsScalarNull() {
+			ret = proc.AllocScalarNullVector(resultType)
+			return
+		}
+		if !v.IsScalar() {
+			allScalar = false
+		}
 	}
 
 	var fn computeFn
@@ -62,11 +69,20 @@ func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.V
 		fn = computeString
 	}
 
-	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
-	if jsonBytes.IsScalar() && pathBytes.IsScalar() {
+	json := vector.MustBytesCols(jsonBytes)
+	paths := make([][][]byte, len(pathVecs))
+	nsps := make([]*nulls.Nulls, len(pathVecs)+1)
+	nsps[0] = jsonBytes.Nsp
+	for i, v := range pathVecs {
+		paths[i] = vector.MustBytesCols(v)
+		nsps[i+1] = v.Nsp
+	}
+
+	if allScalar {
 		ret = proc.AllocScalarVector(resultType)
 		resultValues := make([]*bytejson.ByteJson, 1)
-		resultValues, err = json_extract.JsonExtract(json, path, []*nulls.Nulls{jsonBytes.Nsp, pathBytes.Nsp}, resultValues, ret.Nsp, fn)
+
+		resultValues, err = json_extract.JsonExtract(json, paths, nsps, resultValues, ret.Nsp, 1, fn)
 		if err != nil {
 			return
 		}
@@ -82,7 +98,7 @@ func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.V
 		return
 	}
 	resultValues := make([]*bytejson.ByteJson, maxLen)
-	resultValues, err = json_extract.JsonExtract(json, path, []*nulls.Nulls{jsonBytes.Nsp, pathBytes.Nsp}, resultValues, ret.Nsp, fn)
+	resultValues, err = json_extract.JsonExtract(json, paths, nsps, resultValues, ret.Nsp, maxLen, fn)
 	if err != nil {
 		return
 	}

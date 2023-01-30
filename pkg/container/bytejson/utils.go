@@ -404,3 +404,14 @@ func (r UnnestResult) String() string {
 	}
 	return buf.String()
 }
+
+func checkAllNull(vals []ByteJson) bool {
+	allNull := true
+	for _, val := range vals {
+		if !val.IsNull() {
+			allNull = false
+			break
+		}
+	}
+	return allNull
+}
