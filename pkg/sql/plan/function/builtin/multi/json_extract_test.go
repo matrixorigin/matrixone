@@ -12,19 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package binary
+package multi
 
 import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 var (
-	procs = testutil.NewProc()
 	kases = []struct {
 		json string
 		path string
@@ -97,11 +95,11 @@ func makeTestVector1(json, path string) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
 	vec[0] = vector.New(types.T_varchar.ToType())
 	vec[1] = vector.New(types.T_varchar.ToType())
-	err := vec[0].Append([]byte(json), false, procs.Mp())
+	err := vec[0].Append([]byte(json), false, proc.Mp())
 	if err != nil {
 		panic(err)
 	}
-	err = vec[1].Append([]byte(path), false, procs.Mp())
+	err = vec[1].Append([]byte(path), false, proc.Mp())
 	if err != nil {
 		panic(err)
 	}
@@ -119,11 +117,11 @@ func makeTestVector2(json, path string) []*vector.Vector {
 	if err != nil {
 		panic(err)
 	}
-	err = vec[0].Append(bjsonSlice, false, procs.Mp())
+	err = vec[0].Append(bjsonSlice, false, proc.Mp())
 	if err != nil {
 		panic(err)
 	}
-	err = vec[1].Append([]byte(path), false, procs.Mp())
+	err = vec[1].Append([]byte(path), false, proc.Mp())
 	if err != nil {
 		panic(err)
 	}
@@ -135,7 +133,7 @@ func TestJsonExtractByString(t *testing.T) {
 	for _, kase := range kases {
 		t.Run(kase.path, func(t *testing.T) {
 			vec := makeTestVector1(kase.json, kase.path)
-			gotvec, err := JsonExtract(vec, procs)
+			gotvec, err := JsonExtract(vec, proc)
 			require.Nil(t, err)
 			got := vector.GetBytesVectorValues(gotvec)
 			switch value := kase.want.(type) {
@@ -153,13 +151,13 @@ func TestJsonExtractByString(t *testing.T) {
 				require.JSONEq(t, kase.want.(string), bjson.String())
 			}
 			vec[0].MakeScalar(1)
-			_, err = JsonExtract(vec, procs)
+			_, err = JsonExtract(vec, proc)
 			require.NoError(t, err)
 			vec[1].MakeScalar(1)
-			_, err = JsonExtract(vec, procs)
+			_, err = JsonExtract(vec, proc)
 			require.NoError(t, err)
 			vec[0].Nsp.Set(0)
-			_, err = JsonExtract(vec, procs)
+			_, err = JsonExtract(vec, proc)
 			require.NoError(t, err)
 		})
 	}
@@ -169,7 +167,7 @@ func TestJsonExtractByJson(t *testing.T) {
 	for _, kase := range kases {
 		t.Run(kase.path, func(t *testing.T) {
 			vec := makeTestVector2(kase.json, kase.path)
-			got, err := JsonExtract(vec, procs)
+			got, err := JsonExtract(vec, proc)
 			require.Nil(t, err)
 			bytes := vector.MustBytesCols(got)
 			switch value := kase.want.(type) {

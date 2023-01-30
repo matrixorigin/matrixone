@@ -25,6 +25,7 @@ import (
 )
 
 func TestDateDiff(t *testing.T) {
+	procs := testutil.NewProc()
 	cases := []struct {
 		name string
 		vecs []*vector.Vector

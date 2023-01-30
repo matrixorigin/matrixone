@@ -2095,7 +2095,7 @@ var builtins = map[int]Functions{
 				Volatile:  false,
 				Args:      []types.T{},
 				ReturnTyp: types.T_json,
-				Fn:        binary.JsonExtract,
+				Fn:        multi.JsonExtract,
 			},
 		},
 	},

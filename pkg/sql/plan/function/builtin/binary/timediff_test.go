@@ -26,6 +26,7 @@ import (
 )
 
 func TestTimeDiffInTime(t *testing.T) {
+	procs := testutil.NewProc()
 	cases := []struct {
 		name string
 		vecs []*vector.Vector
@@ -106,6 +107,7 @@ func TestTimeDiffInTime(t *testing.T) {
 }
 
 func TestTimeDiffInDateTime(t *testing.T) {
+	procs := testutil.NewProc()
 	cases := []struct {
 		name string
 		vecs []*vector.Vector
