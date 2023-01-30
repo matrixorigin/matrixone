@@ -917,6 +917,7 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	}
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(database.String()))
+	database.Close()
 	catalog.Lock()
 	defer catalog.Unlock()
 	if n, ok := catalog.entries[database.GetID()]; !ok {
@@ -930,7 +931,6 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 		}
 		delete(catalog.entries, database.GetID())
 	}
-	database.Close()
 	return nil
 }
 

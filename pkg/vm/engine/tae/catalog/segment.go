@@ -354,13 +354,18 @@ func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 	return nil
 }
 func (entry *SegmentEntry) Close() {
-	blks := entry.getAllBlksLocked()
+	blks := entry.getAllBlks()
+	entry.Lock()
+	defer entry.Unlock()
 	for _, blk := range blks {
-		entry.deleteEntryLocked(blk)
+		err := entry.deleteEntryLocked(blk)
+		if err != nil {
+			panic(err)
+		}
 	}
 }
 
-func (entry *SegmentEntry) getAllBlksLocked() []*BlockEntry {
+func (entry *SegmentEntry) getAllBlks() []*BlockEntry {
 	blks := make([]*BlockEntry, 0)
 	it := entry.MakeBlockIt(false)
 	for it.Valid() {

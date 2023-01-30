@@ -382,6 +382,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 			e.catalog.AddColumnCnt(-1 * len(table.schema.ColDefs))
 		}
 	}()
+	table.Close()
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(table.String()))
 	e.Lock()
@@ -397,14 +398,16 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		}
 		delete(e.entries, table.GetID())
 	}
-	table.Close()
 	return
 }
 
 func (e *DBEntry) Close() {
 	tbls := e.getAllTablesLocked()
 	for _, tbl := range tbls {
-		e.RemoveEntry(tbl)
+		err := e.RemoveEntry(tbl)
+		if err != nil {
+			panic(err)
+		}
 	}
 }
 

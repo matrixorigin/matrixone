@@ -357,19 +357,25 @@ func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (delete
 func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(segment.String()))
+	segment.Close()
 	entry.Lock()
 	defer entry.Unlock()
-	segment.Close()
 	return entry.deleteEntryLocked(segment)
 }
+
 func (entry *TableEntry) Close() {
-	segs := entry.getAllSegsLocked()
+	segs := entry.getAllSegs()
+	entry.Lock()
+	defer entry.Unlock()
 	for _, seg := range segs {
-		entry.deleteEntryLocked(seg)
+		err := entry.deleteEntryLocked(seg)
+		if err != nil {
+			panic(err)
+		}
 	}
 }
 
-func (entry *TableEntry) getAllSegsLocked() []*SegmentEntry {
+func (entry *TableEntry) getAllSegs() []*SegmentEntry {
 	segs := make([]*SegmentEntry, 0)
 	it := entry.MakeSegmentIt(false)
 	for it.Valid() {
