@@ -286,3 +286,7 @@ show table_values from t;
 max(a)    min(a)    max(b)    min(b)    max(c)    min(c)
 6    1    6    1    null    null
 drop table t;
+
+create database `.quote`;
+show tables from `.quote`;
+Tables_in_.quote
