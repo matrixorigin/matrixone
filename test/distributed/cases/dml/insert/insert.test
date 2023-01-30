@@ -181,4 +181,5 @@ commit;
 -- @bvt:issue
 select count(*) from t;
 # not-null test
+insert into t select null;
 drop table t;
