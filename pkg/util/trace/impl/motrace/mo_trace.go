@@ -44,7 +44,7 @@ type MOTracer struct {
 }
 
 func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanOption) (context.Context, trace.Span) {
-	if !t.provider.IsEnable() {
+	if !t.IsEnable() {
 		return ctx, trace.NoopSpan{}
 	}
 	span := newMOSpan()

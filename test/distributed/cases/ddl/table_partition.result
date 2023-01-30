@@ -108,7 +108,7 @@ PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 );
 show create table tp16;
 Table    Create Table
-tp16    CREATE TABLE `tp16` (\n`id` INT DEFAULT NULL,\n`name` VARCHAR(35) DEFAULT NULL,\n`age` INT UNSIGNED DEFAULT NULL,\nPRIMARY KEY (`id`)\n) partition by list(id) (partition r0 values in (1, 5, 9, 13, 17, 21), partition r1 values in (2, 6, 10, 14, 18, 22), partition r2 values in (3, 7, 11, 15, 19, 23), partition r3 values in (4, 8, 12, 16, 20, 24))
+tp16    CREATE TABLE `tp16` (\n`id` INT NOT NULL,\n`name` VARCHAR(35) DEFAULT NULL,\n`age` INT UNSIGNED DEFAULT NULL,\nPRIMARY KEY (`id`)\n) partition by list(id) (partition r0 values in (1, 5, 9, 13, 17, 21), partition r1 values in (2, 6, 10, 14, 18, 22), partition r2 values in (3, 7, 11, 15, 19, 23), partition r3 values in (4, 8, 12, 16, 20, 24))
 CREATE TABLE tp17 (
 id   INT,
 name VARCHAR(35),

@@ -49,7 +49,7 @@ const (
 
 	DefaultCatalogGCInterval = time.Minute * 30
 
-	DefaultIOWorkers    = int(8)
+	DefaultIOWorkers    = int(16)
 	DefaultAsyncWorkers = int(16)
 
 	DefaultLogtailTxnPageSize = 100

@@ -15,6 +15,7 @@
 package options
 
 import (
+	"runtime"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -185,8 +186,12 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 
 	if o.SchedulerCfg == nil {
+		ioworkers := DefaultIOWorkers
+		if ioworkers < runtime.NumCPU() {
+			ioworkers = runtime.NumCPU()
+		}
 		o.SchedulerCfg = &SchedulerCfg{
-			IOWorkers:    DefaultIOWorkers,
+			IOWorkers:    ioworkers,
 			AsyncWorkers: DefaultAsyncWorkers,
 		}
 	}

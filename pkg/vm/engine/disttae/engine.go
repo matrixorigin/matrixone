@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -346,6 +346,8 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.fs,
 		e.getClusterDetails,
 	)
+	workspace := memorytable.NewTable[RowID, *workspaceRow, *workspaceRow]()
+	workspace.DisableHistory()
 	txn := &Transaction{
 		op:          op,
 		proc:        proc,
@@ -354,11 +356,12 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		meta:        op.Txn(),
 		idGen:       e.idGen,
 		rowId:       [2]uint64{math.MaxUint64, 0},
-		workspace:   memtable.NewTable[RowID, *workspaceRow, *workspaceRow](),
+		workspace:   workspace,
 		dnStores:    cluster.DNStores,
 		fileMap:     make(map[string]uint64),
 		tableMap:    new(sync.Map),
 		databaseMap: new(sync.Map),
+		createMap:   new(sync.Map),
 		catalog:     e.catalog,
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
@@ -526,12 +529,8 @@ func (e *Engine) delTransaction(txn *Transaction) {
 			txn.writes[i][j].bat.Clean(e.mp)
 		}
 	}
-	txn.tableMap.Range(func(_, val any) bool {
-		tbl := val.(*table)
-		tbl.meta = nil
-		return true
-	})
 	txn.tableMap = nil
+	txn.createMap = nil
 	txn.databaseMap = nil
 	e.Lock()
 	defer e.Unlock()
