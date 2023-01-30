@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -130,7 +129,7 @@ func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) bool {
 		Timestamp: ts,
 	}
 	tx := memtable.NewTransaction(
-		uuid.NewString(),
+		newMemTableTransactionID(),
 		t,
 		memtable.SnapshotIsolation,
 	)
@@ -146,7 +145,7 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 		return err
 	}
 
-	txID := uuid.NewString()
+	txID := newMemTableTransactionID()
 
 	iter := memorytable.NewBatchIter(bat)
 	for {
@@ -173,11 +172,6 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
 			memtable.Uint(opDelete),
-		})
-		// time
-		indexes = append(indexes, memtable.Tuple{
-			index_Time,
-			ts,
 		})
 
 		err := p.data.Upsert(tx, &DataRow{
@@ -210,7 +204,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 		return err
 	}
 
-	txID := uuid.NewString()
+	txID := newMemTableTransactionID()
 
 	iter := memorytable.NewBatchIter(bat)
 	for {
@@ -268,11 +262,6 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
 			memtable.Uint(opInsert),
-		})
-		// time
-		indexes = append(indexes, memtable.Tuple{
-			index_Time,
-			ts,
 		})
 		// columns indexes
 		for _, def := range p.columnsIndexDefs {
@@ -341,7 +330,7 @@ func (p *Partition) GetRowsByIndex(ts timestamp.Timestamp, index memtable.Tuple,
 		Timestamp: ts,
 	}
 	tx := memtable.NewTransaction(
-		uuid.NewString(),
+		newMemTableTransactionID(),
 		t,
 		memtable.SnapshotIsolation,
 	)
@@ -365,7 +354,7 @@ func (p *Partition) GetRowsByIndexPrefix(ts timestamp.Timestamp, prefix memtable
 		Timestamp: ts,
 	}
 	tx := memtable.NewTransaction(
-		uuid.NewString(),
+		newMemTableTransactionID(),
 		t,
 		memtable.SnapshotIsolation,
 	)
@@ -391,7 +380,7 @@ func rowIDToBlockID(rowID RowID) uint64 {
 }
 
 func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp, blockID uint64) error {
-	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
+	tx := memtable.NewTransaction(newMemTableTransactionID(), memtable.Time{
 		Timestamp: ts,
 	}, memtable.SnapshotIsolation)
 	min := memtable.Tuple{
@@ -418,7 +407,7 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 }
 
 func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts timestamp.Timestamp, fn func(rowID RowID) bool) {
-	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
+	tx := memtable.NewTransaction(newMemTableTransactionID(), memtable.Time{
 		Timestamp: ts,
 	}, memtable.SnapshotIsolation)
 
@@ -508,7 +497,7 @@ func (p *Partition) NewReader(
 		Timestamp: ts,
 	}
 	tx := memtable.NewTransaction(
-		uuid.NewString(),
+		newMemTableTransactionID(),
 		t,
 		memtable.SnapshotIsolation,
 	)
