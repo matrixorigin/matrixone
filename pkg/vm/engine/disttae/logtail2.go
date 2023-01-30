@@ -17,19 +17,21 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"sort"
+	"sync"
+	"time"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	logtail2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
-	"sort"
-	"sync"
-	"time"
 )
 
 const (
@@ -424,17 +426,33 @@ func consumeLogTail2(
 		tbl.db.databaseId, tbl.db.databaseName, tbl.db.fs); err != nil {
 		return
 	}
+	t := time.Now()
 	for _, entry := range entries {
 		if err = consumeEntry(idx, tbl.primaryIdx, tbl, ctx,
 			db, mvcc, entry); err != nil {
 			return
 		}
 	}
+	if cnt := len(entries); cnt > 0 && time.Now().Sub(t) > 100*time.Millisecond {
+		fmt.Printf("++++process ckpt %v: %v\n", cnt, time.Now().Sub(t))
+		for i, entry := range entries {
+			vec, _ := vector.ProtoVectorToVector(entry.Bat.Vecs[0])
+			fmt.Printf("\t[%v] = %v-%v-%v\n", i, entry.EntryType, entry.TableName, vec.Length())
+		}
+	}
+	t = time.Now()
 
 	for i := 0; i < len(lt.Commands); i++ {
 		if err = consumeEntry(idx, tbl.primaryIdx, tbl, ctx,
 			db, mvcc, &lt.Commands[i]); err != nil {
 			return
+		}
+	}
+	if cnt := len(lt.Commands); cnt > 0 && time.Now().Sub(t) > 100*time.Millisecond {
+		fmt.Printf("++++process log %v: %v\n", cnt, time.Now().Sub(t))
+		for i, entry := range lt.Commands {
+			vec, _ := vector.ProtoVectorToVector(entry.Bat.Vecs[0])
+			fmt.Printf("\t[%v] = %v-%v-%v\n", i, entry.EntryType, entry.TableName, vec.Length())
 		}
 	}
 	return nil
