@@ -108,7 +108,9 @@ func NewTxnServer(
 		morpc.WithServerLogger(s.rt.Logger().RawLogger()),
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(morpc.RPCMessage)
-			s.releaseResponse(m.Message.(*txn.TxnResponse))
+			if !m.InternalMessage() {
+				s.releaseResponse(m.Message.(*txn.TxnResponse))
+			}
 		})))
 	if err != nil {
 		return nil, err

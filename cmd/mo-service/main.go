@@ -314,6 +314,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	if !SV.DisableMetric {
 		metric.InitMetric(ctx, nil, &SV, UUID, nodeRole, metric.WithWriterFactory(writerFactory),
 			metric.WithExportInterval(SV.MetricExportInterval),
+			metric.WithUpdateInterval(SV.MetricUpdateStorageUsageInterval.Duration),
 			metric.WithMultiTable(SV.MetricMultiTable))
 	}
 	if err = export.InitMerge(ctx, SV.MergeCycle.Duration, SV.MergeMaxFileSize); err != nil {

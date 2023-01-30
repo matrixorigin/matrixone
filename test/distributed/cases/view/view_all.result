@@ -145,9 +145,9 @@ a
 1
 2
 DELETE FROM v1;
-invalid input: cannot delete from view
+invalid input: cannot insert/update/delete from view
 DELETE v2 FROM v2;
-invalid input: cannot delete from view
+invalid input: cannot insert/update/delete from view
 select * from v1;
 a    b
 1    1

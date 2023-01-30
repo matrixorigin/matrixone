@@ -16,11 +16,12 @@ package disttae
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"math"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -282,10 +283,8 @@ func (txn *Transaction) checkPrimaryKey(
 		return nil
 	}
 
-	t := memtable.Time{
-		Timestamp: txn.nextLocalTS(),
-	}
-	tx := memtable.NewTransaction(uuid.NewString(), t, memtable.SnapshotIsolation)
+	t := txn.nextLocalTS()
+	tx := memorytable.NewTransaction(t)
 	iter := memorytable.NewBatchIter(bat)
 	for {
 		tuple := iter()
@@ -336,7 +335,7 @@ func (txn *Transaction) checkPrimaryKey(
 
 		case DELETE:
 			err := txn.workspace.Delete(tx, rowID)
-			if err != nil {
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
 
@@ -608,10 +607,8 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
 
 	// tx for workspace operations
-	t := memtable.Time{
-		Timestamp: txn.nextLocalTS(),
-	}
-	tx := memtable.NewTransaction(uuid.NewString(), t, memtable.SnapshotIsolation)
+	t := txn.nextLocalTS()
+	tx := memorytable.NewTransaction(t)
 	defer func() {
 		if err := tx.Commit(t); err != nil {
 			panic(err)
@@ -624,7 +621,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		mp[rowid] = 0
 		// update workspace
 		err := txn.workspace.Delete(tx, RowID(rowid))
-		if err != nil {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			panic(err)
 		}
 	}
