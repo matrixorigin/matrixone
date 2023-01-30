@@ -15,175 +15,119 @@
 package multi
 
 import (
-	"testing"
-
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
 var (
 	kases = []struct {
-		json string
-		path string
-		want interface{}
+		index        int
+		json         string
+		path         string
+		want         string
+		pathNullList []bool
 	}{
 		{
-			json: `{"a":1,"b":2,"c":3}`,
-			path: `$.a`,
-			want: `1`,
+			index: 0,
+			json:  `{"a":1,"b":2,"c":3}`,
+			path:  `$.a`,
+			want:  `1`,
 		},
 		{
-			json: `{"a":1,"b":2,"c":3}`,
-			path: `$.b`,
-			want: `2`,
+			index: 1,
+			json:  `{"a":1,"b":2,"c":3}`,
+			path:  `$.b`,
+			want:  `2`,
 		},
 		{
-			json: `{"a":{"q":[1,2,3]}}`,
-			path: `$.a.q[1]`,
-			want: `2`,
+			index: 2,
+			json:  `{"a":{"q":[1,2,3]}}`,
+			path:  `$.a.q[1]`,
+			want:  `2`,
 		},
 		{
-			json: `[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]`,
-			path: `$[1].a`,
-			want: `4`,
+			index: 3,
+			json:  `[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]`,
+			path:  `$[1].a`,
+			want:  `4`,
 		},
 		{
-			json: `{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}`,
-			path: `$.a.q[1]`,
-			want: `{"a":2}`,
+			index: 4,
+			json:  `{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}`,
+			path:  `$.a.q[1]`,
+			want:  `{"a":2}`,
 		},
 		{
-			json: `{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}`,
-			path: `$.a.q`,
-			want: `[{"a":1},{"a":2},{"a":3}]`,
+			index: 5,
+			json:  `{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}`,
+			path:  `$.a.q`,
+			want:  `[{"a":1},{"a":2},{"a":3}]`,
 		},
 		{
-			json: `[1,2,3]`,
-			path: "$[*]",
-			want: "[1,2,3]",
+			index: 6,
+			json:  `[1,2,3]`,
+			path:  "$[*]",
+			want:  "[1,2,3]",
 		},
 		{
-			json: `{"a":[1,2,3,{"b":4}]}`,
-			path: "$.a[3].b",
-			want: "4",
+			index: 7,
+			json:  `{"a":[1,2,3,{"b":4}]}`,
+			path:  "$.a[3].b",
+			want:  "4",
 		},
 		{
-			json: `{"a":[1,2,3,{"b":4}]}`,
-			path: "$.a[3].c",
-			want: "null",
+			index: 8,
+			json:  `{"a":[1,2,3,{"b":4}]}`,
+			path:  "$.a[3].c",
+			want:  "null",
 		},
 		{
-			json: `{"a":[1,2,3,{"b":4}],"c":5}`,
-			path: "$.*",
-			want: `[[1,2,3,{"b":4}],5]`,
+			index: 9,
+			json:  `{"a":[1,2,3,{"b":4}],"c":5}`,
+			path:  "$.*",
+			want:  `[[1,2,3,{"b":4}],5]`,
 		},
 		{
-			json: `{"a":[1,2,3,{"a":4}]}`,
-			path: "$**.a",
-			want: `[[1,2,3,{"a":4}],4]`,
+			index: 10,
+			json:  `{"a":[1,2,3,{"a":4}]}`,
+			path:  "$**.a",
+			want:  `[[1,2,3,{"a":4}],4]`,
 		},
 		{
-			json: `{"a":[1,2,3,{"a":4}]}`,
-			path: "$.a[*].a",
-			want: `4`,
+			index: 11,
+			json:  `{"a":[1,2,3,{"a":4}]}`,
+			path:  "$.a[*].a",
+			want:  `4`,
+		},
+		{
+			index:        12,
+			json:         `{"a":[1,2,3,{"a":4}]}`,
+			pathNullList: []bool{true},
+			want:         "null",
 		},
 	}
 )
 
-func makeTestVector1(json, path string) []*vector.Vector {
-	vec := make([]*vector.Vector, 2)
-	vec[0] = vector.New(types.T_varchar.ToType())
-	vec[1] = vector.New(types.T_varchar.ToType())
-	err := vec[0].Append([]byte(json), false, proc.Mp())
-	if err != nil {
-		panic(err)
-	}
-	err = vec[1].Append([]byte(path), false, proc.Mp())
-	if err != nil {
-		panic(err)
-	}
-	return vec
-}
-func makeTestVector2(json, path string) []*vector.Vector {
-	vec := make([]*vector.Vector, 2)
-	vec[0] = vector.New(types.T_json.ToType())
-	vec[1] = vector.New(types.T_varchar.ToType())
-	bjson, err := types.ParseStringToByteJson(json)
-	if err != nil {
-		panic(err)
-	}
-	bjsonSlice, err := types.EncodeJson(bjson)
-	if err != nil {
-		panic(err)
-	}
-	err = vec[0].Append(bjsonSlice, false, proc.Mp())
-	if err != nil {
-		panic(err)
-	}
-	err = vec[1].Append([]byte(path), false, proc.Mp())
-	if err != nil {
-		panic(err)
-	}
-	return vec
-}
-
-func TestJsonExtractByString(t *testing.T) {
-
+func TestJsonExtract(t *testing.T) {
+	proc := testutil.NewProc()
 	for _, kase := range kases {
-		t.Run(kase.path, func(t *testing.T) {
-			vec := makeTestVector1(kase.json, kase.path)
-			gotvec, err := JsonExtract(vec, proc)
-			require.Nil(t, err)
-			got := vector.GetBytesVectorValues(gotvec)
-			switch value := kase.want.(type) {
-			case []string:
-				for i := range value {
-					bjson := types.DecodeJson(got[i])
-					require.JSONEq(t, value[i], bjson.String())
-				}
-			default:
-				if kase.want == "null" {
-					require.Equal(t, []byte{}, got[0])
-					break
-				}
-				bjson := types.DecodeJson(got[0])
-				require.JSONEq(t, kase.want.(string), bjson.String())
-			}
-			vec[0].MakeScalar(1)
-			_, err = JsonExtract(vec, proc)
-			require.NoError(t, err)
-			vec[1].MakeScalar(1)
-			_, err = JsonExtract(vec, proc)
-			require.NoError(t, err)
-			vec[0].Nsp.Set(0)
-			_, err = JsonExtract(vec, proc)
-			require.NoError(t, err)
-		})
-	}
-}
-
-func TestJsonExtractByJson(t *testing.T) {
-	for _, kase := range kases {
-		t.Run(kase.path, func(t *testing.T) {
-			vec := makeTestVector2(kase.json, kase.path)
-			got, err := JsonExtract(vec, proc)
-			require.Nil(t, err)
-			bytes := vector.MustBytesCols(got)
-			switch value := kase.want.(type) {
-			case []string:
-				for i := range value {
-					bjson := types.DecodeJson(bytes[i])
-					require.JSONEq(t, value[i], bjson.String())
-				}
-			default:
-				if kase.want == "null" {
-					require.Equal(t, []byte{}, bytes[0])
-					break
-				}
-				bjson := types.DecodeJson(bytes[0])
-				require.JSONEq(t, kase.want.(string), bjson.String())
-			}
-		})
+		inputs := []testutil.FunctionTestInput{
+			testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{kase.json}, nil),
+			testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{kase.path}, kase.pathNullList),
+		}
+		want := make([]string, 1)
+		if kase.want != "null" {
+			bj, _ := types.ParseStringToByteJson(kase.want)
+			dt, _ := bj.Marshal()
+			want[0] = string(dt)
+		}
+		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, want, nil)
+		kaseNow := testutil.NewFunctionTestCase(proc,
+			inputs, expect, JsonExtract)
+		s, info := kaseNow.Run()
+		require.True(t, s, fmt.Sprintf("case %d, err info is '%s'", kase.index, info))
 	}
 }
