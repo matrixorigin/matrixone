@@ -230,7 +230,7 @@ import (
 %right <str> NOT '!'
 %left <str> BETWEEN CASE WHEN THEN ELSE END
 %nonassoc LOWER_THAN_EQ
-%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT
+%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE
 %left <str> '|'
 %left <str> '&'
 %left <str> SHIFT_LEFT SHIFT_RIGHT
@@ -2610,6 +2610,10 @@ like_opt:
 |   LIKE simple_expr
     {
         $$ = tree.NewComparisonExpr(tree.LIKE, nil, $2)
+    }
+|   ILIKE simple_expr
+    {
+        $$ = tree.NewComparisonExpr(tree.ILIKE, nil, $2)
     }
 
 database_name_opt:
@@ -7013,6 +7017,14 @@ predicate:
     {
         $$ = tree.NewComparisonExprWithEscape(tree.NOT_LIKE, $1, $4, $5)
     }
+|   bit_expr ILIKE simple_expr like_escape_opt
+    {
+        $$ = tree.NewComparisonExprWithEscape(tree.ILIKE, $1, $3, $4)
+    }
+|   bit_expr NOT ILIKE simple_expr like_escape_opt
+    {
+        $$ = tree.NewComparisonExprWithEscape(tree.NOT_ILIKE, $1, $4, $5)
+    }
 |   bit_expr REGEXP bit_expr
     {
         $$ = tree.NewComparisonExpr(tree.REG_MATCH, $1, $3)
@@ -8049,6 +8061,7 @@ reserved_keyword:
 |   LAST
 |   LEFT
 |   LIKE
+|	ILIKE
 |   LIMIT
 |   LOCALTIME
 |   LOCALTIMESTAMP
