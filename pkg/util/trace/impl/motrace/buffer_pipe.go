@@ -60,7 +60,7 @@ func NewBufferPipe2CSVWorker(opt ...BufferOption) bp.PipeImpl[bp.HasName, any] {
 // NewItemBuffer implement batchpipe.PipeImpl
 func (t batchETLHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, any] {
 	var opts []BufferOption
-	var f genBatchFunc = genCsvData
+	var f genBatchFunc = genETLData
 	logutil.Debugf("NewItemBuffer name: %s", name)
 	switch name {
 	case MOStatementType, SingleStatementTable.GetName():
@@ -80,7 +80,7 @@ func (t batchETLHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 func (t batchETLHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 
 	handle := func(b any) {
-		req, ok := b.(table.WriteRequest) // see genCsvData
+		req, ok := b.(table.WriteRequest) // see genETLData
 		if !ok {
 			panic(moerr.NewInternalError(ctx, "batchETLHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
 		}
@@ -112,7 +112,7 @@ type WriteFactoryConfig struct {
 	PathBuilder table.PathBuilder
 }
 
-func genCsvData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, factory table.WriterFactory) any {
+func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, factory table.WriterFactory) any {
 	buf.Reset()
 	if len(in) == 0 {
 		return table.NewRowRequest(nil)
