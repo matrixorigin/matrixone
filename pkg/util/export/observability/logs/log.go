@@ -35,14 +35,14 @@ type LogRecord struct {
 	Caller      string
 	Message     string
 	Stack       string
-	// Labels as extra
-	// transfer kubernetes as labels
-	// transfer kubernetes.labels into labels
+	// Labels store other elems and kubernetes elems
 	Labels map[string]any // json
 }
 
 var logPool = &sync.Pool{New: func() any {
-	return &LogRecord{}
+	return &LogRecord{
+		Labels: make(map[string]any),
+	}
 }}
 
 func NewLogRecord() *LogRecord {
