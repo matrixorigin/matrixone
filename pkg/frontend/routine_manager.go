@@ -27,17 +27,25 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type RoutineManager struct {
-	mu            sync.Mutex
-	ctx           context.Context
-	clients       map[goetty.IOSession]*Routine
-	pu            *config.ParameterUnit
-	skipCheckUser bool
-	tlsConfig     *tls.Config
+	mu             sync.Mutex
+	ctx            context.Context
+	clients        map[goetty.IOSession]*Routine
+	pu             *config.ParameterUnit
+	skipCheckUser  bool
+	tlsConfig      *tls.Config
+	autoIncrCaches map[string]defines.AutoIncrCache
+}
+
+func (rm *RoutineManager) GetAutoIncrCache() defines.AutoIncrCaches {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	return defines.AutoIncrCaches{Mu: &rm.mu, AutoIncrCaches: rm.autoIncrCaches}
 }
 
 func (rm *RoutineManager) SetSkipCheckUser(b bool) {
@@ -100,6 +108,10 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
 	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
+
+	// Add  autoIncrCaches in session structure.
+	ses.SetAutoIncrCaches(defines.AutoIncrCaches{Mu: &rm.mu, AutoIncrCaches: rm.autoIncrCaches})
+
 	routine.setSession(ses)
 	pro.SetSession(ses)
 
@@ -320,6 +332,10 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineM
 		clients: make(map[goetty.IOSession]*Routine),
 		pu:      pu,
 	}
+
+	// Initialize auto incre cache.
+	rm.autoIncrCaches = make(map[string]defines.AutoIncrCache)
+
 	if pu.SV.EnableTls {
 		err := initTlsConfig(rm, pu.SV)
 		if err != nil {

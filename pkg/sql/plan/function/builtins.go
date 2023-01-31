@@ -899,6 +899,12 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_decimal128,
 				Fn:        multi.CeilDecimal128,
 			},
+			{
+				Index:     7,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_float64,
+				Fn:        multi.CeilStr,
+			},
 		},
 	},
 	FLOOR: {
@@ -947,6 +953,12 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
 				Fn:        multi.FloorDecimal128,
+			},
+			{
+				Index:     7,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_float64,
+				Fn:        multi.FloorStr,
 			},
 		},
 	},

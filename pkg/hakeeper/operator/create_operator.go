@@ -52,3 +52,7 @@ func CreateTaskServiceOp(brief, uuid string, serviceType pb.ServiceType, user pb
 		CreateTaskService{StoreID: uuid, StoreType: serviceType, TaskUser: user},
 	)
 }
+
+func CreateDeleteCNOp(brief, uuid string) *Operator {
+	return NewOperator(brief, 0, 0, DeleteCNStore{StoreID: uuid})
+}
