@@ -15,25 +15,46 @@
 package deletion
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
 	Ts           uint64
-	DeleteCtxs   []*DeleteCtx
+	DeleteCtx    *DeleteCtx
 	AffectedRows uint64
-	IsRemote     bool
+	Engine       engine.Engine
+	// when detele data in a remote CN,
+	// IsRemote is true, and we need IBucket
+	// and NBucket to know those data in batch
+	// that we need to delete in this CN, because
+	// we need to make sure one Block will be processed
+	// by only one CN, this is useful for our compaction
+	IsRemote bool
+	IBucket  uint64
+	NBucket  uint64
 }
 
 type DeleteCtx struct {
-	TableName          string
-	DbName             string
-	TableSource        engine.Relation
-	UseDeleteKey       string // The column used when deletion(dml), Currently, it is based on '__row_id' column
-	CanTruncate        bool
-	ColIndex           int32
-	IsIndexTableDelete bool
+	CanTruncate bool
+
+	DelSource []engine.Relation
+	DelRef    []*plan.ObjectRef
+
+	IdxSource []engine.Relation
+	IdxIdx    []int32
+
+	OnRestrictIdx []int32
+
+	OnCascadeSource []engine.Relation
+	OnCascadeIdx    []int32
+
+	OnSetSource    []engine.Relation
+	OnSetIdx       [][]int32
+	OnSetRef       []*plan.ObjectRef
+	OnSetTableDef  []*plan.TableDef
+	OnSetUpdateCol []map[string]int32
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

@@ -188,6 +188,21 @@ func (c *client) NewStream(backend string, lock bool) (Stream, error) {
 	return b.NewStream(lock)
 }
 
+func (c *client) Ping(ctx context.Context, backend string) error {
+	b, err := c.getBackend(backend, false)
+	if err != nil {
+		return err
+	}
+
+	f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Get()
+	return err
+}
+
 func (c *client) Close() error {
 	c.mu.Lock()
 	if c.mu.closed {

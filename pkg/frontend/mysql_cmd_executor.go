@@ -20,10 +20,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"math"
 	"os"
@@ -33,6 +29,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -467,11 +468,7 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 				return err
 			}
 			row[1] = typ.DescString()
-			if d[2].(int8) == 0 {
-				row[2] = "NO"
-			} else {
-				row[2] = "YES"
-			}
+			row[2] = d[2]
 			row[3] = d[3]
 			if value, ok := row[3].([]uint8); ok {
 				if len(value) != 0 {
@@ -514,11 +511,7 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 			}
 			row[1] = typ.DescString()
 			row[2] = "NULL"
-			if d[3].(int8) == 0 {
-				row[3] = "NO"
-			} else {
-				row[3] = "YES"
-			}
+			row[3] = d[3]
 			row[4] = d[4]
 			if value, ok := row[4].([]uint8); ok {
 				if len(value) != 0 {
@@ -1007,6 +1000,18 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			} else {
 				vs := vec.Col.([]types.Uuid)
 				row[i] = vs[rowIndex].ToString()
+			}
+		}
+	case types.T_Rowid:
+		if !nulls.Any(vec.Nsp) {
+			vs := vec.Col.([]types.Rowid)
+			row[i] = vs[rowIndex]
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]types.Rowid)
+				row[i] = vs[rowIndex]
 			}
 		}
 	default:
@@ -1681,8 +1686,12 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 
 	var hasLike = false
 	var likePattern = ""
+	var isIlike = false
 	if sv.Like != nil {
 		hasLike = true
+		if sv.Like.Op == tree.ILIKE {
+			isIlike = true
+		}
 		likePattern = strings.ToLower(sv.Like.Right.String())
 	}
 
@@ -1698,8 +1707,14 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 
 	rows := make([][]interface{}, 0, len(sysVars))
 	for name, value := range sysVars {
-		if hasLike && !WildcardMatch(likePattern, name) {
-			continue
+		if hasLike {
+			s := name
+			if isIlike {
+				s = strings.ToLower(s)
+			}
+			if !WildcardMatch(likePattern, s) {
+				continue
+			}
 		}
 		row := make([]interface{}, 2)
 		row[0] = name
@@ -2461,7 +2476,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		cwft.ses.InitTempEngine = true
 	}
-	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
 }
 
@@ -3370,6 +3384,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
+		Session:       ses,
 	}
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
@@ -4161,7 +4176,7 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 	}
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
 		for _, node := range q.Query.Nodes {
-			if node.NodeType == plan.Node_EXTERNAL_SCAN && node.TableDef.TableType == "query_result" {
+			if node.NotCacheable {
 				return false
 			}
 		}
@@ -4200,6 +4215,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
+		Session:       ses,
 	}
 
 	if ses.GetTenantInfo() != nil {

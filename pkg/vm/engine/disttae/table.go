@@ -17,11 +17,11 @@ package disttae
 import (
 	"context"
 	"math/rand"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -66,7 +66,7 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	}
 	// before first execution, no metadata.
 	if totalBlockCnt == 0 {
-		return 100, 1000000, nil
+		return 100, 1, nil
 	}
 	return int32(blockNum), outcnt, nil
 }
@@ -82,10 +82,11 @@ func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 				rows += blockRows(blk)
 			}
 		}
+
 	}
 	// before first execution, no metadata.
 	if totalBlockCnt == 0 {
-		return 100, 1000000, nil
+		return 100, 1, nil
 	}
 	return int32(totalBlockCnt), rows, nil
 }
@@ -122,7 +123,7 @@ func (tbl *table) Rows(ctx context.Context) (int64, error) {
 		Timestamp: tbl.db.txn.meta.SnapshotTS,
 	}
 	tx := memtable.NewTransaction(
-		uuid.NewString(),
+		newMemTableTransactionID(),
 		t,
 		memtable.SnapshotIsolation,
 	)
@@ -244,7 +245,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	default:
 		tbl.dnList = dnList
 	}
-	_, created := tbl.db.txn.tableMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
+	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
 	if !created && !tbl.updated {
 		if err := tbl.db.txn.db.Update(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
 			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
@@ -426,6 +427,23 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
+	if bat == nil {
+		return nil
+	}
+
+	// Write S3 Block
+	if bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+		fileName := strings.Split(bat.Vecs[0].GetString(0), ":")[0]
+		ibat := batch.New(true, bat.Attrs)
+		for j := range bat.Vecs {
+			ibat.SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
+		}
+		if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
+			return err
+		}
+		i := rand.Int() % len(tbl.db.txn.dnStores)
+		return tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, fileName, ibat, tbl.db.txn.dnStores[i])
+	}
 	if tbl.insertExpr == nil {
 		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
@@ -592,6 +610,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		if tbl.meta != nil {
 			blks = tbl.meta.modifedBlocks[i]
 		}
+		tbl.parts[i].txn = tbl.db.txn
 		rds0, err := tbl.parts[i].NewReader(ctx, num, index, tbl.defs, tbl.tableDef,
 			tbl.skipBlocks, blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
 		if err != nil {

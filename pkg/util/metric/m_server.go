@@ -23,8 +23,21 @@ var (
 		},
 		[]string{constTenantKey},
 	)
+
+	StorageUsageFactory = NewGaugeVec(
+		GaugeOpts{
+			Subsystem: "server",
+			Name:      "storage_usage",
+			Help:      "Storage usage of each account",
+		},
+		[]string{constTenantKey},
+	)
 )
 
 func ConnectionCounter(account string) Gauge {
 	return ConnFactory.WithLabelValues(account)
+}
+
+func StorageUsage(account string) Gauge {
+	return StorageUsageFactory.WithLabelValues(account)
 }

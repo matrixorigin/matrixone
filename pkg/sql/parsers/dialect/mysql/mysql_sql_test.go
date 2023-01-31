@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select connection_id()",
-		output: "select connection_id()",
+		input:  "select * from t1 where a not ilike '%a'",
+		output: "select * from t1 where a not ilike %a",
 	}
 )
 
@@ -53,6 +53,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select * from t1 where a not ilike '%a'",
+		output: "select * from t1 where a not ilike %a",
+	}, {
+		input:  "select * from t1 where a ilike '%a'",
+		output: "select * from t1 where a ilike %a",
+	}, {
 		input:  "select * from result_scan(query_id)",
 		output: "select * from result_scan(query_id)",
 	}, {
@@ -405,6 +411,9 @@ var (
 	}, {
 		input:  "SELECT GROUP_CONCAT(DISTINCT 2) from t1",
 		output: "select group_concat(distinct 2, ,) from t1",
+	}, {
+		input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
+		output: "select group_concat(distinct a, ,) from t1",
 	}, {
 		input: "select variance(2) from t1",
 	}, {

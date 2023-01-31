@@ -47,7 +47,7 @@ const (
 	DefaultScanGCInterval = time.Minute * 30
 	DefaultGCTTL          = time.Hour
 
-	DefaultIOWorkers    = int(8)
+	DefaultIOWorkers    = int(16)
 	DefaultAsyncWorkers = int(16)
 
 	DefaultLogtailTxnPageSize = 100

@@ -230,7 +230,7 @@ import (
 %right <str> NOT '!'
 %left <str> BETWEEN CASE WHEN THEN ELSE END
 %nonassoc LOWER_THAN_EQ
-%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT
+%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE
 %left <str> '|'
 %left <str> '&'
 %left <str> SHIFT_LEFT SHIFT_RIGHT
@@ -2610,6 +2610,10 @@ like_opt:
 |   LIKE simple_expr
     {
         $$ = tree.NewComparisonExpr(tree.LIKE, nil, $2)
+    }
+|   ILIKE simple_expr
+    {
+        $$ = tree.NewComparisonExpr(tree.ILIKE, nil, $2)
     }
 
 database_name_opt:
@@ -6326,14 +6330,14 @@ window_spec_opt:
     }
 
 function_call_aggregate:
-    GROUP_CONCAT '(' func_type_opt expression_list separator_opt ')' window_spec_opt
+    GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: append($4,tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)),
+            Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
             Type: $3,
-            WindowSpec: $7,
+            WindowSpec: $8,
             AggType: 2,
         }
     }
@@ -7012,6 +7016,14 @@ predicate:
 |   bit_expr NOT LIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.NOT_LIKE, $1, $4, $5)
+    }
+|   bit_expr ILIKE simple_expr like_escape_opt
+    {
+        $$ = tree.NewComparisonExprWithEscape(tree.ILIKE, $1, $3, $4)
+    }
+|   bit_expr NOT ILIKE simple_expr like_escape_opt
+    {
+        $$ = tree.NewComparisonExprWithEscape(tree.NOT_ILIKE, $1, $4, $5)
     }
 |   bit_expr REGEXP bit_expr
     {
@@ -8049,6 +8061,7 @@ reserved_keyword:
 |   LAST
 |   LEFT
 |   LIKE
+|	ILIKE
 |   LIMIT
 |   LOCALTIME
 |   LOCALTIMESTAMP

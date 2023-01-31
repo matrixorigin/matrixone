@@ -37,6 +37,10 @@ type MOServer struct {
 	rm       *RoutineManager
 }
 
+func (mo *MOServer) GetRoutineManager() *RoutineManager {
+	return mo.rm
+}
+
 func (mo *MOServer) Start() error {
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")

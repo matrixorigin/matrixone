@@ -121,12 +121,12 @@ func NewUnresolvedNameWithStar(ctx context.Context, parts ...string) (*Unresolve
 		return nil, moerr.NewInternalError(ctx, "the count of name parts among [1,3]")
 	}
 	u := &UnresolvedName{
-		NumParts: 1 + len(parts),
+		NumParts: len(parts),
 		Star:     true,
 	}
 	u.Parts[0] = ""
 	for i := 0; i < len(parts); i++ {
-		u.Parts[i+1] = parts[l-1-i]
+		u.Parts[i] = parts[l-1-i]
 	}
 	return u, nil
 }
