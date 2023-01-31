@@ -409,3 +409,111 @@ select * from trans_index_01;
 commit;
 select * from trans_index_01;
 drop table trans_index_01;
+
+-- secondary ddl
+create table create_secondary_01 (col1 bigint primary key,col2 varchar(25) unique key,col3 float,col4 varchar(50));
+insert into create_secondary_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23'),(3,NULL,100.00,'23');
+create index varchar_second_index on create_secondary_01(col4) comment 'create varchar index';
+show create table create_secondary_01;
+insert into create_secondary_01 values (4,'13456789899',20.23,'5678'),(5,'13873458255',100.00,'23');
+select * from create_secondary_01;
+drop index varchar_second_index on create_secondary_01;
+show create table create_secondary_01;
+create table create_secondary_02 (col1 bigint,col2 char(25),col3 float,col4 char(50));
+create index char_second_index on create_secondary_02(col2);
+insert into create_secondary_02 values (1,'',20.23,'5678'),(2,'13873458290',100.00,'23');
+select col2,col4 from create_secondary_02;
+drop index char_second_index on create_secondary_02;
+create table create_secondary_03 (col1 bigint auto_increment,col2 int default 1000,col3 float,col4 int);
+create index int_second_index on create_secondary_03(col2);
+insert into create_secondary_03(col3,col4) values (20.23,4090),(100.00,5678);
+select * from create_secondary_03;
+drop index int_second_index on create_secondary_03;
+create table create_secondary_04 (col1 bigint,col2 int primary key,col3 float,col4 bigint);
+create index bigint_index on create_secondary_04(col1);
+insert into create_secondary_04 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
+select * from create_secondary_04;
+create table create_secondary_05 (col1 smallint,col2 int primary key,col3 float,col4 smallint);
+create index smallint_second_index on create_secondary_05(col1);
+insert into create_secondary_05 values (1,2,20.23,4090),(1,4,100.00,4091);
+select * from create_secondary_05;
+create table create_secondary_06 (col1 tinyint,col2 int primary key,col3 float,col4 tinyint);
+create index tinyint_second_index on create_secondary_06(col1);
+insert into create_secondary_06 values (1,2,20.23,56),(1,4,100.00,90);
+select * from create_secondary_06;
+create table create_secondary_07 (col1 int unsigned,col2 int primary key,col3 float,col4 int unsigned);
+create index int_unsigned_index on create_secondary_07(col1);
+insert into create_secondary_07 values (1,2,20.23,56),(1,4,100.00,90);
+show create table create_secondary_07;
+select * from create_secondary_07;
+create table create_secondary_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4 bigint unsigned);
+create index bigint_unsigned_index on create_secondary_08(col1);
+insert into create_secondary_08 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
+select * from create_secondary_08;
+create table create_secondary_09 (col1 bigint primary key,col2 decimal(16,8),col3 decimal(16,8));
+create index decimal_index on create_secondary_09(col2);
+insert into create_secondary_09 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
+select * from create_secondary_09;
+create table create_secondary_10 (col1 bigint primary key,col2 float,col3 float);
+insert into create_secondary_10 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
+create index float_index on create_secondary_10(col2);
+select * from create_secondary_10;
+create table create_secondary_11 (col1 bigint primary key,col2 double,col3 double);
+create index double_index on create_secondary_11(col2);
+insert into create_secondary_11 values (1000,20.23,20.00),(1200,20.23,0.10);
+select * from create_secondary_11;
+create table create_secondary_12(col1 bigint auto_increment primary key,col2 date,col3 date);
+create index date_index on create_secondary_12(col2);
+insert into create_secondary_12(col2,col3) values ('2013-01-01','2014-02-01'),('2013-01-01','2014-02-20');
+create table create_secondary_13 (col1 bigint auto_increment primary key,col2 datetime,col3 datetime);
+create index datetime_index on create_secondary_13(col2);
+insert into create_secondary_13(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
+create table create_secondary_14 (col1 bigint auto_increment primary key,col2 timestamp,col3 timestamp);
+create index timestamp_index on create_secondary_14(col2);
+insert into create_secondary_14(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
+create table create_secondary_15 (col1 bigint primary key,col2 bool);
+create index bool_index on create_secondary_15(col2);
+insert into create_secondary_15 values (1,TRUE),(2,FALSE),(3,TRUE);
+select * from create_secondary_15;
+-- blob/json/text type not support unique index
+create table create_secondary_16 (col1 bigint primary key,col2 blob,col3 blob);
+create index blob_index on create_secondary_16(col2);
+drop table create_secondary_16;
+create table create_secondary_17 (col1 bigint primary key,col2 json,col3 json);
+create index json_index on create_secondary_17(col2);
+drop table create_secondary_17;
+create table create_secondary_18 (col1 bigint primary key,col2 text,col3 text);
+create index text_index on create_secondary_18(col2);
+drop table create_secondary_18;
+
+--more column secondary key
+drop table create_secondary_01;
+create table create_secondary_01 (col1 bigint primary key,col2 varchar(25) unique key,col3 float,col4 varchar(50),col5 int);
+create index secondary_key on create_secondary_01(col4,col5);
+insert into create_secondary_01 values (1,'13456789872',20.23,'5678',99),(2,'13873458290',100.00,'23',9),(3,NULL,100.00,'23',99);
+select * from create_secondary_01;
+show create table create_secondary_01;
+drop index secondary_key on create_secondary_01;
+truncate table create_secondary_01;
+-- @bvt:issue#7740
+show create table create_secondary_01;
+-- @bvt:issue
+drop table create_secondary_01;
+
+--primary key create secondary key
+create table create_secondary_01 (col1 bigint primary key,col2 varchar(25) unique key,col3 float,col4 varchar(50),col5 int);
+create index secondary_key1 on create_secondary_01(col1);
+create index secondary_key2 on create_secondary_01(col1,col2);
+show create table create_secondary_01;
+drop index secondary_key1 on create_secondary_01;
+drop index secondary_key2 on create_secondary_01;
+create index secondary_key1 on create_secondary_01(col4,col5);
+create index secondary_key1 on create_secondary_01(col4,col5);
+drop table create_secondary_01;
+
+--anormal test
+create table create_secondary_01 (col1 bigint primary key,col2 varchar(25) unique key,col3 float,col4 varchar(50),col5 int);
+drop index secondary_key1 on create_secondary_01;
+create unique index secondary_key1 on create_secondary_01(col1);
+create index secondary_key1 on create_secondary_01(col1);
+show create table create_secondary_01;

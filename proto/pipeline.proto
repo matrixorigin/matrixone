@@ -61,6 +61,20 @@ message Group {
   repeated Aggregate  aggs = 6;
 }
 
+message Insert{
+  repeated plan.ColDef TargetColDefs = 1;
+  uint64 Affected = 2;
+  uint64 TableID = 3;
+  plan.ColDef CPkeyColDef = 4;
+  string DBName = 5;
+  string TableName = 6;
+  plan.UniqueIndexDef UniqueIndexDef = 7;
+  plan.ClusterTable ClusterTable = 8;
+  plan.ClusterByDef ClusterByDef = 9;
+  bool IsRemote = 10;
+  bool HasAutoCol = 11;
+}
+
 message Join {
   uint64 ibucket = 1;
   uint64 nbucket = 2;
@@ -191,15 +205,16 @@ message Instruction{
   TableFunction table_function = 14;
   HashBuild hash_build = 15;
   ExternalScan external_scan = 16;
-  repeated plan.OrderBySpec order_by = 17;
-  repeated plan.Expr    project_list = 18;
-  plan.Expr    filter = 19;
-  uint64    limit = 20;
-  uint64    offset = 21;
+  Insert insert = 17;
+  repeated plan.OrderBySpec order_by = 18;
+  repeated plan.Expr    project_list = 19;
+  plan.Expr    filter = 20;
+  uint64    limit = 21;
+  uint64    offset = 22;
   // isFirst identifies whether it is the first instruction of analyzeInfo corresponding to idx
-  bool isFirst = 22;
+  bool isFirst = 23;
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
-  bool isLast = 23;
+  bool isLast = 24;
 }
 
 message AnalysisList {
