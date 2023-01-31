@@ -592,6 +592,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				},
 			})
 		}
+		for _, primaryKey := range primaryKeys {
+			colMap[primaryKey].Default.NullAbility = false
+			colMap[primaryKey].NotNull = true
+		}
 	}
 
 	//handle cluster by keys

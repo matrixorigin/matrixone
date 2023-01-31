@@ -24,12 +24,15 @@ func Check(cfg hakeeper.Config, infos pb.CNState, user pb.TaskTableUser, current
 	if user.Username == "" {
 		return
 	}
-	working, _ := parseCNStores(cfg, infos, currentTick)
+	working, expired := parseCNStores(cfg, infos, currentTick)
 	for _, store := range working {
 		if !infos.Stores[store].TaskServiceCreated {
 			operators = append(operators, operator.CreateTaskServiceOp("",
 				store, pb.CNService, user))
 		}
+	}
+	for _, store := range expired {
+		operators = append(operators, operator.CreateDeleteCNOp("", store))
 	}
 	return operators
 }

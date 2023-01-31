@@ -23,6 +23,7 @@ type Driver interface {
 	Read(lsn uint64) (*entry.Entry, error)
 	Close() error
 	Replay(h ApplyHandle) error
+	GetCurrSeqNum() uint64
 }
 
 type ApplyHandle = func(*entry.Entry)
