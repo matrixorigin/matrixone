@@ -23,24 +23,31 @@ import (
 
 // a locktable instance manages the locks on a table
 type lockTable struct {
-	sync.RWMutex
-	store LockStorage
-}
+	tableID  uint64
+	detector *detector
 
-func newLockTable() *lockTable {
-	return &lockTable{
-		store: newBtreeBasedStorage(),
+	mu struct {
+		sync.RWMutex
+		store LockStorage
 	}
 }
 
-func (l *lockTable) acquireLock(ctx context.Context, txnID []byte, rows [][]byte, options LockOptions) error {
-	waiter := acquireWaiter(txnID)
+func newLockTable(
+	tableID uint64,
+	detector *detector) *lockTable {
+	l := &lockTable{tableID: tableID, detector: detector}
+	l.mu.store = newBtreeBasedStorage()
+	return l
+}
+
+func (l *lockTable) lock(
+	ctx context.Context,
+	txn *activeTxn,
+	rows [][]byte,
+	options LockOptions) error {
+	waiter := acquireWaiter(txn.txnID)
 	for {
-		ok, err := l.doAcquireLock(waiter, rows, txnID, options)
-		if err != nil {
-			return err
-		}
-		if ok {
+		if added := l.doAcquireLock(txn, waiter, rows, options); added {
 			return nil
 		}
 
@@ -51,33 +58,124 @@ func (l *lockTable) acquireLock(ctx context.Context, txnID []byte, rows [][]byte
 	}
 }
 
-func (l *lockTable) doAcquireLock(waiter *waiter, txnID []byte, rows [][]byte, opts LockOptions) (bool, error) {
-	l.Lock()
-	defer l.Unlock()
+func (l *lockTable) unlock(ls *cowSlice) {
+	locks := ls.slice()
+	defer locks.unref()
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	locks.iter(func(key []byte) bool {
+		if lock, ok := l.mu.store.Get(key); ok {
+			if lock.isLockRow() || lock.isLockRangeEnd() {
+				lock.waiter.close()
+			}
+			l.mu.store.Delete(key)
+		}
+		return true
+	})
+}
+
+func (l *lockTable) getLock(key []byte) (Lock, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.mu.store.Get(key)
+}
+
+func (l *lockTable) doAcquireLock(
+	txn *activeTxn,
+	waiter *waiter,
+	rows [][]byte,
+	opts LockOptions) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	switch opts.granularity {
 	case Row:
-		return l.acquireRowLock(waiter, rows[0], txnID, opts.mode)
+		return l.acquireRowLockLocked(txn, waiter, rows[0], opts.mode)
 	case Range:
-		return l.acquireRangeLock(waiter, rows[0], rows[1], txnID, opts.mode)
+		if len(rows) != 2 {
+			panic("invalid range lock")
+		}
+		return l.acquireRangeLockLocked(txn, waiter, rows[0], rows[1], opts.mode)
 	default:
 		panic(fmt.Sprintf("not support lock granularity %d", opts))
 	}
 }
 
-func (l *lockTable) acquireRowLock(w *waiter, row []byte, txnID []byte, mode LockMode) (bool, error) {
-	txnKey := unsafeByteSliceToString(txnID)
-	key, lock, ok := l.store.Seek(row)
-	if ok && (bytes.Equal(key, row) || lock.isLockRangeEnd()) {
-		if err := lock.waiter.add(w); err != nil {
-			return false, err
-		}
-
-		s.waiterAdded(txnID, txnKey, w)
-		return false, nil
-	} else {
-		addRowLock(storage, txnID, row, w, mode)
+func (l *lockTable) acquireRowLockLocked(
+	txn *activeTxn,
+	w *waiter,
+	row []byte,
+	mode LockMode) bool {
+	key, lock, ok := l.mu.store.Seek(row)
+	if ok &&
+		(bytes.Equal(key, row) ||
+			lock.isLockRangeEnd()) {
+		l.handleLockConflict(txn, w, lock)
+		return false
 	}
-	s.locks[txnKey][tableID] = append(s.locks[txnKey][tableID], row)
-	return true, nil
+	l.addRowLockLocked(txn, row, w, mode)
+	return true
+}
+
+func (l *lockTable) acquireRangeLockLocked(
+	txn *activeTxn,
+	w *waiter,
+	start, end []byte,
+	mode LockMode) bool {
+	if bytes.Compare(start, end) >= 0 {
+		panic(fmt.Sprintf("lock error: start[%v] is greater than end[%v]",
+			start, end))
+	}
+	key, lock, ok := l.mu.store.Seek(start)
+	if ok &&
+		bytes.Compare(key, end) <= 0 {
+		l.handleLockConflict(txn, w, lock)
+		return false
+	}
+
+	l.addRangeLockLocked(txn, start, end, w, mode)
+	return true
+}
+
+func (l *lockTable) addRowLockLocked(
+	txn *activeTxn,
+	row []byte,
+	waiter *waiter,
+	mode LockMode) {
+	lock := newRowLock(txn.txnID, mode)
+	lock.waiter = waiter
+
+	// we must first add the lock to txn to ensure that the
+	// lock can be read when the deadlock is detected.
+	txn.lockAdded(l.tableID, [][]byte{row})
+	l.mu.store.Add(row, lock)
+}
+
+func (l *lockTable) addRangeLockLocked(
+	txn *activeTxn,
+	start, end []byte,
+	waiter *waiter,
+	mode LockMode) {
+	startLock, endLock := newRangeLock(txn.txnID, mode)
+	startLock.waiter = waiter
+	endLock.waiter = waiter
+
+	// we must first add the lock to txn to ensure that the
+	// lock can be read when the deadlock is detected.
+	txn.lockAdded(l.tableID, [][]byte{start, end})
+	l.mu.store.Add(start, startLock)
+	l.mu.store.Add(end, endLock)
+}
+
+func (l *lockTable) handleLockConflict(txn *activeTxn, w *waiter, conflictWith Lock) {
+	// find conflict, and wait prev txn completed, and a new
+	// waiter added, we need to active dead lock check.
+	txn.setBlocked(w)
+	if err := conflictWith.waiter.add(w); err != nil {
+		panic("BUG: add waiter can not failed")
+	}
+	if err := l.detector.check(txn.txnID); err != nil {
+		panic("BUG: active dead lock check can not fail")
+	}
 }
