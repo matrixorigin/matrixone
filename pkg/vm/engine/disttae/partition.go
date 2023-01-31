@@ -37,6 +37,7 @@ func NewPartition(
 ) *Partition {
 	return &Partition{
 		data:             memtable.NewTable[RowID, DataValue, *DataRow](),
+		index:            NewPartitionIndex(),
 		columnsIndexDefs: columnsIndexDefs,
 	}
 }
@@ -125,18 +126,12 @@ func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error 
 }
 
 func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) bool {
-	t := memtable.Time{
-		Timestamp: ts,
-	}
-	tx := memtable.NewTransaction(
-		newMemTableTransactionID(),
-		t,
-		memtable.SnapshotIsolation,
-	)
-	if _, err := p.data.Get(tx, RowID(key)); err != nil {
+	versions, ok := p.index.RowIDs.Get(key)
+	if !ok {
 		return false
 	}
-	return true
+	v := versions.Get(ts)
+	return v != nil
 }
 
 func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
@@ -148,13 +143,16 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 	txID := newMemTableTransactionID()
 
 	iter := memorytable.NewBatchIter(bat)
+	offset := -1
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
 			break
 		}
+		offset++
 
-		rowID := RowID(tuple[0].Value.(types.Rowid))
+		rowId := tuple[0].Value.(types.Rowid)
+		rowID := RowID(rowId)
 		ts := tuple[1].Value.(types.TS)
 		t := memtable.Time{
 			Timestamp: timestamp.Timestamp{
@@ -172,6 +170,16 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
 			memtable.Uint(opDelete),
+		})
+
+		p.index.RowIDs.Update(rowId, func(p *Versions[RowRef]) *Versions[RowRef] {
+			if p == nil {
+				versions := new(Versions[RowRef])
+				versions.Set(ts.ToTimestamp(), nil)
+				return versions
+			}
+			p.Set(ts.ToTimestamp(), nil)
+			return p
 		})
 
 		err := p.data.Upsert(tx, &DataRow{
@@ -207,13 +215,16 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 	txID := newMemTableTransactionID()
 
 	iter := memorytable.NewBatchIter(bat)
+	offset := -1
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
 			break
 		}
+		offset++
 
-		rowID := RowID(tuple[0].Value.(types.Rowid))
+		rowId := tuple[0].Value.(types.Rowid)
+		rowID := RowID(rowId)
 		ts := tuple[1].Value.(types.TS)
 		t := memtable.Time{
 			Timestamp: timestamp.Timestamp{
@@ -273,6 +284,20 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			}
 			indexes = append(indexes, index)
 		}
+
+		p.index.RowIDs.Update(rowId, func(p *Versions[RowRef]) *Versions[RowRef] {
+			rowRef := &RowRef{
+				Batch:  bat,
+				Offset: offset,
+			}
+			if p == nil {
+				versions := new(Versions[RowRef])
+				versions.Set(ts.ToTimestamp(), rowRef)
+				return versions
+			}
+			p.Set(ts.ToTimestamp(), rowRef)
+			return p
+		})
 
 		err = p.data.Upsert(tx, &DataRow{
 			rowID:   rowID,
