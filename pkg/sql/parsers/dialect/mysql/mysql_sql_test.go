@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select 1+1",
-		output: "select 1 + 1",
+		input:  "select * from t1 where a not ilike '%a'",
+		output: "select * from t1 where a not ilike %a",
 	}
 )
 
@@ -53,6 +53,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select * from t1 where a not ilike '%a'",
+		output: "select * from t1 where a not ilike %a",
+	}, {
+		input:  "select * from t1 where a ilike '%a'",
+		output: "select * from t1 where a ilike %a",
+	}, {
 		input:  "select * from result_scan(query_id)",
 		output: "select * from result_scan(query_id)",
 	}, {
