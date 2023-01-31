@@ -82,6 +82,9 @@ SELECT mid(s, NULL, NULL) FROM mid_02;
 SELECT mid(s, NULL, 2) FROM mid_02;
 SELECT mid(s, 1, NULL) FROM mid_02;
 SELECT mid(s, 1, 9) FROM mid_02 WHERE mid(s, 1, 2) = 'eh';
+SELECT mid(s, d1, d2) FROM mid_02;
+SELECT mid(s, d1, -3) FROM mid_02 WHERE d2 = 2;
+
 
 -- string function
 SELECT concat_ws('-',mid(s,2,3),mid(s,1,2)) FROM mid_02 WHERE id BETWEEN 2 AND 3;
@@ -98,4 +101,3 @@ SELECT endswith(mid(s,-1,1),' ') FROM mid_02 WHERE id = 6;
 SELECT substring(mid(s, 3, 19),3, 10) FROM mid_02 WHERE id + 1 = 4;
 SELECT REVERSE(mid(s, -1, 2)) FROM mid_02;
 SELECT hex(mid(s, 1, 2)) FROM mid_02 WHERE id = 7;
-
