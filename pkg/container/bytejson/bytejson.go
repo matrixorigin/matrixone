@@ -391,7 +391,7 @@ func (bj ByteJson) Query(paths []*Path) *ByteJson {
 	if len(out) == 0 {
 		return &ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 	}
-	if len(out) == 1 {
+	if len(out) == 1 && len(paths) == 1 {
 		return &out[0]
 	}
 	allNull := checkAllNull(out)
