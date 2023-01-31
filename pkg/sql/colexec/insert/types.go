@@ -51,6 +51,7 @@ type Argument struct {
 	DB                   engine.Database
 	TableID              uint64
 	CPkeyColDef          *plan.ColDef
+	PrimaryKeyDef        *plan.PrimaryKeyDef
 	DBName               string
 	TableName            string
 	UniqueIndexTables    []engine.Relation

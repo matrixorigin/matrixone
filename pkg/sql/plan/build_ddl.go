@@ -564,7 +564,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			pkeyName = primaryKeys[0]
 			for _, col := range createTable.TableDef.Cols {
 				if col.Name == pkeyName {
-					//col.Primary = true
+					col.Primary = true
 					createTable.TableDef.Pkey = &PrimaryKeyDef{
 						Names: primaryKeys,
 					}
@@ -589,19 +589,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					OriginString: "",
 				},
 			}
+			colDef.Primary = true
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[pkeyName] = colDef
 
 			pkeyDef := &PrimaryKeyDef{
 				Names: []string{pkeyName},
-			}
-			for i, keyname := range primaryKeys {
-				for pos, col := range createTable.TableDef.Cols {
-					if keyname == col.Name {
-						pkeyDef.Cols[i] = uint64(pos)
-						break
-					}
-				}
 			}
 			createTable.TableDef.Pkey = pkeyDef
 			createTable.PkColName = pkeyName

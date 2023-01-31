@@ -384,6 +384,13 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		copy(newTable.TblFunc.Param, table.TblFunc.Param)
 	}
 
+	if table.Pkey != nil {
+		newTable.Pkey = &plan.PrimaryKeyDef{
+			Names: make([]string, len(table.Pkey.Names)),
+		}
+		copy(newTable.Pkey.Names, table.Pkey.Names)
+	}
+
 	if table.CompositePkey != nil {
 		newTable.CompositePkey = DeepCopyColDef(table.CompositePkey)
 	}
@@ -396,16 +403,6 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 
 	for idx, def := range table.Defs {
 		switch defImpl := def.Def.(type) {
-		case *plan.TableDef_DefType_Pk:
-			pkDef := &plan.PrimaryKeyDef{
-				Names: make([]string, len(defImpl.Pk.Names)),
-			}
-			copy(pkDef.Names, defImpl.Pk.Names)
-			newTable.Defs[idx] = &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: pkDef,
-				},
-			}
 		case *plan.TableDef_DefType_UIdx:
 			newTable.Defs[idx] = &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_UIdx{

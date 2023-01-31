@@ -400,11 +400,10 @@ message TableDef {
 	// XXX: Deprecated and to be removed soon.
 	message DefType {
 		oneof def {
-			PrimaryKeyDef pk			= 1;
-			PropertiesDef properties	= 2;
-			PartitionInfo partition		= 3;
-			UniqueIndexDef uIdx			= 4;
-			SecondaryIndexDef sIdx		= 5;
+			PropertiesDef properties	= 1;
+			PartitionInfo partition		= 2;
+			UniqueIndexDef uIdx			= 3;
+			SecondaryIndexDef sIdx		= 4;
 		}
 	}
 
@@ -756,6 +755,7 @@ message InsertValues {
 	ClusterTable cluster_table = 10;
 	ClusterByDef cb=11;
 	bool has_auto_col = 12;
+	PrimaryKeyDef primary_key_def = 13;
 }
 
 message column{
