@@ -41,17 +41,17 @@ func NewNotifier(ctx context.Context, buffer int) *Notifier {
 
 // NotifyLogtail provides incremental logtail.
 func (n *Notifier) NotifyLogtail(
-	to timestamp.Timestamp, tails ...logtail.TableLogtail,
+	from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
 ) error {
 	select {
 	case <-n.ctx.Done():
 		return n.ctx.Err()
-	case n.C <- event{to: to, logtails: tails}:
+	case n.C <- event{from: from, to: to, logtails: tails}:
 	}
 	return nil
 }
 
 type event struct {
-	to       timestamp.Timestamp
+	from, to timestamp.Timestamp
 	logtails []logtail.TableLogtail
 }

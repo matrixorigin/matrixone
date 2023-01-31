@@ -412,6 +412,8 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 			}
 
 			publishmentFunc := func() {
+				// NOTE: there's gap between multiple (e.from, e.to], so we
+				// maintain waterline to make UpdateResponse monotonous.
 				from := s.waterline.Waterline()
 				to := e.to
 
@@ -470,7 +472,7 @@ func (s *LogtailServer) Start() error {
 
 // NotifyLogtail provides incremental logtail for server.
 func (s *LogtailServer) NotifyLogtail(
-	to timestamp.Timestamp, tails ...logtail.TableLogtail,
+	from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
 ) error {
-	return s.event.NotifyLogtail(to, tails...)
+	return s.event.NotifyLogtail(from, to, tails...)
 }

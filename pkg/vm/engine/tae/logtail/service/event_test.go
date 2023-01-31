@@ -30,15 +30,16 @@ func TestPublisher(t *testing.T) {
 
 	go func() {
 		for i := 1; i <= eventNum; i++ {
-			ts := mockTimestamp(int64(i), 0)
+			from, to := mockTimestamp(int64(i-1), 0), mockTimestamp(int64(i), 0)
 			table := mockTable(uint64(i), uint64(i), uint64(i))
-			err := event.NotifyLogtail(ts, mockLogtail(table, ts))
+			err := event.NotifyLogtail(from, to, mockLogtail(table, to))
 			require.NoError(t, err)
 		}
 	}()
 
 	for j := 1; j <= eventNum; j++ {
 		e := <-event.C
+		require.Equal(t, mockTimestamp(int64(j-1), 0), e.from)
 		require.Equal(t, mockTimestamp(int64(j), 0), e.to)
 		require.Equal(t, 1, len(e.logtails))
 	}

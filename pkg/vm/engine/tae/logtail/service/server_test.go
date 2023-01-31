@@ -203,6 +203,7 @@ func startLogtailServer(
 
 	/* ---- generate incremental logtail ---- */
 	go func() {
+		from := timestamp.Timestamp{}
 
 		for {
 			now, _ := rt.Clock().Now()
@@ -212,10 +213,12 @@ func startLogtailServer(
 				tails = append(tails, mockLogtail(table, now))
 			}
 
-			err := logtailServer.NotifyLogtail(now, tails...)
+			err := logtailServer.NotifyLogtail(from, now, tails...)
 			if err != nil {
 				return
 			}
+			from = now
+
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
