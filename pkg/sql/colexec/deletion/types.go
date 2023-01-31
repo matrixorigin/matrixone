@@ -24,7 +24,15 @@ type Argument struct {
 	Ts           uint64
 	DeleteCtx    *DeleteCtx
 	AffectedRows uint64
-	IsRemote     bool
+	// when detele data in a remote CN,
+	// IsRemote is true, and we need IBucket
+	// and NBucket to know those data in batch
+	// that we need to delete in this CN, because
+	// we need to make sure one Block will be processed
+	// by only one CN, this is useful for our compaction
+	IsRemote bool
+	IBucket  uint64
+	NBucket  uint64
 }
 
 type DeleteCtx struct {

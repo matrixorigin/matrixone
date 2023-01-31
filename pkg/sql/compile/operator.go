@@ -342,6 +342,28 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			}
 			res.Arg = arg
 		}
+	case vm.Insert:
+		t := sourceIns.Arg.(*insert.Argument)
+		res.Arg = &insert.Argument{
+			Ts:                   t.Ts,
+			TargetTable:          t.TargetTable,
+			TargetColDefs:        t.TargetColDefs,
+			Affected:             t.Affected,
+			Engine:               t.Engine,
+			DB:                   t.DB,
+			TableID:              t.TableID,
+			CPkeyColDef:          t.CPkeyColDef,
+			DBName:               t.DBName,
+			TableName:            t.TableName,
+			UniqueIndexTables:    t.UniqueIndexTables,
+			UniqueIndexDef:       t.UniqueIndexDef,
+			SecondaryIndexTables: t.SecondaryIndexTables,
+			SecondaryIndexDef:    t.SecondaryIndexDef,
+			ClusterTable:         t.ClusterTable,
+			ClusterByDef:         t.ClusterByDef,
+			IsRemote:             t.IsRemote,
+			HasAutoCol:           t.HasAutoCol,
+		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}

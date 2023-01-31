@@ -633,6 +633,7 @@ message Node {
     int32   parallelism = 26;
 
 	ClusterTable cluster_table = 27;
+	bool not_cacheable = 28;
 }
 
 message IdList {
