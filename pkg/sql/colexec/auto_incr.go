@@ -377,7 +377,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 	}
 
 	expr := getRangeExpr(colName)
-	// 存入表达式
+	// use expression to get ranges
 	ret, err := rel.Ranges(param.ctx, expr)
 	if err != nil {
 		return 0, 0, nil, err
