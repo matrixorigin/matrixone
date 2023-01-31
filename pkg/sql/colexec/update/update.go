@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
@@ -127,7 +126,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			if len(updateCtx.UniqueIndexPos) > 0 {
 				// get Primary key name of the original table
 				tableDef := p.TableDefVec[i]
-				oriPriKeyName := GetTablePriKeyName(tableDef.Cols, tableDef.CompositePkey)
+				oriPriKeyName := GetTablePriKeyName(tableDef.Pkey, tableDef.CompositePkey)
 				// Update the index table records
 				for _, indexPos := range updateCtx.UniqueIndexPos {
 					indexTableUpdateCtx := p.UpdateCtxs[indexPos]
@@ -536,15 +535,27 @@ func updateIndexTable(indexTableUpdateCtx *UpdateCtx, originTableBatch *batch.Ba
 }
 
 // Get the primary key name of the table
-func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
-	for _, col := range cols {
-		if col.Name != catalog.Row_ID && col.Primary {
-			return col.Name
-		}
-	}
+//func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
+//	for _, col := range cols {
+//		if col.Name != catalog.Row_ID && col.Primary {
+//			return col.Name
+//		}
+//	}
+//
+//	if cPkeyCol != nil {
+//		return cPkeyCol.Name
+//	}
+//	return ""
+//}
 
+// Get the primary key name of the table
+func GetTablePriKeyName(pkey *plan.PrimaryKeyDef, cPkeyCol *plan.ColDef) string {
 	if cPkeyCol != nil {
 		return cPkeyCol.Name
+	}
+
+	if pkey != nil {
+		return pkey.Names[0]
 	}
 	return ""
 }
