@@ -869,10 +869,10 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	c := new(engine.ConstraintDef)
 	for _, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
-		case *plan.TableDef_DefType_Pk:
-			exeDefs = append(exeDefs, &engine.PrimaryIndexDef{
-				Names: defVal.Pk.GetNames(),
-			})
+		//case *plan.TableDef_DefType_Pk:
+		//	exeDefs = append(exeDefs, &engine.PrimaryIndexDef{
+		//		Names: defVal.Pk.GetNames(),
+		//	})
 		case *plan.TableDef_DefType_Properties:
 			properties := make([]engine.Property, len(defVal.Properties.GetProperties()))
 			for i, p := range defVal.Properties.GetProperties() {
@@ -920,6 +920,12 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	if len(tableDef.Fkeys) > 0 {
 		c.Cts = append(c.Cts, &engine.ForeignKeyDef{
 			Fkeys: tableDef.Fkeys,
+		})
+	}
+
+	if tableDef.Pkey != nil {
+		c.Cts = append(c.Cts, &engine.PrimaryKeyDef{
+			Pkey: tableDef.Pkey,
 		})
 	}
 

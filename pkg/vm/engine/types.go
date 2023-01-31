@@ -145,6 +145,10 @@ type ForeignKeyDef struct {
 	Fkeys []*plan.ForeignKeyDef
 }
 
+type PrimaryKeyDef struct {
+	Pkey *plan.PrimaryKeyDef
+}
+
 type RefChildTableDef struct {
 	Tables []uint64
 }
@@ -174,6 +178,7 @@ const (
 	SecondaryIndex
 	RefChildTable
 	ForeignKey
+	PrimaryKey
 )
 
 func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
@@ -229,6 +234,18 @@ func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
 				}
 				buf.Write(bytes)
 			}
+		case *PrimaryKeyDef:
+			if err := binary.Write(buf, binary.BigEndian, PrimaryKey); err != nil {
+				return nil, err
+			}
+			bytes, err := def.Pkey.Marshal()
+			if err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64((len(bytes)))); err != nil {
+				return nil, err
+			}
+			buf.Write(bytes)
 		}
 	}
 	return buf.Bytes(), nil
@@ -281,6 +298,16 @@ func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
 				fKeys[i] = fKey
 			}
 			c.Cts = append(c.Cts, &ForeignKeyDef{fKeys})
+
+		case PrimaryKey:
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			pkey := &plan.PrimaryKeyDef{}
+			err := pkey.Unmarshal(data[l : l+int(length)])
+			if err != nil {
+				return err
+			}
+			l += int(length)
 		}
 	}
 	return nil
@@ -294,6 +321,7 @@ type Constraint interface {
 func (*UniqueIndexDef) constraint()    {}
 func (*SecondaryIndexDef) constraint() {}
 func (*ForeignKeyDef) constraint()     {}
+func (*PrimaryKeyDef) constraint()     {}
 func (*RefChildTableDef) constraint()  {}
 
 type Relation interface {
