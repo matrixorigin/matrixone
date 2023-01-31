@@ -19,21 +19,22 @@ import (
 type CnTaeVector[T any] struct {
 	downstreamVector *cnVector.Vector
 	mpool            *mpool.MPool
-	nullable         bool
 }
 
 func NewTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeVector[T] {
 	vec := CnTaeVector[T]{
 		downstreamVector: cnVector.New(typ),
-		nullable:         nullable,
 	}
-	vec.downstreamVector.Nsp = cnNulls.NewWithSize(0)
+
+	// nullable
+	if nullable {
+		vec.downstreamVector.Nsp = cnNulls.NewWithSize(0)
+	}
 
 	// mpool
 	var alloc *mpool.MPool
 	if len(opts) > 0 {
-		opt := opts[0]
-		alloc = opt.Allocator
+		alloc = opts[0].Allocator
 	}
 	if alloc == nil {
 		alloc = common.DefaultAllocator
@@ -60,8 +61,6 @@ func (vec CnTaeVector[T]) HasNull() bool {
 }
 
 func (vec CnTaeVector[T]) Append(v any) {
-	//TODO: Do we need vec.tryCOW()?
-
 	_, isNull := v.(types.Null)
 	if isNull {
 		_ = vec.downstreamVector.Append(types.DefaultVal[T](), true, vec.mpool)
@@ -79,7 +78,7 @@ func (vec CnTaeVector[T]) AppendMany(vs ...any) {
 
 func (vec CnTaeVector[T]) Nullable() bool {
 	// TODO: replace this nullable flag with Nsp!=nil check
-	return vec.nullable
+	return vec.downstreamVector.Nsp.Np != nil
 }
 
 func (vec CnTaeVector[T]) GetAllocator() *mpool.MPool {
@@ -327,7 +326,6 @@ func (vec CnTaeVector[T]) Window(offset, length int) Vector {
 	return CnTaeVector[T]{
 		downstreamVector: window,
 		mpool:            vec.GetAllocator(),
-		nullable:         vec.nullable,
 	}
 }
 
