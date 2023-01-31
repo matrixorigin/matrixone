@@ -300,7 +300,7 @@ create external table ex_table_yccs(char_1 char(20),char_2 varchar(10),date_1 da
 insert into ex_table_yccs select 'yellow','apple','2020-09-30','2020-09-30 10:20:08','2020-09-30 10:20:08.09834';
 invalid input: cannot insert into external table
 update ex_table_yccs set char_1="cat123";
-internal error: the external table is not support update operation
+invalid input: cannot insert/update/delete from external table
 delete from ex_table_yccs;
 invalid input: cannot insert/update/delete from external table
 
