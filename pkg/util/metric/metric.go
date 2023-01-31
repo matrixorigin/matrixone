@@ -151,6 +151,7 @@ func StopMetricSync() {
 	}
 	// mark inited = false
 	_ = atomic.CompareAndSwapUint32(&inited, 1, 0)
+	logutil.Info("Shutdown metric complete.")
 }
 
 func mustRegiterToProm(collector prom.Collector) {
