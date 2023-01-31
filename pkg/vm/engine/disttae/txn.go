@@ -353,15 +353,10 @@ func (txn *Transaction) nextLocalTS() timestamp.Timestamp {
 	return txn.localTS
 }
 
-func (txn *Transaction) RegisterFile(fileName string) {
-	txn.fileMap[fileName] = txn.blockId
-	txn.blockId++
-}
-
 // WriteFile used to add a s3 file information to the transaction buffer
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
-	databaseName, tableName string, fileName string) error {
+	databaseName, tableName string, fileName string, bat *batch.Batch, dnStore DNStore) error {
 	txn.readOnly = false
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
@@ -370,7 +365,8 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 		tableName:    tableName,
 		databaseName: databaseName,
 		fileName:     fileName,
-		blockId:      txn.fileMap[fileName],
+		bat:          bat,
+		dnStore:      dnStore,
 	})
 	return nil
 }
