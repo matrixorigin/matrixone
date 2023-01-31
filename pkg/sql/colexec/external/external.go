@@ -469,6 +469,9 @@ func ReadFile(param *tree.ExternParam, fileParam *ExFileparam, offset [2]int, pr
 		vec.Entries[0].Offset = int64(offset[0])
 		vec.Entries[0].Size = int64(offset[1] - offset[0])
 	}
+	if vec.Entries[0].Size == 0 {
+		return nil, nil
+	}
 	err = fs.Read(param.Ctx, &vec)
 	if err != nil {
 		return nil, err
@@ -476,7 +479,7 @@ func ReadFile(param *tree.ExternParam, fileParam *ExFileparam, offset [2]int, pr
 	return r, nil
 }
 
-func ReadFile2(param *tree.ExternParam, proc *process.Process, mcpu int, fileSize int64) ([][2]int, error) {
+func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fileSize int64) ([][2]int, error) {
 	arr := make([][2]int, 0)
 
 	fs, readPath, err := GetForETLWithType(param, param.Filepath)
@@ -660,7 +663,6 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 			}
 		} else {
 			if !param.Extern.SysTable && len(Line) < getRealAttrCnt(param.Attrs) {
-				fmt.Println("wangjian sql2 is", Line, param.Attrs)
 				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo())
 			}
 		}
@@ -706,7 +708,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 func GetSimdcsvReader(param *ExternalParam, proc *process.Process) (*ParseLineHandler, error) {
 	var err error
 	param.reader, err = ReadFile(param.Extern, param.Fileparam, param.FileOffset[param.Fileparam.FileIndex-1], proc)
-	if err != nil {
+	if err != nil || param.reader == nil {
 		return nil, err
 	}
 	param.reader, err = getUnCompressReader(param.Extern, param.Fileparam.Filepath, param.reader)
@@ -740,7 +742,7 @@ func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, err
 	if param.plh == nil {
 		param.IgnoreLine = param.IgnoreLineTag
 		param.plh, err = GetSimdcsvReader(param, proc)
-		if err != nil {
+		if err != nil || param.plh == nil {
 			return nil, err
 		}
 	}

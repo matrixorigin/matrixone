@@ -227,6 +227,7 @@ func init() {
 		"less":                     LESS,
 		"level":                    LEVEL,
 		"like":                     LIKE,
+		"ilike":                    ILIKE,
 		"list":                     LIST,
 		"limit":                    LIMIT,
 		"linear":                   LINEAR,

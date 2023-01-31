@@ -33,18 +33,18 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	if ap.crossCN {
-		ap.ctr.streams = make([]*WrapperStream, 0, len(ap.nodes))
+	if ap.CrossCN {
+		ap.ctr.streams = make([]*WrapperStream, 0, len(ap.Nodes))
 		for i := range ap.ctr.streams {
-			if ap.nodes[i].Node.Addr == "" {
+			if ap.Nodes[i].Node.Addr == "" {
 				ap.ctr.streams = append(ap.ctr.streams, nil)
 				continue
 			}
-			stream, errStream := cnclient.GetStreamSender(ap.nodes[i].Node.Addr)
+			stream, errStream := cnclient.GetStreamSender(ap.Nodes[i].Node.Addr)
 			if errStream != nil {
 				return errStream
 			}
-			ap.ctr.streams = append(ap.ctr.streams, &WrapperStream{stream, ap.nodes[i].Uuid})
+			ap.ctr.streams = append(ap.ctr.streams, &WrapperStream{stream, ap.Nodes[i].Uuid})
 		}
 	}
 	return nil
@@ -53,11 +53,11 @@ func Prepare(proc *process.Process, arg any) error {
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
-	if ap.crossCN {
+	if ap.CrossCN {
 		if bat == nil {
 			return true, nil
 		}
-		if err := ap.sendFunc(ap.ctr.streams, ap.localIndex, bat, ap.Regs[ap.localIndex], proc); err != nil {
+		if err := ap.SendFunc(ap.ctr.streams, ap.LocalIndex, bat, ap.Regs[ap.LocalIndex], proc); err != nil {
 			return false, err
 		}
 		return false, nil
