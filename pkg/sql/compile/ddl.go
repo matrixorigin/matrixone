@@ -984,19 +984,30 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 // Get the required columns of the index table from the original table
 func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []string) []string {
 	colNameMap := make(map[string]int)
-	for _, def := range tblDefs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Primary {
-				colNameMap[attr.Attr.Name] = 1
-				break
+	for _, tbldef := range tblDefs {
+		//if attr, ok := def.(*engine.AttributeDef); ok {
+		//	if attr.Attr.Primary {
+		//		colNameMap[attr.Attr.Name] = 1
+		//		break
+		//	}
+		//} else if cpk, ok := def.(*engine.PrimaryIndexDef); ok {
+		//	for _, name := range cpk.Names {
+		//		colNameMap[name] = 1
+		//	}
+		//	break
+		//} else {
+		//	continue
+		//}
+
+		if constraintDef, ok := tbldef.(*engine.ConstraintDef); ok {
+			for _, ct := range constraintDef.Cts {
+				if pk, ok2 := ct.(*engine.PrimaryKeyDef); ok2 {
+					for _, name := range pk.Pkey.Names {
+						colNameMap[name] = 1
+					}
+					break
+				}
 			}
-		} else if cpk, ok := def.(*engine.PrimaryIndexDef); ok {
-			for _, name := range cpk.Names {
-				colNameMap[name] = 1
-			}
-			break
-		} else {
-			continue
 		}
 	}
 
