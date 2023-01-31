@@ -37,7 +37,6 @@ import (
 
 var AUTO_INCR_TABLE = "%!%mo_increment_columns"
 var AUTO_INCR_TABLE_COLNAME []string = []string{catalog.Row_ID, "name", "offset", "step"}
-var AUTO_INCR_TABLE_COLTYPE []int32 = []int32{int32(types.T_uint64), int32(types.T_varchar), int32(types.T_uint64), int32(types.T_uint64)}
 
 type AutoIncrParam struct {
 	eg engine.Engine
@@ -347,7 +346,6 @@ func getRangeExpr(colName string) *plan.Expr {
 				},
 				Args: []*plan.Expr{
 					{
-						Typ: &plan.Type{Id: AUTO_INCR_TABLE_COLTYPE[1]},
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								Name: AUTO_INCR_TABLE_COLNAME[1],
@@ -355,7 +353,6 @@ func getRangeExpr(colName string) *plan.Expr {
 						},
 					},
 					{
-						Typ: &plan.Type{Id: int32(types.T_varchar)},
 						Expr: &plan.Expr_C{
 							C: &plan.Const{
 								Value: &plan.Const_Sval{
