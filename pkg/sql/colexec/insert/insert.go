@@ -104,29 +104,32 @@ func GenerateWriter(ap *Argument, proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	if ap.UniqueIndexDef == nil {
+	if len(ap.InsertCtx.IdxSource) == 0 {
 		return nil
 	}
 	ap.container.unique_writer = ap.container.unique_writer[:0]
 	ap.container.unique_lengths = ap.container.unique_lengths[:0]
-	for i := range ap.UniqueIndexDef.TableExists {
-		if ap.UniqueIndexDef.TableExists[i] {
-			segId, err := colexec.Srv.GenerateSegment()
-			if err != nil {
-				return err
-			}
-			s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
-			if err != nil {
-				return err
-			}
-			writer, err := objectio.NewObjectWriter(segId, s3)
-			if err != nil {
-				return err
-			}
-			ap.container.unique_writer = append(ap.container.unique_writer, writer)
-			ap.container.unique_lengths = append(ap.container.unique_lengths, make([]uint64, 0, 1))
+
+	// for i := range ap.UniqueIndexDef.TableExists {
+	// 	if ap.UniqueIndexDef.TableExists[i] {
+	for i := 0; i < len(ap.InsertCtx.IdxSource); i++ {
+		segId, err := colexec.Srv.GenerateSegment()
+		if err != nil {
+			return err
 		}
+		s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+		if err != nil {
+			return err
+		}
+		writer, err := objectio.NewObjectWriter(segId, s3)
+		if err != nil {
+			return err
+		}
+		ap.container.unique_writer = append(ap.container.unique_writer, writer)
+		ap.container.unique_lengths = append(ap.container.unique_lengths, make([]uint64, 0, 1))
 	}
+	// 	}
+	// }
 	return nil
 }
 
@@ -219,54 +222,55 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) error {
-	// XXX The original logic was buggy and I had to temporarily circumvent it
-	if bat.Length() == 0 {
-		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
-	}
-	var err error
-	var metaLocBat *batch.Batch
-	// notice the number of the index def not equal to the number of the index table
-	// in some special cases, we don't create index table.
-	if n.UniqueIndexDef != nil {
-		primaryKeyName := update.GetTablePriKeyName(n.TargetColDefs, n.CPkeyColDef)
-		idx := 0
-		for i := range n.UniqueIndexDef.TableNames {
-			if n.UniqueIndexDef.TableExists[i] {
-				b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, n.UniqueIndexDef.Fields[i].Parts, primaryKeyName, proc)
-				if rowNum != 0 {
-					b.SetZs(rowNum, proc.Mp())
-					if !n.IsRemote {
-						err = n.UniqueIndexTables[idx].Write(ctx, b)
-					}
-					if err != nil {
-						return err
-					}
-				}
-				b.Clean(proc.Mp())
-				idx++
-			}
-		}
-	}
-	if !n.IsRemote {
-		if err := n.TargetTable.Write(ctx, bat); err != nil {
-			return err
-		}
-	} else {
-		bats := reSizeBatch(n, bat, proc)
-		if len(bats) == 0 {
-			proc.SetInputBatch(&batch.Batch{})
-			return nil
-		}
-		metaLocBat, err = GetBlockMeta(bats, n, proc)
-		if err != nil {
-			return err
-		}
-		proc.SetInputBatch(metaLocBat)
-	}
-	atomic.AddUint64(&n.Affected, uint64(bat.Vecs[0].Length()))
-	return nil
-}
+// func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) error {
+// 	// XXX The original logic was buggy and I had to temporarily circumvent it
+// 	if bat.Length() == 0 {
+// 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
+// 	}
+// 	var err error
+// 	var metaLocBat *batch.Batch
+// 	// notice the number of the index def not equal to the number of the index table
+// 	// in some special cases, we don't create index table.
+// 	if n.UniqueIndexDef != nil {
+// 		primaryKeyName := update.GetTablePriKeyName(n.TargetColDefs, n.CPkeyColDef)
+// 		idx := 0
+// 		for i := range n.UniqueIndexDef.TableNames {
+// 			if n.UniqueIndexDef.TableExists[i] {
+// 				b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, n.UniqueIndexDef.Fields[i].Parts, primaryKeyName, proc)
+// 				if rowNum != 0 {
+// 					b.SetZs(rowNum, proc.Mp())
+// 					if !n.IsRemote {
+// 						err = n.UniqueIndexTables[idx].Write(ctx, b)
+// 					}
+// 					if err != nil {
+// 						return err
+// 					}
+// 				}
+// 				b.Clean(proc.Mp())
+// 				idx++
+// 			}
+// 		}
+// 	}
+
+// 	if !n.IsRemote {
+// 		if err := n.TargetTable.Write(ctx, bat); err != nil {
+// 			return err
+// 		}
+// 	} else {
+// 		bats := reSizeBatch(n, bat, proc)
+// 		if len(bats) == 0 {
+// 			proc.SetInputBatch(&batch.Batch{})
+// 			return nil
+// 		}
+// 		metaLocBat, err = GetBlockMeta(bats, n, proc)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		proc.SetInputBatch(metaLocBat)
+// 	}
+// 	atomic.AddUint64(&n.Affected, uint64(bat.Vecs[0].Length()))
+// 	return nil
+// }
 
 func NewTxn(n *Argument, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
 	if proc.TxnClient == nil {
@@ -329,47 +333,47 @@ func RolllbackTxn(n *Argument, txn client.TxnOperator, ctx context.Context) erro
 }
 
 func GetNewRelation(n *Argument, txn client.TxnOperator, proc *process.Process, ctx context.Context) (engine.Relation, error) {
-	dbHandler, err := n.Engine.Database(ctx, n.DBName, txn)
+	dbHandler, err := n.Engine.Database(ctx, n.InsertCtx.Ref.SchemaName, txn)
 	if err != nil {
 		return nil, err
 	}
-	tableHandler, err := dbHandler.Relation(ctx, n.TableName)
+	tableHandler, err := dbHandler.Relation(ctx, n.InsertCtx.Ref.ObjName)
 	if err != nil {
 		return nil, err
 	}
 	return tableHandler, nil
 }
 
-func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) (bool, error) {
-	var err error
-	proc.TxnOperator, err = NewTxn(n, proc, ctx)
-	if err != nil {
-		return false, err
-	}
+// func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) (bool, error) {
+// 	var err error
+// 	proc.TxnOperator, err = NewTxn(n, proc, ctx)
+// 	if err != nil {
+// 		return false, err
+// 	}
 
-	n.TargetTable, err = GetNewRelation(n, proc.TxnOperator, proc, ctx)
-	if err != nil {
-		return false, err
-	}
-	if err = handleWrite(n, proc, ctx, bat); err != nil {
-		if err2 := RolllbackTxn(n, proc.TxnOperator, ctx); err2 != nil {
-			return false, err2
-		}
-		return false, err
-	}
+// 	n.InsertCtx.Source, err = GetNewRelation(n, proc.TxnOperator, proc, ctx)
+// 	if err != nil {
+// 		return false, err
+// 	}
+// 	if err = handleWrite(n, proc, ctx, bat); err != nil {
+// 		if err2 := RolllbackTxn(n, proc.TxnOperator, ctx); err2 != nil {
+// 			return false, err2
+// 		}
+// 		return false, err
+// 	}
 
-	if err = CommitTxn(n, proc.TxnOperator, ctx); err != nil {
-		return false, err
-	}
-	return false, nil
-}
+// 	if err = CommitTxn(n, proc.TxnOperator, ctx); err != nil {
+// 		return false, err
+// 	}
+// 	return false, nil
+// }
 
 // referece to pkg/sql/colexec/order/order.go logic
 func SortByPrimaryKey(proc *process.Process, n *Argument, bat *batch.Batch, pkIdx []int, m *mpool.MPool) error {
 	// Not-Null Check
 	for i := 0; i < len(pkIdx); i++ {
 		if nulls.Any(bat.Vecs[i].Nsp) {
-			return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
+			return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.InsertCtx.TableDef.Cols[i].GetName()))
 		}
 	}
 	var strCol []string
@@ -499,15 +503,17 @@ func WriteEndBlocks(n *Argument, proc *process.Process, metaLocBat *batch.Batch)
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
-	n := arg.(*Argument)
-	bat := proc.Reg.InputBatch
+	var err error
+	var affectedRows uint64
 	t1 := time.Now()
+	insertArg := arg.(*Argument)
+	bat := proc.Reg.InputBatch
 	if bat == nil {
-		if n.IsRemote {
+		if insertArg.IsRemote {
 			// handle the last Batch that batchSize less than DefaultBlockMaxRows
 			// for more info, refer to the comments about reSizeBatch
-			if n.container.cacheBat != nil {
-				metaLocBat, err := GetBlockMeta([]*batch.Batch{n.container.cacheBat}, n, proc)
+			if insertArg.container.cacheBat != nil {
+				metaLocBat, err := GetBlockMeta([]*batch.Batch{insertArg.container.cacheBat}, insertArg, proc)
 				if err != nil {
 					return true, err
 				}
@@ -520,40 +526,71 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return false, nil
 	}
 	ctx := proc.Ctx
-	clusterTable := n.ClusterTable
-
+	insertCtx := insertArg.InsertCtx
+	clusterTable := insertCtx.ClusterTable
 	if clusterTable.GetIsClusterTable() {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
+
+	var insertBat *batch.Batch
 	defer func() {
 		bat.Clean(proc.Mp())
+		if insertBat != nil {
+			insertBat.Clean(proc.Mp())
+		}
 		anal := proc.GetAnalyze(idx)
 		anal.AddInsertTime(t1)
 	}()
-	{
-		for i := range bat.Vecs {
-			// Not-null check, for more information, please refer to the comments in func InsertValues
-			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].Typ.AutoIncr) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].Typ.AutoIncr) {
-				if nulls.Any(bat.Vecs[i].Nsp) {
-					return false, moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
+
+	// delete old unique index
+	_, err = colexec.FilterAndDelByRowId(proc, bat, insertCtx.IdxIdx, insertCtx.IdxSource)
+	if err != nil {
+		return false, err
+	}
+
+	insertRows := func() error {
+		var affectedRow uint64
+
+		if insertArg.IsRemote {
+
+		} else if proc.LoadTag {
+			proc.TxnOperator, err = NewTxn(insertArg, proc, ctx)
+			if err != nil {
+				return err
+			}
+
+			insertCtx.Source, err = GetNewRelation(insertArg, proc.TxnOperator, proc, ctx)
+			if err != nil {
+				return err
+			}
+
+			affectedRow, err = colexec.InsertBatch(insertArg.Engine, proc, bat, insertCtx.Source,
+				insertCtx.Ref, insertCtx.TableDef, insertCtx.ParentIdx)
+			if err != nil {
+				err2 := RolllbackTxn(insertArg, proc.TxnOperator, ctx)
+				if err2 != nil {
+					return err2
 				}
+				return err
+			}
+
+			if err = CommitTxn(insertArg, proc.TxnOperator, ctx); err != nil {
+				return err
+			}
+		} else {
+			affectedRow, err = colexec.InsertBatch(insertArg.Engine, proc, bat, insertCtx.Source,
+				insertCtx.Ref, insertCtx.TableDef, insertCtx.ParentIdx)
+			if err != nil {
+				return err
 			}
 		}
+
+		affectedRows = affectedRows + affectedRow
+		return nil
 	}
-	{
-		bat.Ro = false
-		bat.Attrs = make([]string, len(bat.Vecs))
-		// scalar vector's extension
-		for i := range bat.Vecs {
-			bat.Attrs[i] = n.TargetColDefs[i].GetName()
-			bat.Vecs[i] = bat.Vecs[i].ConstExpand(false, proc.Mp())
-			if bat.Vecs[i].IsScalarNull() && n.TargetColDefs[i].GetTyp().GetAutoIncr() {
-				bat.Vecs[i].ConstExpand(true, proc.Mp())
-			}
-		}
-	}
+
 	if clusterTable.GetIsClusterTable() {
-		accountIdColumnDef := n.TargetColDefs[clusterTable.GetColumnIndexOfAccountId()]
+		accountIdColumnDef := insertCtx.TableDef.Cols[clusterTable.GetColumnIndexOfAccountId()]
 		accountIdExpr := accountIdColumnDef.GetDefault().GetExpr()
 		accountIdConst := accountIdExpr.GetC()
 
@@ -567,7 +604,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				vector.Clean(vec, proc.Mp())
 			}
 		}()
-		for i, colDef := range n.TargetColDefs {
+		for i, colDef := range insertCtx.TableDef.Cols {
 			if colDef.GetTyp().GetAutoIncr() {
 				vec2, err := vector.Dup(bat.Vecs[i], proc.Mp())
 				if err != nil {
@@ -591,7 +628,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 			if idx != 0 { //refill the auto_increment column vector
 				j := 0
-				for colIdx, colDef := range n.TargetColDefs {
+				for colIdx, colDef := range insertCtx.TableDef.Cols {
 					if colDef.GetTyp().GetAutoIncr() {
 						targetVec := bat.Vecs[colIdx]
 						vector.Clean(targetVec, proc.Mp())
@@ -605,16 +642,139 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 					}
 				}
 			}
-			b, err := writeBatch(ctx, n, proc, bat)
+
+			err := insertRows()
 			if err != nil {
-				return b, err
+				return false, err
 			}
 		}
-		return false, nil
 	} else {
-		return writeBatch(ctx, n, proc, bat)
+		err := insertRows()
+		if err != nil {
+			return false, err
+		}
 	}
+	atomic.AddUint64(&insertArg.Affected, affectedRows)
+	return false, nil
 }
+
+// func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+// 	n := arg.(*Argument)
+// 	bat := proc.Reg.InputBatch
+// 	t1 := time.Now()
+// 	if bat == nil {
+// 		if n.IsRemote {
+// 			// handle the last Batch that batchSize less than DefaultBlockMaxRows
+// 			// for more info, refer to the comments about reSizeBatch
+// 			if n.container.cacheBat != nil {
+// 				metaLocBat, err := GetBlockMeta([]*batch.Batch{n.container.cacheBat}, n, proc)
+// 				if err != nil {
+// 					return true, err
+// 				}
+// 				proc.SetInputBatch(metaLocBat)
+// 			}
+// 		}
+// 		return true, nil
+// 	}
+// 	if len(bat.Zs) == 0 {
+// 		return false, nil
+// 	}
+// 	ctx := proc.Ctx
+// 	clusterTable := n.ClusterTable
+
+// 	if clusterTable.GetIsClusterTable() {
+// 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+// 	}
+// 	defer func() {
+// 		bat.Clean(proc.Mp())
+// 		anal := proc.GetAnalyze(idx)
+// 		anal.AddInsertTime(t1)
+// 	}()
+// 	{
+// 		for i := range bat.Vecs {
+// 			// Not-null check, for more information, please refer to the comments in func InsertValues
+// 			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].Typ.AutoIncr) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].Typ.AutoIncr) {
+// 				if nulls.Any(bat.Vecs[i].Nsp) {
+// 					return false, moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
+// 				}
+// 			}
+// 		}
+// 	}
+// 	{
+// 		bat.Ro = false
+// 		bat.Attrs = make([]string, len(bat.Vecs))
+// 		// scalar vector's extension
+// 		for i := range bat.Vecs {
+// 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
+// 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(false, proc.Mp())
+// 			if bat.Vecs[i].IsScalarNull() && n.TargetColDefs[i].GetTyp().GetAutoIncr() {
+// 				bat.Vecs[i].ConstExpand(true, proc.Mp())
+// 			}
+// 		}
+// 	}
+// 	if clusterTable.GetIsClusterTable() {
+// 		accountIdColumnDef := n.TargetColDefs[clusterTable.GetColumnIndexOfAccountId()]
+// 		accountIdExpr := accountIdColumnDef.GetDefault().GetExpr()
+// 		accountIdConst := accountIdExpr.GetC()
+
+// 		vecLen := vector.Length(bat.Vecs[0])
+// 		tmpBat := batch.NewWithSize(0)
+// 		tmpBat.Zs = []int64{1}
+// 		//save auto_increment column if necessary
+// 		savedAutoIncrVectors := make([]*vector.Vector, 0)
+// 		defer func() {
+// 			for _, vec := range savedAutoIncrVectors {
+// 				vector.Clean(vec, proc.Mp())
+// 			}
+// 		}()
+// 		for i, colDef := range n.TargetColDefs {
+// 			if colDef.GetTyp().GetAutoIncr() {
+// 				vec2, err := vector.Dup(bat.Vecs[i], proc.Mp())
+// 				if err != nil {
+// 					return false, err
+// 				}
+// 				savedAutoIncrVectors = append(savedAutoIncrVectors, vec2)
+// 			}
+// 		}
+// 		for idx, accountId := range clusterTable.GetAccountIDs() {
+// 			//update accountId in the accountIdExpr
+// 			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
+// 			accountIdVec := bat.Vecs[clusterTable.GetColumnIndexOfAccountId()]
+// 			//clean vector before fill it
+// 			vector.Clean(accountIdVec, proc.Mp())
+// 			//the i th row
+// 			for i := 0; i < vecLen; i++ {
+// 				err := fillRow(tmpBat, accountIdExpr, accountIdVec, proc)
+// 				if err != nil {
+// 					return false, err
+// 				}
+// 			}
+// 			if idx != 0 { //refill the auto_increment column vector
+// 				j := 0
+// 				for colIdx, colDef := range n.TargetColDefs {
+// 					if colDef.GetTyp().GetAutoIncr() {
+// 						targetVec := bat.Vecs[colIdx]
+// 						vector.Clean(targetVec, proc.Mp())
+// 						for k := int64(0); k < int64(vecLen); k++ {
+// 							err := vector.UnionOne(targetVec, savedAutoIncrVectors[j], k, proc.Mp())
+// 							if err != nil {
+// 								return false, err
+// 							}
+// 						}
+// 						j++
+// 					}
+// 				}
+// 			}
+// 			b, err := writeBatch(ctx, n, proc, bat)
+// 			if err != nil {
+// 				return b, err
+// 			}
+// 		}
+// 		return false, nil
+// 	} else {
+// 		return writeBatch(ctx, n, proc, bat)
+// 	}
+// }
 
 /*
 fillRow evaluates the expression and put the result into the targetVec.
@@ -643,45 +803,45 @@ func fillRow(tmpBat *batch.Batch,
 
 // writeBatch saves the batch into the storage
 // and updates the auto increment table, index table.
-func writeBatch(ctx context.Context,
-	n *Argument,
-	proc *process.Process,
-	bat *batch.Batch) (bool, error) {
+// func writeBatch(ctx context.Context,
+// 	n *Argument,
+// 	proc *process.Process,
+// 	bat *batch.Batch) (bool, error) {
 
-	if n.HasAutoCol {
-		if err := colexec.UpdateInsertBatch(n.Engine, ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
-			return false, err
-		}
-	}
-	if n.CPkeyColDef != nil {
-		err := util.FillCompositePKeyBatch(bat, n.CPkeyColDef, proc)
-		if err != nil {
-			names := util.SplitCompositePrimaryKeyColumnName(n.CPkeyColDef.Name)
-			for _, name := range names {
-				for i := range bat.Vecs {
-					if n.TargetColDefs[i].Name == name {
-						if nulls.Any(bat.Vecs[i].Nsp) {
-							return false, moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
-						}
-					}
-				}
-			}
-		}
-	} else if n.ClusterByDef != nil && util.JudgeIsCompositeClusterByColumn(n.ClusterByDef.Name) {
-		util.FillCompositeClusterByBatch(bat, n.ClusterByDef.Name, proc)
-	}
-	// set null value's data
-	for i := range bat.Vecs {
-		bat.Vecs[i] = vector.CheckInsertVector(bat.Vecs[i], proc.Mp())
-	}
-	if n.IsRemote {
-		return false, handleWrite(n, proc, ctx, bat)
-	}
-	if !proc.LoadTag {
-		return false, handleWrite(n, proc, ctx, bat)
-	}
-	return handleLoadWrite(n, proc, ctx, bat)
-}
+// 	if n.HasAutoCol {
+// 		if err := colexec.UpdateInsertBatch(n.Engine, ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
+// 			return false, err
+// 		}
+// 	}
+// 	if n.CPkeyColDef != nil {
+// 		err := util.FillCompositePKeyBatch(bat, n.CPkeyColDef, proc)
+// 		if err != nil {
+// 			names := util.SplitCompositePrimaryKeyColumnName(n.CPkeyColDef.Name)
+// 			for _, name := range names {
+// 				for i := range bat.Vecs {
+// 					if n.TargetColDefs[i].Name == name {
+// 						if nulls.Any(bat.Vecs[i].Nsp) {
+// 							return false, moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
+// 						}
+// 					}
+// 				}
+// 			}
+// 		}
+// 	} else if n.ClusterByDef != nil && util.JudgeIsCompositeClusterByColumn(n.ClusterByDef.Name) {
+// 		util.FillCompositeClusterByBatch(bat, n.ClusterByDef.Name, proc)
+// 	}
+// 	// set null value's data
+// 	for i := range bat.Vecs {
+// 		bat.Vecs[i] = vector.CheckInsertVector(bat.Vecs[i], proc.Mp())
+// 	}
+// 	if n.IsRemote {
+// 		return false, handleWrite(n, proc, ctx, bat)
+// 	}
+// 	if !proc.LoadTag {
+// 		return false, handleWrite(n, proc, ctx, bat)
+// 	}
+// 	return handleLoadWrite(n, proc, ctx, bat)
+// }
 
 func getIndexDataFromVec(block objectio.BlockObject, writer objectio.Writer,
 	idx uint16,

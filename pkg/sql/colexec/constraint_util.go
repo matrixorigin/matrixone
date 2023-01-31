@@ -79,41 +79,9 @@ func FilterAndUpdateByRowId(
 		if len(parentIdxs) > 0 {
 			parentIdx = parentIdxs[i]
 		}
-		attrs := make([]string, len(tableDef.Cols)-1)
+		info := getInfoForInsertAndUpdate(tableDef, updateCol)
 
-		// prepare some data for update batch
-		hasAutoCol := false
-		pkPos := -1
-		compositePkey := ""
-		if tableDef.CompositePkey != nil {
-			compositePkey = tableDef.CompositePkey.Name
-		}
-		clusterBy := ""
-		if tableDef.ClusterBy != nil {
-			clusterBy = tableDef.ClusterBy.Name
-		}
-		updateNameToPos := make(map[string]int)
-		pos := 0
-		for j, col := range tableDef.Cols {
-			if col.Typ.AutoIncr {
-				if _, ok := updateCol[col.Name]; ok {
-					hasAutoCol = true
-				}
-			}
-			if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
-				pkPos = j
-			}
-			if col.Name != catalog.Row_ID {
-				attrs[pos] = col.Name
-				updateNameToPos[col.Name] = pos
-				pos++
-			}
-		}
-		if compositePkey != "" {
-			pkPos = pos
-		}
-
-		delBatch, updateBatch, err = filterRowIdForUpdate(proc, bat, setIdxList, attrs, parentIdx)
+		delBatch, updateBatch, err = filterRowIdForUpdate(proc, bat, setIdxList, info.attrs, parentIdx)
 		if err != nil {
 			return 0, err
 		}
@@ -135,22 +103,22 @@ func FilterAndUpdateByRowId(
 			}
 
 			// fill auto incr column
-			if hasAutoCol {
+			if info.hasAutoCol {
 				if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, updateBatch, uint64(ref[i].Obj), ref[i].SchemaName, tableDef.Name); err != nil {
 					return 0, err
 				}
 			}
 
 			//  append hidden columns
-			if compositePkey != "" {
-				util.FillCompositeClusterByBatch(updateBatch, compositePkey, proc)
+			if info.compositePkey != "" {
+				util.FillCompositeClusterByBatch(updateBatch, info.compositePkey, proc)
 			}
-			if clusterBy != "" {
-				util.FillCompositeClusterByBatch(updateBatch, clusterBy, proc)
+			if info.clusterBy != "" {
+				util.FillCompositeClusterByBatch(updateBatch, info.clusterBy, proc)
 			}
 
 			// write unique key table
-			writeUniqueTable(eg, proc, updateBatch, tableDef, ref[i].SchemaName, updateNameToPos, pkPos)
+			writeUniqueTable(eg, proc, updateBatch, tableDef, ref[i].SchemaName, info.updateNameToPos, info.pkPos)
 
 			// write origin table
 			err = rels[i].Write(proc.Ctx, updateBatch)
@@ -176,14 +144,7 @@ func writeUniqueTable(eg engine.Engine, proc *process.Process, updateBatch *batc
 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
 			// how to get relation?
 			for idx, tblName := range idxDef.UIdx.TableNames {
-				db, err := eg.Database(proc.Ctx, dbName, proc.TxnOperator)
-				if err != nil {
-					return err
-				}
-				rel, err := db.Relation(proc.Ctx, tblName)
-				if err != nil {
-					return err
-				}
+
 				partsLength := len(idxDef.UIdx.Fields[idx].Parts)
 				uniqueColumnPos := make([]int, partsLength)
 				for p, column := range idxDef.UIdx.Fields[idx].Parts {
@@ -217,6 +178,15 @@ func writeUniqueTable(eg engine.Engine, proc *process.Process, updateBatch *batc
 					// have pk, append pk vector
 					vec = util.CompactPrimaryCol(updateBatch.Vecs[pkPos], bitMap, proc)
 					ukBatch.SetVector(1, vec)
+				}
+
+				db, err := eg.Database(proc.Ctx, dbName, proc.TxnOperator)
+				if err != nil {
+					return err
+				}
+				rel, err := db.Relation(proc.Ctx, tblName)
+				if err != nil {
+					return err
 				}
 				err = rel.Write(proc.Ctx, ukBatch)
 				if err != nil {
@@ -370,6 +340,58 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 	return updateBatch, nil
 }
 
+type tableInfo struct {
+	hasAutoCol      bool
+	pkPos           int
+	updateNameToPos map[string]int
+	compositePkey   string
+	clusterBy       string
+	attrs           []string
+	idxList         []int32
+}
+
+func getInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int32) *tableInfo {
+	info := &tableInfo{
+		hasAutoCol:      false,
+		pkPos:           -1,
+		updateNameToPos: make(map[string]int),
+		compositePkey:   "",
+		clusterBy:       "",
+		attrs:           make([]string, 0, len(tableDef.Cols)),
+		idxList:         make([]int32, 0, len(tableDef.Cols)),
+	}
+	if tableDef.CompositePkey != nil {
+		info.compositePkey = tableDef.CompositePkey.Name
+	}
+	if tableDef.ClusterBy != nil {
+		info.clusterBy = tableDef.ClusterBy.Name
+	}
+	pos := 0
+	for j, col := range tableDef.Cols {
+		if col.Typ.AutoIncr {
+			if updateCol == nil { // update statement
+				info.hasAutoCol = true
+			} else if _, ok := updateCol[col.Name]; ok { // insert statement
+				info.hasAutoCol = true
+			}
+		}
+		if info.compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
+			info.pkPos = j
+		}
+		if col.Name != catalog.Row_ID {
+			info.attrs = append(info.attrs, col.Name)
+			info.idxList = append(info.idxList, int32(pos))
+			info.updateNameToPos[col.Name] = pos
+			pos++
+		}
+	}
+	if info.compositePkey != "" {
+		info.pkPos = pos
+	}
+
+	return info
+}
+
 func InsertBatch(
 	eg engine.Engine,
 	proc *process.Process,
@@ -388,37 +410,10 @@ func InsertBatch(
 		bat.Clean(proc.Mp())
 	}()
 
-	// prepare some data for insert batch
-	attrs := make([]string, len(tableDef.Cols))
-	hasAutoCol := false
-	pkPos := -1
-	compositePkey := ""
-	if tableDef.CompositePkey != nil {
-		compositePkey = tableDef.CompositePkey.Name
-	}
-	clusterBy := ""
-	if tableDef.ClusterBy != nil {
-		clusterBy = tableDef.ClusterBy.Name
-	}
-	updateNameToPos := make(map[string]int)
-	idxList := make([]int32, len(tableDef.Cols))
-	for j, col := range tableDef.Cols {
-		if col.Typ.AutoIncr {
-			hasAutoCol = true
-		}
-		if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
-			pkPos = j
-		}
-		attrs[j] = col.Name
-		updateNameToPos[col.Name] = j
-		idxList[j] = int32(j)
-	}
-	if compositePkey != "" {
-		pkPos = len(tableDef.Cols)
-	}
+	info := getInfoForInsertAndUpdate(tableDef, nil)
 
 	//get insert batch
-	insertBatch, err = GetUpdateBatch(proc, bat, idxList, bat.Length(), attrs, nil, parentIdx)
+	insertBatch, err = GetUpdateBatch(proc, bat, info.idxList, bat.Length(), info.attrs, nil, parentIdx)
 	if err != nil {
 		return 0, err
 	}
@@ -430,22 +425,22 @@ func InsertBatch(
 	}
 
 	// fill auto incr column
-	if hasAutoCol {
+	if info.hasAutoCol {
 		if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, insertBatch, uint64(ref.Obj), ref.SchemaName, tableDef.Name); err != nil {
 			return 0, err
 		}
 	}
 
 	// append hidden columns
-	if compositePkey != "" {
-		util.FillCompositeClusterByBatch(insertBatch, compositePkey, proc)
+	if info.compositePkey != "" {
+		util.FillCompositeClusterByBatch(insertBatch, info.compositePkey, proc)
 	}
-	if clusterBy != "" {
-		util.FillCompositeClusterByBatch(insertBatch, clusterBy, proc)
+	if info.clusterBy != "" {
+		util.FillCompositeClusterByBatch(insertBatch, info.clusterBy, proc)
 	}
 
 	// write unique key table
-	writeUniqueTable(eg, proc, insertBatch, tableDef, ref.SchemaName, updateNameToPos, pkPos)
+	writeUniqueTable(eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos)
 
 	// write origin table
 	err = rel.Write(proc.Ctx, insertBatch)

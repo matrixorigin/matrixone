@@ -43,25 +43,41 @@ type Container struct {
 
 type Argument struct {
 	// Ts is not used
-	Ts                   uint64
-	TargetTable          engine.Relation
-	TargetColDefs        []*plan.ColDef
-	Affected             uint64
-	Engine               engine.Engine
-	DB                   engine.Database
-	TableID              uint64
-	CPkeyColDef          *plan.ColDef
-	DBName               string
-	TableName            string
-	UniqueIndexTables    []engine.Relation
-	UniqueIndexDef       *plan.UniqueIndexDef
-	SecondaryIndexTables []engine.Relation
-	SecondaryIndexDef    *plan.SecondaryIndexDef
-	ClusterTable         *plan.ClusterTable
-	ClusterByDef         *plan.ClusterByDef
-	IsRemote             bool // mark if this insert is cn2s3 directly
-	HasAutoCol           bool
-	container            *Container
+	Ts uint64
+	// TargetTable          engine.Relation
+	// TargetColDefs        []*plan.ColDef
+	Affected uint64
+	Engine   engine.Engine
+	// DB                   engine.Database
+	// TableID              uint64
+	// CPkeyColDef          *plan.ColDef
+	// DBName               string
+	// TableName            string
+	// UniqueIndexTables    []engine.Relation
+	// UniqueIndexDef       *plan.UniqueIndexDef
+	// SecondaryIndexTables []engine.Relation
+	// SecondaryIndexDef    *plan.SecondaryIndexDef
+	// ClusterTable         *plan.ClusterTable
+	// ClusterByDef         *plan.ClusterByDef
+	IsRemote bool // mark if this insert is cn2s3 directly
+	// HasAutoCol bool
+	container *Container
+
+	InsertCtx *InsertCtx
+}
+
+type InsertCtx struct {
+	Source   engine.Relation
+	Idx      []int32
+	Ref      *plan.ObjectRef
+	TableDef *plan.TableDef
+
+	IdxSource []engine.Relation
+	IdxIdx    []int32
+
+	ParentIdx map[string]int32
+
+	ClusterTable *plan.ClusterTable
 }
 
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
@@ -73,9 +89,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 func (arg *Argument) GetPkIndexes() {
 	arg.container.pkIndex = make([]int, 0, 1)
 	// Get CPkey index
-	if arg.CPkeyColDef != nil {
-		names := util.SplitCompositePrimaryKeyColumnName(arg.CPkeyColDef.Name)
-		for num, colDef := range arg.TargetColDefs {
+	if arg.InsertCtx.TableDef.CompositePkey != nil {
+		names := util.SplitCompositePrimaryKeyColumnName(arg.InsertCtx.TableDef.CompositePkey.Name)
+		for num, colDef := range arg.InsertCtx.TableDef.Cols {
 			for _, name := range names {
 				if colDef.Name == name {
 					arg.container.pkIndex = append(arg.container.pkIndex, num)
@@ -84,7 +100,7 @@ func (arg *Argument) GetPkIndexes() {
 		}
 	} else {
 		// Get Single Col pk index
-		for num, colDef := range arg.TargetColDefs {
+		for num, colDef := range arg.InsertCtx.TableDef.Cols {
 			if colDef.Primary {
 				arg.container.pkIndex = append(arg.container.pkIndex, num)
 				break
@@ -94,28 +110,29 @@ func (arg *Argument) GetPkIndexes() {
 }
 
 func (arg *Argument) GetNameNullAbility() bool {
-	for i := range arg.TargetColDefs {
-		def := arg.TargetColDefs[i]
+	for _, def := range arg.InsertCtx.TableDef.Cols {
 		arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
 		if def.Primary {
 			arg.container.pk[def.Name] = true
 		}
 	}
-	if arg.CPkeyColDef != nil {
-		def := arg.CPkeyColDef
+	if arg.InsertCtx.TableDef.CompositePkey != nil {
+		def := arg.InsertCtx.TableDef.CompositePkey
 		arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
 		arg.container.pk[def.Name] = true
 	}
-	if arg.UniqueIndexDef != nil {
-		for i := range arg.UniqueIndexDef.Fields {
-			for j := range arg.UniqueIndexDef.Fields[i].Cols {
-				def := arg.UniqueIndexDef.Fields[i].Cols[j]
-				arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
+	for _, def := range arg.InsertCtx.TableDef.Defs {
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+			for i := range idxDef.UIdx.Fields {
+				for j := range idxDef.UIdx.Fields[i].Cols {
+					def := idxDef.UIdx.Fields[i].Cols[j]
+					arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
+				}
 			}
 		}
 	}
-	if arg.ClusterByDef != nil {
-		arg.container.nameToNullablity[arg.ClusterByDef.Name] = true
+	if arg.InsertCtx.TableDef.ClusterBy != nil {
+		arg.container.nameToNullablity[arg.InsertCtx.TableDef.ClusterBy.Name] = true
 	}
 	return false
 }

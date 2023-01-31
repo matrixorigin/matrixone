@@ -359,8 +359,8 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
-					Tbl:         arg.TargetTable,
-					Unique_tbls: arg.UniqueIndexTables,
+					Tbl:         arg.InsertCtx.Source,
+					Unique_tbls: arg.InsertCtx.IdxSource,
 				},
 			})
 		} else {
