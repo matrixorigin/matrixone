@@ -122,11 +122,11 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side int8) {
+func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			side |= getJoinSide(arg, leftTags, rightTags)
+			side |= getJoinSide(arg, leftTags, rightTags, markTag)
 		}
 
 	case *plan.Expr_Col:
@@ -134,6 +134,8 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side 
 			side = JoinSideLeft
 		} else if _, ok := rightTags[exprImpl.Col.RelPos]; ok {
 			side = JoinSideRight
+		} else if exprImpl.Col.RelPos == markTag {
+			side = JoinSideMark
 		}
 
 	case *plan.Expr_Corr:
