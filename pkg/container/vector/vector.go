@@ -1748,3 +1748,34 @@ func CopyConst(toVec, fromVec *Vector, length int, m *mpool.MPool) error {
 
 	return nil
 }
+
+func Delete[T any](v *Vector, i int) {
+	if v.Nsp != nil && v.Nsp.Any() {
+		vNulls := v.Nsp.Np.Clone()
+
+		vNullsArr := vNulls.ToArray()
+		for pos := len(vNullsArr) - 1; pos >= 0; pos-- {
+			if vNullsArr[pos] < uint64(i) {
+				break
+			}
+			vNulls.Remove(vNullsArr[pos])
+			vNulls.Add(vNullsArr[pos] - 1)
+		}
+
+		v.Nsp.Np = vNulls
+	}
+
+	vCol := v.Col.([]T)
+	vCol = append(vCol[:i], vCol[i+1:]...)
+	v.Col = vCol
+
+	var a T
+	tsize := int(unsafe.Sizeof(a))
+
+	size := len(v.data) - tsize
+	v.data = v.data[:size]
+}
+
+func (v *Vector) GetData() []byte {
+	return v.data
+}

@@ -27,7 +27,7 @@ func NewTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeV
 		downstreamVector: cnVector.New(typ),
 		nullable:         nullable,
 	}
-	vec.downstreamVector.Nsp = &cnNulls.Nulls{Np: bitmap.New(0)}
+	vec.downstreamVector.Nsp = cnNulls.NewWithSize(0)
 
 	// mpool
 	var alloc *mpool.MPool
@@ -65,7 +65,6 @@ func (vec CnTaeVector[T]) Append(v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
 		_ = vec.downstreamVector.Append(types.DefaultVal[T](), true, vec.mpool)
-
 	} else {
 		_ = vec.downstreamVector.Append(v, false, vec.mpool)
 	}
@@ -79,6 +78,7 @@ func (vec CnTaeVector[T]) AppendMany(vs ...any) {
 }
 
 func (vec CnTaeVector[T]) Nullable() bool {
+	// TODO: replace this nullable flag with Nsp!=nil check
 	return vec.nullable
 }
 
@@ -337,13 +337,15 @@ func (vec CnTaeVector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 
 func (vec CnTaeVector[T]) Capacity() int {
 	// TODO: Not sure if it correct
+	// Should capacity be showing the mpool allocated byte[] capacity?
+
 	if vec.downstreamVector.Col != nil {
 		return cap(vec.downstreamVector.Col.([]T))
 	}
 	return 0
 }
 
-// No Idea
+// At least better than No Idea
 
 func (vec CnTaeVector[T]) SlicePtr() unsafe.Pointer {
 	//panic("Soon Deprecated")
@@ -359,6 +361,26 @@ func (vec CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 		return
 	}
 
+	//TODO: This null mask check is ideally not required. Need to check on how to remove it
+	if src.Nullable() && src.HasNull() {
+		if vec.downstreamVector.GetNulls() == nil {
+			vec.downstreamVector.Nsp = cnNulls.NewWithSize(0)
+		}
+		it := src.NullMask().Iterator()
+		offset := vec.Length()
+		vec.downstreamVector.Nsp.Np.TryExpandWithSize(src.Length())
+		for it.HasNext() {
+			pos := it.Next()
+			if pos < uint64(srcOff) {
+				continue
+			} else if pos >= uint64(srcOff+srcLen) {
+				break
+			}
+
+			vec.downstreamVector.Nsp.Np.Add(uint64(offset) + pos - uint64(srcOff))
+		}
+	}
+
 	if vec.downstreamVector.GetType().IsVarlen() {
 		bs := src.Bytes()
 		for i := srcOff; i < srcOff+srcLen; i++ {
@@ -367,6 +389,7 @@ func (vec CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 		return
 	}
 
+	// TODO: Where should slicePtr fetch data from ?
 	slice := unsafe.Slice((*T)(src.SlicePtr()), srcOff+srcLen)
 	for i := srcOff; i < srcOff+srcLen; i++ {
 		vec.Append(any(slice[i]).(T))
@@ -374,15 +397,7 @@ func (vec CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 }
 
 func (vec CnTaeVector[T]) Delete(i int) {
-	//TODO: Not concurrent
-	vec.downstreamVector.Col = append(vec.downstreamVector.Col.([]T)[:i], vec.downstreamVector.Col.([]T)[i+1:]...)
-
-	if !vec.HasNull() {
-		vec.downstreamVector.Nsp.Np.Remove(uint64(i))
-	}
-	// TODO: resize the buffer
-	//size := len(vec.downstreamVector.data) - stl.Sizeof[T]()
-	//vec.buf = vec.buf[:size]
+	cnVector.Delete[T](vec.downstreamVector, i)
 }
 
 func (vec CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
@@ -410,26 +425,30 @@ func (vec CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	return 0, err
 }
 
+// No Idea
+
+func (vec CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
+	var moVector *cnVector.Vector
+	if vec.GetType().IsVarlen() {
+		moVector, _ = cnVector.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
+	} else {
+		moVector = cnVector.NewOriginalWithData(vec.GetType(), bs.StorageBuf(), &cnNulls.Nulls{})
+	}
+
+	if vec.Nullable() {
+		moVector.Nsp.Np = bitmap.New(vec.Length())
+		moVector.Nsp.Np.AddMany(nulls.ToArray())
+	}
+	vec.downstreamVector = moVector
+}
+
 // Issues
 
 func (vec CnTaeVector[T]) Data() []byte {
-	//TODO: wrong impl
-	length := vec.downstreamVector.Length()
-	var buffer []byte
-	for i := 0; i < length; i++ {
-		buffer = append(buffer, vec.downstreamVector.GetBytes(int64(i))...)
+	if vec.GetType().IsVarlen() {
+		panic("not support")
 	}
-
-	return buffer
-}
-
-func (vec CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
-
-	if vec.Nullable() {
-		vec.downstreamVector.Nsp = &cnNulls.Nulls{Np: Roaring64ToBitmap(nulls)}
-	}
-	vec.downstreamVector.Col = bs.Header
-	vec.downstreamVector.Read(bs.Storage)
+	return vec.downstreamVector.GetData()
 }
 
 func (vec CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
@@ -475,14 +494,41 @@ func (vec CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (e
 	return err
 }
 
-// --------------- Yet to Implement
+func (vec CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 
-func (vec CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error {
-	//TODO implement me
-	panic("implement me")
+	if sels == nil || sels.IsEmpty() {
+		for i := offset; i < offset+length; i++ {
+			elem := vec.Get(i)
+			if err = op(elem, i); err != nil {
+				break
+			}
+		}
+	} else {
+
+		idxes := sels.ToArray()
+		end := offset + length
+		for _, idx := range idxes {
+			if int(idx) < offset {
+				continue
+			} else if int(idx) >= end {
+				break
+			}
+			elem := vec.Get(int(idx))
+			if err = op(elem, int(idx)); err != nil {
+				break
+			}
+		}
+	}
+
+	return nil
+
 }
 
-func (vec CnTaeVector[T]) Compact(bitmap *roaring.Bitmap) {
-	//TODO implement me
-	panic("implement me")
+// --------------- Yet to Implement
+
+func (vec CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
+	arr := deletes.ToArray()
+	for _, rowIdx := range arr {
+		vec.Delete(int(rowIdx))
+	}
 }
