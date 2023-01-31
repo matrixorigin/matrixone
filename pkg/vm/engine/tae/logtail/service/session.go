@@ -59,7 +59,6 @@ func (sm *SessionManager) GetSession(
 	notifier SessionErrorNotifier,
 	stream morpcStream,
 	sendTimeout time.Duration,
-	poisionTime time.Duration,
 	heartbeatInterval time.Duration,
 ) *Session {
 	sm.Lock()
@@ -68,7 +67,7 @@ func (sm *SessionManager) GetSession(
 	if _, ok := sm.clients[stream]; !ok {
 		sm.clients[stream] = NewSession(
 			rootCtx, logger, responses, notifier, stream,
-			sendTimeout, poisionTime, heartbeatInterval,
+			sendTimeout, heartbeatInterval,
 		)
 	}
 	return sm.clients[stream]
@@ -162,9 +161,8 @@ type Session struct {
 	responses   LogtailResponsePool
 	notifier    SessionErrorNotifier
 
-	stream      morpcStream
-	poisionTime time.Duration
-	sendChan    chan message
+	stream   morpcStream
+	sendChan chan message
 
 	active int32
 
@@ -189,7 +187,6 @@ func NewSession(
 	notifier SessionErrorNotifier,
 	stream morpcStream,
 	sendTimeout time.Duration,
-	poisionTime time.Duration,
 	heartbeatInterval time.Duration,
 ) *Session {
 	ctx, cancel := context.WithCancel(rootCtx)
@@ -201,7 +198,6 @@ func NewSession(
 		responses:         responses,
 		notifier:          notifier,
 		stream:            stream,
-		poisionTime:       poisionTime,
 		sendChan:          make(chan message, 16), // buffer response for morpc client session
 		tables:            make(map[TableID]TableState),
 		heartbeatInterval: heartbeatInterval,
@@ -423,15 +419,15 @@ func (ss *Session) SendResponse(
 	}
 
 	select {
-	case <-time.After(ss.poisionTime):
+	case ss.sendChan <- message{sendCtx: sendCtx, response: response}:
+		return nil
+	default:
 		ss.logger.Error("poision morpc client session detected, close it")
 		ss.responses.Release(response)
 		if err := ss.stream.Close(); err != nil {
 			ss.logger.Error("fail to close poision morpc client session", zap.Error(err))
 		}
 		return moerr.NewStreamClosedNoCtx()
-	case ss.sendChan <- message{sendCtx: sendCtx, response: response}:
-		return nil
 	}
 }
 

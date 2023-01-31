@@ -36,11 +36,6 @@ import (
 
 const (
 	LogtailServiceRPCName = "logtail-push-rpc"
-
-	// minimal duration to detect slow morpc stream
-	minStreamPoisionTime = 5 * time.Millisecond
-	// maximum duration to detect slow morpc stream
-	maxStreamPoisionTime = 500 * time.Millisecond
 )
 
 type ServerOption func(*LogtailServer)
@@ -262,7 +257,6 @@ func (s *LogtailServer) onSubscription(
 	session := s.ssmgr.GetSession(
 		s.rootCtx, logger, s.pool.responses, s, stream,
 		s.cfg.ResponseSendTimeout,
-		s.streamPoisionTime(),
 		s.cfg.LogtailCollectInterval,
 	)
 
@@ -304,7 +298,6 @@ func (s *LogtailServer) onUnsubscription(
 	session := s.ssmgr.GetSession(
 		s.rootCtx, s.logger, s.pool.responses, s, stream,
 		s.cfg.ResponseSendTimeout,
-		s.streamPoisionTime(),
 		s.cfg.LogtailCollectInterval,
 	)
 
@@ -314,18 +307,6 @@ func (s *LogtailServer) onUnsubscription(
 	}
 
 	return session.SendUnsubscriptionResponse(sendCtx, *req.Table)
-}
-
-// streamPoisionTime returns poision duration for stream.
-func (s *LogtailServer) streamPoisionTime() time.Duration {
-	duration := s.cfg.LogtailCollectInterval * 2
-	if duration < minStreamPoisionTime {
-		duration = minStreamPoisionTime
-	}
-	if duration > maxStreamPoisionTime {
-		duration = maxStreamPoisionTime
-	}
-	return duration
 }
 
 // NotifySessionError notifies session manager with session error.
