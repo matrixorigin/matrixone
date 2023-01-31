@@ -261,10 +261,10 @@ a    b    c
 91    pppp    2000-09-08 00:00:00
 2    pppp    2222-07-12 00:00:00
 94    pppp    1999-06-04 00:00:00
-5    pppp    1897-04-29 00:00:00
-6    pppp    2030-12-29 00:00:00
 select * from dis_table_02;
 a    b    c
+5        1897-04-29 00:00:00
+6    vvvvv    2030-12-29 00:00:00
 1    aaaa    2020-09-08 00:00:00
 91    vvv    2000-09-08 00:00:00
 2    aaaa    2222-07-12 00:00:00
@@ -279,8 +279,6 @@ a    b    c
 91    pppp    2000-09-08 00:00:00
 2    pppp    2222-07-12 00:00:00
 94    pppp    1999-06-04 00:00:00
-5    pppp    1897-04-29 00:00:00
-6    pppp    2030-12-29 00:00:00
 use isolation_2;
 select * from dis_view_02;
 SQL parser error: table "dis_view_02" does not exist
@@ -297,8 +295,6 @@ a    b    c
 91    pppp    2000-09-08 00:00:00
 2    pppp    2222-07-12 00:00:00
 94    pppp    1999-06-04 00:00:00
-5    pppp    1897-04-29 00:00:00
-6    pppp    2030-12-29 00:00:00
 select * from dis_view_02;
 SQL parser error: table "dis_view_02" does not exist
 drop table dis_view_02;
@@ -330,8 +326,6 @@ a    b    c
 91    pppp    2000-09-08 00:00:00
 2    pppp    2222-07-12 00:00:00
 94    pppp    1999-06-04 00:00:00
-5    pppp    1897-04-29 00:00:00
-6    pppp    2030-12-29 00:00:00
 update dis_table_02 set b='tittttt' where a>1;
 select * from dis_table_02;
 a    b    c
@@ -339,8 +333,6 @@ a    b    c
 91    tittttt    2000-09-08 00:00:00
 2    tittttt    2222-07-12 00:00:00
 94    tittttt    1999-06-04 00:00:00
-5    tittttt    1897-04-29 00:00:00
-6    tittttt    2030-12-29 00:00:00
 select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
@@ -351,8 +343,6 @@ a    b    c
 91    catttteee    2000-09-08 00:00:00
 2    catttteee    2222-07-12 00:00:00
 94    catttteee    1999-06-04 00:00:00
-5    catttteee    1897-04-29 00:00:00
-6    catttteee    2030-12-29 00:00:00
 1    pppp    2020-09-08 00:00:00
 commit;
 commit;
@@ -363,16 +353,12 @@ a    b    c
 91    catttteee    2000-09-08 00:00:00
 2    catttteee    2222-07-12 00:00:00
 94    catttteee    1999-06-04 00:00:00
-5    catttteee    1897-04-29 00:00:00
-6    catttteee    2030-12-29 00:00:00
 select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
 91    catttteee    2000-09-08 00:00:00
 2    catttteee    2222-07-12 00:00:00
 94    catttteee    1999-06-04 00:00:00
-5    catttteee    1897-04-29 00:00:00
-6    catttteee    2030-12-29 00:00:00
 create database if not exists iso_db_02;
 start transaction ;
 use iso_db_02;
