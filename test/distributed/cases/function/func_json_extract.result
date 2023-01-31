@@ -210,8 +210,9 @@ json_extract({"a":1,"b":2,"c":3}, $.a, $.b, $.c)
 select json_extract('{"a":1,"b":2,"c":3}','$.c','$.d');
 json_extract({"a":1,"b":2,"c":3}, $.c, $.d)
 [3]
-select json_extract('[0,1,2]', '$[0]', '$[1]',);
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 47 near ");";
+select json_extract('[0,1,2]', '$[0]', '$[1]');
+json_extract([0,1,2], $[0], $[1])
+[0, 1]
 select json_extract('[0,1,2]', '$[1]', '$[0]');
 json_extract([0,1,2], $[1], $[0])
 [1, 0]

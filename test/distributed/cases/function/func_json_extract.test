@@ -80,6 +80,6 @@ select json_extract('[1,2,3]','$[0 to last-8]');
 select json_extract('{"a":1,"b":2,"c":3}','$.a','$.b');
 select json_extract('{"a":1,"b":2,"c":3}','$.a','$.b','$.c');
 select json_extract('{"a":1,"b":2,"c":3}','$.c','$.d');
-select json_extract('[0,1,2]', '$[0]', '$[1]',);
+select json_extract('[0,1,2]', '$[0]', '$[1]');
 select json_extract('[0,1,2]', '$[1]', '$[0]');
 select json_extract('[0,1,2]', '$[last-1]', '$[0]', '$[2]');
