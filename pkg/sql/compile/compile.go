@@ -360,7 +360,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
 					Tbl:         arg.InsertCtx.Source,
-					Unique_tbls: arg.InsertCtx.IdxSource,
+					Unique_tbls: arg.Container.UniqueRels,
 				},
 			})
 		} else {
@@ -564,7 +564,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		if err != nil {
 			return nil, err
 		}
-		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+		return ss, nil
+		// return c.compileProjection(n, c.compileRestrict(n, ss)), nil
 	case plan.Node_UPDATE:
 		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
 		if err != nil {

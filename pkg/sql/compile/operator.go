@@ -361,7 +361,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			// SecondaryIndexDef:    t.SecondaryIndexDef,
 			// ClusterTable:         t.ClusterTable,
 			// ClusterByDef:         t.ClusterByDef,
-			IsRemote: t.IsRemote,
+			IsRemote:  t.IsRemote,
+			InsertCtx: t.InsertCtx,
 			// HasAutoCol:           t.HasAutoCol,
 		}
 	default:

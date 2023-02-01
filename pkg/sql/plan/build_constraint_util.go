@@ -389,9 +389,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	syntaxHasColumnNames := false
 	isClusterTable := info.tblInfo.isClusterTable[0]
 	colToIdx := make(map[string]int)
+	oldColPosMap := make(map[string]int)
 	for i, col := range tableDef.Cols {
 		colToIdx[col.Name] = i
+		oldColPosMap[col.Name] = i
 	}
+	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
+	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
+
 	if stmt.Columns == nil {
 		if isClusterTable {
 			for _, col := range tableDef.Cols {
@@ -829,109 +834,111 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 		}
 	}
 
-	// rewrite index
-	for _, def := range tableDef.Defs {
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-			for idx, tblName := range idxDef.UIdx.TableNames {
-				idxRef := &plan.ObjectRef{
-					SchemaName: builder.compCtx.DefaultDatabase(),
-					ObjName:    tblName,
-				}
+	// rewrite index, to get rows of unique table to delete
+	if info.typ != "insert" {
+		for _, def := range tableDef.Defs {
+			if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+				for idx, tblName := range idxDef.UIdx.TableNames {
+					idxRef := &plan.ObjectRef{
+						SchemaName: builder.compCtx.DefaultDatabase(),
+						ObjName:    tblName,
+					}
 
-				// append table_scan node
-				rightCtx := NewBindContext(builder, bindCtx)
-				astTblName := tree.NewTableName(tree.Identifier(tblName), tree.ObjectNamePrefix{})
-				rightId, err := builder.buildTable(astTblName, rightCtx)
-				if err != nil {
-					return err
-				}
-				rightTag := builder.qry.Nodes[rightId].BindingTags[0]
-				baseTag := builder.qry.Nodes[baseNodeId].BindingTags[0]
-				rightTableDef := builder.qry.Nodes[rightId].TableDef
-				rightRowIdPos := int32(len(rightTableDef.Cols)) - 1
-				rightIdxPos := int32(0)
+					// append table_scan node
+					rightCtx := NewBindContext(builder, bindCtx)
+					astTblName := tree.NewTableName(tree.Identifier(tblName), tree.ObjectNamePrefix{})
+					rightId, err := builder.buildTable(astTblName, rightCtx)
+					if err != nil {
+						return err
+					}
+					rightTag := builder.qry.Nodes[rightId].BindingTags[0]
+					baseTag := builder.qry.Nodes[baseNodeId].BindingTags[0]
+					rightTableDef := builder.qry.Nodes[rightId].TableDef
+					rightRowIdPos := int32(len(rightTableDef.Cols)) - 1
+					rightIdxPos := int32(0)
 
-				// append projection
-				info.projectList = append(info.projectList, &plan.Expr{
-					Typ: rightTableDef.Cols[rightRowIdPos].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: rightTag,
-							ColPos: rightRowIdPos,
-						},
-					},
-				})
-
-				rightExpr := &plan.Expr{
-					Typ: rightTableDef.Cols[rightIdxPos].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: rightTag,
-							ColPos: rightIdxPos,
-						},
-					},
-				}
-
-				// append join node
-				var joinConds []*Expr
-				var leftExpr *Expr
-				partsLength := len(idxDef.UIdx.Fields[idx].Parts)
-				if partsLength == 1 {
-					orginIndexColumnName := idxDef.UIdx.Fields[idx].Parts[0]
-					typ := typMap[orginIndexColumnName]
-					leftExpr = &Expr{
-						Typ: typ,
+					// append projection
+					info.projectList = append(info.projectList, &plan.Expr{
+						Typ: rightTableDef.Cols[rightRowIdPos].Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
-								RelPos: baseTag,
-								ColPos: int32(oldColPosMap[orginIndexColumnName]),
+								RelPos: rightTag,
+								ColPos: rightRowIdPos,
+							},
+						},
+					})
+
+					rightExpr := &plan.Expr{
+						Typ: rightTableDef.Cols[rightIdxPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: rightTag,
+								ColPos: rightIdxPos,
 							},
 						},
 					}
-				} else {
-					args := make([]*Expr, partsLength)
-					for i, column := range idxDef.UIdx.Fields[idx].Parts {
-						typ := typMap[column]
-						args[i] = &plan.Expr{
+
+					// append join node
+					var joinConds []*Expr
+					var leftExpr *Expr
+					partsLength := len(idxDef.UIdx.Fields[idx].Parts)
+					if partsLength == 1 {
+						orginIndexColumnName := idxDef.UIdx.Fields[idx].Parts[0]
+						typ := typMap[orginIndexColumnName]
+						leftExpr = &Expr{
 							Typ: typ,
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									RelPos: baseTag,
-									ColPos: int32(oldColPosMap[column]),
+									ColPos: int32(oldColPosMap[orginIndexColumnName]),
 								},
 							},
 						}
+					} else {
+						args := make([]*Expr, partsLength)
+						for i, column := range idxDef.UIdx.Fields[idx].Parts {
+							typ := typMap[column]
+							args[i] = &plan.Expr{
+								Typ: typ,
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: baseTag,
+										ColPos: int32(oldColPosMap[column]),
+									},
+								},
+							}
+						}
+						leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+						if err != nil {
+							return err
+						}
 					}
-					leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+
+					condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 					if err != nil {
 						return err
 					}
-				}
+					joinConds = []*Expr{condExpr}
 
-				condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
-				if err != nil {
-					return err
-				}
-				joinConds = []*Expr{condExpr}
+					leftCtx := builder.ctxByNode[info.rootId]
+					joinCtx := NewBindContext(builder, bindCtx)
+					err = joinCtx.mergeContexts(leftCtx, rightCtx)
+					if err != nil {
+						return err
+					}
+					newRootId := builder.appendNode(&plan.Node{
+						NodeType: plan.Node_JOIN,
+						Children: []int32{info.rootId, rightId},
+						JoinType: plan.Node_LEFT,
+						OnList:   joinConds,
+					}, joinCtx)
+					bindCtx.binder = NewTableBinder(builder, bindCtx)
+					info.rootId = newRootId
 
-				leftCtx := builder.ctxByNode[info.rootId]
-				joinCtx := NewBindContext(builder, bindCtx)
-				err = joinCtx.mergeContexts(leftCtx, rightCtx)
-				if err != nil {
-					return err
+					info.onIdxTbl = append(info.onIdxTbl, idxRef)
+					info.onIdx = append(info.onIdx, info.idx)
+					info.idx = info.idx + 1
 				}
-				newRootId := builder.appendNode(&plan.Node{
-					NodeType: plan.Node_JOIN,
-					Children: []int32{info.rootId, rightId},
-					JoinType: plan.Node_LEFT,
-					OnList:   joinConds,
-				}, joinCtx)
-				bindCtx.binder = NewTableBinder(builder, bindCtx)
-				info.rootId = newRootId
-
-				info.onIdxTbl = append(info.onIdxTbl, idxRef)
-				info.onIdx = append(info.onIdx, info.idx)
-				info.idx = info.idx + 1
 			}
 		}
 	}

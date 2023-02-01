@@ -58,14 +58,14 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		return nil, err
 	}
 
-	// if tblInfo.haveConstraint {
-	// 	for i, tableDef := range tblInfo.tableDefs {
-	// 		err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId, i)
-	// 		if err != nil {
-	// 			return nil, err
-	// 		}
-	// 	}
-	// }
+	if tblInfo.haveConstraint {
+		for i, tableDef := range tblInfo.tableDefs {
+			err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId, i)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	// append ProjectNode
 	rewriteInfo.rootId = builder.appendNode(&plan.Node{
@@ -87,12 +87,11 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		Ref:      rewriteInfo.tblInfo.objRef[0],
 		TableDef: rewriteInfo.tblInfo.tableDefs[0],
 		Idx:      make([]int32, len(rewriteInfo.tblInfo.tableDefs[0].Cols)),
-		// UpdateCol: rewriteInfo.tblInfo.updateCol[0],
 
 		IdxRef: rewriteInfo.onIdxTbl,
 		IdxIdx: rewriteInfo.onIdx,
 
-		// ParentIdx: rewriteInfo.parentIdx[0],
+		ParentIdx:    rewriteInfo.parentIdx[0],
 		ClusterTable: clusterTable,
 	}
 	for j := range tblDef.Cols {

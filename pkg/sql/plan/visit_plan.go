@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -91,6 +92,17 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		node.FilterList[i], err = rule.ApplyExpr(node.FilterList[i])
 		if err != nil {
 			return err
+		}
+	}
+
+	if node.RowsetData != nil {
+		for i := range node.RowsetData.Cols {
+			for j := range node.RowsetData.Cols[i].Data {
+				node.RowsetData.Cols[i].Data[j], err = rule.ApplyExpr(node.RowsetData.Cols[i].Data[j])
+				if err != nil {
+					return err
+				}
+			}
 		}
 	}
 

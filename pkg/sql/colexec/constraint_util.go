@@ -30,6 +30,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type tableInfo struct {
+	hasAutoCol      bool
+	pkPos           int
+	updateNameToPos map[string]int
+	compositePkey   string
+	clusterBy       string
+	attrs           []string
+	idxList         []int32
+}
+
 func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int32, rels []engine.Relation) (uint64, error) {
 	var affectedRows uint64
 	for i, idx := range idxList {
@@ -96,17 +106,17 @@ func FilterAndUpdateByRowId(
 				return 0, err
 			}
 
-			// check new rows not null
-			err := batchDataNotNullCheck(updateBatch, tableDef, proc.Ctx)
-			if err != nil {
-				return 0, err
-			}
-
 			// fill auto incr column
 			if info.hasAutoCol {
 				if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, updateBatch, uint64(ref[i].Obj), ref[i].SchemaName, tableDef.Name); err != nil {
 					return 0, err
 				}
+			}
+
+			// check new rows not null
+			err := batchDataNotNullCheck(updateBatch, tableDef, proc.Ctx)
+			if err != nil {
+				return 0, err
 			}
 
 			//  append hidden columns
@@ -118,7 +128,7 @@ func FilterAndUpdateByRowId(
 			}
 
 			// write unique key table
-			writeUniqueTable(eg, proc, updateBatch, tableDef, ref[i].SchemaName, info.updateNameToPos, info.pkPos)
+			writeUniqueTable(nil, eg, proc, updateBatch, tableDef, ref[i].SchemaName, info.updateNameToPos, info.pkPos)
 
 			// write origin table
 			err = rels[i].Write(proc.Ctx, updateBatch)
@@ -130,7 +140,7 @@ func FilterAndUpdateByRowId(
 	return affectedRows, nil
 }
 
-func writeUniqueTable(eg engine.Engine, proc *process.Process, updateBatch *batch.Batch,
+func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *process.Process, updateBatch *batch.Batch,
 	tableDef *plan.TableDef, dbName string, updateNameToPos map[string]int, pkPos int) error {
 	var ukBatch *batch.Batch
 
@@ -140,6 +150,7 @@ func writeUniqueTable(eg engine.Engine, proc *process.Process, updateBatch *batc
 		}
 	}()
 
+	uIdx := 0
 	for _, def := range tableDef.Defs {
 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
 			// how to get relation?
@@ -188,9 +199,16 @@ func writeUniqueTable(eg engine.Engine, proc *process.Process, updateBatch *batc
 				if err != nil {
 					return err
 				}
-				err = rel.Write(proc.Ctx, ukBatch)
-				if err != nil {
-					return err
+
+				if s3Container == nil {
+					err = rel.Write(proc.Ctx, ukBatch)
+					if err != nil {
+						return err
+					}
+				} else {
+					WriteS3Batch(s3Container, ukBatch, proc, uIdx)
+					uIdx++
+					s3Container.UniqueRels = append(s3Container.UniqueRels, rel)
 				}
 			}
 		}
@@ -340,16 +358,6 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 	return updateBatch, nil
 }
 
-type tableInfo struct {
-	hasAutoCol      bool
-	pkPos           int
-	updateNameToPos map[string]int
-	compositePkey   string
-	clusterBy       string
-	attrs           []string
-	idxList         []int32
-}
-
 func getInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int32) *tableInfo {
 	info := &tableInfo{
 		hasAutoCol:      false,
@@ -393,6 +401,7 @@ func getInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int
 }
 
 func InsertBatch(
+	container *WriteS3Container,
 	eg engine.Engine,
 	proc *process.Process,
 	bat *batch.Batch,
@@ -418,17 +427,17 @@ func InsertBatch(
 		return 0, err
 	}
 
-	// check new rows not null
-	err = batchDataNotNullCheck(insertBatch, tableDef, proc.Ctx)
-	if err != nil {
-		return 0, err
-	}
-
 	// fill auto incr column
 	if info.hasAutoCol {
 		if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, insertBatch, uint64(ref.Obj), ref.SchemaName, tableDef.Name); err != nil {
 			return 0, err
 		}
+	}
+
+	// check new rows not null
+	err = batchDataNotNullCheck(insertBatch, tableDef, proc.Ctx)
+	if err != nil {
+		return 0, err
 	}
 
 	// append hidden columns
@@ -439,11 +448,31 @@ func InsertBatch(
 		util.FillCompositeClusterByBatch(insertBatch, info.clusterBy, proc)
 	}
 
-	// write unique key table
-	writeUniqueTable(eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos)
+	if container != nil {
+		// write to s3
+		err = WriteS3Batch(container, bat, proc, 0)
+		if err != nil {
+			return 0, err
+		}
 
-	// write origin table
-	err = rel.Write(proc.Ctx, insertBatch)
+		err = writeUniqueTable(container, eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos)
+		if err != nil {
+			return 0, err
+		}
+
+		container.metaLocBat.SetZs(container.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+		proc.SetInputBatch(container.metaLocBat)
+	} else {
+		// write unique key table
+		err = writeUniqueTable(nil, eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos)
+		if err != nil {
+			return 0, err
+		}
+
+		// write origin table
+		err = rel.Write(proc.Ctx, insertBatch)
+	}
+
 	if err != nil {
 		return 0, err
 	}
@@ -462,8 +491,7 @@ func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx con
 
 	for j := range tmpBat.Vecs {
 		nsp := tmpBat.Vecs[j].Nsp
-		if (tableDef.Cols[j].Primary && !tableDef.Cols[j].Typ.AutoIncr) ||
-			(tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility) {
+		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility {
 			if nulls.Any(nsp) {
 				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
 			}
@@ -476,60 +504,3 @@ func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx con
 	}
 	return nil
 }
-
-// func filterRowIdForInsert(proc *process.Process, bat *batch.Batch, idxList []int32, attrs []string) (*batch.Batch, *batch.Batch, error) {
-// 	rowIdMap := make(map[types.Rowid]struct{})
-// 	var rowSkip []bool
-// 	var err error
-// 	foundRowId := false
-// 	insertBatLen := 0
-// 	for i, idx := range idxList {
-// 		if bat.Vecs[idx].Typ.Oid == types.T_Rowid {
-// 			for j, r := range vector.MustTCols[types.Rowid](bat.Vecs[idx]) {
-// 				if bat.Vecs[idx].Nsp.Contains(uint64(j)) {
-// 					rowSkip = append(rowSkip, false)
-// 					insertBatLen++
-// 				} else {
-// 					rowSkip = append(rowSkip, true)
-// 					rowIdMap[r] = struct{}{}
-// 				}
-// 			}
-// 			foundRowId = true
-// 			idxList = append(idxList[:i], idxList[i+1:]...)
-// 			break
-// 		}
-// 	}
-// 	if !foundRowId {
-// 		return nil, nil, moerr.NewInternalError(proc.Ctx, "need rowid vector for update")
-// 	}
-// 	var delBatch *batch.Batch
-// 	var updateBatch *batch.Batch
-
-// 	batLen := len(rowIdMap)
-// 	if batLen > 0 {
-// 		// get delete batch
-// 		delVec := vector.New(types.T_Rowid.ToType())
-// 		rowIdList := make([]types.Rowid, len(rowIdMap))
-// 		i := 0
-// 		for rowId := range rowIdMap {
-// 			rowIdList[i] = rowId
-// 			i++
-// 		}
-// 		mp := proc.Mp()
-// 		vector.AppendFixed(delVec, rowIdList, mp)
-// 		delBatch = batch.New(true, []string{catalog.Row_ID})
-// 		delBatch.SetVector(0, delVec)
-// 		delBatch.SetZs(batLen, mp)
-// 	}
-
-// 	// get update batch
-// 	if insertBatLen == 0 {
-// 		return delBatch, nil, nil
-// 	}
-// 	updateBatch, err = GetUpdateBatch(proc, bat, idxList, insertBatLen, attrs, rowSkip)
-// 	if err != nil {
-// 		delBatch.Clean(proc.Mp())
-// 		return nil, nil, err
-// 	}
-// 	return delBatch, updateBatch, nil
-// }

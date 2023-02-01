@@ -15,10 +15,8 @@
 package insert
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -27,19 +25,6 @@ const (
 	INSERT = iota
 	DELETE
 )
-
-type Container struct {
-	writer        objectio.Writer
-	unique_writer []objectio.Writer
-	pkIndex       []int
-	// record every batch's Length
-	lengths []uint64
-	// record unique batch's Length
-	unique_lengths   [][]uint64
-	cacheBat         *batch.Batch
-	nameToNullablity map[string]bool
-	pk               map[string]bool
-}
 
 type Argument struct {
 	// Ts is not used
@@ -61,7 +46,7 @@ type Argument struct {
 	// ClusterByDef         *plan.ClusterByDef
 	IsRemote bool // mark if this insert is cn2s3 directly
 	// HasAutoCol bool
-	container *Container
+	Container *colexec.WriteS3Container
 
 	InsertCtx *InsertCtx
 }
@@ -86,53 +71,53 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 }
 
-func (arg *Argument) GetPkIndexes() {
-	arg.container.pkIndex = make([]int, 0, 1)
-	// Get CPkey index
-	if arg.InsertCtx.TableDef.CompositePkey != nil {
-		names := util.SplitCompositePrimaryKeyColumnName(arg.InsertCtx.TableDef.CompositePkey.Name)
-		for num, colDef := range arg.InsertCtx.TableDef.Cols {
-			for _, name := range names {
-				if colDef.Name == name {
-					arg.container.pkIndex = append(arg.container.pkIndex, num)
-				}
-			}
-		}
-	} else {
-		// Get Single Col pk index
-		for num, colDef := range arg.InsertCtx.TableDef.Cols {
-			if colDef.Primary {
-				arg.container.pkIndex = append(arg.container.pkIndex, num)
-				break
-			}
-		}
-	}
-}
+// func (arg *Argument) GetPkIndexes() {
+// 	arg.container.pkIndex = make([]int, 0, 1)
+// 	// Get CPkey index
+// 	if arg.InsertCtx.TableDef.CompositePkey != nil {
+// 		names := util.SplitCompositePrimaryKeyColumnName(arg.InsertCtx.TableDef.CompositePkey.Name)
+// 		for num, colDef := range arg.InsertCtx.TableDef.Cols {
+// 			for _, name := range names {
+// 				if colDef.Name == name {
+// 					arg.container.pkIndex = append(arg.container.pkIndex, num)
+// 				}
+// 			}
+// 		}
+// 	} else {
+// 		// Get Single Col pk index
+// 		for num, colDef := range arg.InsertCtx.TableDef.Cols {
+// 			if colDef.Primary {
+// 				arg.container.pkIndex = append(arg.container.pkIndex, num)
+// 				break
+// 			}
+// 		}
+// 	}
+// }
 
-func (arg *Argument) GetNameNullAbility() bool {
-	for _, def := range arg.InsertCtx.TableDef.Cols {
-		arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
-		if def.Primary {
-			arg.container.pk[def.Name] = true
-		}
-	}
-	if arg.InsertCtx.TableDef.CompositePkey != nil {
-		def := arg.InsertCtx.TableDef.CompositePkey
-		arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
-		arg.container.pk[def.Name] = true
-	}
-	for _, def := range arg.InsertCtx.TableDef.Defs {
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-			for i := range idxDef.UIdx.Fields {
-				for j := range idxDef.UIdx.Fields[i].Cols {
-					def := idxDef.UIdx.Fields[i].Cols[j]
-					arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
-				}
-			}
-		}
-	}
-	if arg.InsertCtx.TableDef.ClusterBy != nil {
-		arg.container.nameToNullablity[arg.InsertCtx.TableDef.ClusterBy.Name] = true
-	}
-	return false
-}
+// func (arg *Argument) GetNameNullAbility() bool {
+// 	for _, def := range arg.InsertCtx.TableDef.Cols {
+// 		arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
+// 		if def.Primary {
+// 			arg.container.pk[def.Name] = true
+// 		}
+// 	}
+// 	if arg.InsertCtx.TableDef.CompositePkey != nil {
+// 		def := arg.InsertCtx.TableDef.CompositePkey
+// 		arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
+// 		arg.container.pk[def.Name] = true
+// 	}
+// 	for _, def := range arg.InsertCtx.TableDef.Defs {
+// 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+// 			for i := range idxDef.UIdx.Fields {
+// 				for j := range idxDef.UIdx.Fields[i].Cols {
+// 					def := idxDef.UIdx.Fields[i].Cols[j]
+// 					arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
+// 				}
+// 			}
+// 		}
+// 	}
+// 	if arg.InsertCtx.TableDef.ClusterBy != nil {
+// 		arg.container.nameToNullablity[arg.InsertCtx.TableDef.ClusterBy.Name] = true
+// 	}
+// 	return false
+// }
