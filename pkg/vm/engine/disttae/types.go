@@ -61,6 +61,8 @@ const (
 
 type DNStore = logservice.DNStore
 
+type Tuple = memorytable.Tuple
+
 type IDGenerator interface {
 	AllocateID(ctx context.Context) (uint64, error)
 }

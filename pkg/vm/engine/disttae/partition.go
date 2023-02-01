@@ -238,16 +238,18 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 		var primaryKey any
 		if primaryKeyIndex >= 0 {
 			primaryKey = memtable.ToOrdered(tuple[primaryKeyIndex].Value)
-			entries, err := p.data.Index(tx, memtable.Tuple{
+			tuple := Tuple{
 				index_PrimaryKey,
 				primaryKey,
-			})
-			if err != nil {
-				return err
 			}
-			if len(entries) > 0 && needCheck {
-				return moerr.NewDuplicate(ctx)
+			iter := p.index.Iter(ts.ToTimestamp(), tuple, tuple)
+			for iter.Next() {
+				if needCheck {
+					iter.Close()
+					return moerr.NewDuplicate(ctx)
+				}
 			}
+			iter.Close()
 		}
 
 		dataValue := DataValue{
@@ -298,6 +300,9 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			p.Set(ts.ToTimestamp(), rowRef)
 			return p
 		})
+		for _, tuple := range indexes {
+			p.index.Index.Set(tuple, rowId)
+		}
 
 		err = p.data.Upsert(tx, &DataRow{
 			rowID:   rowID,
