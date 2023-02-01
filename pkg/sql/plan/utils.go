@@ -122,11 +122,11 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side int8) {
+func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			side |= getJoinSide(arg, leftTags, rightTags)
+			side |= getJoinSide(arg, leftTags, rightTags, markTag)
 		}
 
 	case *plan.Expr_Col:
@@ -134,6 +134,8 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side 
 			side = JoinSideLeft
 		} else if _, ok := rightTags[exprImpl.Col.RelPos]; ok {
 			side = JoinSideRight
+		} else if exprImpl.Col.RelPos == markTag {
+			side = JoinSideMark
 		}
 
 	case *plan.Expr_Corr:
@@ -962,7 +964,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if err != nil {
 		return nil, err
 	}
-	c := rule.GetConstantValue(vec)
+	c := rule.GetConstantValue(vec, false)
 	vec.Free(proc.Mp())
 	if c == nil {
 		return e, nil
@@ -1171,6 +1173,9 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal >= 0
 		case types.T_varchar:
 			return true
+		case types.T_float32:
+			//float32 has 6-7 significant digits.
+			return constVal <= 100000 && constVal >= -100000
 		default:
 			return false
 		}
@@ -1197,6 +1202,9 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal <= math.MaxUint32
 		case types.T_uint64:
 			return true
+		case types.T_float32:
+			//float32 has 6-7 significant digits.
+			return constVal <= 100000
 		default:
 			return false
 		}

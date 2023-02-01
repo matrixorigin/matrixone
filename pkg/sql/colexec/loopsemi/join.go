@@ -16,6 +16,7 @@ package loopsemi
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -48,7 +49,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			ctr.state = Probe
 
 		case Probe:
+			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
+			anal.WaitStop(start)
+
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -73,7 +77,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+	start := time.Now()
 	bat := <-proc.Reg.MergeReceivers[1].Ch
+	anal.WaitStop(start)
+
 	if bat != nil {
 		ctr.bat = bat
 	}

@@ -48,7 +48,6 @@ func TestTxnTable1(t *testing.T) {
 	cnt := 0
 
 	op := func(row RowT) (goNext bool) {
-		t.Log(row.String())
 		cnt++
 		return true
 	}
@@ -60,8 +59,8 @@ func TestTxnTable1(t *testing.T) {
 		op,
 	)
 	assert.Equal(t, txnCnt, cnt)
+
 	cnt = 0
-	t.Log("==")
 	table.ForeachRowInBetween(
 		timestamps[1],
 		types.MaxTs(),
@@ -69,8 +68,8 @@ func TestTxnTable1(t *testing.T) {
 		op,
 	)
 	assert.Equal(t, txnCnt-blockSize, cnt)
+
 	cnt = 0
-	t.Log("==")
 	table.ForeachRowInBetween(
 		timestamps[2],
 		types.MaxTs(),
@@ -78,12 +77,12 @@ func TestTxnTable1(t *testing.T) {
 		op,
 	)
 	assert.Equal(t, txnCnt-2*blockSize, cnt)
-	cnt = 0
 
 	ckp := timestamps[0].Prev()
 	cnt = table.TruncateByTimeStamp(ckp)
 	assert.Equal(t, 0, cnt)
 
+	// these two are in first block, do not delete
 	ckp = timestamps[0].Next()
 	cnt = table.TruncateByTimeStamp(ckp)
 	assert.Equal(t, 0, cnt)
@@ -92,8 +91,16 @@ func TestTxnTable1(t *testing.T) {
 	cnt = table.TruncateByTimeStamp(ckp)
 	assert.Equal(t, 0, cnt)
 
-	t.Log(table.String())
+	// do not delete if truncate all
+	assert.Equal(t, 0, table.TruncateByTimeStamp(types.MaxTs()))
+	assert.Equal(t, 0, table.TruncateByTimeStamp(types.MaxTs()))
+
 	ckp = timestamps[1].Next()
 	cnt = table.TruncateByTimeStamp(ckp)
 	assert.Equal(t, 1, cnt)
+
+	ckp = timestamps[2]
+	cnt = table.TruncateByTimeStamp(ckp)
+	// 2 blocks left and skip deleting only one block
+	assert.Equal(t, 0, cnt)
 }

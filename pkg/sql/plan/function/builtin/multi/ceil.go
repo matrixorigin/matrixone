@@ -15,6 +15,8 @@
 package multi
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/ceil"
@@ -27,6 +29,28 @@ func CeilUint64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 
 func CeilInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return generalMathMulti("ceil", vecs, proc, ceil.CeilInt64)
+}
+
+// Parse string to float instead of int.
+func CeilStr(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	values := vector.MustStrCols(vecs[0])
+	floatvector, err := proc.AllocVectorOfRows(types.T_float64.ToType(), 0, nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range values {
+		float, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return nil, err
+		}
+		if err := floatvector.Append(float, false, proc.Mp()); err != nil {
+			floatvector.Free(proc.Mp())
+			return nil, err
+		}
+	}
+	newvecs := make([]*vector.Vector, 0)
+	newvecs = append(newvecs, floatvector)
+	return CeilFloat64(newvecs, proc)
 }
 
 func CeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

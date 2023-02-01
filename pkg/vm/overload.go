@@ -18,39 +18,33 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -58,7 +52,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -81,12 +78,13 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Projection: projection.String,
 	Anti:       anti.String,
 	Mark:       mark.String,
-
+	MergeBlock: mergeblock.String,
 	LoopJoin:   loopjoin.String,
 	LoopLeft:   loopleft.String,
 	LoopSingle: loopsingle.String,
 	LoopSemi:   loopsemi.String,
 	LoopAnti:   loopanti.String,
+	LoopMark:   loopmark.String,
 
 	MergeTop:    mergetop.String,
 	MergeLimit:  mergelimit.String,
@@ -127,12 +125,13 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Projection: projection.Prepare,
 	Anti:       anti.Prepare,
 	Mark:       mark.Prepare,
-
+	MergeBlock: mergeblock.Prepare,
 	LoopJoin:   loopjoin.Prepare,
 	LoopLeft:   loopleft.Prepare,
 	LoopSingle: loopsingle.Prepare,
 	LoopSemi:   loopsemi.Prepare,
 	LoopAnti:   loopanti.Prepare,
+	LoopMark:   loopmark.Prepare,
 
 	MergeTop:    mergetop.Prepare,
 	MergeLimit:  mergelimit.Prepare,
@@ -173,11 +172,13 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	Projection: projection.Call,
 	Anti:       anti.Call,
 	Mark:       mark.Call,
+	MergeBlock: mergeblock.Call,
 	LoopJoin:   loopjoin.Call,
 	LoopLeft:   loopleft.Call,
 	LoopSingle: loopsingle.Call,
 	LoopSemi:   loopsemi.Call,
 	LoopAnti:   loopanti.Call,
+	LoopMark:   loopmark.Call,
 
 	MergeTop:    mergetop.Call,
 	MergeLimit:  mergelimit.Call,

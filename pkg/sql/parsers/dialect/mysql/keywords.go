@@ -227,6 +227,7 @@ func init() {
 		"less":                     LESS,
 		"level":                    LEVEL,
 		"like":                     LIKE,
+		"ilike":                    ILIKE,
 		"list":                     LIST,
 		"limit":                    LIMIT,
 		"linear":                   LINEAR,
@@ -526,12 +527,12 @@ func init() {
 		"preceding":                PRECEDING,
 		"following":                FOLLOWING,
 		"groups":                   GROUPS,
-		"table_size":               TABLE_SIZE,
 		"table_number":             TABLE_NUMBER,
 		"table_values":             TABLE_VALUES,
 		"column_number":            COLUMN_NUMBER,
 		"returns":                  RETURNS,
 		"extension":                EXTENSION,
 		"query_result":             QUERY_RESULT,
+		"mysql_compatbility_mode":  MYSQL_COMPATBILITY_MODE,
 	}
 }

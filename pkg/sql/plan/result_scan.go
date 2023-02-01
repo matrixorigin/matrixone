@@ -73,6 +73,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		name2ColIndex[cols[i].Name] = int32(i)
 	}
 	tableDef := &plan.TableDef{
+		Name:          uuid.ToString(),
 		TableType:     "query_result",
 		Cols:          cols,
 		Name2ColIndex: name2ColIndex,
@@ -108,10 +109,11 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		}})
 	tableDef.Createsql = string(b)
 	node := &plan.Node{
-		NodeType:    plan.Node_EXTERNAL_SCAN,
-		Stats:       &plan.Stats{},
-		TableDef:    tableDef,
-		BindingTags: []int32{builder.genNewTag()},
+		NodeType:     plan.Node_EXTERNAL_SCAN,
+		Stats:        &plan.Stats{},
+		TableDef:     tableDef,
+		BindingTags:  []int32{builder.genNewTag()},
+		NotCacheable: true,
 	}
 	nodeID := builder.appendNode(node, ctx)
 	return nodeID, nil

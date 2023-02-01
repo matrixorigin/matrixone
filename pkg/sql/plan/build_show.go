@@ -130,6 +130,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
+		if types.IsFloat(typ.Oid) && col.Typ.Precision != -1 {
+			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Precision)
+		}
 
 		updateOpt := ""
 		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -160,11 +163,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr += pkStr
 	}
 
-	uIndexDef, _ := buildIndexDefs(tableDef.Defs)
+	uIndexDef, sIndexDef := buildIndexDefs(tableDef.Defs)
 	if uIndexDef != nil {
 		for i, name := range uIndexDef.IndexNames {
-			uIStr := "UNIQUE KEY"
-			uIStr += fmt.Sprintf("`%s`(", name)
+			uIStr := "UNIQUE KEY "
+			uIStr += fmt.Sprintf("`%s` (", name)
 			for num, part := range uIndexDef.Fields[i].Parts {
 				if num == len(uIndexDef.Fields[i].Parts)-1 {
 					uIStr += fmt.Sprintf("`%s`", part)
@@ -173,6 +176,32 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 				}
 			}
 			uIStr += ")"
+			if uIndexDef.Comments[i] != "" {
+				uIStr += fmt.Sprintf(" COMMENT `%s`", uIndexDef.Comments[i])
+			}
+			if rowCount != 0 {
+				createStr += ",\n"
+			}
+			createStr += uIStr
+		}
+
+	}
+
+	if sIndexDef != nil {
+		for i, name := range sIndexDef.IndexNames {
+			uIStr := "KEY "
+			uIStr += fmt.Sprintf("`%s` (", name)
+			for num, part := range sIndexDef.Fields[i].Parts {
+				if num == len(sIndexDef.Fields[i].Parts)-1 {
+					uIStr += fmt.Sprintf("`%s`", part)
+				} else {
+					uIStr += fmt.Sprintf("`%s`,", part)
+				}
+			}
+			uIStr += ")"
+			if sIndexDef.Comments[i] != "" {
+				uIStr += fmt.Sprintf(" COMMENT `%s`", sIndexDef.Comments[i])
+			}
 			if rowCount != 0 {
 				createStr += ",\n"
 			}
@@ -370,10 +399,10 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 		clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
+		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
 			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%", accountClause)
 	} else {
-		sql = fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'",
+		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'",
 			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_index_unique__%")
 	}
 
@@ -450,6 +479,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 
 	sql := "SELECT"
 	tableCols := tableDef.Cols
+	isAllNull := true
 	for i := range tableCols {
 		colName := tableCols[i].Name
 		if types.T(tableCols[i].GetTyp().Id) == types.T_json {
@@ -458,10 +488,15 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 		} else {
 			sql += " max(%s), min(%s),"
 			sql = fmt.Sprintf(sql, colName, colName)
+			isAllNull = false
 		}
 	}
 	sql = sql[:len(sql)-1]
 	sql += " FROM %s"
+
+	if isAllNull {
+		sql += " LIMIT 1"
+	}
 	sql = fmt.Sprintf(sql, tblName)
 
 	return returnByRewriteSQL(ctx, sql, ddlType)
@@ -496,15 +531,15 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			clusterTable = fmt.Sprintf(" or att_relname = '%s'", tblName)
 		}
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = "SELECT attname `Field`, atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
+		sql = "SELECT attname `Field`, atttyp `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
 		if stmt.Full {
-			sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
+			sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
 		}
 		sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 	} else {
-		sql = "SELECT attname `Field`, atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+		sql = "SELECT attname `Field`, atttyp `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
 		if stmt.Full {
-			sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+			sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
 		}
 		sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName)
 	}

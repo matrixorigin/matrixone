@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -201,7 +202,92 @@ type Session struct {
 
 	curResultSize float64 // MB
 
+	createdTime time.Time
+
+	expiredTime time.Time
+
 	planCache *planCache
+
+	autoIncrCaches defines.AutoIncrCaches
+}
+
+// The update version. Four function.
+func (ses *Session) SetAutoIncrCaches(autocaches defines.AutoIncrCaches) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.autoIncrCaches = autocaches
+}
+
+func (ses *Session) GetAutoIncrCaches() defines.AutoIncrCaches {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.autoIncrCaches
+}
+
+func (ses *Session) DeleteAutoIncrCache(name string) {
+	ses.autoIncrCaches.Mu.Lock()
+	defer ses.autoIncrCaches.Mu.Unlock()
+	_, ok := ses.autoIncrCaches.AutoIncrCaches[name]
+	if ok {
+		delete(ses.autoIncrCaches.AutoIncrCaches, name)
+	}
+}
+
+func (ses *Session) RenameAutoIncrCache(oldname, newname string) {
+	ses.autoIncrCaches.Mu.Lock()
+	defer ses.autoIncrCaches.Mu.Unlock()
+	_, ok := ses.autoIncrCaches.AutoIncrCaches[oldname]
+	if ok {
+		ses.autoIncrCaches.AutoIncrCaches[newname] = defines.AutoIncrCache{CurNum: ses.autoIncrCaches.AutoIncrCaches[oldname].CurNum,
+			MaxNum: ses.autoIncrCaches.AutoIncrCaches[oldname].MaxNum, Step: ses.autoIncrCaches.AutoIncrCaches[oldname].Step}
+		delete(ses.autoIncrCaches.AutoIncrCaches, oldname)
+	}
+}
+
+func (ses *Session) GetNextAutoIncrNum(colDefs []*plan.ColDef, ctx context.Context, incrParam *colexec.AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
+	ses.autoIncrCaches.Mu.Lock()
+	defer ses.autoIncrCaches.Mu.Unlock()
+	offset, step := make([]uint64, 0), make([]uint64, 0)
+	for i, col := range colDefs {
+		if !col.Typ.AutoIncr {
+			continue
+		}
+
+		name := fmt.Sprintf("%d_%s", tableID, col.Name)
+		autoincrcache, ok := ses.autoIncrCaches.AutoIncrCaches[name]
+		// Not cached yet or the cache is ran out.
+		// Need new txn for read from the table.
+		if !ok || autoincrcache.CurNum >= autoincrcache.MaxNum {
+			// Need return maxNum for correction.
+			cur := uint64(0)
+			if ok {
+				cur = autoincrcache.CurNum
+			}
+			curNum, maxNum, stp, err := colexec.GetNextOneCache(ctx, incrParam, bat, tableID, i, name, uint64(cacheSize), cur)
+			if err != nil {
+				return nil, nil, err
+			}
+			ses.autoIncrCaches.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: curNum, MaxNum: maxNum, Step: stp}
+		}
+
+		offset = append(offset, ses.autoIncrCaches.AutoIncrCaches[name].CurNum)
+		step = append(step, ses.autoIncrCaches.AutoIncrCaches[name].Step)
+
+		// Here got the most recent id in the cache.
+		// Need compare witch vec and get the maxNum.
+		maxNum, err := colexec.GetMax(incrParam, bat, i, ses.autoIncrCaches.AutoIncrCaches[name].Step, 1, ses.autoIncrCaches.AutoIncrCaches[name].CurNum)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		incrParam.SetLastInsertID(maxNum)
+
+		// Update the caches.
+		ses.autoIncrCaches.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: maxNum,
+			MaxNum: ses.autoIncrCaches.AutoIncrCaches[name].MaxNum, Step: ses.autoIncrCaches.AutoIncrCaches[name].Step}
+	}
+
+	return offset, step, nil
 }
 
 const saveQueryIdCnt = 10
@@ -313,9 +399,10 @@ type BackgroundSession struct {
 }
 
 // NewBackgroundSession generates an independent background session executing the sql
-func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
+func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables, autoincrcaches defines.AutoIncrCaches) *BackgroundSession {
 	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false)
 	ses.SetOutputCallback(fakeDataSetFetcher)
+	ses.SetAutoIncrCaches(autoincrcaches)
 	if stmt := motrace.StatementFromContext(ctx); stmt != nil {
 		logutil.Infof("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
 	}
@@ -528,7 +615,7 @@ func (ses *Session) InvalidatePrivilegeCache() {
 
 // GetBackgroundExec generates a background executor
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
-	return NewBackgroundHandler(ctx, ses.GetMemPool(), ses.GetParameterUnit())
+	return NewBackgroundHandler(ctx, ses.GetMemPool(), ses.GetParameterUnit(), ses.autoIncrCaches)
 }
 
 func (ses *Session) GetIsInternal() bool {
@@ -1173,6 +1260,14 @@ func (ses *Session) TxnBegin() error {
 	}
 	ses.ClearOptionBits(OPTION_BEGIN)
 	if err != nil {
+		/*
+			fix issue 6024.
+			When we get a w-w conflict during commit the txn,
+			we convert the error into a readable error.
+		*/
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			return moerr.NewInternalError(ses.GetRequestContext(), writeWriteConflictsErrorInfo())
+		}
 		return err
 	}
 	ses.SetOptionBits(OPTION_BEGIN)
@@ -1287,7 +1382,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	pu := ses.GetParameterUnit()
 	mp := ses.GetMemPool()
 	logDebugf(sessionProfile, "check tenant %s exists", tenant)
-	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, mp, pu, sqlForCheckTenant)
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, mp, pu, sqlForCheckTenant, ses.GetAutoIncrCaches())
 	if err != nil {
 		return nil, err
 	}
@@ -1320,7 +1415,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	logDebugf(sessionProfile, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
-	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser)
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser, ses.GetAutoIncrCaches())
 	if err != nil {
 		return nil, err
 	}
@@ -1363,7 +1458,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		logDebugf(sessionProfile, "check default role of user %s.", tenant)
 		//step4 : check role exists or not
 		sqlForCheckRoleExists := getSqlForRoleIdOfRole(tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists, ses.GetAutoIncrCaches())
 		if err != nil {
 			return nil, err
 		}
@@ -1375,7 +1470,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		logDebugf(sessionProfile, "check granted role of user %s.", tenant)
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser, ses.GetAutoIncrCaches())
 		if err != nil {
 			return nil, err
 		}
@@ -1393,7 +1488,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		logDebugf(sessionProfile, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sql)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sql, ses.GetAutoIncrCaches())
 		if err != nil {
 			return nil, err
 		}
@@ -1480,9 +1575,18 @@ func (th *TxnHandler) TxnClientNew() error {
 // Then it creates the new transaction.
 func (th *TxnHandler) NewTxn() error {
 	var err error
+	ctx := th.GetSession().GetRequestContext()
 	if th.IsValidTxn() {
 		err = th.CommitTxn()
 		if err != nil {
+			/*
+				fix issue 6024.
+				When we get a w-w conflict during commit the txn,
+				we convert the error into a readable error.
+			*/
+			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+				return moerr.NewInternalError(ctx, writeWriteConflictsErrorInfo())
+			}
 			return err
 		}
 	}
@@ -1497,7 +1601,6 @@ func (th *TxnHandler) NewTxn() error {
 	if err != nil {
 		return err
 	}
-	ctx := th.GetSession().GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
 	}
@@ -2337,8 +2440,8 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string) ([]ExecResult, error) {
-	bh := NewBackgroundHandler(ctx, mp, pu)
+func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string, autoIncrCaches defines.AutoIncrCaches) ([]ExecResult, error) {
+	bh := NewBackgroundHandler(ctx, mp, pu, autoIncrCaches)
 	defer bh.Close()
 	logutil.Debugf("background exec sql:%v", sql)
 	err := bh.Exec(ctx, sql)
@@ -2368,10 +2471,10 @@ type BackgroundHandler struct {
 	ses *BackgroundSession
 }
 
-var NewBackgroundHandler = func(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit) BackgroundExec {
+var NewBackgroundHandler = func(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, autoincrcaches defines.AutoIncrCaches) BackgroundExec {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(ctx, mp, pu, GSysVariables),
+		ses: NewBackgroundSession(ctx, mp, pu, GSysVariables, autoincrcaches),
 	}
 	return bh
 }
@@ -2385,6 +2488,8 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	bh.mce.SetSession(bh.ses.Session)
 	if ctx == nil {
 		ctx = bh.ses.GetRequestContext()
+	} else {
+		bh.ses.SetRequestContext(ctx)
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 	//logutil.Debugf("-->bh:%s", sql)

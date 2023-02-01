@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"os"
 	"sync"
 	"syscall"
@@ -35,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -402,12 +402,16 @@ func (h *Handle) startLoadJobs(
 				fmt.Sprintf("load-deleted-rowid-%s", req.DeltaLocs[i]))
 		}
 	}
-	//start loading jobs
+	//start loading jobs asynchronously,should create a new root context.
+	nctx := context.Background()
+	if deadline, ok := ctx.Deadline(); ok {
+		nctx, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
+	}
 	for i, v := range locations {
-		ctx := context.WithValue(ctx, db.LocationKey{}, v)
+		nctx = context.WithValue(nctx, db.LocationKey{}, v)
 		req.Jobs[i] = tasks.NewJob(
 			jobIds[i],
-			ctx,
+			nctx,
 			func(ctx context.Context) (jobR *tasks.JobResult) {
 				jobR = &tasks.JobResult{}
 				loc, ok := ctx.Value(db.LocationKey{}).(string)
@@ -484,12 +488,19 @@ func (h *Handle) EvaluateTxnRequest(
 					}
 					if r.Schema.HasPK() {
 						//start to load primary keys
-						return h.startLoadJobs(ctx, meta, r)
+						err = h.startLoadJobs(ctx, meta, r)
+						if err != nil {
+							return
+						}
 					}
-					return
+					continue
 				}
 				//start to load deleted row ids
-				return h.startLoadJobs(ctx, meta, r)
+				err = h.startLoadJobs(ctx, meta, r)
+				if err != nil {
+					return
+				}
+
 			}
 		}
 	}
@@ -622,10 +633,9 @@ func (h *Handle) HandlePreCommitWrite(
 				panic(err)
 			}
 			req := &db.WriteReq{
-				Type:       db.EntryType(pe.EntryType),
-				DatabaseId: pe.GetDatabaseId(),
-				TableID:    pe.GetTableId(),
-				//SegID:        pe.GetSegmentId(),
+				Type:         db.EntryType(pe.EntryType),
+				DatabaseId:   pe.GetDatabaseId(),
+				TableID:      pe.GetTableId(),
 				DatabaseName: pe.GetDatabaseName(),
 				TableName:    pe.GetTableName(),
 				FileName:     pe.GetFileName(),
@@ -787,6 +797,11 @@ func (h *Handle) HandleWrite(
 	meta txn.TxnMeta,
 	req *db.WriteReq,
 	resp *db.WriteResp) (err error) {
+	defer func() {
+		if req.Cancel != nil {
+			req.Cancel()
+		}
+	}()
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
@@ -890,15 +905,19 @@ func (h *Handle) HandleUpdateConstraint(
 	return nil
 }
 
-func vec2Str[T any](vec []T, typ types.Type, originalLen int) string {
+func vec2Str[T any](vec []T, v *vector.Vector) string {
 	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("[%d]: ", originalLen))
+	_, _ = w.WriteString(fmt.Sprintf("[%d]: ", v.Length()))
 	first := true
 	for i := 0; i < len(vec); i++ {
 		if !first {
 			_ = w.WriteByte(',')
 		}
-		_, _ = w.WriteString(common.TypeStringValue(typ, vec[i]))
+		if v.GetNulls().Contains(uint64(i)) {
+			_, _ = w.WriteString(common.TypeStringValue(*v.GetType(), types.Null{}))
+		} else {
+			_, _ = w.WriteString(common.TypeStringValue(*v.GetType(), vec[i]))
+		}
 		first = false
 	}
 	return w.String()
@@ -907,48 +926,48 @@ func vec2Str[T any](vec []T, typ types.Type, originalLen int) string {
 func moVec2String(v *vector.Vector, printN int) string {
 	switch v.GetType().Oid {
 	case types.T_bool:
-		return vec2Str(vector.MustTCols[bool](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[bool](v)[:printN], v)
 	case types.T_int8:
-		return vec2Str(vector.MustTCols[int8](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[int8](v)[:printN], v)
 	case types.T_int16:
-		return vec2Str(vector.MustTCols[int16](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[int16](v)[:printN], v)
 	case types.T_int32:
-		return vec2Str(vector.MustTCols[int32](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[int32](v)[:printN], v)
 	case types.T_int64:
-		return vec2Str(vector.MustTCols[int64](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[int64](v)[:printN], v)
 	case types.T_uint8:
-		return vec2Str(vector.MustTCols[uint8](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[uint8](v)[:printN], v)
 	case types.T_uint16:
-		return vec2Str(vector.MustTCols[uint16](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[uint16](v)[:printN], v)
 	case types.T_uint32:
-		return vec2Str(vector.MustTCols[uint32](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[uint32](v)[:printN], v)
 	case types.T_uint64:
-		return vec2Str(vector.MustTCols[uint64](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[uint64](v)[:printN], v)
 	case types.T_float32:
-		return vec2Str(vector.MustTCols[float32](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[float32](v)[:printN], v)
 	case types.T_float64:
-		return vec2Str(vector.MustTCols[float64](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[float64](v)[:printN], v)
 	case types.T_date:
-		return vec2Str(vector.MustTCols[types.Date](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[types.Date](v)[:printN], v)
 	case types.T_datetime:
-		return vec2Str(vector.MustTCols[types.Datetime](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[types.Datetime](v)[:printN], v)
 	case types.T_time:
-		return vec2Str(vector.MustTCols[types.Time](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[types.Time](v)[:printN], v)
 	case types.T_timestamp:
-		return vec2Str(vector.MustTCols[types.Timestamp](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[types.Timestamp](v)[:printN], v)
 	case types.T_decimal64:
-		return vec2Str(vector.MustTCols[types.Decimal64](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[types.Decimal64](v)[:printN], v)
 	case types.T_decimal128:
-		return vec2Str(vector.MustTCols[types.Decimal128](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[types.Decimal128](v)[:printN], v)
 	case types.T_uuid:
-		return vec2Str(vector.MustTCols[types.Uuid](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[types.Uuid](v)[:printN], v)
 	case types.T_TS:
-		return vec2Str(vector.MustTCols[types.TS](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[types.TS](v)[:printN], v)
 	case types.T_Rowid:
-		return vec2Str(vector.MustTCols[types.Rowid](v)[:printN], *v.GetType(), v.Length())
+		return vec2Str(vector.MustTCols[types.Rowid](v)[:printN], v)
 	}
 	if v.GetType().IsVarlen() {
-		return vec2Str(vector.MustBytesCols(v)[:printN], types.T_varchar.ToType(), v.Length())
+		return vec2Str(vector.MustBytesCols(v)[:printN], v)
 	}
 	return fmt.Sprintf("unkown type vec... %v", *v.GetType())
 }

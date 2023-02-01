@@ -194,12 +194,12 @@ a	col	seq	key	path	index	value	this
 [1, true, false, null, "aaa", 1.1, {"t": false}]	myt.a	4	null	$[4]	4	"aaa"	[1, true, false, null, "aaa", 1.1, {"t": false}]
 [1, true, false, null, "aaa", 1.1, {"t": false}]	myt.a	5	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
 [1, true, false, null, "aaa", 1.1, {"t": false}]	myt.a	6	null	$[6]	6	{"t": false}	[1, true, false, null, "aaa", 1.1, {"t": false}]
-with myt as (select a from t1 where t1.b>1) select * from myt,unnest(myt.a) u where `value`='false' or `index`=5;
+with myt as (select a from t1 where t1.b>1) select * from myt,unnest(myt.a) u where json_unquote(value)='false' or `index`=5;
 a	col	seq	key	path	index	value	this
 [1, true, false, null, "aaa", 1.1, {"t": false}]	myt.a	2	null	$[2]	2	false	[1, true, false, null, "aaa", 1.1, {"t": false}]
 [1, true, false, null, "aaa", 1.1, {"t": false}]	myt.a	5	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
 create view v1 as (select * from t1,unnest(t1.a) u);
-select count(seq),seq from v1 where `index` is null or `value`='false' group by seq;
+select count(seq),seq from v1 where `index` is null or json_unquote(value)='false' group by seq;
 count(seq)	seq
 6    0
 3    1

@@ -380,6 +380,7 @@ message UniqueIndexDef {
 	repeated string table_names = 2;
 	repeated Field fields = 3;
 	repeated bool table_exists = 4;
+	repeated string comments = 5;
 }
 
 message SecondaryIndexDef {
@@ -387,6 +388,7 @@ message SecondaryIndexDef {
 	repeated string table_names = 2;
 	repeated Field fields = 3;
 	repeated bool table_exists = 4;
+	repeated string comments = 5;
 }
 
 message Field {
@@ -484,19 +486,28 @@ message WindowSpec {
 }
 
 message UpdateCtx {
-	string db_name = 1;
-	string tbl_name = 2;
-	string hide_key = 3;
-	int32 hide_key_idx = 4;
-	repeated ColDef update_cols = 5;
-	repeated string other_attrs = 6;
-	repeated string order_attrs = 7;
-	ColDef composite_pkey = 8;
-	bool is_index_table_update = 9;
-	repeated int32 uniqueIndexPos = 10;
-	repeated int32	secondaryIndexPos = 11;
-	repeated string indexParts = 12;
-	ClusterByDef clusterByDef = 13;
+	repeated ObjectRef ref 				= 1;
+	repeated IdList idx 				= 2;
+	repeated TableDef tableDefs 		= 3;
+	repeated ColPosMap update_col 		= 4; 
+
+	repeated ObjectRef idx_ref 			= 5;
+	repeated int32 idx_idx 				= 6;
+
+	repeated ObjectRef on_restrict_ref 	= 7;
+	repeated int32 on_restrict_idx 		= 8;
+
+	repeated ObjectRef on_cascade_ref 			= 9;
+	repeated IdList on_cascade_idx 				= 10;
+	repeated TableDef on_cascade_def			= 11;
+	repeated ColPosMap on_cascade_update_col 	= 12; 
+
+	repeated ObjectRef on_set_ref 			= 13;
+	repeated IdList on_set_idx 				= 14;
+	repeated TableDef on_set_def			= 15;
+	repeated ColPosMap on_set_update_col 	= 16; 
+
+	repeated ColPosMap parent_idx = 17;
 }
 
 message AnalyzeInfo {
@@ -508,8 +519,11 @@ message AnalyzeInfo {
     int64 memory_size = 6;
     int64 wait_time_consumed = 7;
     int64 diskIO = 8;
-    int64 s3IO = 9;
-    int64 networkIO = 10;
+    int64 s3IO_byte = 9;
+    int64 s3IO_count = 10;
+    int64 networkIO = 11;
+	int64 scanTime = 12;
+	int64 insertTime = 13;
 }
 
 message Node {
@@ -606,7 +620,7 @@ message Node {
 	repeated Expr grouping_set = 10;
 	repeated Expr agg_list = 11;
 	repeated OrderBySpec order_by = 12;
-	repeated UpdateCtx update_ctxs = 13;
+	UpdateCtx update_ctx = 13;
 	WindowSpec win_spec = 14;
 	Expr limit = 15;
 	Expr offset = 16;
@@ -615,7 +629,7 @@ message Node {
 	ObjectRef obj_ref = 19;
 	RowsetData rowset_data = 20;
 	string extra_options = 21;
-	repeated DeleteTableCtx delete_tables_ctx = 22;
+	DeleteCtx delete_ctx = 22;
 
 	repeated int32 binding_tags = 23;
 
@@ -628,15 +642,35 @@ message Node {
     int32   parallelism = 26;
 
 	ClusterTable cluster_table = 27;
+	bool not_cacheable = 28;
 }
 
-message DeleteTableCtx {
-	string db_name = 1;
-	string tbl_name = 2;
-	string use_delete_key = 3;
-	bool can_truncate = 4;
-	int32 col_index = 5;
-	bool is_index_table_delete = 6;
+message IdList {
+	repeated int64 list = 1;
+}
+
+message ColPosMap {
+	map<string, int32> map = 1;
+}
+
+message DeleteCtx {
+	repeated ObjectRef ref 			= 1;
+
+	repeated ObjectRef idx_ref 		= 2;
+	repeated int32 idx_idx 			= 3;
+
+	repeated ObjectRef on_restrict_ref 	= 4;
+	repeated int32 on_restrict_idx 		= 5;
+
+	repeated ObjectRef on_cascade_ref 	= 6;
+	repeated int32 on_cascade_idx 		= 7;
+
+	repeated ObjectRef on_set_ref 			= 8;
+	repeated TableDef on_set_def 			= 9;
+	repeated IdList on_set_idx 				= 10;
+	repeated ColPosMap on_set_update_col 	= 11; 
+	
+	bool can_truncate = 12;
 }
 
 message Query {
@@ -733,6 +767,7 @@ message InsertValues {
 	SecondaryIndexDef secondary_index_def = 9;
 	ClusterTable cluster_table = 10;
 	ClusterByDef cb=11;
+	bool has_auto_col = 12;
 }
 
 message column{
@@ -873,6 +908,7 @@ message CreateIndex {
 	string table = 2;
 	string	origin_table_primary_key = 3;
 	CreateTable index = 4;
+	bool table_exist = 5;
 }
 
 message AlterIndex {

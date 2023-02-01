@@ -317,7 +317,18 @@ func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
 	case bool:
 		expr = makePlan2BoolConstExprWithType(val)
 	case nil:
-		expr = makePlan2NullConstExprWithType()
+		if e.Typ.Id == int32(types.T_any) {
+			expr = makePlan2NullConstExprWithType()
+		} else {
+			expr = &plan.Expr{
+				Expr: &plan.Expr_C{
+					C: &Const{
+						Isnull: true,
+					},
+				},
+				Typ: e.Typ,
+			}
+		}
 	case types.Decimal64, types.Decimal128:
 		err = moerr.NewNYI(r.getContext(), "decimal var")
 	default:
@@ -339,7 +350,7 @@ func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		constValue := rule.GetConstantValue(vec)
+		constValue := rule.GetConstantValue(vec, true)
 		constValue.Src = e
 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Precision: vec.GetType().Precision, Scale: vec.GetType().Scale, Width: vec.GetType().Width, Size: vec.GetType().Size}
 		expr.Expr = &plan.Expr_C{
@@ -419,7 +430,7 @@ func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, 
 				if err != nil {
 					return nil, err
 				}
-				constValue := rule.GetConstantValue(vec)
+				constValue := rule.GetConstantValue(vec, false)
 				constValue.Src = exprImpl.C.Src
 				exprImpl.C = constValue
 			}

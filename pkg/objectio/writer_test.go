@@ -108,7 +108,7 @@ func TestNewObjectWriter(t *testing.T) {
 	objectReader, _ := NewObjectReader(name, service)
 	extents := make([]Extent, 2)
 	for i, blk := range blocks {
-		extents[i] = NewExtent(blk.GetExtent().offset, blk.GetExtent().length, blk.GetExtent().originSize)
+		extents[i] = NewExtent(blk.GetID(), blk.GetExtent().offset, blk.GetExtent().length, blk.GetExtent().originSize)
 	}
 	pool, err := mpool.NewMPool("objectio_test", 0, mpool.NoFixed)
 	assert.NoError(t, err)

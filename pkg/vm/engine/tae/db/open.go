@@ -16,11 +16,12 @@ package db
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"path"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -184,7 +185,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			"disk-gc",
 			opts.GCCfg.ScanGCInterval,
 			func(ctx context.Context) (err error) {
-				db.DiskCleaner.JobFactory(ctx)
+				db.DiskCleaner.GC(ctx)
 				return
 			}),
 		gc.WithCronJob(
@@ -198,8 +199,33 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 				if consumed == nil {
 					return nil
 				}
-				return db.BGCheckpointRunner.GCCheckpoint(consumed.GetEnd())
+				return db.BGCheckpointRunner.GCByTS(ctx, consumed.GetEnd())
 			}),
+		gc.WithCronJob(
+			"catalog-gc",
+			opts.CatalogCfg.GCInterval,
+			func(ctx context.Context) error {
+				if opts.CatalogCfg.DisableGC {
+					return nil
+				}
+				consumed := db.DiskCleaner.GetMaxConsumed()
+				if consumed == nil {
+					return nil
+				}
+				db.Catalog.GCByTS(ctx, consumed.GetEnd())
+				return nil
+			}),
+		gc.WithCronJob(
+			"logtail-gc",
+			opts.CheckpointCfg.GCCheckpointInterval,
+			func(ctx context.Context) error {
+				global := db.BGCheckpointRunner.MaxGlobalCheckpoint()
+				if global != nil {
+					db.LogtailMgr.GCByTS(ctx, global.GetEnd())
+				}
+				return nil
+			},
+		),
 	)
 
 	db.GCManager.Start()

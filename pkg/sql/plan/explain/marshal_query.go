@@ -174,13 +174,13 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 			return result, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_UPDATE:
-		if m.node.UpdateCtxs != nil {
+		if m.node.UpdateCtx != nil {
 			first := true
-			for _, ctx := range m.node.UpdateCtxs {
+			for _, ctx := range m.node.UpdateCtx.Ref {
 				if !first {
 					result += ", "
 				}
-				result += ctx.DbName + "." + ctx.TblName
+				result += ctx.SchemaName + "." + ctx.ObjName
 				if first {
 					first = false
 				}
@@ -189,13 +189,13 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 			return result, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_DELETE:
-		if m.node.DeleteTablesCtx != nil {
+		if m.node.DeleteCtx != nil {
 			first := true
-			for _, ctx := range m.node.DeleteTablesCtx {
+			for _, ctx := range m.node.DeleteCtx.Ref {
 				if !first {
 					result += ", "
 				}
-				result += ctx.DbName + "." + ctx.TblName
+				result += ctx.SchemaName + "." + ctx.ObjName
 				if first {
 					first = false
 				}
@@ -320,17 +320,17 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Value: len(tableDef.Cols),
 		})
 	case plan.Node_UPDATE:
-		if m.node.UpdateCtxs != nil {
-			updateTableNames := GetUpdateTableLableValue(ctx, m.node.UpdateCtxs, options)
+		if m.node.UpdateCtx != nil {
+			updateTableNames := GetUpdateTableLableValue(ctx, m.node.UpdateCtx, options)
 			labels = append(labels, Label{
 				Name:  "Full table name",
 				Value: updateTableNames,
 			})
 
 			updateCols := make([]string, 0)
-			for _, ctx := range m.node.UpdateCtxs {
-				if ctx.UpdateCols != nil {
-					upcols := GetUpdateTableColsLableValue(ctx.UpdateCols, ctx.DbName, ctx.TblName, options)
+			for i, ctx := range m.node.UpdateCtx.Ref {
+				if m.node.UpdateCtx.UpdateCol[i] != nil {
+					upcols := GetUpdateTableColsLableValue(m.node.UpdateCtx.UpdateCol[i].Map, ctx.SchemaName, ctx.ObjName, options)
 					updateCols = append(updateCols, upcols...)
 				}
 			}
@@ -342,8 +342,8 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			return nil, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_DELETE:
-		if m.node.DeleteTablesCtx != nil {
-			deleteTableNames := GetDeleteTableLableValue(ctx, m.node.DeleteTablesCtx, options)
+		if m.node.DeleteCtx != nil {
+			deleteTableNames := GetDeleteTableLableValue(ctx, m.node.DeleteCtx, options)
 			labels = append(labels, Label{
 				Name:  "Full table name",
 				Value: deleteTableNames,
@@ -538,7 +538,8 @@ const InputSize = "Input Size"
 const OutputSize = "Output Size"
 const MemorySize = "Memory Size"
 const DiskIO = "Disk IO"
-const S3IO = "S3 IO"
+const S3IOByte = "S3 IO Byte"
+const S3IOCount = "S3 IO Count"
 const Network = "Network"
 
 func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOptions) Statistics {
@@ -595,9 +596,14 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Unit:  "byte",
 			},
 			{
-				Name:  S3IO,
-				Value: analyzeInfo.S3IO,
+				Name:  S3IOByte,
+				Value: analyzeInfo.S3IOByte,
 				Unit:  "byte",
+			},
+			{
+				Name:  S3IOCount,
+				Value: analyzeInfo.S3IOCount,
+				Unit:  "count",
 			},
 		}
 
@@ -666,24 +672,24 @@ func GettOrderByLabelValue(ctx context.Context, orderbyList []*plan.OrderBySpec,
 	return result, nil
 }
 
-func GetDeleteTableLableValue(ctx context.Context, deleteCtxs []*plan.DeleteTableCtx, options *ExplainOptions) []string {
-	if deleteCtxs == nil {
+func GetDeleteTableLableValue(ctx context.Context, deleteCtx *plan.DeleteCtx, options *ExplainOptions) []string {
+	if deleteCtx == nil {
 		return make([]string, 0)
 	}
 	result := make([]string, 0)
-	for _, ctx := range deleteCtxs {
-		result = append(result, ctx.DbName+"."+ctx.TblName)
+	for _, ctx := range deleteCtx.Ref {
+		result = append(result, ctx.SchemaName+"."+ctx.ObjName)
 	}
 	return result
 }
 
-func GetUpdateTableLableValue(ctx context.Context, updateCtxs []*plan.UpdateCtx, options *ExplainOptions) []string {
-	if updateCtxs == nil {
+func GetUpdateTableLableValue(ctx context.Context, updateCtx *plan.UpdateCtx, options *ExplainOptions) []string {
+	if updateCtx == nil {
 		return make([]string, 0)
 	}
 	result := make([]string, 0)
-	for _, ctx := range updateCtxs {
-		result = append(result, ctx.DbName+"."+ctx.TblName)
+	for _, ctx := range updateCtx.Ref {
+		result = append(result, ctx.SchemaName+"."+ctx.ObjName)
 	}
 	return result
 }
@@ -696,10 +702,12 @@ func GetTableColsLableValue(ctx context.Context, cols []*plan.ColDef, options *E
 	return columns
 }
 
-func GetUpdateTableColsLableValue(cols []*plan.ColDef, db string, tname string, options *ExplainOptions) []string {
+func GetUpdateTableColsLableValue(cols map[string]int32, db string, tname string, options *ExplainOptions) []string {
 	columns := make([]string, len(cols))
-	for i, col := range cols {
-		columns[i] = db + "." + tname + "." + col.Name
+	i := 0
+	for col := range cols {
+		columns[i] = db + "." + tname + "." + col
+		i++
 	}
 	return columns
 }

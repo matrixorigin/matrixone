@@ -728,6 +728,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 			collector.data.bats[SEGInsertIDX].GetVectorByName(SegmentAttr_ID).Append(entry.GetID())
 			collector.data.bats[SEGInsertIDX].GetVectorByName(SegmentAttr_CreateAt).Append(segNode.GetEnd())
 			collector.data.bats[SEGInsertIDX].GetVectorByName(SegmentAttr_State).Append(entry.IsAppendable())
+			collector.data.bats[SEGInsertIDX].GetVectorByName(SegmentAttr_Sorted).Append(entry.IsSorted())
 			collector.data.bats[SEGInsertTxnIDX].GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().GetID())
 			collector.data.bats[SEGInsertTxnIDX].GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().GetID())
 			segNode.TxnMVCCNode.AppendTuple(collector.data.bats[SEGInsertTxnIDX])

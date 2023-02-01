@@ -15,6 +15,7 @@
 package options
 
 import (
+	"runtime"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -98,6 +99,24 @@ func WithDisableGCCheckpoint() func(*Options) {
 	}
 }
 
+func WithCatalogGCInterval(internal time.Duration) func(*Options) {
+	return func(o *Options) {
+		if o.CatalogCfg == nil {
+			o.CatalogCfg = new(CatalogCfg)
+		}
+		o.CatalogCfg.GCInterval = internal
+	}
+}
+
+func WithDisableGCCatalog() func(*Options) {
+	return func(o *Options) {
+		if o.CatalogCfg == nil {
+			o.CatalogCfg = new(CatalogCfg)
+		}
+		o.CatalogCfg.DisableGC = true
+	}
+}
+
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}
@@ -147,6 +166,13 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.CheckpointCfg.GCCheckpointInterval = DefaultGCCheckpointInterval
 	}
 
+	if o.CatalogCfg == nil {
+		o.CatalogCfg = new(CatalogCfg)
+	}
+	if o.CatalogCfg.GCInterval <= 0 {
+		o.CatalogCfg.GCInterval = DefaultCatalogGCInterval
+	}
+
 	if o.GCCfg == nil {
 		o.GCCfg = new(GCCfg)
 	}
@@ -160,8 +186,12 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 
 	if o.SchedulerCfg == nil {
+		ioworkers := DefaultIOWorkers
+		if ioworkers < runtime.NumCPU() {
+			ioworkers = runtime.NumCPU()
+		}
 		o.SchedulerCfg = &SchedulerCfg{
-			IOWorkers:    DefaultIOWorkers,
+			IOWorkers:    ioworkers,
 			AsyncWorkers: DefaultAsyncWorkers,
 		}
 	}

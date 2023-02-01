@@ -87,7 +87,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	rbat = batch.NewWithSize(len(catalog.MetaColTypes))
+	rbat = batch.NewWithSize(len(idxs))
 	rbat.SetAttributes(catalog.MetaColNames)
 	rbat.Cnt = 1
 	for i, e := range iov.Entries {

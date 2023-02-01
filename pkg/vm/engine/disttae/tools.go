@@ -698,8 +698,13 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 
 	if e.typ == INSERT {
 		ebat = batch.NewWithSize(0)
-		ebat.Vecs = e.bat.Vecs[1:]
-		ebat.Attrs = e.bat.Attrs[1:]
+		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+			ebat.Vecs = e.bat.Vecs
+			ebat.Attrs = e.bat.Attrs
+		} else {
+			ebat.Vecs = e.bat.Vecs[1:]
+			ebat.Attrs = e.bat.Attrs[1:]
+		}
 	} else {
 		ebat = e.bat
 	}
@@ -830,7 +835,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			}
 		}
 	}
-	var num int32 = 0
+	var num int32 = 1
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
 		attrDef, ok := def.(*engine.AttributeDef)

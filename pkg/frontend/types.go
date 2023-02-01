@@ -104,6 +104,11 @@ const (
 	externSql       = "external_sql"
 )
 
+// Cache size of auto_increment_columns cache.
+const (
+	cacheSize = 30000
+)
+
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
 func isCmdFieldListSql(sql string) bool {
 	return strings.HasPrefix(strings.ToLower(sql), cmdFieldListSql)

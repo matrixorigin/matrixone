@@ -87,9 +87,10 @@ func (b *bufferHolder) Start() {
 // Add call buffer.Add(), while bufferHolder is NOT readonly
 func (b *bufferHolder) Add(item batchpipe.HasName) {
 	b.mux.Lock()
-	b.buffer.Add(item)
+	buf := b.buffer
+	buf.Add(item)
 	b.mux.Unlock()
-	if b.buffer.ShouldFlush() {
+	if buf.ShouldFlush() {
 		b.signal(b)
 	}
 }
@@ -233,8 +234,13 @@ func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 }
 
 func (c *MOCollector) Collect(ctx context.Context, i batchpipe.HasName) error {
-	c.awakeCollect <- i
-	return nil
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		c.awakeCollect <- i
+		return nil
+	}
 }
 
 // Start all goroutine worker, including collector, generator, and exporter

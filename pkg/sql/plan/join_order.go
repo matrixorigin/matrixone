@@ -87,7 +87,7 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 
 		var joinSide int8
 		for _, cond := range node.OnList {
-			joinSide |= getJoinSide(cond, leftTags, rightTags)
+			joinSide |= getJoinSide(cond, leftTags, rightTags, 0)
 		}
 
 		if joinSide == JoinSideLeft {
@@ -430,12 +430,15 @@ func (builder *QueryBuilder) filterOnPK(filter *plan.Expr, pks []int32) bool {
 }
 
 func (builder *QueryBuilder) enumerateTags(nodeID int32) []int32 {
+	var tags []int32
+
 	node := builder.qry.Nodes[nodeID]
 	if len(node.BindingTags) > 0 {
-		return node.BindingTags
+		tags = append(tags, node.BindingTags...)
+		if node.NodeType != plan.Node_JOIN {
+			return tags
+		}
 	}
-
-	var tags []int32
 
 	for _, childID := range builder.qry.Nodes[nodeID].Children {
 		tags = append(tags, builder.enumerateTags(childID)...)

@@ -79,6 +79,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.cleanHashMap()
 		ctr.cleanAggVectors(mp)
 		ctr.cleanGroupVectors(mp)
+		ctr.cleanMultiAggVecs(mp)
 	}
 }
 

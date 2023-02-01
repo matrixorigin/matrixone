@@ -39,6 +39,8 @@ const (
 	EoFResponse
 	// ResultResponse result message
 	ResultResponse
+	// LocalInfileRequest local infile message
+	LocalInfileRequest
 )
 
 type Request struct {
@@ -319,6 +321,10 @@ func (pi *ProtocolImpl) Quit() {
 			return
 		}
 	}
+	//release salt
+	if pi.salt != nil {
+		pi.salt = nil
+	}
 }
 
 func (pi *ProtocolImpl) GetLock() sync.Locker {
@@ -423,6 +429,9 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 			return mp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), uint16(resp.status), mer.Warnings(), "")
 		}
 		return mp.sendResultSet(ctx, mer.Mrs(), resp.cmd, mer.Warnings(), uint16(resp.status))
+	case LocalInfileRequest:
+		s, _ := resp.data.(string)
+		return mp.sendLocalInfileRequest(s)
 	default:
 		return moerr.NewInternalError(ctx, "unsupported response:%d ", resp.category)
 	}
@@ -438,6 +447,7 @@ const (
 type FakeProtocol struct {
 	username string
 	database string
+	ioses    goetty.IOSession
 }
 
 func (fp *FakeProtocol) GetCapability() uint32 {
@@ -457,7 +467,7 @@ func (fp *FakeProtocol) HandleHandshake(ctx context.Context, payload []byte) (bo
 }
 
 func (fp *FakeProtocol) GetTcpConnection() goetty.IOSession {
-	return nil
+	return fp.ioses
 }
 
 func (fp *FakeProtocol) GetConciseProfile() string {
@@ -559,3 +569,7 @@ func (fp *FakeProtocol) SetUserName(s string) {
 }
 
 func (fp *FakeProtocol) Quit() {}
+
+func (fp *FakeProtocol) sendLocalInfileRequest(filename string) error {
+	return nil
+}

@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -132,14 +134,15 @@ func (s *Scope) MergeRun(c *Compile) error {
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		s.NodeInfo.Addr == c.addr || len(c.addr) == 0 {
+		len(c.addr) == 0 || strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
 	err := s.remoteRun(c)
+
 	// tell connect operator that it's over
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
-	sendToConnectOperator(arg, nil)
+	arg.Free(s.Proc, err != nil)
 	return err
 }
 
@@ -167,12 +170,14 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if err != nil {
 			return err
 		}
+		s.NodeInfo.Data = nil
 	case s.NodeInfo.Rel != nil:
 		var err error
 
 		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
+		s.NodeInfo.Data = nil
 	default:
 		var err error
 		var db engine.Database
@@ -201,6 +206,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if rds, err = rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
+		s.NodeInfo.Data = nil
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
@@ -223,7 +229,7 @@ func (s *Scope) PushdownRun(c *Compile) error {
 	var end bool // exist flag
 	var err error
 
-	reg := srv.GetConnector(s.DataSource.PushdownId)
+	reg := colexec.Srv.GetConnector(s.DataSource.PushdownId)
 	for {
 		bat := <-reg.Ch
 		if bat == nil {
@@ -289,8 +295,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op:  vm.Top,
-					Idx: in.Idx,
+					Op:      vm.Top,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &top.Argument{
 						Fs:    arg.Fs,
 						Limit: arg.Limit,
@@ -310,8 +317,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op:  vm.Order,
-					Idx: in.Idx,
+					Op:      vm.Order,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &order.Argument{
 						Fs: arg.Fs,
 					},
@@ -330,8 +338,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op:  vm.Limit,
-					Idx: in.Idx,
+					Op:      vm.Limit,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &limit.Argument{
 						Limit: arg.Limit,
 					},
@@ -342,14 +351,17 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			arg := in.Arg.(*group.Argument)
 			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
 			s.Instructions[0] = vm.Instruction{
-				Op: vm.MergeGroup,
+				Op:  vm.MergeGroup,
+				Idx: in.Idx,
 				Arg: &mergegroup.Argument{
 					NeedEval: false,
 				},
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op: vm.Group,
+					Op:      vm.Group,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &group.Argument{
 						Aggs:      arg.Aggs,
 						Exprs:     arg.Exprs,
@@ -363,14 +375,17 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			arg := in.Arg.(*offset.Argument)
 			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
 			s.Instructions[0] = vm.Instruction{
-				Op: vm.MergeOffset,
+				Op:  vm.MergeOffset,
+				Idx: in.Idx,
 				Arg: &mergeoffset.Argument{
 					Offset: arg.Offset,
 				},
 			}
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-					Op: vm.Offset,
+					Op:      vm.Offset,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
 					Arg: &offset.Argument{
 						Offset: arg.Offset,
 					},

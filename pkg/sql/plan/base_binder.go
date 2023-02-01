@@ -154,11 +154,6 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindFuncExprImplByAstExpr("xor", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
 
 	case *tree.Subquery:
-		if !isRoot && exprImpl.Exists {
-			// TODO: implement MARK join to better support non-scalar subqueries
-			return nil, moerr.NewNYI(b.GetContext(), "EXISTS subquery as non-root expression")
-		}
-
 		expr, err = b.impl.BindSubquery(exprImpl, isRoot)
 
 	case *tree.DefaultVal:
@@ -492,6 +487,13 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		newExpr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
+	case tree.ILIKE:
+		op = "ilike"
+
+	case tree.NOT_ILIKE:
+		newExpr := tree.NewComparisonExpr(tree.ILIKE, astExpr.Left, astExpr.Right)
+		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
+
 	case tree.IN:
 		switch astExpr.Right.(type) {
 		case *tree.Tuple:
@@ -509,11 +511,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery, ok := rightArg.Expr.(*plan.Expr_Sub); ok {
-				if !isRoot {
-					// TODO: implement MARK join to better support non-scalar subqueries
-					return nil, moerr.NewNYI(b.GetContext(), "IN subquery as non-root expression")
-				}
-
 				if list, ok := leftArg.Expr.(*plan.Expr_List); ok {
 					if len(list.List.List) != int(subquery.Sub.RowSize) {
 						return nil, moerr.NewNYI(b.GetContext(), "subquery should return %d columns", len(list.List.List))
@@ -526,6 +523,13 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 				subquery.Sub.Typ = plan.SubqueryRef_IN
 				subquery.Sub.Child = leftArg
+
+				rightArg.Typ = &plan.Type{
+					Id:          int32(types.T_bool),
+					NotNullable: leftArg.Typ.NotNullable && rightArg.Typ.NotNullable,
+					Size:        1,
+				}
+
 				return rightArg, nil
 			} else {
 				return bindFuncExprImplByPlanExpr(b.GetContext(), "in", []*plan.Expr{leftArg, rightArg})
@@ -549,11 +553,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery, ok := rightArg.Expr.(*plan.Expr_Sub); ok {
-				if !isRoot {
-					// TODO: implement MARK join to better support non-scalar subqueries
-					return nil, moerr.NewNYI(b.GetContext(), "IN subquery as non-root expression will be supported in future version")
-				}
-
 				if list, ok := leftArg.Expr.(*plan.Expr_List); ok {
 					if len(list.List.List) != int(subquery.Sub.RowSize) {
 						return nil, moerr.NewInvalidInput(b.GetContext(), "subquery should return %d columns", len(list.List.List))
@@ -566,6 +565,13 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 				subquery.Sub.Typ = plan.SubqueryRef_NOT_IN
 				subquery.Sub.Child = leftArg
+
+				rightArg.Typ = &plan.Type{
+					Id:          int32(types.T_bool),
+					NotNullable: leftArg.Typ.NotNullable && rightArg.Typ.NotNullable,
+					Size:        1,
+				}
+
 				return rightArg, nil
 			} else {
 				expr, err := bindFuncExprImplByPlanExpr(b.GetContext(), "in", []*plan.Expr{leftArg, rightArg})
@@ -596,11 +602,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 		if subquery, ok := expr.Expr.(*plan.Expr_Sub); ok {
-			if !isRoot {
-				// TODO: implement MARK join to better support non-scalar subqueries
-				return nil, moerr.NewNYI(b.GetContext(), "%q subquery as non-root expression", strings.ToUpper(astExpr.SubOp.ToString()))
-			}
-
 			if list, ok := child.Expr.(*plan.Expr_List); ok {
 				if len(list.List.List) != int(subquery.Sub.RowSize) {
 					return nil, moerr.NewInvalidInput(b.GetContext(), "subquery should return %d columns", len(list.List.List))
@@ -619,6 +620,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				subquery.Sub.Typ = plan.SubqueryRef_ANY
 			case tree.ALL:
 				subquery.Sub.Typ = plan.SubqueryRef_ALL
+			}
+
+			expr.Typ = &plan.Type{
+				Id:          int32(types.T_bool),
+				NotNullable: expr.Typ.NotNullable && child.Typ.NotNullable,
+				Size:        1,
 			}
 
 			return expr, nil
@@ -855,7 +862,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(ctx, args[0], &plan.Type{
 				Id:          int32(types.T_decimal128),
-				NotNullable: true,
+				NotNullable: args[0].Typ.NotNullable,
 			})
 			if err != nil {
 				return nil, err
@@ -868,7 +875,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(ctx, args[0], &plan.Type{
 				Id:          int32(types.T_float64),
-				NotNullable: true,
+				NotNullable: args[0].Typ.NotNullable,
 			})
 			if err != nil {
 				return nil, err

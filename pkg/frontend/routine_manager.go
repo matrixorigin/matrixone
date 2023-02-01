@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"os"
 	"sync"
 	"time"
@@ -26,17 +27,25 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type RoutineManager struct {
-	mu            sync.Mutex
-	ctx           context.Context
-	clients       map[goetty.IOSession]*Routine
-	pu            *config.ParameterUnit
-	skipCheckUser bool
-	tlsConfig     *tls.Config
+	mu             sync.Mutex
+	ctx            context.Context
+	clients        map[goetty.IOSession]*Routine
+	pu             *config.ParameterUnit
+	skipCheckUser  bool
+	tlsConfig      *tls.Config
+	autoIncrCaches map[string]defines.AutoIncrCache
+}
+
+func (rm *RoutineManager) GetAutoIncrCache() defines.AutoIncrCaches {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	return defines.AutoIncrCaches{Mu: &rm.mu, AutoIncrCaches: rm.autoIncrCaches}
 }
 
 func (rm *RoutineManager) SetSkipCheckUser(b bool) {
@@ -99,6 +108,10 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
 	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
+
+	// Add  autoIncrCaches in session structure.
+	ses.SetAutoIncrCaches(defines.AutoIncrCaches{Mu: &rm.mu, AutoIncrCaches: rm.autoIncrCaches})
+
 	routine.setSession(ses)
 	pro.SetSession(ses)
 
@@ -107,7 +120,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
 	if err != nil {
-		logError(pro.GetConciseProfile(), "failed to handshake with server, quiting routine...")
+		logErrorf(pro.GetConciseProfile(), "failed to handshake with server, quiting routine... %s", err)
 		routine.killConnection(true)
 		return
 	}
@@ -133,6 +146,14 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	if rt != nil {
 		ses := rt.getSession()
 		if ses != nil {
+			rt.decreaseCount(func() {
+				account := ses.GetTenantInfo()
+				accountName := sysAccountName
+				if account != nil {
+					accountName = account.GetTenant()
+				}
+				metric.ConnectionCounter(accountName).Dec()
+			})
 			logDebugf(ses.GetConciseProfile(), "the io session was closed.")
 		}
 		rt.cleanup()
@@ -296,12 +317,25 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	return nil
 }
 
+// clientCount returns the count of the clients
+func (rm *RoutineManager) clientCount() int {
+	var count int
+	rm.mu.Lock()
+	count = len(rm.clients)
+	rm.mu.Unlock()
+	return count
+}
+
 func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineManager, error) {
 	rm := &RoutineManager{
 		ctx:     ctx,
 		clients: make(map[goetty.IOSession]*Routine),
 		pu:      pu,
 	}
+
+	// Initialize auto incre cache.
+	rm.autoIncrCaches = make(map[string]defines.AutoIncrCache)
+
 	if pu.SV.EnableTls {
 		err := initTlsConfig(rm, pu.SV)
 		if err != nil {

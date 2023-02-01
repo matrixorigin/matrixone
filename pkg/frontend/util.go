@@ -728,3 +728,9 @@ func removeFile(s string, idx int64) {
 		os.RemoveAll(filepath.Join(path, fmt.Sprintf("%s_%d.%s", base, i, extend)))
 	}
 }
+
+func isInvalidConfigInput(config string) bool {
+	// first verify if the input string can parse as a josn type data
+	_, err := types.ParseStringToByteJson(config)
+	return err != nil
+}
