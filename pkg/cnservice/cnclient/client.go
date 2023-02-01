@@ -16,7 +16,6 @@ package cnclient
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"time"
@@ -139,7 +138,6 @@ func (c *CNClient) acquireMessage() morpc.Message {
 
 func (c *CNClient) releaseMessage(m *pipeline.Message) {
 	if c.requestPool != nil {
-		fmt.Printf("cnclient release msg\n")
 		m.Sid = 0
 		m.Err = nil
 		m.Data = nil

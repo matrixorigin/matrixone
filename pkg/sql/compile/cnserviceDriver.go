@@ -157,19 +157,16 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 			for {
 				if srv.IsEndStatus(opUuid, requireCnt) {
 					wg.Ch <- nil
-					srv.chanBufMp.Delete(m.GetID())
 					close(wg.Ch)
-
+					srv.RemoveUuidFromUuidMap(opUuid)
 					break
 				} else {
 					runtime.Gosched()
 				}
 			}
-			return nil, err
+			return nil, nil
 		} else {
-			if m.WaitingNextToMerge() {
-				return nil, nil
-			}
+			// TODO: handle seperate batch
 			mp, err := mpool.NewMPool("cnservice_handle_batch", 0, mpool.NoFixed)
 			if err != nil {
 				return nil, err

@@ -199,7 +199,6 @@ func (s *service) acquireMessage() morpc.Message {
 
 func (s *service) releaseMessage(m *pipeline.Message) {
 	if s.responsePool != nil {
-		fmt.Printf("cnservice release msg\n")
 		m.Sid = 0
 		m.Err = nil
 		m.Data = nil

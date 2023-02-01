@@ -16,7 +16,7 @@ package compile
 
 import (
 	"context"
-	"sync"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,7 +35,6 @@ func NewServer(addr string) *Server {
 		idMap:       RelationMap{id: 0, mp: make(map[uint64]*process.WaitRegister)},
 		uuidMap:     UuidMap{mp: make(map[uuid.UUID]*process.WaitRegister)},
 		batchCntMap: BatchCntMap{mp: make(map[uuid.UUID]uint64)},
-		chanBufMp:   new(sync.Map),
 	}
 	return srv
 }
@@ -74,6 +73,7 @@ func (srv *Server) PutRegFromUuidMap(u uuid.UUID, reg *process.WaitRegister) err
 		}
 		return nil
 	}
+	fmt.Printf("[msghandler] add to uuidmap. uuid %s -> ch %p\n", u, reg.Ch)
 	srv.uuidMap.mp[u] = reg
 	return nil
 }
@@ -98,6 +98,7 @@ func (srv *Server) IsEndStatus(u uuid.UUID, requireCnt uint64) bool {
 	srv.batchCntMap.Lock()
 	defer srv.batchCntMap.Unlock()
 	if cnt, ok := srv.batchCntMap.mp[u]; ok {
+		fmt.Printf("[msghandler] end check. cnt = %d, requirecnt = %d\n", cnt, requireCnt)
 		if cnt == requireCnt {
 			delete(srv.batchCntMap.mp, u)
 			return true

@@ -985,10 +985,10 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 	}
 
 	sendFunc := func(streams []*dispatch.WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, ctxs []context.Context, cnts [][]uint, proc *process.Process) error {
-		// TODO: seperate to different goroutine?
+		// TODO: seperate local and remote to different goroutine?
 		// send bat to streams
 		{
-			// TODO: handle refCountAdd of batch's hashmap and batch?
+			// TODO: Split the batch into small if it is too large
 			encodeBatch, err := types.Encode(bat)
 			if err != nil {
 				return err

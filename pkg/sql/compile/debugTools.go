@@ -208,8 +208,11 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 							remoteChs += ", "
 						}
 						uuids := ""
-						for _, u := range reg.Uuids {
-							uuids += fmt.Sprintf("%s, ", u)
+						for j, u := range reg.Uuids {
+							if j != 0 {
+								uuids += " ,"
+							}
+							uuids += u.String()
 						}
 						remoteChs += fmt.Sprintf("addr: %s, uuids[%s]", reg.NodeAddr, uuids)
 					}

@@ -137,6 +137,7 @@ type anaylze struct {
 	analInfos []*process.AnalyzeInfo
 }
 
+// TODO: remove batchCntMap when dispatch executor using the stream correctly
 type Server struct {
 	// idMap is used to construct the correct relation between regs
 	// when decoding PipelineMessage
@@ -147,13 +148,8 @@ type Server struct {
 	// regs when receiving BatchMessage
 	uuidMap UuidMap
 
-	// map use to handle reoder issue when handeling BatchMessage
+	// batchCntMap use to handle reoder issue when handeling BatchMessage
 	batchCntMap BatchCntMap
-
-	// chanMp will be used in:
-	// messgage.Id --> dataBuf (when a batch is too large, it will be split into small ones in the source
-	// CN, and the target CN need to recieve them all and then merge them into one batch)
-	chanBufMp *sync.Map
 }
 
 type RelationMap struct {
