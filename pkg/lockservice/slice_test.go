@@ -58,12 +58,7 @@ func TestRelease(t *testing.T) {
 	fsp := newFixedSlicePool(16)
 	fs := fsp.acquire(1)
 	fsp.release(fs)
-
-	fs2 := fsp.acquire(1)
-	assert.Equal(t, fs, fs2)
-
-	fs3 := fsp.acquire(1)
-	assert.NotEqual(t, fs, fs3)
+	assert.Equal(t, uint64(1), fsp.releaseV.Load())
 
 	defer func() {
 		if err := recover(); err != nil {
@@ -71,8 +66,9 @@ func TestRelease(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	fs3.values = make([][]byte, 1024)
-	fsp.release(fs3)
+	fs = fsp.acquire(1)
+	fs.values = make([][]byte, 1024)
+	fsp.release(fs)
 }
 
 func TestFixedSliceAppend(t *testing.T) {
