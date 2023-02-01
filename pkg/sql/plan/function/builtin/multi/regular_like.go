@@ -15,6 +15,7 @@
 package multi
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/regular"
@@ -28,6 +29,8 @@ func RegularLike(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	secondValues := vector.MustStrCols(secondVector)
 	resultType := types.T_bool.ToType()
 
+	var thirdNsp *nulls.Nulls
+	thirdNsp = nil
 	//maxLen
 	maxLen := vector.Length(vectors[0])
 	for i := range vectors {
@@ -44,7 +47,14 @@ func RegularLike(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	switch len(vectors) {
 	case 2:
 		match_type = []string{"c"}
+	case 3:
+		match_type = vector.MustStrCols(vectors[2])
+		if vectors[2].IsScalarNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		thirdNsp = vectors[2].Nsp
 	}
+
 	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
@@ -54,7 +64,7 @@ func RegularLike(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		return nil, err
 	}
 	resultValues := vector.MustTCols[bool](resultVector)
-	err = regular.RegularLikeWithArrays(firstValues, secondValues, match_type, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues, maxLen)
+	err = regular.RegularLikeWithArrays(firstValues, secondValues, match_type, firstVector.Nsp, secondVector.Nsp, thirdNsp, resultVector.Nsp, resultValues, maxLen)
 	if err != nil {
 		return nil, err
 	}

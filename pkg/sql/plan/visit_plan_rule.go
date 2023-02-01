@@ -16,11 +16,12 @@ package plan
 
 import (
 	"context"
+	"sort"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"sort"
-	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -317,7 +318,18 @@ func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
 	case bool:
 		expr = makePlan2BoolConstExprWithType(val)
 	case nil:
-		expr = makePlan2NullConstExprWithType()
+		if e.Typ.Id == int32(types.T_any) {
+			expr = makePlan2NullConstExprWithType()
+		} else {
+			expr = &plan.Expr{
+				Expr: &plan.Expr_C{
+					C: &Const{
+						Isnull: true,
+					},
+				},
+				Typ: e.Typ,
+			}
+		}
 	case types.Decimal64, types.Decimal128:
 		err = moerr.NewNYI(r.getContext(), "decimal var")
 	default:

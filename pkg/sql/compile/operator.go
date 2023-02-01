@@ -382,19 +382,19 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		DelSource: make([]engine.Relation, len(oldCtx.Ref)),
 		DelRef:    oldCtx.Ref,
 
-		ParentSource: make([][]engine.Relation, len(oldCtx.ParentIds)),
-
-		DelIdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
-		DelIdxIdx:    make([]int32, len(oldCtx.IdxIdx)),
+		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
+		IdxIdx:    make([]int32, len(oldCtx.IdxIdx)),
 
 		OnRestrictIdx: make([]int32, len(oldCtx.OnRestrictIdx)),
 
 		OnCascadeIdx:    make([]int32, len(oldCtx.OnCascadeIdx)),
 		OnCascadeSource: make([]engine.Relation, len(oldCtx.OnCascadeRef)),
 
-		OnSetSource: make([]engine.Relation, len(oldCtx.OnSetRef)),
-		OnSetIdx:    make([][]int32, len(oldCtx.OnSetIdx)),
-		OnSetAttrs:  make([][]string, len(oldCtx.OnSetAttrs)),
+		OnSetSource:    make([]engine.Relation, len(oldCtx.OnSetRef)),
+		OnSetIdx:       make([][]int32, len(oldCtx.OnSetIdx)),
+		OnSetTableDef:  oldCtx.OnSetDef,
+		OnSetRef:       oldCtx.OnSetRef,
+		OnSetUpdateCol: make([]map[string]int32, len(oldCtx.OnSetUpdateCol)),
 
 		CanTruncate: oldCtx.CanTruncate,
 	}
@@ -407,22 +407,8 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			}
 			delCtx.DelSource[i] = rel
 		}
-		for i, idList := range oldCtx.ParentIds {
-			rels := make([]engine.Relation, len(idList.List))
-			for j, id := range idList.List {
-				ref := &plan.ObjectRef{
-					Obj: id,
-				}
-				rel, err := getRel(proc, eg, ref)
-				if err != nil {
-					return nil, err
-				}
-				rels[j] = rel
-			}
-			delCtx.ParentSource[i] = rels
-		}
 	} else {
-		copy(delCtx.DelIdxIdx, oldCtx.IdxIdx)
+		copy(delCtx.IdxIdx, oldCtx.IdxIdx)
 		copy(delCtx.OnRestrictIdx, oldCtx.OnRestrictIdx)
 		copy(delCtx.OnCascadeIdx, oldCtx.OnCascadeIdx)
 		for i, list := range oldCtx.OnSetIdx {
@@ -430,10 +416,6 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			for j, id := range list.List {
 				delCtx.OnSetIdx[i][j] = int32(id)
 			}
-		}
-		for i, list := range oldCtx.OnSetAttrs {
-			delCtx.OnSetAttrs[i] = make([]string, len(list.List))
-			copy(delCtx.OnSetAttrs[i], list.List)
 		}
 		for i, ref := range oldCtx.Ref {
 			rel, err := getRel(proc, eg, ref)
@@ -447,7 +429,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			if err != nil {
 				return nil, err
 			}
-			delCtx.DelIdxSource[i] = rel
+			delCtx.IdxSource[i] = rel
 		}
 		for i, ref := range oldCtx.OnCascadeRef {
 			rel, err := getRel(proc, eg, ref)
@@ -463,10 +445,14 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			}
 			delCtx.OnSetSource[i] = rel
 		}
+		for i, idxMap := range oldCtx.OnSetUpdateCol {
+			delCtx.OnSetUpdateCol[i] = idxMap.Map
+		}
 	}
 
 	return &deletion.Argument{
 		DeleteCtx: delCtx,
+		Engine:    eg,
 	}, nil
 }
 
@@ -573,95 +559,96 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 }
 
 func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
-	updateCtxs := make([]*update.UpdateCtx, len(n.UpdateCtxs))
-	tableIDs := make([]uint64, len(n.UpdateCtxs))
-	dbs := make([]engine.Database, len(n.UpdateCtxs))
-	dbNames := make([]string, len(n.UpdateCtxs))
-	tblNames := make([]string, len(n.UpdateCtxs))
-	hasAtuoCol := make([]bool, len(n.UpdateCtxs))
-	for i, updateCtx := range n.UpdateCtxs {
-		var dbSource engine.Database
-		var relation engine.Relation
-		var err error
-		var isTemp bool
-		dbSource, err = eg.Database(proc.Ctx, updateCtx.DbName, proc.TxnOperator)
+	oldCtx := n.UpdateCtx
+	updateCtx := &update.UpdateCtx{
+		Source:    make([]engine.Relation, len(oldCtx.Ref)),
+		Idxs:      make([][]int32, len(oldCtx.Idx)),
+		TableDefs: oldCtx.TableDefs,
+		Ref:       oldCtx.Ref,
+		UpdateCol: make([]map[string]int32, len(oldCtx.UpdateCol)),
+
+		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
+		IdxIdx:    oldCtx.IdxIdx,
+
+		OnRestrictIdx: oldCtx.OnRestrictIdx,
+
+		OnCascadeIdx:       make([][]int32, len(oldCtx.OnCascadeIdx)),
+		OnCascadeSource:    make([]engine.Relation, len(oldCtx.OnCascadeRef)),
+		OnCascadeRef:       oldCtx.OnCascadeRef,
+		OnCascadeTableDef:  oldCtx.OnCascadeDef,
+		OnCascadeUpdateCol: make([]map[string]int32, len(oldCtx.OnCascadeUpdateCol)),
+
+		OnSetSource:    make([]engine.Relation, len(oldCtx.OnSetRef)),
+		OnSetIdx:       make([][]int32, len(oldCtx.OnSetIdx)),
+		OnSetRef:       oldCtx.OnSetRef,
+		OnSetTableDef:  oldCtx.OnSetDef,
+		OnSetUpdateCol: make([]map[string]int32, len(oldCtx.OnSetUpdateCol)),
+
+		ParentIdx: make([]map[string]int32, len(oldCtx.ParentIdx)),
+	}
+
+	for i, idxMap := range oldCtx.UpdateCol {
+		updateCtx.UpdateCol[i] = idxMap.Map
+	}
+	for i, list := range oldCtx.Idx {
+		updateCtx.Idxs[i] = make([]int32, len(list.List))
+		for j, id := range list.List {
+			updateCtx.Idxs[i][j] = int32(id)
+		}
+	}
+	for i, list := range oldCtx.OnSetIdx {
+		updateCtx.OnSetIdx[i] = make([]int32, len(list.List))
+		for j, id := range list.List {
+			updateCtx.OnSetIdx[i][j] = int32(id)
+		}
+	}
+	for i, list := range oldCtx.OnCascadeIdx {
+		updateCtx.OnCascadeIdx[i] = make([]int32, len(list.List))
+		for j, id := range list.List {
+			updateCtx.OnCascadeIdx[i][j] = int32(id)
+		}
+	}
+	for i, ref := range oldCtx.Ref {
+		rel, err := getRel(proc, eg, ref)
 		if err != nil {
 			return nil, err
 		}
-		relation, err = dbSource.Relation(proc.Ctx, updateCtx.TblName)
-		dbs[i] = dbSource
+		updateCtx.Source[i] = rel
+	}
+	for i, ref := range oldCtx.IdxRef {
+		rel, err := getRel(proc, eg, ref)
 		if err != nil {
-			var e error
-			dbSource, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-			if e != nil {
-				return nil, err
-			}
-			relation, e = dbSource.Relation(proc.Ctx, engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName))
-			if e != nil {
-				return nil, err
-			}
-			isTemp = true
+			return nil, err
 		}
-		tableIDs[i] = relation.GetTableID(proc.Ctx)
-
-		if isTemp {
-			dbNames[i] = defines.TEMPORARY_DBNAME
-			tblNames[i] = engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName)
-		} else {
-			dbNames[i] = updateCtx.DbName
-			tblNames[i] = updateCtx.TblName
+		updateCtx.IdxSource[i] = rel
+	}
+	for i, ref := range oldCtx.OnCascadeRef {
+		rel, err := getRel(proc, eg, ref)
+		if err != nil {
+			return nil, err
 		}
-		tableIDs[i] = relation.GetTableID(proc.Ctx)
-
-		colNames := make([]string, 0, len(updateCtx.UpdateCols))
-		for _, col := range updateCtx.UpdateCols {
-			colNames = append(colNames, col.Name)
+		updateCtx.OnCascadeSource[i] = rel
+	}
+	for i, ref := range oldCtx.OnSetRef {
+		rel, err := getRel(proc, eg, ref)
+		if err != nil {
+			return nil, err
 		}
-
-		updateCtxs[i] = &update.UpdateCtx{
-			HideKey:            updateCtx.HideKey,
-			HideKeyIdx:         updateCtx.HideKeyIdx,
-			UpdateAttrs:        colNames,
-			OtherAttrs:         updateCtx.OtherAttrs,
-			OrderAttrs:         updateCtx.OrderAttrs,
-			TableSource:        relation,
-			CPkeyColDef:        updateCtx.CompositePkey,
-			IsIndexTableUpdate: updateCtx.IsIndexTableUpdate,
-			IndexParts:         updateCtx.IndexParts,
-			ClusterByDef:       updateCtx.ClusterByDef,
-		}
-
-		if !updateCtx.IsIndexTableUpdate {
-			if len(updateCtx.UniqueIndexPos) > 0 {
-				for _, pos := range updateCtx.UniqueIndexPos {
-					updateCtxs[i].UniqueIndexPos = append(updateCtxs[i].UniqueIndexPos, int(pos))
-				}
-			}
-
-			if len(updateCtx.SecondaryIndexPos) > 0 {
-				for _, pos := range updateCtx.SecondaryIndexPos {
-					updateCtxs[i].SecondaryIndexPos = append(updateCtxs[i].SecondaryIndexPos, int(pos))
-				}
-			}
-		}
-		for j := 0; j < len(n.TableDefVec[i].Cols); j++ {
-			if n.TableDefVec[i].Cols[j].Typ.AutoIncr {
-				hasAtuoCol[i] = true
-				break
-			}
-		}
-
+		updateCtx.OnSetSource[i] = rel
+	}
+	for i, idxMap := range oldCtx.OnCascadeUpdateCol {
+		updateCtx.OnCascadeUpdateCol[i] = idxMap.Map
+	}
+	for i, idxMap := range oldCtx.OnSetUpdateCol {
+		updateCtx.OnSetUpdateCol[i] = idxMap.Map
+	}
+	for i, idxMap := range oldCtx.ParentIdx {
+		updateCtx.ParentIdx[i] = idxMap.Map
 	}
 
 	return &update.Argument{
-		UpdateCtxs:  updateCtxs,
-		Engine:      eg,
-		DB:          dbs,
-		TableID:     tableIDs,
-		DBName:      dbNames,
-		TblName:     tblNames,
-		TableDefVec: n.TableDefVec,
-		HasAutoCol:  hasAtuoCol,
+		UpdateCtx: updateCtx,
+		Engine:    eg,
 	}, nil
 }
 

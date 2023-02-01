@@ -31,12 +31,16 @@ create table test04(a int, b int, c varchar(10), unique key(a)) cluster by (b,c,
 insert into test04 values(11,3,'bb');
 insert into test04 values(1,2,'a');
 insert into test04 values(2,2,'');
+-- @bvt:issue#7565
 insert into test04 values(3,2,null);
+-- @bvt:issue
 select * from test04;
 create table test06(a int, b int, c varchar(10)) cluster by (b,a,c);
 insert into test06 select * from test04;
 select * from test06;
+-- @bvt:issue#7565
 update test06 set c=null where a=11;
+-- @bvt:issue
 select * from test06;
 insert into test06 select * from test04;
 select * from test06;

@@ -132,8 +132,11 @@ func (variance *Variance[T1]) MarshalBinary() ([]byte, error) {
 }
 
 func (variance *Variance[T1]) UnmarshalBinary(data []byte) error {
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
 	decoded := new(EncodeVariance)
-	if err := types.Decode(data, decoded); err != nil {
+	if err := types.Decode(copyData, decoded); err != nil {
 		return nil
 	}
 	variance.Sum = decoded.Sum
@@ -198,8 +201,11 @@ func (v *VD64) MarshalBinary() ([]byte, error) {
 }
 
 func (v *VD64) UnmarshalBinary(data []byte) error {
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
 	decoded := new(EncodeDecimalV)
-	if err := types.Decode(data, decoded); err != nil {
+	if err := types.Decode(copyData, decoded); err != nil {
 		return nil
 	}
 	v.Sum = decoded.Sum
@@ -263,8 +269,11 @@ func (v *VD128) MarshalBinary() ([]byte, error) {
 }
 
 func (v *VD128) UnmarshalBinary(data []byte) error {
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
 	decoded := new(EncodeDecimalV)
-	if err := types.Decode(data, decoded); err != nil {
+	if err := types.Decode(copyData, decoded); err != nil {
 		return nil
 	}
 	v.Sum = decoded.Sum

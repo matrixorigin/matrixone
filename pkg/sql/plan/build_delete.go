@@ -15,10 +15,6 @@
 package plan
 
 import (
-	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -28,7 +24,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	for _, tbl := range stmt.TableRefs {
 		getAliasToName(ctx, tbl, "", aliasMap)
 	}
-	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, aliasMap)
+	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, aliasMap)
 	if err != nil {
 		return nil, err
 	}
@@ -42,8 +38,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	}
 
 	canTruncate := false
-	parentIds := make([]*plan.IdList, len(tblInfo.tableDefs))
-	if checkIfStmtHaveRewriteConstraint(tblInfo) {
+	if tblInfo.haveConstraint {
 		bindCtx.groupTag = builder.genNewTag()
 		bindCtx.aggregateTag = builder.genNewTag()
 		bindCtx.projectTag = builder.genNewTag()
@@ -54,8 +49,8 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 			return nil, err
 		}
 
-		for _, tableDef := range tblInfo.tableDefs {
-			err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId)
+		for i, tableDef := range tblInfo.tableDefs {
+			err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId, i)
 			if err != nil {
 				return nil, err
 			}
@@ -73,17 +68,6 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		// if delete table have no constraint
 		if stmt.Where == nil && stmt.Limit == nil {
 			canTruncate = true
-			for i, def := range tblInfo.tableDefs {
-				var idList []int64
-				for _, fk := range def.Fkeys {
-					if _, existInDelTable := tblInfo.idToName[fk.ForeignTbl]; !existInDelTable {
-						idList = append(idList, int64(fk.ForeignTbl))
-					}
-				}
-				parentIds[i] = &plan.IdList{
-					List: idList,
-				}
-			}
 		}
 		rewriteInfo.rootId, err = deleteToSelect(builder, bindCtx, stmt, false)
 		if err != nil {
@@ -99,18 +83,21 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 
 	// append delete node
 	deleteCtx := &plan.DeleteCtx{
-		CanTruncate:   canTruncate,
-		ParentIds:     parentIds,
-		Ref:           rewriteInfo.tblInfo.objRef,
-		IdxRef:        rewriteInfo.onIdxTbl,
-		IdxIdx:        rewriteInfo.onIdx,
+		CanTruncate: canTruncate,
+		Ref:         rewriteInfo.tblInfo.objRef,
+
+		IdxRef: rewriteInfo.onIdxTbl,
+		IdxIdx: rewriteInfo.onIdx,
+
 		OnRestrictRef: rewriteInfo.onRestrictTbl,
 		OnRestrictIdx: rewriteInfo.onRestrict,
-		OnCascadeRef:  rewriteInfo.onCascadeTbl,
+		OnCascadeRef:  rewriteInfo.onCascadeRef,
 		OnCascadeIdx:  make([]int32, len(rewriteInfo.onCascade)),
-		OnSetRef:      rewriteInfo.onSetTbl,
-		OnSetIdx:      make([]*plan.IdList, len(rewriteInfo.onSet)),
-		OnSetAttrs:    make([]*plan.Attrs, len(rewriteInfo.onSetAttr)),
+
+		OnSetRef:       rewriteInfo.onSetRef,
+		OnSetIdx:       make([]*plan.IdList, len(rewriteInfo.onSet)),
+		OnSetDef:       rewriteInfo.onSetTableDef,
+		OnSetUpdateCol: make([]*plan.ColPosMap, len(rewriteInfo.onSetUpdateCol)),
 	}
 	for i, idxList := range rewriteInfo.onCascade {
 		deleteCtx.OnCascadeIdx[i] = int32(idxList[0])
@@ -120,9 +107,9 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 			List: setList,
 		}
 	}
-	for i, attrs := range rewriteInfo.onSetAttr {
-		deleteCtx.OnSetAttrs[i] = &plan.Attrs{
-			List: attrs,
+	for i, idxMap := range rewriteInfo.onSetUpdateCol {
+		deleteCtx.OnSetUpdateCol[i] = &plan.ColPosMap{
+			Map: idxMap,
 		}
 	}
 
@@ -145,64 +132,64 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	}, err
 }
 
-// build rowid column abstract syntax tree expression of the table to be deleted
-func buildRowIdAstExpr(ctx CompilerContext, tbinfo *tableInfo, schemaName string, tableName string) (tree.SelectExpr, error) {
-	hideKey := ctx.GetHideKeyDef(schemaName, tableName)
-	if hideKey == nil {
-		return tree.SelectExpr{}, moerr.NewInvalidState(ctx.GetContext(), "cannot find hide key")
-	}
-	tblAliasName := tableName
-	if tbinfo != nil {
-		tblAliasName = tbinfo.baseName2AliasMap[tableName]
-	}
-	expr := tree.SetUnresolvedName(tblAliasName, hideKey.Name)
-	return tree.SelectExpr{Expr: expr}, nil
-}
+// // build rowid column abstract syntax tree expression of the table to be deleted
+// func buildRowIdAstExpr(ctx CompilerContext, tbinfo *tableInfo, schemaName string, tableName string) (tree.SelectExpr, error) {
+// 	hideKey := ctx.GetHideKeyDef(schemaName, tableName)
+// 	if hideKey == nil {
+// 		return tree.SelectExpr{}, moerr.NewInvalidState(ctx.GetContext(), "cannot find hide key")
+// 	}
+// 	tblAliasName := tableName
+// 	if tbinfo != nil {
+// 		tblAliasName = tbinfo.baseName2AliasMap[tableName]
+// 	}
+// 	expr := tree.SetUnresolvedName(tblAliasName, hideKey.Name)
+// 	return tree.SelectExpr{Expr: expr}, nil
+// }
 
-// build Index table ast expr
-func buildIndexTableExpr(indexTableName string) tree.TableExpr {
-	prefix := tree.ObjectNamePrefix{
-		CatalogName:     "",
-		SchemaName:      "",
-		ExplicitCatalog: false,
-		ExplicitSchema:  false,
-	}
+// // build Index table ast expr
+// func buildIndexTableExpr(indexTableName string) tree.TableExpr {
+// 	prefix := tree.ObjectNamePrefix{
+// 		CatalogName:     "",
+// 		SchemaName:      "",
+// 		ExplicitCatalog: false,
+// 		ExplicitSchema:  false,
+// 	}
 
-	tableExpr := tree.NewTableName(tree.Identifier(indexTableName), prefix)
+// 	tableExpr := tree.NewTableName(tree.Identifier(indexTableName), prefix)
 
-	aliasClause := tree.AliasClause{
-		Alias: "",
-	}
-	return tree.NewAliasedTableExpr(tableExpr, aliasClause)
-}
+// 	aliasClause := tree.AliasClause{
+// 		Alias: "",
+// 	}
+// 	return tree.NewAliasedTableExpr(tableExpr, aliasClause)
+// }
 
-// construct equivalent connection conditions between original table and index table
-func buildJoinOnCond(tbinfo *tableInfo, originTableName string, indexTableName string, indexField *plan.Field) *tree.OnJoinCond {
-	originTableAlias := tbinfo.baseName2AliasMap[originTableName]
-	// If it is a single column index
-	if len(indexField.Parts) == 1 {
-		uniqueColName := indexField.Parts[0]
-		leftExpr := tree.SetUnresolvedName(originTableAlias, uniqueColName)
-		rightExpr := tree.SetUnresolvedName(indexTableName, strings.ToLower(catalog.IndexTableIndexColName))
+// // construct equivalent connection conditions between original table and index table
+// func buildJoinOnCond(tbinfo *tableInfo, originTableName string, indexTableName string, indexField *plan.Field) *tree.OnJoinCond {
+// 	originTableAlias := tbinfo.baseName2AliasMap[originTableName]
+// 	// If it is a single column index
+// 	if len(indexField.Parts) == 1 {
+// 		uniqueColName := indexField.Parts[0]
+// 		leftExpr := tree.SetUnresolvedName(originTableAlias, uniqueColName)
+// 		rightExpr := tree.SetUnresolvedName(indexTableName, strings.ToLower(catalog.IndexTableIndexColName))
 
-		onCondExpr := tree.NewComparisonExprWithSubop(tree.EQUAL, tree.EQUAL, leftExpr, rightExpr)
-		return tree.NewOnJoinCond(onCondExpr)
-	} else { // If it is a composite index
-		funcName := tree.SetUnresolvedName(strings.ToLower("serial"))
-		// build function parameters
-		exprs := make(tree.Exprs, len(indexField.Parts))
-		for i, part := range indexField.Parts {
-			exprs[i] = tree.SetUnresolvedName(originTableAlias, part)
-		}
+// 		onCondExpr := tree.NewComparisonExprWithSubop(tree.EQUAL, tree.EQUAL, leftExpr, rightExpr)
+// 		return tree.NewOnJoinCond(onCondExpr)
+// 	} else { // If it is a composite index
+// 		funcName := tree.SetUnresolvedName(strings.ToLower("serial"))
+// 		// build function parameters
+// 		exprs := make(tree.Exprs, len(indexField.Parts))
+// 		for i, part := range indexField.Parts {
+// 			exprs[i] = tree.SetUnresolvedName(originTableAlias, part)
+// 		}
 
-		// build composite index serialize function expression
-		leftExpr := &tree.FuncExpr{
-			Func:  tree.FuncName2ResolvableFunctionReference(funcName),
-			Exprs: exprs,
-		}
+// 		// build composite index serialize function expression
+// 		leftExpr := &tree.FuncExpr{
+// 			Func:  tree.FuncName2ResolvableFunctionReference(funcName),
+// 			Exprs: exprs,
+// 		}
 
-		rightExpr := tree.SetUnresolvedName(indexTableName, strings.ToLower(catalog.IndexTableIndexColName))
-		onCondExpr := tree.NewComparisonExprWithSubop(tree.EQUAL, tree.EQUAL, leftExpr, rightExpr)
-		return tree.NewOnJoinCond(onCondExpr)
-	}
-}
+// 		rightExpr := tree.SetUnresolvedName(indexTableName, strings.ToLower(catalog.IndexTableIndexColName))
+// 		onCondExpr := tree.NewComparisonExprWithSubop(tree.EQUAL, tree.EQUAL, leftExpr, rightExpr)
+// 		return tree.NewOnJoinCond(onCondExpr)
+// 	}
+// }
