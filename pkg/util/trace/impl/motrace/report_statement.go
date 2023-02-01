@@ -100,9 +100,9 @@ func (s *StatementInfo) Free() {
 	}
 }
 
-func (s *StatementInfo) GetRow() *table.Row { return SingleStatementTable.GetRow(DefaultContext()) }
+func (s *StatementInfo) GetTable() *table.Table { return SingleStatementTable }
 
-func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string {
+func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.exported = true
@@ -111,7 +111,7 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 	row.SetColumnVal(txnIDCol, uuid.UUID(s.TransactionID).String())
 	row.SetColumnVal(sesIDCol, uuid.UUID(s.SessionID).String())
 	row.SetColumnVal(accountCol, s.Account)
-	row.SetColumnVal(roleIdCol, fmt.Sprintf("%d", s.RoleId))
+	row.SetColumnVal(roleIdCol, int64(s.RoleId))
 	row.SetColumnVal(userCol, s.User)
 	row.SetColumnVal(hostCol, s.Host)
 	row.SetColumnVal(dbCol, s.Database)
@@ -121,9 +121,9 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 	row.SetColumnVal(stmtFgCol, s.StatementFingerprint)
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
-	row.SetColumnVal(reqAtCol, Time2DatetimeString(s.RequestAt))
-	row.SetColumnVal(respAtCol, Time2DatetimeString(s.ResponseAt))
-	row.SetColumnVal(durationCol, fmt.Sprintf("%d", s.Duration))
+	row.SetColumnVal(reqAtCol, s.RequestAt)
+	row.SetColumnVal(respAtCol, s.ResponseAt)
+	row.SetColumnVal(durationCol, uint64(s.Duration))
 	row.SetColumnVal(statusCol, s.Status.String())
 	if s.Error != nil {
 		var moError *moerr.Error
@@ -136,13 +136,11 @@ func (s *StatementInfo) CsvFields(ctx context.Context, row *table.Row) []string 
 	}
 	execPlan, stats := s.ExecPlan2Json(ctx)
 	row.SetColumnVal(execPlanCol, execPlan)
-	row.SetColumnVal(rowsReadCol, fmt.Sprintf("%d", s.RowsRead))
-	row.SetColumnVal(bytesScanCol, fmt.Sprintf("%d", s.BytesScan))
+	row.SetColumnVal(rowsReadCol, s.RowsRead)
+	row.SetColumnVal(bytesScanCol, s.BytesScan)
 	row.SetColumnVal(statsCol, stats)
 	row.SetColumnVal(stmtTypeCol, s.StatementType)
 	row.SetColumnVal(queryTypeCol, s.QueryType)
-
-	return row.ToStrings()
 }
 
 // ExecPlan2Json return ExecPlan Serialized json-str
@@ -172,6 +170,9 @@ func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
 			// get nil ExecPlan json-str
 			jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
 		}
+	}
+	if len(statsJsonByte) == 0 {
+		statsJsonByte = []byte("{}")
 	}
 	return string(jsonByte), string(statsJsonByte)
 }
