@@ -352,7 +352,10 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	now := time.Now()
 	entry := r.MaxCheckpoint()
-	if entry.GetState() != ST_Running {
+	// In some unit tests, ckp is managed manually, and ckp deletiton (CleanPenddingCheckpoint)
+	// can be called when the queue still has unexecuted task.
+	// Add `entry == nil` here as protective codes
+	if entry == nil || entry.GetState() != ST_Running {
 		return
 	}
 	err := r.doIncrementalCheckpoint(entry)
