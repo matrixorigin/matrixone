@@ -62,6 +62,7 @@ func NewTxnMVCCNodeWithTS(ts types.TS) *TxnMVCCNode {
 		End:     ts,
 	}
 }
+func (un *TxnMVCCNode) Close() {}
 func (un *TxnMVCCNode) IsAborted() bool {
 	return un.Aborted
 }
