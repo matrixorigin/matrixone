@@ -536,7 +536,7 @@ func updateIndexTable(indexTableUpdateCtx *UpdateCtx, originTableBatch *batch.Ba
 
 // Get the primary key name of the table
 func GetTablePriKeyName(pKeyDef *plan.PrimaryKeyDef, cPkeyCol *plan.ColDef) string {
-	if len(pKeyDef.Names) == 1 {
+	if pKeyDef != nil && len(pKeyDef.Names) == 1 {
 		return pKeyDef.Names[0]
 	}
 
