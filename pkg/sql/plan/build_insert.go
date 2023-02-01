@@ -91,11 +91,13 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		IdxRef: rewriteInfo.onIdxTbl,
 		IdxIdx: rewriteInfo.onIdx,
 
-		ParentIdx:    rewriteInfo.parentIdx[0],
 		ClusterTable: clusterTable,
 	}
 	for j := range tblDef.Cols {
 		insertCtx.Idx[j] = int32(j)
+	}
+	if len(rewriteInfo.parentIdx) == 1 {
+		insertCtx.ParentIdx = rewriteInfo.parentIdx[0]
 	}
 
 	node := &Node{

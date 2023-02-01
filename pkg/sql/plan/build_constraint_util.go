@@ -531,7 +531,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// --------
 	// rewrite 'insert into t1(b) values (1)' to
 	// select 'select 0, _t.column_0 from (select * from values (1)) _t
-	projectList := make([]*Expr, 0, len(tableDef.Cols)-1)
+	projectList := make([]*Expr, 0, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			projectList = append(projectList, oldExpr)
@@ -545,13 +545,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	// append ProjectNode
+	projectCtx := NewBindContext(builder, bindCtx)
 	lastTag := builder.genNewTag()
 	info.rootId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: projectList,
 		Children:    []int32{info.rootId},
 		BindingTags: []int32{lastTag},
-	}, bindCtx)
+	}, projectCtx)
 
 	info.projectList = make([]*Expr, len(projectList))
 	info.derivedTableId = info.rootId
@@ -845,7 +846,9 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					}
 
 					// append table_scan node
-					rightCtx := NewBindContext(builder, bindCtx)
+					joinCtx := NewBindContext(builder, bindCtx)
+
+					rightCtx := NewBindContext(builder, joinCtx)
 					astTblName := tree.NewTableName(tree.Identifier(tblName), tree.ObjectNamePrefix{})
 					rightId, err := builder.buildTable(astTblName, rightCtx)
 					if err != nil {
@@ -921,7 +924,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					joinConds = []*Expr{condExpr}
 
 					leftCtx := builder.ctxByNode[info.rootId]
-					joinCtx := NewBindContext(builder, bindCtx)
 					err = joinCtx.mergeContexts(leftCtx, rightCtx)
 					if err != nil {
 						return err
@@ -986,7 +988,8 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					}
 
 					// append table scan node
-					rightCtx := NewBindContext(builder, bindCtx)
+					joinCtx := NewBindContext(builder, bindCtx)
+					rightCtx := NewBindContext(builder, joinCtx)
 					astTblName := tree.NewTableName(tree.Identifier(childTableDef.Name), tree.ObjectNamePrefix{})
 					rightId, err := builder.buildTable(astTblName, rightCtx)
 					if err != nil {
@@ -1156,7 +1159,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 					// append join node
 					leftCtx := builder.ctxByNode[info.rootId]
-					joinCtx := NewBindContext(builder, bindCtx)
 					err = joinCtx.mergeContexts(leftCtx, rightCtx)
 					if err != nil {
 						return err
@@ -1192,20 +1194,20 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 				updateRefColumn := false
 				for _, colId := range fk.Cols {
 					updateName := id2name[colId]
-					parentIdx[updateName] = info.idx
 					if _, ok := info.tblInfo.updateKeys[rewriteIdx][updateName]; ok {
 						updateRefColumn = true
+						break
 					}
 				}
 				if !updateRefColumn {
 					continue
 				}
-			} else {
-				// insert statement, we will alsways check parent ref
-				for _, colId := range fk.Cols {
-					updateName := id2name[colId]
-					parentIdx[updateName] = info.idx
-				}
+			}
+
+			// insert statement, we will alsways check parent ref
+			for _, colId := range fk.Cols {
+				updateName := id2name[colId]
+				parentIdx[updateName] = info.idx
 			}
 
 			_, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl)
@@ -1225,7 +1227,9 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 			// }
 
 			// append table scan node
-			rightCtx := NewBindContext(builder, bindCtx)
+			joinCtx := NewBindContext(builder, bindCtx)
+
+			rightCtx := NewBindContext(builder, joinCtx)
 			astTblName := tree.NewTableName(tree.Identifier(parentTableDef.Name), tree.ObjectNamePrefix{})
 			rightId, err := builder.buildTable(astTblName, rightCtx)
 			if err != nil {
@@ -1285,7 +1289,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 			// append join node
 			leftCtx := builder.ctxByNode[info.rootId]
-			joinCtx := NewBindContext(builder, bindCtx)
 			err = joinCtx.mergeContexts(leftCtx, rightCtx)
 			if err != nil {
 				return err

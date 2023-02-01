@@ -298,22 +298,39 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 	for i, idx := range idxList {
 		fromVec := bat.Vecs[idx]
 		colName := attrs[i]
+
+		// if update values is not null, but parent is null, throw error
 		if parentIdx != nil {
-			// if update values is not null, but parent is null, throw error
 			if pIdx, exists := parentIdx[colName]; exists {
 				parentVec := bat.Vecs[pIdx]
 				if fromVec.IsConst() {
 					if !fromVec.IsScalarNull() {
-						for j := 0; j < batLen; j++ {
-							if !rowSkip[j] && parentVec.Nsp.Contains(uint64(j)) {
-								return nil, moerr.NewInternalError(proc.Ctx, "Cannot add or update a child row: a foreign key constraint fails")
+						if rowSkip == nil {
+							for j := 0; j < batLen; j++ {
+								if parentVec.Nsp.Contains(uint64(j)) {
+									return nil, moerr.NewInternalError(proc.Ctx, "Cannot add or update a child row: a foreign key constraint fails")
+								}
+							}
+						} else {
+							for j := 0; j < batLen; j++ {
+								if !rowSkip[j] && parentVec.Nsp.Contains(uint64(j)) {
+									return nil, moerr.NewInternalError(proc.Ctx, "Cannot add or update a child row: a foreign key constraint fails")
+								}
 							}
 						}
 					}
 				} else {
-					for j := 0; j < fromVec.Length(); j++ {
-						if !rowSkip[j] && !fromVec.Nsp.Contains(uint64(j)) && parentVec.Nsp.Contains(uint64(j)) {
-							return nil, moerr.NewInternalError(proc.Ctx, "Cannot add or update a child row: a foreign key constraint fails")
+					if rowSkip == nil {
+						for j := 0; j < fromVec.Length(); j++ {
+							if !fromVec.Nsp.Contains(uint64(j)) && parentVec.Nsp.Contains(uint64(j)) {
+								return nil, moerr.NewInternalError(proc.Ctx, "Cannot add or update a child row: a foreign key constraint fails")
+							}
+						}
+					} else {
+						for j := 0; j < fromVec.Length(); j++ {
+							if !rowSkip[j] && !fromVec.Nsp.Contains(uint64(j)) && parentVec.Nsp.Contains(uint64(j)) {
+								return nil, moerr.NewInternalError(proc.Ctx, "Cannot add or update a child row: a foreign key constraint fails")
+							}
 						}
 					}
 				}
