@@ -775,24 +775,13 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			//tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-			//	Def: &plan.TableDef_DefType_Pk{
-			//		Pk: &PrimaryKeyDef{
-			//			Names: []string{keyName},
-			//		},
-			//	},
-			//})
 			field.Cols = append(field.Cols, colDef)
-			//-------------------------------------------------------->>>>>>>>>>>>>>>>>>
 			tableDef.Pkey = &PrimaryKeyDef{
 				Names:       []string{keyName},
 				PkeyColName: keyName,
 			}
 			createTable.PkColName = pkeyName
 			createTable.PkParts = []*ColDef{colDef}
-
-			//--------------------------------------------------------<<<<<<<<<<<<<<<<<<
-
 		} else {
 			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
@@ -810,23 +799,13 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			//tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-			//	Def: &plan.TableDef_DefType_Pk{
-			//		Pk: &PrimaryKeyDef{
-			//			Names: []string{keyName},
-			//		},
-			//	},
-			//})
 			field.Cols = append(field.Cols, colDef)
-			//--------------------------------------------------<<<<<<<<<<<<
 			tableDef.Pkey = &PrimaryKeyDef{
 				Names:       []string{keyName},
 				PkeyColName: keyName,
 			}
 			createTable.PkColName = pkeyName
 			createTable.PkParts = []*ColDef{colDef}
-
-			//-------------------------------------------------->>>>>>>>>>>>
 		}
 		if pkeyName != "" {
 			colDef := &ColDef{
