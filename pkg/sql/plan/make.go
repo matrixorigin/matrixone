@@ -218,10 +218,10 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr
 	}
 	targetType.NotNullable = expr.Typ.NotNullable
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
-	// if types.T(expr.Typ.Id) == types.T_any {
-	// 	expr.Typ = targetType
-	// 	return expr, nil
-	// }
+	if types.T(expr.Typ.Id) == types.T_any {
+		expr.Typ = targetType
+		return expr, nil
+	}
 	id, _, _, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
 	if err != nil {
 		return nil, err

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -432,6 +433,21 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if slt.Rows[0] == nil {
 			isAllDefault = true
 		}
+		if isAllDefault {
+			for j, row := range slt.Rows {
+				if row != nil {
+					return moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("Column count doesn't match value count at row '%v'", j))
+				}
+			}
+		} else {
+			colCount := len(updateColumns)
+			for j, row := range slt.Rows {
+				if len(row) != colCount {
+					return moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("Column count doesn't match value count at row '%v'", j))
+				}
+			}
+		}
+
 		// isInsertValues = true
 		//example1:insert into a values ();
 		//but it does not work at the case:
@@ -449,7 +465,9 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				}
 				exprs[i] = tree.NewDefaultVal(nil)
 			}
-			slt.Rows[0] = exprs
+			for j := range slt.Rows {
+				slt.Rows[j] = exprs
+			}
 		}
 
 		slt.RowWord = true
@@ -516,11 +534,9 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				},
 			},
 		}
-		if !isSameColumnType(projExpr.Typ, tableDef.Cols[colIdx].Typ) {
-			projExpr, err = makePlan2CastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
-			if err != nil {
-				return err
-			}
+		projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+		if err != nil {
+			return err
 		}
 		insertColToExpr[column] = projExpr
 	}
@@ -718,6 +734,36 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 	return nil
 }
 
+func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
+	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
+	if t1.Oid == t2.Oid && t1.Width == t2.Width && t1.Precision == t2.Precision && t1.Size == t2.Size && t1.Scale == t2.Scale {
+		return expr, nil
+	}
+
+	targetType.NotNullable = expr.Typ.NotNullable
+	id, _, _, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
+	if err != nil {
+		return nil, err
+	}
+	t := &plan.Expr{
+		Typ: targetType,
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{
+				Typ: targetType,
+			},
+		},
+	}
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &ObjectRef{Obj: id, ObjName: "cast"},
+				Args: []*Expr{expr, t},
+			},
+		},
+		Typ: targetType,
+	}, nil
+}
+
 func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, stmt *tree.Update) error {
 	var err error
 	subCtx := NewBindContext(builder, bindCtx)
@@ -761,11 +807,9 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 				if err != nil {
 					return err
 				}
-				if !isSameColumnType(posExpr.Typ, coldef.Typ) {
-					lastNode.ProjectList[pos], err = makePlan2CastExpr(builder.GetContext(), posExpr, coldef.Typ)
-					if err != nil {
-						return err
-					}
+				lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, coldef.Typ)
+				if err != nil {
+					return err
 				}
 				projExpr := &plan.Expr{
 					Typ: coldef.Typ,
@@ -783,11 +827,9 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 					lastNode.ProjectList[idx] = coldef.OnUpdate.Expr
 				}
 
-				if !isSameColumnType(lastNode.ProjectList[idx].Typ, coldef.Typ) {
-					lastNode.ProjectList[idx], err = makePlan2CastExpr(builder.GetContext(), lastNode.ProjectList[idx], coldef.Typ)
-					if err != nil {
-						return err
-					}
+				lastNode.ProjectList[idx], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[idx], coldef.Typ)
+				if err != nil {
+					return err
 				}
 
 				info.projectList = append(info.projectList, &plan.Expr{

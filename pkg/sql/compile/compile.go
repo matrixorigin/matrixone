@@ -1631,7 +1631,7 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 	var vec *vector.Vector
 	for _, e := range exprs {
 		if e.Typ.Id != int32(types.T_any) {
-			typ = plan2.MakeTypeByPlan2Type(exprs[0].Typ)
+			typ = plan2.MakeTypeByPlan2Type(e.Typ)
 			vec = vector.New(typ)
 			break
 		}

@@ -1329,19 +1329,19 @@ func exprRelPos(expr *plan.Expr) int32 {
 	return -1
 }
 
-func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.SecondaryIndexDef) {
-	var uIdxDef *plan.UniqueIndexDef = nil
-	var sIdxDef *plan.SecondaryIndexDef = nil
-	for _, def := range defs {
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-			uIdxDef = idxDef.UIdx
-		}
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
-			sIdxDef = idxDef.SIdx
-		}
-	}
-	return uIdxDef, sIdxDef
-}
+// func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.SecondaryIndexDef) {
+// 	var uIdxDef *plan.UniqueIndexDef = nil
+// 	var sIdxDef *plan.SecondaryIndexDef = nil
+// 	for _, def := range defs {
+// 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+// 			uIdxDef = idxDef.UIdx
+// 		}
+// 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
+// 			sIdxDef = idxDef.SIdx
+// 		}
+// 	}
+// 	return uIdxDef, sIdxDef
+// }
 
 func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (rel engine.Relation, err error) {
 	var dbSource engine.Database
