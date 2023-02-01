@@ -48,24 +48,30 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	}
 	var blockNum, totalBlockCnt int
 	var outcnt int64
+
 	if tbl.meta == nil || tbl.updated == false {
 		err := GetTableMeta(ctx, tbl, expr)
 		if err != nil {
 			return 0, 0, err
 		}
 	}
-	exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
-	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
-	for _, blockmetas := range tbl.meta.blocks {
-		totalBlockCnt += len(blockmetas)
-		for _, blk := range blockmetas {
-			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
-				outcnt += blockRows(blk)
-				blockNum++
+	if tbl.meta != nil {
+		exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
+		columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
+		for _, blockmetas := range tbl.meta.blocks {
+			totalBlockCnt += len(blockmetas)
+			for _, blk := range blockmetas {
+				if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
+					outcnt += blockRows(blk)
+					blockNum++
+				}
 			}
 		}
+		return int32(blockNum), outcnt, nil
+	} else {
+		// no meta means not flushed yet, very small table
+		return 100, 1, nil
 	}
-	return int32(blockNum), outcnt, nil
 }
 
 func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
@@ -77,13 +83,18 @@ func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 			return 0, 0, err
 		}
 	}
-	for _, blks := range tbl.meta.blocks {
-		totalBlockCnt += len(blks)
-		for _, blk := range blks {
-			rows += blockRows(blk)
+	if tbl.meta != nil {
+		for _, blks := range tbl.meta.blocks {
+			totalBlockCnt += len(blks)
+			for _, blk := range blks {
+				rows += blockRows(blk)
+			}
 		}
+		return int32(totalBlockCnt), rows, nil
+	} else {
+		// no meta means not flushed yet, very small table
+		return 100, 1, nil
 	}
-	return int32(totalBlockCnt), rows, nil
 }
 
 func (tbl *table) Rows(ctx context.Context) (int64, error) {
