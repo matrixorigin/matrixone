@@ -49,7 +49,7 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 	var blockNum, totalBlockCnt int
 	var outcnt int64
 
-	if tbl.meta == nil || tbl.updated == false {
+	if tbl.meta == nil || !tbl.updated {
 		err := GetTableMeta(ctx, tbl, expr)
 		if err != nil {
 			return 0, 0, err
@@ -77,7 +77,7 @@ func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, in
 func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
 	var rows int64
 	var totalBlockCnt int
-	if tbl.meta == nil || tbl.updated == false {
+	if tbl.meta == nil || !tbl.updated {
 		err := GetTableMeta(ctx, tbl, nil)
 		if err != nil {
 			return 0, 0, err
