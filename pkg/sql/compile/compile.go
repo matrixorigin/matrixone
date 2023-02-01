@@ -1331,39 +1331,39 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 	return rs
 }
 
-func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
-	rs := make([]*Scope, len(ss))
-	// join's input will record in the left/right scope when JoinRun
-	// so set it to false here.
-	c.anal.isFirst = false
-	for i := range ss {
-		if ss[i].IsEnd {
-			rs[i] = ss[i]
-			continue
-		}
-		chp := c.newMergeScope(dupScopeList(children))
-		rs[i] = new(Scope)
-		rs[i].Magic = Remote
-		rs[i].IsJoin = true
-		rs[i].NodeInfo = ss[i].NodeInfo
-		rs[i].PreScopes = []*Scope{ss[i], chp}
-		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-		ss[i].appendInstruction(vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[0],
-			},
-		})
-		chp.appendInstruction(vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[1],
-			},
-		})
-		chp.IsEnd = true
-	}
-	return rs
-}
+//func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+//	rs := make([]*Scope, len(ss))
+// join's input will record in the left/right scope when JoinRun
+// so set it to false here.
+//	c.anal.isFirst = false
+//	for i := range ss {
+//		if ss[i].IsEnd {
+//			rs[i] = ss[i]
+//			continue
+//		}
+//		chp := c.newMergeScope(dupScopeList(children))
+//		rs[i] = new(Scope)
+//		rs[i].Magic = Remote
+//		rs[i].IsJoin = true
+//		rs[i].NodeInfo = ss[i].NodeInfo
+//		rs[i].PreScopes = []*Scope{ss[i], chp}
+//		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+//		ss[i].appendInstruction(vm.Instruction{
+//			Op: vm.Connector,
+///			Arg: &connector.Argument{
+//				Reg: rs[i].Proc.Reg.MergeReceivers[0],
+//			},
+//		})
+//		chp.appendInstruction(vm.Instruction{
+//			Op: vm.Connector,
+//			Arg: &connector.Argument{
+//				Reg: rs[i].Proc.Reg.MergeReceivers[1],
+//			},
+//		})
+//		chp.IsEnd = true
+//	}
+//	return rs
+//}
 
 func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 	len := len(ss)
