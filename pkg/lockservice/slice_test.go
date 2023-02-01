@@ -57,6 +57,7 @@ func TestAcquire(t *testing.T) {
 func TestRelease(t *testing.T) {
 	fsp := newFixedSlicePool(16)
 	fs := fsp.acquire(1)
+	fs.append([][]byte{{1}})
 	fsp.release(fs)
 
 	fs2 := fsp.acquire(1)
