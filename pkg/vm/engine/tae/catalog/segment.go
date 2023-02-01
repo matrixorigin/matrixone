@@ -349,9 +349,31 @@ func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 		entry.link.Delete(n)
 		delete(entry.entries, block.GetID())
 	}
+	block.blkData.Close()
+	block.blkData = nil
 	return nil
 }
+func (entry *SegmentEntry) Close() {
+	blks := entry.getAllBlks()
+	entry.Lock()
+	defer entry.Unlock()
+	for _, blk := range blks {
+		err := entry.deleteEntryLocked(blk)
+		if err != nil {
+			panic(err)
+		}
+	}
+}
 
+func (entry *SegmentEntry) getAllBlks() []*BlockEntry {
+	blks := make([]*BlockEntry, 0)
+	it := entry.MakeBlockIt(false)
+	for it.Valid() {
+		blks = append(blks, it.Get().GetPayload())
+		it.Next()
+	}
+	return blks
+}
 func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
 	logutil.Debug("[Catalog]", common.OperationField("remove"),
 		common.OperandField(block.String()))

@@ -142,7 +142,7 @@ func (r *runner) GetGlobalCheckpointCount() int {
 	return r.storage.globals.Len()
 }
 
-func (r *runner) GCCheckpoint(ts types.TS) error {
+func (r *runner) GCByTS(ctx context.Context, ts types.TS) error {
 	prev := r.gcTS.Load()
 	if prev == nil {
 		r.gcTS.Store(ts)
