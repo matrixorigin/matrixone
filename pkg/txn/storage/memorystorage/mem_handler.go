@@ -71,8 +71,8 @@ type MemHandler struct {
 }
 
 type Iter[
-	K memorytable.Ordered[K],
-	V any,
+K memorytable.Ordered[K],
+V any,
 ] struct {
 	TableIter *memorytable.TableIter[K, V]
 	TableID   ID
@@ -228,31 +228,6 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
-
-	//case *engine.PrimaryIndexDef:
-	//	// set primary index
-	//	if err := m.iterRelationAttributes(
-	//		tx, req.TableID,
-	//		func(_ ID, row *AttributeRow) error {
-	//			isPrimary := false
-	//			for _, name := range def.Names {
-	//				if name == row.Name {
-	//					isPrimary = true
-	//					break
-	//				}
-	//			}
-	//			if isPrimary == row.Primary {
-	//				return nil
-	//			}
-	//			row.Primary = isPrimary
-	//			if err := m.attributes.Update(tx, row); err != nil {
-	//				return err
-	//			}
-	//			return nil
-	//		},
-	//	); err != nil {
-	//		return err
-	//	}
 
 	default:
 		panic(fmt.Sprintf("unknown table def: %T", req.Def))
@@ -417,16 +392,6 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 			return moerr.NewConstraintViolationNoCtx(`duplicate column "%s"`, attr.Name)
 		}
 		nameSet[attr.Name] = true
-		//if len(primaryColumnNames) > 0 {
-		//	isPrimary := false
-		//	for _, name := range primaryColumnNames {
-		//		if name == attr.Name {
-		//			isPrimary = true
-		//			break
-		//		}
-		//	}
-		//	attr.Primary = isPrimary
-		//}
 		if primaryColumnName != "" {
 			isPrimary := false
 			if primaryColumnName == attr.Name {
@@ -939,11 +904,6 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 			return err
 		}
 
-		//if len(primaryAttrNames) > 0 {
-		//	resp.Defs = append(resp.Defs, &engine.PrimaryIndexDef{
-		//		Names: primaryAttrNames,
-		//	})
-		//}
 		sort.Slice(attrRows, func(i, j int) bool {
 			return attrRows[i].Order < attrRows[j].Order
 		})
@@ -1234,9 +1194,9 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	tableName string,
 	b *batch.Batch,
 	fn func(
-		*DataRow,
-		types.Rowid,
-	) error,
+	*DataRow,
+	types.Rowid,
+) error,
 ) error {
 
 	// load attributes
