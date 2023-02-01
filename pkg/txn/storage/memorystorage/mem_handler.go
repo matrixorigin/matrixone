@@ -71,8 +71,8 @@ type MemHandler struct {
 }
 
 type Iter[
-K memorytable.Ordered[K],
-V any,
+	K memorytable.Ordered[K],
+	V any,
 ] struct {
 	TableIter *memorytable.TableIter[K, V]
 	TableID   ID
@@ -1194,9 +1194,9 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	tableName string,
 	b *batch.Batch,
 	fn func(
-	*DataRow,
-	types.Rowid,
-) error,
+		*DataRow,
+		types.Rowid,
+	) error,
 ) error {
 
 	// load attributes

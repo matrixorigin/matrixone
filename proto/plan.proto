@@ -865,10 +865,6 @@ message CreateTable {
 	repeated string fk_tables = 7;
 	// we need column name when create table, but not in ForeignKeyDef
 	repeated FkColName fk_cols = 8;
-	// primary key column name. If it is a composite primary key, it is a composite primary key column name
-	string pk_col_name = 9;
-	// the part columns of the primary key
-	repeated ColDef pk_parts = 10;
 }
 
 message AlterTable {

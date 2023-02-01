@@ -572,8 +572,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					break
 				}
 			}
-			createTable.PkColName = pkeyName
-			createTable.PkParts = pKeyParts
 		} else {
 			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
 			colDef := &ColDef{
@@ -599,8 +597,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				PkeyColName: pkeyName,
 			}
 			createTable.TableDef.Pkey = pkeyDef
-			createTable.PkColName = pkeyName
-			createTable.PkParts = pKeyParts
 		}
 		for _, primaryKey := range primaryKeys {
 			colMap[primaryKey].Default.NullAbility = false
@@ -780,8 +776,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Names:       []string{keyName},
 				PkeyColName: keyName,
 			}
-			createTable.PkColName = pkeyName
-			createTable.PkParts = []*ColDef{colDef}
 		} else {
 			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
@@ -804,8 +798,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Names:       []string{keyName},
 				PkeyColName: keyName,
 			}
-			createTable.PkColName = pkeyName
-			createTable.PkParts = []*ColDef{colDef}
 		}
 		if pkeyName != "" {
 			colDef := &ColDef{
