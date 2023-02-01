@@ -158,7 +158,7 @@ func TestMetricSingleTable(t *testing.T) {
 		SV.EnableMetricToProm = true
 		SV.BatchProcessor = FileService
 		SV.MetricExportInterval = 1
-		SV.MetricMultiTable = true
+		SV.MetricMultiTable = false
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
