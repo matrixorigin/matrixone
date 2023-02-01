@@ -24,13 +24,10 @@ type container struct {
 	aliveMergeReceiver int
 	// receiverListener is a structure to listen all the merge receiver.
 	receiverListener []reflect.SelectCase
-
-	idxs []int
 }
 
 type Argument struct {
-	ctr  *container
-	Addr string
+	ctr *container
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

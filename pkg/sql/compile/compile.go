@@ -1255,7 +1255,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		Op:      vm.Merge,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
-		Arg:     &merge.Argument{Addr: c.addr},
+		Arg:     &merge.Argument{},
 	})
 	c.anal.isFirst = false
 
@@ -1391,7 +1391,6 @@ func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Sco
 		})
 	}
 
-	// TODO: find a better place to put mergeChildren
 	mergeChildren := c.newMergeScope(children)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
@@ -1410,7 +1409,7 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 		Op:      vm.Merge,
 		Idx:     s.Instructions[0].Idx,
 		IsFirst: true,
-		Arg:     &merge.Argument{Addr: s.NodeInfo.Addr},
+		Arg:     &merge.Argument{},
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,

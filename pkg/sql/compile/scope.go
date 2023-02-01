@@ -133,7 +133,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
-	// TODO: add strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
 		len(c.addr) == 0 || strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
 		return s.ParallelRun(c, s.IsRemote)
@@ -407,7 +406,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 		s.Instructions[0] = vm.Instruction{
 			Op:  vm.Merge,
 			Idx: s.Instructions[0].Idx, // TODO: remove it
-			Arg: &merge.Argument{Addr: s.NodeInfo.Addr},
+			Arg: &merge.Argument{},
 		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
 		s.Instructions = s.Instructions[:2]
@@ -426,7 +425,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 		for i := 0; i < cnt; i++ {
 			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Ctx: s.Proc.Ctx,
-				Ch:  make(chan *batch.Batch, 2),
+				Ch:  make(chan *batch.Batch, 1),
 			}
 		}
 	}

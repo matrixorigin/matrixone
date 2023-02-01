@@ -246,8 +246,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			NBucket: t.NBucket,
 		}
 	case vm.Merge:
-		t := sourceIns.Arg.(*merge.Argument)
-		res.Arg = &merge.Argument{Addr: t.Addr}
+		res.Arg = &merge.Argument{}
 	case vm.MergeGroup:
 		t := sourceIns.Arg.(*mergegroup.Argument)
 		res.Arg = &mergegroup.Argument{
@@ -955,18 +954,19 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 		if s.IsEnd {
 			continue
 		}
-		// TODO: add strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
+
 		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
 			strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
 			// Local reg.
-			// Put them into arg.Regs
+			// Put them into arg.LocalRegs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 		} else {
 			// Remote reg.
-			// Generate uuid for them and put them into arg.RemoteRegs
-			// Length of RemoteRegs must be very small, so find the same NodeAddr with traversal
+			// Generate uuid for them and put into arg.RemoteRegs
 			found := false
 			newUuid := uuid.New()
+
+			// Length of RemoteRegs must be very small, so find the same NodeAddr with traversal
 			for _, reg := range arg.RemoteRegs {
 				if reg.NodeAddr == s.NodeInfo.Addr {
 					reg.Uuids = append(reg.Uuids, newUuid)

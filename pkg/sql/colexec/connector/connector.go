@@ -25,7 +25,7 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("pipe connector")
 }
 
-func Prepare(proc *process.Process, _ any) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 

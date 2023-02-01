@@ -32,13 +32,11 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
-	ap.ctr.idxs = make([]int, len(proc.Reg.MergeReceivers))
 	for i, mr := range proc.Reg.MergeReceivers {
 		ap.ctr.receiverListener[i] = reflect.SelectCase{
 			Dir:  reflect.SelectRecv,
 			Chan: reflect.ValueOf(mr.Ch),
 		}
-		ap.ctr.idxs[i] = i
 	}
 
 	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
@@ -69,7 +67,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		bat := (*batch.Batch)(pointer)
 		if bat == nil {
 			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-			ctr.idxs = append(ctr.idxs[:chosen], ctr.idxs[chosen+1:]...)
 			ctr.aliveMergeReceiver--
 			continue
 		}
