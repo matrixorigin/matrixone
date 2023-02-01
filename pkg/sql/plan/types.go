@@ -29,6 +29,7 @@ const (
 	JoinSideLeft            = 1 << iota
 	JoinSideRight           = 1 << iota
 	JoinSideBoth            = JoinSideLeft | JoinSideRight
+	JoinSideMark            = 1 << iota
 	JoinSideCorrelated      = 1 << iota
 )
 

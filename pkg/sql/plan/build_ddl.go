@@ -71,6 +71,10 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 			Key:   catalog.SystemRelAttr_Kind,
 			Value: catalog.SystemViewRel,
 		},
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: ctx.GetRootSql(),
+		},
 	}
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_Properties{
@@ -204,6 +208,9 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			default:
 				return nil, moerr.NewBadConfig(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
+		}
+		if err := InitNullMap(stmt.Param, ctx); err != nil {
+			return nil, err
 		}
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
