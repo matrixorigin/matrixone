@@ -22,6 +22,7 @@ package main
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"go.uber.org/zap/zapcore"
@@ -34,7 +35,6 @@ import (
 	_ "net/http/pprof"
 	"runtime/pprof"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	morun "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -87,7 +87,12 @@ func main() {
 	ctx, cancel := context.WithCancel(ctx)
 	go traceMemStats(ctx)
 
-	if err := export.InitMerge(ctx, 5*time.Minute, 128*mpool.MB, "tae"); err != nil {
+	SV := &config.ObservabilityParameters{}
+	SV.SetDefaultValues("test")
+	SV.MergeCycle.Duration = 5 * time.Minute
+	SV.MergeMaxFileSize = 128
+	SV.MergedExtension = "tae"
+	if err := export.InitMerge(ctx, SV); err != nil {
 		panic(err)
 	}
 	dr := morun.NewRuntime(

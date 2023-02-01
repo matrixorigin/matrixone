@@ -86,6 +86,11 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		return
 	}
 	var initOpts InitOptions
+	opts = append(opts,
+		withExportInterval(SV.MetricExportInterval),
+		withUpdateInterval(SV.MetricUpdateStorageUsageInterval.Duration),
+		withMultiTable(SV.MetricMultiTable),
+	)
 	for _, opt := range opts {
 		opt.ApplyTo(&initOpts)
 	}
@@ -313,9 +318,9 @@ type InitOptions struct {
 	// initSingleTable
 	multiTable bool // see WithMultiTable
 	// exportInterval
-	exportInterval time.Duration // see WithExportInterval
+	exportInterval time.Duration // see withExportInterval
 	// updateInterval, update StorageUsage interval
-	// set by WithUpdateInterval
+	// set by withUpdateInterval
 	updateInterval time.Duration
 }
 
@@ -337,19 +342,19 @@ func WithInitAction(init bool) InitOption {
 	})
 }
 
-func WithMultiTable(multi bool) InitOption {
+func withMultiTable(multi bool) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.multiTable = multi
 	})
 }
 
-func WithExportInterval(sec int) InitOption {
+func withExportInterval(sec int) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.exportInterval = time.Second * time.Duration(sec)
 	})
 }
 
-func WithUpdateInterval(interval time.Duration) InitOption {
+func withUpdateInterval(interval time.Duration) InitOption {
 	return InitOption(func(opts *InitOptions) {
 		opts.updateInterval = interval
 	})

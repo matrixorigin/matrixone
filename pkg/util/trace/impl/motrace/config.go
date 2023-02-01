@@ -53,7 +53,7 @@ type tracerProviderConfig struct {
 	idGenerator trace.IDGenerator
 
 	// resource contains attributes representing an entity that produces telemetry.
-	resource *trace.Resource // WithMOVersion, WithNode,
+	resource *trace.Resource // withMOVersion, WithNode,
 
 	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
@@ -114,7 +114,7 @@ func (f tracerProviderOption) apply(config *tracerProviderConfig) {
 	f(config)
 }
 
-func WithMOVersion(v string) tracerProviderOption {
+func withMOVersion(v string) tracerProviderOption {
 	return func(config *tracerProviderConfig) {
 		config.resource.Put("version", v)
 	}

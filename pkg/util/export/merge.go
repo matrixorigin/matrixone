@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -811,8 +812,11 @@ func InitCronExpr(ctx context.Context, duration time.Duration) error {
 var maxFileSize atomic.Int64
 var mergedExtension = table.GetExtension(table.CsvExtension)
 
-func InitMerge(ctx context.Context, mergeCycle time.Duration, filesize int, ext string) error {
+func InitMerge(ctx context.Context, SV *config.ObservabilityParameters) error {
 	var err error
+	mergeCycle := SV.MergeCycle.Duration
+	filesize := SV.MergeMaxFileSize
+	ext := SV.MergedExtension
 	if mergeCycle > 0 {
 		err = InitCronExpr(ctx, mergeCycle)
 		if err != nil {
