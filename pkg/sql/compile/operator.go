@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -955,7 +956,8 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 			continue
 		}
 		// TODO: add strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
-		if len(s.NodeInfo.Addr) == 0 || s.NodeInfo.Addr == currentCNAddr || len(currentCNAddr) == 0 {
+		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
+			strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
 			// Local reg.
 			// Put them into arg.Regs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
@@ -1003,7 +1005,6 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 			}
 			for i, stream := range streams {
 				// seperate different uuid into different message
-				// TODO: gather them in same message and handle in receiver?
 				for j, uuid := range stream.Uuids {
 					message := cnclient.AcquireMessage()
 					{
@@ -1012,7 +1013,6 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 						message.Data = encodeBatch
 						message.Uuid = uuid[:]
 					}
-					// TODO: change the ctx
 					errSend := stream.Stream.Send(ctxs[i], message)
 					if errSend != nil {
 						return errSend

@@ -1675,8 +1675,7 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 }
 
 func isCurrentCN(addr string, currentCNAddr string) bool {
-	// TODO: add strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
-	return addr == currentCNAddr
+	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
 
 }
 
