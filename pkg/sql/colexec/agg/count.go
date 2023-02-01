@@ -62,6 +62,9 @@ func (c *Count[T1]) MarshalBinary() ([]byte, error) {
 }
 
 func (c *Count[T1]) UnmarshalBinary(data []byte) error {
-	c.IsStar = types.DecodeBool(data)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	c.IsStar = types.DecodeBool(copyData)
 	return nil
 }
