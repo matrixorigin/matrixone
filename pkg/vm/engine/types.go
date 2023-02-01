@@ -68,10 +68,6 @@ type Attribute struct {
 	AutoIncrement bool
 }
 
-type PrimaryIndexDef struct {
-	Names []string
-}
-
 type PropertiesDef struct {
 	Properties []Property
 }
@@ -157,15 +153,14 @@ type TableDef interface {
 	tableDef()
 }
 
-func (*CommentDef) tableDef()      {}
-func (*PartitionDef) tableDef()    {}
-func (*ViewDef) tableDef()         {}
-func (*AttributeDef) tableDef()    {}
-func (*IndexTableDef) tableDef()   {}
-func (*PropertiesDef) tableDef()   {}
-func (*PrimaryIndexDef) tableDef() {}
-func (*ClusterByDef) tableDef()    {}
-func (*ConstraintDef) tableDef()   {}
+func (*CommentDef) tableDef()    {}
+func (*PartitionDef) tableDef()  {}
+func (*ViewDef) tableDef()       {}
+func (*AttributeDef) tableDef()  {}
+func (*IndexTableDef) tableDef() {}
+func (*PropertiesDef) tableDef() {}
+func (*ClusterByDef) tableDef()  {}
+func (*ConstraintDef) tableDef() {}
 
 type ConstraintDef struct {
 	Cts []Constraint
@@ -308,6 +303,16 @@ func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
 				return err
 			}
 			l += int(length)
+		}
+	}
+	return nil
+}
+
+// get the primary key definition in the constraint, and return null if there is no primary key
+func (c *ConstraintDef) GetPrimaryKeyDef() *PrimaryKeyDef {
+	for _, ct := range c.Cts {
+		if ctVal, ok := ct.(*PrimaryKeyDef); ok {
+			return ctVal
 		}
 	}
 	return nil

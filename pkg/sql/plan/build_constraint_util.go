@@ -815,17 +815,25 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 	}
 
 	pkPos := int32(-1)
-	compositePkey := ""
-	if tableDef.CompositePkey != nil {
-		compositePkey = tableDef.CompositePkey.Name
+	//compositePkey := ""
+	//if tableDef.CompositePkey != nil {
+	//	compositePkey = tableDef.CompositePkey.Name
+	//}
+	pKeyColName := ""
+	if tableDef.Pkey != nil {
+		pKeyColName = tableDef.Pkey.PkeyColName
 	}
+
 	for idx, col := range tableDef.Cols {
 		pos := int32(beginPos + idx)
-		if col.Name == compositePkey {
-			pkPos = pos
-		} else if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
+		if col.Name == pKeyColName {
 			pkPos = pos
 		}
+		//if col.Name == compositePkey {
+		//	pkPos = pos
+		//} else if compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
+		//	pkPos = pos
+		//}
 
 		posMap[col.Name] = pos
 		typMap[col.Name] = col.Typ

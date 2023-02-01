@@ -250,9 +250,9 @@ message PrimaryKeyDef {
 	IndexOption option		= 3;
 
 	// Composed primary key column name: __mo_cpkey
-
+	string pkey_col_name = 4;
 	// XXX: Deprecated and to be removed soon.
-	repeated string names = 4;
+	repeated string names = 5;
 }
 
 message IndexDef {

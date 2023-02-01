@@ -121,13 +121,13 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		}
 		defs = append(defs, &engine.AttributeDef{Attr: *attr})
 	}
-	if schema.SortKey != nil && schema.SortKey.IsPrimary() {
-		pk := new(engine.PrimaryIndexDef)
-		for _, def := range schema.SortKey.Defs {
-			pk.Names = append(pk.Names, def.Name)
-		}
-		defs = append(defs, pk)
-	}
+	//if schema.SortKey != nil && schema.SortKey.IsPrimary() {
+	//	pk := new(engine.PrimaryIndexDef)
+	//	for _, def := range schema.SortKey.Defs {
+	//		pk.Names = append(pk.Names, def.Name)
+	//	}
+	//	defs = append(defs, pk)
+	//}
 	pro := new(engine.PropertiesDef)
 	pro.Properties = append(pro.Properties, engine.Property{
 		Key:   pkgcatalog.SystemRelAttr_Kind,
@@ -146,20 +146,28 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 
 func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, err error) {
 	schema = catalog.NewEmptySchema(name)
-	pkMap := make(map[string]int)
+	//pkMap := make(map[string]int)
+	var pkeyColName string
 	for _, def := range defs {
-		if pkDef, ok := def.(*engine.PrimaryIndexDef); ok {
-			for i, name := range pkDef.Names {
-				pkMap[name] = i
+		switch defVal := def.(type) {
+		case *engine.ConstraintDef:
+			primaryKeyDef := defVal.GetPrimaryKeyDef()
+			if primaryKeyDef != nil {
+				pkeyColName = primaryKeyDef.Pkey.PkeyColName
 			}
-			break
 		}
+		//if pkDef, ok := def.(*engine.PrimaryIndexDef); ok {
+		//	for i, name := range pkDef.Names {
+		//		pkMap[name] = i
+		//	}
+		//	break
+		//}
 	}
 	for _, def := range defs {
 		switch defVal := def.(type) {
 		case *engine.AttributeDef:
-			if idx, ok := pkMap[defVal.Attr.Name]; ok {
-				if err = schema.AppendSortColWithAttribute(defVal.Attr, idx, true); err != nil {
+			if pkeyColName == defVal.Attr.Name {
+				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, true); err != nil {
 					return
 				}
 			} else if defVal.Attr.ClusterBy {

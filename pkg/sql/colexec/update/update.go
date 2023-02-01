@@ -535,20 +535,6 @@ func updateIndexTable(indexTableUpdateCtx *UpdateCtx, originTableBatch *batch.Ba
 }
 
 // Get the primary key name of the table
-<<<<<<< HEAD
-//func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
-//	for _, col := range cols {
-//		if col.Name != catalog.Row_ID && col.Primary {
-//			return col.Name
-//		}
-//	}
-//
-//	if cPkeyCol != nil {
-//		return cPkeyCol.Name
-//	}
-//	return ""
-//}
-
 func GetTablePriKeyName(pKeyDef *plan.PrimaryKeyDef, cPkeyCol *plan.ColDef) string {
 	if len(pKeyDef.Names) == 1 {
 		return pKeyDef.Names[0]

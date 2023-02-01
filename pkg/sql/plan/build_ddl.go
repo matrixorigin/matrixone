@@ -566,7 +566,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if col.Name == pkeyName {
 					col.Primary = true
 					createTable.TableDef.Pkey = &PrimaryKeyDef{
-						Names: primaryKeys,
+						Names:       primaryKeys,
+						PkeyColName: pkeyName,
 					}
 					break
 				}
@@ -594,7 +595,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colMap[pkeyName] = colDef
 
 			pkeyDef := &PrimaryKeyDef{
-				Names: []string{pkeyName},
+				Names:       primaryKeys,
+				PkeyColName: pkeyName,
 			}
 			createTable.TableDef.Pkey = pkeyDef
 			createTable.PkColName = pkeyName
@@ -783,7 +785,8 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			field.Cols = append(field.Cols, colDef)
 			//-------------------------------------------------------->>>>>>>>>>>>>>>>>>
 			tableDef.Pkey = &PrimaryKeyDef{
-				Names: []string{keyName},
+				Names:       []string{keyName},
+				PkeyColName: keyName,
 			}
 			createTable.PkColName = pkeyName
 			createTable.PkParts = []*ColDef{colDef}
@@ -817,7 +820,8 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			field.Cols = append(field.Cols, colDef)
 			//--------------------------------------------------<<<<<<<<<<<<
 			tableDef.Pkey = &PrimaryKeyDef{
-				Names: []string{keyName},
+				Names:       []string{keyName},
+				PkeyColName: keyName,
 			}
 			createTable.PkColName = pkeyName
 			createTable.PkParts = []*ColDef{colDef}
