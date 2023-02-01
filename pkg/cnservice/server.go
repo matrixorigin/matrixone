@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
@@ -131,8 +130,6 @@ func NewService(
 	for _, opt := range options {
 		opt(srv)
 	}
-
-	compile.NewServer(cfg.ServiceAddress)
 
 	return srv, nil
 }
