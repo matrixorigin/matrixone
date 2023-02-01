@@ -158,7 +158,10 @@ func (m *Median[T]) MarshalBinary() ([]byte, error) {
 }
 
 func (m *Median[T]) UnmarshalBinary(data []byte) error {
-	return types.Decode(data, &m.Vals)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	return types.Decode(copyData, &m.Vals)
 }
 
 func NewD64Median() *Decimal64Median {
@@ -231,7 +234,10 @@ func (m *Decimal64Median) MarshalBinary() ([]byte, error) {
 	return types.Encode(&m.Vals)
 }
 func (m *Decimal64Median) UnmarshalBinary(dt []byte) error {
-	return types.Decode(dt, &m.Vals)
+	// avoid resulting errors caused by morpc overusing memory
+	cdt := make([]byte, len(dt))
+	copy(cdt, dt)
+	return types.Decode(cdt, &m.Vals)
 }
 
 func NewD128Median() *Decimal128Median {
@@ -300,8 +306,12 @@ func (m *Decimal128Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128,
 func (m *Decimal128Median) MarshalBinary() ([]byte, error) {
 	return types.Encode(&m.Vals)
 }
+
 func (m *Decimal128Median) UnmarshalBinary(dt []byte) error {
-	return types.Decode(dt, &m.Vals)
+	// avoid resulting errors caused by morpc overusing memory
+	cdt := make([]byte, len(dt))
+	copy(cdt, dt)
+	return types.Decode(cdt, &m.Vals)
 }
 
 func merge[T Numeric | types.Decimal64 | types.Decimal128](s1, s2, rs []T, lt func(a, b T) bool) []T {

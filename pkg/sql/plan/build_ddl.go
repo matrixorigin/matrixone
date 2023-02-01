@@ -71,6 +71,10 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 			Key:   catalog.SystemRelAttr_Kind,
 			Value: catalog.SystemViewRel,
 		},
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: ctx.GetRootSql(),
+		},
 	}
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_Properties{
@@ -591,6 +595,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					},
 				},
 			})
+		}
+		for _, primaryKey := range primaryKeys {
+			colMap[primaryKey].Default.NullAbility = false
+			colMap[primaryKey].NotNull = true
 		}
 	}
 

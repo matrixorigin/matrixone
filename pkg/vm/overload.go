@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
@@ -77,7 +78,7 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Projection: projection.String,
 	Anti:       anti.String,
 	Mark:       mark.String,
-
+	MergeBlock: mergeblock.String,
 	LoopJoin:   loopjoin.String,
 	LoopLeft:   loopleft.String,
 	LoopSingle: loopsingle.String,
@@ -124,7 +125,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Projection: projection.Prepare,
 	Anti:       anti.Prepare,
 	Mark:       mark.Prepare,
-
+	MergeBlock: mergeblock.Prepare,
 	LoopJoin:   loopjoin.Prepare,
 	LoopLeft:   loopleft.Prepare,
 	LoopSingle: loopsingle.Prepare,
@@ -171,6 +172,7 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	Projection: projection.Call,
 	Anti:       anti.Call,
 	Mark:       mark.Call,
+	MergeBlock: mergeblock.Call,
 	LoopJoin:   loopjoin.Call,
 	LoopLeft:   loopleft.Call,
 	LoopSingle: loopsingle.Call,

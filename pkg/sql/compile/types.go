@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"sync"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -59,6 +58,7 @@ const (
 	InsertValues
 	TruncateTable
 	AlterView
+	MergeInsert
 )
 
 // Source contains information of a relation which will be used in execution,
@@ -135,40 +135,6 @@ type anaylze struct {
 	isFirst   bool
 	qry       *plan.Query
 	analInfos []*process.AnalyzeInfo
-}
-
-// TODO: remove batchCntMap when dispatch executor using the stream correctly
-type Server struct {
-	// idMap is used to construct the correct relation between regs
-	// when decoding PipelineMessage
-	// k = id, v = reg
-	idMap RelationMap
-
-	// uuidMap is used to put the message into the uuid-specified
-	// regs when receiving BatchMessage
-	uuidMap UuidMap
-
-	// batchCntMap use to handle reoder issue when handeling BatchMessage
-	batchCntMap BatchCntMap
-}
-
-type RelationMap struct {
-	sync.Mutex
-	id uint64
-	// mp is used to construct the correct relation between regs
-	// when decoding PipelineMessage
-	// k = id, v = reg
-	mp map[uint64]*process.WaitRegister
-}
-
-type UuidMap struct {
-	sync.RWMutex
-	mp map[uuid.UUID]*process.WaitRegister
-}
-
-type BatchCntMap struct {
-	sync.Mutex
-	mp map[uuid.UUID]uint64
 }
 
 // Compile contains all the information needed for compilation.

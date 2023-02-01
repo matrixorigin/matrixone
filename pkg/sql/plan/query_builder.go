@@ -2243,6 +2243,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			rightTags[tag] = nil
 		}
 
+		var markTag int32
+		if node.JoinType == plan.Node_MARK {
+			markTag = node.BindingTags[0]
+		}
+
 		if node.JoinType == plan.Node_INNER {
 			for _, cond := range node.OnList {
 				filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
@@ -2259,10 +2264,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		for i, filter := range filters {
 			canTurnInner := true
 
-			joinSides[i] = getJoinSide(filter, leftTags, rightTags)
+			joinSides[i] = getJoinSide(filter, leftTags, rightTags, markTag)
 			if f, ok := filter.Expr.(*plan.Expr_F); ok {
 				for _, arg := range f.F.Args {
-					if getJoinSide(arg, leftTags, rightTags) == JoinSideBoth {
+					if getJoinSide(arg, leftTags, rightTags, markTag) == JoinSideBoth {
 						canTurnInner = false
 						break
 					}
@@ -2288,14 +2293,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			joinSides = make([]int8, len(filters))
 
 			for i, filter := range filters {
-				joinSides[i] = getJoinSide(filter, leftTags, rightTags)
+				joinSides[i] = getJoinSide(filter, leftTags, rightTags, markTag)
 			}
 		} else if node.JoinType == plan.Node_LEFT {
 			var newOnList []*plan.Expr
 			for _, cond := range node.OnList {
 				conj := splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))
 				for _, conjElem := range conj {
-					side := getJoinSide(conjElem, leftTags, rightTags)
+					side := getJoinSide(conjElem, leftTags, rightTags, markTag)
 					if side&JoinSideLeft == 0 {
 						rightPushdown = append(rightPushdown, conjElem)
 					} else {
@@ -2323,33 +2328,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
 					rightPushdown = append(rightPushdown, filter)
 
-				case plan.Node_MARK:
-					if tryMark, ok := filter.Expr.(*plan.Expr_Col); ok {
-						if tryMark.Col.RelPos == node.BindingTags[0] {
-							node.JoinType = plan.Node_SEMI
-							node.BindingTags = nil
-							break
-						}
-					} else if fExpr, ok := filter.Expr.(*plan.Expr_F); ok {
-						if filter.Typ.NotNullable && fExpr.F.Func.ObjName == "not" {
-							arg := fExpr.F.Args[0]
-							if tryMark, ok := arg.Expr.(*plan.Expr_Col); ok {
-								if tryMark.Col.RelPos == node.BindingTags[0] {
-									node.JoinType = plan.Node_ANTI
-									node.BindingTags = nil
-									break
-								}
-							}
-						}
-					}
-
-					if hasTag(filter, node.BindingTags[0]) {
-						cantPushdown = append(cantPushdown, filter)
-					} else {
-						leftPushdown = append(leftPushdown, filter)
-					}
-
-				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
+				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
 					leftPushdown = append(leftPushdown, filter)
 
 				default:
@@ -2374,8 +2353,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				if node.JoinType == plan.Node_INNER {
 					if f, ok := filter.Expr.(*plan.Expr_F); ok {
 						if f.F.Func.ObjName == "=" {
-							if getJoinSide(f.F.Args[0], leftTags, rightTags) != JoinSideBoth {
-								if getJoinSide(f.F.Args[1], leftTags, rightTags) != JoinSideBoth {
+							if getJoinSide(f.F.Args[0], leftTags, rightTags, markTag) != JoinSideBoth {
+								if getJoinSide(f.F.Args[1], leftTags, rightTags, markTag) != JoinSideBoth {
 									node.OnList = append(node.OnList, filter)
 									break
 								}
@@ -2384,6 +2363,31 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 					}
 				}
 
+				cantPushdown = append(cantPushdown, filter)
+
+			case JoinSideMark:
+				if tryMark, ok := filter.Expr.(*plan.Expr_Col); ok {
+					if tryMark.Col.RelPos == node.BindingTags[0] {
+						node.JoinType = plan.Node_SEMI
+						node.BindingTags = nil
+						break
+					}
+				} else if fExpr, ok := filter.Expr.(*plan.Expr_F); ok {
+					if filter.Typ.NotNullable && fExpr.F.Func.ObjName == "not" {
+						arg := fExpr.F.Args[0]
+						if tryMark, ok := arg.Expr.(*plan.Expr_Col); ok {
+							if tryMark.Col.RelPos == node.BindingTags[0] {
+								node.JoinType = plan.Node_ANTI
+								node.BindingTags = nil
+								break
+							}
+						}
+					}
+				}
+
+				cantPushdown = append(cantPushdown, filter)
+
+			default:
 				cantPushdown = append(cantPushdown, filter)
 			}
 		}

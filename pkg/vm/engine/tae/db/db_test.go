@@ -4243,7 +4243,7 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 
 	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	err := tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+	err := tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
 	assert.NoError(t, err)
 
 	testutils.WaitExpect(10000, func() bool {
@@ -4765,7 +4765,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	t.Logf("Checkpointed: %d", tae.Scheduler.GetCheckpointedLSN())
 	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
-	err := manager.JobFactory(context.Background())
+	err := manager.GC(context.Background())
 	assert.Nil(t, err)
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	num := len(entries)
@@ -4820,7 +4820,7 @@ func TestGCDropDB(t *testing.T) {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	t.Log(time.Since(now))
-	err = manager.JobFactory(context.Background())
+	err = manager.GC(context.Background())
 	assert.Nil(t, err)
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	num := len(entries)
@@ -4891,7 +4891,7 @@ func TestGCDropTable(t *testing.T) {
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetDeleteAt())
 	t.Log(time.Since(now))
-	err = manager.JobFactory(context.Background())
+	err = manager.GC(context.Background())
 	assert.Nil(t, err)
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	num := len(entries)
@@ -5110,6 +5110,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCheckpointGlobalMinCount(1)(opts)
+	options.WithDisableGCCatalog()(opts)
 	tae := newTestEngine(t, opts)
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
@@ -5163,6 +5164,7 @@ func TestGlobalCheckpoint3(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCheckpointGlobalMinCount(1)(opts)
 	options.WithGlobalVersionInterval(time.Nanosecond * 1)(opts)
+	options.WithDisableGCCatalog()(opts)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(10, 2)
@@ -5408,7 +5410,7 @@ func TestGCCheckpoint1(t *testing.T) {
 
 	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	t.Log(gcTS.ToString())
-	tae.BGCheckpointRunner.GCCheckpoint(gcTS)
+	tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
 
 	maxGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
 
@@ -5431,4 +5433,276 @@ func TestGCCheckpoint1(t *testing.T) {
 		assert.True(t, incremental.GetStart().Equal(prevEnd.Next()))
 		t.Log(incremental.String())
 	}
+}
+
+func TestGCCatalog1(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	txn1, _ := tae.StartTxn(nil)
+	db, err := txn1.CreateDatabase("db1", "")
+	assert.Nil(t, err)
+	db2, err := txn1.CreateDatabase("db2", "")
+	assert.Nil(t, err)
+
+	schema := catalog.MockSchema(1, 0)
+	schema.Name = "tb1"
+	tb, err := db.CreateRelation(schema)
+	assert.Nil(t, err)
+	schema2 := catalog.MockSchema(1, 0)
+	schema2.Name = "tb2"
+	tb2, err := db.CreateRelation(schema2)
+	assert.Nil(t, err)
+	schema3 := catalog.MockSchema(1, 0)
+	schema3.Name = "tb3"
+	tb3, err := db2.CreateRelation(schema3)
+	assert.Nil(t, err)
+
+	seg1, err := tb.CreateSegment(false)
+	assert.Nil(t, err)
+	seg2, err := tb2.CreateSegment(false)
+	assert.Nil(t, err)
+	seg3, err := tb2.CreateSegment(false)
+	assert.Nil(t, err)
+	seg4, err := tb3.CreateSegment(false)
+	assert.Nil(t, err)
+
+	_, err = seg1.CreateBlock(false)
+	assert.NoError(t, err)
+	_, err = seg2.CreateBlock(false)
+	assert.NoError(t, err)
+	_, err = seg3.CreateBlock(false)
+	assert.NoError(t, err)
+	blk4, err := seg4.CreateBlock(false)
+	assert.NoError(t, err)
+
+	err = txn1.Commit()
+	assert.Nil(t, err)
+
+	p := &catalog.LoopProcessor{}
+	var dbCnt, tableCnt, segCnt, blkCnt int
+	p.DatabaseFn = func(d *catalog.DBEntry) error {
+		if d.IsSystemDB() {
+			return nil
+		}
+		dbCnt++
+		return nil
+	}
+	p.TableFn = func(te *catalog.TableEntry) error {
+		if te.GetDB().IsSystemDB() {
+			return nil
+		}
+		tableCnt++
+		return nil
+	}
+	p.SegmentFn = func(se *catalog.SegmentEntry) error {
+		if se.GetTable().GetDB().IsSystemDB() {
+			return nil
+		}
+		segCnt++
+		return nil
+	}
+	p.BlockFn = func(be *catalog.BlockEntry) error {
+		if be.GetSegment().GetTable().GetDB().IsSystemDB() {
+			return nil
+		}
+		blkCnt++
+		return nil
+	}
+	resetCount := func() {
+		dbCnt = 0
+		tableCnt = 0
+		segCnt = 0
+		blkCnt = 0
+	}
+
+	err = tae.Catalog.RecurLoop(p)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, dbCnt)
+	assert.Equal(t, 3, tableCnt)
+	assert.Equal(t, 4, segCnt)
+	assert.Equal(t, 4, blkCnt)
+
+	txn2, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db2, err = txn2.GetDatabase("db2")
+	assert.NoError(t, err)
+	tb3, err = db2.GetRelationByName("tb3")
+	assert.NoError(t, err)
+	seg4, err = tb3.GetSegment(seg4.GetID())
+	assert.NoError(t, err)
+	err = seg4.SoftDeleteBlock(blk4.ID())
+	assert.NoError(t, err)
+	err = txn2.Commit()
+	assert.NoError(t, err)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.Catalog.GCByTS(context.Background(), txn2.GetCommitTS().Next())
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	resetCount()
+	err = tae.Catalog.RecurLoop(p)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, dbCnt)
+	assert.Equal(t, 3, tableCnt)
+	assert.Equal(t, 4, segCnt)
+	assert.Equal(t, 3, blkCnt)
+
+	txn3, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db2, err = txn3.GetDatabase("db2")
+	assert.NoError(t, err)
+	tb3, err = db2.GetRelationByName("tb3")
+	assert.NoError(t, err)
+	err = tb3.SoftDeleteSegment(seg4.GetID())
+	assert.NoError(t, err)
+
+	db2, err = txn3.GetDatabase("db1")
+	assert.NoError(t, err)
+	tb3, err = db2.GetRelationByName("tb2")
+	assert.NoError(t, err)
+	err = tb3.SoftDeleteSegment(seg3.GetID())
+	assert.NoError(t, err)
+
+	err = txn3.Commit()
+	assert.NoError(t, err)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.Catalog.GCByTS(context.Background(), txn3.GetCommitTS().Next())
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	resetCount()
+	err = tae.Catalog.RecurLoop(p)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, dbCnt)
+	assert.Equal(t, 3, tableCnt)
+	assert.Equal(t, 2, segCnt)
+	assert.Equal(t, 2, blkCnt)
+
+	txn4, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db2, err = txn4.GetDatabase("db2")
+	assert.NoError(t, err)
+	_, err = db2.DropRelationByName("tb3")
+	assert.NoError(t, err)
+
+	db2, err = txn4.GetDatabase("db1")
+	assert.NoError(t, err)
+	_, err = db2.DropRelationByName("tb2")
+	assert.NoError(t, err)
+
+	err = txn4.Commit()
+	assert.NoError(t, err)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.Catalog.GCByTS(context.Background(), txn4.GetCommitTS().Next())
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	resetCount()
+	err = tae.Catalog.RecurLoop(p)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, dbCnt)
+	assert.Equal(t, 1, tableCnt)
+	assert.Equal(t, 1, segCnt)
+	assert.Equal(t, 1, blkCnt)
+
+	txn5, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn5.DropDatabase("db2")
+	assert.NoError(t, err)
+
+	_, err = txn5.DropDatabase("db1")
+	assert.NoError(t, err)
+
+	err = txn5.Commit()
+	assert.NoError(t, err)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.Catalog.GCByTS(context.Background(), txn5.GetCommitTS().Next())
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	resetCount()
+	err = tae.Catalog.RecurLoop(p)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, dbCnt)
+	assert.Equal(t, 0, tableCnt)
+	assert.Equal(t, 0, segCnt)
+	assert.Equal(t, 0, blkCnt)
+}
+
+func TestGCCatalog2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchema(3, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 33)
+
+	checkCompactAndGCFn := func() bool {
+		p := &catalog.LoopProcessor{}
+		appendableCount := 0
+		p.BlockFn = func(be *catalog.BlockEntry) error {
+			if be.GetSegment().GetTable().GetDB().IsSystemDB() {
+				return nil
+			}
+			if be.IsAppendable() {
+				appendableCount++
+			}
+			return nil
+		}
+		err := tae.Catalog.RecurLoop(p)
+		assert.NoError(t, err)
+		return appendableCount == 0
+	}
+
+	tae.createRelAndAppend(bat, true)
+	t.Log(tae.Catalog.SimplePPString(3))
+	testutils.WaitExpect(4000, checkCompactAndGCFn)
+	assert.True(t, checkCompactAndGCFn())
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+func TestGCCatalog3(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchema(3, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 33)
+
+	checkCompactAndGCFn := func() bool {
+		p := &catalog.LoopProcessor{}
+		dbCount := 0
+		p.DatabaseFn = func(be *catalog.DBEntry) error {
+			if be.IsSystemDB() {
+				return nil
+			}
+			dbCount++
+			return nil
+		}
+		err := tae.Catalog.RecurLoop(p)
+		assert.NoError(t, err)
+		return dbCount == 0
+	}
+
+	tae.createRelAndAppend(bat, true)
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.DropDatabase("db")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	testutils.WaitExpect(4000, checkCompactAndGCFn)
+	assert.True(t, checkCompactAndGCFn())
+	t.Log(tae.Catalog.SimplePPString(3))
 }

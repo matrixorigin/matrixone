@@ -116,7 +116,9 @@ func NewCNClient(cfg *ClientConfig) error {
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
 				m := v.(morpc.RPCMessage)
-				client.releaseMessage(m.Message.(*pipeline.Message))
+				if !m.InternalMessage() {
+					client.releaseMessage(m.Message.(*pipeline.Message))
+				}
 			}),
 		),
 		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),

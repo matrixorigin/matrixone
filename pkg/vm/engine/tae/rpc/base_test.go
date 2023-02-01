@@ -17,9 +17,8 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"testing"
 	"time"
 
@@ -747,49 +746,15 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 	return rbat, nil
 }
 
-func getIndexDataFromVec(
-	idx uint16,
-	vec *vector.Vector,
-) (objectio.IndexData, objectio.IndexData, error) {
-	var bloomFilter, zoneMap objectio.IndexData
-
-	// get min/max from  vector
-	if vec.Length() > 0 {
-		cvec := containers.NewVectorWithSharedMemory(vec, true)
-
-		// create zone map
-		zm := index.NewZoneMap(vec.Typ)
-		ctx := new(index.KeysCtx)
-		ctx.Keys = cvec
-		ctx.Count = vec.Length()
-		defer ctx.Keys.Close()
-		err := zm.BatchUpdate(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		buf, err := zm.Marshal()
-		if err != nil {
-			return nil, nil, err
-		}
-		zoneMap, err = objectio.NewZoneMap(idx, buf)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// create bloomfilter
-		sf, err := index.NewBinaryFuseFilter(cvec)
-		if err != nil {
-			return nil, nil, err
-		}
-		bf, err := sf.Marshal()
-		if err != nil {
-			return nil, nil, err
-		}
-		alg := uint8(0)
-		bloomFilter = objectio.NewBloomFilter(idx, alg, bf)
+func toTAEBatchWithSharedMemory(schema *catalog2.Schema,
+	bat *batch.Batch) *containers.Batch {
+	allNullables := schema.AllNullables()
+	taeBatch := containers.NewEmptyBatch()
+	for i, vec := range bat.Vecs {
+		v := containers.NewVectorWithSharedMemory(vec, allNullables[i])
+		taeBatch.AddVector(bat.Attrs[i], v)
 	}
-
-	return bloomFilter, zoneMap, nil
+	return taeBatch
 }
 
 //gen LogTail

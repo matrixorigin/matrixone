@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
@@ -126,6 +127,17 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	return cs.Write(ctx, backMessage)
 }
 
+func fillEngineForInsert(s *Scope, e engine.Engine) {
+	for i := range s.Instructions {
+		if s.Instructions[i].Op == vm.Insert {
+			s.Instructions[i].Arg.(*insert.Argument).Engine = e
+		}
+	}
+	for i := range s.PreScopes {
+		fillEngineForInsert(s.PreScopes[i], e)
+	}
+}
+
 func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper, cli client.TxnClient) (anaData []byte, err error) {
 	var c *Compile
 	var s *Scope
@@ -145,7 +157,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		}
 
 		for {
-			if wg, ok = srv.GetRegFromUuidMap(opUuid); !ok {
+			if wg, ok = colexec.Srv.GetRegFromUuidMap(opUuid); !ok {
 				runtime.Gosched()
 			} else {
 				break
@@ -155,10 +167,10 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		if m.IsBatchMessageEnd() {
 			requireCnt := m.GetBatchCnt()
 			for {
-				if srv.IsEndStatus(opUuid, requireCnt) {
+				if colexec.Srv.IsEndStatus(opUuid, requireCnt) {
 					wg.Ch <- nil
 					close(wg.Ch)
-					srv.RemoveUuidFromUuidMap(opUuid)
+					colexec.Srv.RemoveUuidFromUuidMap(opUuid)
 					break
 				} else {
 					runtime.Gosched()
@@ -176,7 +188,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 				return nil, err
 			}
 			wg.Ch <- bat
-			srv.ReceiveNormalBatch(opUuid)
+			colexec.Srv.ReceiveNormalBatch(opUuid)
 			return nil, nil
 		}
 	}
@@ -189,6 +201,9 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 
 	// decode and run the scope.
 	s, err = decodeScope(m.GetData(), c.proc, true)
+	// remote insert operator need to have engine
+	fillEngineForInsert(s, c.e)
+
 	if err != nil {
 		return nil, err
 	}
@@ -656,7 +671,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
 	for _, u := range s.UuidToRegIdx {
-		srv.PutRegFromUuidMap(u.Uuid, s.Proc.Reg.MergeReceivers[u.Idx])
+		colexec.Srv.PutRegFromUuidMap(u.Uuid, s.Proc.Reg.MergeReceivers[u.Idx])
 	}
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
@@ -703,6 +718,20 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 
 	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch t := opr.Arg.(type) {
+	case *insert.Argument:
+		in.Insert = &pipeline.Insert{
+			TargetColDefs:  t.TargetColDefs,
+			Affected:       t.Affected,
+			TableID:        t.TableID,
+			CPkeyColDef:    t.CPkeyColDef,
+			DBName:         t.DBName,
+			TableName:      t.TableName,
+			ClusterTable:   t.ClusterTable,
+			ClusterByDef:   t.ClusterByDef,
+			UniqueIndexDef: t.UniqueIndexDef,
+			IsRemote:       t.IsRemote,
+			HasAutoCol:     t.HasAutoCol,
+		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
 			Ibucket:   t.Ibucket,
@@ -722,7 +751,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		for i := range t.LocalRegs {
 			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
 			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
-				id := srv.RegistConnector(t.LocalRegs[i])
+				id := colexec.Srv.RegistConnector(t.LocalRegs[i])
 				if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
 					return ctxId, nil, err
 				}
@@ -890,7 +919,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *connector.Argument:
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
 		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
-			id := srv.RegistConnector(t.Reg)
+			id := colexec.Srv.RegistConnector(t.Reg)
 			if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
 				return ctxId, nil, err
 			}
@@ -951,6 +980,21 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
 	v := vm.Instruction{Op: int(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch opr.Op {
+	case vm.Insert:
+		t := opr.GetInsert()
+		v.Arg = &insert.Argument{
+			TargetColDefs:  t.TargetColDefs,
+			Affected:       t.Affected,
+			TableID:        t.TableID,
+			CPkeyColDef:    t.CPkeyColDef,
+			DBName:         t.DBName,
+			TableName:      t.TableName,
+			UniqueIndexDef: t.UniqueIndexDef,
+			ClusterTable:   t.ClusterTable,
+			ClusterByDef:   t.ClusterByDef,
+			IsRemote:       t.IsRemote,
+			HasAutoCol:     t.HasAutoCol,
+		}
 	case vm.Anti:
 		t := opr.GetAnti()
 		v.Arg = &anti.Argument{
@@ -1233,7 +1277,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 		proc: proc,
 		e:    mHelper.storeEngine,
 		anal: &anaylze{},
-		addr: cnAddr, // TODO: check
+		addr: colexec.CnAddr,
 	}
 
 	c.fill = func(_ any, b *batch.Batch) error {
@@ -1472,7 +1516,7 @@ func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32) (int3
 	ds.Proc = process.NewWithAnalyze(ctx.scope.Proc, ctx.scope.Proc.Ctx, 0, nil)
 	ds.DataSource = &Source{
 		PushdownId:   id,
-		PushdownAddr: cnAddr,
+		PushdownAddr: colexec.CnAddr,
 	}
 	ds.appendInstruction(vm.Instruction{
 		Op: vm.Connector,
@@ -1487,7 +1531,7 @@ func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32) (int3
 	ctxId++
 	p.DataSource = &pipeline.Source{
 		PushdownId:   id,
-		PushdownAddr: cnAddr,
+		PushdownAddr: colexec.CnAddr,
 	}
 	p.InstructionList = append(p.InstructionList, &pipeline.Instruction{
 		Op: vm.Connector,

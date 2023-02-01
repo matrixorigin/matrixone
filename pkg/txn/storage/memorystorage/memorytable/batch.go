@@ -164,20 +164,9 @@ func (b *Batch[K, V, R]) Upsert(row R) (err error) {
 		Key: key,
 	}
 
-	oldNode, ok := b.state.tree.Get(TreeNode[K, V]{
+	oldNode, _ := b.state.tree.Get(TreeNode[K, V]{
 		KVPair: pair,
 	})
-	if !ok {
-		// insert
-		pair.KVValue = new(KVValue[K, V])
-		pair.ID = atomic.AddInt64(&nextKVPairID, 1)
-		pair.Value = row.Value()
-		pair.Indexes = row.Indexes()
-		b.state.setPair(pair, oldNode.KVPair)
-		return nil
-	}
-
-	// update
 	pair.KVValue = new(KVValue[K, V])
 	pair.ID = atomic.AddInt64(&nextKVPairID, 1)
 	pair.Value = row.Value()
