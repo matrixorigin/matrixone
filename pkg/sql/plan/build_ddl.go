@@ -209,6 +209,9 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 				return nil, moerr.NewBadConfig(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
 		}
+		if err := InitNullMap(stmt.Param, ctx); err != nil {
+			return nil, err
+		}
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
 			return nil, err
