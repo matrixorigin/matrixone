@@ -133,9 +133,9 @@ func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings,
 			}
 
 			if nodedescImpl.Node.NodeType == plan.Node_UPDATE {
-				if nodedescImpl.Node.UpdateCtxs != nil {
+				if nodedescImpl.Node.UpdateCtx != nil {
 					updateCtxsDescImpl := &UpdateCtxsDescribeImpl{
-						UpdateCtxs: nodedescImpl.Node.UpdateCtxs,
+						UpdateCtx: nodedescImpl.Node.UpdateCtx,
 					}
 					updateCols, err := updateCtxsDescImpl.GetDescription(ctx, options)
 					if err != nil {
