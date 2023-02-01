@@ -40,6 +40,12 @@ func (m *Map[K, V]) Delete(key K) {
 	m.m.Delete(key)
 }
 
+func (m *Map[K, V]) Range(fn func(K, *V) bool) {
+	m.m.Range(func(k, v any) bool {
+		return fn(k.(K), v.(*V))
+	})
+}
+
 func (m *Map[K, V]) Update(key K, fn func(*V) *V) {
 	for {
 		value, ok := m.m.Load(key)

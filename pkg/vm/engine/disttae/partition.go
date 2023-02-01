@@ -481,31 +481,26 @@ func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts
 func (p *Partition) Rows(
 	tx *memtable.Transaction,
 	deletes map[types.Rowid]uint8,
-	skipBlocks map[uint64]uint8) (int64, error) {
-	var rows int64 = 0
-	iter := p.data.NewIter(tx)
-	defer iter.Close()
-	for ok := iter.First(); ok; ok = iter.Next() {
-		dataKey, dataValue, err := iter.Read()
-		if err != nil {
-			return 0, err
-		}
+	skipBlocks map[uint64]uint8,
+) (int64, error) {
+	rows := int64(0)
 
-		if _, ok := deletes[types.Rowid(dataKey)]; ok {
-			continue
+	p.index.RowIDs.Range(func(rowID types.Rowid, versions *Versions[RowRef]) bool {
+		if _, ok := deletes[rowID]; ok {
+			return true
 		}
-
-		if dataValue.op == opDelete {
-			continue
-		}
-
 		if skipBlocks != nil {
-			if _, ok := skipBlocks[rowIDToBlockID(dataKey)]; ok {
-				continue
+			if _, ok := skipBlocks[rowIDToBlockID(RowID(rowID))]; ok {
+				return true
 			}
 		}
+		p := versions.Get(tx.BeginTime.Timestamp)
+		if p == nil {
+			return true
+		}
 		rows++
-	}
+		return true
+	})
 
 	return rows, nil
 }
