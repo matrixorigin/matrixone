@@ -60,3 +60,7 @@ SELECT a, REGEXP_LIKE(b, '^P') from t1;
 drop table t1;
 
 select regexp_like('Cat', '*');
+select regexp_like('CAT','cat','i') r;
+select regexp_like('\n','.','n') r;
+select regexp_like('abc\ndef','^def','m') r;
+select regexp_like('CAT','cat','iiiiiiic') r;
