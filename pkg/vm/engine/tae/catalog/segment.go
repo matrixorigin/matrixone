@@ -349,8 +349,10 @@ func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 		entry.link.Delete(n)
 		delete(entry.entries, block.GetID())
 	}
+	block.Lock()
 	block.blkData.Close()
 	block.blkData = nil
+	block.Unlock()
 	return nil
 }
 func (entry *SegmentEntry) Close() {

@@ -676,20 +676,25 @@ func (blk *ablock) CollectAppendInRange(
 }
 
 func (blk *ablock) estimateRawScore() (score int, dropped bool) {
-	if blk.meta.HasDropCommitted() {
+	meta := blk.getMeta()
+	if meta == nil {
 		dropped = true
 		return
 	}
-	blk.meta.RLock()
-	atLeastOneCommitted := blk.meta.HasCommittedNode()
-	blk.meta.RUnlock()
+	if meta.HasDropCommitted() {
+		dropped = true
+		return
+	}
+	meta.RLock()
+	atLeastOneCommitted := meta.HasCommittedNode()
+	meta.RUnlock()
 	if !atLeastOneCommitted {
 		score = 1
 		return
 	}
 
 	rows := blk.Rows()
-	if rows == int(blk.meta.GetSchema().BlockMaxRows) {
+	if rows == int(meta.GetSchema().BlockMaxRows) {
 		score = 100
 		return
 	}
@@ -701,7 +706,7 @@ func (blk *ablock) estimateRawScore() (score int, dropped bool) {
 	}
 
 	if score > 0 {
-		if _, terminated := blk.meta.GetTerminationTS(); terminated {
+		if _, terminated := meta.GetTerminationTS(); terminated {
 			score = 100
 		}
 	}

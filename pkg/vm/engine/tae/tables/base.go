@@ -81,6 +81,8 @@ func newBaseBlock(
 }
 
 func (blk *baseBlock) Close() {
+	blk.Lock()
+	defer blk.Unlock()
 	blk.meta = nil
 	blk.mvcc.Close()
 	blk.mvcc = nil
@@ -144,6 +146,12 @@ func (blk *baseBlock) GetMeta() any                 { return blk.meta }
 func (blk *baseBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
 func (blk *baseBlock) GetFs() *objectio.ObjectFS    { return blk.fs }
 func (blk *baseBlock) GetID() *common.ID            { return blk.meta.AsCommonID() }
+
+func (blk *baseBlock) getMeta() *catalog.BlockEntry {
+	blk.RLock()
+	defer blk.RUnlock()
+	return blk.meta
+}
 
 func (blk *baseBlock) FillInMemoryDeletesLocked(
 	view *model.BaseView,
