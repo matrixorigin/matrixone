@@ -45,10 +45,10 @@ mid(, 2, 9)
 
 DROP TABLE IF EXISTS mid_01;
 CREATE TABLE mid_01(id int,
-                    str1 CHAR,
-                    d1 int,
-                    d2 tinyint unsigned,
-                    PRIMARY KEY(id));
+str1 CHAR,
+d1 int,
+d2 tinyint unsigned,
+PRIMARY KEY(id));
 INSERT INTO mid_01 VALUES(1, 'h', 3, 12);
 INSERT INTO mid_01 VALUES(2, '', -2, 32);
 INSERT INTO mid_01 VALUES(3, '2',-2, 2);
@@ -116,10 +116,10 @@ mid(str1, d1, d2)
 null
 DROP TABLE IF EXISTS mid_02;
 CREATE TABLE mid_02(id int,
-                    s VARCHAR(50),
-                    d1 smallint,
-                    d2 bigint unsigned NOT NULL,
-                    PRIMARY KEY(id));
+s VARCHAR(50),
+d1 smallint,
+d2 bigint unsigned NOT NULL,
+PRIMARY KEY(id));
 INSERT INTO mid_02 VALUES(1, 'woshishei3829', 3, 12);
 INSERT INTO mid_02 VALUES(2, '', -2, 2132);
 INSERT INTO mid_02 VALUES(3, ' 356284o 329&***((^%$%^&',-2, 2);
@@ -128,7 +128,7 @@ INSERT INTO mid_02 VALUES(5, NULL, 2, 4);
 INSERT INTO mid_02 VALUES(6, 'ehwqkjf8392__+ ',NULL,6);
 INSERT INTO mid_02 values(7, '123', 0, 2);
 INSERT INTO mid_02 VALUES(8, 'ehiuwjey73y8213092kjfm3e#$%^WHJfne32edwfdewvvcqeveqnelfkw', NULL, 3);
-Data truncation: data out of range: data type varchar/char , ehiuwjey73y8213092kjfm3e#$%^WHJfne32edwfdewvvcqeveqnelfkw oversize of 50
+Data truncation: data out of range: data type varchar/char , ehiuwjey73y8213092kjfm3e#$%^WHJfne32edwfdewvvcqeveqnelfkw oversize of 50 
 INSERT INTO mid_02 VALUES(9, '2',32769, 0);
 truncated type SMALLINT value 32769 for column d1, 1
 INSERT INTO mid_02 VALUES(10, '1', 328, 18446744073709551618);
@@ -249,7 +249,7 @@ reverse(mid(s, -1, 2))
 &
 
 
-
+ 
 3
 SELECT hex(mid(s, 1, 2)) FROM mid_02 WHERE id = 7;
 hex(mid(s, 1, 2))
@@ -265,15 +265,15 @@ id    s    d1    d2
 DROP TABLE IF EXISTS mid_03;
 DROP TABLE IF EXISTS mid_04;
 CREATE TABLE mid_03(
-                       id int,
-                       d1 tinyint unsigned,
-                       str1 VARCHAR(50),
-                       primary key (id));
+id int,
+d1 tinyint unsigned,
+str1 VARCHAR(50),
+primary key (id));
 CREATE TABLE mid_04(
-                       id int,
-                       d2 bigint,
-                       str1 mediumtext NOT NULL,
-                       primary key (id));
+id int,
+d2 bigint,
+str1 mediumtext NOT NULL,
+primary key (id));
 INSERT INTO mid_03 VALUES(1, 255, 'zheshimeihaodeyitian,这是美好的一天');
 INSERT INTO mid_03 VALUES(2, 10, '明天更美好ehwqknjcw*^*qk67329&&*');
 INSERT INTO mid_03 VALUES(3, NULL, 'ewgu278wd-+ABNJDSK');
