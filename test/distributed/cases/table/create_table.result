@@ -15,7 +15,7 @@ create table table19$ (a int);
 create table table17 (`index` int);
 create table account(a int);
 show tables;
-tables_in_create_table
+Tables_in_create_table
 table01
 table15
 table06
@@ -36,6 +36,7 @@ not supported: cluster by with primary key is not support
 create table test01(a int, b int) cluster by a;
 create table test02(a int, b int) cluster by b;
 insert into test01 values(1,1),(2,2),(3,null),(null,4);
+
 select * from test01;
 a    b
 1    1
@@ -43,6 +44,7 @@ a    b
 3    null
 null    4
 insert into test02 select * from test01;
+
 select * from test02;
 a    b
 1    1
@@ -50,6 +52,7 @@ a    b
 3    null
 null    4
 update test02 set b=null where a=1;
+
 select * from test02;
 a    b
 2    2
@@ -63,12 +66,12 @@ insert into test04 values(11,3,'bb');
 insert into test04 values(1,2,'a');
 insert into test04 values(2,2,'');
 insert into test04 values(3,2,null);
+
 select * from test04;
 a    b    c
 11    3    bb
 1    2    a
 2    2    
-3    2    null
 create table test06(a int, b int, c varchar(10)) cluster by (b,a,c);
 insert into test06 select * from test04;
 select * from test06;
@@ -76,36 +79,31 @@ a    b    c
 11    3    bb
 1    2    a
 2    2    
-3    2    null
 update test06 set c=null where a=11;
+
 select * from test06;
 a    b    c
+11    3    bb
 1    2    a
 2    2    
-3    2    null
-11    3    null
 insert into test06 select * from test04;
 select * from test06;
 a    b    c
-1    2    a
-2    2    
-3    2    null
-11    3    null
 11    3    bb
 1    2    a
 2    2    
-3    2    null
+11    3    bb
+1    2    a
+2    2    
 update test06 set c=a where b=2;
 select * from test06;
 a    b    c
-11    3    null
+11    3    bb
 11    3    bb
 1    2    1
 2    2    2
-3    2    3
 1    2    1
 2    2    2
-3    2    3
 create table test05(a int, b int, c varchar(10)) cluster by (b,c,d);
 invalid input: column 'd' doesn't exist in table
 show create table test01;

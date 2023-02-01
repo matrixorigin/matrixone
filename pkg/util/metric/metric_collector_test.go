@@ -160,13 +160,14 @@ func newDummyFSWriterFactory(csvCh chan string) export.FSWriterFactory {
 		return &dummyStringWriter{name: name.GetName(), ch: csvCh}
 	})
 }
+
 func dummyInitView(ctx context.Context, tbls []string) {
 	for _, tbl := range tbls {
 		GetMetricViewWithLabels(ctx, tbl, []string{metricTypeColumn.Name, metricAccountColumn.Name})
 	}
 }
 
-func TestCsvFSCollector(t *testing.T) {
+func TestFSCollector(t *testing.T) {
 	ctx := context.Background()
 	csvCh := make(chan string, 100)
 	factory := newDummyFSWriterFactory(csvCh)

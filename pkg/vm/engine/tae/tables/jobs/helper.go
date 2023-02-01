@@ -67,8 +67,7 @@ func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef
 	return
 }
 
-func BuildBlockIndex(writer objectio.Writer, block objectio.BlockObject, meta *catalog.BlockEntry, columnsData *containers.Batch, isSorted bool) (err error) {
-	schema := meta.GetSchema()
+func BuildBlockIndex(writer objectio.Writer, block objectio.BlockObject, schema *catalog.Schema, columnsData *containers.Batch, isSorted bool) (err error) {
 	blkMetas := indexwrapper.NewEmptyIndicesMeta()
 	pkIdx := -10086
 	if schema.HasPK() {
