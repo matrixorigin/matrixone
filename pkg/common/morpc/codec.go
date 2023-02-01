@@ -28,13 +28,17 @@ import (
 	"github.com/pierrec/lz4/v4"
 )
 
-var (
-	flagHashPayload      byte = 1
-	flagChecksumEnabled  byte = 2
-	flagHasCustomHeader  byte = 4
-	flagCompressEnabled  byte = 8
-	flagStreamingMessage byte = 16
+const (
+	flagHashPayload byte = 1 << iota
+	flagChecksumEnabled
+	flagHasCustomHeader
+	flagCompressEnabled
+	flagStreamingMessage
+	flagPing
+	flagPong
+)
 
+var (
 	defaultMaxMessageSize = 1024 * 1024 * 100
 	checksumFieldBytes    = 8
 	totalSizeFieldBytes   = 4
@@ -140,12 +144,12 @@ type baseCodec struct {
 }
 
 func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
-	msg := RPCMessage{Message: c.messageFactory()}
+	msg := RPCMessage{}
 	offset := 0
 	data := getDecodeData(in)
 
 	// 2.1
-	flag, n := readFlag(data, offset)
+	flag, n := c.readFlag(&msg, data, offset)
 	offset += n
 
 	// 2.2
@@ -348,6 +352,11 @@ func (c *baseCodec) getFlag(msg RPCMessage) byte {
 	if msg.stream {
 		flag |= flagStreamingMessage
 	}
+	if msg.internal {
+		if m, ok := msg.Message.(*flagOnlyMessage); ok {
+			flag |= m.flag
+		}
+	}
 	return flag
 }
 
@@ -389,6 +398,10 @@ func (c *baseCodec) writeBody(
 	writtenSize int) ([]byte, error) {
 	maxCanWrite := c.maxBodySize - writtenSize
 	size := msg.Size()
+	if size == 0 {
+		return nil, nil
+	}
+
 	if size > maxCanWrite {
 		return nil,
 			moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
@@ -433,6 +446,10 @@ func (c *baseCodec) writeBody(
 }
 
 func (c *baseCodec) readMessage(flag byte, data []byte, offset int, expectChecksum uint64, payloadSize int, msg *RPCMessage) error {
+	if offset == len(data) {
+		return nil
+	}
+
 	body := data[offset : len(data)-payloadSize]
 	payload := data[len(data)-payloadSize:]
 	if flag&flagChecksumEnabled != 0 {
@@ -543,8 +560,18 @@ func getDecodeData(in *buf.ByteBuf) []byte {
 	return in.RawSlice(in.GetReadIndex(), in.GetMarkIndex())
 }
 
-func readFlag(data []byte, offset int) (byte, int) {
-	return data[offset], 1
+func (c *baseCodec) readFlag(msg *RPCMessage, data []byte, offset int) (byte, int) {
+	flag := data[offset]
+	if flag&flagPing != 0 {
+		msg.Message = &flagOnlyMessage{flag: flagPing}
+		msg.internal = true
+	} else if flag&flagPong != 0 {
+		msg.Message = &flagOnlyMessage{flag: flagPong}
+		msg.internal = true
+	} else {
+		msg.Message = c.messageFactory()
+	}
+	return flag, 1
 }
 
 func readChecksum(flag byte, data []byte, offset int) (uint64, int) {

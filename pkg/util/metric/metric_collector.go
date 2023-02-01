@@ -136,7 +136,7 @@ func (c *metricCollector) NewItemBatchHandler(ctx context.Context) func(batch st
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish())
 	return func(batch string) {
 		if err := exec.Exec(ctx, batch, ie.NewOptsBuilder().Finish()); err != nil {
-			logutil.Errorf("[Trace] insert error. sql: %s; err: %v", batch, err)
+			logutil.Errorf("[Metric] insert error. sql: %s; err: %v", batch, err)
 		}
 	}
 }
@@ -287,7 +287,7 @@ func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch 
 	return func(batchs motrace.CSVRequests) {
 		for _, batch := range batchs {
 			if _, err := batch.Handle(); err != nil {
-				logutil.Errorf("[Metric] failed to write csv, err: %v", err)
+				logutil.Errorf("[Metric] failed to write, err: %v", err)
 			}
 		}
 	}
@@ -339,7 +339,7 @@ func (s *mfsetCSV) GetBatchMultiTable(ctx context.Context, buf *bytes.Buffer) mo
 
 	buf.Reset()
 
-	writer := s.writerFactory(motrace.DefaultContext(), MetricDBConst, s.mfs[0])
+	writer := s.writerFactory(ctx, MetricDBConst, s.mfs[0])
 
 	//buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
 	writeValues := func(t string, v float64, lbls ...string) {
@@ -436,7 +436,7 @@ func (s *mfsetCSV) GetBatchSingleTable(ctx context.Context, buf *bytes.Buffer) m
 
 	reqs := make([]*motrace.CSVRequest, 0, len(buffer))
 	for account, buf := range buffer {
-		writer := s.writerFactory(motrace.DefaultContext(), SingleMetricTable.Database, SingleMetricTable,
+		writer := s.writerFactory(ctx, SingleMetricTable.Database, SingleMetricTable,
 			export.WithAccount(account), export.WithTimestamp(ts), export.WithPathBuilder(SingleMetricTable.PathBuilder))
 		reqs = append(reqs, motrace.NewCSVRequest(writer, buf.String()))
 	}

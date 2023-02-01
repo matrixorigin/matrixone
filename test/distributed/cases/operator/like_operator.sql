@@ -214,3 +214,9 @@ drop table t1;
 create table t1(a text);
 insert into t1 values(rpad('1',50000,'1') + rpad('1',50000,'1'));
 select * from t1 where a like ".";
+
+drop table t1;
+create table t1(a varchar(20));
+insert into t1 values ('abc'), ('ABC'), ('abC');
+select * from t1 where a ilike '%abC%';
+show variables where value ilike "%system%" and variable_name = "time_zone";

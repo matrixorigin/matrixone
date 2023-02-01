@@ -93,4 +93,16 @@ a    regexp_like(b, ^P)
 9    false
 drop table t1;
 select regexp_like('Cat', '*');
-invalid input: regexp_like have invalid input
+error parsing regexp: missing argument to repetition operator: `*`
+select regexp_like('CAT','cat','i') r;
+r
+true
+select regexp_like('\n','.','n') r;
+r
+true
+select regexp_like('abc\ndef','^def','m') r;
+r
+true
+select regexp_like('CAT','cat','iiiiiiic') r;
+r
+false
