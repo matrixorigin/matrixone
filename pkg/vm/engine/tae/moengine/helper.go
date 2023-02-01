@@ -18,7 +18,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -154,14 +153,9 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 			primaryKeyDef := defVal.GetPrimaryKeyDef()
 			if primaryKeyDef != nil {
 				pkeyColName = primaryKeyDef.Pkey.PkeyColName
+				break
 			}
 		}
-		//if pkDef, ok := def.(*engine.PrimaryIndexDef); ok {
-		//	for i, name := range pkDef.Names {
-		//		pkMap[name] = i
-		//	}
-		//	break
-		//}
 	}
 	for _, def := range defs {
 		switch defVal := def.(type) {
@@ -197,73 +191,11 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 			schema.Partition = defVal.Partition
 		case *engine.ViewDef:
 			schema.View = defVal.View
+		case *engine.CommentDef:
+			schema.Comment = defVal.Comment
 		case *engine.ConstraintDef:
 			schema.Constraint, err = defVal.MarshalBinary()
 			if err != nil {
-				return nil, err
-			}
-		default:
-			// We will not deal with other cases for the time being
-		}
-	}
-	if err = schema.Finalize(false); err != nil {
-		return
-	}
-	return
-}
-
-// this function used in PrecommitWrite. CN won't give PrimaryIndexDef and ComputeIndexDef
-// HandleDefsToSchema assume there is at most one AttributeDef with Primary true. TODO:
-func HandleDefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, err error) {
-	schema = catalog.NewEmptySchema(name)
-
-	have_one := false
-	for _, def := range defs {
-		switch defVal := def.(type) {
-		case *engine.AttributeDef:
-			if defVal.Attr.Primary {
-				if have_one {
-					panic(moerr.NewInternalErrorNoCtx("%s more one pk", name))
-				} else {
-					have_one = true
-				}
-				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, true); err != nil {
-					return
-				}
-			} else if defVal.Attr.ClusterBy {
-				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, false); err != nil {
-					return
-				}
-			} else {
-				if err = schema.AppendColWithAttribute(defVal.Attr); err != nil {
-					return
-				}
-			}
-
-		case *engine.PropertiesDef:
-			for _, property := range defVal.Properties {
-				switch strings.ToLower(property.Key) {
-				case pkgcatalog.SystemRelAttr_Comment:
-					schema.Comment = property.Value
-				case pkgcatalog.SystemRelAttr_Kind:
-					schema.Relkind = property.Value
-				case pkgcatalog.SystemRelAttr_CreateSQL:
-					schema.Createsql = property.Value
-				default:
-				}
-			}
-
-		case *engine.PartitionDef:
-			schema.Partition = defVal.Partition
-
-		case *engine.ViewDef:
-			schema.View = defVal.View
-
-		case *engine.CommentDef:
-			schema.Comment = defVal.Comment
-
-		case *engine.ConstraintDef:
-			if schema.Constraint, err = defVal.MarshalBinary(); err != nil {
 				return nil, err
 			}
 		default:
