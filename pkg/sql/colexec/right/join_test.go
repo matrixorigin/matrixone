@@ -19,6 +19,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -84,6 +85,9 @@ func TestJoin(t *testing.T) {
 	for _, tc := range tcs {
 		nb0 := tc.proc.Mp().CurrNB()
 		bat := hashBuild(t, tc)
+		if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+			jm.SetDupCount(int64(1))
+		}
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
