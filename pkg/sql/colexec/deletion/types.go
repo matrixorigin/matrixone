@@ -24,28 +24,37 @@ type Argument struct {
 	Ts           uint64
 	DeleteCtx    *DeleteCtx
 	AffectedRows uint64
-	IsRemote     bool
+	Engine       engine.Engine
+	// when detele data in a remote CN,
+	// IsRemote is true, and we need IBucket
+	// and NBucket to know those data in batch
+	// that we need to delete in this CN, because
+	// we need to make sure one Block will be processed
+	// by only one CN, this is useful for our compaction
+	IsRemote bool
+	IBucket  uint64
+	NBucket  uint64
 }
 
 type DeleteCtx struct {
 	CanTruncate bool
 
-	ParentSource [][]engine.Relation
-
 	DelSource []engine.Relation
 	DelRef    []*plan.ObjectRef
 
-	DelIdxSource []engine.Relation
-	DelIdxIdx    []int32
+	IdxSource []engine.Relation
+	IdxIdx    []int32
 
 	OnRestrictIdx []int32
 
 	OnCascadeSource []engine.Relation
 	OnCascadeIdx    []int32
 
-	OnSetSource []engine.Relation
-	OnSetIdx    [][]int32
-	OnSetAttrs  [][]string
+	OnSetSource    []engine.Relation
+	OnSetIdx       [][]int32
+	OnSetRef       []*plan.ObjectRef
+	OnSetTableDef  []*plan.TableDef
+	OnSetUpdateCol []map[string]int32
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

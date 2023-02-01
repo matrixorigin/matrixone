@@ -72,7 +72,10 @@ func (sdp *Stddevpop[T1]) MarshalBinary() ([]byte, error) {
 }
 
 func (sdp *Stddevpop[T1]) UnmarshalBinary(data []byte) error {
-	types.Decode(data, sdp.Variance)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	types.Decode(copyData, sdp.Variance)
 	return nil
 }
 
@@ -108,7 +111,10 @@ func (s *StdD64) MarshalBinary() ([]byte, error) {
 }
 
 func (s *StdD64) UnmarshalBinary(data []byte) error {
-	types.Decode(data, s.Variance)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	types.Decode(copyData, s.Variance)
 	return nil
 }
 
@@ -144,6 +150,9 @@ func (s *StdD128) MarshalBinary() ([]byte, error) {
 }
 
 func (s *StdD128) UnmarshalBinary(data []byte) error {
-	types.Decode(data, s.Variance)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	types.Decode(copyData, s.Variance)
 	return nil
 }

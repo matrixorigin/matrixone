@@ -2476,7 +2476,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		cwft.ses.InitTempEngine = true
 	}
-	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
 }
 
@@ -4177,7 +4176,7 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 	}
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
 		for _, node := range q.Query.Nodes {
-			if node.NodeType == plan.Node_EXTERNAL_SCAN && node.TableDef.TableType == "query_result" {
+			if node.NotCacheable {
 				return false
 			}
 		}
