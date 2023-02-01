@@ -303,6 +303,7 @@ func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
 				return err
 			}
 			l += int(length)
+			c.Cts = append(c.Cts, &PrimaryKeyDef{pkey})
 		}
 	}
 	return nil

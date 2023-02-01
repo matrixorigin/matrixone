@@ -280,6 +280,18 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 	}
 }
 
+func DeepCopyPrimaryKeyDef(pkeyDef *plan.PrimaryKeyDef) *plan.PrimaryKeyDef {
+	if pkeyDef == nil {
+		return nil
+	}
+	def := &plan.PrimaryKeyDef{
+		PkeyColName: pkeyDef.PkeyColName,
+		Names:       make([]string, len(pkeyDef.Names)),
+	}
+	copy(def.Names, pkeyDef.Names)
+	return def
+}
+
 func DeepCopyUniqueIndexDef(indexDef *plan.UniqueIndexDef) *plan.UniqueIndexDef {
 	if indexDef == nil {
 		return nil
@@ -511,6 +523,7 @@ func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
 		Columns:           make([]*plan.Column, len(insert.Columns)),
 		OrderAttrs:        make([]string, len(insert.OrderAttrs)),
 		CompositePkey:     DeepCopyColDef(insert.CompositePkey),
+		PrimaryKeyDef:     DeepCopyPrimaryKeyDef(insert.PrimaryKeyDef),
 		UniqueIndexDef:    DeepCopyUniqueIndexDef(insert.UniqueIndexDef),
 		SecondaryIndexDef: DeepCopySecondaryIndexDef(insert.SecondaryIndexDef),
 		ClusterTable:      DeepCopyClusterTable(insert.GetClusterTable()),
