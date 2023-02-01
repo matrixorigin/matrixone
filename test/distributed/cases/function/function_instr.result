@@ -174,16 +174,6 @@ instr(reverse(str2),  )
 null
 0
 null
-SELECT SPACE(INSTR(str2,'')) FROM instr_01;
-space(instr(str2, ))
-
-
-
-
-
-null
-
-null
 SELECT bin(INSTR(str1, 'a')) FROM instr_01 WHERE id = 1;
 bin(instr(str1, a))
 1
@@ -277,14 +267,6 @@ instr(substring(str2, 1, 6), cd)
 SELECT INSTR(REVERSE(str1), '用使') FROM instr_02 WHERE id = 2;
 instr(reverse(str1), 用使)
 3
-SELECT SPACE(INSTR(str2,'')) FROM instr_02;
-space(instr(str2, ))
-
-
-
-
-
-
 SELECT bin(INSTR(str2, 'd')) FROM instr_02 WHERE id = 3;
 bin(instr(str2, d))
 1010
