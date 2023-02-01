@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"math"
 	"sort"
 	"strconv"
@@ -87,6 +88,46 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	}
 
 	return bloomFilter, zoneMap, nil
+}
+
+func GetTableMeta(ctx context.Context, tbl *table, expr *plan.Expr) error {
+	priKeys := make([]*engine.Attribute, 0, 1)
+	if tbl.primaryIdx >= 0 {
+		for _, def := range tbl.defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				if attr.Attr.Primary {
+					priKeys = append(priKeys, &attr.Attr)
+				}
+			}
+		}
+	}
+	dnList := needSyncDnStores(ctx, expr, tbl.tableDef, priKeys,
+		tbl.db.txn.dnStores, tbl.db.txn.proc)
+	switch {
+	case tbl.tableId == catalog.MO_DATABASE_ID:
+		tbl.dnList = []int{0}
+	case tbl.tableId == catalog.MO_TABLES_ID:
+		tbl.dnList = []int{0}
+	case tbl.tableId == catalog.MO_COLUMNS_ID:
+		tbl.dnList = []int{0}
+	default:
+		tbl.dnList = dnList
+	}
+	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
+	if !created && !tbl.updated {
+		if err := tbl.db.txn.db.Update(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
+			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+			return err
+		}
+		columnLength := len(tbl.tableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
+		meta, err := tbl.db.txn.getTableMeta(ctx, tbl.db.databaseId, genMetaTableName(tbl.tableId), true, columnLength, true)
+		if err != nil {
+			return err
+		}
+		tbl.meta = meta
+		tbl.updated = true
+	}
+	return nil
 }
 
 func fetchZonemapAndRowsFromBlockInfo(
