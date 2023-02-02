@@ -299,7 +299,7 @@ func init() {
 		"outfile":                  OUTFILE,
 		"ownership":                OWNERSHIP,
 		"header":                   HEADER,
-		"record_per_line":          RECORD_PER_LINE,
+		"parallel":                 PARALLEL,
 		"max_file_size":            MAX_FILE_SIZE,
 		"force_quote":              FORCE_QUOTE,
 		"external":                 EXTERNAL,

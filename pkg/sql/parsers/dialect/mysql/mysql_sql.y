@@ -355,7 +355,7 @@ import (
 %token <str> ARROW
 
 // Insert
-%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE RECORD_PER_LINE
+%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL
 
 %token <str> UNUSED BINDINGS
 
@@ -837,7 +837,7 @@ parallel_opt:
     {
         $$ = false
     }
-|   RECORD_PER_LINE STRING
+|   PARALLEL STRING
     {
         str := strings.ToLower($2)
         if str == "true" {
@@ -4887,22 +4887,28 @@ load_param_opt:
     INFILE STRING
     {
         $$ = &tree.ExternParam{
-            Filepath: $2,
-            CompressType: tree.AUTO,
-            Format: tree.CSV,
+            ExParamConst: tree.ExParamConst{
+                Filepath: $2,
+                CompressType: tree.AUTO,
+                Format: tree.CSV,
+            },
         }
     }
 |   INFILE '{' infile_or_s3_params '}'
     {
-	$$ = &tree.ExternParam{
-	    Option: $3,
-	}
+        $$ = &tree.ExternParam{
+            ExParamConst: tree.ExParamConst{
+                Option: $3,
+            },
+        }
     }
 |   URL S3OPTION '{' infile_or_s3_params '}'
     {
         $$ = &tree.ExternParam{
-            ScanType: tree.S3,
-            Option: $4,
+            ExParamConst: tree.ExParamConst{
+                ScanType: tree.S3,
+                Option: $4,
+            },
         }
     }
 
@@ -8372,7 +8378,7 @@ non_reserved_keyword:
 |   EXTENSION
 |   NODE
 |   UUID
-|   RECORD_PER_LINE
+|   PARALLEL
 
 func_not_keyword:
     DATE_ADD

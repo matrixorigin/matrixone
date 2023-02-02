@@ -128,13 +128,13 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 			}
 		case plan.Node_UPDATE:
 			result += " on "
-			if ndesc.Node.UpdateCtxs != nil {
+			if ndesc.Node.UpdateCtx != nil {
 				first := true
-				for _, ctx := range ndesc.Node.UpdateCtxs {
+				for _, ctx := range ndesc.Node.UpdateCtx.Ref {
 					if !first {
 						result += ", "
 					}
-					result += ctx.DbName + "." + ctx.TblName
+					result += ctx.SchemaName + "." + ctx.ObjName
 					if first {
 						first = false
 					}
@@ -570,21 +570,21 @@ func (r *RowsetDataDescribeImpl) GetDescription(ctx context.Context, options *Ex
 }
 
 type UpdateCtxsDescribeImpl struct {
-	UpdateCtxs []*plan.UpdateCtx
+	UpdateCtx *plan.UpdateCtx
 }
 
 func (u *UpdateCtxsDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Update Columns: "
 	first := true
-	for _, ctx := range u.UpdateCtxs {
-		if ctx.UpdateCols != nil {
-			for _, col := range ctx.UpdateCols {
+	for i, ctx := range u.UpdateCtx.Ref {
+		if u.UpdateCtx.UpdateCol[i] != nil {
+			for colName := range u.UpdateCtx.UpdateCol[i].Map {
 				if !first {
 					result += ", "
 				} else {
 					first = false
 				}
-				result += ctx.DbName + "." + ctx.TblName + "." + col.Name
+				result += ctx.SchemaName + "." + ctx.ObjName + "." + colName
 			}
 		}
 	}

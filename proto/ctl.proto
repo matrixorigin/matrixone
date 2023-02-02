@@ -38,6 +38,8 @@ enum CmdMethod {
     UseSnapshot = 4;
     // GetSnapshot get current snapshot timestamp
     GetSnapshot = 5;
+    // ForceGC forcing a GC to free memory
+    ForceGC     = 6;
 }
 
 // DNPingRequest ping request

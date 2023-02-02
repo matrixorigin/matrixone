@@ -661,10 +661,12 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	var fileOffset [][][2]int
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
-		arr, err := external.ReadFileOffset(param, c.proc, mcpu, fileSize[i])
-		fileOffset = append(fileOffset, arr)
-		if err != nil {
-			return nil, err
+		if param.Parallel {
+			arr, err := external.ReadFileOffset(param, c.proc, mcpu, fileSize[i])
+			fileOffset = append(fileOffset, arr)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
