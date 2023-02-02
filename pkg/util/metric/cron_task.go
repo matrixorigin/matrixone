@@ -100,10 +100,13 @@ var QuitableWait = func(ctx context.Context) (*time.Ticker, error) {
 }
 
 func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
+	var err error
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
-	defer logger.Info("finished.")
+	defer func() {
+		logger.Info("finished", zap.Error(err))
+	}()
 
 	next := time.NewTicker(time.Second)
 
@@ -125,8 +128,10 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		// | query_tae_table | admin      | 2023-01-17 09:56:26 | open   | NULL           |        6 |          34 |       792 | 0.036 |                |
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
 		executor := sqlExecutor()
+		logger.Info("show accounts get size")
 		result := executor.Query(ctx, ShowAccountSQL, ie.NewOptsBuilder().Finish())
-		err := result.Error()
+		logger.Info("fetch result")
+		err = result.Error()
 		if err != nil {
 			return err
 		}
