@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -5705,4 +5706,31 @@ func TestGCCatalog3(t *testing.T) {
 	testutils.WaitExpect(4000, checkCompactAndGCFn)
 	assert.True(t, checkCompactAndGCFn())
 	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestForceCheckpoint(t *testing.T) {
+	fault.Enable()
+	defer fault.Disable()
+	err := fault.AddFaultPoint(context.Background(), "tae: flush timeout", ":::", "echo", 0, "mock flush timeout")
+	assert.NoError(t, err)
+	defer func() {
+		err := fault.RemoveFaultPoint(context.Background(), "tae: flush timeout")
+		assert.NoError(t, err)
+	}()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(18, 2)
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+
+	tae.createRelAndAppend(bat, true)
+
+	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
+	assert.Error(t, err)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 }
