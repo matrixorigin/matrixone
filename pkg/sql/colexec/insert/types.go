@@ -70,7 +70,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 }
 
-func (arg *Argument) GetPkIndexes() {
+func (arg *Argument) GetSortKeyIndexes() {
 	arg.container.sortIndex = make([]int, 0, 1)
 	// Get CPkey index
 	if arg.CPkeyColDef != nil {
