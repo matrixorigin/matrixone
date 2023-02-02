@@ -22,9 +22,15 @@ import (
 )
 
 const (
-	BatchEnd = iota
+	// Basic message type
+	PipelineMessage = iota
+	BatchMessage
+
+	// Status type
+	BatchEnd
 	MessageEnd
 	WaitingNext
+	BatchMessageEnd
 )
 
 func (m *Message) Size() int {
@@ -48,8 +54,20 @@ func (m *Message) DebugString() string {
 	return fmt.Sprintf("MessageSize: %d, sid: %d, ErrInfo: %s, batchSize: %d", m.Size(), m.Sid, errInfo, len(m.Data))
 }
 
+func (m *Message) IsBatchMessage() bool {
+	return m.GetCmd() == BatchMessage
+}
+
+func (m *Message) IsPipelineMessage() bool {
+	return m.GetCmd() == PipelineMessage
+}
+
 func (m *Message) IsEndMessage() bool {
 	return m.Sid == MessageEnd
+}
+
+func (m *Message) IsBatchMessageEnd() bool {
+	return m.Sid == BatchMessageEnd
 }
 
 func (m *Message) WaitingNextToMerge() bool {
