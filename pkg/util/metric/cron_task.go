@@ -99,8 +99,7 @@ var QuitableWait = func(ctx context.Context) (*time.Ticker, error) {
 	return next, nil
 }
 
-func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
-	var err error
+func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) (err error) {
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
