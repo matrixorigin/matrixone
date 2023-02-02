@@ -164,6 +164,7 @@ drop table t;
 
 create database `.quote`;
 show tables from `.quote`;
+drop database if exists `.quote`;
 
 drop database if exists showDB;
 create database showDB;
