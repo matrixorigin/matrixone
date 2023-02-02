@@ -172,7 +172,7 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 		}
 		rbat.Zs = append(rbat.Zs, ctr.bat.Zs[unmatch[i]])
 	}
-
+	rbat.ExpandNulls()
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
