@@ -356,11 +356,15 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			arg.IsRemote = true
 			rs = c.newInsertMergeScope(arg, ss)
 			rs.Magic = MergeInsert
+			var Unique_tbls []engine.Relation
+			if arg.Container != nil {
+				Unique_tbls = arg.Container.UniqueRels
+			}
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
 					Tbl:         arg.InsertCtx.Source,
-					Unique_tbls: arg.Container.UniqueRels,
+					Unique_tbls: Unique_tbls,
 				},
 			})
 		} else {

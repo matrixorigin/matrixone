@@ -47,7 +47,7 @@ type WriteS3Container struct {
 
 	writer   objectio.Writer
 	lengths  []uint64
-	cacheBat *batch.Batch
+	cacheBat []*batch.Batch
 
 	UniqueRels []engine.Relation
 
@@ -122,19 +122,25 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 }
 
 func WriteS3CacheBatch(container *WriteS3Container, proc *process.Process) error {
-	if container.cacheBat != nil {
-		err := GetBlockMeta([]*batch.Batch{container.cacheBat}, container, proc, 0)
-		if err != nil {
-			return err
+	if len(container.cacheBat) > 0 {
+		for i, bat := range container.cacheBat {
+			if bat != nil {
+				err := GetBlockMeta([]*batch.Batch{bat}, container, proc, i)
+				if err != nil {
+					return err
+				}
+			}
 		}
-		container.metaLocBat.SetZs(container.metaLocBat.Vecs[0].Length(), proc.GetMPool())
-		proc.SetInputBatch(container.metaLocBat)
+		if container.metaLocBat.Vecs[0].Length() > 0 {
+			container.metaLocBat.SetZs(container.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+			proc.SetInputBatch(container.metaLocBat)
+		}
 	}
 	return nil
 }
 
 func WriteS3Batch(container *WriteS3Container, bat *batch.Batch, proc *process.Process, idx int) error {
-	bats := reSizeBatch(container, bat, proc)
+	bats := reSizeBatch(container, bat, proc, idx)
 	if len(bats) == 0 {
 		proc.SetInputBatch(&batch.Batch{})
 		return nil
@@ -146,19 +152,11 @@ func WriteS3Batch(container *WriteS3Container, bat *batch.Batch, proc *process.P
 // and cn needs to pass it to dn for conflict detection
 // Except for the case of writing s3 directly, cn doesn't need to sense how dn is labeling the blocks on s3
 func GetBlockMeta(bats []*batch.Batch, container *WriteS3Container, proc *process.Process, idx int) error {
-	// A simple explanation of the two vectors held by metaLocBat
-	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
-	// vecs[1] store relative block metadata
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
-	metaLocBat := batch.New(true, attrs)
-	metaLocBat.Vecs[0] = vector.New(types.Type{Oid: types.T(types.T_uint16)})
-	metaLocBat.Vecs[1] = vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
-
 	for i := range bats {
 		if err := GenerateWriter(container, proc); err != nil {
 			return err
 		}
-		if len(container.pkIndex) != 0 {
+		if idx == 0 && len(container.pkIndex) != 0 {
 			SortByPrimaryKey(proc, container, bats[i], container.pkIndex, proc.GetMPool())
 		}
 		if bats[i].Length() == 0 {
@@ -185,19 +183,22 @@ func GetBlockMeta(bats []*batch.Batch, container *WriteS3Container, proc *proces
 // The expected result is : unitBatch1, unitBatch2, ... unitBatchx, the last Batch that batchSize less than DefaultBlockMaxRows
 //
 // limit : one segment has only one block, this limit exists because currently, tae caches blocks in memory (instead of disk) before writing them to s3, which means that if limit 1 is removed, it may cause memory problems
-func reSizeBatch(container *WriteS3Container, bat *batch.Batch, proc *process.Process) (bats []*batch.Batch) {
+func reSizeBatch(container *WriteS3Container, bat *batch.Batch, proc *process.Process, batIdx int) (bats []*batch.Batch) {
 	var newBat *batch.Batch
 	var cacheLen uint32
-	if container.cacheBat != nil {
-		cacheLen = uint32(container.cacheBat.Length())
+	if len(container.cacheBat) <= batIdx {
+		container.cacheBat = append(container.cacheBat, nil)
+	}
+	if container.cacheBat[batIdx] != nil {
+		cacheLen = uint32(container.cacheBat[batIdx].Length())
 	}
 	idx := int(cacheLen)
 	cnt := cacheLen + uint32(bat.Length())
 
 	if cnt >= options.DefaultBlockMaxRows { // case 1
-		if container.cacheBat != nil {
-			newBat = container.cacheBat
-			container.cacheBat = nil
+		if container.cacheBat[batIdx] != nil {
+			newBat = container.cacheBat[batIdx]
+			container.cacheBat[batIdx] = nil
 		} else {
 			newBat = getNewBatch(bat)
 		}
@@ -217,15 +218,15 @@ func reSizeBatch(container *WriteS3Container, bat *batch.Batch, proc *process.Pr
 	}
 
 	if len(bats) == 0 { // implying the end of this operator, the last Batch that batchSize less than DefaultBlockMaxRows
-		if container.cacheBat == nil {
-			container.cacheBat = getNewBatch(bat)
+		if container.cacheBat[batIdx] == nil {
+			container.cacheBat[batIdx] = getNewBatch(bat)
 		}
 		for i := 0; i < bat.Length(); i++ {
-			for j := range container.cacheBat.Vecs {
-				vector.UnionOne(container.cacheBat.Vecs[j], bat.Vecs[j], int64(i), proc.GetMPool())
+			for j := range container.cacheBat[batIdx].Vecs {
+				vector.UnionOne(container.cacheBat[batIdx].Vecs[j], bat.Vecs[j], int64(i), proc.GetMPool())
 			}
 		}
-		container.cacheBat.SetZs(container.cacheBat.Vecs[0].Length(), proc.GetMPool())
+		container.cacheBat[batIdx].SetZs(container.cacheBat[batIdx].Vecs[0].Length(), proc.GetMPool())
 	} else {
 		if cnt > 0 { // the part less than DefaultBlockMaxRows stored in cacheBat
 			if newBat == nil {
@@ -238,8 +239,8 @@ func reSizeBatch(container *WriteS3Container, bat *batch.Batch, proc *process.Pr
 				idx++
 				cnt--
 			}
-			container.cacheBat = newBat
-			container.cacheBat.SetZs(container.cacheBat.Vecs[0].Length(), proc.GetMPool())
+			container.cacheBat[batIdx] = newBat
+			container.cacheBat[batIdx].SetZs(container.cacheBat[batIdx].Vecs[0].Length(), proc.GetMPool())
 		}
 	}
 	return

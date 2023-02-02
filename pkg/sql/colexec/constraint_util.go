@@ -467,7 +467,7 @@ func InsertBatch(
 
 	if container != nil {
 		// write to s3
-		err = WriteS3Batch(container, bat, proc, 0)
+		err = WriteS3Batch(container, insertBatch, proc, 0)
 		if err != nil {
 			return 0, err
 		}

@@ -425,7 +425,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	var astSlt *tree.Select
-	// var isInsertValues := false
 	switch slt := stmt.Rows.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
 	case *tree.ValuesClause:
@@ -448,64 +447,177 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			}
 		}
 
-		// isInsertValues = true
 		//example1:insert into a values ();
 		//but it does not work at the case:
-		//insert into a(a) values (0),();
+		//insert into a(a) values (); insert into a values (0),();
 		if isAllDefault && syntaxHasColumnNames {
 			return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
 
+		// we can not use builder.buildSelect,
+		// because insert clause can use default. but normal [select ... from values] cann't do that
+		valueScanTableDef := &plan.TableDef{
+			TblId: 0,
+			Name:  "",
+		}
+		var rowsetData *plan.RowsetData
+		lastTag := builder.genNewTag()
+		var projectList []*Expr
 		if isAllDefault {
-			exprs := make([]tree.Expr, len(updateColumns))
+			colCount := len(tableDef.Cols)
+			rowsetData = &plan.RowsetData{
+				Cols: make([]*plan.ColData, colCount),
+			}
+			valueScanTableDef.Cols = make([]*plan.ColDef, colCount)
+			projectList = make([]*Expr, colCount)
 			for i, col := range tableDef.Cols {
-				_, err := getDefaultExpr(builder.GetContext(), col)
+				defExpr, err := getDefaultExpr(builder.GetContext(), col)
 				if err != nil {
 					return err
 				}
-				exprs[i] = tree.NewDefaultVal(nil)
-			}
-			for j := range slt.Rows {
-				slt.Rows[j] = exprs
-			}
-		}
-
-		slt.RowWord = true
-		astSlt = &tree.Select{
-			Select: &tree.SelectClause{
-				Exprs: []tree.SelectExpr{
-					{
-						Expr: tree.UnqualifiedStar{},
-					},
-				},
-				From: &tree.From{
-					Tables: []tree.TableExpr{
-						&tree.JoinTableExpr{
-							JoinType: tree.JOIN_TYPE_CROSS,
-							Left: &tree.AliasedTableExpr{
-								As: tree.AliasClause{},
-								Expr: &tree.ParenTableExpr{
-									Expr: &tree.Select{Select: slt},
-								},
-							},
+				defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
+				if err != nil {
+					return err
+				}
+				rows := make([]*Expr, len(slt.Rows))
+				for j := range slt.Rows {
+					rows[j] = defExpr
+				}
+				rowsetData.Cols[i] = &plan.ColData{
+					Data: rows,
+				}
+				colName := fmt.Sprintf("column_%d", i) // like MySQL
+				valueScanTableDef.Cols[i] = &plan.ColDef{
+					ColId: 0,
+					Name:  colName,
+					Typ:   col.Typ,
+				}
+				projectList[i] = &plan.Expr{
+					Typ: col.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: lastTag,
+							ColPos: int32(i),
 						},
 					},
-				},
-			},
+				}
+			}
+		} else {
+			colCount := len(updateColumns)
+			rowsetData = &plan.RowsetData{
+				Cols: make([]*plan.ColData, colCount),
+			}
+			valueScanTableDef.Cols = make([]*plan.ColDef, colCount)
+			projectList = make([]*Expr, colCount)
+			binder := NewWhereBinder(builder, bindCtx)
+			for i, colName := range updateColumns {
+				col := tableDef.Cols[colToIdx[colName]]
+				rows := make([]*Expr, len(slt.Rows))
+				var defExpr *Expr
+				for j, r := range slt.Rows {
+					if _, ok := r[i].(*tree.DefaultVal); ok {
+						defExpr, err = getDefaultExpr(builder.GetContext(), col)
+						if err != nil {
+							return err
+						}
+					} else {
+						defExpr, err = binder.BindExpr(r[i], 0, true)
+						if err != nil {
+							return err
+						}
+					}
+					defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
+					if err != nil {
+						return err
+					}
+					rows[j] = defExpr
+				}
+				rowsetData.Cols[i] = &plan.ColData{
+					Data: rows,
+				}
+				colName := fmt.Sprintf("column_%d", i) // like MySQL
+				valueScanTableDef.Cols[i] = &plan.ColDef{
+					ColId: 0,
+					Name:  colName,
+					Typ:   col.Typ,
+				}
+				projectList[i] = &plan.Expr{
+					Typ: col.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: lastTag,
+							ColPos: int32(i),
+						},
+					},
+				}
+			}
+
 		}
+
+		info.rootId = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_VALUE_SCAN,
+			RowsetData:  rowsetData,
+			TableDef:    valueScanTableDef,
+			BindingTags: []int32{lastTag},
+		}, bindCtx)
+		err = builder.addBinding(info.rootId, tree.AliasClause{
+			Alias: "_ValueScan",
+		}, bindCtx)
+		if err != nil {
+			return err
+		}
+
+		lastTag = builder.genNewTag()
+		info.rootId = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: projectList,
+			Children:    []int32{info.rootId},
+			BindingTags: []int32{lastTag},
+		}, bindCtx)
+
+		// slt.RowWord = true
+		// astSlt = &tree.Select{
+		// 	Select: &tree.SelectClause{
+		// 		Exprs: []tree.SelectExpr{
+		// 			{
+		// 				Expr: tree.UnqualifiedStar{},
+		// 			},
+		// 		},
+		// 		From: &tree.From{
+		// 			Tables: []tree.TableExpr{
+		// 				&tree.JoinTableExpr{
+		// 					JoinType: tree.JOIN_TYPE_CROSS,
+		// 					Left: &tree.AliasedTableExpr{
+		// 						As: tree.AliasClause{},
+		// 						Expr: &tree.ParenTableExpr{
+		// 							Expr: &tree.Select{Select: slt},
+		// 						},
+		// 					},
+		// 				},
+		// 			},
+		// 		},
+		// 	},
+		// }
 	case *tree.SelectClause:
 		astSlt = stmt.Rows
+
+		subCtx := NewBindContext(builder, bindCtx)
+		info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
+		if err != nil {
+			return err
+		}
 	case *tree.ParenSelect:
 		astSlt = slt.Select
+
+		subCtx := NewBindContext(builder, bindCtx)
+		info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
+		if err != nil {
+			return err
+		}
 	default:
 		return moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	subCtx := NewBindContext(builder, bindCtx)
-	info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
-	if err != nil {
-		return err
-	}
 	err = builder.addBinding(info.rootId, tree.AliasClause{
 		Alias: derivedTableName,
 	}, bindCtx)
