@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -76,6 +77,7 @@ func (arg *Argument) GetSortKeyIndexes() {
 	arg.container.sortIndex = make([]int, 0, 1)
 	// Get CPkey index
 	if arg.CPkeyColDef != nil {
+		// the serialized cpk col is located in the last of the bat.vecs
 		arg.container.sortIndex = append(arg.container.sortIndex, len(arg.TargetColDefs))
 	} else {
 		// Get Single Col pk index
@@ -86,7 +88,16 @@ func (arg *Argument) GetSortKeyIndexes() {
 			}
 		}
 		if arg.ClusterByDef != nil {
-			arg.container.sortIndex = append(arg.container.sortIndex, len(arg.TargetColDefs))
+			if util.JudgeIsCompositeClusterByColumn(arg.ClusterByDef.Name) {
+				// the serialized clusterby col is located in the last of the bat.vecs
+				arg.container.sortIndex = append(arg.container.sortIndex, len(arg.TargetColDefs))
+			} else {
+				for num, colDef := range arg.TargetColDefs {
+					if colDef.Name == arg.ClusterByDef.Name {
+						arg.container.sortIndex = append(arg.container.sortIndex, num)
+					}
+				}
+			}
 		}
 	}
 }
