@@ -71,8 +71,8 @@ func GetBlockMeta(bats []*batch.Batch, n *Argument, proc *process.Process) (*bat
 		if err := GenerateWriter(n, proc); err != nil {
 			return nil, err
 		}
-		if len(n.container.pkIndex) != 0 {
-			SortByPrimaryKey(proc, n, bats[i], n.container.pkIndex, proc.GetMPool())
+		if len(n.container.sortIndex) != 0 {
+			SortByPrimaryKey(proc, n, bats[i], n.container.sortIndex, proc.GetMPool())
 		}
 		if bats[i].Length() == 0 {
 			continue
@@ -674,9 +674,9 @@ func writeBatch(ctx context.Context,
 		// remember that, pkIdx can hold cpkeys, or single col pk, or clusterBy key
 		// but it can't hold them above towo of them , that means it can only hold \
 		// one of them at most.
-		if n.IsRemote && len(n.container.pkIndex) == 0 {
+		if n.IsRemote && len(n.container.sortIndex) == 0 {
 			for i := oldLen; i < newLen; i++ {
-				n.container.pkIndex = append(n.container.pkIndex, i)
+				n.container.sortIndex = append(n.container.sortIndex, i)
 			}
 		}
 	}

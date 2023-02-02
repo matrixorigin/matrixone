@@ -31,7 +31,7 @@ const (
 type Container struct {
 	writer        objectio.Writer
 	unique_writer []objectio.Writer
-	pkIndex       []int
+	sortIndex     []int
 	// record every batch's Length
 	lengths []uint64
 	// record unique batch's Length
@@ -71,14 +71,14 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 func (arg *Argument) GetPkIndexes() {
-	arg.container.pkIndex = make([]int, 0, 1)
+	arg.container.sortIndex = make([]int, 0, 1)
 	// Get CPkey index
 	if arg.CPkeyColDef != nil {
 		names := util.SplitCompositePrimaryKeyColumnName(arg.CPkeyColDef.Name)
 		for num, colDef := range arg.TargetColDefs {
 			for _, name := range names {
 				if colDef.Name == name {
-					arg.container.pkIndex = append(arg.container.pkIndex, num)
+					arg.container.sortIndex = append(arg.container.sortIndex, num)
 				}
 			}
 		}
@@ -86,7 +86,7 @@ func (arg *Argument) GetPkIndexes() {
 		// Get Single Col pk index
 		for num, colDef := range arg.TargetColDefs {
 			if colDef.Primary {
-				arg.container.pkIndex = append(arg.container.pkIndex, num)
+				arg.container.sortIndex = append(arg.container.sortIndex, num)
 				break
 			}
 		}
