@@ -909,7 +909,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 
 	switch joinTyp {
 	case plan.Node_INNER:
-		rs := c.newShuffleJoinScopeList(ss, children)
+		rs = c.newShuffleJoinScopeList(ss, children)
 		if len(n.OnList) == 0 {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
@@ -936,7 +936,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 			}
 		}
 	case plan.Node_SEMI:
-		rs := c.newShuffleJoinScopeList(ss, children)
+		rs = c.newShuffleJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -953,7 +953,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 			}
 		}
 	case plan.Node_LEFT:
-		rs := c.newShuffleJoinScopeList(ss, children)
+		rs = c.newShuffleJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -989,7 +989,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 			}
 		}
 	case plan.Node_SINGLE:
-		rs := c.newShuffleJoinScopeList(ss, children)
+		rs = c.newShuffleJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1006,7 +1006,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 			}
 		}
 	case plan.Node_ANTI:
-		rs := c.newShuffleJoinScopeList(ss, children)
+		rs = c.newShuffleJoinScopeList(ss, children)
 		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
 			if isEq && len(conds) == 1 {
@@ -1024,7 +1024,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 			}
 		}
 	case plan.Node_MARK:
-		rs := c.newShuffleJoinScopeList(ss, children)
+		rs = c.newShuffleJoinScopeList(ss, children)
 		for i := range rs {
 			//if isEq {
 			//	rs[i].appendInstruction(vm.Instruction{
