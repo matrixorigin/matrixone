@@ -116,14 +116,14 @@ insert into  dis_table_02(b,c) values ('vvv','2000-09-08');
 -- @session}
 -- @session:id=2{
 begin ;
-select * from dis_table_02;
+select b, c from dis_table_02;
 delete from dis_table_02 where a=1;
 rollback ;
 -- @session}
 commit ;
-select * from aaa;
+select b, c from aaa;
 -- @session:id=1{
-select * from aaa;
+select b, c from aaa;
 -- @session}
 drop view aaa ;
 
@@ -132,31 +132,31 @@ insert into dis_table_02(b,c) values ('','1999-06-04');
 -- @session:id=1{
 prepare stmt1 from "update dis_table_02 set c='2222-07-12' where a=2";
 execute stmt1;
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
 update dis_table_02 set c='2000-09-02' where a=2;
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session:id=2{
 begin ;
 create database dis_db_02;
 rollback ;
 -- @session}
 commit;
-select * from dis_table_02;
+select b, c from dis_table_02;
 
 begin ;
 prepare stmt1 from "insert into dis_table_02(b,c) values('oppo','1009-11-11')";
 execute stmt1;
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session:id=1{
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
 prepare stmt2 from "update dis_table_02 set a=null";
 execute stmt2;
 commit;
-select * from dis_table_02;
+select b, c from dis_table_02;
 use dis_db_02;
-select * from dis_table_02;
+select b, c from dis_table_02;
 insert into dis_table_02(b,c) values ('','1999-06-04');
 
 ------------------------------
@@ -178,14 +178,14 @@ start transaction;
 load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02;
 -- @session:id=1{
 update dis_table_02 set b='pppp';
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session:id=2{
 begin ;
 create view dis_view_02 as select * from dis_table_02;
 insert into dis_table_02 values (2,'oooo','1802-03-20');
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
 -- @session:id=1{
 use isolation_2;
@@ -197,7 +197,7 @@ insert into dis_table_02 values (2,'oooo','1802-03-20');
 -- @session}
 commit;
 -- @session:id=1{
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
 select * from dis_view_02;
 drop table dis_view_02;
@@ -219,23 +219,23 @@ select * from dis_table_01;
 
 begin ;
 delete from dis_table_02 where a>1;;
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session:id=1{
-select * from dis_table_02;
+select b, c from dis_table_02;
 update dis_table_02 set b='tittttt' where a>1;
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session:id=2{
 start transaction ;
 update dis_table_02 set b='catttteee' where a>1;
-select * from dis_table_02;
+select b, c from dis_table_02;
 commit;
 -- @session}
 commit;
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session:id=1{
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
 
 --------------------------------

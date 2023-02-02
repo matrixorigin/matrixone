@@ -38,43 +38,34 @@ const (
 	spanInfoTbl  = "span_info"
 	logInfoTbl   = "log_info"
 	errorInfoTbl = "error_info"
-
-	uuidColType        = "varchar(36)"
-	spanIDType         = "varchar(16)"
-	spanKindType       = "varchar(32)"
-	datetime6Type      = "datetime(6)"
-	bigintUnsignedType = "bigint unsigned"
-	stringType         = "varchar(1024)"
-
-	jsonColumnDEFAULT = "{}"
 )
 
 var (
-	stmtIDCol    = table.Column{Name: "statement_id", Type: uuidColType, ColType: table.TVarchar, Default: "0", Comment: "statement uniq id"}
-	txnIDCol     = table.Column{Name: "transaction_id", Type: uuidColType, ColType: table.TVarchar, Default: "0", Comment: "txn uniq id"}
-	sesIDCol     = table.Column{Name: "session_id", Type: uuidColType, ColType: table.TVarchar, Default: "0", Comment: "session uniq id"}
-	accountCol   = table.Column{Name: "account", Type: stringType, ColType: table.TVarchar, Default: "", Comment: "account name"}
-	roleIdCol    = table.Column{Name: "role_id", Type: bigintUnsignedType, ColType: table.TUint64, Default: "0", Comment: "role id"}
-	userCol      = table.Column{Name: "user", Type: stringType, ColType: table.TVarchar, Default: "", Comment: "user name"}
-	hostCol      = table.Column{Name: "host", Type: stringType, ColType: table.TVarchar, Default: "", Comment: "user client ip"}
-	dbCol        = table.Column{Name: "database", Type: stringType, ColType: table.TVarchar, Default: "", Comment: "what database current session stay in."}
-	stmtCol      = table.Column{Name: "statement", Type: "TEXT", ColType: table.TText, Default: "", Comment: "sql statement"}
-	stmtTagCol   = table.Column{Name: "statement_tag", Type: "TEXT", ColType: table.TText, Default: "", Comment: "note tag in statement(Reserved)"}
-	stmtFgCol    = table.Column{Name: "statement_fingerprint", Type: "TEXT", ColType: table.TText, Default: "", Comment: "note tag in statement(Reserved)"}
-	nodeUUIDCol  = table.Column{Name: "node_uuid", Type: uuidColType, ColType: table.TVarchar, Default: "0", Comment: "node uuid, which node gen this data."}
-	nodeTypeCol  = table.Column{Name: "node_type", Type: "varchar(64)", ColType: table.TVarchar, Default: "node", Comment: "node type in MO, val in [DN, CN, LOG]"}
-	reqAtCol     = table.Column{Name: "request_at", Type: datetime6Type, ColType: table.TDatetime, Default: "", Comment: "request accept datetime"}
-	respAtCol    = table.Column{Name: "response_at", Type: datetime6Type, ColType: table.TDatetime, Default: "", Comment: "response send datetime"}
-	durationCol  = table.Column{Name: "duration", Type: bigintUnsignedType, ColType: table.TUint64, Default: "0", Comment: "exec time, unit: ns"}
-	statusCol    = table.Column{Name: "status", Type: "varchar(32)", ColType: table.TVarchar, Default: "Running", Comment: "sql statement running status, enum: Running, Success, Failed"}
-	errorCol     = table.Column{Name: "error", Type: "TEXT", ColType: table.TText, Default: "", Comment: "error message"}
-	execPlanCol  = table.Column{Name: "exec_plan", Type: "JSON", ColType: table.TJson, Default: jsonColumnDEFAULT, Comment: "statement execution plan"}
-	rowsReadCol  = table.Column{Name: "rows_read", Type: bigintUnsignedType, ColType: table.TUint64, Default: "0", Comment: "rows read total"}
-	bytesScanCol = table.Column{Name: "bytes_scan", Type: bigintUnsignedType, ColType: table.TUint64, Default: "0", Comment: "bytes scan total"}
-	statsCol     = table.Column{Name: "stats", Type: "JSON", ColType: table.TJson, Default: jsonColumnDEFAULT, Comment: "global stats info in exec_plan"}
-	stmtTypeCol  = table.Column{Name: "statement_type", Type: "varchar(128)", ColType: table.TVarchar, Default: "", Comment: "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]"}
-	queryTypeCol = table.Column{Name: "query_type", Type: "varchar(128)", ColType: table.TVarchar, Default: "", Comment: "query type, val in [DQL, DDL, DML, DCL, TCL]"}
-	sqlTypeCol   = table.Column{Name: "sql_source_type", Type: "TEXT", ColType: table.TText, Default: "", Comment: "sql statement source type"}
+	stmtIDCol    = table.UuidStringColumn("statement_id", "statement uniq id")
+	txnIDCol     = table.UuidStringColumn("transaction_id", "txn uniq id")
+	sesIDCol     = table.UuidStringColumn("session_id", "session uniq id")
+	accountCol   = table.StringColumn("account", "account name")
+	roleIdCol    = table.Int64Column("role_id", "role id")
+	userCol      = table.StringColumn("user", "user name")
+	hostCol      = table.StringColumn("host", "user client ip")
+	dbCol        = table.StringColumn("database", "what database current session stay in.")
+	stmtCol      = table.TextColumn("statement", "sql statement")
+	stmtTagCol   = table.TextColumn("statement_tag", "note tag in statement(Reserved)")
+	stmtFgCol    = table.TextColumn("statement_fingerprint", "note tag in statement(Reserved)")
+	nodeUUIDCol  = table.UuidStringColumn("node_uuid", "node uuid, which node gen this data.")
+	nodeTypeCol  = table.StringColumn("node_type", "node type in MO, val in [DN, CN, LOG]")
+	reqAtCol     = table.DatetimeColumn("request_at", "request accept datetime")
+	respAtCol    = table.DatetimeColumn("response_at", "response send datetime")
+	durationCol  = table.UInt64Column("duration", "exec time, unit: ns")
+	statusCol    = table.StringColumn("status", "sql statement running status, enum: Running, Success, Failed")
+	errorCol     = table.TextColumn("error", "error message")
+	execPlanCol  = table.JsonColumn("exec_plan", "statement execution plan")
+	rowsReadCol  = table.Int64Column("rows_read", "rows read total")
+	bytesScanCol = table.Int64Column("bytes_scan", "bytes scan total")
+	statsCol     = table.JsonColumn("stats", "global stats info in exec_plan")
+	stmtTypeCol  = table.StringColumn("statement_type", "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]")
+	queryTypeCol = table.StringColumn("query_type", "query type, val in [DQL, DDL, DML, DCL, TCL]")
+	sqlTypeCol   = table.TextColumn("sql_source_type", "sql statement source type")
 
 	SingleStatementTable = &table.Table{
 		Account:  table.AccountAll,
@@ -117,23 +108,23 @@ var (
 		SupportUserAccess: true,
 	}
 
-	rawItemCol      = table.Column{Name: "raw_item", Type: stringType, ColType: table.TVarchar, Comment: "raw log item"}
-	timestampCol    = table.Column{Name: "timestamp", Type: datetime6Type, ColType: table.TDatetime, Comment: "timestamp of action"}
-	loggerNameCol   = table.Column{Name: "logger_name", Type: stringType, ColType: table.TVarchar, Comment: "logger name"}
-	levelCol        = table.Column{Name: "level", Type: stringType, ColType: table.TVarchar, Comment: "log level, enum: debug, info, warn, error, panic, fatal"}
-	callerCol       = table.Column{Name: "caller", Type: stringType, ColType: table.TVarchar, Comment: "where it log, like: package/file.go:123"}
-	messageCol      = table.Column{Name: "message", Type: "TEXT", ColType: table.TText, Comment: "log message"}
-	extraCol        = table.Column{Name: "extra", Type: "JSON", ColType: table.TJson, Default: jsonColumnDEFAULT, Comment: "log dynamic fields"}
-	errCodeCol      = table.Column{Name: "err_code", Type: stringType, ColType: table.TVarchar, Default: "0"}
-	stackCol        = table.Column{Name: "stack", Type: "varchar(4096)", ColType: table.TVarchar}
-	traceIDCol      = table.Column{Name: "trace_id", Type: uuidColType, ColType: table.TVarchar, Default: "0", Comment: "trace uniq id"}
-	spanIDCol       = table.Column{Name: "span_id", Type: spanIDType, ColType: table.TVarchar, Default: "0", Comment: "span uniq id"}
-	spanKindCol     = table.Column{Name: "span_kind", Type: spanKindType, ColType: table.TVarchar, Default: "", Comment: "span kind, enum: internal, statement, remote"}
-	parentSpanIDCol = table.Column{Name: "parent_span_id", Type: spanIDType, ColType: table.TVarchar, Default: "0", Comment: "parent span uniq id"}
-	spanNameCol     = table.Column{Name: "span_name", Type: stringType, ColType: table.TVarchar, Default: "", Comment: "span name, for example: step name of execution plan, function name in code, ..."}
-	startTimeCol    = table.Column{Name: "start_time", Type: datetime6Type, ColType: table.TDatetime, Default: ""}
-	endTimeCol      = table.Column{Name: "end_time", Type: datetime6Type, ColType: table.TDatetime, Default: ""}
-	resourceCol     = table.Column{Name: "resource", Type: "JSON", ColType: table.TJson, Default: jsonColumnDEFAULT, Comment: "static resource information"}
+	rawItemCol      = table.StringColumn("raw_item", "raw log item")
+	timestampCol    = table.DatetimeColumn("timestamp", "timestamp of action")
+	loggerNameCol   = table.StringColumn("logger_name", "logger name")
+	levelCol        = table.StringColumn("level", "log level, enum: debug, info, warn, error, panic, fatal")
+	callerCol       = table.StringColumn("caller", "where it log, like: package/file.go:123")
+	messageCol      = table.TextColumn("message", "log message")
+	extraCol        = table.JsonColumn("extra", "log dynamic fields")
+	errCodeCol      = table.StringDefaultColumn("err_code", `0`, "error code info")
+	stackCol        = table.StringWithPrecision("stack", 4096, "stack info")
+	traceIDCol      = table.UuidStringColumn("trace_id", "trace uniq id")
+	spanIDCol       = table.SpanIDStringColumn("span_id", "span uniq id")
+	spanKindCol     = table.StringColumn("span_kind", "span kind, enum: internal, statement, remote")
+	parentSpanIDCol = table.SpanIDStringColumn("parent_span_id", "parent span uniq id")
+	spanNameCol     = table.StringColumn("span_name", "span name, for example: step name of execution plan, function name in code, ...")
+	startTimeCol    = table.DatetimeColumn("start_time", "start time")
+	endTimeCol      = table.DatetimeColumn("end_time", "end time")
+	resourceCol     = table.JsonColumn("resource", "static resource information")
 
 	SingleRowLogTable = &table.Table{
 		Account:  table.AccountAll,
@@ -298,6 +289,7 @@ func GetSchemaForAccount(ctx context.Context, account string) []string {
 
 func init() {
 	for _, tbl := range tables {
+		tbl.GetRow(context.Background()).Free()
 		if old := table.RegisterTableDefine(tbl); old != nil {
 			panic(moerr.NewInternalError(context.Background(), "table already registered: %s", old.GetIdentify()))
 		}
