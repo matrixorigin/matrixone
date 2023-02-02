@@ -131,6 +131,12 @@ var (
 
 	// defaultSessionTimeout default: 10 minutes
 	defaultSessionTimeout = 24 * time.Hour
+
+	// defaultLogsExtension default: tae. Support val in [csv, tae]
+	defaultLogsExtension = "tae"
+
+	// defaultMergedExtension default: tae. Support val in [csv, tae]
+	defaultMergedExtension = "tae"
 )
 
 // FrontendParameters of the frontend
@@ -448,7 +454,13 @@ type ObservabilityParameters struct {
 	MergeMaxFileSize int `toml:"mergeMaxFileSize"`
 
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
-	PathBuilder string `toml:"PathBuilder"`
+	PathBuilder string `toml:"pathBuilder"`
+
+	// LogsExtension default: tae. Support val in [csv, tae]
+	LogsExtension string `toml:"logsExtension"`
+
+	// MergedExtension default: tae. Support val in [csv, tae]
+	MergedExtension string `toml:"mergedExtension"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
@@ -492,6 +504,14 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.MergeMaxFileSize <= 0 {
 		op.MergeMaxFileSize = defaultMaxFileSize
+	}
+
+	if op.LogsExtension == "" {
+		op.LogsExtension = defaultLogsExtension
+	}
+
+	if op.MergedExtension == "" {
+		op.MergedExtension = defaultMergedExtension
 	}
 }
 
