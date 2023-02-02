@@ -438,14 +438,21 @@ const (
 /*
 handle show columns from table in plan2 and tae
 */
-func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
+func handleShowColumns(ses *Session, stmt *tree.ShowColumns, ctx plan2.CompilerContext) error {
 	data := ses.GetData()
 	mrs := ses.GetMysqlResultSet()
 	dbName := stmt.Table.GetDBName()
 	if len(dbName) == 0 {
 		dbName = ses.GetDatabaseName()
 	}
+
 	tableName := string(stmt.Table.ToTableName().ObjectName)
+	_, tableDef := ctx.Resolve(dbName, tableName)
+	if tableDef == nil {
+		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tableName)
+	}
+
+	colNameToColContent := make(map[string][]interface{})
 	for _, d := range data {
 		colName := string(d[0].([]byte))
 		if colName == catalog.Row_ID {
@@ -500,7 +507,7 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 
 			row[5] = ""
 			row[6] = d[6]
-			mrs.AddRow(row)
+			colNameToColContent[colName] = row
 		} else {
 			row := make([]interface{}, 9)
 			row[0] = colName
@@ -544,8 +551,11 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 			row[6] = ""
 			row[7] = d[7]
 			row[8] = d[8]
-			mrs.AddRow(row)
+			colNameToColContent[colName] = row
 		}
+	}
+	for _, col := range tableDef.Cols {
+		mrs.AddRow(colNameToColContent[col.Name])
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
 		logErrorf(ses.GetConciseProfile(), "handleShowColumns error %v", err)
@@ -3850,7 +3860,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 			switch ses.GetShowStmtType() {
 			case ShowColumns:
-				if err = handleShowColumns(ses, statement.(*tree.ShowColumns)); err != nil {
+				if err = handleShowColumns(ses, statement.(*tree.ShowColumns), ses.GetTxnCompileCtx()); err != nil {
 					goto handleFailed
 				}
 			case ShowTableStatus:
