@@ -112,13 +112,22 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 	return nodeID
 }
 
-func (builder *QueryBuilder) swapJoinOrderByStats(children []int32) []int32 {
+func (builder *QueryBuilder) swapJoinOrderByStats(children []int32, joinType plan.Node_JoinFlag) ([]int32, plan.Node_JoinFlag) {
+	if joinType != plan.Node_INNER && joinType != plan.Node_LEFT && joinType != plan.Node_RIGHT {
+		//do not swap
+		return children, joinType
+	}
 	left := builder.qry.Nodes[children[0]].Stats.Outcnt
 	right := builder.qry.Nodes[children[1]].Stats.Outcnt
 	if left < right {
-		return []int32{children[1], children[0]}
+		if joinType == plan.Node_LEFT {
+			joinType = plan.Node_RIGHT
+		} else if joinType == plan.Node_RIGHT {
+			joinType = plan.Node_LEFT
+		}
+		return []int32{children[1], children[0]}, joinType
 	} else {
-		return children
+		return children, joinType
 	}
 }
 func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
@@ -129,6 +138,10 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			for i, child := range node.Children {
 				node.Children[i] = builder.determineJoinOrder(child)
 			}
+		}
+		if node.NodeType == plan.Node_JOIN {
+			//swap join order for left & right join, inner join is not here
+			node.Children, node.JoinType = builder.swapJoinOrderByStats(node.Children, node.JoinType)
 		}
 		return nodeID
 	}
@@ -214,7 +227,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			visited[nextSibling] = true
 
 			children := []int32{nodeID, subTrees[nextSibling].NodeId}
-			children = builder.swapJoinOrderByStats(children)
+			children, _ = builder.swapJoinOrderByStats(children, plan.Node_INNER)
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: children,
@@ -241,7 +254,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 		for i := 1; i < len(subTrees); i++ {
 			children := []int32{nodeID, subTrees[i].NodeId}
-			children = builder.swapJoinOrderByStats(children)
+			children, _ = builder.swapJoinOrderByStats(children, plan.Node_INNER)
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: children,
@@ -388,7 +401,7 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 	for _, child := range dimensions {
 
 		children := []int32{vertex.node.NodeId, child.node.NodeId}
-		children = builder.swapJoinOrderByStats(children)
+		children, _ = builder.swapJoinOrderByStats(children, plan.Node_INNER)
 		nodeId := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: children,

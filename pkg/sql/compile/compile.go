@@ -1666,7 +1666,7 @@ func joinType(ctx context.Context, n *plan.Node, ns []*plan.Node) (bool, plan.No
 	case plan.Node_ANTI:
 		return false, plan.Node_ANTI
 	case plan.Node_RIGHT:
-		return true, plan.Node_LEFT
+		return false, plan.Node_RIGHT
 	case plan.Node_SINGLE:
 		return false, plan.Node_SINGLE
 	case plan.Node_MARK:
