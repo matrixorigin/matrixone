@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"io"
 	"math/rand"
 	"sort"
@@ -665,13 +666,28 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 	rand.Seed(time.Now().UnixNano())
 	schema := NewEmptySchema(time.Now().String())
 	prefix := "mock_"
+
+	constraintDef := &engine.ConstraintDef{
+		Cts: make([]engine.Constraint, 0),
+	}
+
 	for i := 0; i < colCnt; i++ {
 		if pkIdx == i {
-			_ = schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4}, 0)
+			colName := fmt.Sprintf("%s%d", prefix, i)
+			_ = schema.AppendPKCol(colName, types.Type{Oid: types.T_int32, Size: 4, Width: 4}, 0)
+			pkConstraint := &engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					PkeyColName: colName,
+					Names:       []string{colName},
+				},
+			}
+			constraintDef.Cts = append(constraintDef.Cts, pkConstraint)
 		} else {
 			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
 		}
 	}
+	schema.Constraint, _ = constraintDef.MarshalBinary()
+
 	_ = schema.Finalize(false)
 	return schema
 }
