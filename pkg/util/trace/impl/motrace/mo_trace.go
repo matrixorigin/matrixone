@@ -22,9 +22,7 @@
 package motrace
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"time"
@@ -81,10 +79,10 @@ var _ trace.Span = (*MOSpan)(nil)
 // MOSpan implement export.IBuffer2SqlItem and export.CsvFields
 type MOSpan struct {
 	trace.SpanConfig
-	Name      bytes.Buffer `json:"name"`
-	StartTime time.Time    `json:"start_time"`
-	EndTime   time.Time    `jons:"end_time"`
-	Duration  uint64       `json:"duration"`
+	Name      string    `json:"name"`
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `jons:"end_time"`
+	Duration  uint64    `json:"duration"`
 
 	tracer *MOTracer `json:"-"`
 }
@@ -98,7 +96,7 @@ func newMOSpan() *MOSpan {
 }
 
 func (s *MOSpan) init(name string, opts ...trace.SpanOption) {
-	s.Name.WriteString(name)
+	s.Name = name
 	s.StartTime = time.Now()
 	for _, opt := range opts {
 		opt.ApplySpanStart(&s.SpanConfig)
@@ -106,7 +104,7 @@ func (s *MOSpan) init(name string, opts ...trace.SpanOption) {
 }
 
 func (s *MOSpan) Size() int64 {
-	return int64(unsafe.Sizeof(*s)) + int64(s.Name.Cap())
+	return int64(unsafe.Sizeof(*s)) + int64(len(s.Name))
 }
 
 var zeroTime = time.Time{}
@@ -114,7 +112,7 @@ var zeroTime = time.Time{}
 func (s *MOSpan) Free() {
 	s.SpanConfig.Reset()
 	s.Parent = nil
-	s.Name.Reset()
+	s.Name = ""
 	s.tracer = nil
 	s.StartTime = zeroTime
 	s.EndTime = zeroTime
@@ -125,9 +123,9 @@ func (s *MOSpan) GetName() string {
 	return spanView.OriginTable.GetName()
 }
 
-func (s *MOSpan) GetRow() *table.Row { return spanView.OriginTable.GetRow(DefaultContext()) }
+func (s *MOSpan) GetTable() *table.Table { return spanView.OriginTable }
 
-func (s *MOSpan) CsvFields(ctx context.Context, row *table.Row) []string {
+func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, spanView.Table)
 	row.SetColumnVal(spanIDCol, s.SpanID.String())
@@ -136,12 +134,11 @@ func (s *MOSpan) CsvFields(ctx context.Context, row *table.Row) []string {
 	row.SetColumnVal(parentSpanIDCol, s.Parent.SpanContext().SpanID.String())
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
-	row.SetColumnVal(spanNameCol, s.Name.String())
-	row.SetColumnVal(startTimeCol, Time2DatetimeString(s.StartTime))
-	row.SetColumnVal(endTimeCol, Time2DatetimeString(s.EndTime))
-	row.SetColumnVal(durationCol, fmt.Sprintf("%d", s.EndTime.Sub(s.StartTime))) // Duration
+	row.SetColumnVal(spanNameCol, s.Name)
+	row.SetColumnVal(startTimeCol, s.StartTime)
+	row.SetColumnVal(endTimeCol, s.EndTime)
+	row.SetColumnVal(durationCol, uint64(s.EndTime.Sub(s.StartTime))) // Duration
 	row.SetColumnVal(resourceCol, s.tracer.provider.resource.String())
-	return row.ToStrings()
 }
 
 func (s *MOSpan) End(options ...trace.SpanEndOption) {

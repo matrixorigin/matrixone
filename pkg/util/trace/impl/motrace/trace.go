@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -48,6 +49,18 @@ func init() {
 }
 
 var inited uint32
+
+func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opts ...TracerProviderOption) (context.Context, error) {
+	opts = append(opts,
+		withMOVersion(SV.MoVersion),
+		EnableTracer(!SV.DisableTrace),
+		WithBatchProcessMode(SV.BatchProcessor),
+		WithExportInterval(SV.TraceExportInterval),
+		WithLongQueryTime(SV.LongQueryTime),
+		DebugMode(SV.EnableTraceDebug),
+	)
+	return Init(ctx, opts...)
+}
 
 func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, error) {
 	// fix multi-init in standalone
@@ -150,6 +163,7 @@ func Shutdown(ctx context.Context) error {
 			return err
 		}
 	}
+	logutil.Info("Shutdown trace complete.")
 	return nil
 }
 
