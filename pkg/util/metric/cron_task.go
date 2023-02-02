@@ -128,9 +128,8 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		// | query_tae_table | admin      | 2023-01-17 09:56:26 | open   | NULL           |        6 |          34 |       792 | 0.036 |                |
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
 		executor := sqlExecutor()
-		logger.Info("show accounts get size")
+		logger.Info("query storage size")
 		result := executor.Query(ctx, ShowAccountSQL, ie.NewOptsBuilder().Finish())
-		logger.Info("fetch result")
 		err = result.Error()
 		if err != nil {
 			return err
