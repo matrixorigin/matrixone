@@ -31,7 +31,7 @@ func newHandle(table *dataTable, block *ablock) *tableHandle {
 		table: table,
 		block: block,
 	}
-	if block != nil {
+	if block != nil && block.IsAppendable() {
 		h.appender, _ = block.MakeAppender()
 	}
 	return h

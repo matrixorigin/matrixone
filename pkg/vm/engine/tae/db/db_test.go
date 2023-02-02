@@ -5633,6 +5633,41 @@ func TestGCCatalog1(t *testing.T) {
 	assert.Equal(t, 0, blkCnt)
 }
 
+func TestAppendAndGCCatalog(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	// Use GCByTS to force GC
+	options.WithCatalogGCInterval(5 * time.Second)(opts)
+	tae := initDB(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchema(2, 4)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	createRelation(t, tae, "db", schema, true)
+	bat := catalog.MockBatch(schema, 33)
+	defer bat.Close()
+	txn, _ := tae.StartTxn(nil)
+	database, _ := txn.GetDatabase("db")
+	rel, _ := database.GetRelationByName(schema.Name)
+	err := rel.Append(bat)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+	testutils.WaitExpect(2000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.Catalog.GCByTS(context.Background(), tae.TxnMgr.StatMaxCommitTS())
+	t.Log(tae.Catalog.SimplePPString(3))
+	txn, _ = tae.StartTxn(nil)
+	database, _ = txn.GetDatabase("db")
+	rel, _ = database.GetRelationByName(schema.Name)
+	err = rel.Append(bat)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
+}
+
 func TestGCCatalog2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
