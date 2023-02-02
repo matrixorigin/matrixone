@@ -160,6 +160,7 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 func getMaxnum[T constraints.Integer](vec *vector.Vector, length, maxNum, step uint64) uint64 {
 	vs := vector.MustTCols[T](vec)
 	rowIndex := uint64(0)
+	maxStore := maxNum + step
 	for rowIndex = 0; rowIndex < length; rowIndex++ {
 		if nulls.Contains(vec.Nsp, rowIndex) {
 			maxNum += step
@@ -171,6 +172,9 @@ func getMaxnum[T constraints.Integer](vec *vector.Vector, length, maxNum, step u
 				maxNum = uint64(vs[rowIndex])
 			}
 		}
+	}
+	if maxStore > maxNum {
+		maxNum = maxStore
 	}
 	return maxNum
 }
