@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/util/export/observability"
 	"sync"
 	"time"
@@ -59,27 +58,25 @@ func (*Span) GetName() string {
 	return observability.SpansTable.GetIdentify()
 }
 
-func (*Span) GetRow() *table.Row {
-	return observability.SpansTable.GetRow(context.Background())
+func (*Span) GetTable() *table.Table {
+	return observability.SpansTable
 }
 
-func (s *Span) CsvFields(ctx context.Context, row *table.Row) []string {
+func (s *Span) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(observability.SpansTraceIDCol, s.TraceId)
 	row.SetColumnVal(observability.SpansSpanIDCol, s.SpanId)
 	row.SetColumnVal(observability.SpansParentTraceIDCol, s.ParentSpanId)
 	row.SetColumnVal(observability.SpansSpanKindCol, s.Kind)
 	row.SetColumnVal(observability.SpansSpanNameCol, s.Name)
-	row.SetColumnVal(observability.SpansStartTimeCol, observability.Time2DatetimeString(s.StartTime))
-	row.SetColumnVal(observability.SpansEndTimeCol, observability.Time2DatetimeString(s.EndTime))
-	row.SetColumnVal(observability.SpansDurationCol, fmt.Sprintf("%d", s.Duration))
+	row.SetColumnVal(observability.SpansStartTimeCol, s.StartTime)
+	row.SetColumnVal(observability.SpansEndTimeCol, s.EndTime)
+	row.SetColumnVal(observability.SpansDurationCol, s.Duration)
 	row.SetColumnVal(observability.SpansStatusCol, trsfStatus(s.Status))
 	row.SetColumnVal(observability.SpansResourceCol, trsfResource(s.Resource))
 	row.SetColumnVal(observability.SpansAttributesCol, trsfAttributes(s.Attributes))
 	row.SetColumnVal(observability.SpansLinksCol, trsfSpanLink(s.Links))
 	row.SetColumnVal(observability.SpansEventsCol, trsfEvents(s.Events))
-
-	return row.ToStrings()
 }
 
 func (s *Span) Size() int64 {

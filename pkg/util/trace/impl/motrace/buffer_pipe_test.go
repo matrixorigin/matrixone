@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"io"
-	"os"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
@@ -48,21 +49,22 @@ func noopReportError(context.Context, error, int) {}
 
 func init() {
 	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
-	if _, err := Init(
+	SV := config.ObservabilityParameters{}
+	SV.SetDefaultValues("v0.test.0")
+	SV.TraceExportInterval = 15
+	SV.LongQueryTime = 0
+	SV.EnableTraceDebug = true
+	if _, err := InitWithConfig(
 		context.Background(),
+		&SV,
 		EnableTracer(true),
-		WithMOVersion("v0.test.0"),
+		withMOVersion("v0.test.0"),
 		WithNode("node_uuid", trace.NodeTypeStandalone),
 		WithBatchProcessMode(FileService),
-		WithFSWriterFactory(func(ctx context.Context, _ string, _ batchpipe.HasName, _ WriteFactoryConfig) io.StringWriter {
-			return os.Stdout
-		}),
+		WithFSWriterFactory(dummyFSWriterFactory),
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
 			return nil
 		}),
-		WithExportInterval(15),
-		WithLongQueryTime(0),
-		DebugMode(true),
 	); err != nil {
 		panic(err)
 	}
@@ -77,6 +79,24 @@ func init() {
 		panic(err)
 	}
 	fmt.Println("Finish tests init.")
+}
+
+type dummyStringWriter struct{}
+
+func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
+	return fmt.Printf("dummyStringWriter: %s\n", s)
+}
+func (w *dummyStringWriter) WriteRow(row *table.Row) error {
+	fmt.Printf("dummyStringWriter: %v\n", row.ToStrings())
+	return nil
+}
+func (w *dummyStringWriter) FlushAndClose() (int, error) {
+	return 0, nil
+}
+func (w *dummyStringWriter) GetContent() string { return "" }
+
+var dummyFSWriterFactory = func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+	return &dummyStringWriter{}
 }
 
 func Test_newBuffer2Sql_base(t *testing.T) {
@@ -267,6 +287,13 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	<-gCtrlSqlCh
 }*/
 
+var genFactory = func() table.WriterFactory {
+	return func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+		buf := bytes.NewBuffer(nil)
+		return etl.NewCSVWriter(ctx, buf, &dummyStringWriter{})
+	}
+}
+
 func Test_genCsvData(t *testing.T) {
 	errorFormatter.Store("%v")
 	logStackFormatter.Store("%n")
@@ -286,7 +313,7 @@ func Test_genCsvData(t *testing.T) {
 				in: []IBuffer2SqlItem{
 					&MOSpan{
 						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, Parent: trace.NoopSpan{}},
-						Name:       *bytes.NewBuffer([]byte("span1")),
+						Name:       "span1",
 						StartTime:  zeroTime,
 						EndTime:    zeroTime.Add(time.Microsecond),
 						tracer:     gTracer.(*MOTracer),
@@ -294,7 +321,7 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,,,,,{},0,,,span1,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",internal
+			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,span1,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",internal
 `,
 		},
 		{
@@ -303,14 +330,14 @@ func Test_genCsvData(t *testing.T) {
 				in: []IBuffer2SqlItem{
 					&MOSpan{
 						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _1SpanID, Kind: trace.SpanKindStatement}, Parent: trace.NoopSpan{}},
-						Name:       *bytes.NewBuffer([]byte("span1")),
+						Name:       "span1",
 						StartTime:  zeroTime,
 						EndTime:    zeroTime.Add(time.Microsecond),
 						tracer:     gTracer.(*MOTracer),
 					},
 					&MOSpan{
 						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _2SpanID, Kind: trace.SpanKindRemote}, Parent: trace.NoopSpan{}},
-						Name:       *bytes.NewBuffer([]byte("span2")),
+						Name:       "span2",
 						StartTime:  zeroTime.Add(time.Microsecond),
 						EndTime:    zeroTime.Add(time.Millisecond),
 						tracer:     gTracer.(*MOTracer),
@@ -318,8 +345,8 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,,,,,{},0,,,span1,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",statement
-span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,,,,,{},0,,,span2,0,0001-01-01 00:00:00.000001,0001-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
+			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,span1,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",statement
+span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,span2,0,0001-01-01 00:00:00.000001,0001-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
 `,
 		},
 		{
@@ -337,7 +364,7 @@ span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-00000000
 				},
 				buf: buf,
 			},
-			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:912,info message,{},0,,,,0,,,0,{},internal
+			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:912,info message,{},0,,,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},internal
 `,
 		},
 		{
@@ -363,8 +390,8 @@ span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-00000000
 				},
 				buf: buf,
 			},
-			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:939,info message,{},0,,,,0,,,0,{},internal
-log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.001001,debug,trace/buffer_pipe_sql_test.go:939,debug message,{},0,,,,0,,,0,{},internal
+			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:939,info message,{},0,,,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},internal
+log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.001001,debug,trace/buffer_pipe_sql_test.go:939,debug message,{},0,,,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},internal
 `,
 		},
 		{
@@ -437,7 +464,7 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 				},
 				buf: buf,
 			},
-			want: `error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,,,0,{},
+			want: `error_info,node_uuid,Standalone,0,,,0001-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},
 `,
 		},
 		{
@@ -449,20 +476,22 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 				},
 				buf: buf,
 			},
-			want: `error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,,,0,{},
-error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.001001,,,,{},20101,test2: internal error: test1,test2: internal error: test1,,0,,,0,{},
+			want: `error_info,node_uuid,Standalone,0,,,0001-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},
+error_info,node_uuid,Standalone,0,,,0001-01-01 00:00:00.001001,,,,{},20101,test2: internal error: test1,test2: internal error: test1,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},
 `,
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf)
+			got := genETLData(context.TODO(), tt.args.in, tt.args.buf, genFactory())
 			require.NotEqual(t, nil, got)
-			req, ok := got.(CSVRequests)
+			req, ok := got.(table.ExportRequests)
 			require.Equal(t, true, ok)
 			require.Equal(t, 1, len(req))
-			batch := req[0]
-			assert.Equalf(t, tt.want, batch.content, "genCsvData(%v, %v)", batch.content, tt.args.buf)
+			batch := req[0].(*table.RowRequest)
+			content := batch.GetContent()
+			assert.Equalf(t, tt.want, content, "genETLData(%v, %v)", content, tt.args.buf)
 			t.Logf("%s", tt.want)
 		})
 	}
@@ -543,21 +572,22 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf)
+			got := genETLData(DefaultContext(), tt.args.in, tt.args.buf, genFactory())
 			require.NotEqual(t, nil, got)
-			reqs, ok := got.(CSVRequests)
+			reqs, ok := got.(table.ExportRequests)
 			require.Equal(t, true, ok)
 			require.Equal(t, len(tt.args.in), len(reqs))
 			require.Equal(t, len(tt.args.in), len(tt.want))
 			for _, req := range reqs {
 				found := false
+				batch := req.(*table.RowRequest)
 				for idx, w := range tt.want {
-					if w == req.content {
+					if w == batch.GetContent() {
 						found = true
 						t.Logf("idx %d: %s", idx, w)
 					}
 				}
-				assert.Equalf(t, true, found, "genCsvData: %v", req.content)
+				assert.Equalf(t, true, found, "genETLData: %v", batch.GetContent())
 			}
 		})
 	}
@@ -639,13 +669,14 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			GetTracerProvider().longQueryTime = tt.args.queryT
-			got := genCsvData(DefaultContext(), tt.args.in, tt.args.buf)
+			got := genETLData(DefaultContext(), tt.args.in, tt.args.buf, genFactory())
 			require.NotEqual(t, nil, got)
-			req, ok := got.(CSVRequests)
+			req, ok := got.(table.ExportRequests)
 			require.Equal(t, true, ok)
 			require.Equal(t, 1, len(req))
-			batch := req[0]
-			assert.Equalf(t, tt.want, batch.content, "genCsvData(%v, %v)", batch.content, tt.args.buf)
+			batch := req[0].(*table.RowRequest)
+			content := batch.GetContent()
+			assert.Equalf(t, tt.want, content, "genETLData(%v, %v)", content, tt.args.buf)
 			t.Logf("%s", tt.want)
 			GetTracerProvider().longQueryTime = 0
 		})

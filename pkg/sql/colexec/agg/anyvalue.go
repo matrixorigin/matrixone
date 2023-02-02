@@ -66,6 +66,9 @@ func (a *Anyvalue[T]) MarshalBinary() ([]byte, error) {
 }
 
 func (a *Anyvalue[T]) UnmarshalBinary(data []byte) error {
-	a.NotSet = types.DecodeSlice[bool](data)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	a.NotSet = types.DecodeSlice[bool](copyData)
 	return nil
 }

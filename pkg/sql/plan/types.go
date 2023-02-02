@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
@@ -30,6 +29,7 @@ const (
 	JoinSideLeft            = 1 << iota
 	JoinSideRight           = 1 << iota
 	JoinSideBoth            = JoinSideLeft | JoinSideRight
+	JoinSideMark            = 1 << iota
 	JoinSideCorrelated      = 1 << iota
 )
 
@@ -94,8 +94,6 @@ type CompilerContext interface {
 	GetProcess() *process.Process
 
 	GetQueryResultMeta(uuid string) ([]*ColDef, string, error)
-
-	GetEngine() engine.Engine
 }
 
 type Optimizer interface {

@@ -173,11 +173,6 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			ts,
 			memtable.Uint(opDelete),
 		})
-		// time
-		indexes = append(indexes, memtable.Tuple{
-			index_Time,
-			ts,
-		})
 
 		err := p.data.Upsert(tx, &DataRow{
 			rowID: rowID,
@@ -267,11 +262,6 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
 			memtable.Uint(opInsert),
-		})
-		// time
-		indexes = append(indexes, memtable.Tuple{
-			index_Time,
-			ts,
 		})
 		// columns indexes
 		for _, def := range p.columnsIndexDefs {
@@ -530,6 +520,13 @@ func (p *Partition) NewReader(
 	readers := make([]engine.Reader, readerNumber)
 
 	mp := make(map[string]types.Type)
+	colIdxMp := make(map[string]int)
+	if tableDef != nil {
+		for i := range tableDef.Cols {
+			colIdxMp[tableDef.Cols[i].Name] = i
+		}
+	}
+
 	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0, 0)
 	for _, def := range defs {
 		attr, ok := def.(*engine.AttributeDef)
@@ -539,17 +536,24 @@ func (p *Partition) NewReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
-	readers[0] = &PartitionReader{
-		typsMap:    mp,
-		readTime:   t,
-		tx:         tx,
-		index:      index,
-		inserts:    inserts,
-		deletes:    deletes,
-		skipBlocks: skipBlocks,
-		data:       p.data,
-		iter:       p.data.NewIter(tx),
+	partReader := &PartitionReader{
+		typsMap:         mp,
+		readTime:        t,
+		tx:              tx,
+		index:           index,
+		inserts:         inserts,
+		deletes:         deletes,
+		skipBlocks:      skipBlocks,
+		data:            p.data,
+		iter:            p.data.NewIter(tx),
+		colIdxMp:        colIdxMp,
+		extendId2s3File: make(map[string]int),
+		s3FileService:   fs,
 	}
+	if p.txn != nil {
+		partReader.proc = p.txn.proc
+	}
+	readers[0] = partReader
 	if readerNumber == 1 {
 		for i := range blks {
 			readers = append(readers, &blockMergeReader{
