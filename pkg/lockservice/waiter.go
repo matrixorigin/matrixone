@@ -108,10 +108,14 @@ func (w *waiter) unref() {
 	}
 }
 
-func (w *waiter) add(waiter *waiter) error {
-	w.waiters.Put(waiter)
-	waiter.ref()
-	return nil
+func (w *waiter) add(waiter ...*waiter) {
+	if len(waiter) == 0 {
+		return
+	}
+	w.waiters.Put(waiter...)
+	for i := range waiter {
+		waiter[i].ref()
+	}
 }
 
 func (w *waiter) getStatus() int32 {
@@ -220,8 +224,9 @@ func (w *waiter) close() *waiter {
 func (w *waiter) mustNotifyFirstWaiter() *waiter {
 	prevWaiter := w
 	for {
-		nextWaiter := prevWaiter.waiters.MustGet()
-		prevWaiter.changeWaitersToWaitNew(nextWaiter)
+		nextWaiter, remainWaiters := prevWaiter.waiters.MustGetHeadAndTail()
+		nextWaiter.add(remainWaiters...)
+		prevWaiter.waiters.Reset()
 		if nextWaiter.notify(nil) {
 			return nextWaiter
 		}
@@ -229,16 +234,6 @@ func (w *waiter) mustNotifyFirstWaiter() *waiter {
 			return nil
 		}
 		prevWaiter = nextWaiter
-	}
-}
-
-func (w *waiter) changeWaitersToWaitNew(newWaiter *waiter) {
-	// make all waiters to waiting newWaiter
-	l := w.waiters.Len()
-	for i := uint64(0); i < l; i++ {
-		if err := newWaiter.add(w.waiters.MustGet()); err != nil {
-			panic(err)
-		}
 	}
 }
 
