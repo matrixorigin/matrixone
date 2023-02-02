@@ -668,7 +668,17 @@ func writeBatch(ctx context.Context,
 			}
 		}
 	} else if n.ClusterByDef != nil && util.JudgeIsCompositeClusterByColumn(n.ClusterByDef.Name) {
+		oldLen := len(bat.Vecs)
 		util.FillCompositeClusterByBatch(bat, n.ClusterByDef.Name, proc)
+		newLen := len(bat.Vecs)
+		// remember that, pkIdx can hold cpkeys, or single col pk, or clusterBy key
+		// but it can't hold them above towo of them , that means it can only hold \
+		// one of them at most.
+		if len(n.container.pkIndex) == 0 {
+			for i := oldLen; i < newLen; i++ {
+				n.container.pkIndex = append(n.container.pkIndex, i)
+			}
+		}
 	}
 	// set null value's data
 	for i := range bat.Vecs {
