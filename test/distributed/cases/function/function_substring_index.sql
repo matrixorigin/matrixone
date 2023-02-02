@@ -158,4 +158,3 @@ SELECT substring_index_03.str1 AS tmp,substring_index_04.str1 AS temp FROM subst
 SELECT substring_index_03.d1 AS d1_3,substring_index_04.d2 AS d2_4 FROM substring_index_03 right join substring_index_04 ON substring_index(substring_index_03.str1, '2', 1) = substring_index(substring_index_04.str1, '2', 1);
 
 
-
