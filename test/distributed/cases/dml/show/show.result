@@ -228,14 +228,14 @@ mo_role_privs
 mo_user_defined_function
 mo_mysql_compatbility_mode
 mo_database
-mo_columns
 mo_tables
+mo_columns
 show table_number from mo_catalog;
-mo_catalog    Number of tables in mo_catalog
-mo_catalog    9
+Number of tables in mo_catalog
+11
 show column_number from mo_database;
-mo_database    Number of columns in mo_database
-mo_database    8
+Number of columns in mo_database
+8
 show column_number from hdjshdj;
 no such table mo_catalog.hdjshdj
 drop database if exists test01;
@@ -274,8 +274,8 @@ create database test01;
 use test01;
 create table t1(a int unique key, b int, c int);
 show table_number from test01;
-test01    Number of tables in test01
-test01    1
+Number of tables in test01
+1
 drop table t1;
 drop database if exists test01;
 create database test01;
@@ -286,7 +286,6 @@ show table_values from t;
 max(a)    min(a)    max(b)    min(b)    max(c)    min(c)
 6    1    6    1    null    null
 drop table t;
-
 create database `.quote`;
 show tables from `.quote`;
 Tables_in_.quote
