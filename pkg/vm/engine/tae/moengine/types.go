@@ -17,6 +17,8 @@ package moengine
 import (
 	"bytes"
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
@@ -112,7 +114,7 @@ type Engine interface {
 	GetTAE(ctx context.Context) *db.DB
 
 	FlushTable(ctx context.Context, tenantID uint32, databaseId, tableId uint64, ts types.TS) error
-	ForceCheckpoint(ctx context.Context, ts types.TS) error
+	ForceCheckpoint(ctx context.Context, ts types.TS, flushDuration time.Duration) error
 }
 
 type TxnEngine interface {

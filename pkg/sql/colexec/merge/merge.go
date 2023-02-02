@@ -38,6 +38,7 @@ func Prepare(proc *process.Process, arg any) error {
 			Chan: reflect.ValueOf(mr.Ch),
 		}
 	}
+
 	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
 	return nil
 }

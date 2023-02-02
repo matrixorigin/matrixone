@@ -129,6 +129,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 
 	// XXX PrintScope has a none-trivial amount of logging
 	// PrintScope(nil, []*Scope{c.scope})
+
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -447,6 +448,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		if err != nil {
 			return nil, err
 		}
+		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_FILTER:
 		curr := c.anal.curr
@@ -892,7 +894,8 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 }
 
 func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
-	rs := c.newJoinScopeList(ss, children)
+	//rs := c.newJoinScopeList(ss, children)
+	rs := c.newShuffleJoinScopeList(ss, children)
 	isEq := isEquiJoin(n.OnList)
 	typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
@@ -1328,22 +1331,57 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 	return rs
 }
 
-func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
-	rs := make([]*Scope, len(ss))
-	// join's input will record in the left/right scope when JoinRun
-	// so set it to false here.
-	c.anal.isFirst = false
+//func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+//	rs := make([]*Scope, len(ss))
+// join's input will record in the left/right scope when JoinRun
+// so set it to false here.
+//	c.anal.isFirst = false
+//	for i := range ss {
+//		if ss[i].IsEnd {
+//			rs[i] = ss[i]
+//			continue
+//		}
+//		chp := c.newMergeScope(dupScopeList(children))
+//		rs[i] = new(Scope)
+//		rs[i].Magic = Remote
+//		rs[i].IsJoin = true
+//		rs[i].NodeInfo = ss[i].NodeInfo
+//		rs[i].PreScopes = []*Scope{ss[i], chp}
+//		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+//		ss[i].appendInstruction(vm.Instruction{
+//			Op: vm.Connector,
+///			Arg: &connector.Argument{
+//				Reg: rs[i].Proc.Reg.MergeReceivers[0],
+//			},
+//		})
+//		chp.appendInstruction(vm.Instruction{
+//			Op: vm.Connector,
+//			Arg: &connector.Argument{
+//				Reg: rs[i].Proc.Reg.MergeReceivers[1],
+//			},
+//		})
+//		chp.IsEnd = true
+//	}
+//	return rs
+//}
+
+func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+	len := len(ss)
+	rs := make([]*Scope, len)
+	idx := 0
 	for i := range ss {
 		if ss[i].IsEnd {
 			rs[i] = ss[i]
 			continue
 		}
-		chp := c.newMergeScope(dupScopeList(children))
 		rs[i] = new(Scope)
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = ss[i].NodeInfo
-		rs[i].PreScopes = []*Scope{ss[i], chp}
+		if isCurrentCN(rs[i].NodeInfo.Addr, c.addr) {
+			idx = i
+		}
+		rs[i].PreScopes = []*Scope{ss[i]}
 		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -1351,14 +1389,15 @@ func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 				Reg: rs[i].Proc.Reg.MergeReceivers[0],
 			},
 		})
-		chp.appendInstruction(vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[1],
-			},
-		})
-		chp.IsEnd = true
 	}
+
+	mergeChildren := c.newMergeScope(children)
+	mergeChildren.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructShuffleJoinDispatch(1, rs, c.addr),
+	})
+	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
+
 	return rs
 }
 
@@ -1399,6 +1438,18 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[1]
+
+	for i, u := range s.UuidToRegIdx {
+		if u.Idx == 1 {
+			rs.UuidToRegIdx = append(rs.UuidToRegIdx, UuidToRegIdx{
+				Uuid: u.Uuid,
+				Idx:  0,
+			})
+			s.UuidToRegIdx = append(s.UuidToRegIdx[:i], s.UuidToRegIdx[i+1:]...)
+			break
+		}
+	}
+
 	return rs
 }
 
@@ -1504,6 +1555,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 		return nodes, nil
 	}
+	// ranges[0] means memtable
 	if len(ranges[0]) == 0 {
 		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{
@@ -1619,6 +1671,11 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 		last := len(s.Instructions) - 1
 		s.Instructions[last].IsLast = true
 	}
+}
+
+func isCurrentCN(addr string, currentCNAddr string) bool {
+	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
+
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {

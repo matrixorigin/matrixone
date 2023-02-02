@@ -111,8 +111,9 @@ type Scope struct {
 	// Proc contains the execution context.
 	Proc *process.Process
 
-	Reg   *process.WaitRegister
-	uuids []uuid.UUID
+	Reg *process.WaitRegister
+
+	UuidToRegIdx []UuidToRegIdx
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
@@ -172,4 +173,9 @@ type Compile struct {
 	// remote, but now the tempEngine is just standlone. So for now use this to read
 	// table locally. But int the future, this will disappear.
 	isTemporaryScan bool
+}
+
+type UuidToRegIdx struct {
+	Uuid uuid.UUID
+	Idx  int
 }
