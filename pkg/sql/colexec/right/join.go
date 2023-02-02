@@ -110,23 +110,22 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 		ap.Channel <- &ctr.matched_sels
 		proc.SetInputBatch(nil)
 		return nil
-	} else {
+	}
 
-		for _, value := range ctr.matched_sels {
-			matched_sels[value] = true
-		}
+	for _, value := range ctr.matched_sels {
+		matched_sels[value] = true
+	}
 
-		if ap.NumCPU > 1 {
-			cnt := 1
-			for v := range ap.Channel {
-				for _, value := range *v {
-					matched_sels[value] = true
-				}
-				cnt++
-				if cnt == int(ap.NumCPU) {
-					close(ap.Channel)
-					break
-				}
+	if ap.NumCPU > 1 {
+		cnt := 1
+		for v := range ap.Channel {
+			for _, value := range *v {
+				matched_sels[value] = true
+			}
+			cnt++
+			if cnt == int(ap.NumCPU) {
+				close(ap.Channel)
+				break
 			}
 		}
 	}
@@ -138,6 +137,8 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 			}
 		}
 	}
+	unmatch = append(unmatch, ctr.mp.Nullsels()...)
+
 	count := len(unmatch)
 	if count == 0 {
 		proc.SetInputBatch(nil)

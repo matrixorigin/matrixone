@@ -256,7 +256,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 		mcpu = 1
 	}
 
-	is_right := s.Is_Right()
+	isRight := s.isRight()
 
 	chp := s.PreScopes
 	for i := range chp {
@@ -274,7 +274,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	left_scope, right_scope := c.newLeftScope(s, ss), c.newRightScope(s, ss)
 	s = newParallelScope(c, s, ss)
 
-	if is_right {
+	if isRight {
 		channel := make(chan *[]int64)
 		for i := range s.PreScopes {
 			arg := s.PreScopes[i].Instructions[0].Arg.(*right.Argument)
@@ -290,7 +290,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	s.PreScopes = append(s.PreScopes, right_scope)
 	return s.MergeRun(c)
 }
-func (s *Scope) Is_Right() bool {
+func (s *Scope) isRight() bool {
 	return s != nil && s.Instructions[0].Op == vm.Right
 }
 

@@ -1248,6 +1248,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 		return &hashbuild.Argument{
 			Ibucket:     arg.Ibucket,
 			Nbucket:     arg.Nbucket,
+			IsRight:     true,
 			NeedHashMap: true,
 			Typs:        arg.Right_typs,
 			Conditions:  arg.Conditions[1],
