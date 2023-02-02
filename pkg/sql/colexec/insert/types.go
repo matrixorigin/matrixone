@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -77,14 +76,7 @@ func (arg *Argument) GetSortKeyIndexes() {
 	arg.container.sortIndex = make([]int, 0, 1)
 	// Get CPkey index
 	if arg.CPkeyColDef != nil {
-		names := util.SplitCompositePrimaryKeyColumnName(arg.CPkeyColDef.Name)
-		for num, colDef := range arg.TargetColDefs {
-			for _, name := range names {
-				if colDef.Name == name {
-					arg.container.sortIndex = append(arg.container.sortIndex, num)
-				}
-			}
-		}
+		arg.container.sortIndex = append(arg.container.sortIndex, len(arg.TargetColDefs))
 	} else {
 		// Get Single Col pk index
 		for num, colDef := range arg.TargetColDefs {
@@ -94,10 +86,7 @@ func (arg *Argument) GetSortKeyIndexes() {
 			}
 		}
 		if arg.ClusterByDef != nil {
-			names := util.SplitCompositeClusterByColumnName(arg.ClusterByDef.Name)
-			for i := 0; i < len(names); i++ {
-				arg.container.sortIndex = append(arg.container.sortIndex, len(arg.TargetColDefs)+i)
-			}
+			arg.container.sortIndex = append(arg.container.sortIndex, len(arg.TargetColDefs))
 		}
 	}
 }
