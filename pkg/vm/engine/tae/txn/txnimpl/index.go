@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"io"
 	"sync"
 
@@ -34,6 +35,7 @@ type TableIndex interface {
 	Name() string
 	Count() int
 	KeyToVector(types.Type) containers.Vector
+	KeyToVectors(types.Type) []containers.Vector
 }
 
 type simpleTableIndex struct {
@@ -106,6 +108,33 @@ func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 		}
 	}
 	return vec
+}
+
+func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector {
+	vec := containers.MakeVector(kType, false)
+	var vecs []containers.Vector
+	switch kType.Oid {
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+		for k := range idx.tree {
+			if vec.Length() > int(txnbase.MaxNodeRows) {
+				vecs = append(vecs, vec)
+				vec = containers.MakeVector(kType, false)
+			}
+			vec.Append([]byte(k.(string)))
+		}
+	default:
+		for k := range idx.tree {
+			if vec.Length() > int(txnbase.MaxNodeRows) {
+				vecs = append(vecs, vec)
+				vec = containers.MakeVector(kType, false)
+			}
+			vec.Append(k)
+		}
+	}
+	if vec.Length() > 0 {
+		vecs = append(vecs, vec)
+	}
+	return vecs
 }
 
 func (idx *simpleTableIndex) Close() error {
