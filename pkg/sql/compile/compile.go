@@ -641,7 +641,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 				fileList[i] = strings.TrimSpace(fileList[i])
 			}
 		} else {
-			fileList, err = external.ReadDir(param)
+			fileList, err = plan2.ReadDir(param)
 			if err != nil {
 				return nil, err
 			}

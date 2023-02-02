@@ -15,8 +15,11 @@
 package plan
 
 import (
+	"container/list"
 	"context"
+	"encoding/csv"
 	"math"
+	"path"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -26,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1212,4 +1216,79 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		return false
 	}
 
+}
+
+func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
+	if param.ScanType == tree.S3 {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
+			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
+		if param.S3Param.Provider == "minio" {
+			opts = append(opts, "is-minio=true")
+		}
+		if err = w.Write(opts); err != nil {
+			return nil, "", err
+		}
+		w.Flush()
+		return fileservice.GetForETL(nil, fileservice.JoinPath(buf.String(), prefix))
+	}
+	return fileservice.GetForETL(param.FileService, prefix)
+}
+
+// ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
+func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
+	filePath := strings.TrimSpace(param.Filepath)
+	if strings.HasPrefix(filePath, "etl:") {
+		filePath = path.Clean(filePath)
+	} else {
+		filePath = path.Clean("/" + filePath)
+	}
+
+	sep := "/"
+	pathDir := strings.Split(filePath, sep)
+	l := list.New()
+	if pathDir[0] == "" {
+		l.PushBack(sep)
+	} else {
+		l.PushBack(pathDir[0])
+	}
+
+	for i := 1; i < len(pathDir); i++ {
+		length := l.Len()
+		for j := 0; j < length; j++ {
+			prefix := l.Front().Value.(string)
+			fs, readPath, err := GetForETLWithType(param, prefix)
+			if err != nil {
+				return nil, err
+			}
+			entries, err := fs.List(param.Ctx, readPath)
+			if err != nil {
+				return nil, err
+			}
+			for _, entry := range entries {
+				if !entry.IsDir && i+1 != len(pathDir) {
+					continue
+				}
+				if entry.IsDir && i+1 == len(pathDir) {
+					continue
+				}
+				matched, err := path.Match(pathDir[i], entry.Name)
+				if err != nil {
+					return nil, err
+				}
+				if !matched {
+					continue
+				}
+				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
+			}
+			l.Remove(l.Front())
+		}
+	}
+	len := l.Len()
+	for j := 0; j < len; j++ {
+		fileList = append(fileList, l.Front().Value.(string))
+		l.Remove(l.Front())
+	}
+	return fileList, err
 }

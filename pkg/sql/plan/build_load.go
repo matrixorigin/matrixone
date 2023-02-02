@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -28,6 +29,16 @@ import (
 )
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
+	stmt.Param.Ctx = context.TODO()
+	fileList, err := ReadDir(stmt.Param)
+	if err != nil {
+		return nil, err
+	}
+	if len(fileList) == 0 {
+		return nil, moerr.NewInvalidInput(stmt.Param.Ctx, "the file does not exist in load flow")
+	}
+	stmt.Param.Ctx = nil
+
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return nil, err
 	}
