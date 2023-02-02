@@ -70,6 +70,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 }
 
+// remember that, sortIdx can hold cpkeys, or single col pk, or clusterBy key
+// but it can't hold them above two of them , that means it can only hold
+// one of them at most.
 func (arg *Argument) GetSortKeyIndexes() {
 	arg.container.sortIndex = make([]int, 0, 1)
 	// Get CPkey index
@@ -88,6 +91,12 @@ func (arg *Argument) GetSortKeyIndexes() {
 			if colDef.Primary {
 				arg.container.sortIndex = append(arg.container.sortIndex, num)
 				break
+			}
+		}
+		if arg.ClusterByDef != nil {
+			names := util.SplitCompositeClusterByColumnName(arg.ClusterByDef.Name)
+			for i := 0; i < len(names); i++ {
+				arg.container.sortIndex = append(arg.container.sortIndex, len(arg.TargetColDefs)+i)
 			}
 		}
 	}
