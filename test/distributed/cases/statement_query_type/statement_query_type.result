@@ -1,0 +1,640 @@
+begin;
+commit;
+start transaction;
+rollback;
+drop database if exists test_db;
+create database test_db;
+use test_db;
+drop table if exists test_table;
+create table test_table(
+col1 int,
+col2 varchar
+);
+create view test_view as select * from test_table;
+show create database test_db;
+Database    Create Database
+test_db    CREATE DATABASE `test_db`
+show create table test_table;
+Table    Create Table
+test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
+show create view test_view;
+View    Create View
+test_view    create view test_view as select * from test_table;
+show triggers;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+show procedure status;
+1
+show config;
+1
+show events;
+1
+show plugins;
+1
+show profiles;
+1
+show privileges;
+1
+show processlist;
+Id    User    Host    db    Command    Time    State    Info
+show tables;
+Tables_in_test_db
+test_table
+test_view
+show collation;
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like '%';
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show index from test_table;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+test_table    0    col1    1    col1    A    0    NULL    NULL    YES            YES    NULL
+test_table    0    col2    1    col2    A    0    NULL    NULL    YES            YES    NULL
+test_table    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+values row(1,1), row(2,2), row(3,3) order by column_0 desc;
+column_0    column_1
+3    3
+2    2
+1    1
+WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+1    2
+1    2
+insert into test_table values (1,'a'),(2,'b'),(3,'c');
+update test_table set col2='xxx' where col1=1;
+delete from test_table where col1=3;
+create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
+create role test_role;
+create user user_name identified by 'password';
+create database if not exists db1;
+grant create table,drop table on database *.* to test_role;
+revoke test_role from user_name;
+drop user user_name;
+drop role test_role;
+drop account test_account;
+drop database db1;
+create database db2;
+create table table_2(
+col1 int,
+col2 varchar
+);
+create view view_2 as select * from table_2;
+create index index_table_2 on table_2(col1);
+drop index index_table_2 on table_2;
+drop view view_2;
+drop table table_2;
+drop database db2;
+select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
+prepare s1 from select * from test_table where col1=?;
+set @a=2;
+execute s1 using @a;
+col1    col2
+2    b
+deallocate prepare s1;
+drop table if exists test_01;
+create table test_01(a int, b varchar);
+show create table test_01;
+Table    Create Table
+test_01    CREATE TABLE `test_01` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(65535) DEFAULT NULL\n)
+insert into test_01 values (1,'a');
+insert into test_01 values (2,'b');
+update test_01 set a=100 where b='b';
+select * from test_01;
+a    b
+1    a
+100    b
+explain select * from test_01;
+QUERY PLAN
+Project
+  ->  Table Scan on test_db.test_01
+delete from test_01 where a=1;
+truncate table test_01;
+drop table test_01;
+drop database test_db;
+use statement_query_type;
+begin;
+create database test_db;
+use test_db;
+create table test_table(
+col1 int,
+col2 varchar
+);
+create view test_view as select * from test_table;
+show create database test_db;
+Database    Create Database
+test_db    CREATE DATABASE `test_db`
+show create table test_table;
+Table    Create Table
+test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
+show triggers;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+show procedure status;
+1
+show config;
+1
+show events;
+1
+show plugins;
+1
+show profiles;
+1
+show privileges;
+1
+show processlist;
+Id    User    Host    db    Command    Time    State    Info
+show tables;
+Tables_in_test_db
+test_table
+test_view
+show index from test_table;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+test_table    0    col1    1    col1    A    0    NULL    NULL    YES            YES    NULL
+test_table    0    col2    1    col2    A    0    NULL    NULL    YES            YES    NULL
+values row(1,1), row(2,2), row(3,3) order by column_0 desc;
+column_0    column_1
+3    3
+2    2
+1    1
+WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+1    2
+1    2
+insert into test_table values (1,'a'),(2,'b'),(3,'c');
+create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
+internal error: administrative command is unsupported in transactions
+create role test_role;
+internal error: administrative command is unsupported in transactions
+create user user_name identified by 'password';
+internal error: administrative command is unsupported in transactions
+create database if not exists db1;
+grant create table,drop table on database *.* to test_role;
+internal error: administrative command is unsupported in transactions
+revoke test_role from user_name;
+internal error: administrative command is unsupported in transactions
+drop user user_name;
+internal error: administrative command is unsupported in transactions
+drop role test_role;
+internal error: administrative command is unsupported in transactions
+drop account test_account;
+internal error: administrative command is unsupported in transactions
+drop database db1;
+internal error: Only CREATE of DDL is supported in transactions
+create database db2;
+create table table_2(
+col1 int,
+col2 varchar
+);
+create view view_2 as select * from table_2;
+create index index_table_2 on table_2(col1);
+drop index index_table_2 on table_2;
+internal error: Only CREATE of DDL is supported in transactions
+drop view view_2;
+internal error: Only CREATE of DDL is supported in transactions
+drop table table_2;
+internal error: Only CREATE of DDL is supported in transactions
+drop database db2;
+internal error: Only CREATE of DDL is supported in transactions
+select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
+prepare s1 from select * from test_table where col1=?;
+set @a=2;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+execute s1 using @a;
+col1    col2
+2    b
+deallocate prepare s1;
+rollback;
+use system;
+select sleep(15);
+sleep(15)
+0
+select statement,query_type,sql_source_type from  statement_info where user="dump" and sql_source_type="external_sql" order by request_at desc limit 114;
+statement    query_type    sql_source_type
+select sleep(15)    DQL    external_sql
+use system    Other    external_sql
+rollback    TCL    external_sql
+deallocate prepare s1    Other    external_sql
+execute s1 using @a    Other    external_sql
+set a = 2    Other    external_sql
+prepare s1 from select * from test_table where col1 = ?    Other    external_sql
+select * from unnest("{\"a\":1}") as f    DQL    external_sql
+drop database db2    DDL    external_sql
+drop table table_2    DDL    external_sql
+drop view view_2    DDL    external_sql
+drop index index_table_2 on table_2    DDL    external_sql
+create index index_table_2 on table_2 (col1)    DDL    external_sql
+create view view_2 as select * from table_2    DDL    external_sql
+create table table_2 (col1 int, col2 varchar)    DDL    external_sql
+create database db2    DDL    external_sql
+drop database db1    DDL    external_sql
+drop account test_account    DCL    external_sql
+drop role test_role    DCL    external_sql
+drop user user_name    DCL    external_sql
+revoke test_role from user_name    DCL    external_sql
+grant Unknown PrivilegeType, Unknown PrivilegeType on database *.* to test_role    DCL    external_sql
+create database if not exists db1    DDL    external_sql
+create user user_name identified by 'password'    DCL    external_sql
+create role test_role    DCL    external_sql
+create account test_account admin_name 'test_name' identified by '111' open comment 'tenant_test'    DCL    external_sql
+insert into test_table values (1, "a"), (2, "b"), (3, "c")    DML    external_sql
+with cte1 as (select 1), cte2 as (select 2) select * from cte1 inner join cte2    DQL    external_sql
+values row(1, 1), row(2, 2), row(3, 3) order by column_0 desc    DQL    external_sql
+show index from test_table    DQL    external_sql
+show tables    DQL    external_sql
+show processlist    DQL    external_sql
+show privileges    DQL    external_sql
+show profiles    DQL    external_sql
+show plugins    DQL    external_sql
+show events    DQL    external_sql
+show config    DQL    external_sql
+show procedure status    DQL    external_sql
+show triggers    DQL    external_sql
+show create table test_table    DQL    external_sql
+show create database test_db    DQL    external_sql
+create view test_view as select * from test_table    DDL    external_sql
+create table test_table (col1 int, col2 varchar)    DDL    external_sql
+use test_db    Other    external_sql
+create database test_db    DDL    external_sql
+start transaction    TCL    external_sql
+use statement_query_type    Other    external_sql
+drop database test_db    DDL    external_sql
+drop table test_01    DDL    external_sql
+truncate table test_01    DDL    external_sql
+delete from test_01 where a = 1    DML    external_sql
+explain select * from test_01    Other    external_sql
+select * from test_01    DQL    external_sql
+update test_01 set a = 100 where b = "b"    DML    external_sql
+insert into test_01 values (2, "b")    DML    external_sql
+insert into test_01 values (1, "a")    DML    external_sql
+show create table test_01    DQL    external_sql
+create table test_01 (a int, b varchar)    DDL    external_sql
+drop table if exists test_01    DDL    external_sql
+deallocate prepare s1    Other    external_sql
+execute s1 using @a    Other    external_sql
+set a = 2    Other    external_sql
+prepare s1 from select * from test_table where col1 = ?    Other    external_sql
+select * from unnest("{\"a\":1}") as f    DQL    external_sql
+drop database db2    DDL    external_sql
+drop table table_2    DDL    external_sql
+drop view view_2    DDL    external_sql
+drop index index_table_2 on table_2    DDL    external_sql
+create index index_table_2 on table_2 (col1)    DDL    external_sql
+create view view_2 as select * from table_2    DDL    external_sql
+create table table_2 (col1 int, col2 varchar)    DDL    external_sql
+create database db2    DDL    external_sql
+drop database db1    DDL    external_sql
+drop account test_account    DCL    external_sql
+drop role test_role    DCL    external_sql
+drop user user_name    DCL    external_sql
+revoke test_role from user_name    DCL    external_sql
+grant Unknown PrivilegeType, Unknown PrivilegeType on database *.* to test_role    DCL    external_sql
+create database if not exists db1    DDL    external_sql
+create user user_name identified by 'password'    DCL    external_sql
+create role test_role    DCL    external_sql
+create account test_account admin_name 'test_name' identified by '111' open comment 'tenant_test'    DCL    external_sql
+delete from test_table where col1 = 3    DML    external_sql
+update test_table set col2 = "xxx" where col1 = 1    DML    external_sql
+insert into test_table values (1, "a"), (2, "b"), (3, "c")    DML    external_sql
+with cte1 as (select 1), cte2 as (select 2) select * from cte1 inner join cte2    DQL    external_sql
+values row(1, 1), row(2, 2), row(3, 3) order by column_0 desc    DQL    external_sql
+show index from test_table    DQL    external_sql
+show collation    DQL    external_sql
+show collation    DQL    external_sql
+show tables    DQL    external_sql
+show processlist    DQL    external_sql
+show privileges    DQL    external_sql
+show profiles    DQL    external_sql
+show plugins    DQL    external_sql
+show events    DQL    external_sql
+show config    DQL    external_sql
+show procedure status    DQL    external_sql
+show triggers    DQL    external_sql
+show create view test_view    DQL    external_sql
+show create table test_table    DQL    external_sql
+show create database test_db    DQL    external_sql
+create view test_view as select * from test_table    DDL    external_sql
+create table test_table (col1 int, col2 varchar)    DDL    external_sql
+drop table if exists test_table    DDL    external_sql
+use test_db    Other    external_sql
+create database test_db    DDL    external_sql
+drop database if exists test_db    DDL    external_sql
+rollback    TCL    external_sql
+start transaction    TCL    external_sql
+commit    TCL    external_sql
+start transaction    TCL    external_sql
+use statement_query_type    Other    external_sql
+create database if not exists statement_query_type    DDL    external_sql
+/* cloud_user */ use statement_query_type;
+/* cloud_user */ begin;
+/* cloud_user */ commit;
+/* cloud_user */ start transaction;
+/* cloud_user */ rollback;
+/* cloud_user */ drop database if exists test_db;
+/* cloud_user */ create database test_db;
+/* cloud_user */ use test_db;
+/* cloud_user */ drop table if exists test_table;
+/* cloud_user */ create table test_table(col1 int,col2 varchar);
+/* cloud_user */ create view test_view as select * from test_table;
+/* cloud_user */ show create database test_db;
+Database    Create Database
+test_db    CREATE DATABASE `test_db`
+/* cloud_user */ show create table test_table;
+Table    Create Table
+test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
+/* cloud_user */ show create view test_view;
+View    Create View
+test_view    /* cloud_user */ create view test_view as select * from test_table;
+/* cloud_user */ show triggers;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+/* cloud_user */ show procedure status;
+1
+/* cloud_user */ show config;
+1
+/* cloud_user */ show events;
+1
+/* cloud_user */ show plugins;
+1
+/* cloud_user */ show profiles;
+1
+/* cloud_user */ show privileges;
+1
+/* cloud_user */ show processlist;
+Id    User    Host    db    Command    Time    State    Info
+/* cloud_user */ show tables;
+Tables_in_test_db
+test_table
+test_view
+/* cloud_user */ show collation;
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+/* cloud_user */ show collation like '%';
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+/* cloud_user */ show index from test_table;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+test_table    0    col1    1    col1    A    0    NULL    NULL    YES            YES    NULL
+test_table    0    col2    1    col2    A    0    NULL    NULL    YES            YES    NULL
+test_table    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+/* cloud_user */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
+column_0    column_1
+3    3
+2    2
+1    1
+/* cloud_user */ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+1    2
+1    2
+/* cloud_user */ insert into test_table values (1,'a'),(2,'b'),(3,'c');
+/* cloud_user */ update test_table set col2='xxx' where col1=1;
+/* cloud_user */ delete from test_table where col1=3;
+/* cloud_user */ create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
+/* cloud_user */ create role test_role;
+/* cloud_user */ create user user_name identified by 'password';
+/* cloud_user */ create database if not exists db1;
+/* cloud_user */ grant create table,drop table on database *.* to test_role;
+/* cloud_user */ revoke test_role from user_name;
+/* cloud_user */ drop user user_name;
+/* cloud_user */ drop role test_role;
+/* cloud_user */ drop account test_account;
+/* cloud_user */ drop database db1;
+/* cloud_user */ create database db2;
+/* cloud_user */ create table table_2(col1 int,col2 varchar);
+/* cloud_user */ create view view_2 as select * from table_2;
+/* cloud_user */ create index index_table_2 on table_2(col1);
+/* cloud_user */ drop index index_table_2 on table_2;
+/* cloud_user */ drop view view_2;
+/* cloud_user */ drop table table_2;
+/* cloud_user */ drop database db2;
+/* cloud_user */ select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
+/* cloud_user */ prepare s1 from select * from test_table where col1=?;
+/* cloud_user */ set @a=2;
+/* cloud_user */ execute s1 using @a;
+col1    col2
+2    b
+/* cloud_user */ deallocate prepare s1;
+/* cloud_user */ drop table if exists test_01;
+/* cloud_user */ create table test_01(a int, b varchar);
+/* cloud_user */ show create table test_01;
+Table    Create Table
+test_01    CREATE TABLE `test_01` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(65535) DEFAULT NULL\n)
+/* cloud_user */ insert into test_01 values (1,'a');
+/* cloud_user */ insert into test_01 values (2,'b');
+/* cloud_user */ update test_01 set a=100 where b='b';
+/* cloud_user */ select * from test_01;
+a    b
+1    a
+100    b
+/* cloud_user */ explain select * from test_01;
+QUERY PLAN
+Project
+  ->  Table Scan on test_db.test_01
+/* cloud_user */ delete from test_01 where a=1;
+/* cloud_user */ truncate table test_01;
+/* cloud_user */ drop table test_01;
+/* cloud_user */ use system;
+/* cloud_user */ drop database test_db;
+/* cloud_user */ select sleep(15);
+[unknown result because it is related to issue#7778]
+/* cloud_user */ select statement,query_type,sql_source_type from  statement_info where user="dump" and sql_source_type="cloud_user_sql" order by request_at desc limit 68;
+[unknown result because it is related to issue#7778]
+/* cloud_nouser */ use statement_query_type;
+/* cloud_nouser */ begin;
+/* cloud_nouser */ commit;
+/* cloud_nouser */ start transaction;
+/* cloud_nouser */ rollback;
+/* cloud_nouser */ drop database if exists test_db;
+/* cloud_nouser */ create database test_db;
+/* cloud_nouser */ use test_db;
+/* cloud_nouser */ drop table if exists test_table;
+/* cloud_nouser */ create table test_table(col1 int,col2 varchar);
+/* cloud_nouser */ create view test_view as select * from test_table;
+/* cloud_nouser */ show create database test_db;
+Database    Create Database
+test_db    CREATE DATABASE `test_db`
+/* cloud_nouser */ show create table test_table;
+Table    Create Table
+test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
+/* cloud_nouser */ show create view test_view;
+View    Create View
+test_view    /* cloud_nouser */ create view test_view as select * from test_table;
+/* cloud_nouser */ show triggers;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+/* cloud_nouser */ show procedure status;
+1
+/* cloud_nouser */ show config;
+1
+/* cloud_nouser */ show events;
+1
+/* cloud_nouser */ show plugins;
+1
+/* cloud_nouser */ show profiles;
+1
+/* cloud_nouser */ show privileges;
+1
+/* cloud_nouser */ show processlist;
+Id    User    Host    db    Command    Time    State    Info
+/* cloud_nouser */ show tables;
+Tables_in_test_db
+test_table
+test_view
+/* cloud_nouser */ show collation;
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+/* cloud_nouser */ show collation like '%';
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+/* cloud_nouser */ show index from test_table;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+test_table    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+test_table    0    col1    1    col1    A    0    NULL    NULL    YES            YES    NULL
+test_table    0    col2    1    col2    A    0    NULL    NULL    YES            YES    NULL
+/* cloud_nouser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
+column_0    column_1
+3    3
+2    2
+1    1
+/* cloud_nouser */ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+1    2
+1    2
+/* cloud_nouser */ insert into test_table values (1,'a'),(2,'b'),(3,'c');
+/* cloud_nouser */ update test_table set col2='xxx' where col1=1;
+/* cloud_nouser */ delete from test_table where col1=3;
+/* cloud_nouser */ create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
+/* cloud_nouser */ create role test_role;
+/* cloud_nouser */ create user user_name identified by 'password';
+/* cloud_nouser */ create database if not exists db1;
+/* cloud_nouser */ grant create table,drop table on database *.* to test_role;
+/* cloud_nouser */ revoke test_role from user_name;
+/* cloud_nouser */ drop user user_name;
+/* cloud_nouser */ drop role test_role;
+/* cloud_nouser */ drop account test_account;
+/* cloud_nouser */ drop database db1;
+/* cloud_nouser */ create database db2;
+/* cloud_nouser */ create table table_2(col1 int,col2 varchar);
+/* cloud_nouser */ create view view_2 as select * from table_2;
+/* cloud_nouser */ create index index_table_2 on table_2(col1);
+/* cloud_nouser */ drop index index_table_2 on table_2;
+/* cloud_nouser */ drop view view_2;
+/* cloud_nouser */ drop table table_2;
+/* cloud_nouser */ drop database db2;
+/* cloud_nouser */ select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
+/* cloud_nouser */ prepare s1 from select * from test_table where col1=?;
+/* cloud_nouser */ set @a=2;
+/* cloud_nouser */ execute s1 using @a;
+col1    col2
+2    b
+/* cloud_nouser */ deallocate prepare s1;
+/* cloud_nouser */ drop table if exists test_01;
+/* cloud_nouser */ create table test_01(a int, b varchar);
+/* cloud_nouser */ show create table test_01;
+Table    Create Table
+test_01    CREATE TABLE `test_01` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(65535) DEFAULT NULL\n)
+/* cloud_nouser */ insert into test_01 values (1,'a');
+/* cloud_nouser */ insert into test_01 values (2,'b');
+/* cloud_nouser */ update test_01 set a=100 where b='b';
+/* cloud_nouser */ select * from test_01;
+a    b
+1    a
+100    b
+/* cloud_nouser */ explain select * from test_01;
+QUERY PLAN
+Project
+  ->  Table Scan on test_db.test_01
+/* cloud_nouser */ delete from test_01 where a=1;
+/* cloud_nouser */ truncate table test_01;
+/* cloud_nouser */ drop table test_01;
+/* cloud_nouser */ use system;
+/* cloud_nouser */ drop database test_db;
+/* cloud_nouser */ select sleep(15);
+sleep(15)
+0
+/* cloud_nouser */ select statement,query_type,sql_source_type from  statement_info where user="dump" order by request_at desc limit 68;
+statement    query_type    sql_source_type
+select sleep(15)    DQL    cloud_nouser_sql
+drop database test_db    DDL    cloud_nouser_sql
+use system    Other    cloud_nouser_sql
+drop table test_01    DDL    cloud_nouser_sql
+truncate table test_01    DDL    cloud_nouser_sql
+delete from test_01 where a = 1    DML    cloud_nouser_sql
+explain select * from test_01    Other    cloud_nouser_sql
+select * from test_01    DQL    cloud_nouser_sql
+update test_01 set a = 100 where b = "b"    DML    cloud_nouser_sql
+insert into test_01 values (2, "b")    DML    cloud_nouser_sql
+insert into test_01 values (1, "a")    DML    cloud_nouser_sql
+show create table test_01    DQL    cloud_nouser_sql
+create table test_01 (a int, b varchar)    DDL    cloud_nouser_sql
+drop table if exists test_01    DDL    cloud_nouser_sql
+deallocate prepare s1    Other    cloud_nouser_sql
+execute s1 using @a    Other    cloud_nouser_sql
+set a = 2    Other    cloud_nouser_sql
+prepare s1 from select * from test_table where col1 = ?    Other    cloud_nouser_sql
+select * from unnest("{\"a\":1}") as f    DQL    cloud_nouser_sql
+drop database db2    DDL    cloud_nouser_sql
+drop table table_2    DDL    cloud_nouser_sql
+drop view view_2    DDL    cloud_nouser_sql
+drop index index_table_2 on table_2    DDL    cloud_nouser_sql
+create index index_table_2 on table_2 (col1)    DDL    cloud_nouser_sql
+create view view_2 as select * from table_2    DDL    cloud_nouser_sql
+create table table_2 (col1 int, col2 varchar)    DDL    cloud_nouser_sql
+create database db2    DDL    cloud_nouser_sql
+drop database db1    DDL    cloud_nouser_sql
+drop account test_account    DCL    cloud_nouser_sql
+drop role test_role    DCL    cloud_nouser_sql
+drop user user_name    DCL    cloud_nouser_sql
+revoke test_role from user_name    DCL    cloud_nouser_sql
+grant Unknown PrivilegeType, Unknown PrivilegeType on database *.* to test_role    DCL    cloud_nouser_sql
+create database if not exists db1    DDL    cloud_nouser_sql
+create user user_name identified by 'password'    DCL    cloud_nouser_sql
+create role test_role    DCL    cloud_nouser_sql
+create account test_account admin_name 'test_name' identified by '111' open comment 'tenant_test'    DCL    cloud_nouser_sql
+delete from test_table where col1 = 3    DML    cloud_nouser_sql
+update test_table set col2 = "xxx" where col1 = 1    DML    cloud_nouser_sql
+insert into test_table values (1, "a"), (2, "b"), (3, "c")    DML    cloud_nouser_sql
+with cte1 as (select 1), cte2 as (select 2) select * from cte1 inner join cte2    DQL    cloud_nouser_sql
+values row(1, 1), row(2, 2), row(3, 3) order by column_0 desc    DQL    cloud_nouser_sql
+show index from test_table    DQL    cloud_nouser_sql
+show collation    DQL    cloud_nouser_sql
+show collation    DQL    cloud_nouser_sql
+show tables    DQL    cloud_nouser_sql
+show processlist    DQL    cloud_nouser_sql
+show privileges    DQL    cloud_nouser_sql
+show profiles    DQL    cloud_nouser_sql
+show plugins    DQL    cloud_nouser_sql
+show events    DQL    cloud_nouser_sql
+show config    DQL    cloud_nouser_sql
+show procedure status    DQL    cloud_nouser_sql
+show triggers    DQL    cloud_nouser_sql
+show create view test_view    DQL    cloud_nouser_sql
+show create table test_table    DQL    cloud_nouser_sql
+show create database test_db    DQL    cloud_nouser_sql
+create view test_view as select * from test_table    DDL    cloud_nouser_sql
+create table test_table (col1 int, col2 varchar)    DDL    cloud_nouser_sql
+drop table if exists test_table    DDL    cloud_nouser_sql
+use test_db    Other    cloud_nouser_sql
+create database test_db    DDL    cloud_nouser_sql
+drop database if exists test_db    DDL    cloud_nouser_sql
+rollback    TCL    cloud_nouser_sql
+start transaction    TCL    cloud_nouser_sql
+commit    TCL    cloud_nouser_sql
+start transaction    TCL    cloud_nouser_sql
+use statement_query_type    Other    cloud_nouser_sql
+show create view test_view;
+[unknown result because it is related to issue#7789]
+show collation;
+[unknown result because it is related to issue#7789]
+show collation like '%';
+[unknown result because it is related to issue#7789]
+begin;
+use statement_query_type;
+create table test_table(col1 int,col2 varchar);
+load data infile '$resources/load_data/test.csv' into table test_table;
+insert into test_table values (1,'a'),(2,'b'),(3,'c');
+update test_table set col2='xxx' where col1=1;
+[unknown result because it is related to issue#7772]
+delete from test_table where col1=3;
+[unknown result because it is related to issue#7772]
+rollback ;

@@ -35,14 +35,14 @@ type LogRecord struct {
 	Caller      string
 	Message     string
 	Stack       string
-	// Labels as extra
-	// transfer kubernetes as labels
-	// transfer kubernetes.labels into labels
+	// Labels store other elems and kubernetes elems
 	Labels map[string]any // json
 }
 
 var logPool = &sync.Pool{New: func() any {
-	return &LogRecord{}
+	return &LogRecord{
+		Labels: make(map[string]any),
+	}
 }}
 
 func NewLogRecord() *LogRecord {
@@ -53,16 +53,16 @@ func (*LogRecord) GetName() string {
 	return observability.LogsTable.GetIdentify()
 }
 
-func (*LogRecord) GetRow() *table.Row {
-	return observability.LogsTable.GetRow(context.Background())
+func (*LogRecord) GetTable() *table.Table {
+	return observability.LogsTable
 }
 
-func (l *LogRecord) CsvFields(ctx context.Context, row *table.Row) []string {
+func (l *LogRecord) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(observability.LogsTraceIDCol, l.TraceId)
 	row.SetColumnVal(observability.LogsSpanIDCol, l.SpanId)
-	row.SetColumnVal(observability.LogsTimestampCol, observability.Time2DatetimeString(l.Timestamp))
-	row.SetColumnVal(observability.LogsCollectTimeCol, observability.Time2DatetimeString(l.CollectTime))
+	row.SetColumnVal(observability.LogsTimestampCol, l.Timestamp)
+	row.SetColumnVal(observability.LogsCollectTimeCol, l.CollectTime)
 	row.SetColumnVal(observability.LogsLoggerNameCol, l.LoggerName)
 	row.SetColumnVal(observability.LogsLevelCol, l.Level)
 	row.SetColumnVal(observability.LogsCallerCol, l.Caller)
@@ -74,8 +74,6 @@ func (l *LogRecord) CsvFields(ctx context.Context, row *table.Row) []string {
 		panic(err)
 	}
 	row.SetColumnVal(observability.LogsLabelsCol, string(labels))
-
-	return row.ToStrings()
 }
 
 func (l *LogRecord) Size() int64 {
