@@ -53,6 +53,7 @@ drop table if exists ex_table_drop;
 drop table if exists table_15;
 drop table if exists table_16;
 drop table if exists ex_table_yccs;
+drop table if exists ex_table_null;
 create external table ex_table_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from  ex_table_1;
 num_col1    num_col2    num_col3    num_col4    num_col5    num_col6    num_col7    num_col8    num_col9    num_col10    num_col11
@@ -323,6 +324,10 @@ select length(a), length(b), length(c) from t1;
 length(a)    length(b)   length(c)
 4    6    8
 2    2    2
+create external table ex_table_null( col1 int, col2 float, col3 varchar, col4 blob, col6 date, col7 bool )infile{"filepath"='$resources/external_table_file/ex_table_null.csv'} fields terminated by ',' enclosed by '"' lines terminated by '\n' set col3=nullif(col3,'null');
+select max(col3), min(col3) from ex_table_null;
+max(col3)    min(col3)
+你好    你
 drop table if exists ex_table_1;
 drop table if exists ex_table_2_1;
 drop table if exists ex_table_2_2;
@@ -379,3 +384,4 @@ drop table if exists table_15;
 drop table if exists ex_table_yccs;
 drop table if exists ex_table_space;
 drop table if exists t1;
+drop table if exists ex_table_null;
