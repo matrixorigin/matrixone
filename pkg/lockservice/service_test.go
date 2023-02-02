@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -90,7 +91,7 @@ func TestMultipleRowLocks(t *testing.T) {
 }
 
 func TestDeadLock(t *testing.T) {
-	l := NewLockService().(*lockTable)
+	l := NewLockService().(*service)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -128,7 +129,7 @@ func TestDeadLock(t *testing.T) {
 }
 
 func TestDeadLockWithRange(t *testing.T) {
-	l := NewLockService().(*lockTable)
+	l := NewLockService().(*service)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -167,7 +168,7 @@ func TestDeadLockWithRange(t *testing.T) {
 
 func mustAddTestLock(t *testing.T,
 	ctx context.Context,
-	l *lockTable,
+	l *service,
 	txnID []byte,
 	lock [][]byte,
 	granularity Granularity) {
@@ -183,7 +184,7 @@ func mustAddTestLock(t *testing.T,
 
 func maybeAddTestLockWithDeadlock(t *testing.T,
 	ctx context.Context,
-	l *lockTable,
+	l *service,
 	txnID []byte,
 	lock [][]byte,
 	granularity Granularity,
@@ -291,4 +292,48 @@ func BenchmarkMultipleRowLock(b *testing.B) {
 			}(i)
 		}
 	})
+}
+
+func BenchmarkWithoutConflict(b *testing.B) {
+	runBenchmark(b, "1-table", 1)
+	runBenchmark(b, "unlimited-table", 32)
+}
+
+var tableID atomic.Uint64
+var txnID atomic.Uint64
+var rowID atomic.Uint64
+
+func runBenchmark(b *testing.B, name string, t uint64) {
+	b.Run(name, func(b *testing.B) {
+		l := NewLockService()
+		getTableID := func() uint64 {
+			if t == 1 {
+				return 0
+			}
+			return tableID.Add(1)
+		}
+
+		// total p goroutines to run test
+		b.ReportAllocs()
+		b.ResetTimer()
+
+		b.RunParallel(func(p *testing.PB) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			row := [][]byte{buf.Uint64ToBytes(rowID.Add(1))}
+			txn := buf.Uint64ToBytes(txnID.Add(1))
+			table := getTableID()
+			// fmt.Printf("on table %d\n", table)
+			for p.Next() {
+				if _, err := l.Lock(ctx, table, row, txn, LockOptions{}); err != nil {
+					panic(err)
+				}
+				if err := l.Unlock(txn); err != nil {
+					panic(err)
+				}
+			}
+		})
+	})
+
 }
