@@ -236,12 +236,12 @@ func (e *txnEngine) Destroy() (err error) {
 	panic(moerr.NewNYINoCtx("Pls implement me!"))
 }
 
-func (e *txnEngine) ForceCheckpoint(ctx context.Context, ts types.TS) error {
+func (e *txnEngine) ForceCheckpoint(ctx context.Context, ts types.TS, flushDuration time.Duration) error {
 	e.impl.BGCheckpointRunner.DisableCheckpoint()
 	defer e.impl.BGCheckpointRunner.EnableCheckpoint()
 	e.impl.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()
-	err := e.impl.BGCheckpointRunner.ForceFlush(ts, ctx)
+	err := e.impl.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
 	logutil.Infof("[Force Checkpoint] flush takes %v", time.Since(t0))
 	if err != nil {
 		return err
