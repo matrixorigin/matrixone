@@ -111,6 +111,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		select {
 		case <-ctx.Done():
 			logger.Error("meet context error", zap.Error(ctx.Err()))
+			StorageUsageFactory.Reset() // clean CN data for next cron task.
 			return ctx.Err()
 		case <-next.C:
 			logger.Info("start next round")

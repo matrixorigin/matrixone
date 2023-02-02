@@ -148,41 +148,47 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		panic("unexpected message type for cn-server")
 	}
 	// it's a Batch
-	if m.GetCmd() == 1 {
-		var v any
-		var dataBuffer []byte
+	if m.IsBatchMessage() {
+		var wg *process.WaitRegister
 		var ok bool
+		opUuid, err := uuid.FromBytes(m.GetUuid())
+		if err != nil {
+			return nil, err
+		}
+
 		for {
-			v, ok = colexec.Srv.ChanBufMp.Load(m.GetUuid())
-			if !ok {
+			if wg, ok = colexec.Srv.GetRegFromUuidMap(opUuid); !ok {
 				runtime.Gosched()
 			} else {
 				break
 			}
 		}
-		if dataBuffer, ok := colexec.Srv.ChanBufMp.Load(m.GetID()); !ok {
-			colexec.Srv.ChanBufMp.Store(m.GetID(), dataBuffer)
-		}
-		wg := v.(*process.WaitRegister)
-		if m.IsEndMessage() {
-			wg.Ch <- nil
-			colexec.Srv.ChanBufMp.Delete(m.GetID())
-			return nil, err
+
+		if m.IsBatchMessageEnd() {
+			requireCnt := m.GetBatchCnt()
+			for {
+				if colexec.Srv.IsEndStatus(opUuid, requireCnt) {
+					wg.Ch <- nil
+					close(wg.Ch)
+					colexec.Srv.RemoveUuidFromUuidMap(opUuid)
+					break
+				} else {
+					runtime.Gosched()
+				}
+			}
+			return nil, nil
 		} else {
-			if len(dataBuffer) == 0 {
-				dataBuffer = m.Data
-			} else {
-				dataBuffer = append(dataBuffer, m.Data...)
+			// TODO: handle seperate batch
+			mp, err := mpool.NewMPool("cnservice_handle_batch", 0, mpool.NoFixed)
+			if err != nil {
+				return nil, err
 			}
-			if m.WaitingNextToMerge() {
-				return nil, nil
-			}
-			bat, err := decodeBatch(c.proc, dataBuffer)
+			bat, err := decodeBatch(mp, m.Data)
 			if err != nil {
 				return nil, err
 			}
 			wg.Ch <- bat
-			colexec.Srv.ChanBufMp.Store(m.GetID(), []byte{})
+			colexec.Srv.ReceiveNormalBatch(opUuid)
 			return nil, nil
 		}
 	}
@@ -296,7 +302,7 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyz
 			if m.WaitingNextToMerge() {
 				continue
 			}
-			bat, err := decodeBatch(c.proc, dataBuffer)
+			bat, err := decodeBatch(c.proc.Mp(), dataBuffer)
 			if err != nil {
 				return err
 			}
@@ -351,6 +357,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 		message.Id = streamSender.ID()
 		message.Data = sData
 		message.ProcInfoData = pData
+		message.Cmd = 0
 	}
 
 	errSend := streamSender.Send(c.ctx, message)
@@ -394,7 +401,11 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool) (*Scope, err
 	if err != nil {
 		return nil, err
 	}
-	return s, fillInstructionsForScope(s, ctx, p)
+	if err := fillInstructionsForScope(s, ctx, p); err != nil {
+		return nil, err
+	}
+
+	return s, nil
 }
 
 // encodeProcessInfo get needed information from proc, and do serialization work.
@@ -499,7 +510,8 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
-	p.Uuids = convertScopeUuids(s)
+	p.UuidsToRegIdx = convertScopeUuids(s)
+
 	// Plan
 	if ctxId == 1 {
 		// encode and decode cost is too large for it.
@@ -582,22 +594,30 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	return ctxId, nil
 }
 
-func convertPipelineUuid(p *pipeline.Pipeline) (res []uuid.UUID) {
-	res = make([]uuid.UUID, len(p.Uuids))
-	for i := range p.Uuids {
-		res = append(res, uuid.UUID{})
-		copy(res[i][:], p.Uuids[i])
+func convertPipelineUuid(p *pipeline.Pipeline) ([]UuidToRegIdx, error) {
+	ret := make([]UuidToRegIdx, len(p.UuidsToRegIdx))
+	for i, u := range p.UuidsToRegIdx {
+		uid, err := uuid.FromBytes(u.GetUuid())
+		if err != nil {
+			return nil, moerr.NewInvalidInputNoCtx("decode uuid failed: %s\n", err)
+		}
+		ret[i] = UuidToRegIdx{
+			Uuid: uid,
+			Idx:  int(u.GetIdx()),
+		}
 	}
-	return
+	return ret, nil
 }
 
-func convertScopeUuids(s *Scope) (res [][]byte) {
-	res = make([][]byte, len(s.uuids))
-	for i := range s.uuids {
-		res = append(res, nil)
-		res[i] = s.uuids[i][:]
+func convertScopeUuids(s *Scope) (ret []*pipeline.UuidToRegIdx) {
+	ret = make([]*pipeline.UuidToRegIdx, len(s.UuidToRegIdx))
+	for i, u := range s.UuidToRegIdx {
+		ret[i] = &pipeline.UuidToRegIdx{
+			Uuid: u.Uuid[:],
+			Idx:  int32(u.Idx),
+		}
 	}
-	return
+	return ret
 }
 
 // generateScope generate a scope from scope context and pipeline.
@@ -608,13 +628,17 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		ctx.plan = p.Qry
 	}
 
+	uuidToRegIdx, converErr := convertPipelineUuid(p)
+	if converErr != nil {
+		return nil, converErr
+	}
 	s := &Scope{
-		Magic:    int(p.GetPipelineType()),
-		IsEnd:    p.IsEnd,
-		IsJoin:   p.IsJoin,
-		Plan:     ctx.plan,
-		IsRemote: isRemote,
-		uuids:    convertPipelineUuid(p),
+		Magic:        int(p.GetPipelineType()),
+		IsEnd:        p.IsEnd,
+		IsJoin:       p.IsJoin,
+		Plan:         ctx.plan,
+		IsRemote:     isRemote,
+		UuidToRegIdx: uuidToRegIdx,
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
@@ -646,11 +670,8 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
-	for i := range s.uuids {
-		if len(s.uuids[i]) == 0 {
-			continue
-		}
-		colexec.Srv.ChanBufMp.Store(s.uuids[i], s.Proc.Reg.MergeReceivers[i])
+	for _, u := range s.UuidToRegIdx {
+		colexec.Srv.PutRegFromUuidMap(u.Uuid, s.Proc.Reg.MergeReceivers[u.Idx])
 	}
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
@@ -723,13 +744,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{
-			All: t.All,
+			All:     t.All,
+			CrossCn: t.CrossCN,
 		}
-		in.Dispatch.Connector = make([]*pipeline.Connector, len(t.Regs))
-		for i := range t.Regs {
-			idx, ctx0 := ctx.root.findRegister(t.Regs[i])
+		in.Dispatch.Connector = make([]*pipeline.Connector, len(t.LocalRegs))
+		for i := range t.LocalRegs {
+			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
 			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
-				id := colexec.Srv.RegistConnector(t.Regs[i])
+				id := colexec.Srv.RegistConnector(t.LocalRegs[i])
 				if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
 					return ctxId, nil, err
 				}
@@ -737,6 +759,20 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			in.Dispatch.Connector[i] = &pipeline.Connector{
 				ConnectorIndex: idx,
 				PipelineId:     ctx0.id,
+			}
+		}
+		if t.CrossCN {
+			in.Dispatch.RemoteConnector = make([]*pipeline.WrapNode, len(t.RemoteRegs))
+			for i, r := range t.RemoteRegs {
+				udata := make([][]byte, len(r.Uuids))
+				for j, u := range r.Uuids {
+					udata[j] = u[:]
+				}
+				wn := &pipeline.WrapNode{
+					NodeAddr: r.NodeAddr,
+					Uuids:    udata,
+				}
+				in.Dispatch.RemoteConnector[i] = wn
 			}
 		}
 	case *group.Argument:
@@ -977,9 +1013,29 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		for i, cp := range t.Connector {
 			regs[i] = ctx.root.getRegister(cp.PipelineId, cp.ConnectorIndex)
 		}
+		rrs := make([]colexec.WrapperNode, 0)
+		if t.CrossCn {
+			for _, rc := range t.RemoteConnector {
+				n := colexec.WrapperNode{
+					NodeAddr: rc.NodeAddr,
+					Uuids:    make([]uuid.UUID, len(rc.Uuids)),
+				}
+				for j, u := range rc.Uuids {
+					uuid, err := uuid.FromBytes(u)
+					if err != nil {
+						return v, err
+					}
+					n.Uuids[j] = uuid
+				}
+				rrs = append(rrs, n)
+			}
+		}
+
 		v.Arg = &dispatch.Argument{
-			Regs: regs,
-			All:  t.All,
+			All:        t.All,
+			CrossCN:    t.CrossCn,
+			LocalRegs:  regs,
+			RemoteRegs: rrs,
 		}
 	case vm.Group:
 		t := opr.GetAgg()
@@ -1193,6 +1249,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 }
 
 // newCompile generates a new compile for remote run.
+// TODO: give addr to compile?
 func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelper, mHelper *messageHandleHelper, cs morpc.ClientSession) *Compile {
 	// compile is almost surely wanting a small or mid pool.  Later.
 	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
@@ -1220,6 +1277,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 		proc: proc,
 		e:    mHelper.storeEngine,
 		anal: &anaylze{},
+		addr: colexec.CnAddr,
 	}
 
 	c.fill = func(_ any, b *batch.Batch) error {
@@ -1386,10 +1444,12 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	}
 }
 
-func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
+// func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
+func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := new(batch.Batch)
-	mp := proc.Mp()
+	//mp := proc.Mp()
 	err := types.Decode(data, bat)
+
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
 		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)

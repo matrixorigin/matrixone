@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -37,7 +38,7 @@ type TestRunner interface {
 
 	ExistPendingEntryToGC() bool
 	MaxGlobalCheckpoint() *CheckpointEntry
-	ForceFlush(ts types.TS, ctx context.Context) (err error)
+	ForceFlush(ts types.TS, ctx context.Context, duration time.Duration) (err error)
 }
 
 // DisableCheckpoint stops generating checkpoint
@@ -92,7 +93,7 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 	})
 	return nil
 }
-func (r *runner) ForceFlush(ts types.TS, ctx context.Context) (err error) {
+func (r *runner) ForceFlush(ts types.TS, ctx context.Context, forceDuration time.Duration) (err error) {
 	makeCtx := func() *DirtyCtx {
 		tree := r.source.ScanInRangePruned(types.TS{}, ts)
 		tree.GetTree().Compact()
@@ -117,10 +118,20 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context) (err error) {
 		return false, nil
 	}
 
+	if forceDuration == 0 {
+		forceDuration = r.options.forceFlushTimeout
+	}
 	err = common.RetryWithIntervalAndTimeout(
 		op,
-		r.options.forceFlushTimeout,
+		forceDuration,
 		r.options.forceFlushCheckInterval, false)
+	if err != nil {
+		return moerr.NewInternalError(ctx, "force flush failed: %v", err)
+	}
+	_, sarg, _ := fault.TriggerFault("tae: flush timeout")
+	if sarg != "" {
+		err = moerr.NewInternalError(ctx, sarg)
+	}
 	return
 }
 

@@ -40,7 +40,7 @@ func defaultMOTracerProvider() *MOTracerProvider {
 		},
 	}
 	WithNode("node_uuid", trace.NodeTypeStandalone).apply(&pTracer.tracerProviderConfig)
-	WithMOVersion("MatrixOne").apply(&pTracer.tracerProviderConfig)
+	withMOVersion("MatrixOne").apply(&pTracer.tracerProviderConfig)
 	return pTracer
 }
 

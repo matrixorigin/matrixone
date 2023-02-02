@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -106,15 +107,23 @@ func Prepare(proc *process.Process, arg any) error {
 	param.Fileparam.FileCnt = len(param.FileList)
 	param.Ctx = proc.Ctx
 	param.Zoneparam = &ZonemapFileparam{}
+	name2ColIndex := make(map[string]int32, len(param.Cols))
+	for i := 0; i < len(param.Cols); i++ {
+		name2ColIndex[param.Cols[i].Name] = int32(i)
+	}
 	param.tableDef = &plan.TableDef{
-		Name2ColIndex: param.Name2ColIndex,
+		Name2ColIndex: name2ColIndex,
 	}
 	var columns []int
 	param.Filter.columnMap, columns, param.Filter.maxCol = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.columns = make([]uint16, len(columns))
+	param.Filter.defColumns = make([]uint16, len(columns))
 	for i := 0; i < len(columns); i++ {
-		param.Filter.columns[i] = uint16(columns[i])
+		col := param.Cols[columns[i]]
+		param.Filter.columns[i] = uint16(param.Name2ColIndex[col.Name])
+		param.Filter.defColumns[i] = uint16(columns[i])
 	}
+
 	param.Filter.exprMono = plan2.CheckExprIsMonotonic(proc.Ctx, param.Filter.FilterExpr)
 	param.Filter.File2Size = make(map[string]int64)
 	return nil
@@ -381,6 +390,7 @@ func IsSysTable(dbName string, tableName string) bool {
 	return false
 }
 
+// ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	filePath := strings.TrimSpace(param.Filepath)
 	if strings.HasPrefix(filePath, "etl:") {
@@ -712,12 +722,13 @@ func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, err
 }
 
 func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) (*batch.Batch, error) {
+	bat := makeBatch(param, 0, proc.Mp())
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
-		return nil, nil
+		return bat, nil
 	}
 
 	rows := 0
-	bat := makeBatch(param, 0, proc.Mp())
+
 	idxs := make([]uint16, len(param.Attrs))
 	meta := param.Zoneparam.bs[param.Zoneparam.offset].GetMeta()
 	header := meta.GetHeader()
@@ -807,7 +818,7 @@ func needRead(param *ExternalParam, proc *process.Process, objectReader objectio
 	datas := make([][2]any, dataLength)
 	dataTypes := make([]uint8, dataLength)
 	for i := 0; i < dataLength; i++ {
-		idx := param.Filter.columns[i]
+		idx := param.Filter.defColumns[i]
 		dataTypes[i] = uint8(param.Cols[idx].Typ.Id)
 		typ := types.T(dataTypes[i]).ToType()
 
@@ -828,7 +839,7 @@ func needRead(param *ExternalParam, proc *process.Process, objectReader objectio
 	bat := batch.NewWithSize(param.Filter.maxCol + 1)
 	defer bat.Clean(proc.Mp())
 	for k, v := range param.Filter.columnMap {
-		for i, realIdx := range param.Filter.columns {
+		for i, realIdx := range param.Filter.defColumns {
 			if int(realIdx) == v {
 				bat.SetVector(int32(k), buildVectors[i])
 				break
@@ -860,7 +871,8 @@ func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, ob
 		}
 	}
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
-		return nil, nil
+		bat := makeBatch(param, 0, proc.Mp())
+		return bat, nil
 	}
 
 	if param.Filter.exprMono {
@@ -878,10 +890,28 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 		dir, _ := filepath.Split(param.Extern.Filepath)
 		var service fileservice.FileService
 		var err error
+		var p fileservice.Path
+
 		if param.Extern.QueryResult {
 			service = param.Extern.FileService
 		} else {
-			service, _, err = GetForETLWithType(param.Extern, param.Extern.Filepath)
+
+			// format filepath for local file
+			fp := param.Extern.Filepath
+			if p, err = fileservice.ParsePath(param.Extern.Filepath); err != nil {
+				return nil, err
+			} else if p.Service == "" {
+				if os.IsPathSeparator(filepath.Clean(param.Extern.Filepath)[0]) {
+					// absolute path
+					fp = "/"
+				} else {
+					// relative path.
+					// PS: this loop never trigger, caused by ReadDir() only support local file with absolute path
+					fp = "."
+				}
+			}
+
+			service, _, err = GetForETLWithType(param.Extern, fp)
 			if err != nil {
 				return nil, err
 			}
@@ -921,6 +951,7 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
 			param.Fileparam.End = true
 		}
+		param.Zoneparam.offset = 0
 	}
 	return bat, nil
 }
