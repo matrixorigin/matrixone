@@ -304,10 +304,10 @@ Number of tables in mo_catalog
 11
 show table_number from system_metrics;
 Number of tables in system_metrics
-17
+7
 show table_number from system;
 Number of tables in system
-5
+1
 use information_schema;
 show column_number from key_column_usage;
 Number of columns in key_column_usage
