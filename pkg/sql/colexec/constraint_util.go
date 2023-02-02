@@ -150,7 +150,7 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 		}
 	}()
 
-	uIdx := 0
+	uIdx := 1
 	for _, def := range tableDef.Defs {
 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
 			// how to get relation?

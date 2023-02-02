@@ -15,8 +15,6 @@
 package colexec
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -157,7 +155,7 @@ func GetBlockMeta(bats []*batch.Batch, container *WriteS3Container, proc *proces
 			return err
 		}
 		if idx == 0 && len(container.pkIndex) != 0 {
-			SortByPrimaryKey(proc, container, bats[i], container.pkIndex, proc.GetMPool())
+			SortByPrimaryKey(proc, bats[i], container.pkIndex, proc.GetMPool())
 		}
 		if bats[i].Length() == 0 {
 			continue
@@ -275,7 +273,7 @@ func GenerateWriter(container *WriteS3Container, proc *process.Process) error {
 }
 
 // referece to pkg/sql/colexec/order/order.go logic
-func SortByPrimaryKey(proc *process.Process, container *WriteS3Container, bat *batch.Batch, pkIdx []int, m *mpool.MPool) error {
+func SortByPrimaryKey(proc *process.Process, bat *batch.Batch, pkIdx []int, m *mpool.MPool) error {
 	// Not-Null Check
 	for i := 0; i < len(pkIdx); i++ {
 		if nulls.Any(bat.Vecs[i].Nsp) {
@@ -389,7 +387,7 @@ func getIndexDataFromVec(block objectio.BlockObject, writer objectio.Writer,
 // WriteEndBlocks WriteEndBlocks write batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
 func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int) error {
-	blocks, err := container.writer.WriteEnd(context.Background())
+	blocks, err := container.writer.WriteEnd(proc.Ctx)
 	if err != nil {
 		return err
 	}
