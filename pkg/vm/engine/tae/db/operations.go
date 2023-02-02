@@ -17,6 +17,8 @@ package db
 import (
 	"context"
 	"encoding/gob"
+	"time"
+
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
@@ -112,6 +114,10 @@ type FlushTable struct {
 	AccessInfo AccessInfo
 	DatabaseID uint64
 	TableID    uint64
+}
+
+type Checkpoint struct {
+	FlushDuration time.Duration
 }
 
 type CreateDatabaseResp struct {

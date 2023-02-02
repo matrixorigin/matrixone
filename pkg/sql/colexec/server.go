@@ -21,6 +21,8 @@ import (
 	"math"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -36,6 +38,9 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 	Srv = &Server{
 		mp:       make(map[uint64]*process.WaitRegister),
 		hakeeper: client,
+
+		uuidMap:     UuidMap{mp: make(map[uuid.UUID]*process.WaitRegister)},
+		batchCntMap: BatchCntMap{mp: make(map[uuid.UUID]uint64)},
 	}
 	return Srv
 }
@@ -53,6 +58,57 @@ func (srv *Server) RegistConnector(reg *process.WaitRegister) uint64 {
 	srv.mp[srv.id] = reg
 	defer func() { srv.id++ }()
 	return srv.id
+}
+
+func (srv *Server) GetRegFromUuidMap(u uuid.UUID) (*process.WaitRegister, bool) {
+	srv.uuidMap.RLock()
+	defer srv.uuidMap.RUnlock()
+	r, ok := srv.uuidMap.mp[u]
+	if !ok {
+		return nil, false
+	}
+	return r, true
+}
+
+func (srv *Server) PutRegFromUuidMap(u uuid.UUID, reg *process.WaitRegister) error {
+	srv.uuidMap.Lock()
+	defer srv.uuidMap.Unlock()
+	if r, ok := srv.uuidMap.mp[u]; ok {
+		if reg != r {
+			return moerr.NewInternalErrorNoCtx("PutRegFromUuidMap error! the uuid has exsit with different reg!")
+		}
+		return nil
+	}
+	srv.uuidMap.mp[u] = reg
+	return nil
+}
+
+func (srv *Server) RemoveUuidFromUuidMap(u uuid.UUID) error {
+	srv.uuidMap.Lock()
+	defer srv.uuidMap.Unlock()
+	delete(srv.uuidMap.mp, u)
+	return nil
+}
+
+func (srv *Server) ReceiveNormalBatch(u uuid.UUID) {
+	srv.batchCntMap.Lock()
+	defer srv.batchCntMap.Unlock()
+	if _, ok := srv.batchCntMap.mp[u]; !ok {
+		srv.batchCntMap.mp[u] = 0
+	}
+	srv.batchCntMap.mp[u]++
+}
+
+func (srv *Server) IsEndStatus(u uuid.UUID, requireCnt uint64) bool {
+	srv.batchCntMap.Lock()
+	defer srv.batchCntMap.Unlock()
+	if cnt, ok := srv.batchCntMap.mp[u]; ok {
+		if cnt == requireCnt {
+			delete(srv.batchCntMap.mp, u)
+			return true
+		}
+	}
+	return false
 }
 
 func (srv *Server) HandleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {

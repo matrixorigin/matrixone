@@ -404,8 +404,11 @@ func getDistAggStrVs(strUnaryDistAgg any) []string {
 }
 
 func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
 	decode := new(EncodeAggDistinct[T1])
-	if err := types.Decode(data, decode); err != nil {
+	if err := types.Decode(copyData, decode); err != nil {
 		return err
 	}
 

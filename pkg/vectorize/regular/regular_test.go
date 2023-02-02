@@ -160,7 +160,7 @@ func TestRegularInstrTest9(t *testing.T) {
 }
 
 // Regular_Like UT tests
-func TestRegularLikerTest2(t *testing.T) {
+func TestRegularLikerTest1(t *testing.T) {
 	//Test values
 	expr := []string{"Cat", "Cat", "Cat", "Cat"}
 	pat := []string{".*", "b+", "^Ca", "^Da"}
@@ -170,6 +170,62 @@ func TestRegularLikerTest2(t *testing.T) {
 	result := make([]bool, len(expr))
 	for i := range expr {
 		result[i], _ = RegularLike(expr[i], pat[i], "")
+	}
+	require.Equal(t, expected, result)
+}
+
+func TestRegularLikeTest2(t *testing.T) {
+	// Test for case insensitive matching.
+	expr := []string{"Cat"}
+	pat := []string{"cat"}
+	matchType := []string{"", "i"}
+
+	expected := []bool{false, true}
+	result := make([]bool, len(matchType))
+	for i := range matchType {
+		result[i], _ = RegularLike(expr[0], pat[0], matchType[i])
+	}
+	require.Equal(t, expected, result)
+}
+
+func TestRegularLikeTest3(t *testing.T) {
+	// Test for . match line-terminator.
+	expr := []string{"\n"}
+	pat := []string{"."}
+	matchType := []string{"", "n"}
+
+	expected := []bool{false, true}
+	result := make([]bool, len(matchType))
+	for i := range matchType {
+		result[i], _ = RegularLike(expr[0], pat[0], matchType[i])
+	}
+	require.Equal(t, expected, result)
+}
+
+func TestRegularLikeTest4(t *testing.T) {
+	// Test for multi-line mode.
+	expr := []string{"last\nday"}
+	pat := []string{"last$"}
+	matchType := []string{"", "m"}
+
+	expected := []bool{false, true}
+	result := make([]bool, len(matchType))
+	for i := range matchType {
+		result[i], _ = RegularLike(expr[0], pat[0], matchType[i])
+	}
+	require.Equal(t, expected, result)
+}
+
+func TestRegularLikeTest5(t *testing.T) {
+	// Test for right-most rule.
+	expr := []string{"ABC"}
+	pat := []string{"abc"}
+	matchType := []string{"icicc", "ccici"}
+
+	expected := []bool{false, true}
+	result := make([]bool, len(matchType))
+	for i := range matchType {
+		result[i], _ = RegularLike(expr[0], pat[0], matchType[i])
 	}
 	require.Equal(t, expected, result)
 }
