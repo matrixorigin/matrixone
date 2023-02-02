@@ -77,7 +77,6 @@ func (vec CnTaeVector[T]) AppendMany(vs ...any) {
 }
 
 func (vec CnTaeVector[T]) Nullable() bool {
-	// TODO: replace this nullable flag with Nsp!=nil check
 	return vec.downstreamVector.Nsp.Np != nil
 }
 
@@ -90,36 +89,32 @@ func (vec CnTaeVector[T]) IsNull(i int) bool {
 }
 
 func (vec CnTaeVector[T]) NullMask() *roaring64.Bitmap {
-	return BitmapToRoaring64Bitmap(vec.downstreamVector.GetNulls().Np)
-}
-
-func BitmapToRoaring64Bitmap(input *bitmap.Bitmap) *roaring64.Bitmap {
+	input := vec.downstreamVector.GetNulls().Np
 	var np *roaring64.Bitmap
 	if input != nil {
 		np = roaring64.New()
 		np.AddMany(input.ToArray())
 		return np
 	}
-
 	return nil
-}
-
-func Roaring64ToBitmap(input *roaring64.Bitmap) *bitmap.Bitmap {
-	result := bitmap.New(int(input.GetCardinality()))
-	itr := input.Iterator()
-	for itr.HasNext() {
-		result.Add(itr.Next())
-	}
-
-	return result
 }
 
 func (vec CnTaeVector[T]) GetType() types.Type {
 	return vec.downstreamVector.GetType()
 }
 
-// TODO: will be replaced by CN version alone
+func (vec CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
+	var sels []int64
+	for i := 0; i < vec.Length(); i++ {
+		if !deletes.Contains(uint32(i)) {
+			sels = append(sels, int64(i))
+		}
+	}
+	cnVector.Shrink(vec.downstreamVector, sels)
+}
+
 func (vec CnTaeVector[T]) String() string {
+	// TODO: Replace with CN vector String
 	s := fmt.Sprintf("StrVector:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Capacity(), vec.Allocated())
 
 	end := 100
@@ -165,28 +160,93 @@ func (vec CnTaeVector[T]) Slice() any {
 	return vec.downstreamVector.Col
 }
 
-// TO remove
+func (vec CnTaeVector[T]) Bytes() *Bytes {
+	return MoVecToBytes(vec.downstreamVector)
+}
+
+func (vec CnTaeVector[T]) Window(offset, length int) Vector {
+
+	window := cnVector.New(vec.GetType())
+	cnVector.Window(vec.downstreamVector, offset, offset+length, window)
+
+	return CnTaeVector[T]{
+		downstreamVector: window,
+		mpool:            vec.GetAllocator(),
+	}
+}
+
+func (vec CnTaeVector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
+	return vec.ForeachWindow(0, vec.Length(), op, sels)
+}
+
+func (vec CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
+	var nr int
+
+	output, _ := vec.downstreamVector.MarshalBinary()
+	if nr, err = w.Write(output); err != nil {
+		return
+	}
+	n += int64(nr)
+
+	return
+}
+
+func (vec CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
+	all, err := io.ReadAll(r)
+	if err != nil {
+		return 0, err
+	}
+	err = vec.downstreamVector.UnmarshalBinary(all)
+	if err != nil {
+		return 0, err
+	}
+
+	return 0, err
+}
+
+func (vec CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
+	opts := Options{}
+	if len(allocator) == 0 {
+		opts.Allocator = vec.GetAllocator()
+	} else {
+		opts.Allocator = allocator[0]
+	}
+
+	// Create a clone
+	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
+
+	// Create a duplicate of the current vector
+	vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
+
+	// attach that duplicate to the window
+	// and perform window operation
+	cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
+
+	return cloned
+}
+
+func (vec CnTaeVector[T]) Delete(i int) {
+	cnVector.Delete[T](vec.downstreamVector, i)
+}
+
+// TODO: Remove below functions as they don't have any usage
 
 func (vec CnTaeVector[T]) IsView() bool {
-	// TODO: What is the use of vector view? Can't find any usage.
 	panic("Soon Deprecated")
 }
 
 func (vec CnTaeVector[T]) GetView() VectorView {
-	// TODO: As of now, can't find any usage. Do we need it?
 	panic("Soon Deprecated")
 }
 
 func (vec CnTaeVector[T]) DataWindow(offset, length int) []byte {
 	panic("Soon Deprecated")
-	//if vec.GetType().IsVarlen() {
-	//	panic("not support")
-	//}
-	//
-	//start := offset * stl.Sizeof[T]()
-	//end := start + length*stl.Sizeof[T]()
-	//return vec.downstreamVector.GetData()[start:end]
 }
+
+func (vec CnTaeVector[T]) Data() []byte {
+	panic("Soon Deprecated")
+}
+
 func (vec CnTaeVector[T]) AppendNoNulls(s any) {
 	slice := s.([]T)
 	for _, v := range slice {
@@ -194,7 +254,53 @@ func (vec CnTaeVector[T]) AppendNoNulls(s any) {
 	}
 }
 
-// Ok idea
+// TODO: Can remove below function as they are only used in Testcases.
+
+func (vec CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
+	// No usage except in testcase
+
+	stat := f.Stat()
+	var n []byte
+	var buf []byte
+	var tmpNode []byte
+	if stat.CompressAlgo() != compress.None {
+		osize := int(stat.OriginSize())
+		size := stat.Size()
+		tmpNode, err = vec.GetAllocator().Alloc(int(size))
+		if err != nil {
+			return
+		}
+		defer vec.GetAllocator().Free(tmpNode)
+		srcBuf := tmpNode[:size]
+		if _, err = f.Read(srcBuf); err != nil {
+			return
+		}
+		if buffer == nil {
+			n, err = vec.GetAllocator().Alloc(osize)
+			if err != nil {
+				return
+			}
+			buf = n[:osize]
+		} else {
+			buffer.Reset()
+			if osize > buffer.Cap() {
+				buffer.Grow(osize)
+			}
+			buf = buffer.Bytes()[:osize]
+		}
+		if _, err = compress.Decompress(srcBuf, buf, compress.Lz4); err != nil {
+			if n != nil {
+				vec.GetAllocator().Free(n)
+			}
+			return nil
+		}
+	}
+
+	err = vec.downstreamVector.UnmarshalBinary(buf)
+	return err
+}
+
+// TODO: Can be implemented in CN Vector.
 
 func (vec CnTaeVector[T]) PPString(num int) string {
 	var w bytes.Buffer
@@ -289,77 +395,82 @@ func (vec CnTaeVector[T]) Equals(o Vector) bool {
 	return true
 }
 
+func (vec CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+
+	if sels == nil || sels.IsEmpty() {
+		//TODO: When sel is Empty(), should we run it for all the entries or should we not perform at all.
+		// In current DN impl, when sel is empty(), we run it on all the entries.
+		for i := offset; i < offset+length; i++ {
+			elem := vec.Get(i)
+			if err = op(elem, i); err != nil {
+				break
+			}
+		}
+	} else {
+
+		selsArray := sels.ToArray()
+		end := offset + length
+		for _, rowId := range selsArray {
+			if int(rowId) < offset {
+				continue
+			} else if int(rowId) >= end {
+				break
+			}
+			elem := vec.Get(int(rowId))
+			if err = op(elem, int(rowId)); err != nil {
+				break
+			}
+		}
+	}
+	return
+}
+
+// TODO: Below code is a little uncertain
+
 func (vec CnTaeVector[T]) Allocated() int {
 	if vec.GetType().IsVarlen() {
-		// Only VarLen is allocated using mpool
+		// Only VarLen is allocated using mpool.
 		return vec.downstreamVector.Size()
 	}
 	return 0
 }
 
-func (vec CnTaeVector[T]) Bytes() *Bytes {
-	return MoVecToBytes(vec.downstreamVector)
-}
-
-func (vec CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
-	opts := Options{}
-	if len(allocator) == 0 {
-		opts.Allocator = vec.GetAllocator()
-	} else {
-		opts.Allocator = allocator[0]
-	}
-	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
-
-	// Create a window
-	window := cnVector.New(vec.GetType())
-	cnVector.Window(vec.downstreamVector, offset, offset+length, window)
-	cloned.downstreamVector = window
-
-	return cloned
-}
-
-func (vec CnTaeVector[T]) Window(offset, length int) Vector {
-
-	window := cnVector.New(vec.GetType())
-	cnVector.Window(vec.downstreamVector, offset, offset+length, window)
-
-	return CnTaeVector[T]{
-		downstreamVector: window,
-		mpool:            vec.GetAllocator(),
-	}
-}
-
-func (vec CnTaeVector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
-	return vec.ForeachWindow(0, vec.Length(), op, sels)
-}
-
 func (vec CnTaeVector[T]) Capacity() int {
-	// TODO: Not sure if it correct
-	// Should capacity be showing the mpool allocated byte[] capacity?
-
-	if vec.downstreamVector.Col != nil {
-		return cap(vec.downstreamVector.Col.([]T))
-	}
-	return 0
+	// TODO: Not sure if it is correct
+	return vec.downstreamVector.Length()
 }
-
-// At least better than No Idea
 
 func (vec CnTaeVector[T]) SlicePtr() unsafe.Pointer {
-	//panic("Soon Deprecated")
 	if vec.GetType().IsVarlen() {
 		panic("not support")
 	}
 	return cnVector.GetPtrAt(vec.downstreamVector, 0)
 }
 
+func (vec CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
+	var moVector *cnVector.Vector
+	if vec.GetType().IsVarlen() {
+		moVector, _ = cnVector.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
+	} else {
+		moVector = cnVector.NewOriginalWithData(vec.GetType(), bs.StorageBuf(), &cnNulls.Nulls{})
+	}
+
+	if vec.Nullable() {
+		moVector.Nsp.Np = bitmap.New(vec.Length())
+		moVector.Nsp.Np.AddMany(nulls.ToArray())
+	}
+	vec.downstreamVector = moVector
+}
+
+// --- Improve
+
 func (vec CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 
+	//TODO: Benchmark score is very poor in this implementation when compared to the original DN implementation.
 	if srcLen <= 0 {
 		return
 	}
 
-	//TODO: This null mask check is ideally not required. Need to check on how to remove it
 	if src.Nullable() && src.HasNull() {
 		if vec.downstreamVector.GetNulls() == nil {
 			vec.downstreamVector.Nsp = cnNulls.NewWithSize(0)
@@ -391,142 +502,5 @@ func (vec CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	slice := unsafe.Slice((*T)(src.SlicePtr()), srcOff+srcLen)
 	for i := srcOff; i < srcOff+srcLen; i++ {
 		vec.Append(any(slice[i]).(T))
-	}
-}
-
-func (vec CnTaeVector[T]) Delete(i int) {
-	cnVector.Delete[T](vec.downstreamVector, i)
-}
-
-func (vec CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
-	var nr int
-
-	output, _ := vec.downstreamVector.MarshalBinary()
-	if nr, err = w.Write(output); err != nil {
-		return
-	}
-	n += int64(nr)
-
-	return
-}
-
-func (vec CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	all, err := io.ReadAll(r)
-	if err != nil {
-		return 0, err
-	}
-	err = vec.downstreamVector.UnmarshalBinary(all)
-	if err != nil {
-		return 0, err
-	}
-
-	return 0, err
-}
-
-// No Idea
-
-func (vec CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
-	var moVector *cnVector.Vector
-	if vec.GetType().IsVarlen() {
-		moVector, _ = cnVector.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
-	} else {
-		moVector = cnVector.NewOriginalWithData(vec.GetType(), bs.StorageBuf(), &cnNulls.Nulls{})
-	}
-
-	if vec.Nullable() {
-		moVector.Nsp.Np = bitmap.New(vec.Length())
-		moVector.Nsp.Np.AddMany(nulls.ToArray())
-	}
-	vec.downstreamVector = moVector
-}
-
-// Issues
-
-func (vec CnTaeVector[T]) Data() []byte {
-	if vec.GetType().IsVarlen() {
-		panic("not support")
-	}
-	return vec.downstreamVector.GetData()
-}
-
-func (vec CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
-
-	stat := f.Stat()
-	var n []byte
-	var buf []byte
-	var tmpNode []byte
-	if stat.CompressAlgo() != compress.None {
-		osize := int(stat.OriginSize())
-		size := stat.Size()
-		tmpNode, err = vec.GetAllocator().Alloc(int(size))
-		if err != nil {
-			return
-		}
-		defer vec.GetAllocator().Free(tmpNode)
-		srcBuf := tmpNode[:size]
-		if _, err = f.Read(srcBuf); err != nil {
-			return
-		}
-		if buffer == nil {
-			n, err = vec.GetAllocator().Alloc(osize)
-			if err != nil {
-				return
-			}
-			buf = n[:osize]
-		} else {
-			buffer.Reset()
-			if osize > buffer.Cap() {
-				buffer.Grow(osize)
-			}
-			buf = buffer.Bytes()[:osize]
-		}
-		if _, err = compress.Decompress(srcBuf, buf, compress.Lz4); err != nil {
-			if n != nil {
-				vec.GetAllocator().Free(n)
-			}
-			return nil
-		}
-	}
-
-	err = vec.downstreamVector.UnmarshalBinary(buf)
-	return err
-}
-
-func (vec CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-
-	if sels == nil || sels.IsEmpty() {
-		for i := offset; i < offset+length; i++ {
-			elem := vec.Get(i)
-			if err = op(elem, i); err != nil {
-				break
-			}
-		}
-	} else {
-
-		idxes := sels.ToArray()
-		end := offset + length
-		for _, idx := range idxes {
-			if int(idx) < offset {
-				continue
-			} else if int(idx) >= end {
-				break
-			}
-			elem := vec.Get(int(idx))
-			if err = op(elem, int(idx)); err != nil {
-				break
-			}
-		}
-	}
-
-	return nil
-
-}
-
-// --------------- Yet to Implement
-
-func (vec CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
-	arr := deletes.ToArray()
-	for _, rowIdx := range arr {
-		vec.Delete(int(rowIdx))
 	}
 }

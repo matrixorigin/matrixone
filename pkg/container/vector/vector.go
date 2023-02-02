@@ -928,7 +928,18 @@ func Dup(v *Vector, m *mpool.MPool) (*Vector, error) {
 // Window just returns a window out of input and no deep copy.
 func Window(v *Vector, start, end int, w *Vector) *Vector {
 	w.Typ = v.Typ
-	w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+
+	if start == 0 {
+		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+	} else {
+		w.Nsp = nulls.NewWithSize(end - start + 1)
+		for i := start; i < end; i++ {
+			if v.Nsp.Contains(uint64(i)) {
+				w.Nsp.Np.Add(uint64(i - start))
+			}
+		}
+	}
+
 	w.data = v.data
 	w.area = v.area
 	w.setupColFromData(start, end)
@@ -1751,31 +1762,56 @@ func CopyConst(toVec, fromVec *Vector, length int, m *mpool.MPool) error {
 
 func Delete[T any](v *Vector, i int) {
 	if v.Nsp != nil && v.Nsp.Any() {
-		vNulls := v.Nsp.Np.Clone()
-
-		vNullsArr := vNulls.ToArray()
-		for pos := len(vNullsArr) - 1; pos >= 0; pos-- {
-			if vNullsArr[pos] < uint64(i) {
-				break
-			}
-			vNulls.Remove(vNullsArr[pos])
-			vNulls.Add(vNullsArr[pos] - 1)
-		}
-
-		v.Nsp.Np = vNulls
+		oldNulls := v.Nsp.Np.Clone()
+		nullSet(i, oldNulls)
+		v.Nsp.Np = oldNulls
+		fmt.Println(oldNulls)
 	}
 
-	vCol := v.Col.([]T)
-	vCol = append(vCol[:i], vCol[i+1:]...)
-	v.Col = vCol
+	if v.GetType().IsVarlen() {
+		vCol := MustTCols[types.Varlena](v)
+		vCol = append(vCol[:i], vCol[i+1:]...)
 
-	var a T
-	tsize := int(unsafe.Sizeof(a))
+		// This is used to reset the capacity
+		vCol = vCol[0:len(vCol):len(vCol)]
 
-	size := len(v.data) - tsize
-	v.data = v.data[:size]
+		v.Col = vCol
+		v.data = v.encodeColToByteSlice()
+	} else {
+		vCol := v.Col.([]T)
+		vCol = append(vCol[:i], vCol[i+1:]...)
+		v.Col = vCol
+		v.data = v.encodeColToByteSlice()
+	}
+
 }
 
-func (v *Vector) GetData() []byte {
-	return v.data
+func nullSet(i int, oldNulls *bitmap.Bitmap) {
+	roOldNullsArr := oldNulls.ToArray()
+	var lastNullRow uint64
+	if len(roOldNullsArr) > 0 {
+		lastNullRow = roOldNullsArr[len(roOldNullsArr)-1]
+	}
+
+	if lastNullRow < uint64(i) {
+		return
+	} else if lastNullRow == uint64(i) {
+		oldNulls.Remove(uint64(i))
+		return
+	}
+
+	oldNulls.Clear()
+	fmt.Println("old", roOldNullsArr)
+	for pos := len(roOldNullsArr) - 1; pos >= 0; pos-- {
+		if roOldNullsArr[pos] == uint64(i) {
+			continue
+		}
+
+		if roOldNullsArr[pos] < uint64(i) {
+			oldNulls.Add(roOldNullsArr[pos])
+		} else {
+			oldNulls.Add(roOldNullsArr[pos] - 1)
+		}
+
+	}
 }
