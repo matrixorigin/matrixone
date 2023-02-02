@@ -15,6 +15,8 @@
 package disttae
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/tidwall/btree"
 )
@@ -26,19 +28,38 @@ type TreeIndex struct {
 type IndexEntry struct {
 	Tuple Tuple
 	RowID types.Rowid
+	// this is required, because a row's value may change (wow!) and tuple may be different.
+	// we need to validate the entry by checking the current version of row ref.
+	RowRefID int64
 }
 
 func NewTreeIndex() *TreeIndex {
 	return &TreeIndex{
 		tree: btree.NewBTreeG(func(a, b *IndexEntry) bool {
-			return a.Tuple.Less(b.Tuple)
+			if a.Tuple.Less(b.Tuple) {
+				return true
+			} else if b.Tuple.Less(a.Tuple) {
+				return false
+			}
+			if res := bytes.Compare(a.RowID[:], b.RowID[:]); res < 0 {
+				return true
+			} else if res > 0 {
+				return false
+			}
+			if a.RowRefID < b.RowRefID {
+				return true
+			} else if b.RowRefID < a.RowRefID {
+				return false
+			}
+			return false
 		}),
 	}
 }
 
-func (t *TreeIndex) Set(tuple Tuple, rowID types.Rowid) {
+func (t *TreeIndex) Set(tuple Tuple, rowID types.Rowid, rowRefID int64) {
 	t.tree.Set(&IndexEntry{
-		Tuple: tuple,
-		RowID: rowID,
+		Tuple:    tuple,
+		RowID:    rowID,
+		RowRefID: rowRefID,
 	})
 }

@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -287,21 +288,22 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			indexes = append(indexes, index)
 		}
 
+		rowRef := RowRef{
+			ID:     atomic.AddInt64(&nextRowRefID, 1),
+			Batch:  bat,
+			Offset: offset,
+		}
 		p.index.RowIDs.Update(rowId, func(p *Versions[RowRef]) *Versions[RowRef] {
-			rowRef := &RowRef{
-				Batch:  bat,
-				Offset: offset,
-			}
 			if p == nil {
 				versions := new(Versions[RowRef])
-				versions.Set(ts.ToTimestamp(), rowRef)
+				versions.Set(ts.ToTimestamp(), &rowRef)
 				return versions
 			}
-			p.Set(ts.ToTimestamp(), rowRef)
+			p.Set(ts.ToTimestamp(), &rowRef)
 			return p
 		})
 		for _, tuple := range indexes {
-			p.index.Index.Set(tuple, rowId)
+			p.index.Index.Set(tuple, rowId, rowRef.ID)
 		}
 
 		err = p.data.Upsert(tx, &DataRow{

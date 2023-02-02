@@ -27,9 +27,12 @@ type PartitionIndex struct {
 }
 
 type RowRef struct {
+	ID     int64
 	Batch  *batch.Batch
 	Offset int
 }
+
+var nextRowRefID int64
 
 func NewPartitionIndex() *PartitionIndex {
 	return &PartitionIndex{
@@ -91,13 +94,16 @@ func (t *TreeIndexIter) Next() bool {
 			return false
 		}
 
-		// check row id
+		// check row ref
 		versions, ok := t.rowIDs.Get(entry.RowID)
 		if !ok {
 			continue
 		}
 		p := versions.Get(t.time)
 		if p == nil {
+			continue
+		}
+		if entry.RowRefID != p.ID {
 			continue
 		}
 
