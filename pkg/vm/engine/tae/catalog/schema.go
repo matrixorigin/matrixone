@@ -701,6 +701,11 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 	if len(from) > 0 {
 		start = from[0]
 	}
+
+	constraintDef := &engine.ConstraintDef{
+		Cts: make([]engine.Constraint, 0),
+	}
+
 	for i := 0; i < colCnt; i++ {
 		if i < start {
 			continue
@@ -766,6 +771,13 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 
 		if pkIdx == i {
 			_ = schema.AppendPKCol(name, typ, 0)
+			pkConstraint := &engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					PkeyColName: name,
+					Names:       []string{name},
+				},
+			}
+			constraintDef.Cts = append(constraintDef.Cts, pkConstraint)
 		} else {
 			_ = schema.AppendCol(name, typ)
 			schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
@@ -773,6 +785,7 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 	}
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
+	schema.Constraint, _ = constraintDef.MarshalBinary()
 	_ = schema.Finalize(false)
 	return schema
 }
