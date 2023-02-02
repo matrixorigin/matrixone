@@ -846,7 +846,7 @@ func Test_handleShowColumns(t *testing.T) {
 		tableName.Parts[0] = "y"
 		err = handleShowColumns(ses, &tree.ShowColumns{
 			Table: tableName,
-		})
+		}, ses.GetTxnCompileCtx())
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
