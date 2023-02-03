@@ -46,14 +46,18 @@ func (e *miniExec) doComQuery(context.Context, string) error {
 	_ = e.sess.GetMysqlProtocol()
 	return nil
 }
-func (e *miniExec) PrepareSessionBeforeExecRequest(sess *Session) {
+func (e *miniExec) SetSession(sess *Session) {
 	e.sess = sess
 }
 
 func TestIe(t *testing.T) {
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
-	executor := newIe(pu, &miniExec{})
+
+	// Mock autoIncrCaches
+	aic := defines.AutoIncrCaches{}
+
+	executor := newIe(pu, &miniExec{}, aic)
 	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
 	sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
 	assert.Equal(t, "dump", sess.GetMysqlProtocol().GetUserName())
@@ -67,24 +71,29 @@ func TestIe(t *testing.T) {
 
 func TestIeProto(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
-	executor := NewInternalExecutor(pu)
+
+	// Mock autoIncrCaches
+	aic := defines.AutoIncrCaches{}
+
+	executor := NewInternalExecutor(pu, aic)
 	p := executor.proto
 	assert.True(t, p.IsEstablished())
 	p.SetEstablished()
 	p.Quit()
-	p.PrepareBeforeProcessingResultSet()
+	p.ResetStatistics()
 	_ = p.GetStats()
 	_ = p.ConnectionID()
+	ctx := context.TODO()
 	assert.Panics(t, func() { p.GetRequest([]byte{1}) })
 	assert.Panics(t, func() { p.Peer() })
-	assert.Nil(t, p.SendColumnDefinitionPacket(nil, 1))
+	assert.Nil(t, p.SendColumnDefinitionPacket(ctx, nil, 1))
 	assert.Nil(t, p.SendColumnCountPacket(1))
 	assert.Nil(t, p.SendEOFPacketIf(0, 1))
 	assert.Nil(t, p.sendOKPacket(1, 1, 0, 0, ""))
 	assert.Nil(t, p.sendEOFOrOkPacket(0, 1))
 
 	p.stashResult = true
-	p.SendResponse(&Response{
+	p.SendResponse(ctx, &Response{
 		category:     OkResponse,
 		status:       0,
 		affectedRows: 1,
@@ -92,7 +101,7 @@ func TestIeProto(t *testing.T) {
 	})
 	assert.Nil(t, nil, p.result.resultSet)
 	assert.Equal(t, uint64(1), p.result.affectedRows)
-	p.SendResponse(&Response{
+	p.SendResponse(ctx, &Response{
 		category: ResultResponse,
 		status:   0,
 		data: &MysqlExecutionResult{
@@ -100,23 +109,23 @@ func TestIeProto(t *testing.T) {
 			mrs:          mockResultSet(),
 		},
 	})
-	v, _ := p.result.Value(0, 0)
+	v, _ := p.result.Value(ctx, 0, 0)
 	assert.Equal(t, 42, v.(int))
 
-	p.PrepareBeforeProcessingResultSet()
+	p.ResetStatistics()
 	assert.NoError(t, p.SendResultSetTextBatchRowSpeedup(mockResultSet(), 1))
 	r := p.swapOutResult()
-	v, e := r.Value(0, 0)
+	v, e := r.Value(ctx, 0, 0)
 	assert.NoError(t, e)
 	assert.Equal(t, 42, v.(int))
-	p.PrepareBeforeProcessingResultSet()
+	p.ResetStatistics()
 	assert.NoError(t, p.SendResultSetTextBatchRow(mockResultSet(), 1))
 	r = p.swapOutResult()
-	v, e = r.Value(0, 0)
+	v, e = r.Value(ctx, 0, 0)
 	assert.NoError(t, e)
 	assert.Equal(t, 42, v.(int))
 	assert.Equal(t, uint64(1), r.affectedRows)
-	p.PrepareBeforeProcessingResultSet()
+	p.ResetStatistics()
 
 	r = p.swapOutResult()
 	assert.Equal(t, uint64(0), r.resultSet.GetRowCount())
@@ -124,43 +133,43 @@ func TestIeProto(t *testing.T) {
 
 func TestIeResult(t *testing.T) {
 	set := mockResultSet()
-	result := &internalExecResult{affectedRows: 1, resultSet: set, err: moerr.NewInternalError("random")}
+	result := &internalExecResult{affectedRows: 1, resultSet: set, err: moerr.NewInternalError(context.TODO(), "random")}
 	require.Equal(t, "internal error: random", result.Error().Error())
 	require.Equal(t, uint64(1), result.ColumnCount())
 	require.Equal(t, uint64(1), result.RowCount())
-	n, ty, s, e := result.Column(0)
+	n, ty, s, e := result.Column(context.TODO(), 0)
 	require.NoError(t, e)
 	require.Equal(t, "test", n)
 	require.Equal(t, defines.MYSQL_TYPE_LONG, defines.MysqlType(ty))
 	require.True(t, s)
-	_, _, _, e = result.Column(1)
+	_, _, _, e = result.Column(context.TODO(), 1)
 	require.Error(t, e)
-	r, e := result.Row(0)
+	r, e := result.Row(context.TODO(), 0)
 	require.Equal(t, 42, r[0].(int))
 	require.NoError(t, e)
-	_, e = result.Row(1)
+	_, e = result.Row(context.TODO(), 1)
 	require.Error(t, e)
-	v, e := result.Value(0, 0)
+	v, e := result.Value(context.TODO(), 0, 0)
 	require.NoError(t, e)
 	require.Equal(t, 42, v.(int))
-	v, e = result.ValueByName(0, "test")
+	v, e = result.ValueByName(context.TODO(), 0, "test")
 	require.NoError(t, e)
 	require.Equal(t, 42, v.(int))
-	str, e := result.StringValueByName(0, "test")
+	str, e := result.StringValueByName(context.TODO(), 0, "test")
 	require.NoError(t, e)
 	require.Equal(t, "42", str)
-	str, e = result.StringValueByName(0, "tet")
+	str, e = result.StringValueByName(context.TODO(), 0, "tet")
 	require.Error(t, e)
 	require.Equal(t, "", str)
 }
 
-func DebugPrintInternalResult(res ie.InternalExecResult) string {
+func DebugPrintInternalResult(ctx context.Context, res ie.InternalExecResult) string {
 	buf := &bytes.Buffer{}
 	for i := uint64(0); i < res.ColumnCount(); i++ {
-		col, _, _, _ := res.Column(i)
+		col, _, _, _ := res.Column(context.TODO(), i)
 		buf.WriteString(col + ": ")
 		for j := uint64(0); j < res.RowCount(); j++ {
-			s, _ := res.StringValueByName(j, col)
+			s, _ := res.StringValueByName(ctx, j, col)
 			buf.WriteString(" | ")
 			buf.WriteString(s)
 		}

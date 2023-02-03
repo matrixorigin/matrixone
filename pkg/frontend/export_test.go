@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"testing"
 
@@ -32,9 +33,11 @@ var colName1, colName2 = "DATABASE()", "VARIABLE_VALUE"
 func Test_initExportFileParam(t *testing.T) {
 	var oq = &outputQueue{
 		mrs: &MysqlResultSet{},
-		ep: &tree.ExportParam{
-			Lines:  &tree.Lines{},
-			Fields: &tree.Fields{},
+		ep: &ExportParam{
+			ExportParam: &tree.ExportParam{
+				Lines:  &tree.Lines{},
+				Fields: &tree.Fields{},
+			},
 		},
 	}
 	initExportFileParam(oq.ep, oq.mrs)
@@ -55,26 +58,30 @@ func Test_openNewFile(t *testing.T) {
 	convey.Convey("openNewFile failed", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 			},
 		}
-		stubs := gostub.StubFunc(&OpenFile, nil, moerr.NewInternalError("can not open file"))
+		stubs := gostub.StubFunc(&OpenFile, nil, moerr.NewInternalError(context.TODO(), "can not open file"))
 		defer stubs.Reset()
-		convey.So(openNewFile(oq.ep, oq.mrs), convey.ShouldNotBeNil)
+		convey.So(openNewFile(context.TODO(), oq.ep, oq.mrs), convey.ShouldNotBeNil)
 	})
 
 	convey.Convey("openNewFile succ", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 				LineSize: 1,
 			},
 		}
@@ -92,7 +99,7 @@ func Test_openNewFile(t *testing.T) {
 		stubs = gostub.StubFunc(&writeDataToCSVFile, nil)
 		defer stubs.Reset()
 
-		convey.So(openNewFile(oq.ep, oq.mrs), convey.ShouldBeNil)
+		convey.So(openNewFile(context.TODO(), oq.ep, oq.mrs), convey.ShouldBeNil)
 	})
 }
 
@@ -100,15 +107,17 @@ func Test_formatOutputString(t *testing.T) {
 	convey.Convey("openNewFile failed", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 				LineSize: 1,
 			},
 		}
-		stubs := gostub.StubFunc(&writeDataToCSVFile, moerr.NewInternalError("write err"))
+		stubs := gostub.StubFunc(&writeDataToCSVFile, moerr.NewInternalError(context.TODO(), "write err"))
 		defer stubs.Reset()
 		convey.So(formatOutputString(oq, nil, nil, '\n', true), convey.ShouldNotBeNil)
 
@@ -122,11 +131,13 @@ func Test_writeToCSVFile(t *testing.T) {
 	convey.Convey("writeToCSVFile case", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 				LineSize: 1,
 				Writer:   &bufio.Writer{},
 			},
@@ -137,7 +148,7 @@ func Test_writeToCSVFile(t *testing.T) {
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
 		oq.ep.Rows = 1
-		stubs := gostub.StubFunc(&Flush, moerr.NewInternalError("Flush error"))
+		stubs := gostub.StubFunc(&Flush, moerr.NewInternalError(context.TODO(), "Flush error"))
 		defer stubs.Reset()
 
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
@@ -145,38 +156,38 @@ func Test_writeToCSVFile(t *testing.T) {
 		stubs = gostub.StubFunc(&Flush, nil)
 		defer stubs.Reset()
 
-		stubs = gostub.StubFunc(&Seek, int64(0), moerr.NewInternalError("Seek error"))
+		stubs = gostub.StubFunc(&Seek, int64(0), moerr.NewInternalError(context.TODO(), "Seek error"))
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
 		stubs = gostub.StubFunc(&Seek, int64(0), nil)
 		defer stubs.Reset()
-		stubs = gostub.StubFunc(&Read, 0, moerr.NewInternalError("Read error"))
+		stubs = gostub.StubFunc(&Read, 0, moerr.NewInternalError(context.TODO(), "Read error"))
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
 		stubs = gostub.StubFunc(&Read, 1, nil)
 		defer stubs.Reset()
 
-		stubs = gostub.StubFunc(&Truncate, moerr.NewInternalError("Truncate error"))
+		stubs = gostub.StubFunc(&Truncate, moerr.NewInternalError(context.TODO(), "Truncate error"))
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
 		stubs = gostub.StubFunc(&Truncate, nil)
 		defer stubs.Reset()
-		stubs = gostub.StubFunc(&Close, moerr.NewInternalError("Close error"))
+		stubs = gostub.StubFunc(&Close, moerr.NewInternalError(context.TODO(), "Close error"))
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
 		stubs = gostub.StubFunc(&Close, nil)
 		defer stubs.Reset()
-		stubs = gostub.StubFunc(&openNewFile, moerr.NewInternalError("openNewFile error"))
+		stubs = gostub.StubFunc(&openNewFile, moerr.NewInternalError(context.TODO(), "openNewFile error"))
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
 		stubs = gostub.StubFunc(&openNewFile, nil)
 		defer stubs.Reset()
-		stubs = gostub.StubFunc(&writeDataToCSVFile, moerr.NewInternalError("writeDataToCSVFile error"))
+		stubs = gostub.StubFunc(&writeDataToCSVFile, moerr.NewInternalError(context.TODO(), "writeDataToCSVFile error"))
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
@@ -190,17 +201,19 @@ func Test_writeDataToCSVFile(t *testing.T) {
 	convey.Convey("writeDataToCSVFile case", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 				LineSize: 1,
 				Writer:   &bufio.Writer{},
 			},
 		}
 		var output = []byte{'1', '2'}
-		stubs := gostub.StubFunc(&Write, 0, moerr.NewInternalError("writeDataToCSVFile error"))
+		stubs := gostub.StubFunc(&Write, 0, moerr.NewInternalError(context.TODO(), "writeDataToCSVFile error"))
 		defer stubs.Reset()
 
 		convey.So(writeDataToCSVFile(oq.ep, output), convey.ShouldNotBeNil)
@@ -216,11 +229,13 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataToCSVFile succ", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 				LineSize: 1,
 				Writer:   &bufio.Writer{},
 			},
@@ -264,11 +279,13 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataToCSVFile fail", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &tree.ExportParam{
-				Lines:    &tree.Lines{},
-				Fields:   &tree.Fields{},
-				Header:   true,
-				FilePath: "test/export.csv",
+			ep: &ExportParam{
+				ExportParam: &tree.ExportParam{
+					Lines:    &tree.Lines{},
+					Fields:   &tree.Fields{},
+					Header:   true,
+					FilePath: "test/export.csv",
+				},
 				LineSize: 1,
 				Writer:   &bufio.Writer{},
 			},

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 var (
@@ -119,9 +120,9 @@ func (db *txnDatabase) Create(_ context.Context, name string, defs []engine.Tabl
 	return err
 }
 
-func (db *txnDatabase) Truncate(_ context.Context, name string) error {
+func (db *txnDatabase) Truncate(_ context.Context, name string) (uint64, error) {
 	_, err := db.handle.TruncateByName(name)
-	return err
+	return 0, err
 }
 
 func (db *txnDatabase) TruncateRelationWithID(_ context.Context, name string, id uint64) error {
@@ -139,8 +140,8 @@ func (db *txnDatabase) CreateRelation(_ context.Context, name string, defs []eng
 	if err != nil {
 		return err
 	}
-	schema.BlockMaxRows = 40000
-	schema.SegmentMaxBlocks = 20
+	schema.BlockMaxRows = options.DefaultBlockMaxRows
+	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
 	_, err = db.handle.CreateRelation(schema)
 	return err
 }
@@ -152,8 +153,8 @@ func (db *txnDatabase) CreateRelationWithID(_ context.Context, name string,
 	if err != nil {
 		return err
 	}
-	schema.BlockMaxRows = 40000
-	schema.SegmentMaxBlocks = 20
+	schema.BlockMaxRows = options.DefaultBlockMaxRows
+	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
 	_, err = db.handle.CreateRelationWithID(schema, id)
 	return err
 }

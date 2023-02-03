@@ -15,17 +15,20 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
 	if stmt.OnDuplicateUpdate != nil {
-		return nil, moerr.NewNotSupported("INSERT ... ON DUPLICATE KEY UPDATE ...")
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ...")
 	}
 	rows := stmt.Rows
 	switch rows.Select.(type) {
@@ -34,7 +37,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
 	case *tree.SelectClause, *tree.ParenSelect:
 		return buildInsertSelect(stmt, ctx)
 	default:
-		return nil, moerr.NewInvalidInput("insert has unknown select statement")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert has unknown select statement")
 	}
 }
 
@@ -42,7 +45,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	// get table source
 	tbl, ok := stmt.Table.(*tree.TableName)
 	if !ok {
-		return nil, moerr.NewInvalidInput("insert table is invalid '%s'", tree.String(stmt.Table, dialect.MYSQL))
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert table is invalid '%s'", tree.String(stmt.Table, dialect.MYSQL))
 	}
 	tblName := string(tbl.ObjectName)
 	dbName := string(tbl.SchemaName)
@@ -51,27 +54,52 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 	_, tblRef := ctx.Resolve(dbName, tblName)
 	if tblRef == nil {
-		return nil, moerr.NewInvalidInput("insert table is invalid '%s'", tree.String(stmt.Table, dialect.MYSQL))
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert table is invalid '%s'", tree.String(stmt.Table, dialect.MYSQL))
 	}
 	if tblRef.TableType == catalog.SystemExternalRel {
-		return nil, moerr.NewInvalidInput("cannot insert into external table '%s'", tblName)
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert into external table '%s'", tblName)
 	} else if tblRef.TableType == catalog.SystemViewRel {
-		return nil, moerr.NewInvalidInput("cannot insert into view '%s'", tblName)
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert into view '%s'", tblName)
+	}
+
+	isClusterTable := util.TableIsClusterTable(tblRef.GetTableType())
+	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert data into the cluster table")
+	}
+	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tblRef, isClusterTable)
+	if err != nil {
+		return nil, err
 	}
 
 	// build columns
 	colCount := len(tblRef.Cols)
 
-	hasExplicitCols := false
+	//syntaxHasColumnNames
+	//	true: there is at least one specified column name after the table name.
+	syntaxHasColumnNames := false
 	if stmt.Columns != nil {
-		hasExplicitCols = true
+		syntaxHasColumnNames = true
 	}
 
+	// columns designated in syntax or all columns in the table.
 	var explicitCols []*ColDef
 	if stmt.Columns == nil {
-		explicitCols = append(explicitCols, tblRef.Cols...)
+		if isClusterTable {
+			//filter out the column account_id of the cluster table
+			for _, col := range tblRef.Cols {
+				if !util.IsClusterTableAttribute(col.Name) {
+					explicitCols = append(explicitCols, col)
+				}
+			}
+		} else {
+			explicitCols = append(explicitCols, tblRef.Cols...)
+		}
 	} else {
 		for _, attr := range stmt.Columns {
+			//user can not specify the column account_id of the cluster table in the syntax
+			if isClusterTable && util.IsClusterTableAttribute(string(attr)) {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "do not specify the attribute %s for the cluster table", util.GetClusterTableAttributeName())
+			}
 			hasAttr := false
 			for _, col := range tblRef.Cols {
 				if string(attr) == col.Name {
@@ -81,17 +109,20 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 				}
 			}
 			if !hasAttr {
-				return nil, moerr.NewInvalidInput("insert value into unknown column '%s'", string(attr))
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert value into unknown column '%s'", string(attr))
 			}
 		}
 	}
 	explicitCount := len(explicitCols)
 
+	hasAutoCol := false
 	orderAttrs := make([]string, 0, colCount)
 	for _, col := range tblRef.Cols {
+		hasAutoCol = hasAutoCol || col.Typ.AutoIncr
 		orderAttrs = append(orderAttrs, col.Name)
 	}
 
+	//the column definitions that does not be specified after the table name
 	var otherCols []*ColDef
 	if len(explicitCols) < colCount {
 		for _, c1 := range tblRef.Cols {
@@ -109,15 +140,21 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 
 	rows := stmt.Rows.Select.(*tree.ValuesClause).Rows
+	//isAllDefault:
+	//	true: the values clause is empty
 	isAllDefault := false
 	if rows[0] == nil {
 		isAllDefault = true
 	}
 
-	if isAllDefault && hasExplicitCols {
-		return nil, moerr.NewInvalidInput("insert values does not match number of columns")
+	//example1:insert into a(a) values ();
+	//but it does not work at the case:
+	//insert into a(a) values (0),();
+	if isAllDefault && syntaxHasColumnNames {
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert values does not match the number of columns")
 	}
 
+	//the values clause transformed into the resolved expressions.
 	rowCount := len(rows)
 	columns := make([]*plan.Column, colCount)
 	for i := range columns {
@@ -127,35 +164,46 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 
 	if isAllDefault {
-		// hasExplicitCols must be false
+		// syntaxHasColumnNames must be false
 		for _, row := range rows {
 			if row != nil {
-				return nil, moerr.NewInvalidInput("insert values does not match number of columns")
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert values does not match number of columns")
 			}
 			// build column
 			for j, col := range explicitCols {
-				expr, err := getDefaultExpr(col)
+				expr, err := getDefaultExpr(ctx.GetContext(), col)
 				if err != nil {
 					return nil, err
 				}
 				columns[j].Column = append(columns[j].Column, expr)
 			}
+			if isClusterTable {
+				idx := explicitCount
+				for _, col := range otherCols {
+					expr, err := getDefaultExpr(ctx.GetContext(), col)
+					if err != nil {
+						return nil, err
+					}
+					columns[idx].Column = append(columns[idx].Column, expr)
+					idx++
+				}
+			}
 		}
 	} else {
-		// hasExplicitCols maybe true or false
+		// syntaxHasColumnNames maybe true or false
 		binders := make([]*DefaultBinder, 0, len(explicitCols))
 		for _, col := range explicitCols {
-			binders = append(binders, NewDefaultBinder(nil, nil, col.Typ, nil))
+			binders = append(binders, NewDefaultBinder(ctx.GetContext(), nil, nil, col.Typ, nil))
 		}
 		for i, row := range rows {
 			if row == nil || explicitCount != len(row) {
-				return nil, moerr.NewInvalidInput("insert values does not match the number of columns")
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert values does not match the number of columns")
 			}
 
 			idx := 0
 			for j, col := range explicitCols {
 				if _, ok := row[idx].(*tree.DefaultVal); ok {
-					expr, err := getDefaultExpr(col)
+					expr, err := getDefaultExpr(ctx.GetContext(), col)
 					if err != nil {
 						return nil, err
 					}
@@ -163,12 +211,12 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 				} else {
 					planExpr, err := binders[j].BindExpr(row[idx], 0, false)
 					if err != nil {
-						err = MakeInsertError(types.T(col.Typ.Id), col, rows, j, i)
+						err = MakeInsertError(ctx.GetContext(), types.T(col.Typ.Id), col, rows, j, i, err)
 						return nil, err
 					}
-					resExpr, err := makePlan2CastExpr(planExpr, col.Typ)
+					resExpr, err := makePlan2CastExpr(ctx.GetContext(), planExpr, col.Typ)
 					if err != nil {
-						err = MakeInsertError(types.T(col.Typ.Id), col, rows, j, i)
+						err = MakeInsertError(ctx.GetContext(), types.T(col.Typ.Id), col, rows, j, i, err)
 						return nil, err
 					}
 					columns[idx].Column = append(columns[idx].Column, resExpr)
@@ -177,7 +225,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			}
 
 			for _, col := range otherCols {
-				expr, err := getDefaultExpr(col)
+				expr, err := getDefaultExpr(ctx.GetContext(), col)
 				if err != nil {
 					return nil, err
 				}
@@ -186,25 +234,37 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			}
 		}
 	}
-	indexInfo := BuildIndexInfos(ctx, dbName, tblRef.Defs)
+
+	uDef, sDef := buildIndexDefs(tblRef.Defs)
+
+	if otherCols != nil {
+		explicitCols = append(explicitCols, otherCols...)
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ins{
 			Ins: &plan.InsertValues{
-				DbName:        dbName,
-				TblName:       tblName,
-				ExplicitCols:  explicitCols,
-				OtherCols:     otherCols,
-				OrderAttrs:    orderAttrs,
-				Columns:       columns,
-				CompositePkey: tblRef.CompositePkey,
-				IndexInfos:    indexInfo,
+				DbName:            dbName,
+				TblName:           tblName,
+				ExplicitCols:      explicitCols,
+				OtherCols:         otherCols,
+				OrderAttrs:        orderAttrs,
+				Columns:           columns,
+				CompositePkey:     tblRef.CompositePkey,
+				Cb:                tblRef.ClusterBy,
+				UniqueIndexDef:    uDef,
+				SecondaryIndexDef: sDef,
+				ClusterTable:      clusterTable,
+				HasAutoCol:        hasAutoCol,
 			},
 		},
 	}, nil
 }
 
-func MakeInsertError(id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx int) error {
+func MakeInsertError(ctx context.Context, id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx int, err error) error {
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		return err
+	}
 	var str string
 	if rows[rowIdx] == nil || len(rows[rowIdx]) < colIdx {
 		str = col.Default.OriginString
@@ -214,9 +274,9 @@ func MakeInsertError(id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx 
 		str = tree.String(rows[rowIdx][colIdx], dialect.MYSQL)
 	}
 	if id == types.T_json {
-		return moerr.NewInvalidInput("Invalid %s text: '%s' for column '%s' at row '%d'", id.String(), str, col.Name, rowIdx+1)
+		return moerr.NewInvalidInput(ctx, "Invalid %s text: '%s' for column '%s' at row '%d'", id.String(), str, col.Name, rowIdx+1)
 	}
-	return moerr.NewTruncatedValueForField(id.String(), str, col.Name, rowIdx+1)
+	return moerr.NewTruncatedValueForField(ctx, id.String(), str, col.Name, rowIdx+1)
 }
 
 func SetPlanLoadTag(pn *Plan) {
@@ -239,10 +299,10 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		return nil, err
 	}
 	SetPlanLoadTag(pn)
-	cols := GetResultColumnsFromPlan(pn)
+	sourceColDefs := GetResultColumnsFromPlan(pn)
 	pn.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
-	if len(stmt.Columns) != 0 && len(stmt.Columns) != len(cols) {
-		return nil, moerr.NewInvalidInput("insert statement column count does not match")
+	if len(stmt.Columns) != 0 && len(stmt.Columns) != len(sourceColDefs) {
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert statement column count does not match")
 	}
 
 	objRef, tableDef, err := getInsertTable(stmt.Table, ctx)
@@ -250,52 +310,89 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		return nil, err
 	}
 	if tableDef.TableType == catalog.SystemExternalRel {
-		return nil, moerr.NewInvalidInput("cannot insert into external table")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert into external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
-		return nil, moerr.NewInvalidInput("cannot insert into view")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert into view")
 	}
 
-	valueCount := len(stmt.Columns)
-	if len(stmt.Columns) == 0 {
-		valueCount = len(tableDef.Cols)
+	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
+	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert data into the cluster table")
 	}
-	if valueCount != len(cols) {
-		return nil, moerr.NewInvalidInput("insert statement column count does not match value count")
+	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, isClusterTable)
+	if err != nil {
+		return nil, err
+	}
+
+	countOfTargetColumn := len(stmt.Columns)
+	if len(stmt.Columns) == 0 {
+		countOfTargetColumn = len(tableDef.Cols)
+		if isClusterTable {
+			//skip the column account_id of the cluster table
+			if countOfTargetColumn != len(sourceColDefs)+1 {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert statement column count does not match value count")
+			}
+		} else {
+			if countOfTargetColumn != len(sourceColDefs) {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert statement column count does not match value count")
+			}
+		}
+	} else {
+		if isClusterTable {
+			for _, attr := range stmt.Columns {
+				//user can not specify the column account_id of the cluster table in the syntax
+				if util.IsClusterTableAttribute(string(attr)) {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "do not specify the attribute %s for the cluster table", util.GetClusterTableAttributeName())
+				}
+			}
+		}
+		if countOfTargetColumn != len(sourceColDefs) {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert statement column count does not match value count")
+		}
 	}
 
 	// generate values expr
-	exprs, err := getInsertExprs(stmt, cols, tableDef)
+	exprs, err := getInsertExprs(ctx, stmt, sourceColDefs, tableDef, isClusterTable, clusterTable.GetColumnIndexOfAccountId())
 	if err != nil {
 		return nil, err
 	}
 
 	// do type cast if needed
 	for i := range tableDef.Cols {
-		exprs[i], err = makePlan2CastExpr(exprs[i], tableDef.Cols[i].Typ)
+		exprs[i], err = makePlan2CastExpr(ctx.GetContext(), exprs[i], tableDef.Cols[i].Typ)
 		if err != nil {
 			return nil, err
 		}
 	}
 	qry := pn.Plan.(*plan.Plan_Query).Query
 	n := &Node{
-		ObjRef:      objRef,
-		TableDef:    tableDef,
-		NodeType:    plan.Node_INSERT,
-		NodeId:      int32(len(qry.Nodes)),
-		Children:    []int32{qry.Steps[len(qry.Steps)-1]},
-		ProjectList: exprs,
+		ObjRef:       objRef,
+		TableDef:     tableDef,
+		NodeType:     plan.Node_INSERT,
+		NodeId:       int32(len(qry.Nodes)),
+		Children:     []int32{qry.Steps[len(qry.Steps)-1]},
+		ProjectList:  exprs,
+		ClusterTable: clusterTable,
 	}
 	appendQueryNode(qry, n)
 	qry.Steps[len(qry.Steps)-1] = n.NodeId
 	return pn, nil
 }
 
-func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*Expr, error) {
+func getInsertExprs(ctx CompilerContext, stmt *tree.Insert, cols []*ColDef, tableDef *TableDef, isClusterTable bool, columnIndexOfAccountId int32) ([]*Expr, error) {
 	var exprs []*Expr
-
+	var err error
 	if len(stmt.Columns) == 0 {
-		exprs = make([]*Expr, len(cols))
+		exprs = make([]*Expr, len(tableDef.Cols))
 		for i := range exprs {
+			//the column account_id of the cluster table has the default expr
+			if isClusterTable && i == int(columnIndexOfAccountId) {
+				exprs[i], err = getDefaultExpr(ctx.GetContext(), tableDef.Cols[i])
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
 			exprs[i] = &plan.Expr{
 				Typ: cols[i].Typ,
 				Expr: &plan.Expr_Col{
@@ -318,10 +415,18 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 		// check if the column name is legal
 		for k := range targetMap {
 			if _, ok := tableColMap[k]; !ok {
-				return nil, moerr.NewInvalidInput("insert column '%s' does not exist", k)
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "insert column '%s' does not exist", k)
 			}
 		}
 		for i := range exprs {
+			//the column account_id of the cluster table has the default expr
+			if isClusterTable && i == int(columnIndexOfAccountId) {
+				exprs[i], err = getDefaultExpr(ctx.GetContext(), tableDef.Cols[i])
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
 			if ref, ok := targetMap[tableDef.Cols[i].GetName()]; ok {
 				exprs[i] = &plan.Expr{
 					Typ: cols[ref].Typ,
@@ -333,11 +438,12 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 				}
 			} else {
 				var err error
-				exprs[i], err = getDefaultExpr(tableDef.Cols[i])
+				exprs[i], err = getDefaultExpr(ctx.GetContext(), tableDef.Cols[i])
 				if err != nil {
 					return nil, err
 				}
 			}
+
 		}
 	}
 	return exprs, nil
@@ -350,51 +456,32 @@ func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *Tabl
 		dbName := string(tbl.SchemaName)
 		objRef, tableDef := ctx.Resolve(dbName, tblName)
 		if tableDef == nil {
-			return nil, nil, moerr.NewInvalidInput("insert target table '%s' does not exist", tblName)
+			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "insert target table '%s' does not exist", tblName)
 		}
-		indexInfos := BuildIndexInfos(ctx, objRef.DbName, tableDef.Defs)
-		tableDef.IndexInfos = indexInfos
 		return objRef, tableDef, nil
 	case *tree.ParenTableExpr:
 		return getInsertTable(tbl.Expr, ctx)
 	case *tree.AliasedTableExpr:
 		return getInsertTable(tbl.Expr, ctx)
 	case *tree.Select:
-		return nil, nil, moerr.NewNotSupported("insert table expr %v", stmt)
+		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "insert table expr %v", stmt)
 	case *tree.StatementSource:
-		return nil, nil, moerr.NewNotSupported("insert table expr %v", stmt)
+		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "insert table expr %v", stmt)
 	default:
-		return nil, nil, moerr.NewNotSupported("insert table expr %v", stmt)
+		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "insert table expr %v", stmt)
 	}
 }
 
-func BuildIndexInfos(ctx CompilerContext, dbName string, defs []*plan.TableDef_DefType) []*plan.IndexInfo {
+func buildIndexDefs(defs []*plan.TableDef_DefType) (*UniqueIndexDef, *SecondaryIndexDef) {
+	var uIdxDef *UniqueIndexDef = nil
+	var sIdxDef *SecondaryIndexDef = nil
 	for _, def := range defs {
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_Idx); ok {
-			infos := make([]*plan.IndexInfo, 0)
-			idx := idxDef.Idx
-
-			for i := range idx.IndexNames {
-				_, tableDef := ctx.Resolve(dbName, idx.TableNames[i])
-				info := &plan.IndexInfo{
-					TableName: idx.TableNames[i],
-					Cols:      make([]*plan.ColDef, 0),
-					ColNames:  make([]string, 0),
-					Field:     &plan.Field{ColNames: idx.Fields[i].ColNames},
-				}
-				if tableDef.CompositePkey != nil {
-					info.Cols = append(info.Cols, tableDef.CompositePkey)
-					info.ColNames = append(info.ColNames, tableDef.CompositePkey.Name)
-				}
-				for _, col := range tableDef.Cols {
-					info.Cols = append(info.Cols, col)
-					info.ColNames = append(info.ColNames, col.Name)
-				}
-				infos = append(infos, info)
-
-			}
-			return infos
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+			uIdxDef = idxDef.UIdx
+		}
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
+			sIdxDef = idxDef.SIdx
 		}
 	}
-	return nil
+	return uIdxDef, sIdxDef
 }

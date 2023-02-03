@@ -40,6 +40,8 @@
    SystemInit = 1;
    // MetricLogMerge handle metric/log exported data merge task
    MetricLogMerge = 2;
+   // MetricStorageUsage handle metric server_storage_usage collection
+   MetricStorageUsage = 3;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
@@ -47,7 +49,7 @@
      // ID task id, global unique
      string      ID       = 1;
      // Executor used to select a particular task executor to run a task
-     uint32      Executor = 2;
+     TaskCode    Executor = 2;
      // Context context needed to run the task
      bytes       Context  = 3;
      // Options options for execute task

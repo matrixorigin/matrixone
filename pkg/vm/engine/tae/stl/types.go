@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 func Sizeof[T any]() int {
@@ -87,6 +88,7 @@ type Vector[T any] interface {
 	DataWindow(offset, length int) []byte
 	// Slice returns the underlying data storage of type T
 	Slice() []T
+	SlicePtr() unsafe.Pointer
 	SliceWindow(offset, length int) []T
 
 	// Get returns the specified element at i
@@ -107,8 +109,11 @@ type Vector[T any] interface {
 	Update(i int, v T)
 	// Delete deletes a element at i
 	Delete(i int) (deleted T)
-	// Delete deletes elements in [offset, offset+length)
-	RangeDelete(offset, length int)
+	// BatchDelete delete rows from rowGen
+	// cnt specifies the total delete count
+	BatchDelete(rowGen common.RowGen, cnt int)
+	BatchDeleteInts(sels ...int)
+	BatchDeleteUint32s(sels ...uint32)
 
 	// Returns the underlying memory allocator
 	GetAllocator() *mpool.MPool

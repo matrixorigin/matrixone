@@ -41,6 +41,7 @@ const (
 	SegmentAttr_ID                         = catalog.SegmentAttr_ID
 	SegmentAttr_CreateAt                   = catalog.SegmentAttr_CreateAt
 	SegmentAttr_State                      = catalog.SegmentAttr_State
+	SegmentAttr_Sorted                     = catalog.SegmentAttr_Sorted
 	SnapshotAttr_BlockMaxRow               = catalog.SnapshotAttr_BlockMaxRow
 	SnapshotAttr_SegmentMaxBlock           = catalog.SnapshotAttr_SegmentMaxBlock
 	SnapshotMetaAttr_Tid                   = "table_id"
@@ -68,10 +69,12 @@ var (
 		SegmentAttr_ID,
 		SegmentAttr_CreateAt,
 		SegmentAttr_State,
+		SegmentAttr_Sorted,
 	}
 	SegmentSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),
 		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_bool, 0, 0, 0),
 		types.New(types.T_bool, 0, 0, 0),
 	}
 	TxnNodeSchemaAttr = []string{
@@ -177,8 +180,8 @@ var (
 		types.New(types.T_uint64, 0, 0, 0),
 		types.New(types.T_uint64, 0, 0, 0),
 		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_varchar, 0, 0, 0),
-		types.New(types.T_varchar, 0, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0),
 	}
 	MetaSchemaAttr = []string{
 		SnapshotMetaAttr_Tid,

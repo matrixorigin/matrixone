@@ -15,9 +15,10 @@
 package explain
 
 import (
+	"strconv"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"strconv"
 )
 
 type ExplainData struct {
@@ -33,7 +34,7 @@ type Step struct {
 	Step        int       `json:"step"`
 	Description string    `json:"description"`
 	State       string    `json:"state"`
-	Stats       Stats     `json:"stats"`
+	PlanStats   PlanStats `json:"stats"`
 }
 
 type GraphData struct {
@@ -43,7 +44,15 @@ type GraphData struct {
 	Global Global  `json:"global"`
 }
 
+type PlanStats struct {
+}
+
 type Stats struct {
+	BlockNum    int32   `json:"blocknum"`
+	Outcnt      float64 `json:"outcnt"`
+	Cost        float64 `json:"cost"`
+	HashmapSize float64 `json:"hashmapsize"`
+	Rowsize     float64 `json:"rowsize"`
 }
 
 type Node struct {
@@ -52,7 +61,7 @@ type Node struct {
 	Title      string     `json:"title"`
 	Labels     []Label    `json:"labels"`
 	Statistics Statistics `json:"statistics"`
-	Cost       Cost       `json:"cost"`
+	Stats      Stats      `json:"stats"`
 	TotalStats TotalStats `json:"totalStats"`
 }
 
@@ -81,24 +90,24 @@ type Global struct {
 }
 
 type Statistics struct {
+	Time       []StatisticValue `json:"Time"`
 	Memory     []StatisticValue `json:"Memory"`
 	Throughput []StatisticValue `json:"Throughput"`
 	IO         []StatisticValue `json:"IO"`
 	Network    []StatisticValue `json:"Network"`
 }
 
-type Cost struct {
-	Start   float64 `json:"start"`
-	Total   float64 `json:"total"`
-	Card    float64 `json:"card"`
-	Ndv     float64 `json:"ndv"`
-	Rowsize float64 `json:"rowsize"`
-}
-
 type StatisticValue struct {
 	Name  string `json:"name"`
 	Value int64  `json:"value"`
 	Unit  string `json:"unit"`
+}
+
+func NewStatisticValue(name string, unit string) *StatisticValue {
+	return &StatisticValue{
+		Name: name,
+		Unit: unit,
+	}
 }
 
 func NewExplainData(uuid uuid.UUID) *ExplainData {

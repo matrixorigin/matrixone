@@ -23,13 +23,17 @@ data-dir = "data dir"
 
 [[fileservice]]
 # s3 fileservice instance, used to store data.
-name = "s3"
+name = "SHARED"
 # use s3 as fileservice backend.
 backend = "S3"
 [fileservice.s3]
 endpoint = "s3 endpoint"
 bucket = "s3 bucket"
 key-prefix = "s3 key preifx"
+[fileservice.cache]
+memory-capacity = "128MB"
+disk-capacity = "1GB"
+disk-path = "mo-data/file-service-cache"
 
 [[fileservice]]
 name = "ETL"

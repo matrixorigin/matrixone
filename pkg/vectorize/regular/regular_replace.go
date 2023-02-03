@@ -16,6 +16,7 @@ package regular
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -25,12 +26,12 @@ import (
 
 func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type string) (string, error) {
 	if pos < 1 || occurrence < 0 || pos >= int64(len(expr)) {
-		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
+		return expr, moerr.NewInvalidInputNoCtx("regexp_replace have invalid input")
 	}
 	//regular expression pattern
 	reg, err := regexp.Compile(pat)
 	if err != nil {
-		return "", moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
+		return "", moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 	}
 	//match result indexs
 	matchRes := reg.FindAllStringIndex(expr, -1)
@@ -68,7 +69,7 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type st
 
 func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, occurrence int64, match_type string) (string, error) {
 	if pos < 1 || occurrence < 0 || pos >= int64(len(expr)) {
-		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
+		return expr, moerr.NewInvalidInputNoCtx("regexp_replace have invalid input")
 	}
 	//match result indexs
 	matchRes := pat.FindAllStringIndex(expr, -1)
@@ -113,7 +114,7 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 	if len(expr) == 1 && len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
-			return moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
+			return moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
@@ -145,7 +146,7 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 	} else if len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
-			return moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
+			return moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
@@ -176,6 +177,63 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 		vector.AppendString(resultVector, rs, proc.Mp())
 	}
 	return nil
+}
+
+func ReplaceWithArrays(expr, subs, rpls []string, exprN, subsN, rplN *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, maxLen int) error {
+	rs := make([]string, maxLen)
+	if len(expr) == 1 && len(subs) == 1 {
+		for i := 0; i < maxLen; i++ {
+			if determineNulls(expr, subs, rpls, exprN, subsN, rplN, i) {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			appendRs(expr, subs, rpls, rs, 0, 0, i)
+		}
+		vector.AppendString(resultVector, rs, proc.Mp())
+	} else if len(expr) == 1 {
+		for i := 0; i < maxLen; i++ {
+			if determineNulls(expr, subs, rpls, exprN, subsN, rplN, i) {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			appendRs(expr, subs, rpls, rs, 0, i, i)
+		}
+		vector.AppendString(resultVector, rs, proc.Mp())
+	} else if len(subs) == 1 {
+		for i := 0; i < maxLen; i++ {
+			if determineNulls(expr, subs, rpls, exprN, subsN, rplN, i) {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			appendRs(expr, subs, rpls, rs, i, 0, i)
+		}
+		vector.AppendString(resultVector, rs, proc.Mp())
+	} else {
+		for i := 0; i < maxLen; i++ {
+			if determineNulls(expr, subs, rpls, exprN, subsN, rplN, i) {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			appendRs(expr, subs, rpls, rs, i, i, i)
+		}
+		vector.AppendString(resultVector, rs, proc.Mp())
+	}
+	return nil
+}
+
+func appendRs(expr, subs, rpls, rs []string, ei, si, ri int) {
+	var rpl string
+	if len(rpls) == 1 {
+		rpl = rpls[0]
+	} else {
+		rpl = rpls[ri]
+	}
+
+	if subs[si] == "" {
+		rs[ri] = expr[ei]
+	} else {
+		rs[ri] = strings.ReplaceAll(expr[ei], subs[si], rpl)
+	}
 }
 
 func determineNulls(expr, pat, rpls []string, exprN, patN, rplN *nulls.Nulls, i int) bool {

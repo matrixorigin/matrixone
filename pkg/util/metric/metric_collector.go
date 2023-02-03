@@ -19,17 +19,14 @@ import (
 	"context"
 	"fmt"
 	"runtime"
-	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 const CHAN_CAPACITY = 10000
@@ -123,7 +120,7 @@ func newMetricCollector(factory func() ie.InternalExecutor, opts ...collectorOpt
 
 func (c *metricCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFamily) error {
 	for _, mf := range mfs {
-		if err := c.SendItem(mf); err != nil {
+		if err := c.SendItem(ctx, mf); err != nil {
 			return err
 		}
 	}
@@ -135,7 +132,7 @@ func (c *metricCollector) NewItemBatchHandler(ctx context.Context) func(batch st
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish())
 	return func(batch string) {
 		if err := exec.Exec(ctx, batch, ie.NewOptsBuilder().Finish()); err != nil {
-			logutil.Errorf("[Trace] insert error. sql: %s; err: %v", batch, err)
+			logutil.Errorf("[Metric] insert error. sql: %s; err: %v", batch, err)
 		}
 	}
 }
@@ -197,7 +194,7 @@ func (s *mfset) IsEmpty() bool {
 // GetBatch
 // getSql extracts a insert sql from a set of MetricFamily. the bytes.Buffer is
 // used to mitigate memory allocation
-func (s *mfset) GetBatch(buf *bytes.Buffer) string {
+func (s *mfset) GetBatch(ctx context.Context, buf *bytes.Buffer) string {
 	buf.Reset()
 	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
 	lblsBuf := new(bytes.Buffer)
@@ -246,21 +243,21 @@ func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 var _ MetricCollector = (*metricFSCollector)(nil)
 
 type metricFSCollector struct {
-	*bp.BaseBatchPipe[*pb.MetricFamily, trace.CSVRequests]
-	writerFactory export.FSWriterFactory
+	*bp.BaseBatchPipe[*pb.MetricFamily, table.ExportRequests]
+	writerFactory table.WriterFactory
 	opts          collectorOpts
 }
 
 func (c *metricFSCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFamily) error {
 	for _, mf := range mfs {
-		if err := c.SendItem(mf); err != nil {
+		if err := c.SendItem(ctx, mf); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func newMetricFSCollector(writerFactory export.FSWriterFactory, opts ...collectorOpt) MetricCollector {
+func newMetricFSCollector(writerFactory table.WriterFactory, opts ...collectorOpt) MetricCollector {
 	initOpts := defaultCollectorOpts()
 	for _, o := range opts {
 		o.ApplyTo(&initOpts)
@@ -277,133 +274,63 @@ func newMetricFSCollector(writerFactory export.FSWriterFactory, opts ...collecto
 				return SingleMetricTable.GetName()
 			}))
 	}
-	base := bp.NewBaseBatchPipe[*pb.MetricFamily, trace.CSVRequests](c, pipeOpts...)
+	base := bp.NewBaseBatchPipe[*pb.MetricFamily, table.ExportRequests](c, pipeOpts...)
 	c.BaseBatchPipe = base
 	return c
 }
 
-func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch trace.CSVRequests) {
-	return func(batchs trace.CSVRequests) {
+func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch table.ExportRequests) {
+	return func(batchs table.ExportRequests) {
 		for _, batch := range batchs {
 			if _, err := batch.Handle(); err != nil {
-				logutil.Errorf("[Metric] failed to write csv: %s, err: %v", batch.Content(), err)
+				logutil.Errorf("[Metric] failed to write, err: %v", err)
 			}
 		}
 	}
 }
 
-func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, trace.CSVRequests] {
-	return &mfsetCSV{
+func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, table.ExportRequests] {
+	return &mfsetETL{
 		mfset: mfset{
 			Reminder:        bp.NewConstantClock(c.opts.flushInterval),
 			metricThreshold: c.opts.metricThreshold,
 			sampleThreshold: c.opts.sampleThreshold,
 		},
-		writerFactory: c.writerFactory,
-		multiTable:    c.opts.multiTable,
+		collector: c,
 	}
 }
 
-type mfsetCSV struct {
+type mfsetETL struct {
 	mfset
-	writerFactory export.FSWriterFactory
-	multiTable    bool
+	collector *metricFSCollector
 }
 
-func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
-	opts := export.CommonCsvOptions
-	for idx, field := range fields {
-		if idx > 0 {
-			buf.WriteRune(opts.FieldTerminator)
-		}
-		if strings.ContainsRune(field, opts.FieldTerminator) || strings.ContainsRune(field, opts.EncloseRune) || strings.ContainsRune(field, opts.Terminator) {
-			buf.WriteRune(opts.EncloseRune)
-			trace.QuoteFieldFunc(buf, field, opts.EncloseRune)
-			buf.WriteRune(opts.EncloseRune)
-		} else {
-			buf.WriteString(field)
-		}
-	}
-	buf.WriteRune(opts.Terminator)
-}
-
-func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) trace.CSVRequests {
-	if !s.multiTable {
-		return s.GetBatchSingleTable(buf)
-	}
-	return s.GetBatchMultiTable(buf)
-}
-
-func (s *mfsetCSV) GetBatchMultiTable(buf *bytes.Buffer) trace.CSVRequests {
-
-	buf.Reset()
-
-	writer := s.writerFactory(trace.DefaultContext(), MetricDBConst, s.mfs[0])
-
-	//buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
-	writeValues := func(t string, v float64, lbls ...string) {
-		var fields []string
-		fields = append(fields, t)
-		fields = append(fields, fmt.Sprintf("%f", v))
-		fields = append(fields, lbls...)
-		s.writeCsvOneLine(buf, fields)
-	}
-
-	for _, mf := range s.mfs {
-		for _, metric := range mf.Metric {
-
-			var lbls []string
-			// reserved labels
-			lbls = append(lbls, mf.GetNode())
-			lbls = append(lbls, mf.GetRole())
-			// custom labels
-			for _, lbl := range metric.Label {
-				lbls = append(lbls, lbl.GetValue())
-			}
-
-			switch mf.GetType() {
-			case pb.MetricType_COUNTER:
-				time := localTimeStr(metric.GetCollecttime())
-				writeValues(time, metric.Counter.GetValue(), lbls...)
-			case pb.MetricType_GAUGE:
-				time := localTimeStr(metric.GetCollecttime())
-				writeValues(time, metric.Gauge.GetValue(), lbls...)
-			case pb.MetricType_RAWHIST:
-				for _, sample := range metric.RawHist.Samples {
-					time := localTimeStr(sample.GetDatetime())
-					writeValues(time, sample.GetValue(), lbls...)
-				}
-			default:
-				panic(moerr.NewInternalError("unsupported metric type %v", mf.GetType()))
-			}
-		}
-	}
-	return []*trace.CSVRequest{trace.NewCSVRequest(writer, buf.String())}
-}
-
-func (s *mfsetCSV) GetBatchSingleTable(buf *bytes.Buffer) trace.CSVRequests {
+func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.ExportRequests {
 	buf.Reset()
 
 	ts := time.Now()
-	buffer := make(map[string]*bytes.Buffer, 2)
-	writeValues := func(row *export.Row) {
-		buf, exist := buffer[row.GetAccount()]
+	buffer := make(map[string]table.RowWriter, 2)
+	writeValues := func(row *table.Row) error {
+		w, exist := buffer[row.GetAccount()]
 		if !exist {
-			buf = bytes.NewBuffer(nil)
-			buffer[row.GetAccount()] = buf
+			w = s.collector.writerFactory(ctx, row.GetAccount(), SingleMetricTable, ts)
+			buffer[row.GetAccount()] = w
 		}
-		s.writeCsvOneLine(buf, row.ToStrings())
+		if err := w.WriteRow(row); err != nil {
+			return err
+		}
+		return nil
 	}
 
-	row := SingleMetricTable.GetRow()
+	row := SingleMetricTable.GetRow(ctx)
+	defer row.Free()
 	for _, mf := range s.mfs {
 		for _, metric := range mf.Metric {
-
 			// reserved labels
 			row.Reset()
-			row.SetVal(metricNameColumn.Name, mf.GetName())
-			row.SetVal(metricNodeColumn.Name, mf.GetNode())
-			row.SetVal(metricRoleColumn.Name, mf.GetRole())
+			row.SetColumnVal(metricNameColumn, mf.GetName())
+			row.SetColumnVal(metricNodeColumn, mf.GetNode())
+			row.SetColumnVal(metricRoleColumn, mf.GetRole())
 			// custom labels
 			for _, lbl := range metric.Label {
 				row.SetVal(lbl.GetName(), lbl.GetValue())
@@ -411,36 +338,38 @@ func (s *mfsetCSV) GetBatchSingleTable(buf *bytes.Buffer) trace.CSVRequests {
 
 			switch mf.GetType() {
 			case pb.MetricType_COUNTER:
-				time := localTimeStr(metric.GetCollecttime())
-				row.SetVal(metricCollectTimeColumn.Name, time)
-				row.SetFloat64(metricValueColumn.Name, metric.Counter.GetValue())
-				writeValues(row)
+				time := localTime(metric.GetCollecttime())
+				row.SetColumnVal(metricCollectTimeColumn, time)
+				row.SetColumnVal(metricValueColumn, metric.Counter.GetValue())
+				_ = writeValues(row)
 			case pb.MetricType_GAUGE:
-				time := localTimeStr(metric.GetCollecttime())
-				row.SetVal(metricCollectTimeColumn.Name, time)
-				row.SetFloat64(metricValueColumn.Name, metric.Gauge.GetValue())
-				writeValues(row)
+				time := localTime(metric.GetCollecttime())
+				row.SetColumnVal(metricCollectTimeColumn, time)
+				row.SetColumnVal(metricValueColumn, metric.Gauge.GetValue())
+				_ = writeValues(row)
 			case pb.MetricType_RAWHIST:
 				for _, sample := range metric.RawHist.Samples {
-					time := localTimeStr(sample.GetDatetime())
-					row.SetVal(metricCollectTimeColumn.Name, time)
-					row.SetFloat64(metricValueColumn.Name, sample.GetValue())
-					writeValues(row)
+					time := localTime(sample.GetDatetime())
+					row.SetColumnVal(metricCollectTimeColumn, time)
+					row.SetColumnVal(metricValueColumn, sample.GetValue())
+					_ = writeValues(row)
 				}
 			default:
-				panic(moerr.NewInternalError("unsupported metric type %v", mf.GetType()))
+				panic(moerr.NewInternalError(ctx, "unsupported metric type %v", mf.GetType()))
 			}
 		}
 	}
 
-	reqs := make([]*trace.CSVRequest, 0, len(buffer))
-	for account, buf := range buffer {
-		writer := s.writerFactory(trace.DefaultContext(), SingleMetricTable.Database, SingleMetricTable,
-			export.WithAccount(account), export.WithTimestamp(ts), export.WithPathBuilder(SingleMetricTable.PathBuilder))
-		reqs = append(reqs, trace.NewCSVRequest(writer, buf.String()))
+	reqs := make([]table.WriteRequest, 0, len(buffer))
+	for _, w := range buffer {
+		reqs = append(reqs, table.NewRowRequest(w))
 	}
 
 	return reqs
+}
+
+func localTime(value int64) time.Time {
+	return time.UnixMicro(value).In(time.Local)
 }
 
 func localTimeStr(value int64) string {

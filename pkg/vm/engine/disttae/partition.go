@@ -17,10 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"database/sql"
-	"errors"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -93,7 +91,12 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 	}
 	ids := make([]uint64, len(blocks))
 	for i := range blocks {
-		ids[i] = blocks[i].Info.BlockID
+		// if cn can see a appendable block, this block must contain all updates
+		// in cache, no need to do merge read, BlockRead will filter out
+		// invisible and deleted rows with respect to the timestamp
+		if !blocks[i].Info.EntryState {
+			ids[i] = blocks[i].Info.BlockID
+		}
 	}
 	p.IterDeletedRowIDs(ctx, ids, ts, func(rowID RowID) bool {
 		id, offset := catalog.DecodeRowid(types.Rowid(rowID))
@@ -126,7 +129,7 @@ func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) bool {
 		Timestamp: ts,
 	}
 	tx := memtable.NewTransaction(
-		uuid.NewString(),
+		newMemTableTransactionID(),
 		t,
 		memtable.SnapshotIsolation,
 	)
@@ -142,9 +145,9 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 		return err
 	}
 
-	txID := uuid.NewString()
+	txID := newMemTableTransactionID()
 
-	iter := memtable.NewBatchIter(bat)
+	iter := memorytable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
@@ -170,11 +173,6 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			ts,
 			memtable.Uint(opDelete),
 		})
-		// time
-		indexes = append(indexes, memtable.Tuple{
-			index_Time,
-			ts,
-		})
 
 		err := p.data.Upsert(tx, &DataRow{
 			rowID: rowID,
@@ -183,6 +181,10 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			},
 			indexes: indexes,
 		})
+		// the reason to ignore, see comments in Insert method
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -202,9 +204,9 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 		return err
 	}
 
-	txID := uuid.NewString()
+	txID := newMemTableTransactionID()
 
-	iter := memtable.NewBatchIter(bat)
+	iter := memorytable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
@@ -233,7 +235,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 				return err
 			}
 			if len(entries) > 0 && needCheck {
-				return moerr.NewDuplicate()
+				return moerr.NewDuplicate(ctx)
 			}
 		}
 
@@ -261,11 +263,6 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			ts,
 			memtable.Uint(opInsert),
 		})
-		// time
-		indexes = append(indexes, memtable.Tuple{
-			index_Time,
-			ts,
-		})
 		// columns indexes
 		for _, def := range p.columnsIndexDefs {
 			index := memtable.Tuple{
@@ -277,20 +274,21 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			indexes = append(indexes, index)
 		}
 
-		_, err := p.data.Get(tx, rowID)
-		if errors.Is(err, sql.ErrNoRows) {
-			err = p.data.Upsert(tx, &DataRow{
-				rowID:   rowID,
-				value:   dataValue,
-				indexes: indexes,
-			})
-			if err != nil {
-				return err
-			}
-			if err := tx.Commit(t); err != nil {
-				return err
-			}
-		} else if err != nil {
+		err = p.data.Upsert(tx, &DataRow{
+			rowID:   rowID,
+			value:   dataValue,
+			indexes: indexes,
+		})
+		// if conflict comes up here,  probably the checkpoint from dn
+		// has duplicated history versions. As txn write conflict has been
+		// checked in dn, so it is safe to ignore this error
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := tx.Commit(t); err != nil {
 			return err
 		}
 	}
@@ -299,31 +297,28 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 }
 
 func (p *Partition) GC(ts timestamp.Timestamp) error {
+	// remove versions only visible before ts
+	// assuming no transaction is reading or writing
 	t := memtable.Time{
 		Timestamp: ts,
 	}
-	tx := memtable.NewTransaction(
-		uuid.NewString(),
-		t,
-		memtable.SnapshotIsolation,
-	)
-	min := memtable.Tuple{
-		index_Time,
-		memtable.Min,
-	}
-	max := memtable.Tuple{
-		index_Time,
-		ts,
-	}
-	iter := p.data.NewIndexIter(tx, min, max)
-	for ok := iter.First(); ok; ok = iter.Next() {
-		entry := iter.Item()
-		err := p.data.Delete(tx, entry.Key)
-		if err != nil {
-			return err
+	err := p.data.FilterVersions(func(k RowID, versions []memtable.Version[DataValue]) (filtered []memtable.Version[DataValue], err error) {
+		for _, version := range versions {
+			if version.LockTime.IsZero() {
+				// not deleted
+				filtered = append(filtered, version)
+				continue
+			}
+			if version.LockTime.Equal(t) ||
+				version.LockTime.After(t) {
+				// still visible after ts
+				filtered = append(filtered, version)
+				continue
+			}
 		}
-	}
-	if err := tx.Commit(t); err != nil {
+		return
+	})
+	if err != nil {
 		return err
 	}
 	return nil
@@ -335,7 +330,7 @@ func (p *Partition) GetRowsByIndex(ts timestamp.Timestamp, index memtable.Tuple,
 		Timestamp: ts,
 	}
 	tx := memtable.NewTransaction(
-		uuid.NewString(),
+		newMemTableTransactionID(),
 		t,
 		memtable.SnapshotIsolation,
 	)
@@ -359,7 +354,7 @@ func (p *Partition) GetRowsByIndexPrefix(ts timestamp.Timestamp, prefix memtable
 		Timestamp: ts,
 	}
 	tx := memtable.NewTransaction(
-		uuid.NewString(),
+		newMemTableTransactionID(),
 		t,
 		memtable.SnapshotIsolation,
 	)
@@ -385,7 +380,7 @@ func rowIDToBlockID(rowID RowID) uint64 {
 }
 
 func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp, blockID uint64) error {
-	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
+	tx := memtable.NewTransaction(newMemTableTransactionID(), memtable.Time{
 		Timestamp: ts,
 	}, memtable.SnapshotIsolation)
 	min := memtable.Tuple{
@@ -412,7 +407,7 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 }
 
 func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts timestamp.Timestamp, fn func(rowID RowID) bool) {
-	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
+	tx := memtable.NewTransaction(newMemTableTransactionID(), memtable.Time{
 		Timestamp: ts,
 	}, memtable.SnapshotIsolation)
 
@@ -453,6 +448,38 @@ func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts
 	}
 }
 
+func (p *Partition) Rows(
+	tx *memtable.Transaction,
+	deletes map[types.Rowid]uint8,
+	skipBlocks map[uint64]uint8) (int64, error) {
+	var rows int64 = 0
+	iter := p.data.NewIter(tx)
+	defer iter.Close()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		dataKey, dataValue, err := iter.Read()
+		if err != nil {
+			return 0, err
+		}
+
+		if _, ok := deletes[types.Rowid(dataKey)]; ok {
+			continue
+		}
+
+		if dataValue.op == opDelete {
+			continue
+		}
+
+		if skipBlocks != nil {
+			if _, ok := skipBlocks[rowIDToBlockID(dataKey)]; ok {
+				continue
+			}
+		}
+		rows++
+	}
+
+	return rows, nil
+}
+
 func (p *Partition) NewReader(
 	ctx context.Context,
 	readerNumber int,
@@ -470,7 +497,7 @@ func (p *Partition) NewReader(
 		Timestamp: ts,
 	}
 	tx := memtable.NewTransaction(
-		uuid.NewString(),
+		newMemTableTransactionID(),
 		t,
 		memtable.SnapshotIsolation,
 	)
@@ -493,6 +520,13 @@ func (p *Partition) NewReader(
 	readers := make([]engine.Reader, readerNumber)
 
 	mp := make(map[string]types.Type)
+	colIdxMp := make(map[string]int)
+	if tableDef != nil {
+		for i := range tableDef.Cols {
+			colIdxMp[tableDef.Cols[i].Name] = i
+		}
+	}
+
 	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0, 0)
 	for _, def := range defs {
 		attr, ok := def.(*engine.AttributeDef)
@@ -502,17 +536,24 @@ func (p *Partition) NewReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
-	readers[0] = &PartitionReader{
-		typsMap:    mp,
-		readTime:   t,
-		tx:         tx,
-		index:      index,
-		inserts:    inserts,
-		deletes:    deletes,
-		skipBlocks: skipBlocks,
-		data:       p.data,
-		iter:       p.data.NewIter(tx),
+	partReader := &PartitionReader{
+		typsMap:         mp,
+		readTime:        t,
+		tx:              tx,
+		index:           index,
+		inserts:         inserts,
+		deletes:         deletes,
+		skipBlocks:      skipBlocks,
+		data:            p.data,
+		iter:            p.data.NewIter(tx),
+		colIdxMp:        colIdxMp,
+		extendId2s3File: make(map[string]int),
+		s3FileService:   fs,
 	}
+	if p.txn != nil {
+		partReader.proc = p.txn.proc
+	}
+	readers[0] = partReader
 	if readerNumber == 1 {
 		for i := range blks {
 			readers = append(readers, &blockMergeReader{

@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -24,21 +25,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func Parse(sql string) ([]tree.Statement, error) {
+func Parse(ctx context.Context, sql string) ([]tree.Statement, error) {
 	lexer := NewLexer(dialect.MYSQL, sql)
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}
+	if len(lexer.stmts) == 0 {
+		return nil, moerr.NewParseError(ctx, "Query was empty")
+	}
 	return lexer.stmts, nil
 }
 
-func ParseOne(sql string) (tree.Statement, error) {
+func ParseOne(ctx context.Context, sql string) (tree.Statement, error) {
 	lexer := NewLexer(dialect.MYSQL, sql)
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) != 1 {
-		return nil, moerr.NewInternalError("syntax error, or too many sql to parse")
+		return nil, moerr.NewParseError(ctx, "syntax error, or too many sql to parse")
 	}
 	return lexer.stmts[0], nil
 }
@@ -152,7 +156,18 @@ func (l *Lexer) toHexNum(lval *yySymType, str string) int {
 }
 
 func (l *Lexer) toBit(lval *yySymType, str string) int {
-	ival, err := strconv.ParseUint(str[2:], 2, 64)
+	var (
+		ival uint64
+		err  error
+	)
+	if len(str) < 2 {
+		ival, err = strconv.ParseUint(str, 2, 64)
+	} else if str[1] == 'b' {
+		ival, err = strconv.ParseUint(str[2:], 2, 64)
+	} else {
+		ival, err = strconv.ParseUint(str, 2, 64)
+	}
+
 	if err != nil {
 		// TODO: toDecimal()
 		//l.scanner.LastError = err

@@ -17,10 +17,11 @@ package sysview
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"time"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
 const (
@@ -169,7 +170,7 @@ var (
 			"attname AS COLUMN_NAME," +
 			"attnum AS ORDINAL_POSITION," +
 			"mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT," +
-			"(case when attnotnull=0 then 'NO' else 'YES' end) as IS_NULLABLE," +
+			"(case when attnotnull != 0 then 'YES' else 'NO' end) as IS_NULLABLE," +
 			"mo_show_visible_bin(atttyp,2) as DATA_TYPE," +
 			"att_length as CHARACTER_MAXIMUM_LENGTH," +
 			"att_length as CHARACTER_OCTET_LENGTH," +
@@ -293,29 +294,59 @@ var (
 			"COLLATION_CONNECTION varchar(64)," +
 			"DATABASE_COLLATION varchar(64)" +
 			");",
-		"CREATE TABLE IF NOT EXISTS TABLES(" +
-			"TABLE_CATALOG varchar(64)," +
-			"TABLE_SCHEMA varchar(64)," +
-			"TABLE_NAME varchar(64)," +
-			"TABLE_TYPE varchar(10)," +
-			"ENGINE varchar(64)," +
-			"VERSION int," +
-			"ROW_FORMAT varchar(10)," +
-			"TABLE_ROWS bigint unsigned," +
-			"AVG_ROW_LENGTH bigint unsigned," +
-			"DATA_LENGTH bigint unsigned," +
-			"MAX_DATA_LENGTH bigint unsigned," +
-			"INDEX_LENGTH bigint unsigned," +
-			"DATA_FREE bigint unsigned," +
-			"`AUTO_INCREMENT` bigint unsigned," +
-			"CREATE_TIME timestamp," +
-			"UPDATE_TIME datetime," +
-			"CHECK_TIME datetime," +
-			"TABLE_COLLATION varchar(64)," +
-			"CHECKSUM bigint," +
-			"CREATE_OPTIONS varchar(256)," +
-			"TABLE_COMMENT text" +
-			");",
+
+		"CREATE VIEW IF NOT EXISTS TABLES AS " +
+			"SELECT 'def' AS TABLE_CATALOG," +
+			"reldatabase AS TABLE_SCHEMA," +
+			"relname AS TABLE_NAME," +
+			"(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' " +
+			"when relkind = 'v'  then 'VIEW' " +
+			"when relkind = 'e' then 'EXTERNAL TABLE' " +
+			"when relkind = 'r' then 'BASE TABLE' " +
+			"else 'UNKNOWN TABLE TYPE' end) AS TABLE_TYPE," +
+			"'' AS ENGINE," +
+			"0 AS VERSION," +
+			"'' AS ROW_FORMAT," +
+			"0 AS TABLE_ROWS," +
+			"0 AS AVG_ROW_LENGTH," +
+			"0 AS DATA_LENGTH," +
+			"0 AS MAX_DATA_LENGTH," +
+			"0 AS INDEX_LENGTH," +
+			"0 AS DATA_FREE," +
+			"0 AS `AUTO_INCREMENT`," +
+			"created_time AS CREATE_TIME," +
+			"created_time AS UPDATE_TIME," +
+			"created_time AS CHECK_TIME," +
+			"'' AS TABLE_COLLATION," +
+			"0 AS CHECKSUM," +
+			"'' AS CREATE_OPTIONS," +
+			"rel_comment AS TABLE_COMMENT " +
+			"FROM mo_catalog.mo_tables;",
+
+		//"CREATE TABLE TABLES(" +
+		//	"TABLE_CATALOG varchar(64)," +
+		//	"TABLE_SCHEMA varchar(64)," +
+		//	"TABLE_NAME varchar(64)," +
+		//	"TABLE_TYPE varchar(50)," +
+		//	"ENGINE varchar(64), " +
+		//	"VERSION int," +
+		//	"ROW_FORMAT varchar(50)," +
+		//	"TABLE_ROWS bigint unsigned," +
+		//	"AVG_ROW_LENGTH bigint unsigned," +
+		//	"DATA_LENGTH bigint unsigned," +
+		//	"MAX_DATA_LENGTH bigint unsigned," +
+		//	"INDEX_LENGTH bigint unsigned," +
+		//	"DATA_FREE bigint unsigned," +
+		//	"`AUTO_INCREMENT` bigint unsigned," +
+		//	"CREATE_TIME timestamp," +
+		//	"UPDATE_TIME datetime," +
+		//	"CHECK_TIME datetime," +
+		//	"TABLE_COLLATION varchar(64)," +
+		//	"CHECKSUM bigint," +
+		//	"CREATE_OPTIONS varchar(256)," +
+		//	"TABLE_COMMENT text" +
+		//	");",
+
 		"CREATE TABLE IF NOT EXISTS ENGINES (" +
 			"ENGINE varchar(64)," +
 			"SUPPORT varchar(8)," +
@@ -346,11 +377,11 @@ var (
 			"PARAMETER_STYLE varchar(3)," +
 			"IS_DETERMINISTIC varchar(3)," +
 			"SQL_DATA_ACCESS varchar(10)," +
-			"SQL_PATH varchar(100)," +
+			"SQL_PATH varchar(1000)," +
 			"SECURITY_TYPE varchar(10)," +
 			"CREATED timestamp," +
 			"LAST_ALTERED timestamp," +
-			"SQL_MODE varchar(100)," +
+			"SQL_MODE varchar(1000)," +
 			"ROUTINE_COMMENT text," +
 			"DEFINER varchar(288)," +
 			"CHARACTER_SET_CLIENT varchar(64)," +
@@ -384,8 +415,8 @@ var (
 )
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
-	initMysqlTables(ctx, ieFactory, trace.FileService)
-	initInformationSchemaTables(ctx, ieFactory, trace.FileService)
+	initMysqlTables(ctx, ieFactory, motrace.FileService)
+	initInformationSchemaTables(ctx, ieFactory, motrace.FileService)
 	return nil
 }
 

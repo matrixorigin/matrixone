@@ -36,7 +36,7 @@ func TmpNewFileservice(dir string) fileservice.FileService {
 	}
 	service, err := fileservice.NewFileService(c)
 	if err != nil {
-		err = moerr.NewInternalError(fmt.Sprintf("NewFileService failed: %s", err.Error()))
+		err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("NewFileService failed: %s", err.Error()))
 		panic(any(err))
 	}
 	return service
@@ -52,4 +52,12 @@ func NewObjectFS(service fileservice.FileService, dir string) *ObjectFS {
 
 func (o *ObjectFS) ListDir(dir string) ([]fileservice.DirEntry, error) {
 	return o.Service.List(context.Background(), dir)
+}
+
+func (o *ObjectFS) DelFiles(ctx context.Context, name []string) error {
+	return o.Service.Delete(ctx, name...)
+}
+
+func (o *ObjectFS) Delete(fileName string) error {
+	return o.Service.Delete(context.Background(), fileName)
 }

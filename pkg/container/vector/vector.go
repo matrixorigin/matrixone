@@ -20,6 +20,8 @@ import (
 	"reflect"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -186,6 +188,10 @@ func GetPtrAt(v *Vector, idx int64) unsafe.Pointer {
 // Raw version, get from v.data.   Adopt python convention and
 // neg idx means counting from end, that is, -1 means last element.
 func (v *Vector) getRawValueAt(idx int64) []byte {
+	if v.IsScalar() && len(v.data) == 0 {
+		return v.encodeColToByteSlice()
+	}
+
 	tlen := int64(v.GetType().TypeSize())
 	dlen := int64(len(v.data))
 	if idx >= 0 {
@@ -374,11 +380,17 @@ func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 	return nil
 }
 
-func (v *Vector) ConstExpand(m *mpool.MPool) *Vector {
+/*
+ConstExpand
+expandCols:
+- true: extend the field Col of the vector that is scalar null
+- false: same as before
+*/
+func (v *Vector) ConstExpand(expandCols bool, m *mpool.MPool) *Vector {
 	if !v.isConst {
 		return v
 	}
-	if v.IsScalarNull() {
+	if !expandCols && v.IsScalarNull() {
 		vlen := uint64(v.ScalarLength())
 		nulls.AddRange(v.Nsp, 0, vlen)
 		return v
@@ -567,7 +579,7 @@ func NewConstNull(typ types.Type, length int) *Vector {
 
 func NewConstFixed[T types.FixedSizeT](typ types.Type, length int, val T, mp *mpool.MPool) *Vector {
 	if mp == nil {
-		panic(moerr.NewInternalError("vector NewConstFixed does not have a mpool"))
+		panic(moerr.NewInternalErrorNoCtx("vector NewConstFixed does not have a mpool"))
 	}
 	v := NewConst(typ, length)
 	v.Append(val, false, mp)
@@ -576,7 +588,7 @@ func NewConstFixed[T types.FixedSizeT](typ types.Type, length int, val T, mp *mp
 
 func NewConstString(typ types.Type, length int, val string, mp *mpool.MPool) *Vector {
 	if mp == nil {
-		panic(moerr.NewInternalError("vector NewConstString does not have a mpool"))
+		panic(moerr.NewInternalErrorNoCtx("vector NewConstString does not have a mpool"))
 	}
 	v := NewConst(typ, length)
 	SetStringAt(v, 0, val, mp)
@@ -585,7 +597,7 @@ func NewConstString(typ types.Type, length int, val string, mp *mpool.MPool) *Ve
 
 func NewConstBytes(typ types.Type, length int, val []byte, mp *mpool.MPool) *Vector {
 	if mp == nil {
-		panic(moerr.NewInternalError("vector NewConstBytes does not have a mpool"))
+		panic(moerr.NewInternalErrorNoCtx("vector NewConstBytes does not have a mpool"))
 	}
 	v := NewConst(typ, length)
 	SetBytesAt(v, 0, val, mp)
@@ -737,7 +749,7 @@ func appendOneBytes(v *Vector, bs []byte, isNull bool, m *mpool.MPool) error {
 
 func (v *Vector) Append(w any, isNull bool, m *mpool.MPool) error {
 	if m == nil {
-		panic(moerr.NewInternalError("vector append does not have a mpool"))
+		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
 	switch v.Typ.Oid {
 	case types.T_bool:
@@ -806,7 +818,7 @@ func SetTAt[T types.FixedSizeT](v *Vector, idx int, t T) error {
 		idx = len(vacol) + idx
 	}
 	if idx < 0 || idx >= len(vacol) {
-		return moerr.NewInternalError("vector idx out of range")
+		return moerr.NewInternalErrorNoCtx("vector idx out of range")
 	}
 	vacol[idx] = t
 	return nil
@@ -832,7 +844,7 @@ func PreAlloc(v *Vector, rows, cap int, m *mpool.MPool) {
 	var err error
 	sz := int64(cap * v.GetType().TypeSize())
 	if m == nil {
-		panic(moerr.NewInternalError("vector alloc must use mpool"))
+		panic(moerr.NewInternalErrorNoCtx("vector alloc must use mpool"))
 	} else {
 		// XXX was alloc rows, not cap.  This is wrong, at least not
 		// matching the comment.
@@ -931,7 +943,7 @@ func AppendFixed[T any](v *Vector, arg []T, m *mpool.MPool) error {
 	}
 
 	if m == nil {
-		panic(moerr.NewInternalError("vector AppendFixed does not have a valid mpool"))
+		panic(moerr.NewInternalErrorNoCtx("vector AppendFixed does not have a valid mpool"))
 	}
 
 	oldSz := len(v.data)
@@ -949,7 +961,7 @@ func AppendFixed[T any](v *Vector, arg []T, m *mpool.MPool) error {
 func AppendFixedRaw(v *Vector, data []byte, m *mpool.MPool) error {
 	var err error
 	if m == nil {
-		panic(moerr.NewInternalError("vector AppendFixed does not have a valid mpool"))
+		panic(moerr.NewInternalErrorNoCtx("vector AppendFixed does not have a valid mpool"))
 	}
 
 	argSz := len(data)
@@ -971,7 +983,7 @@ func AppendFixedRaw(v *Vector, data []byte, m *mpool.MPool) error {
 func AppendBytes(v *Vector, arg [][]byte, m *mpool.MPool) error {
 	var err error
 	if m == nil {
-		panic(moerr.NewInternalError("vector AppendBytes does not have a pool"))
+		panic(moerr.NewInternalErrorNoCtx("vector AppendBytes does not have a pool"))
 	}
 	vas := make([]types.Varlena, len(arg))
 	for idx, bs := range arg {
@@ -986,7 +998,7 @@ func AppendBytes(v *Vector, arg [][]byte, m *mpool.MPool) error {
 func AppendString(v *Vector, arg []string, m *mpool.MPool) error {
 	var err error
 	if m == nil {
-		panic(moerr.NewInternalError("vector AppendBytes does not have a pool"))
+		panic(moerr.NewInternalErrorNoCtx("vector AppendBytes does not have a pool"))
 	}
 	vas := make([]types.Varlena, len(arg))
 	for idx, bs := range arg {
@@ -1000,7 +1012,7 @@ func AppendString(v *Vector, arg []string, m *mpool.MPool) error {
 
 func AppendTuple(v *Vector, arg [][]interface{}) error {
 	if v.GetType().IsTuple() {
-		return moerr.NewInternalError("append tuple to non tuple vector")
+		return moerr.NewInternalErrorNoCtx("append tuple to non tuple vector")
 	}
 	v.Col = append(v.Col.([][]interface{}), arg...)
 	return nil
@@ -1275,7 +1287,7 @@ func Copy(v, w *Vector, vi, wi int64, m *mpool.MPool) error {
 // we don't want to horrible type switch.
 func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 	if v.original {
-		return moerr.NewInternalError("UnionOne cannot be performed on orig vector")
+		return moerr.NewInternalErrorNoCtx("UnionOne cannot be performed on orig vector")
 	}
 
 	if err = v.extend(1, m); err != nil {
@@ -1301,6 +1313,14 @@ func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 		}
 		if v.GetType().IsVarlen() {
 			bs := w.GetBytes(sel)
+			if v.GetType().Width != 0 && lengthutf8.CountUTF8CodePoints([]byte(bs)) > uint64(v.GetType().Width) {
+				return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
+			}
+			if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
+				if len(bs) > 0 {
+					return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), 0)
+				}
+			}
 			tgt := MustTCols[types.Varlena](v)
 			nele := len(tgt)
 			tgt[nele-1], v.area, err = types.BuildVarlena(bs, v.area, m)
@@ -1316,6 +1336,62 @@ func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 	return nil
 }
 
+func UnionMulti(v, w *Vector, sel int64, cnt int, m *mpool.MPool) (err error) {
+	if v.original {
+		return moerr.NewInternalErrorNoCtx("UnionMulti cannot be performed on orig vector")
+	}
+
+	curIdx := v.Length()
+	oldLen := uint64(curIdx)
+
+	if err = v.extend(cnt, m); err != nil {
+		return err
+	}
+
+	if w.IsScalar() {
+		sel = 0
+	}
+
+	if v.GetType().IsTuple() {
+		vs := v.Col.([][]interface{})
+		ws := w.Col.([][]interface{})
+		for i := 0; i < cnt; i++ {
+			vs = append(vs, ws[sel])
+		}
+		v.Col = vs
+	} else {
+		if v.GetType().IsVarlen() {
+			tgt := MustTCols[types.Varlena](v)
+			bs := w.GetBytes(sel)
+			if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
+				return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
+			}
+			if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
+				if len(bs) > 0 {
+					return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), 0)
+				}
+			}
+			for i := 0; i < cnt; i++ {
+				tgt[curIdx], v.area, err = types.BuildVarlena(bs, v.area, m)
+				curIdx += 1
+			}
+		} else {
+			src := w.getRawValueAt(sel)
+			for i := 0; i < cnt; i++ {
+				tgt := v.getRawValueAt(int64(curIdx))
+				copy(tgt, src)
+				curIdx += 1
+			}
+		}
+	}
+
+	if nulls.Contains(w.Nsp, uint64(sel)) {
+		nulls.AddRange(v.Nsp, oldLen, oldLen+uint64(cnt))
+	}
+
+	return
+}
+
 // XXX Old UnionNull is FUBAR
 // func UnionNull(v, _ *Vector, m *mpool.MPool) error
 // It seems to do UnionOne(v, v, 0, m), only that if v is empty,
@@ -1326,11 +1402,11 @@ func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 // clear people want to amortize alloc/grow, or it is a bug.
 func UnionNull(v, _ *Vector, m *mpool.MPool) error {
 	if v.original {
-		return moerr.NewInternalError("UnionNull cannot be performed on orig vector")
+		return moerr.NewInternalErrorNoCtx("UnionNull cannot be performed on orig vector")
 	}
 
 	if v.Typ.IsTuple() {
-		panic(moerr.NewInternalError("unionnull of tuple vector"))
+		panic(moerr.NewInternalErrorNoCtx("unionnull of tuple vector"))
 	}
 
 	if err := v.extend(1, m); err != nil {
@@ -1353,10 +1429,12 @@ func UnionNull(v, _ *Vector, m *mpool.MPool) error {
 
 // XXX Old Union is FUBAR
 // Union is just append.
-func Union(v, w *Vector, sels []int64, m *mpool.MPool) (err error) {
+func Union(v, w *Vector, sels []int64, hasNull bool, m *mpool.MPool) (err error) {
 	if v.original {
-		return moerr.NewInternalError("Union cannot be performed on orig vector")
+		return moerr.NewInternalErrorNoCtx("Union cannot be performed on orig vector")
 	}
+
+	oldLen := v.Length()
 
 	if err = v.extend(len(sels), m); err != nil {
 		return err
@@ -1369,6 +1447,15 @@ func Union(v, w *Vector, sels []int64, m *mpool.MPool) (err error) {
 		next := len(tgt) - len(sels)
 		for idx, sel := range sels {
 			bs := w.GetBytes(sel)
+			if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
+				return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
+			}
+
+			if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
+				if len(bs) > 0 {
+					return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), 0)
+				}
+			}
 			tgt[next+idx], v.area, err = types.BuildVarlena(bs, v.area, m)
 			if err != nil {
 				return err
@@ -1382,13 +1469,22 @@ func Union(v, w *Vector, sels []int64, m *mpool.MPool) (err error) {
 			copy(tgt, src)
 		}
 	}
+
+	if hasNull && w.Nsp != nil {
+		for i := range sels {
+			if nulls.Contains(w.Nsp, uint64(sels[i])) {
+				nulls.Add(v.Nsp, uint64(oldLen+i))
+			}
+		}
+	}
+
 	return
 }
 
 // XXX Old UnionBatch is FUBAR.
 func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPool) (err error) {
 	if v.original {
-		return moerr.NewInternalError("UnionBatch cannot be performed on orig vector")
+		return moerr.NewInternalErrorNoCtx("UnionBatch cannot be performed on orig vector")
 	}
 
 	curIdx := v.Length()
@@ -1412,6 +1508,15 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 		for idx, flg := range flags {
 			if flg > 0 {
 				bs := w.GetBytes(offset + int64(idx))
+				if v.GetType().Width != 0 && lengthutf8.CountUTF8CodePoints([]byte(bs)) > uint64(v.GetType().Width) {
+					return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
+				}
+
+				if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
+					if len(bs) > 0 {
+						return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), 0)
+					}
+				}
 				tgt[curIdx], v.area, err = types.BuildVarlena(bs, v.area, m)
 				curIdx += 1
 			}
@@ -1589,4 +1694,57 @@ func GetInitConstVal(typ types.Type) any {
 		//T_any T_star T_tuple T_interval
 		return int64(0)
 	}
+}
+
+func CopyConst(toVec, fromVec *Vector, length int, m *mpool.MPool) error {
+	typ := fromVec.Typ
+	var item any
+	switch typ.Oid {
+	case types.T_bool:
+		item = MustTCols[bool](fromVec)[0]
+	case types.T_int8:
+		item = MustTCols[int8](fromVec)[0]
+	case types.T_int16:
+		item = MustTCols[int16](fromVec)[0]
+	case types.T_int32:
+		item = MustTCols[int32](fromVec)[0]
+	case types.T_int64:
+		item = MustTCols[int64](fromVec)[0]
+	case types.T_uint8:
+		item = MustTCols[uint8](fromVec)[0]
+	case types.T_uint16:
+		item = MustTCols[uint16](fromVec)[0]
+	case types.T_uint32:
+		item = MustTCols[uint32](fromVec)[0]
+	case types.T_uint64:
+		item = MustTCols[uint64](fromVec)[0]
+	case types.T_float32:
+		item = MustTCols[float32](fromVec)[0]
+	case types.T_float64:
+		item = MustTCols[float64](fromVec)[0]
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+		item = MustBytesCols(fromVec)[0]
+	case types.T_date:
+		item = MustTCols[types.Date](fromVec)[0]
+	case types.T_datetime:
+		item = MustTCols[types.Datetime](fromVec)[0]
+	case types.T_time:
+		item = MustTCols[types.Time](fromVec)[0]
+	case types.T_timestamp:
+		item = MustTCols[types.Timestamp](fromVec)[0]
+	case types.T_decimal64:
+		item = MustTCols[types.Decimal64](fromVec)[0]
+	case types.T_decimal128:
+		item = MustTCols[types.Decimal128](fromVec)[0]
+	case types.T_uuid:
+		item = MustTCols[types.Uuid](fromVec)[0]
+	default:
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("vec %v can not copy", fromVec))
+	}
+
+	for i := 0; i < length; i++ {
+		toVec.Append(item, false, m)
+	}
+
+	return nil
 }

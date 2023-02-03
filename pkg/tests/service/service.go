@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
@@ -281,6 +282,10 @@ type testCluster struct {
 
 // NewCluster construct a cluster for integration test.
 func NewCluster(t *testing.T, opt Options) (Cluster, error) {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "debug",
+		Format: "console",
+	})
 	opt.validate()
 
 	c := &testCluster{
@@ -291,11 +296,12 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	}
 	c.logger = logutil.Adjust(opt.logger).With(zap.String("testcase", t.Name())).With(zap.String("test-id", c.testID))
 	c.opt.rootDataDir = filepath.Join(c.opt.rootDataDir, c.testID, t.Name())
-
 	if c.clock == nil {
 		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, 0)
 	}
-	clock.SetupDefaultClock(c.clock)
+
+	// TODO: CN and LOG use process level runtime
+	runtime.SetupProcessLevelRuntime(c.newRuntime())
 
 	// build addresses for all services
 	c.network.addresses = c.buildServiceAddresses()
@@ -322,6 +328,7 @@ func (c *testCluster) Start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 
+	c.mu.running = true
 	// start log services first
 	if err := c.startLogServices(ctx); err != nil {
 		return err
@@ -337,7 +344,6 @@ func (c *testCluster) Start() error {
 		return err
 	}
 
-	c.mu.running = true
 	return nil
 }
 
@@ -416,7 +422,7 @@ func (c *testCluster) GetDNStoreInfo(
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
-	return logpb.DNStoreInfo{}, moerr.NewNoService(uuid)
+	return logpb.DNStoreInfo{}, moerr.NewNoService(ctx, uuid)
 }
 
 func (c *testCluster) GetDNStoreInfoIndexed(
@@ -440,7 +446,7 @@ func (c *testCluster) GetLogStoreInfo(
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
-	return logpb.LogStoreInfo{}, moerr.NewNoService(uuid)
+	return logpb.LogStoreInfo{}, moerr.NewNoService(ctx, uuid)
 }
 
 func (c *testCluster) GetLogStoreInfoIndexed(
@@ -462,7 +468,7 @@ func (c *testCluster) GetCNStoreInfo(ctx context.Context, uuid string) (logpb.CN
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
-	return logpb.CNStoreInfo{}, moerr.NewNoService(uuid)
+	return logpb.CNStoreInfo{}, moerr.NewNoService(ctx, uuid)
 }
 
 func (c *testCluster) GetCNStoreInfoIndexed(ctx context.Context, index int) (logpb.CNStoreInfo, error) {
@@ -489,7 +495,7 @@ func (c *testCluster) DNStoreExpired(uuid string) (bool, error) {
 
 	dnStore, ok := state.DNState.Stores[uuid]
 	if !ok {
-		return false, moerr.NewShardNotReported(uuid, 0xDEADBEEF)
+		return false, moerr.NewShardNotReportedNoCtx(uuid, 0xDEADBEEF)
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
@@ -520,7 +526,7 @@ func (c *testCluster) LogStoreExpired(uuid string) (bool, error) {
 
 	logStore, ok := state.LogState.Stores[uuid]
 	if !ok {
-		return false, moerr.NewShardNotReported(uuid, 0xDEADBEEF)
+		return false, moerr.NewShardNotReportedNoCtx(uuid, 0xDEADBEEF)
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
@@ -551,7 +557,7 @@ func (c *testCluster) CNStoreExpired(uuid string) (bool, error) {
 
 	cnStore, ok := state.CNState.Stores[uuid]
 	if !ok {
-		return false, moerr.NewShardNotReported(uuid, 0)
+		return false, moerr.NewShardNotReportedNoCtx(uuid, 0)
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
@@ -1050,7 +1056,7 @@ func (c *testCluster) GetDNService(uuid string) (DNService, error) {
 			return c.dn.svcs[i], nil
 		}
 	}
-	return nil, moerr.NewNoService(uuid)
+	return nil, moerr.NewNoServiceNoCtx(uuid)
 }
 
 func (c *testCluster) GetLogService(uuid string) (LogService, error) {
@@ -1062,7 +1068,7 @@ func (c *testCluster) GetLogService(uuid string) (LogService, error) {
 			return svc, nil
 		}
 	}
-	return nil, moerr.NewNoService(uuid)
+	return nil, moerr.NewNoServiceNoCtx(uuid)
 }
 
 func (c *testCluster) GetCNService(uuid string) (CNService, error) {
@@ -1074,7 +1080,7 @@ func (c *testCluster) GetCNService(uuid string) (CNService, error) {
 			return svc, nil
 		}
 	}
-	return nil, moerr.NewNoService(uuid)
+	return nil, moerr.NewNoServiceNoCtx(uuid)
 }
 
 func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
@@ -1082,7 +1088,7 @@ func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
 	defer c.dn.Unlock()
 
 	if index >= len(c.dn.svcs) || index < 0 {
-		return nil, moerr.NewInvalidServiceIndex(index)
+		return nil, moerr.NewInvalidServiceIndexNoCtx(index)
 	}
 	return c.dn.svcs[index], nil
 }
@@ -1092,7 +1098,7 @@ func (c *testCluster) GetLogServiceIndexed(index int) (LogService, error) {
 	defer c.log.Unlock()
 
 	if index >= len(c.log.svcs) || index < 0 {
-		return nil, moerr.NewInvalidServiceIndex(index)
+		return nil, moerr.NewInvalidServiceIndexNoCtx(index)
 	}
 	return c.log.svcs[index], nil
 }
@@ -1102,7 +1108,7 @@ func (c *testCluster) GetCNServiceIndexed(index int) (CNService, error) {
 	defer c.log.Unlock()
 
 	if index >= len(c.cn.svcs) || index < 0 {
-		return nil, moerr.NewInvalidServiceIndex(index)
+		return nil, moerr.NewInvalidServiceIndexNoCtx(index)
 	}
 	return c.cn.svcs[index], nil
 }
@@ -1306,6 +1312,7 @@ func (c *testCluster) buildCNConfigs(
 		cfgs = append(cfgs, cfg)
 
 		opt := buildCNOptions()
+		opt = append(opt, cnservice.WithLogger(c.logger))
 		opts = append(opts, opt)
 	}
 	return cfgs, opts
@@ -1331,10 +1338,11 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		if err != nil {
 			panic(err)
 		}
-
-		opt = append(opt,
-			dnservice.WithLogger(c.logger))
-		ds, err := newDNService(cfg, fs, opt)
+		ds, err := newDNService(
+			cfg,
+			c.newRuntime(),
+			fs,
+			opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(
@@ -1359,8 +1367,6 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
-		opt = append(opt,
-			logservice.WithLogger(c.logger))
 		ls, err := newLogService(cfg, testutil.NewFS(), opt)
 		require.NoError(c.t, err)
 
@@ -1392,9 +1398,6 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 		if err != nil {
 			panic(err)
 		}
-
-		opt = append(opt,
-			cnservice.WithLogger(c.logger))
 		ctx, cancel := context.WithCancel(context.Background())
 		cs, err := newCNService(cfg, ctx, fs, opt)
 		if err != nil {
@@ -1608,6 +1611,10 @@ func (c *testCluster) waitSystemInitCompleted(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (c *testCluster) newRuntime() runtime.Runtime {
+	return runtime.NewRuntime(metadata.ServiceType_CN, "", c.logger, runtime.WithClock(c.clock))
 }
 
 // FilterFunc returns true if traffic was allowed.

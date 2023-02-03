@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -44,6 +46,8 @@ func New(
 		TxnOperator:       txnOperator,
 		FileService:       fileService,
 		GetClusterDetails: getClusterDetails,
+		UnixTime:          time.Now().UnixNano(),
+		LastInsertID:      new(uint64),
 	}
 }
 
@@ -67,6 +71,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.SessionInfo = p.SessionInfo
 	proc.FileService = p.FileService
 	proc.GetClusterDetails = p.GetClusterDetails
+	proc.UnixTime = p.UnixTime
 
 	// reg and cancel
 	proc.Ctx = newctx
@@ -78,6 +83,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 			Ch:  make(chan *batch.Batch, 1),
 		}
 	}
+	proc.LoadLocalReader = p.LoadLocalReader
 	return proc
 }
 
@@ -141,7 +147,7 @@ func (proc *Process) GetAnalyze(idx int) Analyze {
 	if idx >= len(proc.AnalInfos) {
 		return &analyze{analInfo: nil}
 	}
-	return &analyze{analInfo: proc.AnalInfos[idx]}
+	return &analyze{analInfo: proc.AnalInfos[idx], wait: 0}
 }
 
 func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, error) {
@@ -189,4 +195,8 @@ func (proc *Process) AllocInt64ScalarVector(v int64) *vector.Vector {
 	ivec[0] = v
 	vec.Col = ivec
 	return vec
+}
+
+func (proc *Process) WithSpanContext(sc trace.SpanContext) {
+	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)
 }

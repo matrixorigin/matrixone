@@ -42,10 +42,8 @@ insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
 insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
 create table dis_table_03(b varchar(25) primary key,c datetime);
 begin ;
--- @bvt:issue#5950
 insert into dis_table_03 select b,c from dis_table_02;
 select * from dis_table_03;
--- @bvt:issue
 -- @session:id=1{
 insert into dis_table_03 select 'bbb','2012-09-30';
 update dis_table_03 set b='aaa';
@@ -118,14 +116,14 @@ insert into  dis_table_02(b,c) values ('vvv','2000-09-08');
 -- @session}
 -- @session:id=2{
 begin ;
-select * from dis_table_02;
+select b, c from dis_table_02;
 delete from dis_table_02 where a=1;
 rollback ;
 -- @session}
 commit ;
-select * from aaa;
+select b, c from aaa;
 -- @session:id=1{
-select * from aaa;
+select b, c from aaa;
 -- @session}
 drop view aaa ;
 
@@ -134,35 +132,35 @@ insert into dis_table_02(b,c) values ('','1999-06-04');
 -- @session:id=1{
 prepare stmt1 from "update dis_table_02 set c='2222-07-12' where a=2";
 execute stmt1;
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
 update dis_table_02 set c='2000-09-02' where a=2;
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session:id=2{
 begin ;
 create database dis_db_02;
 rollback ;
 -- @session}
 commit;
-select * from dis_table_02;
+select b, c from dis_table_02;
 
 begin ;
 prepare stmt1 from "insert into dis_table_02(b,c) values('oppo','1009-11-11')";
 execute stmt1;
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session:id=1{
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
 prepare stmt2 from "update dis_table_02 set a=null";
 execute stmt2;
 commit;
-select * from dis_table_02;
+select b, c from dis_table_02;
 use dis_db_02;
-select * from dis_table_02;
+select b, c from dis_table_02;
 insert into dis_table_02(b,c) values ('','1999-06-04');
 
 ------------------------------
-create temporary table dis_temp_01(a int,b varchar,primary key(a));
+create temporary table dis_temp_01(a int,b varchar(100),primary key(a));
 begin ;
 insert into dis_temp_01 values (233,'uuuu');
 -- @session:id=1{
@@ -180,14 +178,14 @@ start transaction;
 load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02;
 -- @session:id=1{
 update dis_table_02 set b='pppp';
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session:id=2{
 begin ;
 create view dis_view_02 as select * from dis_table_02;
 insert into dis_table_02 values (2,'oooo','1802-03-20');
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
 -- @session:id=1{
 use isolation_2;
@@ -199,7 +197,7 @@ insert into dis_table_02 values (2,'oooo','1802-03-20');
 -- @session}
 commit;
 -- @session:id=1{
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
 select * from dis_view_02;
 drop table dis_view_02;
@@ -221,23 +219,23 @@ select * from dis_table_01;
 
 begin ;
 delete from dis_table_02 where a>1;;
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session:id=1{
-select * from dis_table_02;
+select b, c from dis_table_02;
 update dis_table_02 set b='tittttt' where a>1;
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session:id=2{
 start transaction ;
 update dis_table_02 set b='catttteee' where a>1;
-select * from dis_table_02;
+select b, c from dis_table_02;
 commit;
 -- @session}
 commit;
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session:id=1{
-select * from dis_table_02;
+select b, c from dis_table_02;
 -- @session}
 
 --------------------------------
@@ -264,7 +262,6 @@ commit;
 use iso_db_02;
 select * from iso_table_0001;
 
--- @bvt:issue#6028
 use isolation_2;
 create table dis_table_04(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
 insert into dis_table_04 values (6666,'kkkk','2010-11-25');
@@ -286,7 +283,6 @@ update dis_table_04 set b=(select 'kkkk')  where a=879;
 -- @session:id=1{
 select * from dis_table_04;
 -- @session}
--- @bvt:issue
 ----------------------------
 begin ;
 use isolation_2;

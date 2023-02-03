@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,7 +33,7 @@ func TestTime_StringAndString2(t *testing.T) {
 		{
 			name: "TestString-NoPrecision",
 			// 11:22:33
-			input:      FromTimeClock(false, 11, 22, 33, 0),
+			input:      TimeFromClock(false, 11, 22, 33, 0),
 			strExpect:  "11:22:33",
 			str2Expect: "11:22:33",
 			precision:  0,
@@ -40,7 +41,7 @@ func TestTime_StringAndString2(t *testing.T) {
 		{
 			name: "TestString-Precision",
 			// 11:22:33.123
-			input:      FromTimeClock(false, 11, 22, 33, 123000),
+			input:      TimeFromClock(false, 11, 22, 33, 123000),
 			strExpect:  "11:22:33",
 			str2Expect: "11:22:33.12300",
 			precision:  5,
@@ -48,7 +49,7 @@ func TestTime_StringAndString2(t *testing.T) {
 		{
 			name: "TestString-ShortterPrecision",
 			// 11:22:33.123
-			input:      FromTimeClock(false, 11, 22, 33, 123000),
+			input:      TimeFromClock(false, 11, 22, 33, 123000),
 			strExpect:  "11:22:33",
 			str2Expect: "11:22:33.12",
 			precision:  2,
@@ -56,7 +57,7 @@ func TestTime_StringAndString2(t *testing.T) {
 		{
 			name: "TestString-Minus",
 			// 11:22:33.125000
-			input:      FromTimeClock(true, 11, 22, 33, 125000),
+			input:      TimeFromClock(true, 11, 22, 33, 125000),
 			strExpect:  "-11:22:33",
 			str2Expect: "-11:22:33.12",
 			precision:  2,
@@ -87,7 +88,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse-NoPrecision",
 			// 11:22:33
 			inputStr:  "2022-12-12 11:22:33",
-			expected:  FromTimeClock(false, 11, 22, 33, 0),
+			expected:  TimeFromClock(false, 11, 22, 33, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -95,7 +96,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse-Precision01",
 			// 11:22:33
 			inputStr:  "2022-12-12 11:22:33.1234",
-			expected:  FromTimeClock(false, 11, 22, 33, 123000),
+			expected:  TimeFromClock(false, 11, 22, 33, 123000),
 			precision: 3,
 			isErr:     false,
 		},
@@ -103,7 +104,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse-Precision02",
 			// 11:22:33
 			inputStr:  "2022-12-12 11:22:33.1235",
-			expected:  FromTimeClock(false, 11, 22, 33, 124000),
+			expected:  TimeFromClock(false, 11, 22, 33, 124000),
 			precision: 3,
 			isErr:     false,
 		},
@@ -118,7 +119,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse2-NoPrecision",
 			// 11:22:33
 			inputStr:  "20221212112233",
-			expected:  FromTimeClock(false, 2022121211, 22, 33, 0),
+			expected:  TimeFromClock(false, 2022121211, 22, 33, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -126,7 +127,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse2-Precision01",
 			// 11:22:33
 			inputStr:  "20221212112233.1234",
-			expected:  FromTimeClock(false, 2022121211, 22, 33, 123000),
+			expected:  TimeFromClock(false, 2022121211, 22, 33, 123000),
 			precision: 3,
 			isErr:     false,
 		},
@@ -134,7 +135,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse2-Precision02",
 			// 11:22:33
 			inputStr:  "20221212112233.1235",
-			expected:  FromTimeClock(false, 2022121211, 22, 33, 124000),
+			expected:  TimeFromClock(false, 2022121211, 22, 33, 124000),
 			precision: 3,
 			isErr:     false,
 		},
@@ -143,7 +144,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse3-NoPrecision",
 			// 11:22:33
 			inputStr:  "11:22:33",
-			expected:  FromTimeClock(false, 11, 22, 33, 0),
+			expected:  TimeFromClock(false, 11, 22, 33, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -151,7 +152,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse3-NoPrecision2",
 			// 11:22:33
 			inputStr:  "555:22:33",
-			expected:  FromTimeClock(false, 555, 22, 33, 0),
+			expected:  TimeFromClock(false, 555, 22, 33, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -159,7 +160,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse3-NoPrecision2",
 			// 11:22:33
 			inputStr:  "-555:22:33",
-			expected:  FromTimeClock(true, 555, 22, 33, 0),
+			expected:  TimeFromClock(true, 555, 22, 33, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -167,7 +168,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse3-Precision",
 			// 11:22:33
 			inputStr:  "11:22:33.1234",
-			expected:  FromTimeClock(false, 11, 22, 33, 123000),
+			expected:  TimeFromClock(false, 11, 22, 33, 123000),
 			precision: 3,
 			isErr:     false,
 		},
@@ -175,7 +176,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse3-Precision",
 			// 11:22:33
 			inputStr:  "11:22:33.1235",
-			expected:  FromTimeClock(false, 11, 22, 33, 124000),
+			expected:  TimeFromClock(false, 11, 22, 33, 124000),
 			precision: 3,
 			isErr:     false,
 		},
@@ -184,7 +185,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse4-NoPrecision01",
 			// 11:22:33
 			inputStr:  "1",
-			expected:  FromTimeClock(false, 0, 0, 1, 0),
+			expected:  TimeFromClock(false, 0, 0, 1, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -192,7 +193,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse4-NoPrecision02",
 			// 11:22:33
 			inputStr:  "112",
-			expected:  FromTimeClock(false, 0, 1, 12, 0),
+			expected:  TimeFromClock(false, 0, 1, 12, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -200,7 +201,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse4-NoPrecision03",
 			// -00:01:12
 			inputStr:  "-112",
-			expected:  FromTimeClock(true, 0, 1, 12, 0),
+			expected:  TimeFromClock(true, 0, 1, 12, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -208,7 +209,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse4-NoPrecision04",
 			// -01:12:32
 			inputStr:  "-11232",
-			expected:  FromTimeClock(true, 1, 12, 32, 0),
+			expected:  TimeFromClock(true, 1, 12, 32, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -216,7 +217,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse4-Precision01",
 			// -01:12:32.123
 			inputStr:  "-11232.123",
-			expected:  FromTimeClock(true, 1, 12, 32, 123000),
+			expected:  TimeFromClock(true, 1, 12, 32, 123000),
 			precision: 3,
 			isErr:     false,
 		},
@@ -224,7 +225,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			name: "TestParse4-Precision02",
 			// -01:12:32.124
 			inputStr:  "11232.1235",
-			expected:  FromTimeClock(false, 1, 12, 32, 124000),
+			expected:  TimeFromClock(false, 1, 12, 32, 124000),
 			precision: 3,
 			isErr:     false,
 		},
@@ -238,7 +239,7 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, parsed, c.expected)
 			} else {
-				require.Equal(t, err, moerr.NewInvalidInput("invalid time value %s", c.inputStr))
+				require.Equal(t, err, moerr.NewInvalidInput(context.TODO(), "invalid time value %s", c.inputStr))
 			}
 		})
 
@@ -257,7 +258,7 @@ func TestTime_CastBetweenTimeInt64(t *testing.T) {
 			name: "TestParse-validInt64-01",
 			// 11:22:33
 			input:     112233,
-			expected:  FromTimeClock(false, 11, 22, 33, 0),
+			expected:  TimeFromClock(false, 11, 22, 33, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -265,7 +266,7 @@ func TestTime_CastBetweenTimeInt64(t *testing.T) {
 			name: "TestParse-validInt64-02",
 			// -11:22:33
 			input:     -112233,
-			expected:  FromTimeClock(true, 11, 22, 33, 0),
+			expected:  TimeFromClock(true, 11, 22, 33, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -273,7 +274,7 @@ func TestTime_CastBetweenTimeInt64(t *testing.T) {
 			name: "TestParse-validInt64-03",
 			// -00:01:12
 			input:     -112,
-			expected:  FromTimeClock(true, 0, 1, 12, 0),
+			expected:  TimeFromClock(true, 0, 1, 12, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -281,7 +282,7 @@ func TestTime_CastBetweenTimeInt64(t *testing.T) {
 			name: "TestParse-validInt64-03",
 			// 00:00:00
 			input:     0,
-			expected:  FromTimeClock(false, 0, 0, 0, 0),
+			expected:  TimeFromClock(false, 0, 0, 0, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -289,7 +290,7 @@ func TestTime_CastBetweenTimeInt64(t *testing.T) {
 			name: "TestParse-validInt64-03",
 			// -11:22:33
 			input:     0,
-			expected:  FromTimeClock(false, 0, 0, 0, 0),
+			expected:  TimeFromClock(false, 0, 0, 0, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -297,7 +298,7 @@ func TestTime_CastBetweenTimeInt64(t *testing.T) {
 			name: "TestParse-validInt64-03",
 			// 2562047787:59:59
 			input:     20221212112233,
-			expected:  FromTimeClock(false, 2022121211, 22, 33, 0),
+			expected:  TimeFromClock(false, 2022121211, 22, 33, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -305,7 +306,7 @@ func TestTime_CastBetweenTimeInt64(t *testing.T) {
 			name: "TestParse-validInt64-03",
 			// 2562047787:59:59
 			input:     25620477875959,
-			expected:  FromTimeClock(false, 2562047787, 59, 59, 0),
+			expected:  TimeFromClock(false, 2562047787, 59, 59, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -313,21 +314,21 @@ func TestTime_CastBetweenTimeInt64(t *testing.T) {
 			name: "TestParse-validInt64-03",
 			// 2562047787:59:59
 			input:     -25620477875959,
-			expected:  FromTimeClock(true, 2562047787, 59, 59, 0),
+			expected:  TimeFromClock(true, 2562047787, 59, 59, 0),
 			precision: 0,
 			isErr:     false,
 		},
 		{
 			name:      "TestParse-invalidInt64",
 			input:     25620477880000,
-			expected:  FromTimeClock(false, 0, 0, 0, 0),
+			expected:  TimeFromClock(false, 0, 0, 0, 0),
 			precision: 0,
 			isErr:     true,
 		},
 		{
 			name:      "TestParse-invalidInt64",
 			input:     -25620477880000,
-			expected:  FromTimeClock(true, 0, 0, 0, 0),
+			expected:  TimeFromClock(true, 0, 0, 0, 0),
 			precision: 0,
 			isErr:     true,
 		},
@@ -345,7 +346,7 @@ func TestTime_CastBetweenTimeInt64(t *testing.T) {
 				toInt := c.expected.ToInt64()
 				require.Equal(t, toInt, c.input)
 			} else {
-				require.Equal(t, err, moerr.NewInvalidInput("invalid time value %d", c.input))
+				require.Equal(t, err, moerr.NewInvalidInput(context.TODO(), "invalid time value %d", c.input))
 			}
 		})
 	}
@@ -364,7 +365,7 @@ func TestTime_ParseTimeFromDecimal128(t *testing.T) {
 		{
 			name:      "TestParse-ValidDecimal128",
 			dcmStr:    "112233.444",
-			expected:  FromTimeClock(false, 11, 22, 33, 444000),
+			expected:  TimeFromClock(false, 11, 22, 33, 444000),
 			precision: 3,
 			isCarry:   false,
 			isErr:     false,
@@ -372,7 +373,7 @@ func TestTime_ParseTimeFromDecimal128(t *testing.T) {
 		{
 			name:      "TestParse-ValidDecimal128",
 			dcmStr:    "112233.44455",
-			expected:  FromTimeClock(false, 11, 22, 33, 445000),
+			expected:  TimeFromClock(false, 11, 22, 33, 445000),
 			expected2: "112233.445",
 			precision: 3,
 			isCarry:   true,
@@ -381,7 +382,7 @@ func TestTime_ParseTimeFromDecimal128(t *testing.T) {
 		{
 			name:      "TestParse-ValidDecimal128",
 			dcmStr:    "20201212112233.44455",
-			expected:  FromTimeClock(false, 2020121211, 22, 33, 445000),
+			expected:  TimeFromClock(false, 2020121211, 22, 33, 445000),
 			expected2: "20201212112233.445",
 			precision: 3,
 			isCarry:   true,
@@ -390,7 +391,7 @@ func TestTime_ParseTimeFromDecimal128(t *testing.T) {
 		{
 			name:      "TestParse-ValidDecimal128",
 			dcmStr:    "-20201212112233.44455",
-			expected:  FromTimeClock(true, 2020121211, 22, 33, 445000),
+			expected:  TimeFromClock(true, 2020121211, 22, 33, 445000),
 			expected2: "-20201212112233.445",
 			precision: 3,
 			isCarry:   true,
@@ -405,12 +406,12 @@ func TestTime_ParseTimeFromDecimal128(t *testing.T) {
 			println("the decimal is ", dcm.String())
 			require.NoError(t, err)
 			if !c.isErr {
-				parsed, err := ParseDecima128lToTime(dcm, c.precision)
+				parsed, err := ParseDecimal128lToTime(dcm, c.precision)
 				require.NoError(t, err)
 				require.Equal(t, parsed, c.expected)
 
 				// Time to Decimal
-				toDcm, err := c.expected.ToDecimal128(34, c.precision)
+				toDcm, err := c.expected.ToDecimal128(context.TODO(), 34, c.precision)
 				println("the toDecimal is ", toDcm.String())
 				require.NoError(t, err)
 				if c.isCarry {

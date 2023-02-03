@@ -15,286 +15,183 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
-	if len(stmt.Tables) == 1 && stmt.TableRefs == nil {
-		return buildDeleteSingleTable(stmt, ctx)
+	aliasMap := make(map[string][2]string)
+	for _, tbl := range stmt.TableRefs {
+		getAliasToName(ctx, tbl, "", aliasMap)
 	}
-	return buildDeleteMultipleTable(stmt, ctx)
-}
-
-func extractAliasTable(aliasTable *tree.AliasedTableExpr, tf *tableInfo, ctx CompilerContext) {
-	dbName := string(aliasTable.Expr.(*tree.TableName).SchemaName)
-	if dbName == "" {
-		dbName = ctx.DefaultDatabase()
-	}
-	tf.dbNames[0] = dbName
-	tf.tableNames[0] = string(aliasTable.Expr.(*tree.TableName).ObjectName)
-	if string(aliasTable.As.Alias) != "" {
-		tf.baseNameMap[string(aliasTable.As.Alias)] = tf.tableNames[0]
-	} else {
-		tf.baseNameMap[tf.tableNames[0]] = tf.tableNames[0]
-	}
-}
-
-func reverseMap(m map[string]string) map[string]string {
-	res := make(map[string]string)
-	for k, v := range m {
-		res[v] = k
-	}
-	return res
-}
-
-// buildDeleteSingleTable, delete single table can optimize to truncate and different from syntax of multiple-tables,
-// so it is build singly.
-func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
-	// check database's name and table's name
-	tf := &tableInfo{
-		baseNameMap: make(map[string]string),
-		dbNames:     make([]string, 1),
-		tableNames:  make([]string, 1),
-	}
-	extractAliasTable(stmt.Tables[0].(*tree.AliasedTableExpr), tf, ctx)
-	tf.baseNameMap = reverseMap(tf.baseNameMap)
-	objRef, tableDef := ctx.Resolve(tf.dbNames[0], tf.tableNames[0])
-	if tableDef == nil {
-		return nil, moerr.NewInvalidInput("delete has no table def")
-	}
-	if tableDef.TableType == catalog.SystemExternalRel {
-		return nil, moerr.NewInvalidInput("cannot delete from external table")
-	} else if tableDef.TableType == catalog.SystemViewRel {
-		return nil, moerr.NewInvalidInput("cannot delete from view")
-	}
-
-	indexInfos := BuildIndexInfos(ctx, objRef.DbName, tableDef.Defs)
-	tableDef.IndexInfos = indexInfos
-
-	// optimize to truncate,
-	if stmt.Where == nil && stmt.Limit == nil {
-		return buildDelete2Truncate(objRef, tableDef)
-	}
-
-	// find out use keys to delete
-	var useProjectExprs tree.SelectExprs = nil
-
-	useProjectExprs, useKey, attrs, err := buildUseProjection(stmt, useProjectExprs, objRef, tableDef, tf, ctx)
+	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, aliasMap)
 	if err != nil {
 		return nil, err
 	}
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	bindCtx := NewBindContext(builder, nil)
 
-	// build the stmt of select and append select node
-	selectStmt := &tree.Select{
-		Select: &tree.SelectClause{
-			Exprs: useProjectExprs,
-			From:  &tree.From{Tables: stmt.Tables},
-			Where: stmt.Where,
-		},
-		OrderBy: stmt.OrderBy,
-		Limit:   stmt.Limit,
-		With:    stmt.With,
+	rewriteInfo := &dmlSelectInfo{
+		typ:     "delete",
+		rootId:  -1,
+		tblInfo: tblInfo,
 	}
-	usePlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
-	if err != nil {
-		return nil, err
-	}
-	usePlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_DELETE
-	qry := usePlan.Plan.(*plan.Plan_Query).Query
 
-	// build delete node
-	d := &plan.DeleteTableCtx{
-		DbName:       objRef.SchemaName,
-		TblName:      tableDef.Name,
-		UseDeleteKey: useKey.Name,
-		CanTruncate:  false,
-		IndexInfos:   tableDef.IndexInfos,
-		IndexAttrs:   attrs,
-	}
-	node := &Node{
-		NodeType:        plan.Node_DELETE,
-		ObjRef:          nil,
-		TableDef:        nil,
-		Children:        []int32{qry.Steps[len(qry.Steps)-1]},
-		NodeId:          int32(len(qry.Nodes)),
-		DeleteTablesCtx: []*plan.DeleteTableCtx{d},
-	}
-	qry.Nodes = append(qry.Nodes, node)
-	qry.Steps[len(qry.Steps)-1] = node.NodeId
+	canTruncate := false
+	if tblInfo.haveConstraint {
+		bindCtx.groupTag = builder.genNewTag()
+		bindCtx.aggregateTag = builder.genNewTag()
+		bindCtx.projectTag = builder.genNewTag()
 
-	return usePlan, nil
-}
-
-func buildDelete2Truncate(objRef *ObjectRef, tblDef *TableDef) (*Plan, error) {
-	// build delete node
-	d := &plan.DeleteTableCtx{
-		DbName:      objRef.SchemaName,
-		TblName:     tblDef.Name,
-		CanTruncate: true,
-		IndexInfos:  tblDef.IndexInfos,
-	}
-	node := &Node{
-		NodeType:        plan.Node_DELETE,
-		ObjRef:          objRef,
-		TableDef:        tblDef,
-		DeleteTablesCtx: []*plan.DeleteTableCtx{d},
-	}
-	return &Plan{
-		Plan: &plan.Plan_Query{
-			Query: &Query{
-				StmtType: plan.Query_DELETE,
-				Steps:    []int32{0},
-				Nodes:    []*Node{node},
-			},
-		},
-	}, nil
-}
-
-func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
-	// build map between base table and alias table
-	tf := &tableInfo{baseNameMap: make(map[string]string)}
-	for _, expr := range stmt.TableRefs {
-		if err := extractExprTable(expr, tf, ctx); err != nil {
+		// if delete table have constraint
+		err = initDeleteStmt(builder, bindCtx, rewriteInfo, stmt)
+		if err != nil {
 			return nil, err
 		}
-	}
 
-	// check database's name and table's name
-	tbs := getTableNames(stmt.Tables)
-	tableCount := len(tbs)
-	objRefs := make([]*ObjectRef, tableCount)
-	tblDefs := make([]*TableDef, tableCount)
-	for i, t := range tbs {
-		dbName := string(t.SchemaName)
-		if dbName == "" {
-			dbName = ctx.DefaultDatabase()
-		}
-		tblName := string(t.ObjectName)
-		if _, ok := tf.baseNameMap[tblName]; ok {
-			tblName = tf.baseNameMap[tblName]
-		}
-		objRefs[i], tblDefs[i] = ctx.Resolve(dbName, tblName)
-		if tblDefs[i] == nil {
-			return nil, moerr.NewInvalidInput("delete has no table ref")
-		}
-		if tblDefs[i].TableType == catalog.SystemExternalRel {
-			return nil, moerr.NewInvalidInput("cannot delete from external table")
-		} else if tblDefs[i].TableType == catalog.SystemViewRel {
-			return nil, moerr.NewInvalidInput("cannot delete from view")
-		}
-	}
-	originMap := tf.baseNameMap
-	tf.baseNameMap = reverseMap(tf.baseNameMap)
-	for _, t := range tbs {
-		tblName := string(t.ObjectName)
-		if _, ok := tf.baseNameMap[tblName]; !ok {
-			if _, ok := originMap[tblName]; !ok {
-				return nil, moerr.NewInvalidInput("Unknown table '%v' in MULTI DELETE", tblName)
+		for i, tableDef := range tblInfo.tableDefs {
+			err = rewriteDmlSelectInfo(builder, bindCtx, rewriteInfo, tableDef, rewriteInfo.derivedTableId, i)
+			if err != nil {
+				return nil, err
 			}
 		}
-	}
 
-	// find out use keys to delete
-	var err error
-	useKeys := make([]*ColDef, tableCount)
-	colIndex := make([]int32, tableCount)
-	attrsArr := make([][]string, tableCount)
-	var useProjectExprs tree.SelectExprs = nil
-	for i := 0; i < tableCount; i++ {
-		colIndex[i] = int32(len(useProjectExprs))
-		useProjectExprs, useKeys[i], attrsArr[i], err = buildUseProjection(stmt, useProjectExprs, objRefs[i], tblDefs[i], tf, ctx)
+		// append ProjectNode
+		rewriteInfo.rootId = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: rewriteInfo.projectList,
+			Children:    []int32{rewriteInfo.rootId},
+			BindingTags: []int32{bindCtx.projectTag},
+		}, bindCtx)
+		bindCtx.results = rewriteInfo.projectList
+	} else {
+		// if delete table have no constraint
+		if stmt.Where == nil && stmt.Limit == nil {
+			// we need to fix #7779 first, don't use truncate
+			// I will improve this after cn-write-s3 delete
+			canTruncate = false
+		}
+		rewriteInfo.rootId, err = deleteToSelect(builder, bindCtx, stmt, false)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	// build the stmt of select and append select node
-	selectStmt := &tree.Select{
-		Select: &tree.SelectClause{
-			Exprs: useProjectExprs,
-			From:  &tree.From{Tables: stmt.TableRefs},
-			Where: stmt.Where,
-		},
-		OrderBy: stmt.OrderBy,
-		Limit:   stmt.Limit,
-		With:    stmt.With,
-	}
-	usePlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
+	builder.qry.Steps = append(builder.qry.Steps, rewriteInfo.rootId)
+	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
 	}
-	usePlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_DELETE
-	qry := usePlan.Plan.(*plan.Plan_Query).Query
 
-	ds := make([]*plan.DeleteTableCtx, tableCount)
-	for i := 0; i < tableCount; i++ {
-		ds[i] = &plan.DeleteTableCtx{
-			DbName:       objRefs[i].SchemaName,
-			TblName:      tblDefs[i].Name,
-			UseDeleteKey: useKeys[i].Name,
-			CanTruncate:  false,
-			ColIndex:     colIndex[i],
-			IndexAttrs:   attrsArr[i],
+	// append delete node
+	deleteCtx := &plan.DeleteCtx{
+		CanTruncate: canTruncate,
+		Ref:         rewriteInfo.tblInfo.objRef,
+
+		IdxRef: rewriteInfo.onIdxTbl,
+		IdxIdx: rewriteInfo.onIdx,
+
+		OnRestrictRef: rewriteInfo.onRestrictTbl,
+		OnRestrictIdx: rewriteInfo.onRestrict,
+		OnCascadeRef:  rewriteInfo.onCascadeRef,
+		OnCascadeIdx:  make([]int32, len(rewriteInfo.onCascade)),
+
+		OnSetRef:       rewriteInfo.onSetRef,
+		OnSetIdx:       make([]*plan.IdList, len(rewriteInfo.onSet)),
+		OnSetDef:       rewriteInfo.onSetTableDef,
+		OnSetUpdateCol: make([]*plan.ColPosMap, len(rewriteInfo.onSetUpdateCol)),
+	}
+	for i, idxList := range rewriteInfo.onCascade {
+		deleteCtx.OnCascadeIdx[i] = int32(idxList[0])
+	}
+	for i, setList := range rewriteInfo.onSet {
+		deleteCtx.OnSetIdx[i] = &plan.IdList{
+			List: setList,
 		}
 	}
+	for i, idxMap := range rewriteInfo.onSetUpdateCol {
+		deleteCtx.OnSetUpdateCol[i] = &plan.ColPosMap{
+			Map: idxMap,
+		}
+	}
+
 	node := &Node{
-		NodeType:        plan.Node_DELETE,
-		ObjRef:          nil,
-		TableDef:        nil,
-		Children:        []int32{qry.Steps[len(qry.Steps)-1]},
-		NodeId:          int32(len(qry.Nodes)),
-		DeleteTablesCtx: ds,
+		NodeType:  plan.Node_DELETE,
+		ObjRef:    nil,
+		TableDef:  nil,
+		Children:  []int32{query.Steps[len(query.Steps)-1]},
+		NodeId:    int32(len(query.Nodes)),
+		DeleteCtx: deleteCtx,
 	}
-	qry.Nodes = append(qry.Nodes, node)
-	qry.Steps[len(qry.Steps)-1] = node.NodeId
+	query.Nodes = append(query.Nodes, node)
+	query.Steps[len(query.Steps)-1] = node.NodeId
+	query.StmtType = plan.Query_DELETE
 
-	return usePlan, nil
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, err
 }
 
-func getTableNames(tableExprs tree.TableExprs) []*tree.TableName {
-	tbs := make([]*tree.TableName, 0, len(tableExprs))
-	for _, tableExpr := range tableExprs {
-		tbs = append(tbs, tableExpr.(*tree.TableName))
-	}
-	return tbs
-}
+// // build rowid column abstract syntax tree expression of the table to be deleted
+// func buildRowIdAstExpr(ctx CompilerContext, tbinfo *tableInfo, schemaName string, tableName string) (tree.SelectExpr, error) {
+// 	hideKey := ctx.GetHideKeyDef(schemaName, tableName)
+// 	if hideKey == nil {
+// 		return tree.SelectExpr{}, moerr.NewInvalidState(ctx.GetContext(), "cannot find hide key")
+// 	}
+// 	tblAliasName := tableName
+// 	if tbinfo != nil {
+// 		tblAliasName = tbinfo.baseName2AliasMap[tableName]
+// 	}
+// 	expr := tree.SetUnresolvedName(tblAliasName, hideKey.Name)
+// 	return tree.SelectExpr{Expr: expr}, nil
+// }
 
-func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, tf *tableInfo, ctx CompilerContext) (tree.SelectExprs, *ColDef, []string, error) {
-	var useKey *ColDef
-	tblName := tf.baseNameMap[tableDef.Name]
+// // build Index table ast expr
+// func buildIndexTableExpr(indexTableName string) tree.TableExpr {
+// 	prefix := tree.ObjectNamePrefix{
+// 		CatalogName:     "",
+// 		SchemaName:      "",
+// 		ExplicitCatalog: false,
+// 		ExplicitSchema:  false,
+// 	}
 
-	// we will allways return hideKey now
-	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
-	if hideKey == nil {
-		return nil, nil, nil, moerr.NewInvalidState("cannot find hide key")
-	}
-	e := tree.SetUnresolvedName(tblName, hideKey.Name)
-	ps = append(ps, tree.SelectExpr{Expr: e})
-	useKey = hideKey
+// 	tableExpr := tree.NewTableName(tree.Identifier(indexTableName), prefix)
 
-	// make true we can get all the index col data before update, so we can delete index info.
-	indexColNameMap := make(map[string]bool)
-	for _, info := range tableDef.IndexInfos {
-		if info.Cols[0].IsCPkey {
-			colNames := util.SplitCompositePrimaryKeyColumnName(info.Cols[0].Name)
-			for _, colName := range colNames {
-				indexColNameMap[colName] = true
-			}
-		} else {
-			indexColNameMap[info.Cols[0].Name] = true
-		}
-	}
-	indexAttrs := make([]string, 0)
+// 	aliasClause := tree.AliasClause{
+// 		Alias: "",
+// 	}
+// 	return tree.NewAliasedTableExpr(tableExpr, aliasClause)
+// }
 
-	for indexColName := range indexColNameMap {
-		indexAttrs = append(indexAttrs, indexColName)
-		e, _ := tree.NewUnresolvedName(tf.baseNameMap[tableDef.Name], indexColName)
-		ps = append(ps, tree.SelectExpr{Expr: e})
-	}
-	return ps, useKey, indexAttrs, nil
+// // construct equivalent connection conditions between original table and index table
+// func buildJoinOnCond(tbinfo *tableInfo, originTableName string, indexTableName string, indexField *plan.Field) *tree.OnJoinCond {
+// 	originTableAlias := tbinfo.baseName2AliasMap[originTableName]
+// 	// If it is a single column index
+// 	if len(indexField.Parts) == 1 {
+// 		uniqueColName := indexField.Parts[0]
+// 		leftExpr := tree.SetUnresolvedName(originTableAlias, uniqueColName)
+// 		rightExpr := tree.SetUnresolvedName(indexTableName, strings.ToLower(catalog.IndexTableIndexColName))
 
-}
+// 		onCondExpr := tree.NewComparisonExprWithSubop(tree.EQUAL, tree.EQUAL, leftExpr, rightExpr)
+// 		return tree.NewOnJoinCond(onCondExpr)
+// 	} else { // If it is a composite index
+// 		funcName := tree.SetUnresolvedName(strings.ToLower("serial"))
+// 		// build function parameters
+// 		exprs := make(tree.Exprs, len(indexField.Parts))
+// 		for i, part := range indexField.Parts {
+// 			exprs[i] = tree.SetUnresolvedName(originTableAlias, part)
+// 		}
+
+// 		// build composite index serialize function expression
+// 		leftExpr := &tree.FuncExpr{
+// 			Func:  tree.FuncName2ResolvableFunctionReference(funcName),
+// 			Exprs: exprs,
+// 		}
+
+// 		rightExpr := tree.SetUnresolvedName(indexTableName, strings.ToLower(catalog.IndexTableIndexColName))
+// 		onCondExpr := tree.NewComparisonExprWithSubop(tree.EQUAL, tree.EQUAL, leftExpr, rightExpr)
+// 		return tree.NewOnJoinCond(onCondExpr)
+// 	}
+// }

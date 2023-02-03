@@ -286,6 +286,20 @@ func (t Type) String() string {
 	return t.Oid.String()
 }
 
+func (t Type) DescString() string {
+	switch t.Oid {
+	case T_char:
+		return fmt.Sprintf("CHAR(%d)", t.Width)
+	case T_varchar:
+		return fmt.Sprintf("VARCHAR(%d)", t.Width)
+	case T_decimal64:
+		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
+	case T_decimal128:
+		return fmt.Sprintf("DECIAML(%d,%d)", t.Width, t.Scale)
+	}
+	return t.Oid.String()
+}
+
 func (t Type) Eq(b Type) bool {
 	switch t.Oid {
 	// XXX need to find out why these types have different size/width
@@ -333,8 +347,14 @@ func (t T) ToType() Type {
 		typ.Size = TxnTsSize
 	case T_Rowid:
 		typ.Size = RowidSize
-	case T_char, T_varchar, T_json, T_blob, T_text:
+	case T_json, T_blob, T_text:
 		typ.Size = VarlenaSize
+	case T_char:
+		typ.Size = VarlenaSize
+		typ.Width = MaxCharLen
+	case T_varchar:
+		typ.Size = VarlenaSize
+		typ.Width = MaxVarcharLen
 	case T_any:
 		// XXX I don't know about this one ...
 		typ.Size = 0
@@ -501,7 +521,7 @@ func (t T) TypeLen() int {
 	case T_tuple:
 		return 0
 	}
-	panic(moerr.NewInternalError(fmt.Sprintf("unknow type %d", t)))
+	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknow type %d", t)))
 }
 
 // FixedLength dangerous code, use TypeLen() if you don't want -8, -16, -24
@@ -530,7 +550,7 @@ func (t T) FixedLength() int {
 	case T_char, T_varchar, T_blob, T_json, T_text:
 		return -24
 	}
-	panic(moerr.NewInternalError(fmt.Sprintf("unknow type %d", t)))
+	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknow type %d", t)))
 }
 
 // isUnsignedInt: return true if the types.T is UnSigned integer type

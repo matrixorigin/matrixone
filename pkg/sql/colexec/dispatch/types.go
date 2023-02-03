@@ -15,24 +15,55 @@
 package dispatch
 
 import (
+	"context"
+
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type WrapperStream struct {
+	Stream morpc.Stream
+	Uuids  []uuid.UUID
+}
 type container struct {
-	i int
+	i       int
+	streams []*WrapperStream
+
+	c []context.Context
+
+	cnts [][]uint
 }
 
 type Argument struct {
-	ctr  *container
-	All  bool // dispatch batch to each consumer
-	Regs []*process.WaitRegister
+	ctr *container
+	// dispatch batch to each consumer
+	All bool
+	// CrossCN is used to treat dispatch operator as a distributed operator
+	CrossCN bool
+
+	// LocalRegs means the local register you need to send to.
+	LocalRegs []*process.WaitRegister
+
+	// RemoteRegs specific the remote reg you need to send to.
+	// RemoteRegs[IBucket].Node.Address == ""
+	RemoteRegs []colexec.WrapperNode
+
+	// streams is the stream which connect local CN with remote CN.
+	SendFunc func(streams []*WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, ctxs []context.Context, cnts [][]uint, proc *process.Process) error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if arg.CrossCN {
+		CloseStreams(arg.ctr.streams, proc, *arg.ctr)
+	}
+
 	if pipelineFailed {
-		for i := range arg.Regs {
-			for len(arg.Regs[i].Ch) > 0 {
-				bat := <-arg.Regs[i].Ch
+		for i := range arg.LocalRegs {
+			for len(arg.LocalRegs[i].Ch) > 0 {
+				bat := <-arg.LocalRegs[i].Ch
 				if bat == nil {
 					break
 				}
@@ -41,11 +72,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		}
 	}
 
-	for i := range arg.Regs {
+	for i := range arg.LocalRegs {
 		select {
-		case <-arg.Regs[i].Ctx.Done():
-		case arg.Regs[i].Ch <- nil:
+		case <-arg.LocalRegs[i].Ctx.Done():
+		case arg.LocalRegs[i].Ch <- nil:
 		}
-		close(arg.Regs[i].Ch)
+		close(arg.LocalRegs[i].Ch)
 	}
 }

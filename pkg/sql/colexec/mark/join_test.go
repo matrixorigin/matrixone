@@ -115,7 +115,7 @@ func TestMark(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
+			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
 				break
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
@@ -126,8 +126,8 @@ func TestMark(t *testing.T) {
 
 func TestHandleResultType(t *testing.T) {
 	ctr := new(container)
-	ctr.joinFlags = make([]bool, 3)
-	ctr.Nsp = nulls.NewWithSize(3)
+	ctr.markVals = make([]bool, 3)
+	ctr.markNulls = nulls.NewWithSize(3)
 	ctr.handleResultType(0, condTrue)
 	ctr.handleResultType(1, condFalse)
 	ctr.handleResultType(2, condUnkown)
@@ -168,7 +168,7 @@ func BenchmarkMark(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- bat
 			for {
-				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
+				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
 					break
 				}
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
@@ -270,7 +270,7 @@ func hashBuild(t *testing.T, tc markTestCase) *batch.Batch {
 	require.NoError(t, err)
 	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 	tc.proc.Reg.MergeReceivers[0].Ch <- nil
-	ok, err := hashbuild.Call(0, tc.proc, tc.barg)
+	ok, err := hashbuild.Call(0, tc.proc, tc.barg, false, false)
 	require.NoError(t, err)
 	require.Equal(t, true, ok)
 	return tc.proc.Reg.InputBatch

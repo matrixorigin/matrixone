@@ -39,9 +39,10 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], ts t
 
 type TableEntry struct {
 	*TableBaseEntry
-	db        *DBEntry
-	schema    *Schema
-	entries   map[uint64]*common.GenericDLNode[*SegmentEntry]
+	db      *DBEntry
+	schema  *Schema
+	entries map[uint64]*common.GenericDLNode[*SegmentEntry]
+	//link.head and link.tail is nil when create tableEntry object.
 	link      *common.GenericSortedDList[*SegmentEntry]
 	tableData data.Table
 	rows      atomic.Uint64
@@ -58,24 +59,7 @@ func genTblFullName(tenantID uint32, name string) string {
 
 func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) *TableEntry {
 	id := db.catalog.NextTable()
-	if txnCtx != nil {
-		// Only in unit test, txnCtx can be nil
-		schema.AcInfo.TenantID = txnCtx.GetTenantID()
-		schema.AcInfo.UserID, schema.AcInfo.RoleID = txnCtx.GetUserAndRoleID()
-	}
-	schema.AcInfo.CreateAt = types.CurrentTimestamp()
-	e := &TableEntry{
-		TableBaseEntry: NewTableBaseEntry(id),
-		db:             db,
-		schema:         schema,
-		link:           common.NewGenericSortedDList(compareSegmentFn),
-		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
-	}
-	if dataFactory != nil {
-		e.tableData = dataFactory(e)
-	}
-	e.CreateWithTxn(txnCtx)
-	return e
+	return NewTableEntryWithTableId(db, schema, txnCtx, dataFactory, id)
 }
 
 func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) *TableEntry {
@@ -95,7 +79,7 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 	if dataFactory != nil {
 		e.tableData = dataFactory(e)
 	}
-	e.CreateWithTxn(txnCtx)
+	e.CreateWithTxn(txnCtx, schema)
 	return e
 }
 
@@ -210,6 +194,7 @@ func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 	} else {
 		entry.link.Delete(n)
 		delete(entry.entries, segment.GetID())
+		segment.Close()
 	}
 	return nil
 }
@@ -292,6 +277,20 @@ func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 	return seg
 }
 
+func (entry *TableEntry) LastNonAppendableSegmemt() (seg *SegmentEntry) {
+	it := entry.MakeSegmentIt(false)
+	for it.Valid() {
+		itSeg := it.Get().GetPayload()
+		dropped := itSeg.HasDropCommitted()
+		if !itSeg.IsAppendable() && !dropped {
+			seg = itSeg
+			break
+		}
+		it.Next()
+	}
+	return seg
+}
+
 func (entry *TableEntry) AsCommonID() *common.ID {
 	return &common.ID{
 		TableID: entry.GetID(),
@@ -358,9 +357,32 @@ func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (delete
 func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(segment.String()))
+	segment.Close()
 	entry.Lock()
 	defer entry.Unlock()
 	return entry.deleteEntryLocked(segment)
+}
+
+func (entry *TableEntry) Close() {
+	segs := entry.getAllSegs()
+	entry.Lock()
+	defer entry.Unlock()
+	for _, seg := range segs {
+		err := entry.deleteEntryLocked(seg)
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
+func (entry *TableEntry) getAllSegs() []*SegmentEntry {
+	segs := make([]*SegmentEntry, 0)
+	it := entry.MakeSegmentIt(false)
+	for it.Valid() {
+		segs = append(segs, it.Get().GetPayload())
+		it.Next()
+	}
+	return segs
 }
 
 func (entry *TableEntry) PrepareRollback() (err error) {

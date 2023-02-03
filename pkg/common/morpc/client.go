@@ -188,6 +188,21 @@ func (c *client) NewStream(backend string, lock bool) (Stream, error) {
 	return b.NewStream(lock)
 }
 
+func (c *client) Ping(ctx context.Context, backend string) error {
+	b, err := c.getBackend(backend, false)
+	if err != nil {
+		return err
+	}
+
+	f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Get()
+	return err
+}
+
 func (c *client) Close() error {
 	c.mu.Lock()
 	if c.mu.closed {
@@ -226,7 +241,7 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 
 func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 	if c.mu.closed {
-		return nil, moerr.NewClientClosed()
+		return nil, moerr.NewClientClosedNoCtx()
 	}
 
 	lockedCnt := 0
@@ -259,7 +274,7 @@ func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 				zap.Int("inactive", inactiveCnt),
 				zap.Int("max", c.options.maxBackendsPerHost))
 			if !c.canCreateLocked(backend) {
-				return nil, moerr.NewNoAvailableBackend()
+				return nil, moerr.NewNoAvailableBackendNoCtx()
 			}
 		}
 
@@ -422,7 +437,7 @@ func (c *client) createBackend(backend string, lock bool) (Backend, error) {
 
 func (c *client) createBackendLocked(backend string) (Backend, error) {
 	if !c.canCreateLocked(backend) {
-		return nil, moerr.NewNoAvailableBackend()
+		return nil, moerr.NewNoAvailableBackendNoCtx()
 	}
 
 	b, err := c.doCreate(backend)

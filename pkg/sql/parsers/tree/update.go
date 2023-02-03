@@ -15,9 +15,7 @@
 package tree
 
 import (
-	"bufio"
 	"context"
-	"os"
 	"strconv"
 	"strings"
 
@@ -64,6 +62,9 @@ func (node *Update) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *Update) GetStatementType() string { return "Update" }
+func (node *Update) GetQueryType() string     { return QueryTypeDML }
+
 type UpdateExprs []*UpdateExpr
 
 func (node *UpdateExprs) Format(ctx *FmtCtx) {
@@ -108,7 +109,9 @@ const (
 	AUTO       = "auto"
 	NOCOMPRESS = "none"
 	GZIP       = "gzip"
-	BZIP2      = "bz2"
+	GZ         = "gz" // alias of gzip
+	BZIP2      = "bzip2"
+	BZ2        = "bz2" // alias for bzip2
 	FLATE      = "flate"
 	LZW        = "lzw"
 	ZLIB       = "zlib"
@@ -140,18 +143,24 @@ type ExternParam struct {
 	Tail         *TailParameter
 	FileService  fileservice.FileService
 	NullMap      map[string]([]string)
-	S3option     []string
+	Option       []string
 	S3Param      *S3Parameter
 	Ctx          context.Context
 	LoadFile     bool
+	Local        bool
+	QueryResult  bool
+	SysTable     bool
 }
 
 type S3Parameter struct {
-	Endpoint  string `json:"s3-test-endpoint"`
-	Region    string `json:"s3-test-region"`
-	APIKey    string `json:"s3-test-key"`
-	APISecret string `json:"s3-test-secret"`
-	Bucket    string `json:"s3-test-bucket"`
+	Endpoint   string `json:"s3-test-endpoint"`
+	Region     string `json:"s3-test-region"`
+	APIKey     string `json:"s3-test-key"`
+	APISecret  string `json:"s3-test-secret"`
+	Bucket     string `json:"s3-test-bucket"`
+	Provider   string `json:"s3-test-rovider"`
+	RoleArn    string `json:"s3-test-rolearn"`
+	ExternalId string `json:"s3-test-externalid"`
 }
 
 type TailParameter struct {
@@ -173,6 +182,7 @@ type Load struct {
 	Local             bool
 	DuplicateHandling DuplicateKey
 	Table             *TableName
+	Accounts          IdentifierList
 	//Partition
 	Param *ExternParam
 }
@@ -192,39 +202,41 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" local")
 	}
 
-	if (node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS) && node.Param.Format == CSV {
+	if len(node.Param.Option) == 0 {
 		ctx.WriteString(" infile ")
 		ctx.WriteString(node.Param.Filepath)
-	} else if node.Param.ScanType == S3 {
-		ctx.WriteString(" url s3option ")
+	} else {
+		if node.Param.ScanType == S3 {
+			ctx.WriteString(" url s3option ")
+		} else {
+			ctx.WriteString(" infile ")
+
+		}
 		ctx.WriteString("{")
-		for i := 0; i < len(node.Param.S3option); i += 2 {
-			switch strings.ToLower(node.Param.S3option[i]) {
+		for i := 0; i < len(node.Param.Option); i += 2 {
+			switch strings.ToLower(node.Param.Option[i]) {
 			case "endpoint":
-				ctx.WriteString("'endpoint'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'endpoint'='" + node.Param.Option[i+1] + "'")
 			case "region":
-				ctx.WriteString("'region'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'region'='" + node.Param.Option[i+1] + "'")
 			case "access_key_id":
-				ctx.WriteString("'access_key_id'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'access_key_id'='" + node.Param.Option[i+1] + "'")
 			case "secret_access_key":
-				ctx.WriteString("'secret_access_key'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'secret_access_key'='" + node.Param.Option[i+1] + "'")
 			case "bucket":
-				ctx.WriteString("'bucket'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'bucket'='" + node.Param.Option[i+1] + "'")
 			case "filepath":
-				ctx.WriteString("'filepath'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'filepath'='" + node.Param.Option[i+1] + "'")
 			case "compression":
-				ctx.WriteString("'compression'='" + node.Param.S3option[i+1] + "'")
+				ctx.WriteString("'compression'='" + node.Param.Option[i+1] + "'")
+			case "format":
+				ctx.WriteString("'format'='" + node.Param.Option[i+1] + "'")
+			case "jsondata":
+				ctx.WriteString("'jsondata'='" + node.Param.Option[i+1] + "'")
 			}
-			if i != len(node.Param.S3option)-2 {
+			if i != len(node.Param.Option)-2 {
 				ctx.WriteString(", ")
 			}
-		}
-		ctx.WriteString("}")
-	} else {
-		ctx.WriteString(" infile ")
-		ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "', 'format':'" + strings.ToLower(node.Param.Format) + "'")
-		if node.Param.Format == JSONLINE {
-			ctx.WriteString(", 'jsondata':'" + node.Param.JsonData + "'")
 		}
 		ctx.WriteString("}")
 	}
@@ -239,6 +251,12 @@ func (node *Load) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(" into table ")
 	node.Table.Format(ctx)
+
+	if node.Accounts != nil {
+		ctx.WriteString(" accounts(")
+		node.Accounts.Format(ctx)
+		ctx.WriteByte(')')
+	}
 
 	if node.Param.Tail.Fields != nil {
 		ctx.WriteByte(' ')
@@ -269,6 +287,9 @@ func (node *Load) Format(ctx *FmtCtx) {
 		node.Param.Tail.Assignments.Format(ctx)
 	}
 }
+
+func (node *Load) GetStatementType() string { return "Load" }
+func (node *Load) GetQueryType() string     { return QueryTypeDML }
 
 func (node *Import) Format(ctx *FmtCtx) {
 	ctx.WriteString("import data")
@@ -324,6 +345,9 @@ func (node *Import) Format(ctx *FmtCtx) {
 		node.Param.Tail.Assignments.Format(ctx)
 	}
 }
+
+func (node *Import) GetStatementType() string { return "Import" }
+func (node *Import) GetQueryType() string     { return QueryTypeDML }
 
 type DuplicateKey interface{}
 
@@ -425,12 +449,10 @@ type LoadColumn interface {
 }
 
 type ExportParam struct {
-	// file handler
-	File *os.File
-	// bufio.writer
-	Writer *bufio.Writer
 	// outfile flag
 	Outfile bool
+	// query id
+	QueryId string
 	// filename path
 	FilePath string
 	// Fields
@@ -439,27 +461,25 @@ type ExportParam struct {
 	Lines *Lines
 	// fileSize
 	MaxFileSize uint64
-	// curFileSize
-	CurFileSize uint64
-	Rows        uint64
-	FileCnt     uint
 	// header flag
 	Header     bool
 	ForceQuote []string
-	ColumnFlag []bool
-	Symbol     [][]byte
-
-	// default flush size
-	DefaultBufSize int64
-	OutputStr      []byte
-	LineSize       uint64
 }
 
 func (ep *ExportParam) Format(ctx *FmtCtx) {
 	if ep.FilePath == "" {
 		return
 	}
-	ctx.WriteString("into outfile " + ep.FilePath)
+	ep.format(ctx, true)
+}
+
+func (ep *ExportParam) format(ctx *FmtCtx, withOutfile bool) {
+	ctx.WriteString("into")
+	if withOutfile {
+		ctx.WriteString(" outfile")
+	}
+	ctx.WriteByte(' ')
+	ctx.WriteString(ep.FilePath)
 	if ep.Fields != nil {
 		ctx.WriteByte(' ')
 		ep.Fields.Format(ctx)

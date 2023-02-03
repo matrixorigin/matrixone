@@ -31,7 +31,7 @@ import (
 
 func ParseFromString(s string) (ret ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInput("json text %s", s)
+		err = moerr.NewInvalidInputNoCtx("json text %s", s)
 		return
 	}
 	data := string2Slice(s)
@@ -40,11 +40,11 @@ func ParseFromString(s string) (ret ByteJson, err error) {
 }
 func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInput("json text %s", string(s))
+		err = moerr.NewInvalidInputNoCtx("json text %s", string(s))
 		return
 	}
 	if !json.Valid(s) {
-		err = moerr.NewInvalidInput("json text %s", string(s))
+		err = moerr.NewInvalidInputNoCtx("json text %s", string(s))
 		return
 	}
 	err = bj.UnmarshalJSON(s)
@@ -92,7 +92,7 @@ func addElem(buf []byte, in interface{}) (TpCode, []byte, error) {
 		tpCode = TpCodeObject
 		buf, err = addObject(buf, x)
 	default:
-		return tpCode, nil, moerr.NewInvalidInput("json element %v", in)
+		return tpCode, nil, moerr.NewInvalidInputNoCtx("json element %v", in)
 	}
 	return tpCode, buf, err
 }
@@ -136,7 +136,7 @@ func addString(buf []byte, in string) []byte {
 func addKeyEntry(buf []byte, start, keyOff int, key string) ([]byte, error) {
 	keyLen := uint32(len(key))
 	if keyLen > math.MaxUint16 {
-		return nil, moerr.NewInvalidInput("json key %s", key)
+		return nil, moerr.NewInvalidInputNoCtx("json key %s", key)
 	}
 	//put key offset
 	endian.PutUint32(buf[start:], uint32(keyOff))
@@ -211,7 +211,7 @@ func addValEntry(buf []byte, bufStart, entryStart int, in interface{}) ([]byte, 
 	case TpCodeLiteral:
 		lit := buf[valStart]
 		buf = buf[:valStart]
-		buf[entryStart] = TpCodeLiteral
+		buf[entryStart] = byte(TpCodeLiteral)
 		buf[entryStart+1] = lit
 		return buf, nil
 	}
@@ -229,7 +229,7 @@ func addUint32(buf []byte, x uint32) []byte {
 
 func checkFloat64(n float64) error {
 	if math.IsInf(n, 0) || math.IsNaN(n) {
-		return moerr.NewInvalidInput("json float64 %f", n)
+		return moerr.NewInvalidInputNoCtx("json float64 %f", n)
 	}
 	return nil
 }
@@ -239,7 +239,7 @@ func addJsonNumber(buf []byte, in json.Number) (TpCode, []byte, error) {
 	if strings.ContainsAny(string(in), "Ee.") {
 		val, err := in.Float64()
 		if err != nil {
-			return TpCodeFloat64, nil, moerr.NewInvalidInput("json number %v", in)
+			return TpCodeFloat64, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
 		}
 		if err = checkFloat64(val); err != nil {
 			return TpCodeFloat64, nil, err
@@ -259,7 +259,7 @@ func addJsonNumber(buf []byte, in json.Number) (TpCode, []byte, error) {
 		return TpCodeFloat64, addFloat64(buf, val), nil
 	}
 	var tpCode TpCode
-	return tpCode, nil, moerr.NewInvalidInput("json number %v", in)
+	return tpCode, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
 }
 func string2Slice(s string) []byte {
 	str := (*reflect.StringHeader)(unsafe.Pointer(&s))
@@ -293,10 +293,10 @@ func isIdentifier(s string) bool {
 }
 
 func ParseJsonPath(path string) (p Path, err error) {
-	pg := NewPathGenerator(path)
+	pg := newPathGenerator(path)
 	pg.trimSpace()
 	if !pg.hasNext() || pg.next() != '$' {
-		err = moerr.NewInvalidInput("invalid json path '%s'", path)
+		err = moerr.NewInvalidInputNoCtx("invalid json path '%s'", path)
 	}
 	pg.trimSpace()
 	subPaths := make([]subPath, 0, 8)
@@ -313,14 +313,14 @@ func ParseJsonPath(path string) (p Path, err error) {
 			ok = false
 		}
 		if !ok {
-			err = moerr.NewInvalidInput("invalid json path '%s'", path)
+			err = moerr.NewInvalidInputNoCtx("invalid json path '%s'", path)
 			return
 		}
 		pg.trimSpace()
 	}
 
 	if len(subPaths) > 0 && subPaths[len(subPaths)-1].tp == subPathDoubleStar {
-		err = moerr.NewInvalidInput("invalid json path '%s'", path)
+		err = moerr.NewInvalidInputNoCtx("invalid json path '%s'", path)
 		return
 	}
 	p.init(subPaths)
@@ -362,39 +362,45 @@ func checkMode(mode string) bool {
 	return false
 }
 
-func genIndexOrKey(pathStr string) (string, string) {
+func genIndexOrKey(pathStr string) ([]byte, []byte) {
 	if pathStr[len(pathStr)-1] == ']' {
 		// find last '['
 		idx := strings.LastIndex(pathStr, "[")
-		return pathStr[idx : len(pathStr)-1], ""
+		return string2Slice(pathStr[idx : len(pathStr)-1]), nil
 	}
 	// find last '.'
 	idx := strings.LastIndex(pathStr, ".")
-	return "", pathStr[idx+1:]
+	return nil, string2Slice(pathStr[idx+1:])
 }
 
 // for test
 func (r UnnestResult) String() string {
 	var buf bytes.Buffer
-	if val, ok := r["key"]; ok {
+	if val, ok := r["key"]; ok && val != nil {
 		buf.WriteString("key: ")
-		buf.WriteString(val + ", ")
+		buf.WriteString(string(val) + ", ")
 	}
-	if val, ok := r["path"]; ok {
+	if val, ok := r["path"]; ok && val != nil {
 		buf.WriteString("path: ")
-		buf.WriteString(val + ", ")
+		buf.WriteString(string(val) + ", ")
 	}
-	if val, ok := r["index"]; ok {
+	if val, ok := r["index"]; ok && val != nil {
 		buf.WriteString("index: ")
-		buf.WriteString(val + ", ")
+		buf.WriteString(string(val) + ", ")
 	}
-	if val, ok := r["value"]; ok {
+	if val, ok := r["value"]; ok && val != nil {
 		buf.WriteString("value: ")
-		buf.WriteString(val + ", ")
+		bj := ByteJson{}
+		bj.Unmarshal(val)
+		val, _ = bj.MarshalJSON()
+		buf.WriteString(string(val) + ", ")
 	}
-	if val, ok := r["this"]; ok {
+	if val, ok := r["this"]; ok && val != nil {
 		buf.WriteString("this: ")
-		buf.WriteString(val)
+		bj := ByteJson{}
+		bj.Unmarshal(val)
+		val, _ = bj.MarshalJSON()
+		buf.WriteString(string(val))
 	}
 	return buf.String()
 }

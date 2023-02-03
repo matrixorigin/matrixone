@@ -15,8 +15,12 @@
 package index
 
 import (
+	"fmt"
+
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -73,6 +77,15 @@ func NewZoneMap(typ types.Type) *ZoneMap {
 
 func (zm *ZoneMap) GetType() types.Type {
 	return zm.typ
+}
+
+func (zm *ZoneMap) String() string {
+	return fmt.Sprintf(
+		"ZM<init-%v,isInf-%v, %v-%v>",
+		zm.inited, zm.isInf,
+		common.TypeStringValue(zm.typ, zm.min),
+		common.TypeStringValue(zm.typ, zm.max),
+	)
 }
 
 func (zm *ZoneMap) init(v any) {
@@ -142,6 +155,23 @@ func (zm *ZoneMap) Contains(key any) (ok bool) {
 	if (zm.isInf || compute.CompareGeneric(key, zm.max, zm.typ) <= 0) && compute.CompareGeneric(key, zm.min, zm.typ) >= 0 {
 		ok = true
 	}
+	return
+}
+
+func (zm *ZoneMap) FastContainsAny(keys containers.Vector) (ok bool) {
+	if !zm.inited {
+		return
+	}
+	op := func(key any, _ int) (err error) {
+		if types.IsNull(key) ||
+			((zm.isInf || compute.CompareGeneric(key, zm.max, zm.typ) <= 0) &&
+				compute.CompareGeneric(key, zm.min, zm.typ) >= 0) {
+			err = moerr.GetOkExpectedEOB()
+			ok = true
+		}
+		return
+	}
+	keys.Foreach(op, nil)
 	return
 }
 

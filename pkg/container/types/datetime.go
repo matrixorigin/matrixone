@@ -25,16 +25,17 @@ import (
 )
 
 const (
-	secsPerMinute   = 60
-	secsPerHour     = 60 * secsPerMinute
-	secsPerDay      = 24 * secsPerHour
-	secsPerWeek     = 7 * secsPerDay
-	NanoSecsPerSec  = 1000000000 // 10^9
-	microSecsPerSec = 1000000    // 10^6
-	MillisecsPerSec = 1000       // 10^3
-	microSecsPerDay = secsPerDay * microSecsPerSec
-	MaxDatetimeYear = 9999
-	MinDatetimeYear = 1
+	secsPerMinute       = 60
+	secsPerHour         = 60 * secsPerMinute
+	secsPerDay          = 24 * secsPerHour
+	secsPerWeek         = 7 * secsPerDay
+	NanoSecsPerSec      = 1000000000 // 10^9
+	microSecsPerSec     = 1000000    // 10^6
+	MillisecsPerSec     = 1000       // 10^3
+	nanoSecsPerMicroSec = 1000
+	microSecsPerDay     = secsPerDay * microSecsPerSec
+	MaxDatetimeYear     = 9999
+	MinDatetimeYear     = 1
 
 	minHourInDay, maxHourInDay           = 0, 23
 	minMinuteInHour, maxMinuteInHour     = 0, 59
@@ -82,10 +83,10 @@ func (dt Datetime) String2(precision int32) string {
 func ParseDatetime(s string, precision int32) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if len(s) < 14 {
-		if d, err := ParseDate(s); err == nil {
+		if d, err := ParseDateCast(s); err == nil {
 			return d.ToDatetime(), nil
 		}
-		return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+		return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 	}
 	var year int32
 	var month, day, hour, minute, second uint8
@@ -98,65 +99,65 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 		var unum uint64
 		strArr := strings.Split(s, " ")
 		if len(strArr) != 2 {
-			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 		}
 		// solve year/month/day
 		front := strings.Split(strArr[0], s[4:5])
 		if len(front) != 3 {
-			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 		}
 		num, err = strconv.ParseInt(front[0], 10, 32)
 		if err != nil {
-			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 		}
 		year = int32(num)
 		unum, err = strconv.ParseUint(front[1], 10, 8)
 		if err != nil {
-			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 		}
 		month = uint8(unum)
 		unum, err = strconv.ParseUint(front[2], 10, 8)
 		if err != nil {
-			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 		}
 		day = uint8(unum)
 
 		if !ValidDate(year, month, day) {
-			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 		}
 
 		middleAndBack := strings.Split(strArr[1], ".")
 		// solve hour/minute/second
 		middle := strings.Split(middleAndBack[0], ":")
 		if len(middle) != 3 {
-			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 		}
 		unum, err = strconv.ParseUint(middle[0], 10, 8)
 		if err != nil {
-			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 		}
 		hour = uint8(unum)
 		unum, err = strconv.ParseUint(middle[1], 10, 8)
 		if err != nil {
-			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 		}
 		minute = uint8(unum)
 		unum, err = strconv.ParseUint(middle[2], 10, 8)
 		if err != nil {
-			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 		}
 		second = uint8(unum)
 		if !ValidTimeInDay(hour, minute, second) {
-			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 		}
 		// solve microsecond
 		if len(middleAndBack) == 2 {
 			msec, carry, err = getMsec(middleAndBack[1], precision)
 			if err != nil {
-				return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+				return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 			}
 		} else if len(middleAndBack) > 2 {
-			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 		}
 	} else {
 		year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
@@ -170,20 +171,20 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 				msecStr := s[15:]
 				msec, carry, err = getMsec(msecStr, precision)
 				if err != nil {
-					return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+					return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 				}
 			} else {
-				return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+				return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 			}
 		}
 	}
 	if !ValidDate(year, month, day) {
-		return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+		return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 	}
-	result := FromClock(year, month, day, hour, minute, second+uint8(carry), msec)
+	result := DatetimeFromClock(year, month, day, hour, minute, second+uint8(carry), msec)
 	y, m, d, _ := result.ToDate().Calendar(true)
 	if !ValidDate(y, m, d) {
-		return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+		return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 	}
 	return result, nil
 }
@@ -206,27 +207,27 @@ func (dt Datetime) UnixTimestamp(loc *time.Location) int64 {
 	return dt.ConvertToGoTime(loc).Unix()
 }
 
-func FromUnix(loc *time.Location, ts int64) Datetime {
+func DatetimeFromUnix(loc *time.Location, ts int64) Datetime {
 	t := time.Unix(ts, 0).In(loc)
 	_, offset := t.Zone()
-	return Datetime((ts+int64(offset))*microSecsPerSec + unixEpoch)
+	return Datetime((ts+int64(offset))*microSecsPerSec + unixEpochSecs)
 }
 
-func FromUnixWithNsec(loc *time.Location, sec int64, nsec int64) Datetime {
+func DatetimeFromUnixWithNsec(loc *time.Location, sec int64, nsec int64) Datetime {
 	t := time.Unix(sec, nsec).In(loc)
 	_, offset := t.Zone()
 	msec := math.Round(float64(nsec) / 1000)
-	return Datetime((sec+int64(offset))*microSecsPerSec + int64(msec) + unixEpoch)
+	return Datetime((sec+int64(offset))*microSecsPerSec + int64(msec) + unixEpochSecs)
 }
 
 func Now(loc *time.Location) Datetime {
 	now := time.Now().In(loc)
 	_, offset := now.Zone()
-	return Datetime(now.UnixMicro() + int64(offset)*microSecsPerSec + unixEpoch)
+	return Datetime(now.UnixMicro() + int64(offset)*microSecsPerSec + unixEpochSecs)
 }
 
 func UTC() Datetime {
-	return Datetime(time.Now().UnixMicro() + unixEpoch)
+	return Datetime(time.Now().UnixMicro() + unixEpochSecs)
 }
 
 func (dt Datetime) ToDate() Date {
@@ -274,8 +275,8 @@ func (dt Datetime) Hour() int8 {
 	return hour
 }
 
-func FromClock(year int32, month, day, hour, minute, sec uint8, msec uint32) Datetime {
-	days := FromCalendar(year, month, day)
+func DatetimeFromClock(year int32, month, day, hour, minute, sec uint8, msec uint32) Datetime {
+	days := DateFromCalendar(year, month, day)
 	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(minute)*secsPerMinute + int64(sec)
 	return Datetime(secs*microSecsPerSec + int64(msec))
 }
@@ -321,7 +322,7 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 			return 0, false
 		}
 	}
-	newDate := FromCalendar(y, m, d)
+	newDate := DateFromCalendar(y, m, d)
 	return dt + Datetime(newDate-oldDate)*secsPerDay*microSecsPerSec, true
 }
 
@@ -382,7 +383,7 @@ func (dt Datetime) DateTimeDiffWithUnit(its string, secondDt Datetime) (int64, e
 	case "year":
 		return dt.ConvertToMonth(secondDt) / 12, nil
 	}
-	return 0, moerr.NewInvalidInput("invalid time_stamp_unit input")
+	return 0, moerr.NewInvalidInputNoCtx("invalid time_stamp_unit input")
 }
 
 func (dt Datetime) DatetimeMinusWithSecond(secondDt Datetime) int64 {
@@ -443,7 +444,7 @@ func (dt Datetime) YearWeek(mode int) (year int, week int) {
 }
 
 func (dt Datetime) ToTimestamp(loc *time.Location) Timestamp {
-	return Timestamp(dt.ConvertToGoTime(loc).UnixMicro() + unixEpoch)
+	return Timestamp(dt.ConvertToGoTime(loc).UnixMicro() + unixEpochSecs)
 }
 
 func (dt Datetime) SecondMicrosecondStr() string {
@@ -515,4 +516,8 @@ func ValidDatetime(year int32, month, day uint8) bool {
 		}
 	}
 	return false
+}
+
+func (dt Datetime) SecsSinceUnixEpoch() int64 {
+	return (int64(dt) - unixEpochSecs) / microSecsPerSec
 }

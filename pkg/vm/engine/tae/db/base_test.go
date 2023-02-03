@@ -18,7 +18,12 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
+	checkpoint2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -65,6 +70,14 @@ func (e *testEngine) restart() {
 	_ = e.DB.Close()
 	var err error
 	e.DB, err = Open(e.Dir, e.Opts)
+	// only ut executes this checker
+	e.DB.DiskCleaner.AddChecker(
+		func(item any) bool {
+			min := e.DB.TxnMgr.MinTSForTest()
+			checkpoint := item.(*checkpoint2.CheckpointEntry)
+			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
+			return !checkpoint.GetEnd().GreaterEq(min)
+		})
 	assert.NoError(e.t, err)
 }
 
@@ -88,16 +101,20 @@ func (e *testEngine) checkRowsByScan(exp int, applyDelete bool) {
 	checkAllColRowsByScan(e.t, rel, exp, applyDelete)
 	assert.NoError(e.t, txn.Commit())
 }
-
+func (e *testEngine) dropRelation(t *testing.T) {
+	txn, err := e.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabase(defaultTestDB)
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(e.schema.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+}
 func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
 	return getRelation(e.t, e.tenantID, e.DB, defaultTestDB, e.schema.Name)
 }
 func (e *testEngine) getRelationWithTxn(txn txnif.AsyncTxn) (rel handle.Relation) {
 	return getRelationWithTxn(e.t, txn, defaultTestDB, e.schema.Name)
-}
-
-func (e *testEngine) checkpointCatalog() {
-	e.DB.BGCheckpointRunner.MockCheckpoint(e.DB.TxnMgr.StatMaxCommitTS())
 }
 
 func (e *testEngine) compactBlocks(skipConflict bool) {
@@ -184,10 +201,72 @@ func (e *testEngine) truncate() {
 	assert.NoError(e.t, err)
 	assert.NoError(e.t, txn.Commit())
 }
+func (e *testEngine) globalCheckpoint(
+	endTs types.TS,
+	versionInterval time.Duration,
+	enableAndCleanBGCheckpoint bool,
+) error {
+	if enableAndCleanBGCheckpoint {
+		e.DB.BGCheckpointRunner.DisableCheckpoint()
+		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
+		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
+	}
+	if e.DB.BGCheckpointRunner.GetPenddingIncrementalCount() == 0 {
+		testutils.WaitExpect(4000, func() bool {
+			flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, endTs, false)
+			return flushed
+		})
+		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, endTs, true)
+		assert.True(e.t, flushed)
+	}
+	err := e.DB.BGCheckpointRunner.ForceGlobalCheckpoint(endTs, versionInterval)
+	assert.NoError(e.t, err)
+	return nil
+}
 
+func (e *testEngine) incrementalCheckpoint(
+	end types.TS,
+	enableAndCleanBGCheckpoint bool,
+	waitFlush bool,
+	truncate bool,
+) error {
+	if enableAndCleanBGCheckpoint {
+		e.DB.BGCheckpointRunner.DisableCheckpoint()
+		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
+		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
+	}
+	if waitFlush {
+		testutils.WaitExpect(4000, func() bool {
+			flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, false)
+			return flushed
+		})
+		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, true)
+		assert.True(e.t, flushed)
+	}
+	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end)
+	assert.NoError(e.t, err)
+	if truncate {
+		lsn := e.DB.BGCheckpointRunner.MaxLSNInRange(end)
+		entry, err := e.DB.Wal.RangeCheckpoint(1, lsn)
+		assert.NoError(e.t, err)
+		assert.NoError(e.t, entry.WaitDone())
+		testutils.WaitExpect(1000, func() bool {
+			return e.Scheduler.GetPenddingLSNCnt() == 0
+		})
+	}
+	return nil
+}
 func initDB(t *testing.T, opts *options.Options) *DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, opts)
+	// only ut executes this checker
+	db.DiskCleaner.AddChecker(
+		func(item any) bool {
+			min := db.TxnMgr.MinTSForTest()
+			checkpoint := item.(*checkpoint2.CheckpointEntry)
+			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
+			return !checkpoint.GetEnd().GreaterEq(min)
+		})
 	return db
 }
 
@@ -206,40 +285,6 @@ func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalo
 		})
 	}
 	wg.Wait()
-}
-
-func getSegmentFileNames(e *DB) (names map[uint64]string) {
-	names = make(map[uint64]string)
-	return
-	/*files, err := os.ReadDir(e.Fs.Dir)
-	if err != nil {
-		panic(err)
-	}
-	for _, f := range files {
-		name := f.Name()
-		id, err := decodeSegName(name)
-		if err != nil {
-			continue
-		}
-		names[id] = name
-	}
-	return*/
-}
-
-func getBlockFileNames(e *DB) (names []string) {
-	names = make([]string, 0)
-	return
-	/*files, err := os.ReadDir(e.Fs.Dir)
-	if err != nil {
-		panic(err)
-	}
-	for _, f := range files {
-		name := f.Name()
-		if strings.HasSuffix(name, ".blk") {
-			names = append(names, name)
-		}
-	}
-	return*/
 }
 
 func lenOfBats(bats []*containers.Batch) int {
@@ -386,6 +431,10 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *model.ColumnView) error) {
 	forEachBlock(rel, func(blk handle.Block) (err error) {
 		view, err := blk.GetColumnDataById(colIdx, nil)
+		if view == nil {
+			logutil.Warnf("blk %v", blk.String())
+			return
+		}
 		if err != nil {
 			return
 		}
@@ -400,6 +449,21 @@ func forEachBlock(rel handle.Relation, fn func(blk handle.Block) error) {
 	var err error
 	for it.Valid() {
 		if err = fn(it.GetBlock()); err != nil {
+			if errors.Is(err, handle.ErrIteratorEnd) {
+				return
+			} else {
+				panic(err)
+			}
+		}
+		it.Next()
+	}
+}
+
+func forEachSegment(rel handle.Relation, fn func(seg handle.Segment) error) {
+	it := rel.MakeSegmentIt()
+	var err error
+	for it.Valid() {
+		if err = fn(it.GetSegment()); err != nil {
 			if errors.Is(err, handle.ErrIteratorEnd) {
 				return
 			} else {

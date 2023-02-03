@@ -15,15 +15,15 @@
 package metric
 
 import (
+	"bytes"
 	"context"
-	"io"
 	"regexp"
 	"testing"
 	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
@@ -146,6 +146,8 @@ func TestCollector(t *testing.T) {
 type dummyStringWriter struct {
 	name string
 	ch   chan string
+	// csvWriter
+	writer table.RowWriter
 }
 
 func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
@@ -155,18 +157,32 @@ func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
 	return n, nil
 }
 
-func newDummyFSWriterFactory(csvCh chan string) export.FSWriterFactory {
-	return export.FSWriterFactory(func(_ context.Context, dir string, name batchpipe.HasName, opts ...export.FSWriterOption) io.StringWriter {
-		return &dummyStringWriter{name: name.GetName(), ch: csvCh}
+func (w *dummyStringWriter) WriteRow(row *table.Row) error {
+	return w.writer.WriteRow(row)
+}
+
+func (w *dummyStringWriter) FlushAndClose() (int, error) {
+	return w.writer.FlushAndClose()
+}
+
+func (w *dummyStringWriter) GetContent() string { return "" }
+
+func newDummyFSWriterFactory(csvCh chan string) table.WriterFactory {
+	return table.WriterFactory(func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+		w := &dummyStringWriter{name: tbl.Table, ch: csvCh}
+		w.writer = etl.NewCSVWriter(context.TODO(), bytes.NewBuffer(nil), w)
+		return w
 	})
 }
-func dummyInitView(tbls []string) {
+
+func dummyInitView(ctx context.Context, tbls []string) {
 	for _, tbl := range tbls {
-		GetMetricViewWithLabels(tbl, []string{metricTypeColumn.Name, metricAccountColumn.Name})
+		GetMetricViewWithLabels(ctx, tbl, []string{metricTypeColumn.Name, metricAccountColumn.Name})
 	}
 }
 
-func TestCsvFSCollector(t *testing.T) {
+func TestFSCollector(t *testing.T) {
+	ctx := context.Background()
 	csvCh := make(chan string, 100)
 	factory := newDummyFSWriterFactory(csvCh)
 	collector := newMetricFSCollector(factory, WithFlushInterval(3*time.Second), WithMetricThreshold(4), ExportMultiTable(false))
@@ -176,7 +192,7 @@ func TestCsvFSCollector(t *testing.T) {
 	nodes := []string{"e669d136-24f3-11ed-ba8c-d6aee46d73fa", "e9b89520-24f3-11ed-ba8c-d6aee46d73fa"}
 	roles := []string{"ping", "pong"}
 	ts := time.Now().UnixMicro()
-	dummyInitView(names)
+	dummyInitView(ctx, names)
 	go func() {
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
 			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[0], Role: roles[0], Metric: []*pb.Metric{

@@ -18,8 +18,8 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"go.uber.org/zap"
 )
 
 // Option is utility that sets callback for Service.
@@ -32,14 +32,14 @@ func WithBackendFilter(filter func(morpc.Message, string) bool) Option {
 	}
 }
 
-// WithLogger sets logger
-func WithLogger(logger *zap.Logger) Option {
+// WithRuntime sets runtime
+func WithRuntime(runtime runtime.Runtime) Option {
 	return func(s *Service) {
-		s.logger = logger
+		s.runtime = runtime
 	}
 }
 
-// WithTaskStorageFactory setup the special task strorage factory
+// WithTaskStorageFactory set up the special task storage factory
 func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 	return func(s *Service) {
 		s.task.storageFactory = factory

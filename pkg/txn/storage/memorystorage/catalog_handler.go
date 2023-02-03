@@ -17,11 +17,9 @@ package memorystorage
 import (
 	"context"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
@@ -58,14 +56,9 @@ func NewCatalogHandler(upstream *MemHandler) (*CatalogHandler, error) {
 	}
 	handler.iterators.Map = make(map[ID]any)
 
-	now := Time{
-		Timestamp: timestamp.Timestamp{
-			PhysicalTime: math.MinInt64,
-		},
-	}
-	tx := memtable.NewTransaction(uuid.NewString(), now, memtable.SnapshotIsolation)
+	now := Time{}
+	tx := memorytable.NewTransaction(now)
 	defer func() {
-		now.Statement = math.MaxInt
 		if err := tx.Commit(now); err != nil {
 			panic(err)
 		}
@@ -187,7 +180,7 @@ func NewCatalogHandler(upstream *MemHandler) (*CatalogHandler, error) {
 func (c *CatalogHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, req memoryengine.AddTableDefReq, resp *memoryengine.AddTableDefResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewInternalError(
+		return moerr.NewInternalError(ctx,
 			"read only, db %v, table %v",
 			req.DatabaseName,
 			req.TableName,
@@ -250,7 +243,7 @@ func (c *CatalogHandler) HandleCreateDatabase(ctx context.Context, meta txn.TxnM
 
 	if req.Name == catalog.MO_CATALOG {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewDBAlreadyExists(req.Name)
+		return moerr.NewDBAlreadyExists(ctx, req.Name)
 	}
 	return c.upstream.HandleCreateDatabase(ctx, meta, req, resp)
 }
@@ -262,7 +255,7 @@ func (c *CatalogHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnM
 func (c *CatalogHandler) HandleDelTableDef(ctx context.Context, meta txn.TxnMeta, req memoryengine.DelTableDefReq, resp *memoryengine.DelTableDefResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewInternalError(
+		return moerr.NewInternalError(ctx,
 			"read only, db %v, table %v",
 			req.DatabaseName,
 			req.TableName,
@@ -274,7 +267,7 @@ func (c *CatalogHandler) HandleDelTableDef(ctx context.Context, meta txn.TxnMeta
 func (c *CatalogHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req memoryengine.DeleteReq, resp *memoryengine.DeleteResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewInternalError(
+		return moerr.NewInternalError(ctx,
 			"read only, db %v, table %v",
 			req.DatabaseName,
 			req.TableName,
@@ -292,7 +285,7 @@ func (c *CatalogHandler) HandleDeleteDatabase(ctx context.Context, meta txn.TxnM
 
 	if req.Name == catalog.MO_CATALOG {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewBadDB(req.Name)
+		return moerr.NewBadDB(ctx, req.Name)
 	}
 	return c.upstream.HandleDeleteDatabase(ctx, meta, req, resp)
 }
@@ -302,7 +295,7 @@ func (c *CatalogHandler) HandleDeleteRelation(ctx context.Context, meta txn.TxnM
 		for _, name := range c.sysRelationIDs {
 			if req.Name == name {
 				defer logReq("catalog", req, meta, resp, &err)()
-				return moerr.NewInternalError(
+				return moerr.NewInternalError(ctx,
 					"read only, db %v, table %v",
 					req.DatabaseName,
 					req.Name,
@@ -316,7 +309,7 @@ func (c *CatalogHandler) HandleDeleteRelation(ctx context.Context, meta txn.TxnM
 func (c *CatalogHandler) HandleTruncateRelation(ctx context.Context, meta txn.TxnMeta, req memoryengine.TruncateRelationReq, resp *memoryengine.TruncateRelationResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.OldTableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)
-		return moerr.NewInternalError(
+		return moerr.NewInternalError(ctx,
 			"read only, db %v, table %v",
 			req.DatabaseName,
 			req.Name,
@@ -382,21 +375,30 @@ func (c *CatalogHandler) HandleNewTableIter(ctx context.Context, meta txn.TxnMet
 		var iter any
 		switch name {
 		case catalog.MO_DATABASE:
-			tableIter := c.upstream.databases.NewIter(tx)
+			tableIter, err := c.upstream.databases.NewIter(tx)
+			if err != nil {
+				return err
+			}
 			iter = &DatabaseRowIter{
 				TableIter: tableIter,
 				AttrsMap:  attrsMap,
 				nextFunc:  tableIter.First,
 			}
 		case catalog.MO_TABLES:
-			tableIter := c.upstream.relations.NewIter(tx)
+			tableIter, err := c.upstream.relations.NewIter(tx)
+			if err != nil {
+				return err
+			}
 			iter = &RelationRowIter{
 				TableIter: tableIter,
 				AttrsMap:  attrsMap,
 				nextFunc:  tableIter.First,
 			}
 		case catalog.MO_COLUMNS:
-			tableIter := c.upstream.attributes.NewIter(tx)
+			tableIter, err := c.upstream.attributes.NewIter(tx)
+			if err != nil {
+				return err
+			}
 			iter = &AttributeRowIter{
 				TableIter: tableIter,
 				AttrsMap:  attrsMap,
@@ -572,7 +574,7 @@ func (c *CatalogHandler) HandleStartRecovery(ctx context.Context, ch chan txn.Tx
 func (c *CatalogHandler) HandleUpdate(ctx context.Context, meta txn.TxnMeta, req memoryengine.UpdateReq, resp *memoryengine.UpdateResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewInternalError(
+		return moerr.NewInternalError(ctx,
 			"read only, db %v, table %v",
 			req.DatabaseName,
 			req.TableName,
@@ -584,7 +586,7 @@ func (c *CatalogHandler) HandleUpdate(ctx context.Context, meta txn.TxnMeta, req
 func (c *CatalogHandler) HandleWrite(ctx context.Context, meta txn.TxnMeta, req memoryengine.WriteReq, resp *memoryengine.WriteResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewInternalError(
+		return moerr.NewInternalError(ctx,
 			"read only, db %v, table %v",
 			req.DatabaseName,
 			req.TableName,

@@ -16,6 +16,7 @@ package single
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,7 +45,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -60,7 +61,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			ctr.state = Probe
 
 		case Probe:
+			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
+			anal.WaitStop(start)
+
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -69,12 +73,12 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				continue
 			}
 			if ctr.bat.Length() == 0 {
-				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
+				if err := ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast); err != nil {
 					ap.Free(proc, true)
 					return true, err
 				}
 			} else {
-				if err := ctr.probe(bat, ap, proc, anal); err != nil {
+				if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
 					ap.Free(proc, true)
 					return true, err
 				}
@@ -90,17 +94,21 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+	start := time.Now()
 	bat := <-proc.Reg.MergeReceivers[1].Ch
+	anal.WaitStop(start)
+
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	count := bat.Length()
 	for i, rp := range ap.Result {
@@ -113,14 +121,14 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	}
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
 		if rp.Rel != 0 {
@@ -128,7 +136,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	ctr.cleanEvalVectors(proc.Mp())
-	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
+	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc, anal); err != nil {
+		rbat.Clean(proc.Mp())
 		return err
 	}
 
@@ -164,13 +173,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for j, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
 					if err != nil {
+						rbat.Clean(proc.Mp())
 						return err
 					}
 					bs := vec.Col.([]bool)
 					if bs[0] {
 						if matched {
 							vec.Free(proc.Mp())
-							return moerr.NewInternalError("scalar subquery returns more than 1 row")
+							rbat.Clean(proc.Mp())
+							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 						}
 						matched = true
 						idx = j
@@ -178,7 +189,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					vec.Free(proc.Mp())
 				}
 			} else if len(sels) > 1 {
-				return moerr.NewInternalError("scalar subquery returns more than 1 row")
+				rbat.Clean(proc.Mp())
+				return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 			}
 			if ap.Cond != nil && !matched {
 				for j, rp := range ap.Result {
@@ -211,15 +223,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
 	rbat.ExpandNulls()
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
+func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
@@ -231,6 +243,9 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 				ctr.evecs[i].needFree = false
 				break
 			}
+		}
+		if ctr.evecs[i].needFree && vec != nil {
+			analyze.Alloc(int64(vec.Size()))
 		}
 	}
 	return nil

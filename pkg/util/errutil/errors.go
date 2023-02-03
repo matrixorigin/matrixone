@@ -57,8 +57,30 @@ func WalkDeep(err error, visitor func(err error) bool) bool {
 	return false
 }
 
+type noReportKeyType int
+
+const noReportKey noReportKeyType = iota
+
+func ContextWithNoReport(parent context.Context, no bool) context.Context {
+	return context.WithValue(parent, noReportKey, no)
+}
+
+// NoReportFromContext return false default.
+func NoReportFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	if noLog, ok := ctx.Value(noReportKey).(bool); ok {
+		return noLog
+	}
+	return false
+}
+
 // ReportError used to handle non-moerr Error
 func ReportError(ctx context.Context, err error) {
+	if NoReportFromContext(ctx) {
+		return
+	}
 	GetReportErrorFunc()(ctx, err, 1)
 }
 

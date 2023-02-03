@@ -43,10 +43,8 @@ func TestBasicSingleShard(t *testing.T) {
 			c, err := NewCluster(t,
 				getBasicClusterOptions(options...))
 			require.NoError(t, err)
+			defer c.Stop()
 			c.Start()
-			defer func() {
-				c.Stop()
-			}()
 
 			cli := c.NewClient()
 
@@ -77,8 +75,8 @@ func TestBasicSingleShardCannotReadUncommittedValue(t *testing.T) {
 			c, err := NewCluster(t,
 				getBasicClusterOptions(options...))
 			require.NoError(t, err)
-			c.Start()
 			defer c.Stop()
+			c.Start()
 
 			cli := c.NewClient()
 
@@ -116,8 +114,8 @@ func TestWriteSkewIsAllowed(t *testing.T) {
 			c, err := NewCluster(t,
 				getBasicClusterOptions(options...))
 			require.NoError(t, err)
-			c.Start()
 			defer c.Stop()
+			c.Start()
 
 			cli := c.NewClient()
 
@@ -159,8 +157,8 @@ func TestSingleShardWithCreateTable(t *testing.T) {
 	c, err := NewCluster(t,
 		getBasicClusterOptions(useTAEStorage, useDistributedTAEEngine))
 	require.NoError(t, err)
-	c.Start()
 	defer c.Stop()
+	c.Start()
 
 	cli := c.NewClient()
 

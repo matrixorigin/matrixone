@@ -25,7 +25,8 @@ import (
 )
 
 const (
-	ReplayReadSize = common.M * 2
+	ReplayReadSize = common.M * 64
+	MaxReadSize    = common.M * 64
 )
 
 func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {
@@ -112,9 +113,12 @@ func (d *LogServiceDriver) Close() error {
 }
 
 func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {
+	d.PreReplay()
 	r := newReplayer(h, ReplayReadSize, d)
 	r.replay()
 	d.onReplay(r)
+	r.d.resetReadCache()
+	d.PostReplay()
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("wal"),
 		common.AnyField("backend", "logservice"),

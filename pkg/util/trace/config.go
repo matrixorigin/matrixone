@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,208 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Portions of this file are additionally subject to the following
+// copyright.
+//
+// Copyright (C) 2022 Matrix Origin.
+//
+// Modified the behavior and the interface of the step.
+
 package trace
 
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"io"
-	"sync"
-	"time"
-
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"io"
 )
-
-const (
-	InternalExecutor = "InternalExecutor"
-	FileService      = "FileService"
-)
-
-const (
-	MOStatementType = "statement"
-	MOSpanType      = "span"
-	MOLogType       = "log"
-	MOErrorType     = "error"
-	MORawLogType    = rawLogTbl
-)
-
-// tracerProviderConfig.
-type tracerProviderConfig struct {
-	// spanProcessors contains collection of SpanProcessors that are processing pipeline
-	// for spans in the trace signal.
-	// SpanProcessors registered with a TracerProvider and are called at the start
-	// and end of a Span's lifecycle, and are called in the order they are
-	// registered.
-	spanProcessors []SpanProcessor
-
-	enable bool // SetEnable
-
-	// idGenerator is used to generate all Span and Trace IDs when needed.
-	idGenerator IDGenerator
-
-	// resource contains attributes representing an entity that produces telemetry.
-	resource *Resource // WithMOVersion, WithNode,
-
-	// debugMode used in Tracer.Debug
-	debugMode bool // DebugMode
-
-	batchProcessMode string // WithBatchProcessMode
-
-	// writerFactory gen writer for CSV output
-	writerFactory export.FSWriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory result
-
-	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
-	// needInit control table schema create
-	needInit bool // WithInitAction
-
-	exportInterval time.Duration //  WithExportInterval
-	// longQueryTime unit ns
-	longQueryTime int64 //  WithLongQueryTime
-
-	mux sync.RWMutex
-}
-
-func (cfg *tracerProviderConfig) getNodeResource() *MONodeResource {
-	cfg.mux.RLock()
-	defer cfg.mux.RUnlock()
-	if val, has := cfg.resource.Get("Node"); !has {
-		return &MONodeResource{}
-	} else {
-		return val.(*MONodeResource)
-	}
-}
-
-func (cfg *tracerProviderConfig) IsEnable() bool {
-	cfg.mux.RLock()
-	defer cfg.mux.RUnlock()
-	return cfg.enable
-}
-
-func (cfg *tracerProviderConfig) SetEnable(enable bool) {
-	cfg.mux.Lock()
-	defer cfg.mux.Unlock()
-	cfg.enable = enable
-}
-
-func (cfg *tracerProviderConfig) GetSqlExecutor() func() ie.InternalExecutor {
-	cfg.mux.RLock()
-	defer cfg.mux.RUnlock()
-	return cfg.sqlExecutor
-}
-
-// TracerProviderOption configures a TracerProvider.
-type TracerProviderOption interface {
-	apply(*tracerProviderConfig)
-}
-
-type tracerProviderOption func(config *tracerProviderConfig)
-
-func (f tracerProviderOption) apply(config *tracerProviderConfig) {
-	f(config)
-}
-
-func WithMOVersion(v string) tracerProviderOption {
-	return func(config *tracerProviderConfig) {
-		config.resource.Put("version", v)
-	}
-}
-
-// WithNode give id as NodeId, t as NodeType
-func WithNode(uuid string, t string) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		cfg.resource.Put("Node", &MONodeResource{
-			NodeUuid: uuid,
-			NodeType: t,
-		})
-	}
-}
-
-func EnableTracer(enable bool) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		cfg.SetEnable(enable)
-	}
-}
-
-func WithFSWriterFactory(f export.FSWriterFactory) tracerProviderOption {
-	return tracerProviderOption(func(cfg *tracerProviderConfig) {
-		cfg.writerFactory = f
-	})
-}
-
-func WithExportInterval(secs int) tracerProviderOption {
-	return tracerProviderOption(func(cfg *tracerProviderConfig) {
-		cfg.exportInterval = time.Second * time.Duration(secs)
-	})
-}
-
-func WithLongQueryTime(secs float64) tracerProviderOption {
-	return tracerProviderOption(func(cfg *tracerProviderConfig) {
-		cfg.longQueryTime = int64(float64(time.Second) * secs)
-	})
-}
-
-func DebugMode(debug bool) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		cfg.debugMode = debug
-	}
-}
-
-func WithBatchProcessMode(mode string) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		cfg.batchProcessMode = mode
-	}
-}
-
-func WithSQLExecutor(f func() ie.InternalExecutor) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		cfg.mux.Lock()
-		defer cfg.mux.Unlock()
-		cfg.sqlExecutor = f
-	}
-}
-
-func WithInitAction(init bool) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		cfg.mux.Lock()
-		defer cfg.mux.Unlock()
-		cfg.needInit = init
-	}
-}
-
-var _ IDGenerator = &moIDGenerator{}
-
-type moIDGenerator struct{}
-
-func (M moIDGenerator) NewIDs() (TraceID, SpanID) {
-	tid := TraceID{}
-	binary.BigEndian.PutUint64(tid[:], util.Fastrand64())
-	binary.BigEndian.PutUint64(tid[8:], util.Fastrand64())
-	sid := SpanID{}
-	binary.BigEndian.PutUint64(sid[:], util.Fastrand64())
-	return tid, sid
-}
-
-func (M moIDGenerator) NewSpanID() SpanID {
-	sid := SpanID{}
-	binary.BigEndian.PutUint64(sid[:], util.Fastrand64())
-	return sid
-}
 
 type TraceID [16]byte
 
-var nilTraceID TraceID
+var NilTraceID TraceID
 
 // IsZero checks whether the trace TraceID is 0 value.
 func (t TraceID) IsZero() bool {
-	return bytes.Equal(t[:], nilTraceID[:])
+	return bytes.Equal(t[:], NilTraceID[:])
 }
 
 func (t TraceID) String() string {
@@ -225,7 +50,7 @@ func (t TraceID) String() string {
 
 type SpanID [8]byte
 
-var nilSpanID SpanID
+var NilSpanID SpanID
 
 // SetByUUID use prefix of uuid as value
 func (s *SpanID) SetByUUID(id string) {
@@ -237,7 +62,7 @@ func (s *SpanID) SetByUUID(id string) {
 }
 
 func (s *SpanID) IsZero() bool {
-	return bytes.Equal(s[:], nilSpanID[:])
+	return bytes.Equal(s[:], NilSpanID[:])
 }
 
 func (s SpanID) String() string {
@@ -302,8 +127,8 @@ func (c SpanContext) GetIDs() (TraceID, SpanID) {
 }
 
 func (c *SpanContext) Reset() {
-	c.TraceID = nilTraceID
-	c.SpanID = nilSpanID
+	c.TraceID = NilTraceID
+	c.SpanID = NilSpanID
 	c.Kind = SpanKindInternal
 }
 
@@ -318,6 +143,9 @@ func (c *SpanContext) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	}
 	if !c.SpanID.IsZero() {
 		enc.AddString("span_id", c.SpanID.String())
+	}
+	if c.Kind != SpanKindInternal {
+		enc.AddString("kind", c.Kind.String())
 	}
 	return nil
 }
@@ -339,17 +167,17 @@ type SpanConfig struct {
 	// commonly used when an existing trace crosses trust boundaries and the
 	// remote parent span context should be ignored for security.
 	NewRoot bool `json:"NewRoot"` // WithNewRoot
-	parent  Span `json:"-"`
+	Parent  Span `json:"-"`
 }
 
 // SpanStartOption applies an option to a SpanConfig. These options are applicable
 // only when the span is created.
 type SpanStartOption interface {
-	applySpanStart(*SpanConfig)
+	ApplySpanStart(*SpanConfig)
 }
 
 type SpanEndOption interface {
-	applySpanEnd(*SpanConfig)
+	ApplySpanEnd(*SpanConfig)
 }
 
 // SpanOption applies an option to a SpanConfig.
@@ -360,11 +188,11 @@ type SpanOption interface {
 
 type spanOptionFunc func(*SpanConfig)
 
-func (f spanOptionFunc) applySpanEnd(cfg *SpanConfig) {
+func (f spanOptionFunc) ApplySpanEnd(cfg *SpanConfig) {
 	f(cfg)
 }
 
-func (f spanOptionFunc) applySpanStart(cfg *SpanConfig) {
+func (f spanOptionFunc) ApplySpanStart(cfg *SpanConfig) {
 	f(cfg)
 }
 
@@ -374,15 +202,9 @@ func WithNewRoot(newRoot bool) spanOptionFunc {
 	})
 }
 
-func WithTraceID(id TraceID) spanOptionFunc {
+func WithKind(kind SpanKind) spanOptionFunc {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.TraceID = id
-	})
-}
-
-func WithSpanID(id SpanID) spanOptionFunc {
-	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.SpanID = id
+		cfg.Kind = kind
 	})
 }
 
@@ -390,7 +212,7 @@ type Resource struct {
 	m map[string]any
 }
 
-func newResource() *Resource {
+func NewResource() *Resource {
 	return &Resource{m: make(map[string]any)}
 }
 
@@ -430,6 +252,9 @@ const (
 	// SpanKindRemote is a SpanKind for a Span that represents the operation
 	// cross rpc
 	SpanKindRemote SpanKind = 2
+	// SpanKindSession is a SpanKind for a Span that represents the operation
+	// start from session
+	SpanKindSession SpanKind = 3
 )
 
 func (k SpanKind) String() string {
@@ -440,7 +265,55 @@ func (k SpanKind) String() string {
 		return "statement"
 	case SpanKindRemote:
 		return "remote"
+	case SpanKindSession:
+		return "session"
 	default:
 		return "unknown"
 	}
+}
+
+// TracerConfig is a group of options for a Tracer.
+type TracerConfig struct {
+	Name string
+}
+
+// TracerOption applies an option to a TracerConfig.
+type TracerOption interface {
+	Apply(*TracerConfig)
+}
+
+var _ TracerOption = tracerOptionFunc(nil)
+
+type tracerOptionFunc func(*TracerConfig)
+
+func (f tracerOptionFunc) Apply(cfg *TracerConfig) {
+	f(cfg)
+}
+
+const (
+	// FlagsSampled is a bitmask with the sampled bit set. A SpanContext
+	// with the sampling bit set means the span is sampled.
+	FlagsSampled = TraceFlags(0x01)
+)
+
+// TraceFlags contains flags that can be set on a SpanContext.
+type TraceFlags byte //nolint:revive // revive complains about stutter of `trace.TraceFlags`.
+
+// IsSampled returns if the sampling bit is set in the TraceFlags.
+func (tf TraceFlags) IsSampled() bool {
+	return tf&FlagsSampled == FlagsSampled
+}
+
+// WithSampled sets the sampling bit in a new copy of the TraceFlags.
+func (tf TraceFlags) WithSampled(sampled bool) TraceFlags { // nolint:revive  // sampled is not a control flag.
+	if sampled {
+		return tf | FlagsSampled
+	}
+
+	return tf &^ FlagsSampled
+}
+
+// String returns the hex string representation form of TraceFlags.
+func (tf TraceFlags) String() string {
+	return hex.EncodeToString([]byte{byte(tf)}[:])
 }

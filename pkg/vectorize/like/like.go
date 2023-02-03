@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
-	"strings"
 	"unicode/utf8"
 	"unsafe"
 
@@ -162,7 +161,7 @@ func BtSliceNullAndConst(xs []string, expr []byte, ns *nulls.Nulls, rs []bool) (
 		return nil, err
 	}
 	for i, s := range xs {
-		rs[i] = isNotNull(ns, uint64(i)) && reg.Match([]byte(s))
+		rs[i] = isNotNull(ns, uint64(i)) && reg.MatchString(s)
 	}
 	return rs, nil
 }
@@ -181,7 +180,7 @@ func BtConstAndConst(s string, expr []byte) (bool, error) {
 // <source column> like <rule column>
 func BtSliceAndSlice(xs []string, exprs [][]byte, rs []bool) ([]bool, error) {
 	if len(xs) != len(exprs) {
-		return nil, moerr.NewInternalError("unexpected error when LIKE operator")
+		return nil, moerr.NewInternalErrorNoCtx("unexpected error when LIKE operator")
 	}
 
 	for i := range xs {
@@ -231,7 +230,7 @@ func convert(expr []byte) string {
 func replace(s string) string {
 	var oldCharactor rune
 
-	r := make([]byte, len(s)+strings.Count(s, `%`))
+	r := make([]byte, len(s)*2)
 	w := 0
 	start := 0
 	for len(s) > start {
@@ -247,6 +246,10 @@ func replace(s string) string {
 			w += copy(r[w:], []byte{'.'})
 		case '%':
 			w += copy(r[w:], []byte{'.', '*'})
+		case '(':
+			w += copy(r[w:], []byte{'\\', '('})
+		case ')':
+			w += copy(r[w:], []byte{'\\', ')'})
 		case '\\':
 		default:
 			w += copy(r[w:], s[start:start+wid])

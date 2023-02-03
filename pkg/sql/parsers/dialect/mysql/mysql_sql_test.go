@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -26,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show variables like 'sql_mode'",
-		output: "show variables like sql_mode",
+		input:  "select * from t1 where a not ilike '%a'",
+		output: "select * from t1 where a not ilike %a",
 	}
 )
 
@@ -36,7 +37,7 @@ func TestDebug(t *testing.T) {
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := ParseOne(debugSQL.input)
+	ast, err := ParseOne(context.TODO(), debugSQL.input)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return
@@ -52,6 +53,18 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select * from t1 where a not ilike '%a'",
+		output: "select * from t1 where a not ilike %a",
+	}, {
+		input:  "select * from t1 where a ilike '%a'",
+		output: "select * from t1 where a ilike %a",
+	}, {
+		input:  "select * from result_scan(query_id)",
+		output: "select * from result_scan(query_id)",
+	}, {
+		input:  "select * from meta_scan('query_id');",
+		output: "select * from meta_scan(query_id)",
+	}, {
 		input:  "show variables like 'sql_mode'",
 		output: "show variables like sql_mode",
 	}, {
@@ -80,7 +93,7 @@ var (
 		output: "select id, name, view_type, attribute, attribute_filed, size, created_at, updated_at from view_warehouse limit 10 offset 0",
 	}, {
 		input:  "select algo_alarm_record.* from algo_alarm_record inner join (SELECT id FROM algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) WHERE first_id = 0 AND created_at >= '2022-09-18 00:00:00' AND created_at <= '2022-10-18 00:00:00' and algo_id not in (9808,9809) order by id desc limit 0,10 ) e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc;",
-		output: "select algo_alarm_record* from algo_alarm_record inner join (select id from algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) where first_id = 0 and created_at >= 2022-09-18 00:00:00 and created_at <= 2022-10-18 00:00:00 and algo_id not in (9808, 9809) order by id desc limit 10 offset 0) as e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc",
+		output: "select algo_alarm_record.* from algo_alarm_record inner join (select id from algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) where first_id = 0 and created_at >= 2022-09-18 00:00:00 and created_at <= 2022-10-18 00:00:00 and algo_id not in (9808, 9809) order by id desc limit 10 offset 0) as e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc",
 	}, {
 		input: "select a from t1 use index(b)",
 	}, {
@@ -90,7 +103,13 @@ var (
 		input:  "CREATE  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
 		output: "create view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
 	}, {
+		input:  "ALTER  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
+		output: "alter view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
+	}, {
 		input: "select time from t1 as value",
+	}, {
+		input:  "alter database test set mysql_compatbility_mode = '{transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0}'",
+		output: "alter database configuration for test as {transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0} ",
 	}, {
 		input: "show profiles",
 	}, {
@@ -200,6 +219,9 @@ var (
 	}, {
 		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
+	}, {
+		input:  "select binary('Geeksforgeeks')",
+		output: "select cast(Geeksforgeeks as binary)",
 	}, {
 		input:  "show schemas where 1",
 		output: "show databases where 1",
@@ -388,7 +410,10 @@ var (
 		input: "select cast(variance(ff) as decimal(10, 3)) from t2",
 	}, {
 		input:  "SELECT GROUP_CONCAT(DISTINCT 2) from t1",
-		output: "select group_concat(distinct 2) from t1",
+		output: "select group_concat(distinct 2, ,) from t1",
+	}, {
+		input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
+		output: "select group_concat(distinct a, ,) from t1",
 	}, {
 		input: "select variance(2) from t1",
 	}, {
@@ -461,10 +486,18 @@ var (
 		input:  "CREATE VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
 		output: "create view v as select * from t where t.id = f(t.name)",
 	}, {
+		input:  "ALTER VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
+		output: "alter view v as select * from t where t.id = f(t.name)",
+	}, {
 		input:  "CREATE VIEW v AS SELECT qty, price, qty*price AS value FROM t;",
 		output: "create view v as select qty, price, qty * price as value from t",
 	}, {
+		input:  "ALTER VIEW v AS SELECT qty, price, qty*price AS value FROM t;",
+		output: "alter view v as select qty, price, qty * price as value from t",
+	}, {
 		input: "create view v_today (today) as select current_day from t",
+	}, {
+		input: "alter view v_today (today) as select current_day from t",
 	}, {
 		input: "explain (analyze true,verbose false) select * from emp",
 	}, {
@@ -594,14 +627,11 @@ var (
 		input:  "create external table t (a int) infile 'data.txt'",
 		output: "create external table t (a int) infile 'data.txt'",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
-		output: "create external table t (a int) infile 'data.txt'",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
-		output: "create external table t (a int) infile 'data.txt'",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
-		output: "create external table t (a int) infile {'filepath':'data.txt', 'compression':'lz4'}",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
 	}, {
 		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
 		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
@@ -652,6 +682,12 @@ var (
 		input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
 		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 	}, {
+		input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 lines",
+		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+	}, {
+		input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 rows",
+		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+	}, {
 		input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
 		output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
 	}, {
@@ -661,23 +697,18 @@ var (
 		input:  "load data infile 'data.txt' into table db.a",
 		output: "load data infile data.txt into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
-		output: "load data infile data.txt into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
-		output: "load data infile data.txt into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
 	}, {
 		input:  "create external table t (a int) infile 'data.txt'",
 		output: "create external table t (a int) infile 'data.txt'",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
-		output: "create external table t (a int) infile 'data.txt'",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
-		output: "create external table t (a int) infile 'data.txt'",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
 	}, {
-		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
-		output: "create external table t (a int) infile {'filepath':'data.txt', 'compression':'lz4'}",
+		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
 	}, {
 		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
 		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
@@ -691,61 +722,47 @@ var (
 		input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
 		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 lines",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
-		output: "load data infile data.txt into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
-		output: "load data infile data.txt into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'gzip', 'format':'csv'} into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'bzip2', 'format':'csv'} into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'flate', 'format':'csv'} into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'lzw', 'format':'csv'} into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'zlib', 'format':'csv'} into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
 	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'lz4', 'format':'csv'} into table db.a",
+		input: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
 	}, {
 		input:  "LOAD DATA URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
 		output: "load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'gzip', 'format':'csv'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'bzip2', 'format':'csv'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'flate', 'format':'csv'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'lzw', 'format':'csv'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'zlib', 'format':'csv'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'lz4', 'format':'csv'} into table db.a",
-	}, {
-		input:  "load data infile {'filepath'='data.txt', 'format'='jsonline','jsondata'='array'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'auto', 'format':'jsonline', 'jsondata':'array'} into table db.a",
 	},
 		{
-			input:  "load data infile {'filepath'='data.txt', 'format'='jsonline','jsondata'='object'} into table db.a",
-			output: "load data infile {'filepath':'data.txt', 'compression':'auto', 'format':'jsonline', 'jsondata':'object'} into table db.a",
+			input: `load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} into table t1`,
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'format'='jsonline', 'jsondata'='array'} into table db.a",
 		},
 		{
-			input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2','format'='jsonline','jsondata'='object'} into table db.a",
-			output: "load data infile {'filepath':'data.txt', 'compression':'bzip2', 'format':'jsonline', 'jsondata':'object'} into table db.a",
+			input: "load data infile {'filepath'='data.txt', 'format'='jsonline', 'jsondata'='object'} into table db.a",
+		},
+		{
+			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} into table db.a",
 		},
 		{
 			input:  "import data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
@@ -1727,15 +1744,177 @@ var (
 			input:  `select mo_show_visible_bin('a',0) as m`,
 			output: `select mo_show_visible_bin(a, 0) as m`,
 		},
+		//https://dev.mysql.com/doc/refman/8.0/en/window-functions-usage.html
+		{
+			input: `select avg(a) over () from t1`,
+		},
+		{
+			input: `select avg(a) over (partition by col1, col2) from t1`,
+		},
+		{
+			input: `select avg(a) over (partition by col1, col2 order by col3 desc) from t1`,
+		},
+		//https://dev.mysql.com/doc/refman/8.0/en/window-functions-frames.html
+		{
+			input: `select count(a) over (partition by col1, col2 order by col3 desc rows 1 preceding) from t1`,
+		},
+		{
+			input: `select sum(a) over (partition by col1, col2 order by col3 desc rows between 1 preceding and 20 following) from t1`,
+		},
+		{
+			input: `select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1`,
+		},
+		{
+			input: "alter account if exists abc",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' open comment 'str'",
+		},
+		{
+			input: "alter account if exists abc open comment 'str'",
+		},
+		{
+			input: "alter account if exists abc comment 'str'",
+		},
+		{
+			input: "alter account if exists abc open",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' open",
+		},
+		{
+			input: "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
+		},
+		{
+			input: `create cluster table a (a int)`,
+		},
+		{
+			input: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+		},
+		{
+			input: `insert into a accounts(acc1, acc2) select a, b from a`,
+		},
+		{
+			input: `insert into a (a, b) accounts(acc1, acc2) values (1, 2), (1, 2)`,
+		},
+		{
+			input:  `insert into a () accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			output: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+		},
+		{
+			input: `insert into a (a, b) accounts(acc1, acc2) select a, b from a`,
+		},
+		{
+			input:  `insert into a accounts(acc1, acc2) set a = b, b = b + 1`,
+			output: `insert into a (a, b) accounts(acc1, acc2) values (b, b + 1)`,
+		},
+		{
+			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A accounts (a1, a2) FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+			output: "load data infile test/loadfile5 ignore into table t.a accounts(a1, a2) fields terminated by , (, , c, d, e, f)",
+		},
+		{
+			input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
+			output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
+		},
+		{
+			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
+			output: `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
+		},
+		{
+			input:  `create function twosum (x int, y int) returns int language sql as 'select $1 + $2'`,
+			output: `create function twosum (x int, y int) returns int language sql as 'select $1 + $2'`,
+		},
+		{
+			input:  `create function charat (x int) returns char language sql as 'select $1'`,
+			output: `create function charat (x int) returns char language sql as 'select $1'`,
+		},
+		{
+			input:  `create function charat (x int default 15) returns char language sql as 'select $1'`,
+			output: `create function charat (x int default 15) returns char language sql as 'select $1'`,
+		},
+		{
+			input:  `create function t.increment (x float) returns float language sql as 'select $1 + 1'`,
+			output: `create function t.increment (x float) returns float language sql as 'select $1 + 1'`,
+		},
+		{
+			input:  `drop function helloworld ()`,
+			output: `drop function helloworld ()`,
+		},
+		{
+			input:  `drop function charat (int)`,
+			output: `drop function charat (int)`,
+		},
+		{
+			input:  `drop function twosum (int, int)`,
+			output: `drop function twosum (int, int)`,
+		},
+		{
+			input:  `drop function t.increment (float)`,
+			output: `drop function t.increment (float)`,
+		},
+		{
+			input:  `create extension python as strutil file 'stringutils.whl'`,
+			output: `create extension python as strutil file stringutils.whl`,
+		},
+		{
+			input:  `load strutil`,
+			output: `load strutil`,
+		},
+		{
+			input: `select * from (values row(1, 2), row(3, 3)) as a`,
+		},
+		{
+			input: `select t1.* from (values row(1, 1), row(3, 3)) as a(c1, c2) inner join t1 on a.c1 = t1.b`,
+		},
+		{
+			input:  "modump query_result '0adaxg' into '/Users/tmp/test'",
+			output: "modump query_result 0adaxg into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		},
+		{
+			input:  `modump query_result "queryId" into '/Users/tmp/test' FIELDS TERMINATED BY ','`,
+			output: "modump query_result queryId into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		},
+		{
+			input:  "modump query_result 'abcx' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'",
+			output: "modump query_result abcx into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		},
+		{
+			input:  "modump query_result '098e32' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'TRUE'",
+			output: "modump query_result 098e32 into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		},
+		{
+			input:  "modump query_result '09eqr' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE'",
+			output: "modump query_result 09eqr into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false",
+		},
+		{
+			input:  "modump query_result 'd097i7' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100",
+			output: "modump query_result d097i7 into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400",
+		},
+		{
+			input:  "modump query_result '09eqrteq' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100 FORCE_QUOTE (a, b)",
+			output: "modump query_result 09eqrteq into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400 force_quote a, b",
+		},
+		{
+			input: "show accounts",
+		},
+		{
+			input:  "show accounts like '%dafgda_'",
+			output: "show accounts like %dafgda_",
+		},
+		{
+			input:  "create table test (`col` varchar(255) DEFAULT b'0')",
+			output: "create table test (col varchar(255) default 0)",
+		},
 	}
 )
 
 func TestValid(t *testing.T) {
+	ctx := context.TODO()
 	for _, tcase := range validSQL {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(tcase.input)
+		ast, err := ParseOne(ctx, tcase.input)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -1762,11 +1941,12 @@ var (
 )
 
 func TestMulti(t *testing.T) {
+	ctx := context.TODO()
 	for _, tcase := range multiSQL {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		asts, err := Parse(tcase.input)
+		asts, err := Parse(ctx, tcase.input)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue

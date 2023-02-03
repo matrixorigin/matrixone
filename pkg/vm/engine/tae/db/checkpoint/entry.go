@@ -15,31 +15,36 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type CheckpointEntry struct {
 	sync.RWMutex
 	start, end types.TS
 	state      State
+	entryType  EntryType
 	location   string
 }
 
-func NewCheckpointEntry(start, end types.TS) *CheckpointEntry {
+func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
 	return &CheckpointEntry{
-		start: start,
-		end:   end,
-		state: ST_Pending,
+		start:     start,
+		end:       end,
+		state:     ST_Pending,
+		entryType: typ,
 	}
 }
 
@@ -61,7 +66,9 @@ func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
 	}
 	return true
 }
-
+func (e *CheckpointEntry) LessEq(ts types.TS) bool {
+	return e.end.LessEq(ts)
+}
 func (e *CheckpointEntry) SetLocation(location string) {
 	e.Lock()
 	defer e.Unlock()
@@ -107,8 +114,7 @@ func (e *CheckpointEntry) IsFinished() bool {
 }
 
 func (e *CheckpointEntry) IsIncremental() bool {
-	// Currently only incremental is supported
-	return true
+	return e.entryType == ET_Incremental
 }
 
 func (e *CheckpointEntry) String() string {
@@ -121,10 +127,11 @@ func (e *CheckpointEntry) String() string {
 }
 
 func (e *CheckpointEntry) Replay(
+	ctx context.Context,
 	c *catalog.Catalog,
 	fs *objectio.ObjectFS,
 	dataFactory catalog.DataFactory) (readDuration, applyDuration time.Duration, err error) {
-	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
+	reader, err := blockio.NewCheckpointReader(ctx, fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -132,7 +139,7 @@ func (e *CheckpointEntry) Replay(
 	data := logtail.NewCheckpointData()
 	defer data.Close()
 	t0 := time.Now()
-	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
 		return
 	}
 	readDuration = time.Since(t0)
@@ -141,17 +148,52 @@ func (e *CheckpointEntry) Replay(
 	applyDuration = time.Since(t0)
 	return
 }
+func (e *CheckpointEntry) Read(
+	ctx context.Context,
+	scheduler tasks.JobScheduler,
+	fs *objectio.ObjectFS,
+) (data *logtail.CheckpointData, err error) {
+	reader, err := blockio.NewCheckpointReader(ctx, fs.Service, e.location)
+	if err != nil {
+		return
+	}
 
+	data = logtail.NewCheckpointData()
+	if err = data.ReadFrom(
+		reader,
+		scheduler,
+		common.DefaultAllocator,
+	); err != nil {
+		return
+	}
+	return
+}
 func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns *api.Batch, err error) {
-	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
+	reader, err := blockio.NewCheckpointReader(context.Background(), fs.Service, e.location)
 	if err != nil {
 		return
 	}
 	data := logtail.NewCheckpointData()
 	defer data.Close()
-	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
 		return
 	}
 	ins, del, cnIns, err = data.GetTableData(tid)
 	return
+}
+
+func (e *CheckpointEntry) GCMetadata(fs *objectio.ObjectFS) error {
+	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, e.start, e.end)
+	err := fs.Delete(name)
+	logutil.Infof("GC checkpoint metadata %v, err %v", e.String(), err)
+	return err
+}
+
+func (e *CheckpointEntry) GCEntry(fs *objectio.ObjectFS) error {
+	fileName, _, err := blockio.DecodeMetaLocToMetas(e.location)
+	defer logutil.Infof("GC checkpoint metadata %v, err %v", e.String(), err)
+	if err != nil {
+		return err
+	}
+	return fs.Delete(fileName)
 }

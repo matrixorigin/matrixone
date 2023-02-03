@@ -16,6 +16,7 @@ package loopjoin
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -33,7 +34,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -48,7 +49,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			ctr.state = Probe
 
 		case Probe:
+			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
+			anal.WaitStop(start)
+
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -60,7 +64,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				bat.Clean(proc.Mp())
 				continue
 			}
-			err := ctr.probe(bat, ap, proc, anal)
+			err := ctr.probe(bat, ap, proc, anal, isFirst, isLast)
 			bat.Clean(proc.Mp())
 			return false, err
 
@@ -73,15 +77,18 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+	start := time.Now()
 	bat := <-proc.Reg.MergeReceivers[1].Ch
+	anal.WaitStop(start)
+
 	if bat != nil {
 		ctr.bat = bat
 	}
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	anal.Input(bat)
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
+	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
@@ -95,6 +102,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i := 0; i < count; i++ {
 		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
 		if err != nil {
+			rbat.Clean(proc.Mp())
 			return err
 		}
 		bs := vector.MustTCols[bool](vec)
@@ -144,7 +152,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		vec.Free(proc.Mp())
 	}
 	rbat.ExpandNulls()
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
 }

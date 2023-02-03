@@ -19,8 +19,36 @@ import "fmt"
 type Statement interface {
 	fmt.Stringer
 	NodeFormatter
+	StatementType
+}
+
+type StatementType interface {
+	// GetStatementType return like insert, update, delete, begin, rename database, rename table, ...
+	GetStatementType() string
+	// GetQueryType return val like DQL, DML, DDL, ...
+	GetQueryType() string
 }
 
 type statementImpl struct {
 	Statement
 }
+
+const (
+	// QueryTypeDQL (Data Query Language) Select, MoDump, Show, ShowCreateTable, ValuesStatement, With
+	QueryTypeDQL = "DQL"
+	// QueryTypeDDL (Data Definition Language): CreateDatabase, DropDatabase, DropTable,
+	// Create/Drop/Alter/Rename Database/Table/View/Index/Function, TruncateTable,
+	QueryTypeDDL = "DDL"
+	// QueryTypeDML (Data Manipulation Language): Insert, Update, Delete, Load, Import
+	QueryTypeDML = "DML"
+	// QueryTypeDCL (Data Control Language)
+	// statement: Grant, Revoke
+	// CreateAccount, CreateUser, CreateRole, AlterAccount, AlterUser, DropAccount, DropUser, DropRole
+	QueryTypeDCL = "DCL"
+	// QueryTypeTCL (Transaction Control Language): BeginTransaction, RollbackTransaction, CommitTransaction, Savepoint(Not Support)
+	QueryTypeTCL = "TCL"
+	// QueryTypeOth (Other.)
+	// statement: AnalyzeStmt(Not Support), ExplainStmt, ExplainAnalyze, ExplainFor,
+	// SetVar, SetDefaultRole, SetRole, SetPassword, Declare, Do, TableFunction, Use, PrepareStmt, Execute, Deallocate, Kill
+	QueryTypeOth = "Other"
+)

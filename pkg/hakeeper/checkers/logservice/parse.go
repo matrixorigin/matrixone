@@ -66,7 +66,7 @@ func fixedLogShardInfo(record metadata.LogShardRecord, info pb.LogShardInfo,
 	// The number of replicas is more than expected.
 	// Remove some of them.
 	if diff > 0 {
-		idSlice := sortedReplicaID(fixing.replicas)
+		idSlice := sortedReplicaID(fixing.replicas, info.LeaderID)
 
 		for i := 0; i < diff; i++ {
 			delete(fixing.replicas, idSlice[i])
@@ -165,13 +165,24 @@ func getRecord(shardID uint64, LogShards []metadata.LogShardRecord) metadata.Log
 	return metadata.LogShardRecord{}
 }
 
-// sortedReplicaID returns a sorted replica id slice
-func sortedReplicaID(replicas map[uint64]string) []uint64 {
+// sortedReplicaID returns a sorted replica id slice with leader at last.
+// The first <expected-current> replicas will be removed as current replica
+// num is larger than expected. So we put the leader replica at last to make
+// sure that no leader election happened if replicas are removed.
+func sortedReplicaID(replicas map[uint64]string, leaderID uint64) []uint64 {
+	var exist bool
 	idSlice := make([]uint64, 0, len(replicas))
 	for id := range replicas {
-		idSlice = append(idSlice, id)
+		if id != leaderID {
+			idSlice = append(idSlice, id)
+		} else {
+			exist = true
+		}
 	}
 	sort.Slice(idSlice, func(i, j int) bool { return idSlice[i] < idSlice[j] })
+	if exist {
+		idSlice = append(idSlice, leaderID)
+	}
 	return idSlice
 }
 

@@ -15,7 +15,12 @@
 package db
 
 import (
+	"context"
 	"encoding/gob"
+	"time"
+
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,7 +43,7 @@ func init() {
 	gob.Register(new(engine.IndexTableDef))
 	gob.Register(new(engine.PropertiesDef))
 	gob.Register(new(engine.PrimaryIndexDef))
-	gob.Register(new(engine.ComputeIndexDef))
+	gob.Register(new(engine.ConstraintDef))
 
 	// register vector column types
 	gob.Register([]bool{})
@@ -69,6 +74,7 @@ type Request interface {
 		DropDatabaseReq |
 		CreateRelationReq |
 		DropOrTruncateRelationReq |
+		UpdateConstraintReq |
 		WriteReq |
 		apipb.SyncLogTailReq
 }
@@ -77,8 +83,9 @@ type Response interface {
 	CreateDatabaseResp |
 		DropDatabaseResp |
 		CreateRelationResp |
-		DropOrTruncateRelationResp
-	WriteResp |
+		DropOrTruncateRelationResp |
+		UpdateConstraintResp |
+		WriteResp |
 		apipb.SyncLogTailResp
 }
 
@@ -109,6 +116,10 @@ type FlushTable struct {
 	TableID    uint64
 }
 
+type Checkpoint struct {
+	FlushDuration time.Duration
+}
+
 type CreateDatabaseResp struct {
 	ID uint64
 }
@@ -131,6 +142,16 @@ type CreateRelationReq struct {
 	Type         RelationType
 	Defs         []engine.TableDef
 }
+
+type UpdateConstraintReq struct {
+	TableId      uint64
+	TableName    string
+	DatabaseId   uint64
+	DatabaseName string
+	Constraint   []byte
+}
+
+type UpdateConstraintResp struct{}
 
 type CreateRelationResp struct {
 	ID uint64
@@ -155,15 +176,27 @@ const (
 	EntryDelete EntryType = 1
 )
 
+type LocationKey struct{}
+
 type WriteReq struct {
 	Type         EntryType
 	DatabaseId   uint64
 	TableID      uint64
 	DatabaseName string
 	TableName    string
-	FileName     string
-	BlockID      uint64
+	Schema       *catalog2.Schema
 	Batch        *batch.Batch
+	//S3 object file name
+	FileName string
+	MetaLocs []string
+	//for delete on S3
+	DeltaLocs []string
+	//tasks for loading primary keys or deleted row ids
+	Jobs []*tasks.Job
+	//loaded sorted primary keys or deleted row ids.
+	JobRes []*tasks.JobResult
+	//load context cancel function
+	Cancel context.CancelFunc
 }
 
 type WriteResp struct {

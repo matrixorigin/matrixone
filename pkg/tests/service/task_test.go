@@ -92,11 +92,12 @@ func TestTaskServiceCanCreate(t *testing.T) {
 		WithLogShardNum(1))
 	require.NoError(t, err)
 
-	// start the cluster
-	require.NoError(t, c.Start())
+	// close the cluster
 	defer func(c Cluster) {
 		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	t.Log("cluster log svcs length:", len(c.(*testCluster).log.svcs))
 
@@ -121,11 +122,12 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
-	// start the cluster
-	require.NoError(t, c.Start())
+	// close the cluster
 	defer func(c Cluster) {
 		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -184,13 +186,13 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 		return nil
 	}
 
-	// start the cluster
-	require.NoError(t, c.Start())
 	defer func(c Cluster, halt chan bool) {
 		halt <- true
 		require.NoError(t, c.Close())
 		close(halt)
 	}(c, halt)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -202,16 +204,16 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 
 	cn2, err := c.GetCNServiceIndexed(1)
 	require.NoError(t, err)
-	cn1.GetTaskRunner().RegisterExecutor(uint32(task.TaskCode_TestOnly), taskExecutor)
-	cn2.GetTaskRunner().RegisterExecutor(uint32(task.TaskCode_TestOnly), taskExecutor)
+	cn1.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, taskExecutor)
+	cn2.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, taskExecutor)
 
 	taskService, ok := cn1.GetTaskService()
 	require.True(t, ok)
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: uint32(task.TaskCode_TestOnly)})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: task.TaskCode_TestOnly})
 	require.NoError(t, err)
 
 	tasks, err := taskService.QueryTask(ctx,
-		taskservice.WithTaskExecutorCond(taskservice.EQ, uint32(task.TaskCode_TestOnly)))
+		taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_TestOnly))
 	require.NoError(t, err)
 	require.Equal(t, 1, len(tasks))
 
@@ -249,12 +251,12 @@ func TestTaskRunner(t *testing.T) {
 	c, err := NewCluster(t, opt.WithLogLevel(zap.DebugLevel))
 	require.NoError(t, err)
 
-	// start the cluster
-	require.NoError(t, c.Start())
 	// close the cluster
 	defer func(c Cluster) {
 		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -263,12 +265,12 @@ func TestTaskRunner(t *testing.T) {
 	indexed, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 
-	indexed.GetTaskRunner().RegisterExecutor(uint32(task.TaskCode_TestOnly), taskExecutor)
+	indexed.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, taskExecutor)
 
 	taskService, ok := indexed.GetTaskService()
 	require.True(t, ok)
 
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: uint32(task.TaskCode_TestOnly)})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: task.TaskCode_TestOnly})
 	require.NoError(t, err)
 
 	waitTaskScheduled(t, ctx, taskService)
@@ -304,11 +306,12 @@ func TestCronTask(t *testing.T) {
 		return nil
 	}
 
-	// start the cluster
-	require.NoError(t, c.Start())
+	// close the cluster
 	defer func(c Cluster) {
 		require.NoError(t, c.Close())
 	}(c)
+	// start the cluster
+	require.NoError(t, c.Start())
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -317,7 +320,7 @@ func TestCronTask(t *testing.T) {
 	indexed, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 
-	indexed.GetTaskRunner().RegisterExecutor(uint32(task.TaskCode_TestOnly), taskExecutor)
+	indexed.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, taskExecutor)
 
 	taskService, ok := indexed.GetTaskService()
 	require.True(t, ok)
@@ -325,7 +328,7 @@ func TestCronTask(t *testing.T) {
 	require.NoError(t, taskService.CreateCronTask(context.TODO(),
 		task.TaskMetadata{
 			ID:       "a",
-			Executor: uint32(task.TaskCode_TestOnly),
+			Executor: task.TaskCode_TestOnly,
 		},
 		"*/1 * * * * *", // every 1 second
 	))

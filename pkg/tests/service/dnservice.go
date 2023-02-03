@@ -25,11 +25,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 // DNService describes expected behavior for dn service.
@@ -110,7 +112,7 @@ func (ds *dnService) StartDNReplica(shard metadata.DNShard) error {
 	defer ds.Unlock()
 
 	if ds.status != ServiceStarted {
-		return moerr.NewNoService(ds.uuid)
+		return moerr.NewNoServiceNoCtx(ds.uuid)
 	}
 
 	return ds.svc.StartDNReplica(shard)
@@ -121,7 +123,7 @@ func (ds *dnService) CloseDNReplica(shard metadata.DNShard) error {
 	defer ds.Unlock()
 
 	if ds.status != ServiceStarted {
-		return moerr.NewNoService(ds.uuid)
+		return moerr.NewNoServiceNoCtx(ds.uuid)
 	}
 
 	return ds.svc.CloseDNReplica(shard)
@@ -137,10 +139,11 @@ type dnOptions []dnservice.Option
 // newDNService initializes an instance of `DNService`.
 func newDNService(
 	cfg *dnservice.Config,
+	rt runtime.Runtime,
 	fs fileservice.FileService,
 	opts dnOptions,
 ) (DNService, error) {
-	svc, err := dnservice.NewService(cfg, fs, opts...)
+	svc, err := dnservice.NewService(cfg, rt, fs, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -159,6 +162,7 @@ func buildDNConfig(
 		UUID:          uuid.New().String(),
 		ListenAddress: address.getDnListenAddress(index),
 	}
+	cfg.LogtailServer.ListenAddress = address.getDnLogtailAddress(index)
 	cfg.DataDir = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatInterval.Duration = opt.heartbeat.dn
@@ -170,7 +174,14 @@ func buildDNConfig(
 	cfg.Ckp.FlushInterval.Duration = time.Second * 100000
 	cfg.Ckp.ScanInterval.Duration = time.Second * 100000
 	cfg.Ckp.IncrementalInterval.Duration = time.Second * 100000
-	cfg.Ckp.GlobalInterval.Duration = time.Second * 100000
+	cfg.Ckp.GlobalMinCount = 10000
+
+	// logtail push service config for tae storage
+	cfg.LogtailServer.RpcMaxMessageSize = toml.ByteSize(opt.logtailPushServer.rpcMaxMessageSize)
+	cfg.LogtailServer.RpcPayloadCopyBufferSize = toml.ByteSize(opt.logtailPushServer.rpcPayloadCopyBufferSize)
+	cfg.LogtailServer.LogtailCollectInterval.Duration = opt.logtailPushServer.logtailCollectInterval
+	cfg.LogtailServer.LogtailResponseSendTimeout.Duration = opt.logtailPushServer.logtailResponseSendTimeout
+	cfg.LogtailServer.MaxLogtailFetchFailure = opt.logtailPushServer.maxLogtailFetchFailure
 
 	// We need the filled version of configuration.
 	// It's necessary when building dnservice.Option.

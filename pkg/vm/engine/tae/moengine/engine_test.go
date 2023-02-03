@@ -65,6 +65,7 @@ func TestEngine(t *testing.T) {
 
 	schema := catalog.MockSchema(13, 12)
 	defs, err := SchemaToDefs(schema)
+	assert.NoError(t, err)
 	defs[5].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: true,
 		Expr: &plan.Expr{
@@ -145,7 +146,7 @@ func TestEngine(t *testing.T) {
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	m := mpool.MustNewZero()
 	for _, reader := range readers {
-		bat, err := reader.Read([]string{schema.ColDefs[1].Name}, nil, m)
+		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
@@ -254,7 +255,7 @@ func TestEngineAllType(t *testing.T) {
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	m := mpool.MustNewZero()
 	for _, reader := range readers {
-		bat, err := reader.Read(schema.Attrs(), nil, m)
+		bat, err := reader.Read(ctx, schema.Attrs(), nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
@@ -263,7 +264,7 @@ func TestEngineAllType(t *testing.T) {
 		}
 	}
 	//delRows, err := rel.Truncate(ctx)
-	err = dbase.Truncate(ctx, schema.Name)
+	_, err = dbase.Truncate(ctx, schema.Name)
 	assert.Nil(t, err)
 	//assert.Equal(t, rows, int64(delRows))
 	assert.Nil(t, txn.Commit())
@@ -274,7 +275,7 @@ func TestEngineAllType(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	n, err := rel.Rows(ctx)
+	_, n, err := rel.Stats(ctx)
 	assert.Nil(t, err)
 	assert.Zero(t, n)
 	assert.Nil(t, txn.Commit())
@@ -328,7 +329,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	delete := mobat.New(true, bat.Attrs)
 	m := mpool.MustNewZero()
 	for _, reader := range readers {
-		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, nil, m)
+		bat, err := reader.Read(ctx, []string{schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 100, vector.Length(bat.Vecs[0]))
@@ -360,7 +361,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	readers, _ = rel.NewReader(ctx, 1, nil, nil)
 	m = mpool.MustNewZero()
 	for _, reader := range readers {
-		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, nil, m)
+		bat, err := reader.Read(ctx, []string{schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 0, vector.Length(bat.Vecs[0]))

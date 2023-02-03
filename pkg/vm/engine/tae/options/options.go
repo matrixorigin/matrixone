@@ -15,6 +15,7 @@
 package options
 
 import (
+	"runtime"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -32,6 +33,15 @@ func WithCheckpointMinCount(count int64) func(*Options) {
 			opts.CheckpointCfg = new(CheckpointCfg)
 		}
 		opts.CheckpointCfg.MinCount = count
+	}
+}
+
+func WithFlushInterval(interval time.Duration) func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.FlushInterval = interval
 	}
 }
 
@@ -53,12 +63,57 @@ func WithCheckpointIncrementaInterval(interval time.Duration) func(*Options) {
 	}
 }
 
-func WithCheckpointGlobalInterval(interval time.Duration) func(*Options) {
+func WithCheckpointGlobalMinCount(count int64) func(*Options) {
 	return func(opts *Options) {
 		if opts.CheckpointCfg == nil {
 			opts.CheckpointCfg = new(CheckpointCfg)
 		}
-		opts.CheckpointCfg.GlobalInterval = interval
+		opts.CheckpointCfg.GlobalMinCount = count
+	}
+}
+
+func WithGlobalVersionInterval(interval time.Duration) func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.GlobalVersionInterval = interval
+	}
+}
+
+func WithGCCheckpointInterval(interval time.Duration) func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.GCCheckpointInterval = interval
+	}
+}
+
+func WithDisableGCCheckpoint() func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.DisableGCCheckpoint = true
+	}
+}
+
+func WithCatalogGCInterval(internal time.Duration) func(*Options) {
+	return func(o *Options) {
+		if o.CatalogCfg == nil {
+			o.CatalogCfg = new(CatalogCfg)
+		}
+		o.CatalogCfg.GCInterval = internal
+	}
+}
+
+func WithDisableGCCatalog() func(*Options) {
+	return func(o *Options) {
+		if o.CatalogCfg == nil {
+			o.CatalogCfg = new(CatalogCfg)
+		}
+		o.CatalogCfg.DisableGC = true
 	}
 }
 
@@ -98,16 +153,45 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.CheckpointCfg.IncrementalInterval <= 0 {
 		o.CheckpointCfg.IncrementalInterval = DefaultCheckpointIncremetalInterval
 	}
-	if o.CheckpointCfg.GlobalInterval <= 0 {
-		o.CheckpointCfg.GlobalInterval = DefaultCheckpointGlobalInterval
+	if o.CheckpointCfg.GlobalMinCount <= 0 {
+		o.CheckpointCfg.GlobalMinCount = DefaultCheckpointMinCount
 	}
 	if o.CheckpointCfg.MinCount <= 0 {
 		o.CheckpointCfg.MinCount = DefaultCheckpointMinCount
 	}
+	if o.CheckpointCfg.GlobalVersionInterval <= 0 {
+		o.CheckpointCfg.GlobalVersionInterval = DefaultGlobalVersionInterval
+	}
+	if o.CheckpointCfg.GCCheckpointInterval <= 0 {
+		o.CheckpointCfg.GCCheckpointInterval = DefaultGCCheckpointInterval
+	}
+
+	if o.CatalogCfg == nil {
+		o.CatalogCfg = new(CatalogCfg)
+	}
+	if o.CatalogCfg.GCInterval <= 0 {
+		o.CatalogCfg.GCInterval = DefaultCatalogGCInterval
+	}
+
+	if o.GCCfg == nil {
+		o.GCCfg = new(GCCfg)
+	}
+
+	if o.GCCfg.GCTTL <= 0 {
+		o.GCCfg.GCTTL = DefaultGCTTL
+	}
+
+	if o.GCCfg.ScanGCInterval <= 0 {
+		o.GCCfg.ScanGCInterval = DefaultScanGCInterval
+	}
 
 	if o.SchedulerCfg == nil {
+		ioworkers := DefaultIOWorkers
+		if ioworkers < runtime.NumCPU() {
+			ioworkers = runtime.NumCPU()
+		}
 		o.SchedulerCfg = &SchedulerCfg{
-			IOWorkers:    DefaultIOWorkers,
+			IOWorkers:    ioworkers,
 			AsyncWorkers: DefaultAsyncWorkers,
 		}
 	}

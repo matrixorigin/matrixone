@@ -15,7 +15,11 @@
 package compile
 
 import (
+	"context"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -39,38 +43,44 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 
-	var tableID string
-	if arg.DeleteCtxs[0].CanTruncate {
-		dbSource, err := c.e.Database(c.ctx, arg.DeleteCtxs[0].DbName, c.proc.TxnOperator)
-		if err != nil {
-			return 0, err
-		}
+	if arg.DeleteCtx.CanTruncate {
+		var err error
+		var affectRows int64
 
-		var rel engine.Relation
-		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
-			return 0, err
-		}
-		tableID = rel.GetTableID(c.ctx)
-
-		for _, info := range arg.DeleteCtxs[0].IndexInfos {
-			err = dbSource.Truncate(c.ctx, info.TableName)
+		for i, rel := range arg.DeleteCtx.DelSource {
+			_, err = rel.Ranges(c.ctx, nil)
 			if err != nil {
 				return 0, err
 			}
+			affectRow, err := rel.Rows(s.Proc.Ctx)
+			if err != nil {
+				return 0, err
+			}
+			affectRows = affectRows + affectRow
+
+			dbName := arg.DeleteCtx.DelRef[i].SchemaName
+			tblName := arg.DeleteCtx.DelRef[i].ObjName
+			oldId := uint64(arg.DeleteCtx.DelRef[i].Obj)
+			dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+			if err != nil {
+				return 0, err
+			}
+
+			// truncate origin table
+			newId, err := dbSource.Truncate(c.ctx, tblName)
+			if err != nil {
+				return 0, err
+			}
+
+			// truncate autoIncr table
+			err = colexec.MoveAutoIncrCol(c.e, c.ctx, tblName, dbSource, c.proc, oldId, newId, dbName)
+			if err != nil {
+				return 0, err
+			}
+
 		}
 
-		err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
-		if err != nil {
-			return 0, err
-		}
-
-		err = colexec.MoveAutoIncrCol(c.e, c.ctx, arg.DeleteCtxs[0].TableName, dbSource, c.proc, tableID, arg.DeleteCtxs[0].DbName)
-		if err != nil {
-			return 0, err
-		}
-
-		affectRows, err := rel.Rows(s.Proc.Ctx)
-		return uint64(affectRows), err
+		return uint64(affectRows), nil
 	}
 
 	if err := s.MergeRun(c); err != nil {
@@ -98,27 +108,132 @@ func (s *Scope) Update(c *Compile) (uint64, error) {
 }
 
 func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
+
+	var err error
+	var dbSource engine.Database
+	var relation engine.Relation
+	var isTemp bool
 	p := s.Plan.GetIns()
 
-	dbSource, err := c.e.Database(c.ctx, p.DbName, c.proc.TxnOperator)
+	ctx := c.ctx
+	clusterTable := p.GetClusterTable()
+	if clusterTable.GetIsClusterTable() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	dbSource, err = c.e.Database(c.ctx, p.DbName, c.proc.TxnOperator)
 	if err != nil {
 		return 0, err
 	}
-	relation, err := dbSource.Relation(c.ctx, p.TblName)
+	relation, err = dbSource.Relation(ctx, p.TblName)
 	if err != nil {
-		return 0, err
+		var e error // avoid contamination of error messages
+		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		if e != nil {
+			return 0, e
+		}
+		relation, e = dbSource.Relation(c.ctx, engine.GetTempTableName(p.DbName, p.TblName))
+		if e != nil {
+			return 0, err
+		}
+		isTemp = true
 	}
 
 	bat := makeInsertBatch(p)
 	defer bat.Clean(c.proc.Mp())
 
-	if p.OtherCols != nil {
-		p.ExplicitCols = append(p.ExplicitCols, p.OtherCols...)
-	}
-
-	if err := fillBatch(bat, p, stmt.Rows.Select.(*tree.ValuesClause).Rows, c.proc); err != nil {
+	insertRows := stmt.Rows.Select.(*tree.ValuesClause).Rows
+	if err = fillBatch(ctx, bat, p, insertRows, c.proc); err != nil {
 		return 0, err
 	}
+
+	if clusterTable.GetIsClusterTable() {
+		columns := p.GetColumns()
+		accountIdColumnDef := p.ExplicitCols[clusterTable.GetColumnIndexOfAccountId()]
+		accountIdRows := columns[clusterTable.GetColumnIndexOfAccountId()].GetColumn()
+		accountIdExpr := accountIdRows[0]
+		accountIdConst := accountIdExpr.GetC()
+		accountIdVec := bat.Vecs[clusterTable.GetColumnIndexOfAccountId()]
+		tmpBat := batch.NewWithSize(0)
+		tmpBat.Zs = []int64{1}
+		//save auto_increment column if necessary
+		savedAutoIncrVectors := make([]*vector.Vector, 0)
+		defer func() {
+			for _, vec := range savedAutoIncrVectors {
+				vector.Clean(vec, c.proc.Mp())
+			}
+		}()
+		for i, colDef := range p.GetExplicitCols() {
+			if colDef.GetTyp().GetAutoIncr() {
+				vec2, err := vector.Dup(bat.Vecs[i], c.proc.Mp())
+				if err != nil {
+					return 0, err
+				}
+				savedAutoIncrVectors = append(savedAutoIncrVectors, vec2)
+			}
+		}
+		for idx, accountId := range clusterTable.GetAccountIDs() {
+			//update accountId in the accountIdExpr
+			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
+			//clean vector before fill it
+			vector.Clean(accountIdVec, c.proc.Mp())
+			//the j th row
+			for j := 0; j < len(accountIdRows); j++ {
+				err = fillRow(ctx, tmpBat,
+					accountIdColumnDef,
+					insertRows,
+					int(clusterTable.GetColumnIndexOfAccountId()), j,
+					accountIdExpr,
+					accountIdVec,
+					c.proc)
+				if err != nil {
+					return 0, err
+				}
+			}
+
+			if idx != 0 { //refill the auto_increment column vector
+				j := 0
+				vecLen := vector.Length(bat.Vecs[0])
+				for colIdx, colDef := range p.GetExplicitCols() {
+					if colDef.GetTyp().GetAutoIncr() {
+						targetVec := bat.Vecs[colIdx]
+						vector.Clean(targetVec, c.proc.Mp())
+						for k := int64(0); k < int64(vecLen); k++ {
+							err = vector.UnionOne(targetVec, savedAutoIncrVectors[j], k, c.proc.Mp())
+							if err != nil {
+								return 0, err
+							}
+						}
+						j++
+					}
+				}
+			}
+
+			if err = writeBatch(ctx, dbSource, relation, c, p, bat, isTemp); err != nil {
+				return 0, err
+			}
+		}
+		//the count of insert rows x the count of accounts
+		return uint64(len(p.Columns[0].Column)) * uint64(len(clusterTable.GetAccountIDs())), nil
+	} else {
+		if err = writeBatch(ctx, dbSource, relation, c, p, bat, isTemp); err != nil {
+			return 0, err
+		}
+		return uint64(len(p.Columns[0].Column)), nil
+	}
+}
+
+// writeBatch saves the data into the storage
+// and updates the auto increment table, index table.
+func writeBatch(ctx context.Context,
+	dbSource engine.Database,
+	relation engine.Relation,
+	c *Compile,
+	p *plan.InsertValues,
+	bat *batch.Batch,
+	isTemp bool) error {
+	var err error
+	var oldDbName string
+
 	/**
 	Null value check:
 	There are two cases to validate for not null
@@ -132,15 +247,26 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		// check for case 1 and case 2
 		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].Typ.AutoIncr) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].Typ.AutoIncr) {
 			if nulls.Any(bat.Vecs[i].Nsp) {
-				return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
+				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}
 		}
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
-	if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
-		return 0, err
+	if isTemp {
+		oldDbName = p.DbName
+		p.TblName = engine.GetTempTableName(p.DbName, p.TblName)
+		p.DbName = defines.TEMPORARY_DBNAME
 	}
+
+	if p.HasAutoCol {
+		//update the auto increment table
+		if err = colexec.UpdateInsertValueBatch(c.e, ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
+			return err
+		}
+	}
+
+	//complement composite primary key
 	if p.CompositePkey != nil {
 		err := util.FillCompositePKeyBatch(bat, p.CompositePkey, c.proc)
 		if err != nil {
@@ -149,393 +275,103 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 				for _, name := range names {
 					if p.OrderAttrs[i] == name {
 						if nulls.Any(bat.Vecs[i].Nsp) {
-							return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
+							return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
 						}
 					}
 				}
 			}
 		}
+	} else if p.Cb != nil && util.JudgeIsCompositeClusterByColumn(p.Cb.Name) {
+		util.FillCompositeClusterByBatch(bat, p.Cb.Name, c.proc)
 	}
-	for _, indexInfo := range p.IndexInfos {
-		indexRelation, err := dbSource.Relation(c.ctx, indexInfo.TableName)
-		if err != nil {
-			return 0, err
-		}
-		indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, indexInfo.Cols, c.proc)
-		if rowNum != 0 {
-			if err := indexRelation.Write(c.ctx, indexBatch); err != nil {
-				return 0, err
+
+	//update unique index table
+	if p.UniqueIndexDef != nil {
+		primaryKeyName := update.GetTablePriKeyName(p.ExplicitCols, p.CompositePkey)
+		for i := range p.UniqueIndexDef.IndexNames {
+			var indexRelation engine.Relation
+			if p.UniqueIndexDef.TableExists[i] {
+				if isTemp {
+					indexRelation, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, p.UniqueIndexDef.TableNames[i]))
+				} else {
+					indexRelation, err = dbSource.Relation(ctx, p.UniqueIndexDef.TableNames[i])
+				}
+				if err != nil {
+					return err
+				}
+				indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, p.UniqueIndexDef.Fields[i].Parts, primaryKeyName, c.proc)
+				if rowNum != 0 {
+					indexBatch.SetZs(rowNum, c.proc.Mp())
+					if err = indexRelation.Write(ctx, indexBatch); err != nil {
+						return err
+					}
+				}
+				indexBatch.Clean(c.proc.Mp())
 			}
 		}
-		indexBatch.Clean(c.proc.Mp())
 	}
 
-	if err := relation.Write(c.ctx, bat); err != nil {
-		return 0, err
-	}
+	return relation.Write(ctx, bat)
+}
 
-	return uint64(len(p.Columns[0].Column)), nil
+/*
+fillRow evaluates the expression and put the result into the targetVec.
+tmpBat: store temporal vector
+colDef: the definition meta of the column
+rows: data rows of the insert
+colIdx,rowIdx: which column, which row
+expr: the expression to be evaluated at the position (colIdx,rowIdx)
+targetVec: the destination where the evaluated result of expr saved into
+*/
+func fillRow(ctx context.Context,
+	tmpBat *batch.Batch,
+	colDef *plan.ColDef,
+	rows []tree.Exprs, colIdx, rowIdx int,
+	expr *plan.Expr,
+	targetVec *vector.Vector,
+	proc *process.Process) error {
+	vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+	if err != nil {
+		return y.MakeInsertError(ctx, targetVec.Typ.Oid, colDef, rows, colIdx, rowIdx, err)
+	}
+	if vec.Size() == 0 {
+		vec = vec.ConstExpand(false, proc.Mp())
+	}
+	if err := vector.UnionOne(targetVec, vec, 0, proc.Mp()); err != nil {
+		vec.Free(proc.Mp())
+		return err
+	}
+	vec.Free(proc.Mp())
+	return err
 }
 
 // XXX: is this just fill batch with first vec.Col[0]?
-func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *process.Process) error {
-	rowCount := len(p.Columns[0].Column)
-
+func fillBatch(ctx context.Context, bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *process.Process) error {
 	tmpBat := batch.NewWithSize(0)
 	tmpBat.Zs = []int64{1}
 
+	clusterTable := p.GetClusterTable()
+	//the i th column
 	for i, v := range bat.Vecs {
-		switch v.Typ.Oid {
-		case types.T_uuid:
-			vs := make([]types.Uuid, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Uuid](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
+		//skip fill vector of the account_id in the cluster table here
+		if clusterTable.GetIsClusterTable() && int32(i) == clusterTable.GetColumnIndexOfAccountId() {
+			continue
+		}
+		//the j th row
+		for j, expr := range p.Columns[i].Column {
+			//evaluate the expr at position (i,j) and
+			//save into
+			err := fillRow(ctx, tmpBat, p.ExplicitCols[i],
+				rows, i, j,
+				expr,
+				v,
+				proc)
+			if err != nil {
 				return err
 			}
-		case types.T_bool:
-			vs := make([]bool, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[bool](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_int8:
-			vs := make([]int8, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[int8](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_int16:
-			vs := make([]int16, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[int16](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_int32:
-			vs := make([]int32, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[int32](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_int64:
-			vs := make([]int64, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[int64](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_uint8:
-			vs := make([]uint8, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[uint8](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_uint16:
-			vs := make([]uint16, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[uint16](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_uint32:
-			vs := make([]uint32, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[uint32](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_uint64:
-			vs := make([]uint64, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[uint64](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_float32:
-			vs := make([]float32, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[float32](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_float64:
-			vs := make([]float64, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[float64](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
-			vs := make([][]byte, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vec.GetBytes(0)
-					}
-				}
-			}
-			if err := vector.AppendBytes(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_date:
-			vs := make([]types.Date, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Date](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_time:
-			vs := make([]types.Time, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Time](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_datetime:
-			vs := make([]types.Datetime, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Datetime](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_timestamp:
-			vs := make([]types.Timestamp, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Timestamp](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_decimal64:
-			vs := make([]types.Decimal64, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Decimal64](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		case types.T_decimal128:
-			vs := make([]types.Decimal128, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vector.GetValueAt[types.Decimal128](vec, 0)
-					}
-				}
-			}
-			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
-				return err
-			}
-		default:
-			return moerr.NewInternalError("data truncation: type of '%v' doesn't implement", v.Typ)
 		}
 	}
-	bat.Zs = make([]int64, len(rows))
-	for i := 0; i < len(rows); i++ {
-		bat.Zs[i] = 1
-	}
+	bat.SetZs(len(rows), proc.Mp())
 	return nil
 }
 
@@ -545,17 +381,11 @@ func makeInsertBatch(p *plan.InsertValues) *batch.Batch {
 	for _, col := range p.ExplicitCols {
 		attrs = append(attrs, col.Name)
 	}
-	for _, col := range p.OtherCols {
-		attrs = append(attrs, col.Name)
-	}
 
-	bat := batch.New(true, attrs)
+	bat := batch.NewWithSize(len(attrs))
+	bat.SetAttributes(attrs)
 	idx := 0
 	for _, col := range p.ExplicitCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
-		idx++
-	}
-	for _, col := range p.OtherCols {
 		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}

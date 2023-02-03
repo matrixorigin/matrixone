@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,14 +30,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	GcCycle = 10 * time.Second
 )
 
 const (
 	INSERT = iota
 	DELETE
+	UPDATE
 )
 
 const (
@@ -52,25 +60,6 @@ const (
 )
 
 type DNStore = logservice.DNStore
-
-// tae's block metadata, which is currently just an empty one,
-// does not serve any purpose When tae submits a concrete structure,
-// it will replace this structure with tae's code
-// type BlockMeta struct {
-
-// }
-
-// Cache is a multi-version cache for maintaining some table data.
-// The cache is concurrently secure,  with multiple transactions accessing
-// the cache at the same time.
-// For different dn,  the cache is handled independently, the format
-// for our example is k-v, k being the dn number and v the timestamp,
-// suppose there are 2 dn, for table A exist dn0 - 100, dn1 - 200.
-type Cache interface {
-	// update table's cache to the specified timestamp
-	Update(ctx context.Context, dnList []DNStore, databaseId uint64,
-		tableId uint64, ts timestamp.Timestamp) error
-}
 
 type IDGenerator interface {
 	AllocateID(ctx context.Context) (uint64, error)
@@ -99,6 +88,7 @@ type Engine struct {
 	idGen             IDGenerator
 	getClusterDetails engine.GetClusterDetailsFunc
 	txns              map[string]*Transaction
+	catalog           *cache.CatalogCache
 	// minimum heap of currently active transactions
 	txnHeap *transactionHeap
 }
@@ -121,17 +111,22 @@ type Partition struct {
 	columnsIndexDefs []ColumnsIndexDef
 	// last updated timestamp
 	ts timestamp.Timestamp
+	// used for block read in PartitionReader
+	txn *Transaction
 }
 
 // Transaction represents a transaction
 type Transaction struct {
+	sync.Mutex
 	db *DB
 	// readOnly default value is true, once a write happen, then set to false
 	readOnly bool
 	// db       *DB
 	// blockId starts at 0 and keeps incrementing,
 	// this is used to name the file on s3 and then give it to tae to use
-	blockId uint64
+	// not-used now
+	// blockId uint64
+
 	// use for solving halloween problem
 	statementId uint64
 	// local timestamp for workspace operations
@@ -144,7 +139,7 @@ type Transaction struct {
 	// writes cache stores any writes done by txn
 	// every statement is an element
 	writes    [][]Entry
-	workspace *memtable.Table[RowID, *workspaceRow, *workspaceRow]
+	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
 	dnStores  []DNStore
 	proc      *process.Process
 
@@ -153,14 +148,14 @@ type Transaction struct {
 	// interim incremental rowid
 	rowId [2]uint64
 
+	catalog *cache.CatalogCache
+
 	// use to cache table
 	tableMap *sync.Map
 	// use to cache database
 	databaseMap *sync.Map
-
-	createTableMap map[uint64]uint8
-
-	deleteMetaTables []string
+	// use to cache created table
+	createMap *sync.Map
 }
 
 // Entry represents a delete/insert
@@ -172,8 +167,6 @@ type Entry struct {
 	databaseName string
 	// blockName for s3 file
 	fileName string
-	// blockId for s3 file
-	blockId uint64
 	// update or delete tuples
 	bat     *batch.Batch
 	dnStore DNStore
@@ -192,11 +185,13 @@ type database struct {
 type tableKey struct {
 	accountId  uint32
 	databaseId uint64
+	tableId    uint64
 	name       string
 }
 
 type databaseKey struct {
 	accountId uint32
+	id        uint64
 	name      string
 }
 
@@ -218,14 +213,15 @@ type table struct {
 	insertExpr *plan.Expr
 	defs       []engine.TableDef
 	tableDef   *plan.TableDef
-	proc       *process.Process
 
-	primaryIdx int // -1 means no primary key
-	viewdef    string
-	comment    string
-	partition  string
-	relKind    string
-	createSql  string
+	primaryIdx   int // -1 means no primary key
+	clusterByIdx int // -1 means no clusterBy key
+	viewdef      string
+	comment      string
+	partition    string
+	relKind      string
+	createSql    string
+	constraint   []byte
 
 	updated bool
 	// use for skip rows
@@ -248,6 +244,7 @@ type column struct {
 	hasDef          int8
 	defaultExpr     []byte
 	constraintType  string
+	isClusterBy     int8
 	isHidden        int8
 	isAutoIncrement int8
 	hasUpdate       int8
@@ -268,6 +265,7 @@ type blockReader struct {
 	colTypes       []types.Type
 	colNulls       []bool
 	pkidxInColIdxs int
+	pkName         string
 }
 
 type blockMergeReader struct {
@@ -334,4 +332,10 @@ func (w *workspaceRow) Indexes() []memtable.Tuple {
 
 func (w *workspaceRow) UniqueIndexes() []memtable.Tuple {
 	return nil
+}
+
+type pkRange struct {
+	isRange bool
+	items   []int64
+	ranges  []int64
 }

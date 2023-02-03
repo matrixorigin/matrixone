@@ -33,7 +33,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
-		opt := NewBaseOptimizer(ctx)
+		opt := NewPrepareOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt)
 		if err != nil {
 			return nil, err
@@ -62,12 +62,12 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		}
 
 	case *tree.PrepareString:
-		stmts, err := mysql.Parse(pstmt.Sql)
+		stmts, err := mysql.Parse(ctx.GetContext(), pstmt.Sql)
 		if err != nil {
 			return nil, err
 		}
 		if len(stmts) > 1 {
-			return nil, moerr.NewInvalidInput("cannot prepare multi statements")
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare multi statements")
 		}
 		stmtName = string(pstmt.Name)
 		preparePlan, err = getPreparePlan(ctx, stmts[0])
@@ -82,19 +82,19 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 
 	switch pp := preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
-		return nil, moerr.NewInvalidInput("cannot prepare TCL and DCL statement")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
 			getParamRule := NewGetParamRule()
 			VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
-			err = VisitQuery.Visit()
+			err = VisitQuery.Visit(ctx.GetContext())
 			if err != nil {
 				return nil, err
 			}
 			// TODO : need confirm
 			if len(getParamRule.params) > 0 {
-				return nil, moerr.NewInvalidInput("cannot plan DDL statement")
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot plan DDL statement")
 			}
 		}
 
@@ -102,7 +102,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		// collect args
 		getParamRule := NewGetParamRule()
 		VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
-		err = VisitQuery.Visit()
+		err = VisitQuery.Visit(ctx.GetContext())
 		if err != nil {
 			return nil, err
 		}
@@ -116,7 +116,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		// reset arg order
 		resetParamRule := NewResetParamOrderRule(args)
 		VisitQuery = NewVisitPlan(preparePlan, []VisitPlanRule{resetParamRule})
-		err = VisitQuery.Visit()
+		err = VisitQuery.Visit(ctx.GetContext())
 		if err != nil {
 			return nil, err
 		}
@@ -202,7 +202,7 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 			Name:   assignment.Name,
 		}
 		if assignment.Value == nil {
-			return nil, moerr.NewInvalidInput("Set statement has no value")
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Set statement has no value")
 		}
 		item.Value, err = binder.baseBindExpr(assignment.Value, 0, true)
 		if err != nil {

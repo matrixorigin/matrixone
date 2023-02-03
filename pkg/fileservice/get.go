@@ -15,14 +15,9 @@
 package fileservice
 
 import (
-	"net/url"
 	"path/filepath"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -31,12 +26,12 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	if fs, ok := fs.(*FileServices); ok {
 		f, ok := fs.mappings[lowerName]
 		if !ok {
-			err = moerr.NewNoService(name)
+			err = moerr.NewNoServiceNoCtx(name)
 			return
 		}
 		res, ok = f.(T)
 		if !ok {
-			err = moerr.NewNoService(name)
+			err = moerr.NewNoServiceNoCtx(name)
 			return
 		}
 		return
@@ -44,11 +39,11 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	var ok bool
 	res, ok = fs.(T)
 	if !ok {
-		err = moerr.NewNoService(name)
+		err = moerr.NewNoServiceNoCtx(name)
 		return
 	}
 	if !strings.EqualFold(fs.Name(), lowerName) {
-		err = moerr.NewNoService(name)
+		err = moerr.NewNoServiceNoCtx(name)
 		return
 	}
 	return
@@ -62,6 +57,9 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 // s3,<endpoint>,<region>,<bucket>,<key>,<secret>,<prefix>
 // s3-no-key,<endpoint>,<region>,<bucket>,<prefix>
 // minio,<endpoint>,<region>,<bucket>,<key>,<secret>,<prefix>
+// s3-opts,endpoint=<endpoint>,region=<region>,bucket=<bucket>,key=<key>,secret=<secret>,prefix=<prefix>,role-arn=<role arn>,external-id=<external id>
+//
+//	key value pairs can be in any order
 func GetForETL(fs FileService, path string) (res ETLFileService, readPath string, err error) {
 	fsPath, err := ParsePath(path)
 	if err != nil {
@@ -82,25 +80,95 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 		switch fsPath.Service {
 
 		case "s3":
-			res, err = newS3FSFromArguments(fsPath.ServiceArguments)
+			arguments := fsPath.ServiceArguments
+			if len(arguments) < 6 {
+				return nil, "", moerr.NewInvalidInputNoCtx("invalid S3 arguments")
+			}
+			endpoint := arguments[0]
+			region := arguments[1]
+			bucket := arguments[2]
+			accessKey := arguments[3]
+			accessSecret := arguments[4]
+			keyPrefix := arguments[5]
+			var name string
+			if len(arguments) > 6 {
+				name = arguments[6]
+			}
+			res, err = newS3FS([]string{
+				"endpoint=" + endpoint,
+				"region=" + region,
+				"bucket=" + bucket,
+				"key=" + accessKey,
+				"secret=" + accessSecret,
+				"prefix=" + keyPrefix,
+				"name=" + name,
+			})
 			if err != nil {
 				return
 			}
 
 		case "s3-no-key":
-			res, err = newS3FSFromArgumentsWithoutKey(fsPath.ServiceArguments)
+			arguments := fsPath.ServiceArguments
+			if len(arguments) < 4 {
+				return nil, "", moerr.NewInvalidInputNoCtx("invalid S3 arguments")
+			}
+			endpoint := arguments[0]
+			region := arguments[1]
+			bucket := arguments[2]
+			keyPrefix := arguments[3]
+			var name string
+			if len(arguments) > 4 {
+				name = arguments[4]
+			}
+			res, err = newS3FS([]string{
+				"endpoint=" + endpoint,
+				"region=" + region,
+				"bucket=" + bucket,
+				"prefix=" + keyPrefix,
+				"name=" + name,
+			})
+			if err != nil {
+				return
+			}
+
+		case "s3-opts":
+			res, err = newS3FS(fsPath.ServiceArguments)
 			if err != nil {
 				return
 			}
 
 		case "minio":
-			res, err = newMinioS3FSFromArguments(fsPath.ServiceArguments)
+			arguments := fsPath.ServiceArguments
+			if len(arguments) < 6 {
+				return nil, "", moerr.NewInvalidInputNoCtx("invalid S3 arguments")
+			}
+			endpoint := arguments[0]
+			region := arguments[1]
+			_ = region
+			bucket := arguments[2]
+			accessKey := arguments[3]
+			accessSecret := arguments[4]
+			keyPrefix := arguments[5]
+			var name string
+			if len(arguments) > 6 {
+				name = arguments[6]
+			}
+			res, err = newS3FS([]string{
+				"endpoint=" + endpoint,
+				"region=" + region,
+				"bucket=" + bucket,
+				"prefix=" + keyPrefix,
+				"name=" + name,
+				"key=" + accessKey,
+				"secret=" + accessSecret,
+				"is-minio=true",
+			})
 			if err != nil {
 				return
 			}
 
 		default:
-			err = moerr.NewInvalidInput("no such service: %s", fsPath.Service)
+			err = moerr.NewInvalidInputNoCtx("no such service: %s", fsPath.Service)
 		}
 
 		readPath = fsPath.File
@@ -115,178 +183,4 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 	}
 
 	return
-}
-
-func newS3FSFromArguments(arguments []string) (*S3FS, error) {
-	if len(arguments) < 6 {
-		return nil, moerr.NewInvalidInput("invalid S3 arguments")
-	}
-	endpoint := arguments[0]
-	region := arguments[1]
-	bucket := arguments[2]
-	accessKey := arguments[3]
-	accessSecret := arguments[4]
-	keyPrefix := arguments[5]
-	var name string
-	if len(arguments) > 6 {
-		name = arguments[6]
-	}
-
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return nil, err
-	}
-	if u.Scheme == "" {
-		u.Scheme = "https"
-	}
-	endpoint = u.String()
-
-	credentialProvider := credentials.NewStaticCredentialsProvider(accessKey, accessSecret, "")
-
-	fs, err := newS3FS(
-		"",
-		name,
-		endpoint,
-		bucket,
-		keyPrefix,
-		0,
-		[]func(*config.LoadOptions) error{
-			config.WithCredentialsProvider(
-				credentialProvider,
-			),
-		},
-		[]func(*s3.Options){
-			s3.WithEndpointResolver(
-				s3.EndpointResolverFromURL(endpoint),
-			),
-			func(opt *s3.Options) {
-				opt.Credentials = credentialProvider
-				opt.Region = region
-			},
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return fs, nil
-}
-
-func newS3FSFromArgumentsWithoutKey(arguments []string) (*S3FS, error) {
-	if len(arguments) < 4 {
-		return nil, moerr.NewInvalidInput("invalid S3 arguments")
-	}
-	endpoint := arguments[0]
-	region := arguments[1]
-	bucket := arguments[2]
-	keyPrefix := arguments[3]
-	var name string
-	if len(arguments) > 4 {
-		name = arguments[4]
-	}
-
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return nil, err
-	}
-	if u.Scheme == "" {
-		u.Scheme = "https"
-	}
-	endpoint = u.String()
-
-	fs, err := newS3FS(
-		"",
-		name,
-		endpoint,
-		bucket,
-		keyPrefix,
-		0,
-		nil,
-		[]func(*s3.Options){
-			s3.WithEndpointResolver(
-				s3.EndpointResolverFromURL(endpoint),
-			),
-			func(opt *s3.Options) {
-				opt.Region = region
-			},
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return fs, nil
-}
-
-func newMinioS3FSFromArguments(arguments []string) (*S3FS, error) {
-	if len(arguments) < 6 {
-		return nil, moerr.NewInvalidInput("invalid S3 arguments")
-	}
-	endpoint := arguments[0]
-	region := arguments[1]
-	_ = region
-	bucket := arguments[2]
-	accessKey := arguments[3]
-	accessSecret := arguments[4]
-	keyPrefix := arguments[5]
-	var name string
-	if len(arguments) > 6 {
-		name = arguments[6]
-	}
-
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return nil, err
-	}
-	if u.Scheme == "" {
-		u.Scheme = "https"
-	}
-	endpoint = u.String()
-
-	endpointResolver := s3.EndpointResolverFunc(
-		func(
-			region string,
-			options s3.EndpointResolverOptions,
-		) (
-			ep aws.Endpoint,
-			err error,
-		) {
-			_ = options
-			ep.URL = endpoint
-			ep.Source = aws.EndpointSourceCustom
-			ep.HostnameImmutable = true
-			ep.SigningRegion = region
-			return
-		},
-	)
-
-	credentialProvider := credentials.NewStaticCredentialsProvider(accessKey, accessSecret, "")
-
-	fs, err := newS3FS(
-		"",
-		name,
-		endpoint,
-		bucket,
-		keyPrefix,
-		0,
-		[]func(*config.LoadOptions) error{
-			config.WithCredentialsProvider(
-				credentialProvider,
-			),
-		},
-		[]func(*s3.Options){
-			s3.WithEndpointResolver(
-				endpointResolver,
-			),
-			func(opt *s3.Options) {
-				opt.Credentials = credentialProvider
-				opt.Region = region
-			},
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return fs, nil
 }

@@ -13,11 +13,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.io/0.5.1/MatrixOne/Release-Notes/v0.5.1/">
-   <img src="https://img.shields.io/badge/Release-v0.5.1-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.io/0.6.0/MatrixOne/Release-Notes/v0.6.0/">
+   <img src="https://img.shields.io/badge/Release-v0.6.0-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.io/cn/0.5.1/">
+  <a href="https://docs.matrixorigin.io/cn/0.6.0/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -34,20 +34,20 @@
   </a>
 </div>
 
-<h3 align="center">加入MatrixOne社区</h3>
+<h3 align="center">加入 MatrixOne 社区</h3>
 <p align="center">
 <a href="https://26805113.s21i.faiusr.com/4/ABUIABAEGAAgv7rJjwYo977zvgQw1AY41AY!200x200.png.webp" target="blank"><img align="center" src="https://github.com/dengn/CASAUVSQ/blob/priority/wechat-logo.png" alt="matrixone16" height="30" width="30" /></a>
 <a href="http://matrixoneworkspace.slack.com" target="blank"><img align="center" src="https://github.com/dengn/CASAUVSQ/blob/priority/slack_icon.png" alt="matrixone16" height="30" width="30" /></a>
 
 </p>
 
-<h5 align="center">如果你对MatrixOne项目感兴趣的话, 请帮忙给MatrixOne点击Star, Fork和Watch三连吧, 谢谢!</h5>
+<h5 align="center">如果你对 MatrixOne 项目感兴趣的话，请帮忙给 MatrixOne 点击 Star, Fork 和 Watch 三连吧，谢谢!</h5>
 
 
 目录
 ========
 
-* [MatrixOne是什么？](#what-is-matrixone)
+* [MatrixOne 是什么？](#what-is-matrixone)
 * [核心特性](#key-features)
 * [用户价值](#user-values)
 * [架构](#architecture)
@@ -55,9 +55,9 @@
 * [参与贡献](#contributing)
 * [License](#license)
 
-## <a id="what-is-matrixone">MatrixOne是什么？</a>
+## <a id="what-is-matrixone">MatrixOne 是什么？</a>
 
-MatrixOne是一款面向未来的超融合异构云原生数据库，通过超融合数据引擎支持事务/分析/流处理等混合工作负载，通过异构云原生架构支持跨机房协同/多地协同/云边协同。简化开发运维，消简数据碎片，打破数据的系统、位置和创新边界。
+MatrixOne 是一款面向未来的超融合异构云原生数据库，通过超融合数据引擎支持事务/分析/流处理等混合工作负载，通过异构云原生架构支持跨机房协同/多地协同/云边协同。简化开发运维，消简数据碎片，打破数据的系统、位置和创新边界。
 <p align="center">
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/all-in-one.png?raw=true">
 </p>
@@ -125,7 +125,7 @@ MatrixOne是一款面向未来的超融合异构云原生数据库，通过超�
     目前，由于缓慢的复杂查询性能以及冗余的中间表，数据仓库在业务敏捷性上的表现不尽人意，大量宽表的创建也严重影响迭代速度。MatrixOne通过特有的因子化计算和向量化执行引擎，支持极速的复杂查询，单表、星型和雪花查询都具备极速分析性能。
 </details>
 <details>
-  <summary><b><font size=4>像TP一样可靠的AP体验</b></font></summary>   
+  <summary><b><font size=4>像 TP 一样可靠的 AP 体验</b></font></summary>   
     传统数据仓库数据更新代价非常高，很难做到数据更新即可见。在营销风控，无人驾驶，智能工厂等实时计算要求高的场景或者上游数据变化快的场景中，当前的大数据分析系统无法支持增量更新，往往需要做全量的更新，耗时耗力。MatrixOne通过提供跨存储引擎的高性能全局分布式事务能力，支持条级别的实时增量更新，在保证极速分析性能的同时支持更新、删除和实时点查询。
 </details>
 <details>
@@ -134,102 +134,135 @@ MatrixOne是一款面向未来的超融合异构云原生数据库，通过超�
 </details>
 
 ## 🔎 <a id="architecture">架构一览</a>
-MatrixOne的架构图如下图所示：   
+MatrixOne 的架构图如下图所示：   
 <p align="center">
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-关于更详细的MatrixOne技术架构，可以参考[MatrixOne架构](https://docs.matrixorigin.io/cn/0.5.1/MatrixOne/Overview/matrixone-architecture/)。
+关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.io/cn/0.6.0/MatrixOne/Overview/matrixone-architecture-design/)。
 
 ## ⚡️ <a id="quick-start">快速上手</a>
 
-### ⚙️ 安装MatrixOne
+### ⚙️ 安装 MatrixOne
 
-MatrixOne目前支持Linux及MacOS系统，您可以通过源码安装或者docker安装。其他安装方式请参见[MatrixOne安装指南](https://docs.matrixorigin.io/cn/0.5.1/MatrixOne/Get-Started/install-standalone-matrixone/)
+MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装或者 docker 安装。其他安装方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.io/cn/0.6.0/MatrixOne/Get-Started/install-standalone-matrixone/)
 
 #### 使用源代码搭建
 
-**步骤 1.** 搭建Go语言环境（至少需要1.19版本）
+**步骤 1.** 搭建 Go 语言环境（至少需要 1.19 版本）
 
-**步骤 2.** 获取MatrixOne源码，搭建MatrixOne
+点击 <a href="https://go.dev/doc/install" target="_blank">Go Download and install</a> 入到 **Go** 的官方文档，按照官方指导安装步骤完成 **Go** 语言的安装。
+
+**步骤 2.** 获取 MatrixOne 源码，构建 MatrixOne
 
 根据您的需要，选择您所获取的代码永远保持最新，还是获得稳定版本的代码。
 
-- *选项 1*：获取 MatrixOne(开发版本) 代码，搭建MatrixOne
+- *选项 1*：获取 MatrixOne(开发版本) 代码，搭建 MatrixOne
 
 **main** 分支是默认分支，主分支上的代码总是最新的，但不够稳定。
 
-1. 获取 MatrixOne(开发版本，即 Pre0.6 版本) 代码方法如下：
+1. 获取 MatrixOne(开发版本) 代码方法如下：
 
     ```shell
     git clone https://github.com/matrixorigin/matrixone.git
     cd matrixone
     ```
 
-2. 运行编译文件：你可以运行`make debug`与`make clean`或者其他任何`Makefile`支持的命令。
+2. 运行 `make build` 编译文件：
 
     ```
     make build
     ```
 
-3. 启动 MatrixOne 服务：
+    __Tips__: 你也可以运行`make debug`与`make clean`或者其他任何`Makefile`支持的命令；`make debug` 可以用来调试构建进程，`make clean` 可以清除构建进程。
 
-    !!! note
-         注意，MatrixOne(开发版本) 的启动配置文件与 MatrixOne(稳定版本) 的启动配置文件不同，MatrixOne(开发版本) 的启动配置文件代码如下：
+- *选项 2*：获取 MatrixOne(稳定版本) 代码，搭建 MatrixOne
 
-    ```
-    ./mo-service -cfg ./etc/cn-standalone-test.toml
-    ```
-
-- *选项 2*：获取 MatrixOne(稳定版本) 代码，搭建MatrixOne
-
-1. 如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.5.1** 版本分支。
+1. 如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.6.0** 版本分支。
 
     ```
     git clone https://github.com/matrixorigin/matrixone.git
-    git checkout 0.5.1
+    git checkout 0.6.0
     cd matrixone
     ```
 
-2. 运行编译文件：你可以运行`make debug`与`make clean`或者其他任何`Makefile`支持的命令。
+2. 运行 `make config` 和 `make build` 编译文件：
 
     ```
     make config
     make build
     ```
 
-3. 启动 MatrixOne 服务：
+    __Tips__: 你也可以运行`make debug`与`make clean`或者其他任何`Makefile`支持的命令；`make debug` 可以用来调试构建进程，`make clean` 可以清除构建进程。
 
-    !!! note
-         注意，MatrixOne(稳定版本) 的启动配置文件与 MatrixOne(开发版本) 的启动配置文件不同，MatrixOne(稳定版本) 的启动配置文件代码如下：
+**步骤 3.** 启动 MatrixOne 服务：
+
+- **在终端的前台启动 MatrixOne 服务**
+
+    该启动方式会在终端的前台运行 `mo-service` 进行，实时打印系统日志。如果你想停止 MatrixOne 服务器，只需按 CTRL+C 或关闭当前终端。
 
     ```
-    ./mo-server system_vars_config.toml
+    # Start mo-service in the frontend
+    ./mo-service -launch ./etc/quickstart/launch.toml
     ```
 
-#### 使用docker
+- **在终端的后台启动 MatrixOne 服务**
 
-**步骤 1.** 确保docker已经安装
+    该启动方法会在后台运行 `mo-service` 进程，系统日志将重定向到 `test.log` 文件中。如果你想停止 MatrixOne 服务器，你需要通过以下命令查找出它的 `PID` 进程号并消除进程。下面是整个过程的完整示例。
 
-请检查Docker daemon是否正在后台运行，并确认docker版本：
+    ```
+    # Start mo-service in the backend
+    nohup ./mo-service -launch ./etc/quickstart/launch.toml &> test.log &
+
+    # Find mo-service PID
+    ps aux | grep mo-service
+
+    [root@VM-0-10-centos ~]# ps aux | grep mo-service
+    root       15277  2.8 16.6 8870276 5338016 ?     Sl   Nov25 156:59 ./mo-service -launch ./etc/quickstart/launch.toml
+    root      836740  0.0  0.0  12136  1040 pts/0    S+   10:39   0:00 grep --color=auto mo-service
+
+    # Kill the mo-service process
+    kill -9 15277
+    ```
+
+    __Tips__: 如上述示例所示，使用命令 `ps aux | grep mo-service` 首先查找出 MatrixOne 运行的进程号为 `15277`，`kill -9 15277` 即表示停止进程号为 `15277` 的 MatrixOne。
+
+
+#### 使用 Docker
+
+**步骤 1.** 确保 Docker 已经安装
+
+点击<a href="https://docs.docker.com/get-docker/" target="_blank">Get Docker</a>，进入 Docker 的官方文档页面，根据你的操作系统，下载安装对应的 Docker。
+
+请检查 Docker daemon 是否正在后台运行，并确认 Docker 版本：
+
 ```
 $ docker --version
 ```
+
+安装成功，代码示例如下：
+
+```
+Docker version 20.10.17, build 100c701
+```
+
 **步骤 2.** 创建并运行容器
 
 使用以下命令将从 Docker Hub 中拉取 MatrixOne 镜像，你可以选择稳定版本镜像，或开发版本镜像。
 
-- 稳定版本的镜像（0.5.1）
+- 稳定版本的镜像（0.6.0）
 
 ```bash
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
+docker pull matrixorigin/matrixone:0.6.0
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.6.0
 ```
 
-- 开发版本的镜像（Pre0.6)
+- 开发版本的镜像
 
-获取最新开发版本的镜像，参见[Docker Hub](https://hub.docker.com/r/matrixorigin/matrixone/tags)，找到最新Tag，拉取镜像。拉取镜像代码示例如下：
+获取最新开发版本的镜像，参见[Docker Hub](https://hub.docker.com/r/matrixorigin/matrixone/tags)，找到最新 Tag，拉取镜像。拉取镜像代码示例如下：
 
 ```bash
+docker pull matrixorigin/matrixone:nightly-commitnumber
 docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commitnumber
 ```
 
@@ -238,51 +271,45 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commi
 
 运行 Docker Hub 时需要输入用户名和密码，获取用户名和密码可以参考**连接 MatrixOne 服务**章节所述。
 
-**步骤 3.**  挂载数据（选做）
-
-如果你需要自定义配置文件或者数据目录，可以直接挂载存放在本地磁盘的自定义配置文件：
-
-```
-docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_config.toml:ro -v ${path_name}/store:/store:rw --name matrixone matrixorigin/matrixone:0.5.1
-```
-
 ### 🌟 连接 MatrixOne 服务
 
 1. 安装 MySQL 客户端
 
-  MatrixOne支持MySQL连接协议，因此您可以使用各种语言通过MySQL客户机程序进行连接。  
-  目前，MatrixOne只兼容Oracle MySQL客户端，因此一些特性可能无法在MariaDB、Percona客户端下正常工作。  
+  MatrixOne 支持 MySQL 连接协议，因此您可以使用各种语言通过 MySQL 客户机程序进行连接。  
+  目前，MatrixOne 只兼容 Oracle MySQL 客户端，因此一些特性可能无法在 MariaDB、Percona 客户端下正常工作。  
 
   安装部署 MySQL 客户端请进入到 [MySQL Community Downloads](https://dev.mysql.com/downloads/mysql/) 页面下载：
 
      - 根据你的系统，下拉选择 **Select Operating System**。
      - 下拉选择 **Select OS Version**，建议选择 8.0.30 版本及以上。
 
-2. 连接MatrixOne服务
+   安装完成后，按照<a href="https://dev.mysql.com/doc/refman/8.0/en/installing.html" target="_blank">Installing and Upgrading MySQL</a>指导，配置 MySQL 客户端环境变量。
 
-你按照上述步骤完成安装启动 MatrixOne，默认在启动模式下，产生很多日志，接下来你可以启动新的终端，使用MySQL命令行客户端来连接MatrixOne服务。  
+2. 连接 MatrixOne 服务
 
-```
-$ mysql -h IP -P PORT -uUsername -p
-```
-
-连接符的格式与MySQL格式相同，您需要提供用户名和密码。  
-此处以内置帐号作为示例：  
-
-   - user: dump
-   - password: 111
+你按照上述步骤完成安装启动 MatrixOne，默认在启动模式下，产生很多日志，接下来你可以启动新的终端，使用 MySQL 命令行客户端来连接 MatrixOne 服务。  
 
 ```
-$ mysql -h 127.0.0.1 -P 6001 -udump -p
+mysql -h IP -P PORT -uUsername -p
+```
+
+输入完成上述命令后，终端会提示你提供用户名和密码。你可以使用我们的内置帐号：
+
+- user: dump
+- password: 111
+
+也可以使用 MySQL 客户端下述命令行，输入密码，来连接 MatrixOne 服务：
+
+```
+mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
-
-目前，MatrixOne只支持TCP监听。
+目前，MatrixOne 只支持 TCP 监听。
 
 ## 🙌 <a id="contributing">参与贡献</a>
 
-欢迎大家对MatrixOne的贡献。  
-请查看[贡献指南](https://docs.matrixorigin.io/cn/0.5.1/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
+欢迎大家对 MatrixOne 的贡献。  
+请查看[贡献指南](https://docs.matrixorigin.io/cn/0.6.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
 
 ### 👏贡献者们
 

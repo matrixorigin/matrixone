@@ -18,12 +18,8 @@ import (
 	"bytes"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -36,7 +32,7 @@ func Prepare(_ *process.Process, _ any) error {
 }
 
 // the bool return value means whether it completed its work or not
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	p := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 
@@ -51,43 +47,46 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 
 	defer bat.Clean(proc.Mp())
-	batLen := batch.Length(bat)
 	var affectedRows uint64
+	var err error
+	delCtx := p.DeleteCtx
 
-	for i := range p.DeleteCtxs {
-		filterColIndex := p.DeleteCtxs[i].ColIndex
-
-		var cnt uint64
-		tmpBat := &batch.Batch{}
-		tmpBat.Vecs = []*vector.Vector{bat.Vecs[filterColIndex]}
-		tmpBat, cnt = update.FilterBatch(tmpBat, batLen, proc)
-
-		length := tmpBat.GetVector(0).Length()
-		if length > 0 {
-			tmpBat.SetZs(length, proc.Mp())
-			err := p.DeleteCtxs[i].TableSource.Delete(proc.Ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
-			if err != nil {
-				tmpBat.Clean(proc.Mp())
-				return false, err
-			}
-			affectedRows += cnt
-		}
-
-		tmpBat.Clean(proc.Mp())
-
-		for infoNum, info := range p.DeleteCtxs[i].IndexInfos {
-			rel := p.DeleteCtxs[i].IndexTables[infoNum]
-			oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[filterColIndex+1:filterColIndex+1+int32(len(p.DeleteCtxs[i].IndexAttrs))], p.DeleteCtxs[i].IndexAttrs, info.Cols, proc)
-			if rowNum != 0 {
-				err := rel.Delete(proc.Ctx, oldBatch, info.ColNames[0])
-				if err != nil {
-					return false, err
-				}
-			}
-			oldBatch.Clean(proc.Mp())
+	// check OnRestrict, if is not all null, throw error
+	for _, idx := range delCtx.OnRestrictIdx {
+		if bat.Vecs[idx].Length() != bat.Vecs[idx].Nsp.Np.Count() {
+			return false, moerr.NewInternalError(proc.Ctx, "Cannot delete or update a parent row: a foreign key constraint fails")
 		}
 	}
-	atomic.AddUint64(&p.AffectedRows, affectedRows)
 
+	// delete unique index
+	_, err = colexec.FilterAndDelByRowId(proc, bat, delCtx.IdxIdx, delCtx.IdxSource)
+	if err != nil {
+		return false, err
+	}
+
+	// delete child table(which ref on delete cascade)
+	_, err = colexec.FilterAndDelByRowId(proc, bat, delCtx.OnCascadeIdx, delCtx.OnCascadeSource)
+	if err != nil {
+		return false, err
+	}
+
+	// update child table(which ref on delete set null)
+	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, delCtx.OnSetIdx, delCtx.OnSetSource,
+		delCtx.OnSetRef, delCtx.OnSetTableDef, delCtx.OnSetUpdateCol, nil)
+	if err != nil {
+		return false, err
+	}
+
+	// delete origin table
+	idxList := make([]int32, len(delCtx.DelSource))
+	for i := 0; i < len(delCtx.DelSource); i++ {
+		idxList[i] = int32(i)
+	}
+	affectedRows, err = colexec.FilterAndDelByRowId(proc, bat, idxList, delCtx.DelSource)
+	if err != nil {
+		return false, err
+	}
+
+	atomic.AddUint64(&p.AffectedRows, affectedRows)
 	return false, nil
 }

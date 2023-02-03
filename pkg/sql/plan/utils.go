@@ -15,11 +15,15 @@
 package plan
 
 import (
+	"context"
 	"math"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -117,11 +122,11 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side int8) {
+func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			side |= getJoinSide(arg, leftTags, rightTags)
+			side |= getJoinSide(arg, leftTags, rightTags, markTag)
 		}
 
 	case *plan.Expr_Col:
@@ -129,6 +134,8 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side 
 			side = JoinSideLeft
 		} else if _, ok := rightTags[exprImpl.Col.RelPos]; ok {
 			side = JoinSideRight
+		} else if exprImpl.Col.RelPos == markTag {
+			side = JoinSideMark
 		}
 
 	case *plan.Expr_Corr:
@@ -202,7 +209,7 @@ func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, e
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
 		if expr.GetSub() == nil {
-			expr, err = makePlan2CastExpr(expr, &plan.Type{Id: int32(types.T_bool)})
+			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, &plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
 				return nil, err
 			}
@@ -231,11 +238,11 @@ func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
 
 // applyDistributivity (X AND B) OR (X AND C) OR (X AND D) => X AND (B OR C OR D)
 // TODO: move it into optimizer
-func applyDistributivity(expr *plan.Expr) *plan.Expr {
+func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for i, arg := range exprImpl.F.Args {
-			exprImpl.F.Args[i] = applyDistributivity(arg)
+			exprImpl.F.Args[i] = applyDistributivity(ctx, arg)
 		}
 
 		if exprImpl.F.Func.ObjName != "or" {
@@ -275,18 +282,18 @@ func applyDistributivity(expr *plan.Expr) *plan.Expr {
 			return expr
 		}
 
-		expr, _ = combinePlanConjunction(commonConds)
+		expr, _ = combinePlanConjunction(ctx, commonConds)
 
 		if len(leftOnlyConds) == 0 || len(rightOnlyConds) == 0 {
 			return expr
 		}
 
-		leftExpr, _ := combinePlanConjunction(leftOnlyConds)
-		rightExpr, _ := combinePlanConjunction(rightOnlyConds)
+		leftExpr, _ := combinePlanConjunction(ctx, leftOnlyConds)
+		rightExpr, _ := combinePlanConjunction(ctx, rightOnlyConds)
 
-		leftExpr, _ = bindFuncExprImplByPlanExpr("or", []*plan.Expr{leftExpr, rightExpr})
+		leftExpr, _ = bindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{leftExpr, rightExpr})
 
-		expr, _ = bindFuncExprImplByPlanExpr("and", []*plan.Expr{expr, leftExpr})
+		expr, _ = bindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{expr, leftExpr})
 	}
 
 	return expr
@@ -348,7 +355,7 @@ func checkDNF(expr *plan.Expr) []string {
 	case *plan.Expr_F:
 		if exprImpl.F.Func.ObjName == "or" {
 			left := checkDNF(exprImpl.F.Args[0])
-			right := checkDNF(exprImpl.F.Args[0])
+			right := checkDNF(exprImpl.F.Args[1])
 			return intersectSlice(left, right)
 		}
 		for _, arg := range exprImpl.F.Args {
@@ -364,31 +371,31 @@ func checkDNF(expr *plan.Expr) []string {
 	return ret
 }
 
-func walkThroughDNF(expr *plan.Expr, keywords string) *plan.Expr {
+func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan.Expr {
 	var retExpr *plan.Expr
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		if exprImpl.F.Func.ObjName == "or" {
-			left := walkThroughDNF(exprImpl.F.Args[0], keywords)
-			right := walkThroughDNF(exprImpl.F.Args[1], keywords)
+			left := walkThroughDNF(ctx, exprImpl.F.Args[0], keywords)
+			right := walkThroughDNF(ctx, exprImpl.F.Args[1], keywords)
 			if left != nil && right != nil {
-				retExpr, _ = bindFuncExprImplByPlanExpr("or", []*plan.Expr{left, right})
+				retExpr, _ = bindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{left, right})
 				return retExpr
 			}
 		} else if exprImpl.F.Func.ObjName == "and" {
-			left := walkThroughDNF(exprImpl.F.Args[0], keywords)
-			right := walkThroughDNF(exprImpl.F.Args[1], keywords)
+			left := walkThroughDNF(ctx, exprImpl.F.Args[0], keywords)
+			right := walkThroughDNF(ctx, exprImpl.F.Args[1], keywords)
 			if left == nil {
 				return right
 			} else if right == nil {
 				return left
 			} else {
-				retExpr, _ = bindFuncExprImplByPlanExpr("and", []*plan.Expr{left, right})
+				retExpr, _ = bindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{left, right})
 				return retExpr
 			}
 		} else {
 			for _, arg := range exprImpl.F.Args {
-				if walkThroughDNF(arg, keywords) == nil {
+				if walkThroughDNF(ctx, arg, keywords) == nil {
 					return nil
 				}
 			}
@@ -429,11 +436,11 @@ func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	return exprs
 }
 
-func combinePlanConjunction(exprs []*plan.Expr) (expr *plan.Expr, err error) {
+func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan.Expr, err error) {
 	expr = exprs[0]
 
 	for i := 1; i < len(exprs); i++ {
-		expr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{expr, exprs[i]})
+		expr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{expr, exprs[i]})
 
 		if err != nil {
 			break
@@ -443,12 +450,12 @@ func combinePlanConjunction(exprs []*plan.Expr) (expr *plan.Expr, err error) {
 	return
 }
 
-func rejectsNull(filter *plan.Expr) bool {
+func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	filter, err := ConstantFold(bat, filter)
+	filter, err := ConstantFold(bat, filter, proc)
 	if err != nil {
 		return false
 	}
@@ -528,10 +535,10 @@ func getNumOfCharacters(str string) int {
 	return len(strRune)
 }
 
-func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTypes *[]plan.Node_NodeType) error {
+func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tree.Statement, unionTypes *[]plan.Node_NodeType) error {
 	switch leftStmt := stmt.Left.(type) {
 	case *tree.UnionClause:
-		err := getUnionSelects(leftStmt, selects, unionTypes)
+		err := getUnionSelects(ctx, leftStmt, selects, unionTypes)
 		if err != nil {
 			return err
 		}
@@ -540,7 +547,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 	case *tree.ParenSelect:
 		*selects = append(*selects, leftStmt.Select)
 	default:
-		return moerr.NewParseError("unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
+		return moerr.NewParseError(ctx, "unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
 	}
 
 	// right is not UNION allways
@@ -564,7 +571,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 
 		*selects = append(*selects, rightStmt.Select)
 	default:
-		return moerr.NewParseError("unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
+		return moerr.NewParseError(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
 	}
 
 	switch stmt.Type {
@@ -582,7 +589,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 		}
 	case tree.EXCEPT, tree.UT_MINUS:
 		if stmt.All {
-			return moerr.NewNYI("EXCEPT/MINUS ALL clause")
+			return moerr.NewNYI(ctx, "EXCEPT/MINUS ALL clause")
 		} else {
 			*unionTypes = append(*unionTypes, plan.Node_MINUS)
 		}
@@ -590,7 +597,346 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 	return nil
 }
 
-func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
+func DeduceSelectivity(expr *plan.Expr) float64 {
+	if expr == nil {
+		return 1
+	}
+	var sel float64
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcName := exprImpl.F.Func.ObjName
+		switch funcName {
+		case "=":
+			return 0.01
+		case "and":
+			sel = math.Min(DeduceSelectivity(exprImpl.F.Args[0]), DeduceSelectivity(exprImpl.F.Args[1]))
+			return sel
+		case "or":
+			sel1 := DeduceSelectivity(exprImpl.F.Args[0])
+			sel2 := DeduceSelectivity(exprImpl.F.Args[1])
+			sel = math.Max(sel1, sel2)
+			if sel < 0.1 {
+				return sel * 1.05
+			} else {
+				return 1 - (1-sel1)*(1-sel2)
+			}
+		default:
+			return 0.33
+		}
+	}
+	return 1
+}
+
+func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
+	node := builder.qry.Nodes[nodeID]
+	if recursive {
+		if len(node.Children) > 0 {
+			for _, child := range node.Children {
+				ReCalcNodeStats(child, builder, recursive)
+			}
+		}
+	}
+
+	var leftStats, rightStats, childStats *Stats
+	if len(node.Children) == 1 {
+		childStats = builder.qry.Nodes[node.Children[0]].Stats
+	} else if len(node.Children) == 2 {
+		leftStats = builder.qry.Nodes[node.Children[0]].Stats
+		rightStats = builder.qry.Nodes[node.Children[1]].Stats
+	}
+
+	switch node.NodeType {
+	case plan.Node_JOIN:
+		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
+		switch node.JoinType {
+		case plan.Node_INNER:
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			if len(node.OnList) > 0 {
+				outcnt *= 0.1
+			}
+			node.Stats = &plan.Stats{
+				Outcnt:      outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+			}
+
+		case plan.Node_LEFT:
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			if len(node.OnList) > 0 {
+				outcnt *= 0.1
+				outcnt += leftStats.Outcnt
+			}
+			node.Stats = &plan.Stats{
+				Outcnt:      outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+			}
+
+		case plan.Node_RIGHT:
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			if len(node.OnList) > 0 {
+				outcnt *= 0.1
+				outcnt += rightStats.Outcnt
+			}
+			node.Stats = &plan.Stats{
+				Outcnt:      outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+			}
+
+		case plan.Node_OUTER:
+			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			if len(node.OnList) > 0 {
+				outcnt *= 0.1
+				outcnt += leftStats.Outcnt + rightStats.Outcnt
+			}
+			node.Stats = &plan.Stats{
+				Outcnt:      outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+			}
+
+		case plan.Node_SEMI, plan.Node_ANTI:
+			node.Stats = &plan.Stats{
+				Outcnt:      leftStats.Outcnt * .7,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+			}
+
+		case plan.Node_SINGLE, plan.Node_MARK:
+			node.Stats = &plan.Stats{
+				Outcnt:      leftStats.Outcnt,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+			}
+		}
+
+	case plan.Node_AGG:
+		if len(node.GroupBy) > 0 {
+			node.Stats = &plan.Stats{
+				Outcnt:      childStats.Outcnt * 0.1,
+				Cost:        childStats.Outcnt,
+				HashmapSize: childStats.Outcnt,
+			}
+		} else {
+			node.Stats = &plan.Stats{
+				Outcnt: 1,
+				Cost:   childStats.Cost,
+			}
+		}
+
+	case plan.Node_UNION:
+		node.Stats = &plan.Stats{
+			Outcnt:      (leftStats.Outcnt + rightStats.Outcnt) * 0.7,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+	case plan.Node_UNION_ALL:
+		node.Stats = &plan.Stats{
+			Outcnt: leftStats.Outcnt + rightStats.Outcnt,
+			Cost:   leftStats.Outcnt + rightStats.Outcnt,
+		}
+	case plan.Node_INTERSECT:
+		node.Stats = &plan.Stats{
+			Outcnt:      math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.5,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+	case plan.Node_INTERSECT_ALL:
+		node.Stats = &plan.Stats{
+			Outcnt:      math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.7,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+	case plan.Node_MINUS:
+		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
+		node.Stats = &plan.Stats{
+			Outcnt:      minus * 0.5,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+	case plan.Node_MINUS_ALL:
+		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
+		node.Stats = &plan.Stats{
+			Outcnt:      minus * 0.7,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			HashmapSize: rightStats.Outcnt,
+		}
+
+	case plan.Node_TABLE_SCAN:
+		if node.ObjRef != nil {
+			node.Stats = builder.compCtx.Stats(node.ObjRef, HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess()))
+		}
+
+	default:
+		if len(node.Children) > 0 {
+			node.Stats = &plan.Stats{
+				Outcnt: childStats.Outcnt,
+				Cost:   childStats.Outcnt,
+			}
+		} else if node.Stats == nil {
+			node.Stats = &plan.Stats{
+				Outcnt: 1000,
+				Cost:   1000000,
+			}
+		}
+	}
+}
+
+func containsParamRef(expr *plan.Expr) bool {
+	var ret bool
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			ret = ret || containsParamRef(arg)
+		}
+	case *plan.Expr_P:
+		return true
+	}
+	return ret
+}
+
+func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+	if expr == nil {
+		return
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			getColumnMapByExpr(arg, tableDef, columnMap)
+		}
+
+	case *plan.Expr_Col:
+		idx := exprImpl.Col.ColPos
+		colName := exprImpl.Col.Name
+		dotIdx := strings.Index(colName, ".")
+		colName = colName[dotIdx+1:]
+		colIdx := tableDef.Name2ColIndex[colName]
+		(*columnMap)[int(idx)] = int(colIdx)
+	}
+}
+
+func GetColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) (map[int]int, []int, int) {
+	columnMap := make(map[int]int)
+	// key = expr's ColPos,  value = tableDef's ColPos
+	getColumnMapByExpr(expr, tableDef, &columnMap)
+
+	maxCol := 0
+	useColumn := len(columnMap)
+	columns := make([]int, useColumn)
+	i := 0
+	for k, v := range columnMap {
+		if k > maxCol {
+			maxCol = k
+		}
+		columns[i] = v //tableDef's ColPos
+		i = i + 1
+	}
+	return columnMap, columns, maxCol
+}
+
+func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
+	if len(bat.Vecs) == 0 { //that's constant expr
+		e, err := ConstantFold(bat, expr, proc)
+		if err != nil {
+			return false, err
+		}
+
+		if cExpr, ok := e.Expr.(*plan.Expr_C); ok {
+			if bVal, bOk := cExpr.C.Value.(*plan.Const_Bval); bOk {
+				return bVal.Bval, nil
+			}
+		}
+		return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
+	} else {
+		vec, err := colexec.EvalExprByZonemapBat(ctx, bat, proc, expr)
+		if err != nil {
+			return false, err
+		}
+		if vec.Typ.Oid != types.T_bool {
+			return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
+		}
+		cols := vector.MustTCols[bool](vec)
+		for _, isNeed := range cols {
+			if isNeed {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+}
+
+func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vector.Vector, mp *mpool.MPool) {
+	for i := 0; i < len(datas[depth]); i++ {
+		tmpResult[depth] = datas[depth][i]
+		if depth != len(datas)-1 {
+			exchangeVectors(datas, depth+1, tmpResult, result, mp)
+		} else {
+			for j, val := range tmpResult {
+				(*result)[j].Append(val, false, mp)
+			}
+		}
+	}
+}
+
+func BuildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*vector.Vector {
+	vectors := make([]*vector.Vector, len(dataTypes))
+	for i, typ := range dataTypes {
+		vectors[i] = vector.New(types.T(typ).ToType())
+	}
+
+	tmpResult := make([]any, len(datas))
+	exchangeVectors(datas, 0, tmpResult, &vectors, mp)
+
+	return vectors
+}
+
+func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			isMonotonic := CheckExprIsMonotonic(ctx, arg)
+			if !isMonotonic {
+				return false
+			}
+		}
+
+		isMonotonic, _ := function.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())
+		if !isMonotonic {
+			return false
+		}
+
+		return true
+	default:
+		return true
+	}
+}
+
+// handle the filter list for zonemap. rewrite and constFold
+func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+	if proc == nil || proc.Ctx == nil {
+		return nil
+	}
+	var newExprList []*plan.Expr
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	for _, expr := range exprList {
+		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
+		if tmpexpr != nil {
+			expr = tmpexpr
+		}
+		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
+			newExprList = append(newExprList, expr)
+		}
+	}
+	e := colexec.RewriteFilterExprList(newExprList)
+	return e
+}
+
+func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
 	var err error
 
 	ef, ok := e.Expr.(*plan.Expr_F)
@@ -598,7 +944,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
 		return e, nil
 	}
 	overloadID := ef.F.Func.GetObj()
-	f, err := function.GetFunctionByID(overloadID)
+	f, err := function.GetFunctionByID(proc.Ctx, overloadID)
 	if err != nil {
 		return nil, err
 	}
@@ -606,22 +952,20 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i])
+		ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc)
 		if err != nil {
 			return nil, err
 		}
 	}
-	if !isConstant(e) {
+	if !rule.IsConstant(e) {
 		return e, nil
 	}
-	// XXX MPOOL
-	// This is a bug -- colexec EvalExpr need to eval, therefore, could potentially need
-	// a mpool.  proc is passed in a nil, where do I get a mpool?   Session?
-	vec, err := colexec.EvalExpr(bat, nil, e)
+	vec, err := colexec.EvalExpr(bat, proc, e)
 	if err != nil {
 		return nil, err
 	}
-	c := getConstantValue(vec)
+	c := rule.GetConstantValue(vec, false)
+	vec.Free(proc.Mp())
 	if c == nil {
 		return e, nil
 	}
@@ -630,106 +974,6 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
 	}
 	e.Expr = ec
 	return e, nil
-}
-
-func getConstantValue(vec *vector.Vector) *plan.Const {
-	if nulls.Any(vec.Nsp) {
-		return &plan.Const{Isnull: true}
-	}
-	switch vec.Typ.Oid {
-	case types.T_bool:
-		return &plan.Const{
-			Value: &plan.Const_Bval{
-				Bval: vec.Col.([]bool)[0],
-			},
-		}
-	case types.T_int8:
-		return &plan.Const{
-			Value: &plan.Const_I8Val{
-				I8Val: int32(vec.Col.([]int8)[0]),
-			},
-		}
-	case types.T_int16:
-		return &plan.Const{
-			Value: &plan.Const_I16Val{
-				I16Val: int32(vec.Col.([]int16)[0]),
-			},
-		}
-	case types.T_int32:
-		return &plan.Const{
-			Value: &plan.Const_I32Val{
-				I32Val: vec.Col.([]int32)[0],
-			},
-		}
-	case types.T_int64:
-		return &plan.Const{
-			Value: &plan.Const_I64Val{
-				I64Val: vec.Col.([]int64)[0],
-			},
-		}
-	case types.T_uint8:
-		return &plan.Const{
-			Value: &plan.Const_U8Val{
-				U8Val: uint32(vec.Col.([]uint8)[0]),
-			},
-		}
-	case types.T_uint16:
-		return &plan.Const{
-			Value: &plan.Const_U16Val{
-				U16Val: uint32(vec.Col.([]uint16)[0]),
-			},
-		}
-	case types.T_uint32:
-		return &plan.Const{
-			Value: &plan.Const_U32Val{
-				U32Val: vec.Col.([]uint32)[0],
-			},
-		}
-	case types.T_uint64:
-		return &plan.Const{
-			Value: &plan.Const_U64Val{
-				U64Val: vec.Col.([]uint64)[0],
-			},
-		}
-	case types.T_float64:
-		return &plan.Const{
-			Value: &plan.Const_Dval{
-				Dval: vec.Col.([]float64)[0],
-			},
-		}
-	case types.T_varchar:
-		return &plan.Const{
-			Value: &plan.Const_Sval{
-				Sval: vec.GetString(0),
-			},
-		}
-	default:
-		return nil
-	}
-}
-
-func isConstant(e *plan.Expr) bool {
-	switch ef := e.Expr.(type) {
-	case *plan.Expr_C, *plan.Expr_T:
-		return true
-	case *plan.Expr_F:
-		overloadID := ef.F.Func.GetObj()
-		f, err := function.GetFunctionByID(overloadID)
-		if err != nil {
-			return false
-		}
-		if f.Volatile { // function cannot be fold
-			return false
-		}
-		for i := range ef.F.Args {
-			if !isConstant(ef.F.Args[i]) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
-	}
 }
 
 func rewriteTableFunction(tblFunc *tree.TableFunction, leftCtx *BindContext) error {
@@ -755,7 +999,7 @@ func rewriteTableFunction(tblFunc *tree.TableFunction, leftCtx *BindContext) err
 				tableName = binding.table
 				expr.Parts[1] = tableName
 			} else {
-				return moerr.NewInternalError("cannot find column '%s'", colName)
+				return moerr.NewInternalError(leftCtx.binder.GetContext(), "cannot find column '%s'", colName)
 			}
 		}
 		//newTableName = newTableAliasMap[tableName]
@@ -848,15 +1092,15 @@ func clearBinding(ctx *BindContext) {
 	ctx.bindings = make([]*Binding, 0)
 }
 
-func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Expr, idx int) (*plan.Expr, error) {
+func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, rightExprs []*plan.Expr, idx int) (*plan.Expr, error) {
 	if idx == len(leftExprs)-1 {
-		return bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+		return bindFuncExprImplByPlanExpr(ctx, op, []*plan.Expr{
 			leftExprs[idx],
 			rightExprs[idx],
 		})
 	}
 
-	expr, err := bindFuncExprImplByPlanExpr(nonEqOp, []*plan.Expr{
+	expr, err := bindFuncExprImplByPlanExpr(ctx, nonEqOp, []*plan.Expr{
 		DeepCopyExpr(leftExprs[idx]),
 		DeepCopyExpr(rightExprs[idx]),
 	})
@@ -864,7 +1108,7 @@ func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Exp
 		return nil, err
 	}
 
-	eqExpr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+	eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
 		leftExprs[idx],
 		rightExprs[idx],
 	})
@@ -872,77 +1116,100 @@ func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Exp
 		return nil, err
 	}
 
-	tailExpr, err := unwindTupleComparison(nonEqOp, op, leftExprs, rightExprs, idx+1)
+	tailExpr, err := unwindTupleComparison(ctx, nonEqOp, op, leftExprs, rightExprs, idx+1)
 	if err != nil {
 		return nil, err
 	}
 
-	tailExpr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{eqExpr, tailExpr})
+	tailExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{eqExpr, tailExpr})
 	if err != nil {
 		return nil, err
 	}
 
-	return bindFuncExprImplByPlanExpr("or", []*plan.Expr{expr, tailExpr})
+	return bindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{expr, tailExpr})
 }
 
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
-func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
-	key := [2]types.T{columnT, constT}
-	// lowIntCol > highIntConst
-	if _, ok := intCastTableForRewrite[key]; ok {
+func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
+	switch constT.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		switch columnT.Oid {
+		case types.T_char, types.T_varchar:
+			if constT.Width <= columnT.Width {
+				return true
+			} else {
+				return false
+			}
+		case types.T_text:
+			return true
+		default:
+			return false
+		}
+
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
 		if !valOk {
 			return false
 		}
 		constVal := val.I64Val
-
-		switch columnT {
+		switch columnT.Oid {
 		case types.T_int8:
 			return constVal <= int64(math.MaxInt8) && constVal >= int64(math.MinInt8)
 		case types.T_int16:
 			return constVal <= int64(math.MaxInt16) && constVal >= int64(math.MinInt16)
 		case types.T_int32:
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
+		case types.T_int64:
+			return true
+		case types.T_uint8:
+			return constVal <= math.MaxUint8 && constVal >= 0
+		case types.T_uint16:
+			return constVal <= math.MaxUint16 && constVal >= 0
+		case types.T_uint32:
+			return constVal <= math.MaxUint32 && constVal >= 0
+		case types.T_uint64:
+			return constVal >= 0
+		case types.T_varchar:
+			return true
+		case types.T_float32:
+			//float32 has 6-7 significant digits.
+			return constVal <= 100000 && constVal >= -100000
+		default:
+			return false
 		}
-	}
-
-	// lowUIntCol > highUIntConst
-	if _, ok := uintCastTableForRewrite[key]; ok {
-		val, valOk := constExpr.C.Value.(*plan.Const_U64Val)
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		val_u, valOk := constExpr.C.Value.(*plan.Const_U64Val)
 		if !valOk {
 			return false
 		}
-		constVal := val.U64Val
-
-		switch columnT {
+		constVal := val_u.U64Val
+		switch columnT.Oid {
+		case types.T_int8:
+			return constVal <= math.MaxInt8
+		case types.T_int16:
+			return constVal <= math.MaxInt16
+		case types.T_int32:
+			return constVal <= math.MaxInt32
+		case types.T_int64:
+			return constVal <= math.MaxInt64
 		case types.T_uint8:
-			return constVal <= uint64(math.MaxUint8)
+			return constVal <= math.MaxUint8
 		case types.T_uint16:
-			return constVal <= uint64(math.MaxUint16)
+			return constVal <= math.MaxUint16
 		case types.T_uint32:
-			return constVal <= uint64(math.MaxUint32)
-		}
-	}
-
-	// lowUIntCol > highIntConst
-	if _, ok := uint2intCastTableForRewrite[key]; ok {
-		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
-		if !valOk {
+			return constVal <= math.MaxUint32
+		case types.T_uint64:
+			return true
+		case types.T_float32:
+			//float32 has 6-7 significant digits.
+			return constVal <= 100000
+		default:
 			return false
 		}
-		constVal := val.I64Val
-
-		switch columnT {
-		case types.T_uint8:
-			return constVal <= int64(math.MaxUint8)
-		case types.T_uint16:
-			return constVal <= int64(math.MaxUint16)
-		case types.T_uint32:
-			return constVal <= int64(math.MaxUint32)
-		}
+	default:
+		return false
 	}
 
-	return false
 }

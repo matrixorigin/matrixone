@@ -46,9 +46,11 @@ func ReturnType(op int, typ types.Type) (types.Type, error) {
 		otyp = BitOrReturnType([]types.Type{typ})
 	case AggregateStdDevPop:
 		otyp = StdDevPopReturnType([]types.Type{typ})
+	case AggregateMedian:
+		otyp = MedianReturnType([]types.Type{typ})
 	}
 	if otyp.Oid == types.T_any {
-		return typ, moerr.NewInternalError("'%v' not support %s", typ, Names[op])
+		return typ, moerr.NewInternalErrorNoCtx("'%v' not support %s", typ, Names[op])
 	}
 	return otyp, nil
 }
@@ -81,8 +83,10 @@ func New(op int, dist bool, typ types.Type) (Agg[any], error) {
 		return newStdDevPop(typ, dist), nil
 	case AggregateAnyValue:
 		return newAnyValue(typ, dist), nil
+	case AggregateMedian:
+		return newMedian(typ, dist), nil
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for aggregate %s", typ, Names[op]))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for aggregate %s", typ, Names[op]))
 }
 
 func newCount(typ types.Type, dist bool, isStar bool) Agg[any] {
@@ -134,7 +138,7 @@ func newCount(typ types.Type, dist bool, isStar bool) Agg[any] {
 	case types.T_uuid:
 		return newGenericCount[types.Uuid](typ, dist, isStar)
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for anyvalue", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for anyvalue", typ))
 }
 
 func newAnyValue(typ types.Type, dist bool) Agg[any] {
@@ -184,7 +188,7 @@ func newAnyValue(typ types.Type, dist bool) Agg[any] {
 	case types.T_uuid:
 		return newGenericAnyValue[types.Uuid](typ, dist)
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for anyvalue", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for anyvalue", typ))
 }
 
 func newAvg(typ types.Type, dist bool) Agg[any] {
@@ -222,7 +226,7 @@ func newAvg(typ types.Type, dist bool) Agg[any] {
 		}
 		return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for avg", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for avg", typ))
 }
 
 func newSum(typ types.Type, dist bool) Agg[any] {
@@ -260,7 +264,7 @@ func newSum(typ types.Type, dist bool) Agg[any] {
 		}
 		return NewUnaryAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for sum", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for sum", typ))
 }
 
 func newMax(typ types.Type, dist bool) Agg[any] {
@@ -342,7 +346,7 @@ func newMax(typ types.Type, dist bool) Agg[any] {
 		}
 		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for anyvalue", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for anyvalue", typ))
 }
 
 func newMin(typ types.Type, dist bool) Agg[any] {
@@ -424,7 +428,7 @@ func newMin(typ types.Type, dist bool) Agg[any] {
 		}
 		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for anyvalue", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for anyvalue", typ))
 }
 
 func newApprox(typ types.Type, dist bool) Agg[any] {
@@ -474,7 +478,7 @@ func newApprox(typ types.Type, dist bool) Agg[any] {
 	case types.T_uuid:
 		return newGenericApproxcd[types.Uuid](typ, dist)
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for anyvalue", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for anyvalue", typ))
 }
 
 func newBitOr(typ types.Type, dist bool) Agg[any] {
@@ -500,7 +504,7 @@ func newBitOr(typ types.Type, dist bool) Agg[any] {
 	case types.T_float64:
 		return newGenericBitOr[float64](typ, dist)
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for avg", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for avg", typ))
 }
 
 func newBitXor(typ types.Type, dist bool) Agg[any] {
@@ -526,7 +530,7 @@ func newBitXor(typ types.Type, dist bool) Agg[any] {
 	case types.T_float64:
 		return newGenericBitXor[float64](typ, dist)
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for avg", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for avg", typ))
 }
 
 func newBitAnd(typ types.Type, dist bool) Agg[any] {
@@ -552,7 +556,7 @@ func newBitAnd(typ types.Type, dist bool) Agg[any] {
 	case types.T_float64:
 		return newGenericBitAnd[float64](typ, dist)
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for avg", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for avg", typ))
 }
 
 func newVariance(typ types.Type, dist bool) Agg[any] {
@@ -591,7 +595,7 @@ func newVariance(typ types.Type, dist bool) Agg[any] {
 		return NewUnaryAgg(AggregateVariance, aggPriv, false, typ, VarianceReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for avg", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for avg", typ))
 }
 
 func newStdDevPop(typ types.Type, dist bool) Agg[any] {
@@ -630,7 +634,45 @@ func newStdDevPop(typ types.Type, dist bool) Agg[any] {
 		return NewUnaryAgg(AggregateStdDevPop, aggPriv, false, typ, StdDevPopReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 
 	}
-	panic(moerr.NewInternalError("unsupport type '%s' for avg", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%s' for avg", typ))
+}
+
+func newMedian(typ types.Type, dist bool) Agg[any] {
+	switch typ.Oid {
+	case types.T_int8:
+		return newGenericMedian[int8](typ, dist)
+	case types.T_int16:
+		return newGenericMedian[int16](typ, dist)
+	case types.T_int32:
+		return newGenericMedian[int32](typ, dist)
+	case types.T_int64:
+		return newGenericMedian[int64](typ, dist)
+	case types.T_uint8:
+		return newGenericMedian[uint8](typ, dist)
+	case types.T_uint16:
+		return newGenericMedian[uint16](typ, dist)
+	case types.T_uint32:
+		return newGenericMedian[uint32](typ, dist)
+	case types.T_uint64:
+		return newGenericMedian[uint64](typ, dist)
+	case types.T_float32:
+		return newGenericMedian[float32](typ, dist)
+	case types.T_float64:
+		return newGenericMedian[float64](typ, dist)
+	case types.T_decimal64:
+		aggPriv := NewD64Median()
+		if dist {
+			panic(moerr.NewNotSupportedNoCtx("median in distinct mode"))
+		}
+		return NewUnaryAgg(AggregateMedian, aggPriv, false, typ, MedianReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	case types.T_decimal128:
+		aggPriv := NewD128Median()
+		if dist {
+			panic(moerr.NewNotSupportedNoCtx("median in distinct mode"))
+		}
+		return NewUnaryAgg(AggregateMedian, aggPriv, false, typ, MedianReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	}
+	panic(moerr.NewNotSupportedNoCtx("median on type '%s'", typ))
 }
 
 func newGenericAnyValue[T any](typ types.Type, dist bool) Agg[any] {
@@ -727,4 +769,11 @@ func newGenericStdDevPop[T types.Ints | types.UInts | types.Floats](typ types.Ty
 		return NewUnaryDistAgg(AggregateStdDevPop, aggPriv, false, typ, StdDevPopReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
 	return NewUnaryAgg(AggregateStdDevPop, aggPriv, false, typ, StdDevPopReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+}
+func newGenericMedian[T Numeric](typ types.Type, dist bool) Agg[any] {
+	aggPriv := NewMedian[T]()
+	if dist {
+		panic(moerr.NewNotSupportedNoCtx("median in distinct mode"))
+	}
+	return NewUnaryAgg(AggregateMedian, aggPriv, false, typ, MedianReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }

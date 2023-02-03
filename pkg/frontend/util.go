@@ -18,12 +18,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"os"
 	"runtime"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
+
+	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,14 +39,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	dumpUtils "github.com/matrixorigin/matrixone/pkg/vectorize/dump"
-	"path/filepath"
-	"strings"
 
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -369,13 +372,13 @@ func WildcardMatch(pattern, target string) bool {
 }
 
 // only support single value and unary minus
-func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
+func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
 		return v.Parts[0], nil
 	default:
-		binder := plan2.NewDefaultBinder(nil, nil, nil, nil)
+		binder := plan2.NewDefaultBinder(ses.GetRequestContext(), nil, nil, nil, nil)
 		planExpr, err := binder.BindExpr(e, 0, false)
 		if err != nil {
 			return nil, err
@@ -383,15 +386,15 @@ func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
 		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
 		bat := batch.NewWithSize(0)
 		bat.Zs = []int64{1}
-		vec, err := colexec.EvalExpr(bat, nil, planExpr)
+		vec, err := colexec.EvalExpr(bat, ses.txnCompileCtx.GetProcess(), planExpr)
 		if err != nil {
 			return nil, err
 		}
-		return getValueFromVector(vec)
+		return getValueFromVector(vec, ses)
 	}
 }
 
-func getValueFromVector(vec *vector.Vector) (interface{}, error) {
+func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 	if nulls.Any(vec.Nsp) {
 		return nil, nil
 	}
@@ -444,9 +447,9 @@ func getValueFromVector(vec *vector.Vector) (interface{}, error) {
 		return val.String(), nil
 	case types.T_timestamp:
 		val := vector.GetValueAt[types.Timestamp](vec, 0)
-		return val.String(), nil
+		return val.String2(ses.GetTimeZone(), vec.Typ.Precision), nil
 	default:
-		return nil, moerr.NewInvalidArg("variable type", vec.Typ.Oid.String())
+		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.Typ.Oid.String())
 	}
 }
 
@@ -470,7 +473,7 @@ func (s statementStatus) String() string {
 // logStatementStatus prints the status of the statement into the log.
 func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, status statementStatus, err error) {
 	var stmtStr string
-	stm := trace.StatementFromContext(ctx)
+	stm := motrace.StatementFromContext(ctx)
 	if stm == nil {
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
 		stmt.Format(fmtCtx)
@@ -484,9 +487,11 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
-		logInfo(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
+		motrace.EndStatement(ctx, nil)
+		logInfo(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 	} else {
-		logError(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
+		motrace.EndStatement(ctx, err)
+		logError(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
 }
 
@@ -561,12 +566,12 @@ func getDDL(bh BackgroundExec, ctx context.Context, sql string) (string, error) 
 	return ret, nil
 }
 
-func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool, loc *time.Location) (*batch.Batch, error) {
+func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool, loc *time.Location) (*batch.Batch, error) {
 	var err error
 	rbat := batch.NewWithSize(bat.VectorCount())
 	rbat.InitZsOne(bat.Length())
 	for i := 0; i < rbat.VectorCount(); i++ {
-		rbat.Vecs[i] = vector.New(types.Type{Oid: types.T_varchar}) //TODO: check size
+		rbat.Vecs[i] = vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}) //TODO: check size
 		rs := make([]string, bat.Length())
 		switch bat.Vecs[i].Typ.Oid {
 		case types.T_bool:
@@ -630,7 +635,7 @@ func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool, loc *time.Location) 
 			xs := vector.MustTCols[types.Uuid](bat.Vecs[i])
 			rs, err = dumpUtils.ParseUuid(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		default:
-			err = moerr.NewNotSupported("type %v", bat.Vecs[i].Typ.String())
+			err = moerr.NewNotSupported(ctx, "type %v", bat.Vecs[i].Typ.String())
 		}
 		if err != nil {
 			return nil, err
@@ -653,13 +658,13 @@ func genDumpFileName(outfile string, idx int64) string {
 	return filepath.Join(path, fmt.Sprintf("%s_%d.%s", base, idx, extend))
 }
 
-func createDumpFile(filename string) (*os.File, error) {
+func createDumpFile(ctx context.Context, filename string) (*os.File, error) {
 	exists, err := fileExists(filename)
 	if err != nil {
 		return nil, err
 	}
 	if exists {
-		return nil, moerr.NewFileAlreadyExists(filename)
+		return nil, moerr.NewFileAlreadyExists(ctx, filename)
 	}
 
 	ret, err := os.Create(filename)
@@ -669,9 +674,9 @@ func createDumpFile(filename string) (*os.File, error) {
 	return ret, nil
 }
 
-func writeDump2File(buf *bytes.Buffer, dump *tree.MoDump, f *os.File, curFileIdx, curFileSize int64) (ret *os.File, newFileIdx, newFileSize int64, err error) {
+func writeDump2File(ctx context.Context, buf *bytes.Buffer, dump *tree.MoDump, f *os.File, curFileIdx, curFileSize int64) (ret *os.File, newFileIdx, newFileSize int64, err error) {
 	if dump.MaxFileSize > 0 && int64(buf.Len()) > dump.MaxFileSize {
-		err = moerr.NewInternalError("dump: data in db is too large,please set a larger max_file_size")
+		err = moerr.NewInternalError(ctx, "dump: data in db is too large,please set a larger max_file_size")
 		return
 	}
 	if dump.MaxFileSize > 0 && curFileSize+int64(buf.Len()) > dump.MaxFileSize {
@@ -681,7 +686,7 @@ func writeDump2File(buf *bytes.Buffer, dump *tree.MoDump, f *os.File, curFileIdx
 		}
 		newFileIdx = curFileIdx + 1
 		newFileSize = int64(buf.Len())
-		ret, err = createDumpFile(genDumpFileName(dump.OutFile, newFileIdx))
+		ret, err = createDumpFile(ctx, genDumpFileName(dump.OutFile, newFileIdx))
 		if err != nil {
 			return
 		}
@@ -722,4 +727,10 @@ func removeFile(s string, idx int64) {
 	for i := int64(1); i <= idx; i++ {
 		os.RemoveAll(filepath.Join(path, fmt.Sprintf("%s_%d.%s", base, i, extend)))
 	}
+}
+
+func isInvalidConfigInput(config string) bool {
+	// first verify if the input string can parse as a josn type data
+	_, err := types.ParseStringToByteJson(config)
+	return err != nil
 }

@@ -13,12 +13,17 @@ name = "LOCAL"
 
 [[fileservice]]
 backend = "MINIO"
-name = "S3"
+name = "SHARED"
 
 [fileservice.s3]
 bucket = "mo-test"
 endpoint = "http://minio:9000"
 key-prefix = "server/data"
+
+[fileservice.cache]
+memory-capacity = "512MB"
+disk-capacity = "8GB"
+disk-path = "mo-data/file-service-cache"
 
 [[fileservice]]
 backend = "MINIO"

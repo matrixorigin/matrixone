@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"io"
+	"time"
 )
 
 // FileService is a write-once file system
@@ -59,6 +60,10 @@ type IOVector struct {
 	// empty Entries is not allowed
 	// when writing, overlapping Entries is not allowed
 	Entries []IOEntry
+	// ExpireAt specifies the expire time of the file
+	// implementations may or may not delete the file after this time
+	// zero value means no expire
+	ExpireAt time.Time
 }
 
 type IOEntry struct {
@@ -82,14 +87,18 @@ type IOEntry struct {
 	ReadCloserForRead *io.ReadCloser
 
 	// when writing, if Reader is not nil, read data from it instead of reading Data field
+	// number of bytes to be read is specified by Size field
+	// if number of bytes is unknown, set Size field to -1
 	ReaderForWrite io.Reader
 
 	// when reading, if the ToObject field is not nil, the returning object will be set to this field
 	// caches may choose to cache this object instead of caching []byte
 	// Data, WriterForRead, ReadCloserForRead may be empty if Object is not null
+	// if ToObject is provided, caller should always read Object instead of Data, WriterForRead or ReadCloserForRead
 	Object any
 
 	// ToObject constructs an object from entry contents
+	// reader or data must not be retained after returns
 	// reader always contains entry contents
 	// data may contains entry contents if available
 	// if data is empty, the io.Reader must be fully read before returning nil error
@@ -102,10 +111,9 @@ type IOEntry struct {
 	// used in capacity limited caches
 	ObjectSize int64
 
-	// ignore indicates the entry should be ignored
-	// if true, implementations must not change any field
-	// for caches to skip individual IOEntry without using another IOVector
-	ignore bool
+	// done indicates whether the entry is filled with data
+	// for implementing cascade cache
+	done bool
 }
 
 // DirEntry is a file or dir

@@ -60,7 +60,7 @@ func (rsse *resultSetStmtExecutor) ResponseBeforeExec(ctx context.Context, ses *
 		/*
 			mysql COM_QUERY response: send the column definition per column
 		*/
-		err = proto.SendColumnDefinitionPacket(mysqlc, int(cmd))
+		err = proto.SendColumnDefinitionPacket(ctx, mysqlc, int(cmd))
 		if err != nil {
 			return err
 		}
@@ -91,6 +91,11 @@ func (rsse *resultSetStmtExecutor) ResponseAfterExec(ctx context.Context, ses *S
 type SelectExecutor struct {
 	*resultSetStmtExecutor
 	sel *tree.Select
+}
+
+type ValuesStmtExecutor struct {
+	*resultSetStmtExecutor
+	sel *tree.ValuesStatement
 }
 
 type ShowCreateTableExecutor struct {

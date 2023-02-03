@@ -126,14 +126,19 @@ func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err err
 
 	oldRel, err := db.DropRelationByName(name)
 	if err != nil {
-		err = moerr.NewInternalError("%v: truncate %s error", err, name)
+		err = moerr.NewInternalErrorNoCtx("%v: truncate %s error", err, name)
 		return
 	}
 	meta := oldRel.GetMeta().(*catalog.TableEntry)
 	schema := meta.GetSchema().Clone()
+	latest := meta.MVCCChain.GetLatestCommittedNode()
+	if latest != nil {
+		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
+	}
+	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
 	if err != nil {
-		err = moerr.NewInternalError("%v: truncate %s error", err, name)
+		err = moerr.NewInternalErrorNoCtx("%v: truncate %s error", err, name)
 	}
 	return
 }
@@ -142,14 +147,19 @@ func (db *txnDatabase) TruncateWithID(name string, newTableId uint64) (rel handl
 
 	oldRel, err := db.DropRelationByName(name)
 	if err != nil {
-		err = moerr.NewInternalError("%v: truncate %s error", err, name)
+		err = moerr.NewInternalErrorNoCtx("%v: truncate %s error", err, name)
 		return
 	}
 	meta := oldRel.GetMeta().(*catalog.TableEntry)
 	schema := meta.GetSchema().Clone()
+	latest := meta.MVCCChain.GetLatestCommittedNode()
+	if latest != nil {
+		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
+	}
+	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
 	if err != nil {
-		err = moerr.NewInternalError("%v: truncate %s error", err, name)
+		err = moerr.NewInternalErrorNoCtx("%v: truncate %s error", err, name)
 	}
 	return
 }
@@ -158,14 +168,19 @@ func (db *txnDatabase) TruncateByID(id uint64, newTableId uint64) (rel handle.Re
 
 	oldRel, err := db.DropRelationByID(id)
 	if err != nil {
-		err = moerr.NewInternalError("%v: truncate %d error", err, id)
+		err = moerr.NewInternalErrorNoCtx("%v: truncate %d error", err, id)
 		return
 	}
 	meta := oldRel.GetMeta().(*catalog.TableEntry)
 	schema := meta.GetSchema().Clone()
+	latest := meta.MVCCChain.GetLatestCommittedNode()
+	if latest != nil {
+		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
+	}
+	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
 	if err != nil {
-		err = moerr.NewInternalError("%v: truncate %d error", err, id)
+		err = moerr.NewInternalErrorNoCtx("%v: truncate %d error", err, id)
 	}
 	return
 }

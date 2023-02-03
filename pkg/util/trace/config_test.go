@@ -20,6 +20,9 @@ import (
 	"testing"
 )
 
+var _1TraceID TraceID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
+var _1SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0, 0, 1}
+
 func TestTraceID_IsZero(t *testing.T) {
 	tests := []struct {
 		name string
@@ -33,7 +36,7 @@ func TestTraceID_IsZero(t *testing.T) {
 		},
 		{
 			name: "nil",
-			t:    nilTraceID,
+			t:    NilTraceID,
 			want: true,
 		},
 	}
@@ -100,7 +103,7 @@ func TestSpanContext_IsEmpty(t *testing.T) {
 		{
 			name: "nilTraceID",
 			fields: fields{
-				TraceID: nilTraceID,
+				TraceID: NilTraceID,
 				SpanID:  _1SpanID,
 			},
 			want: false,
@@ -109,15 +112,15 @@ func TestSpanContext_IsEmpty(t *testing.T) {
 			name: "nilSpanID",
 			fields: fields{
 				TraceID: _1TraceID,
-				SpanID:  nilSpanID,
+				SpanID:  NilSpanID,
 			},
 			want: false,
 		},
 		{
 			name: "nil",
 			fields: fields{
-				TraceID: nilTraceID,
-				SpanID:  nilSpanID,
+				TraceID: NilTraceID,
+				SpanID:  NilSpanID,
 			},
 			want: true,
 		},

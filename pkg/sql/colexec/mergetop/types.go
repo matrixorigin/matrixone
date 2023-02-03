@@ -15,6 +15,8 @@
 package mergetop
 
 import (
+	"reflect"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,6 +31,11 @@ type container struct {
 	cmps  []compare.Compare // compare structure used to do sort work
 
 	bat *batch.Batch // bat stores the final result of merge-top
+
+	// aliveMergeReceiver is a count for no-close receiver
+	aliveMergeReceiver int
+	// receiverListener is a structure to listen all the merge receiver.
+	receiverListener []reflect.SelectCase
 }
 
 type Argument struct {

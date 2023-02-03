@@ -58,6 +58,10 @@ func (s *Storage) StartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
 	s.handler.HandleStartRecovery(ctx, ch)
 }
 
+func (s *Storage) Start() error {
+	return nil
+}
+
 func (s *Storage) Close(ctx context.Context) error {
 	return s.handler.HandleClose(ctx)
 }
@@ -67,5 +71,5 @@ func (s *Storage) Destroy(ctx context.Context) error {
 }
 
 func (s *Storage) Debug(context.Context, txn.TxnMeta, uint32, []byte) ([]byte, error) {
-	return nil, moerr.NewNotSupported("MemoryStorage not support debug method")
+	return nil, moerr.NewNotSupportedNoCtx("MemoryStorage not support debug method")
 }

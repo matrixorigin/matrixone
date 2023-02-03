@@ -16,13 +16,14 @@ package compile
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
@@ -52,12 +54,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestInstructionSerializationCover(t *testing.T) {
@@ -89,6 +90,7 @@ func TestInstructionSerializationCover(t *testing.T) {
 		{instruction: vm.Instruction{Op: vm.LoopSemi, Arg: &loopsemi.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.LoopAnti, Arg: &loopanti.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.LoopSingle, Arg: &loopsingle.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.LoopMark, Arg: &loopmark.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.MergeTop, Arg: &mergetop.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.MergeLimit, Arg: &mergelimit.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.MergeOrder, Arg: &mergeorder.Argument{}}},
@@ -102,8 +104,7 @@ func TestInstructionSerializationCover(t *testing.T) {
 		{instruction: vm.Instruction{Op: vm.Intersect, Arg: &intersect.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.IntersectAll, Arg: &intersectall.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.HashBuild, Arg: &hashbuild.Argument{}}},
-		{instruction: vm.Instruction{Op: vm.Unnest, Arg: &unnest.Argument{Es: &unnest.Param{}}}},
-		{instruction: vm.Instruction{Op: vm.GenerateSeries, Arg: &generate_series.Argument{Es: &generate_series.Param{}}}},
+		{instruction: vm.Instruction{Op: vm.TableFunction, Arg: &table_function.Argument{}}},
 	}
 	{
 		typeReached := make([]int, vm.LastInstructionOp)

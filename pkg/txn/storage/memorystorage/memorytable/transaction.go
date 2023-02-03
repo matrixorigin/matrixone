@@ -22,33 +22,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+// Transaction represents a transaction
+// a transaction may contains multiple operations on multiple tables
+// a transaction commits atomically
 type Transaction struct {
 	State     *Atomic[TransactionState]
 	BeginTime Time
-	tables    map[int64]*transactionTable
+	tables    transactionTableMap
+}
+
+type transactionTableMap struct {
+	sync.Mutex
+	Map map[int64]*transactionTable
 }
 
 type transactionTable struct {
 	table interface {
 		sync.Locker
-		commit(tx *Transaction, state any, commitTime Time) error
+		commit(tx *Transaction, state any, oldState any, commitTime Time) (any, error)
+		rollback(oldState any)
 		abort(*Transaction) error
 	}
-	state atomic.Value
+	initState any
+	state     atomic.Value
 }
 
+// NewTransaction creates a new transaction using beginTime as snapshot time
 func NewTransaction(
 	beginTime Time,
 ) *Transaction {
 	return &Transaction{
 		State:     NewAtomic(Active),
 		BeginTime: beginTime,
-		tables:    make(map[int64]*transactionTable),
+		tables: transactionTableMap{
+			Map: make(map[int64]*transactionTable),
+		},
 	}
 }
 
+// TransactionState represents state of a transaction
 type TransactionState uint8
 
+// String returns the text form of a state
 func (t TransactionState) String() string {
 	switch t {
 	case Active:
@@ -62,52 +77,84 @@ func (t TransactionState) String() string {
 }
 
 const (
+	// Active is the default state of a newly created transaction
 	Active TransactionState = iota
+	// Committed is the state of a committed transaction
 	Committed
+	// Aborted is the state of a aborted transaction
 	Aborted
 )
 
+// Commit commits the transaction
 func (t *Transaction) Commit(commitTime Time) error {
 	if state := t.State.Load(); state != Active {
-		return moerr.NewTxnNotActive(state.String())
+		return moerr.NewTxnNotActiveNoCtx(state.String())
 	}
-	for _, table := range t.tables {
+	committed := make(map[int64]any) // table id -> swapped state
+	t.tables.Lock()
+	defer t.tables.Unlock()
+	for id, table := range t.tables.Map {
 		table.table.Lock()
 		defer table.table.Unlock()
-		if err := table.table.commit(t, table.state.Load(), commitTime); err != nil {
+		swapped, err := table.table.commit(t, table.state.Load(), table.initState, commitTime)
+		if err != nil {
+
+			// rollback previous committed
+			for id, swapped := range committed {
+				table := t.tables.Map[id]
+				table.table.rollback(swapped)
+			}
+
 			return err
 		}
+		committed[id] = swapped
 	}
 	t.State.Store(Committed)
 	return nil
 }
 
 // must call with t being locked
-func (t *Table[K, V, R]) commit(tx *Transaction, state any, commitTime Time) error {
+func (t *Table[K, V, R]) commit(tx *Transaction, state any, oldState any, commitTime Time) (any, error) {
 
 	currentState := t.state.Load()
 	txState := state.(*tableState[K, V])
-	newState, err := currentState.merge(txState)
-	if err != nil {
-		return err
-	}
-	t.state.Store(newState)
-	if !commitTime.IsEmpty() && len(t.history) > 0 {
-		last := t.history[len(t.history)-1]
-		if !commitTime.Greater(last.Before) {
-			return moerr.NewInternalError("commit time too old")
+	if !t.state.CompareAndSwap(oldState.(*tableState[K, V]), txState) {
+		newState, _, err := currentState.merge(txState)
+		if err != nil {
+			return nil, err
 		}
+		t.state.Store(newState)
 	}
-	t.history = append(t.history, &history[K, V]{
-		Before: commitTime,
-		State:  currentState,
-	})
+	if !t.disableHistory.Load() {
+		if !commitTime.IsEmpty() && len(t.history) > 0 {
+			last := t.history[len(t.history)-1]
+			if !commitTime.Greater(last.EndTime) {
+				return nil, moerr.NewInternalErrorNoCtx("commit time too old")
+			}
+		}
+		t.history = append(t.history, &history[K, V]{
+			EndTime:  commitTime,
+			EndState: currentState,
+		})
+	}
 
-	return nil
+	return currentState, nil
 }
 
+// must call with t being locked
+func (t *Table[K, V, R]) rollback(oldStateValue any) {
+	oldState := oldStateValue.(*tableState[K, V])
+	t.state.Store(oldState)
+	for len(t.history) > 0 && t.history[len(t.history)-1].EndState != oldState {
+		t.history = t.history[:len(t.history)-1]
+	}
+}
+
+// Abort aborts the transaction
 func (t *Transaction) Abort() error {
-	for _, table := range t.tables {
+	t.tables.Lock()
+	defer t.tables.Unlock()
+	for _, table := range t.tables.Map {
 		table.table.Lock()
 		defer table.table.Unlock()
 		if err := table.table.abort(t); err != nil {

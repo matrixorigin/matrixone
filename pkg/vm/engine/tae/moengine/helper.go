@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
@@ -42,43 +43,45 @@ func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
 
 func ColDefsToAttrs(colDefs []*catalog.ColDef) (attrs []*engine.Attribute, err error) {
 	for _, col := range colDefs {
-		defaultExpr := &plan.Expr{}
-		if col.Default.Expr != nil {
-			if err := defaultExpr.Unmarshal(col.Default.Expr); err != nil {
-				return nil, err
-			}
-		} else {
-			defaultExpr = nil
-		}
-
-		onUpdateExpr := &plan.Expr{}
-		if col.OnUpdate.Expr != nil {
-			if err := onUpdateExpr.Unmarshal(col.OnUpdate.Expr); err != nil {
-				return nil, err
-			}
-		} else {
-			onUpdateExpr = nil
-		}
-
-		attr := &engine.Attribute{
-			Name:    col.Name,
-			Type:    col.Type,
-			Primary: col.IsPrimary(),
-			Comment: col.Comment,
-			Default: &plan.Default{
-				NullAbility:  col.Default.NullAbility,
-				OriginString: col.Default.OriginString,
-				Expr:         defaultExpr,
-			},
-			OnUpdate: &plan.OnUpdate{
-				Expr:         onUpdateExpr,
-				OriginString: col.OnUpdate.OriginString,
-			},
-			AutoIncrement: col.IsAutoIncrement(),
+		attr, err := AttrFromColDef(col)
+		if err != nil {
+			return nil, err
 		}
 		attrs = append(attrs, attr)
 	}
 	return
+}
+
+func AttrFromColDef(col *catalog.ColDef) (attrs *engine.Attribute, err error) {
+	var defaultVal *plan.Default
+	if len(col.Default) > 0 {
+		defaultVal = &plan.Default{}
+		if err := types.Decode(col.Default, defaultVal); err != nil {
+			return nil, err
+		}
+	}
+
+	var onUpdate *plan.OnUpdate
+	if len(col.OnUpdate) > 0 {
+		onUpdate = new(plan.OnUpdate)
+		if err := types.Decode(col.OnUpdate, onUpdate); err != nil {
+			return nil, err
+		}
+	}
+
+	attr := &engine.Attribute{
+		Name:          col.Name,
+		Type:          col.Type,
+		Primary:       col.IsPrimary(),
+		IsHidden:      col.IsHidden(),
+		IsRowId:       col.IsPhyAddr(),
+		Comment:       col.Comment,
+		Default:       defaultVal,
+		OnUpdate:      onUpdate,
+		AutoIncrement: col.IsAutoIncrement(),
+		ClusterBy:     col.IsClusterBy(),
+	}
+	return attr, nil
 }
 
 func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
@@ -100,60 +103,23 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		defs = append(defs, viewDef)
 	}
 
-	if len(schema.IndexInfos) != 0 {
-		indexDef := new(engine.ComputeIndexDef)
-		indexDef.Fields = make([][]string, 0)
-		for _, indexInfo := range schema.IndexInfos {
-			indexDef.IndexNames = append(indexDef.IndexNames, indexInfo.Name)
-			indexDef.TableNames = append(indexDef.TableNames, indexInfo.TableName)
-			indexDef.Uniques = append(indexDef.Uniques, indexInfo.Unique)
-			indexDef.Fields = append(indexDef.Fields, indexInfo.Field)
+	if len(schema.Constraint) > 0 {
+		c := new(engine.ConstraintDef)
+		if err := c.UnmarshalBinary(schema.Constraint); err != nil {
+			return nil, err
 		}
-		defs = append(defs, indexDef)
+		defs = append(defs, c)
 	}
 
 	for _, col := range schema.ColDefs {
 		if col.IsPhyAddr() {
 			continue
 		}
-
-		defaultExpr := &plan.Expr{}
-		if col.Default.Expr != nil {
-			if err := defaultExpr.Unmarshal(col.Default.Expr); err != nil {
-				return nil, err
-			}
-		} else {
-			defaultExpr = nil
+		attr, err := AttrFromColDef(col)
+		if err != nil {
+			return nil, err
 		}
-
-		onUpdateExpr := &plan.Expr{}
-		if col.OnUpdate.Expr != nil {
-			if err := onUpdateExpr.Unmarshal(col.OnUpdate.Expr); err != nil {
-				return nil, err
-			}
-		} else {
-			onUpdateExpr = nil
-		}
-
-		def := &engine.AttributeDef{
-			Attr: engine.Attribute{
-				Name:    col.Name,
-				Type:    col.Type,
-				Primary: col.IsPrimary(),
-				Comment: col.Comment,
-				Default: &plan.Default{
-					NullAbility:  col.Default.NullAbility,
-					OriginString: col.Default.OriginString,
-					Expr:         defaultExpr,
-				},
-				OnUpdate: &plan.OnUpdate{
-					Expr:         onUpdateExpr,
-					OriginString: col.OnUpdate.OriginString,
-				},
-				AutoIncrement: col.IsAutoIncrement(),
-			},
-		}
-		defs = append(defs, def)
+		defs = append(defs, &engine.AttributeDef{Attr: *attr})
 	}
 	if schema.SortKey != nil && schema.SortKey.IsPrimary() {
 		pk := new(engine.PrimaryIndexDef)
@@ -193,7 +159,11 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 		switch defVal := def.(type) {
 		case *engine.AttributeDef:
 			if idx, ok := pkMap[defVal.Attr.Name]; ok {
-				if err = schema.AppendPKColWithAttribute(defVal.Attr, idx); err != nil {
+				if err = schema.AppendSortColWithAttribute(defVal.Attr, idx, true); err != nil {
+					return
+				}
+			} else if defVal.Attr.ClusterBy {
+				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, false); err != nil {
 					return
 				}
 			} else {
@@ -217,20 +187,13 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 
 		case *engine.PartitionDef:
 			schema.Partition = defVal.Partition
-
 		case *engine.ViewDef:
 			schema.View = defVal.View
-
-		case *engine.ComputeIndexDef:
-			for i := range defVal.IndexNames {
-				schema.IndexInfos = append(schema.IndexInfos, &catalog.ComputeIndexInfo{
-					Name:      defVal.IndexNames[i],
-					TableName: defVal.TableNames[i],
-					Unique:    defVal.Uniques[i],
-					Field:     defVal.Fields[i],
-				})
+		case *engine.ConstraintDef:
+			schema.Constraint, err = defVal.MarshalBinary()
+			if err != nil {
+				return nil, err
 			}
-
 		default:
 			// We will not deal with other cases for the time being
 		}
@@ -241,7 +204,7 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 	return
 }
 
-// this function used in Precommit. CN won't give PrimaryIndexDef and ComputeIndexDef
+// this function used in PrecommitWrite. CN won't give PrimaryIndexDef and ComputeIndexDef
 // HandleDefsToSchema assume there is at most one AttributeDef with Primary true. TODO:
 func HandleDefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, err error) {
 	schema = catalog.NewEmptySchema(name)
@@ -252,11 +215,15 @@ func HandleDefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Sc
 		case *engine.AttributeDef:
 			if defVal.Attr.Primary {
 				if have_one {
-					panic(moerr.NewInternalError("%s more one pk", name))
+					panic(moerr.NewInternalErrorNoCtx("%s more one pk", name))
 				} else {
 					have_one = true
 				}
-				if err = schema.AppendPKColWithAttribute(defVal.Attr, 0); err != nil {
+				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, true); err != nil {
+					return
+				}
+			} else if defVal.Attr.ClusterBy {
+				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, false); err != nil {
 					return
 				}
 			} else {
@@ -287,6 +254,10 @@ func HandleDefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Sc
 		case *engine.CommentDef:
 			schema.Comment = defVal.Comment
 
+		case *engine.ConstraintDef:
+			if schema.Constraint, err = defVal.MarshalBinary(); err != nil {
+				return nil, err
+			}
 		default:
 			// We will not deal with other cases for the time being
 		}

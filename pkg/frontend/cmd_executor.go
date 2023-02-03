@@ -21,16 +21,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // CmdExecutor handle the command from the client
 type CmdExecutor interface {
-	PrepareSessionBeforeExecRequest(*Session)
+	SetSession(*Session)
+
+	GetSession() *Session
 
 	// ExecRequest execute the request and get the response
-	ExecRequest(context.Context, *Request) (*Response, error)
+	ExecRequest(context.Context, *Session, *Request) (*Response, error)
+
+	//SetCancelFunc saves a cancel function for active request.
+	SetCancelFunc(context.CancelFunc)
+
+	// CancelRequest cancels the active request
+	CancelRequest()
 
 	Close()
 }
@@ -92,7 +99,6 @@ var _ StmtExecutor = &resultSetStmtExecutor{}
 func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec StmtExecutor, beginInstant time.Time, envStmt string, useEnv bool) error {
 	var err, err2 error
 	var cmpBegin, runBegin time.Time
-	pu := ses.GetParameterUnit()
 	ctx = RecordStatement(ctx, ses, proc, stmtExec, beginInstant, envStmt, useEnv)
 	err = stmtExec.Setup(ctx, ses)
 	if err != nil {
@@ -122,9 +128,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 		goto handleRet
 	}
 
-	if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-		logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
-	}
+	logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
 
 	err = stmtExec.ResponseBeforeExec(ctx, ses)
 	if err != nil {
@@ -138,9 +142,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 		goto handleRet
 	}
 
-	if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-		logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
-	}
+	logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 
 	_ = stmtExec.RecordExecPlan(ctx)
 
@@ -193,11 +195,9 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 		txnErr = ses.TxnCommitSingleStatement(stmt)
 		if txnErr != nil {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
-			trace.EndStatement(ctx, txnErr)
 			logStatementStatus(ctx, ses, stmt, fail, txnErr)
 			return txnErr
 		}
-		trace.EndStatement(ctx, nil)
 		logStatementStatus(ctx, ses, stmt, success, nil)
 	} else {
 		incStatementErrorsCounter(tenant, stmt)
@@ -214,7 +214,6 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
-		trace.EndStatement(ctx, bse.err)
 		logutil.Error(bse.err.Error())
 		txnErr = ses.TxnRollbackSingleStatement(stmt)
 		if txnErr != nil {
@@ -280,13 +279,13 @@ func (bse *baseStmtExecutor) VerifyTxn(ctx context.Context, ses *Session) error 
 		if !can {
 			//is ddl statement
 			if IsDDL(stmt) {
-				return errorOnlyCreateStatement
+				return moerr.NewInternalError(ctx, onlyCreateStatementErrorInfo())
 			} else if IsAdministrativeStatement(stmt) {
-				return errorAdministrativeStatement
+				return moerr.NewInternalError(ctx, administrativeCommandIsUnsupportedInTxnErrorInfo())
 			} else if IsParameterModificationStatement(stmt) {
-				return errorParameterModificationInTxn
+				return moerr.NewInternalError(ctx, parameterModificationInTxnErrorInfo())
 			} else {
-				return errorUnclassifiedStatement
+				return moerr.NewInternalError(ctx, unclassifiedStatementInUncommittedTxnErrorInfo())
 			}
 		}
 	}
@@ -301,9 +300,8 @@ func (bse *baseStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session
 	var err, retErr error
 	if bse.GetStatus() == stmtExecSuccess {
 		resp := NewOkResponse(bse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
-		if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
-			trace.EndStatement(ctx, err)
-			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
+		if err = ses.GetMysqlProtocol().SendResponse(ctx, resp); err != nil {
+			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 			logStatementStatus(ctx, ses, bse.GetAst(), fail, retErr)
 			return retErr
 		}

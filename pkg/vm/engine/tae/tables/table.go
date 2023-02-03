@@ -23,7 +23,7 @@ import (
 type dataTable struct {
 	meta   *catalog.TableEntry
 	bufMgr base.INodeManager
-	aBlk   *dataBlock
+	aBlk   *ablock
 }
 
 func newTable(meta *catalog.TableEntry, bufMgr base.INodeManager) *dataTable {

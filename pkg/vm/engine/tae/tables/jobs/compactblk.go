@@ -204,7 +204,7 @@ func (task *compactBlockTask) Execute() (err error) {
 			var deltaLoc string
 			deltaLoc, err = blockio.EncodeMetaLocWithObject(
 				ablockTask.blocks[1].GetExtent(),
-				0,
+				uint32(deletes.Length()),
 				ablockTask.blocks)
 			if err != nil {
 				return
@@ -216,6 +216,13 @@ func (task *compactBlockTask) Execute() (err error) {
 		// if err = oldBlkData.ReplayIndex(); err != nil {
 		// 	return err
 		// }
+	}
+	if !table.GetSchema().HasSortKey() && task.created != nil {
+		n := task.created.Rows()
+		task.mapping = make([]uint32, n)
+		for i := 0; i < n; i++ {
+			task.mapping[i] = uint32(i)
+		}
 	}
 	txnEntry := txnentries.NewCompactBlockEntry(
 		task.txn,
@@ -284,7 +291,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		var deltaLoc string
 		deltaLoc, err = blockio.EncodeMetaLocWithObject(
 			ioTask.blocks[1].GetExtent(),
-			0,
+			uint32(deletes.Length()),
 			ioTask.blocks)
 		if err != nil {
 			return
@@ -293,7 +300,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 			return
 		}
 	}
-	if err = newBlkData.ReplayIndex(); err != nil {
+	if err = newBlkData.Init(); err != nil {
 		return
 	}
 	return

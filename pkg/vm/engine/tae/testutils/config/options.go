@@ -105,7 +105,6 @@ func WithQuickScanAndCKPOpts2(in *options.Options, factor int) (opts *options.Op
 	opts.CheckpointCfg.FlushInterval *= time.Duration(factor)
 	opts.CheckpointCfg.MinCount = int64(factor)
 	opts.CheckpointCfg.IncrementalInterval *= time.Duration(factor)
-	opts.CheckpointCfg.GlobalInterval *= time.Duration(factor)
 	return opts
 }
 
@@ -120,7 +119,35 @@ func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	opts.CheckpointCfg.FlushInterval = time.Millisecond * 10
 	opts.CheckpointCfg.MinCount = 1
 	opts.CheckpointCfg.IncrementalInterval = time.Millisecond * 20
-	opts.CheckpointCfg.GlobalInterval = time.Millisecond * 100
+	opts.CheckpointCfg.GlobalMinCount = 1
+	opts.CheckpointCfg.GCCheckpointInterval = time.Millisecond * 10
+	opts.GCCfg = new(options.GCCfg)
+	opts.GCCfg.ScanGCInterval = time.Millisecond * 10
+	opts.GCCfg.GCTTL = time.Millisecond * 1
+	opts.CatalogCfg = new(options.CatalogCfg)
+	opts.CatalogCfg.GCInterval = time.Millisecond * 1
+	return opts
+}
+
+func WithQuickScanAndCKPAndGCOpts(in *options.Options) (opts *options.Options) {
+	if in == nil {
+		opts = new(options.Options)
+	} else {
+		opts = in
+	}
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScanInterval = time.Millisecond * 10
+	opts.CheckpointCfg.FlushInterval = time.Millisecond * 10
+	opts.CheckpointCfg.MinCount = 1
+	opts.CheckpointCfg.IncrementalInterval = time.Millisecond * 20
+	opts.CheckpointCfg.GlobalMinCount = 1
+
+	opts.GCCfg = new(options.GCCfg)
+	// ScanGCInterval does not need to be too fast, because manual gc will be performed in the case
+	opts.GCCfg.ScanGCInterval = time.Second * 10
+	opts.CatalogCfg = new(options.CatalogCfg)
+	opts.CatalogCfg.GCInterval = time.Millisecond * 1
+	opts.GCCfg.GCTTL = time.Millisecond * 1
 	return opts
 }
 
@@ -135,7 +162,7 @@ func WithOpts(in *options.Options, factor float64) (opts *options.Options) {
 	opts.CheckpointCfg.FlushInterval = time.Second * time.Duration(factor)
 	opts.CheckpointCfg.MinCount = 1 * int64(factor)
 	opts.CheckpointCfg.IncrementalInterval = time.Second * 2 * time.Duration(factor)
-	opts.CheckpointCfg.GlobalInterval = time.Second * 10 * time.Duration(factor)
+	opts.CheckpointCfg.GlobalMinCount = 10
 	return opts
 }
 
@@ -149,6 +176,6 @@ func WithLongScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	opts.CheckpointCfg.ScanInterval = time.Hour
 	opts.CheckpointCfg.MinCount = 100000000
 	opts.CheckpointCfg.IncrementalInterval = time.Hour
-	opts.CheckpointCfg.GlobalInterval = time.Hour
+	opts.CheckpointCfg.GlobalMinCount = 10000000
 	return opts
 }

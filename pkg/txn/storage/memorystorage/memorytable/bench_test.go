@@ -33,32 +33,99 @@ func BenchmarkTableInsert(b *testing.B) {
 	}
 }
 
-func BenchmarkTableInsertAndGet(b *testing.B) {
+func BenchmarkParallelTableUpsert(b *testing.B) {
+	table := NewTable[Int, int, TestRow]()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		var row TestRow
+		tx := NewTransaction(Time{})
+		i := 0
+		for pb.Next() {
+			row.key = Int(i)
+			row.value = i
+			err := table.Upsert(tx, row)
+			assert.Nil(b, err)
+		}
+	})
+}
+
+func BenchmarkTableBatchInsert(b *testing.B) {
 	table := NewTable[Int, int, TestRow]()
 	var row TestRow
 	tx := NewTransaction(Time{})
+	bat, err := table.NewBatch(tx)
+	if err != nil {
+		b.Fatal(err)
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		row.key = Int(i)
 		row.value = i
-		err := table.Insert(tx, row)
+		err := bat.Insert(row)
 		assert.Nil(b, err)
-		_, err = table.Get(tx, row.key)
-		assert.Nil(b, err)
+	}
+	bat.Commit()
+}
+
+func BenchmarkParallelTableBatchInsert(b *testing.B) {
+	table := NewTable[Int, int, TestRow]()
+	b.RunParallel(func(pb *testing.PB) {
+		var row TestRow
+		tx := NewTransaction(Time{})
+		bat, err := table.NewBatch(tx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		i := 0
+		for pb.Next() {
+			row.key = Int(i)
+			row.value = i
+			err := bat.Insert(row)
+			assert.Nil(b, err)
+			i++
+		}
+		bat.Commit()
+	})
+}
+
+func BenchmarkTableGet(b *testing.B) {
+	table := NewTable[Int, int, TestRow]()
+	var row TestRow
+	tx := NewTransaction(Time{})
+	row.key = Int(42)
+	row.value = 42
+	err := table.Insert(tx, row)
+	assert.Nil(b, err)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		value, err := table.Get(tx, Int(42))
+		if err != nil {
+			b.Fatal(err)
+		}
+		if value != 42 {
+			b.Fatal()
+		}
 	}
 }
 
-func BenchmarkTableInsertAndCommit(b *testing.B) {
+func BenchmarkParallelTableGet(b *testing.B) {
 	table := NewTable[Int, int, TestRow]()
 	var row TestRow
+	tx := NewTransaction(Time{})
+	row.key = Int(42)
+	row.value = 42
+	err := table.Insert(tx, row)
+	assert.Nil(b, err)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		tx := NewTransaction(Time{})
-		row.key = Int(i)
-		row.value = i
-		err := table.Insert(tx, row)
-		assert.Nil(b, err)
-		err = tx.Commit(Time{})
-		assert.Nil(b, err)
-	}
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			value, err := table.Get(tx, Int(42))
+			if err != nil {
+				b.Fatal(err)
+			}
+			if value != 42 {
+				b.Fatal()
+			}
+		}
+	})
 }

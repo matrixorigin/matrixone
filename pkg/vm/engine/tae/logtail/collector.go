@@ -96,7 +96,7 @@ func (entry *DirtyTreeEntry) String() string {
 
 type dirtyCollector struct {
 	// sourcer
-	sourcer *LogtailMgr
+	sourcer *Manager
 
 	// context
 	catalog     *catalog.Catalog
@@ -113,7 +113,7 @@ type dirtyCollector struct {
 }
 
 func NewDirtyCollector(
-	sourcer *LogtailMgr,
+	sourcer *Manager,
 	clock clock.Clock,
 	catalog *catalog.Catalog,
 	interceptor DirtyEntryInterceptor) *dirtyCollector {
@@ -123,7 +123,7 @@ func NewDirtyCollector(
 		interceptor: interceptor,
 		clock:       types.NewTsAlloctor(clock),
 	}
-	collector.storage.entries = btree.NewBTreeGOptions[*DirtyTreeEntry](
+	collector.storage.entries = btree.NewBTreeGOptions(
 		func(a, b *DirtyTreeEntry) bool {
 			return a.start.Less(b.start) && a.end.Less(b.end)
 		}, btree.Options{
@@ -392,7 +392,7 @@ func (d *dirtyCollector) tryCompactTree(
 					// TODO: may be put it to post replay process
 					// FIXME
 					if blk.HasPersistedData() {
-						blk.GetBlockData().FreeData()
+						blk.GetBlockData().TryUpgrade()
 					}
 					dirtySeg.Shrink(id)
 					continue

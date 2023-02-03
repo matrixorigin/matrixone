@@ -15,6 +15,7 @@
 package binary
 
 import (
+	"context"
 	"strings"
 	"unicode"
 
@@ -37,7 +38,7 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 	resultType := types.T_date.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg("to_date format", "not constant")
+		return nil, moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
 	}
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -49,13 +50,13 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		datestr := dateVector.GetString(0)
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
-		success := strToDate(time, datestr, formatMask, ctx)
+		success := strToDate(proc.Ctx, time, datestr, formatMask, ctx)
 		if !success {
 			// should be null
 			return proc.AllocScalarNullVector(resultType), nil
 		} else {
 			if types.ValidDate(int32(time.year), time.month, time.day) {
-				resCol := types.FromCalendar(int32(time.year), time.month, time.day)
+				resCol := types.DateFromCalendar(int32(time.year), time.month, time.day)
 				return vector.NewConstFixed[types.Date](resultType, 1, resCol, proc.Mp()), nil
 			} else {
 				// should be null
@@ -65,7 +66,7 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	} else {
 		datestrs := vector.MustStrCols(dateVector)
 		rNsp := nulls.NewWithSize(len(datestrs))
-		resCol, err := CalcStrToDate(datestrs, formatMask, dateVector.Nsp, rNsp)
+		resCol, err := CalcStrToDate(proc.Ctx, datestrs, formatMask, dateVector.Nsp, rNsp)
 		if err != nil {
 			return nil, err
 		}
@@ -82,7 +83,7 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 
 	resultType := types.T_datetime.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg("to_date format", "not constant")
+		return nil, moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
 	}
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -94,13 +95,13 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		datetimestr := dateVector.GetString(0)
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
-		success := strToDate(time, datetimestr, formatMask, ctx)
+		success := strToDate(proc.Ctx, time, datetimestr, formatMask, ctx)
 		if !success {
 			// should be null
 			return proc.AllocScalarNullVector(resultType), nil
 		} else {
 			if types.ValidDatetime(int32(time.year), time.month, time.day) && types.ValidTimeInDay(time.hour, time.minute, time.second) {
-				resCol := types.FromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
+				resCol := types.DatetimeFromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
 				return vector.NewConstFixed[types.Datetime](resultType, 1, resCol, proc.Mp()), nil
 			} else {
 				// should be null
@@ -110,7 +111,7 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	} else {
 		datetimestrs := vector.MustStrCols(dateVector)
 		rNsp := nulls.NewWithSize(len(datetimestrs))
-		resCol, err := CalcStrToDatetime(datetimestrs, formatMask, dateVector.Nsp, rNsp)
+		resCol, err := CalcStrToDatetime(proc.Ctx, datetimestrs, formatMask, dateVector.Nsp, rNsp)
 		if err != nil {
 			return nil, err
 		}
@@ -127,7 +128,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 	resultType := types.T_time.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg("to_date format", "not constant")
+		return nil, moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
 	}
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -140,13 +141,13 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
-		success := strToDate(time, timestr, formatMask, ctx)
+		success := strToDate(proc.Ctx, time, timestr, formatMask, ctx)
 		if !success {
 			// should be null
 			return proc.AllocScalarNullVector(resultType), nil
 		} else {
 			if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
-				resCol := types.FromTimeClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
+				resCol := types.TimeFromClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
 				return vector.NewConstFixed[types.Time](resultType, 1, resCol, proc.Mp()), nil
 			} else {
 				// should be null
@@ -156,7 +157,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	} else {
 		timestrs := vector.MustStrCols(dateVector)
 		rNsp := nulls.NewWithSize(len(timestrs))
-		resCol, err := CalcStrToTime(timestrs, formatMask, dateVector.Nsp, rNsp)
+		resCol, err := CalcStrToTime(proc.Ctx, timestrs, formatMask, dateVector.Nsp, rNsp)
 		if err != nil {
 			return nil, err
 		}
@@ -166,20 +167,20 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	}
 }
 
-func CalcStrToDatetime(timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Datetime, error) {
+func CalcStrToDatetime(ctx context.Context, timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Datetime, error) {
 	res := make([]types.Datetime, len(timestrs))
 	time := NewGeneralTime()
 	for idx, timestr := range timestrs {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		success := CoreStrToDate(time, timestr, format)
+		success := CoreStrToDate(ctx, time, timestr, format)
 		if !success {
 			// should be null
 			nulls.Add(rNsp, uint64(idx))
 		} else {
 			if types.ValidDatetime(int32(time.year), time.month, time.day) && types.ValidTimeInDay(time.hour, time.minute, time.second) {
-				res[idx] = types.FromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
+				res[idx] = types.DatetimeFromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
 			} else {
 				// should be null
 				nulls.Add(rNsp, uint64(idx))
@@ -190,20 +191,20 @@ func CalcStrToDatetime(timestrs []string, format string, ns *nulls.Nulls, rNsp *
 	return res, nil
 }
 
-func CalcStrToDate(timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Date, error) {
+func CalcStrToDate(ctx context.Context, timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Date, error) {
 	res := make([]types.Date, len(timestrs))
 	time := NewGeneralTime()
 	for idx, timestr := range timestrs {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		success := CoreStrToDate(time, timestr, format)
+		success := CoreStrToDate(ctx, time, timestr, format)
 		if !success {
 			// should be null
 			nulls.Add(rNsp, uint64(idx))
 		} else {
 			if types.ValidDate(int32(time.year), time.month, time.day) {
-				res[idx] = types.FromCalendar(int32(time.year), time.month, time.day)
+				res[idx] = types.DateFromCalendar(int32(time.year), time.month, time.day)
 			} else {
 				// should be null
 				nulls.Add(rNsp, uint64(idx))
@@ -214,20 +215,20 @@ func CalcStrToDate(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 	return res, nil
 }
 
-func CalcStrToTime(timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Time, error) {
+func CalcStrToTime(ctx context.Context, timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Time, error) {
 	res := make([]types.Time, len(timestrs))
 	time := NewGeneralTime()
 	for idx, timestr := range timestrs {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		success := CoreStrToDate(time, timestr, format)
+		success := CoreStrToDate(ctx, time, timestr, format)
 		if !success {
 			// should be null
 			nulls.Add(rNsp, uint64(idx))
 		} else {
 			if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
-				res[idx] = types.FromTimeClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
+				res[idx] = types.TimeFromClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
 			} else {
 				// should be null
 				nulls.Add(rNsp, uint64(idx))
@@ -238,13 +239,13 @@ func CalcStrToTime(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 	return res, nil
 }
 
-func CoreStrToDate(t *GeneralTime, date string, format string) bool {
+func CoreStrToDate(cctx context.Context, t *GeneralTime, date string, format string) bool {
 	ctx := make(map[string]int)
-	success := strToDate(t, date, format, ctx)
+	success := strToDate(cctx, t, date, format, ctx)
 	if !success {
 		return false
 	}
-	if err := checkMysqlTime(t, ctx); err != nil {
+	if err := checkMysqlTime(cctx, t, ctx); err != nil {
 		return false
 	}
 	return true
@@ -252,7 +253,7 @@ func CoreStrToDate(t *GeneralTime, date string, format string) bool {
 
 // strToDate converts date string according to format,
 // the value will be stored in argument ctx. the second return value is true when success
-func strToDate(t *GeneralTime, date string, format string, ctx map[string]int) (success bool) {
+func strToDate(cctx context.Context, t *GeneralTime, date string, format string, ctx map[string]int) (success bool) {
 	date = trimWhiteSpace(date)
 	format = trimWhiteSpace(format)
 
@@ -280,17 +281,17 @@ func strToDate(t *GeneralTime, date string, format string, ctx map[string]int) (
 		return false
 	}
 
-	return strToDate(t, dateRemain, formatRemain, ctx)
+	return strToDate(cctx, t, dateRemain, formatRemain, ctx)
 }
 
 // checkMysqlTime fixes the Time use the values in the context.
-func checkMysqlTime(t *GeneralTime, ctx map[string]int) error {
+func checkMysqlTime(cctx context.Context, t *GeneralTime, ctx map[string]int) error {
 	if valueAMorPm, ok := ctx["%p"]; ok {
 		if _, ok := ctx["%H"]; ok {
-			return moerr.NewInternalError("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
+			return moerr.NewInternalError(cctx, "Truncated incorrect %-.64s value: '%-.128s'", "time", t)
 		}
 		if t.getHour() == 0 {
-			return moerr.NewInternalError("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
+			return moerr.NewInternalError(cctx, "Truncated incorrect %-.64s value: '%-.128s'", "time", t)
 		}
 		if t.getHour() == 12 {
 			// 12 is a special hour.

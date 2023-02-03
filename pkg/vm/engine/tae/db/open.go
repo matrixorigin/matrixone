@@ -15,14 +15,19 @@
 package db
 
 import (
+	"context"
 	"path"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
@@ -107,7 +112,10 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		dataFactory)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
-	db.LogtailMgr = logtail.NewLogtailMgr(db.Opts.LogtailCfg.PageSize, db.Opts.Clock)
+	db.LogtailMgr = logtail.NewManager(
+		int(db.Opts.LogtailCfg.PageSize),
+		db.Opts.Clock,
+	)
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
 	db.TxnMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
@@ -120,7 +128,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		checkpoint.WithCollectInterval(opts.CheckpointCfg.ScanInterval),
 		checkpoint.WithMinCount(int(opts.CheckpointCfg.MinCount)),
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
-		checkpoint.WithMinGlobalInterval(opts.CheckpointCfg.GlobalInterval))
+		checkpoint.WithGlobalMinCount(int(opts.CheckpointCfg.GlobalMinCount)),
+		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval))
 
 	now := time.Now()
 	checkpointed, err := db.BGCheckpointRunner.Replay(dataFactory)
@@ -143,12 +152,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	calibrationOp := newCalibrationOp(db)
-	gcCollector := newGarbageCollector(
-		db,
-		opts.CheckpointCfg.FlushInterval)
-	scanner.RegisterOp(calibrationOp)
-	scanner.RegisterOp(gcCollector)
+	mergeOp := newMergeTaskBuiler(db)
+	scanner.RegisterOp(mergeOp)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
 
@@ -156,6 +161,74 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		opts.CheckpointCfg.ScanInterval,
 		scanner)
 	db.BGScanner.Start()
+	// TODO: WithGCInterval requires configuration parameters
+	db.DiskCleaner = gc2.NewDiskCleaner(db.Fs, db.BGCheckpointRunner, db.Catalog)
+	db.DiskCleaner.Start()
+	db.DiskCleaner.AddChecker(
+		func(item any) bool {
+			checkpoint := item.(*checkpoint.CheckpointEntry)
+			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
+			return !checkpoint.GetEnd().GreaterEq(ts)
+		})
+	// Init gc manager at last
+	// TODO: clean-try-gc requires configuration parameters
+	db.GCManager = gc.NewManager(
+		gc.WithCronJob(
+			"clean-transfer-table",
+			opts.CheckpointCfg.FlushInterval,
+			func(_ context.Context) (err error) {
+				db.TransferTable.RunTTL(time.Now())
+				return
+			}),
+
+		gc.WithCronJob(
+			"disk-gc",
+			opts.GCCfg.ScanGCInterval,
+			func(ctx context.Context) (err error) {
+				db.DiskCleaner.GC(ctx)
+				return
+			}),
+		gc.WithCronJob(
+			"checkpoint-gc",
+			opts.CheckpointCfg.GCCheckpointInterval,
+			func(ctx context.Context) error {
+				if opts.CheckpointCfg.DisableGCCheckpoint {
+					return nil
+				}
+				consumed := db.DiskCleaner.GetMaxConsumed()
+				if consumed == nil {
+					return nil
+				}
+				return db.BGCheckpointRunner.GCByTS(ctx, consumed.GetEnd())
+			}),
+		gc.WithCronJob(
+			"catalog-gc",
+			opts.CatalogCfg.GCInterval,
+			func(ctx context.Context) error {
+				if opts.CatalogCfg.DisableGC {
+					return nil
+				}
+				consumed := db.DiskCleaner.GetMaxConsumed()
+				if consumed == nil {
+					return nil
+				}
+				db.Catalog.GCByTS(ctx, consumed.GetEnd())
+				return nil
+			}),
+		gc.WithCronJob(
+			"logtail-gc",
+			opts.CheckpointCfg.GCCheckpointInterval,
+			func(ctx context.Context) error {
+				global := db.BGCheckpointRunner.MaxGlobalCheckpoint()
+				if global != nil {
+					db.LogtailMgr.GCByTS(ctx, global.GetEnd())
+				}
+				return nil
+			},
+		),
+	)
+
+	db.GCManager.Start()
 
 	// For debug or test
 	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))

@@ -153,12 +153,12 @@ func (txn *Txn) Prepare() (pts types.TS, err error) {
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		logutil.Warn("tae : txn is not found in TxnManager")
 		//txn.Err = ErrTxnNotFound
-		return types.TS{}, moerr.NewTxnNotFound()
+		return types.TS{}, moerr.NewTxnNotFoundNoCtx()
 	}
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(state))
-		txn.Err = moerr.NewTxnNotActive(txnif.TxnStrState(state))
+		txn.Err = moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state))
 		return types.TS{}, txn.Err
 	}
 	txn.Add(1)
@@ -189,7 +189,7 @@ func (txn *Txn) Rollback() (err error) {
 	//idempotent check
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		logutil.Warnf("tae : txn %s is not found in TxnManager", txn.GetID())
-		err = moerr.NewTxnNotFound()
+		err = moerr.NewTxnNotFoundNoCtx()
 		return
 	}
 	if txn.Store.IsReadonly() {
@@ -217,12 +217,12 @@ func (txn *Txn) CommittingInRecovery() (err error) {
 
 func (txn *Txn) doCommitting(inRecovery bool) (err error) {
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
-		err = moerr.NewTxnNotFound()
+		err = moerr.NewTxnNotFoundNoCtx()
 		return
 	}
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStatePrepared {
-		return moerr.NewInternalError(
+		return moerr.NewInternalErrorNoCtx(
 			"stat not prepared, unexpected txn status : %s",
 			txnif.TxnStrState(state),
 		)
@@ -258,7 +258,7 @@ func (txn *Txn) CommitInRecovery() (err error) {
 
 func (txn *Txn) doCommit(inRecovery bool) (err error) {
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
-		err = moerr.NewTxnNotFound()
+		err = moerr.NewTxnNotFoundNoCtx()
 		return
 	}
 	// Skip readonly txn

@@ -34,7 +34,7 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
@@ -46,7 +46,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 	vec, err := colexec.EvalExpr(bat, proc, ap.E)
 	if err != nil {
 		bat.Clean(proc.Mp())
@@ -54,11 +54,11 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	}
 	defer vec.Free(proc.Mp())
 	if proc.OperatorOutofMemory(int64(vec.Size())) {
-		return false, moerr.NewOOM()
+		return false, moerr.NewOOM(proc.Ctx)
 	}
 	anal.Alloc(int64(vec.Size()))
 	if !vec.GetType().IsBoolean() {
-		return false, moerr.NewInvalidInput("filter condition is not boolean")
+		return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 	}
 	bs := vector.GetColumn[bool](vec)
 	if vec.IsScalar() {
@@ -75,7 +75,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
 	}
-	anal.Output(bat)
+	anal.Output(bat, isLast)
 	proc.SetInputBatch(bat)
 	return false, nil
 }

@@ -49,7 +49,9 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 	}
 	return chain
 }
-
+func (chain *DeleteChain) Close() {
+	chain.mvcc = nil
+}
 func (chain *DeleteChain) AddDeleteCnt(cnt uint32) {
 	chain.cnt.Add(cnt)
 }

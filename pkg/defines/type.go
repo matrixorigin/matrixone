@@ -16,6 +16,7 @@ package defines
 
 import (
 	"math"
+	"sync"
 )
 
 // information from: https://dev.mysql.com/doc/internals/en/com-query-response.html
@@ -84,6 +85,8 @@ func (typ *MysqlType) GetLength(width int32) uint32 {
 	case MYSQL_TYPE_VARCHAR, MYSQL_TYPE_STRING, MYSQL_TYPE_BLOB, MYSQL_TYPE_TEXT:
 		return uint32(width) * 3
 	case MYSQL_TYPE_DATE:
+		return 64
+	case MYSQL_TYPE_TIME:
 		return 64
 	case MYSQL_TYPE_DATETIME:
 		return 64
@@ -155,8 +158,25 @@ type TenantIDKey struct{}
 type UserIDKey struct{}
 type RoleIDKey struct{}
 
-// use SqlKey{} to get string value from Context
+// EngineKey use EngineKey{} to get engine from Context
+type EngineKey struct{}
+
+// SqlKey use SqlKey{} to get string value from Context
 type SqlKey struct{}
 
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
+
+// TemporaryDN use TemporaryDN to get temporary storage from Context
+type TemporaryDN struct{}
+
+type AutoIncrCaches struct {
+	Mu             *sync.Mutex
+	AutoIncrCaches map[string]AutoIncrCache
+}
+
+type AutoIncrCache struct {
+	CurNum uint64
+	MaxNum uint64
+	Step   uint64
+}

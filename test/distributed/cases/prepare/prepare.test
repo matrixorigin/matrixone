@@ -184,3 +184,35 @@ deallocate prepare __mo_stmt_id_1;
 prepare __mo_stmt_id_1 from 'select id, name, email, age from user';
 execute __mo_stmt_id_1;
 deallocate prepare __mo_stmt_id_1;
+create table algo_offline (algo_id int(11) unsigned not null, algo_name varchar(50) not null);
+prepare stmt1 from select count(*) from algo_offline where (algo_name like ? or algo_id like ?);
+set @a="aa";
+set @b="bb";
+execute stmt1 using @a, @b;
+deallocate prepare stmt1;
+drop table if exists t1;
+create table t1 (a int, b int);
+prepare stmt1 from 'show columns from t1';
+execute stmt1;
+prepare stmt1 from 'show variables like "aaaa"';
+execute stmt1;
+
+prepare __mo_stmt_id_1 from 'INSERT INTO user  ( id, name, age )  VALUES  ( ?, ?,? )';
+set @__mo_stmt_var_0 = 7,@__mo_stmt_var_1 = "test_save_7" ,@__mo_stmt_var_2 = 7;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1,@__mo_stmt_var_2;
+reset prepare __mo_stmt_id_1;
+deallocate prepare __mo_stmt_id_1;
+
+drop table if exists t1;
+create table t1( a int unique key,  b int,  c int );
+prepare stmt1 from 'INSERT INTO t1 values(1, 2, 3)';
+execute stmt1;
+execute stmt1;
+select * from t1;
+
+prepare stmt1 from 'update t1 set b = ? where a = ?';
+set @varb = 22;
+set @vara = 1;
+execute stmt1 using @varb,@vara;
+select * from t1;
+drop table t1;

@@ -16,8 +16,8 @@ package compile
 
 import (
 	"context"
-	"sync"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -33,6 +33,10 @@ import (
 
 type (
 	TxnOperator = client.TxnOperator
+)
+
+const (
+	MinBlockNum = 200
 )
 
 // type of scope
@@ -53,6 +57,8 @@ const (
 	Update
 	InsertValues
 	TruncateTable
+	AlterView
+	MergeInsert
 )
 
 // Source contains information of a relation which will be used in execution,
@@ -106,11 +112,14 @@ type Scope struct {
 	Proc *process.Process
 
 	Reg *process.WaitRegister
+
+	UuidToRegIdx []UuidToRegIdx
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
 type scopeContext struct {
 	id       int32
+	plan     *plan.Plan
 	scope    *Scope
 	root     *scopeContext
 	parent   *scopeContext
@@ -123,14 +132,9 @@ type scopeContext struct {
 type anaylze struct {
 	// curr is the current index of plan
 	curr      int
+	isFirst   bool
 	qry       *plan.Query
 	analInfos []*process.AnalyzeInfo
-}
-
-type Server struct {
-	sync.Mutex
-	id uint64
-	mp map[uint64]*process.WaitRegister // k = id, v = reg
 }
 
 // Compile contains all the information needed for compilation.
@@ -164,4 +168,14 @@ type Compile struct {
 	cnList engine.Nodes
 	// ast
 	stmt tree.Statement
+
+	// when we construct the scope, compileTableScan will new a scope, the magic is
+	// remote, but now the tempEngine is just standlone. So for now use this to read
+	// table locally. But int the future, this will disappear.
+	isTemporaryScan bool
+}
+
+type UuidToRegIdx struct {
+	Uuid uuid.UUID
+	Idx  int
 }

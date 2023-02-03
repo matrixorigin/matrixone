@@ -11,6 +11,24 @@ select role_id,role_name,owner from mo_catalog.mo_role where role_name in ("moad
 create account account1 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 -- @session:id=2&user=account1:admin&password=123456
 select role_id,role_name,owner from mo_catalog.mo_role;
+show databases;
+show grants;
+use system;
+show triggers;
+use mo_catalog;
+show columns from mo_tables;
+select datname, dat_createsql from mo_database;
+select relname from mo_tables where relname="sql_statement_total";
+select relname from mo_tables where relname="mo_user";
+select relname from mo_tables where relname="tables";
+select user_name,authentication_string from mo_user;
+select role_name from mo_role;
+create database account_db;
+use account_db;
+show tables;
+create table a(col int);
+show create table a;
+show tables;
 -- @session
 
 --public只有连接权限
@@ -19,8 +37,7 @@ show databases;
 -- @session
 
 --内置表不能增删改
--- @bvt:issue#5707
-update mo_catalog.mo_tables set relanme='mo_aaaa';
+update mo_catalog.mo_tables set relname='mo_aaaa';
 insert into mo_catalog.mo_role values (1763,'apple',0,1,'2022-09-22 06:53:34','');
 delete from mo_catalog.mo_user;
 drop table mo_catalog.mo_account;
@@ -29,7 +46,6 @@ delete from mo_catalog.mo_role_grant;
 delete from mo_catalog.mo_role_privs;
 delete from mo_catalog.mo_database;
 delete from mo_catalog.mo_columns;
--- @bvt:issue
 
 --内置数据库不能删除
 drop database information_schema;
@@ -40,24 +56,18 @@ drop database system_metrics;
 --moadmin,public删除/回收
 revoke moadmin,public from root;
 select count(*) from mo_catalog.mo_role_privs where role_name in ('moadmin','public');
--- @bvt:issue#5705
 drop role if exists moadmin,public;
--- @bvt:issue
 select role_name from mo_role where role_name in('moadmin','public');
 
 --root/admin user修改/删除/授权
--- @bvt:issue#5705
 drop user if exists admin,root;
--- @bvt:issue
 
 --accountadmin删除/回收,切换到普通account验证
 create account inner_account ADMIN_NAME 'admin' IDENTIFIED BY '111';
 -- @session:id=2&user=inner_account:admin&password=123456
 revoke accountadmin from admin;
 select count(*) from mo_catalog.mo_role_privs where role_name in ('accountadmin');
--- @bvt:issue#5705
 drop role if exists accountadmin;
--- @bvt:issue
 select role_name from mo_catalog.mo_role where role_name in('accountadmin');
 -- @session
 

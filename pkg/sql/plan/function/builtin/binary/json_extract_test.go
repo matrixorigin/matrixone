@@ -95,9 +95,8 @@ var (
 
 func makeTestVector1(json, path string) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
-	//TODO size may not fit
-	vec[0] = vector.New(types.Type{Oid: types.T_varchar, Size: -1})
-	vec[1] = vector.New(types.Type{Oid: types.T_varchar, Size: -1})
+	vec[0] = vector.New(types.T_varchar.ToType())
+	vec[1] = vector.New(types.T_varchar.ToType())
 	err := vec[0].Append([]byte(json), false, procs.Mp())
 	if err != nil {
 		panic(err)
@@ -110,9 +109,8 @@ func makeTestVector1(json, path string) []*vector.Vector {
 }
 func makeTestVector2(json, path string) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
-	//TODO size may not fit
-	vec[0] = vector.New(types.Type{Oid: types.T_json, Size: -1})
-	vec[1] = vector.New(types.Type{Oid: types.T_varchar, Size: -1})
+	vec[0] = vector.New(types.T_json.ToType())
+	vec[1] = vector.New(types.T_varchar.ToType())
 	bjson, err := types.ParseStringToByteJson(json)
 	if err != nil {
 		panic(err)
@@ -137,14 +135,13 @@ func TestJsonExtractByString(t *testing.T) {
 	for _, kase := range kases {
 		t.Run(kase.path, func(t *testing.T) {
 			vec := makeTestVector1(kase.json, kase.path)
-			gotvec, err := JsonExtractByString(vec, procs)
+			gotvec, err := JsonExtract(vec, procs)
 			require.Nil(t, err)
 			got := vector.GetBytesVectorValues(gotvec)
 			switch value := kase.want.(type) {
 			case []string:
 				for i := range value {
-					bjson, err := types.ParseSliceToByteJson(got[i])
-					require.Nil(t, err)
+					bjson := types.DecodeJson(got[i])
 					require.JSONEq(t, value[i], bjson.String())
 				}
 			default:
@@ -152,10 +149,18 @@ func TestJsonExtractByString(t *testing.T) {
 					require.Equal(t, []byte{}, got[0])
 					break
 				}
-				bjson, err := types.ParseSliceToByteJson(got[0])
-				require.Nil(t, err)
+				bjson := types.DecodeJson(got[0])
 				require.JSONEq(t, kase.want.(string), bjson.String())
 			}
+			vec[0].MakeScalar(1)
+			_, err = JsonExtract(vec, procs)
+			require.NoError(t, err)
+			vec[1].MakeScalar(1)
+			_, err = JsonExtract(vec, procs)
+			require.NoError(t, err)
+			vec[0].Nsp.Set(0)
+			_, err = JsonExtract(vec, procs)
+			require.NoError(t, err)
 		})
 	}
 }
@@ -164,14 +169,13 @@ func TestJsonExtractByJson(t *testing.T) {
 	for _, kase := range kases {
 		t.Run(kase.path, func(t *testing.T) {
 			vec := makeTestVector2(kase.json, kase.path)
-			got, err := JsonExtractByJson(vec, procs)
+			got, err := JsonExtract(vec, procs)
 			require.Nil(t, err)
 			bytes := vector.MustBytesCols(got)
 			switch value := kase.want.(type) {
 			case []string:
 				for i := range value {
-					bjson, err := types.ParseSliceToByteJson(bytes[i])
-					require.Nil(t, err)
+					bjson := types.DecodeJson(bytes[i])
 					require.JSONEq(t, value[i], bjson.String())
 				}
 			default:
@@ -179,8 +183,7 @@ func TestJsonExtractByJson(t *testing.T) {
 					require.Equal(t, []byte{}, bytes[0])
 					break
 				}
-				bjson, err := types.ParseSliceToByteJson(bytes[0])
-				require.Nil(t, err)
+				bjson := types.DecodeJson(bytes[0])
 				require.JSONEq(t, kase.want.(string), bjson.String())
 			}
 		})

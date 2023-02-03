@@ -58,15 +58,21 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 		p.cleanup(proc, true)
 		return false, err
 	}
+
 	for {
 		// read data from storage engine
-		if bat, err = r.Read(p.attrs, nil, proc.Mp()); err != nil {
+		if bat, err = r.Read(proc.Ctx, p.attrs, nil, proc.Mp()); err != nil {
 			p.cleanup(proc, true)
 			return false, err
 		}
 		if bat != nil {
 			bat.Cnt = 1
 		}
+
+		analyzeIdx := p.instructions[0].Idx
+		a := proc.GetAnalyze(analyzeIdx)
+		a.S3IOByte(bat)
+
 		proc.SetInputBatch(bat)
 		end, err = vm.Run(p.instructions, proc)
 		if err != nil {

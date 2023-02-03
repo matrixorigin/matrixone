@@ -16,18 +16,20 @@ package external
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"io"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/simdcsv"
 )
 
-var errColumnCntLarger = moerr.NewInternalError("the table column is larger than input data column")
+func ColumnCntLargerErrorInfo() string {
+	return "the table column is larger than input data column"
+}
 
 // Use for External table scan param
 type ExternalParam struct {
@@ -37,14 +39,19 @@ type ExternalParam struct {
 	CreateSql     string
 	Ctx           context.Context
 	plh           *ParseLineHandler
-	extern        *tree.ExternParam
+	Extern        *tree.ExternParam
 	IgnoreLine    int
 	IgnoreLineTag int
 	// tag indicate the fileScan is finished
 	Fileparam    *ExternalFileparam
+	Zoneparam    *ZonemapFileparam
+	Filter       *FilterParam
 	FileList     []string
 	reader       io.ReadCloser
 	maxBatchSize uint64
+	tableDef     *plan.TableDef
+	ClusterTable *plan.ClusterTable
+	prevStr      string
 }
 
 type ExternalFileparam struct {
@@ -52,6 +59,22 @@ type ExternalFileparam struct {
 	FileCnt   int
 	FileFin   int
 	FileIndex int
+}
+
+type ZonemapFileparam struct {
+	bs     []objectio.BlockObject
+	offset int
+}
+
+type FilterParam struct {
+	maxCol       int
+	exprMono     bool
+	columns      []uint16 // save real index in table to read column's data from files
+	defColumns   []uint16 // save col index in tableDef.Cols, cooperate with columnMap
+	columnMap    map[int]int
+	File2Size    map[string]int64
+	FilterExpr   *plan.Expr
+	objectReader objectio.Reader
 }
 
 type Argument struct {

@@ -65,6 +65,9 @@ func (a *Avg[T]) Grows(cnt int) {
 
 func (a *Avg[T]) Eval(vs []float64) []float64 {
 	for i := range vs {
+		if a.Cnts[i] == 0 {
+			continue
+		}
 		vs[i] = vs[i] / float64(a.Cnts[i])
 	}
 	return vs
@@ -96,7 +99,10 @@ func (a *Avg[T]) MarshalBinary() ([]byte, error) {
 }
 
 func (a *Avg[T]) UnmarshalBinary(data []byte) error {
-	a.Cnts = types.DecodeSlice[int64](data)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	a.Cnts = types.DecodeSlice[int64](copyData)
 	return nil
 }
 
@@ -112,6 +118,9 @@ func (a *Decimal64Avg) Grows(cnt int) {
 
 func (a *Decimal64Avg) Eval(vs []types.Decimal128) []types.Decimal128 {
 	for i := range vs {
+		if a.Cnts[i] == 0 {
+			continue
+		}
 		vs[i] = vs[i].DivInt64(a.Cnts[i])
 	}
 	return vs
@@ -161,7 +170,10 @@ func (a *Decimal64Avg) MarshalBinary() ([]byte, error) {
 }
 
 func (a *Decimal64Avg) UnmarshalBinary(data []byte) error {
-	a.Cnts = types.DecodeSlice[int64](data)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	a.Cnts = types.DecodeSlice[int64](copyData)
 	return nil
 }
 
@@ -177,6 +189,9 @@ func (a *Decimal128Avg) Grows(cnt int) {
 
 func (a *Decimal128Avg) Eval(vs []types.Decimal128) []types.Decimal128 {
 	for i := range vs {
+		if a.Cnts[i] == 0 {
+			continue
+		}
 		vs[i] = vs[i].DivInt64(a.Cnts[i])
 	}
 	return vs
@@ -225,6 +240,9 @@ func (a *Decimal128Avg) MarshalBinary() ([]byte, error) {
 }
 
 func (a *Decimal128Avg) UnmarshalBinary(data []byte) error {
-	a.Cnts = types.DecodeSlice[int64](data)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	a.Cnts = types.DecodeSlice[int64](copyData)
 	return nil
 }

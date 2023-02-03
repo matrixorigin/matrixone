@@ -54,8 +54,17 @@ func (rel *txnRelation) Write(_ context.Context, bat *batch.Batch) error {
 	return rel.handle.Append(taeBatch)
 }
 
+func (rel *txnRelation) AddBlksWithMetaLoc(
+	ctx context.Context,
+	pkVecs []containers.Vector,
+	file string,
+	metaLocs []string,
+	flag int32) error {
+	return rel.handle.AddBlksWithMetaLoc(pkVecs, file, metaLocs, flag)
+}
+
 func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
-	return moerr.NewNYI("Update not supported")
+	return moerr.NewNYINoCtx("Update not supported")
 }
 
 func (rel *txnRelation) DeleteByPhyAddrKeys(_ context.Context, keys *vector.Vector) error {

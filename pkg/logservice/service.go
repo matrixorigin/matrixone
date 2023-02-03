@@ -28,9 +28,10 @@ import (
 	"github.com/lni/dragonboat/v4"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -59,7 +60,7 @@ func firstError(err1 error, err2 error) error {
 // be considered as the interface layer of the LogService.
 type Service struct {
 	cfg         Config
-	logger      *zap.Logger
+	runtime     runtime.Runtime
 	store       *store
 	server      morpc.RPCServer
 	pool        *sync.Pool
@@ -99,12 +100,12 @@ func NewService(
 	for _, opt := range opts {
 		opt(service)
 	}
-
-	service.logger = logutil.Adjust(service.logger)
-
-	store, err := newLogStore(cfg, service.getTaskService, service.logger)
+	if service.runtime == nil {
+		service.runtime = runtime.DefaultRuntime()
+	}
+	store, err := newLogStore(cfg, service.getTaskService, service.runtime)
 	if err != nil {
-		service.logger.Error("failed to create log store", zap.Error(err))
+		service.runtime.Logger().Error("failed to create log store", zap.Error(err))
 		return nil, err
 	}
 	if err := store.loadMetadata(); err != nil {
@@ -124,16 +125,29 @@ func NewService(
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCRequest)
 	}
-	// TODO: check and fix all these magic numbers
-	codec := morpc.NewMessageCodec(mf,
-		morpc.WithCodecPayloadCopyBufferSize(16*1024),
+
+	var codecOpts []morpc.CodecOption
+	codecOpts = append(codecOpts, morpc.WithCodecPayloadCopyBufferSize(16*1024),
 		morpc.WithCodecEnableChecksum(),
 		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)))
+	if cfg.RPC.EnableCompress {
+		mp, err := mpool.NewMPool("log_rpc_server", 0, mpool.NoFixed)
+		if err != nil {
+			return nil, err
+		}
+		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(mp))
+	}
+
+	// TODO: check and fix all these magic numbers
+	codec := morpc.NewMessageCodec(mf, codecOpts...)
 	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
-			respPool.Put(i.(morpc.RPCMessage).Message)
+			msg := i.(morpc.RPCMessage)
+			if !msg.InternalMessage() {
+				respPool.Put(msg.Message)
+			}
 		})),
-		morpc.WithServerLogger(service.logger),
+		morpc.WithServerLogger(service.runtime.Logger().RawLogger()),
 	)
 	if err != nil {
 		return nil, err
@@ -148,16 +162,16 @@ func NewService(
 	// TODO: before making the service available to the outside world, restore all
 	// replicas already known to the local store
 	if err := server.Start(); err != nil {
-		service.logger.Error("failed to start the server", zap.Error(err))
+		service.runtime.SubLogger(runtime.SystemInit).Error("failed to start the server", zap.Error(err))
 		if err := store.close(); err != nil {
-			service.logger.Error("failed to close the store", zap.Error(err))
+			service.runtime.SubLogger(runtime.SystemInit).Error("failed to close the store", zap.Error(err))
 		}
 		return nil, err
 	}
 	// start the heartbeat worker
 	if !cfg.DisableWorkers {
 		if err := service.stopper.RunNamedTask("log-heartbeat-worker", func(ctx context.Context) {
-			service.logger.Info("logservice heartbeat worker started")
+			service.runtime.SubLogger(runtime.SystemInit).Info("logservice heartbeat worker started")
 
 			// transfer morpc options via context
 			ctx = SetBackendOptions(ctx, service.getBackendOptions()...)
@@ -220,6 +234,8 @@ func (s *Service) handleRPCRequest(ctx context.Context, req morpc.Message,
 
 func (s *Service) handle(ctx context.Context, req pb.Request,
 	payload []byte) (pb.Response, pb.LogRecordResponse) {
+	ctx, span := trace.Debug(ctx, "Service.handle."+req.Method.String())
+	defer span.End()
 	switch req.Method {
 	case pb.TSO_UPDATE:
 		return s.handleTsoUpdate(ctx, req), pb.LogRecordResponse{}

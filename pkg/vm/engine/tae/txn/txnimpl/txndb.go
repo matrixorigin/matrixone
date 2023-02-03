@@ -104,7 +104,7 @@ func (db *txnDB) BatchDedup(id uint64, pk containers.Vector) (err error) {
 		return err
 	}
 	if table.IsDeleted() {
-		return moerr.NewNotFound()
+		return moerr.NewNotFoundNoCtx()
 	}
 
 	return table.DoBatchDedup(pk)
@@ -116,9 +116,25 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 		return err
 	}
 	if table.IsDeleted() {
-		return moerr.NewNotFound()
+		return moerr.NewNotFoundNoCtx()
 	}
 	return table.Append(bat)
+}
+
+func (db *txnDB) AddBlksWithMetaLoc(
+	tid uint64,
+	pkVecs []containers.Vector,
+	file string,
+	metaLocs []string,
+	flag int32) error {
+	table, err := db.getOrSetTable(tid)
+	if err != nil {
+		return err
+	}
+	if table.IsDeleted() {
+		return moerr.NewNotFoundNoCtx()
+	}
+	return table.AddBlksWithMetaLoc(pkVecs, file, metaLocs, flag)
 }
 
 func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
@@ -138,7 +154,7 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteT
 		return err
 	}
 	if table.IsDeleted() {
-		return moerr.NewNotFound()
+		return moerr.NewNotFoundNoCtx()
 	}
 	return table.RangeDelete(id, start, end, dt)
 	// if start == end {
@@ -158,7 +174,7 @@ func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, 
 		return
 	}
 	if table.IsDeleted() {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	return table.GetByFilter(filter)
@@ -170,7 +186,7 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, err 
 		return
 	}
 	if table.IsDeleted() {
-		err = moerr.NewNotFound()
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	return table.GetValue(id, row, colIdx)
@@ -301,12 +317,12 @@ func (db *txnDB) CreateSegment(tid uint64, is1PC bool) (seg handle.Segment, err 
 	return table.CreateSegment(is1PC)
 }
 
-func (db *txnDB) CreateNonAppendableSegment(tid uint64) (seg handle.Segment, err error) {
+func (db *txnDB) CreateNonAppendableSegment(tid uint64, is1PC bool) (seg handle.Segment, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateNonAppendableSegment()
+	return table.CreateNonAppendableSegment(is1PC)
 }
 
 func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
@@ -341,6 +357,17 @@ func (db *txnDB) CreateNonAppendableBlock(id *common.ID) (blk handle.Block, err 
 		return
 	}
 	return table.CreateNonAppendableBlock(id.SegmentID)
+}
+
+func (db *txnDB) CreateNonAppendableBlockWithMeta(
+	id *common.ID,
+	metaLoc string,
+	deltaLoc string) (blk handle.Block, err error) {
+	var table *txnTable
+	if table, err = db.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.CreateNonAppendableBlockWithMeta(id.SegmentID, metaLoc, deltaLoc)
 }
 
 func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {

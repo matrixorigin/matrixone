@@ -47,7 +47,8 @@ type externalTestCase struct {
 }
 
 var (
-	cases []externalTestCase
+	cases         []externalTestCase
+	defaultOption = []string{"filepath", "abc", "format", "jsonline", "jsondata", "array"}
 )
 
 func newTestCase(all bool, format, jsondata string) externalTestCase {
@@ -63,6 +64,7 @@ func newTestCase(all bool, format, jsondata string) externalTestCase {
 			Es: &ExternalParam{
 				Ctx:       ctx,
 				Fileparam: &ExternalFileparam{},
+				Filter:    &FilterParam{},
 			},
 		},
 		cancel:   cancel,
@@ -88,10 +90,6 @@ func Test_Prepare(t *testing.T) {
 	convey.Convey("external Prepare", t, func() {
 		for _, tcs := range cases {
 			param := tcs.arg.Es
-			err := Prepare(tcs.proc, tcs.arg)
-			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(param.extern, convey.ShouldNotBeNil)
-			convey.So(param.Fileparam.End, convey.ShouldBeTrue)
 			extern := &tree.ExternParam{
 				Filepath: "",
 				Tail: &tree.TailParameter{
@@ -100,14 +98,17 @@ func Test_Prepare(t *testing.T) {
 				FileService: tcs.proc.FileService,
 				Format:      tcs.format,
 				JsonData:    tcs.jsondata,
+				Option:      defaultOption,
+				Ctx:         context.Background(),
 			}
 			json_byte, err := json.Marshal(extern)
 			if err != nil {
 				panic(err)
 			}
 			param.CreateSql = string(json_byte)
+			tcs.arg.Es.Extern = extern
 			err = Prepare(tcs.proc, tcs.arg)
-			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err, convey.ShouldBeNil)
 			convey.So(param.FileList, convey.ShouldBeNil)
 			convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
 
@@ -116,7 +117,7 @@ func Test_Prepare(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			param.CreateSql = string(json_byte)
 			err = Prepare(tcs.proc, tcs.arg)
-			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			if tcs.format == tree.JSONLINE {
 				extern = &tree.ExternParam{
@@ -125,6 +126,7 @@ func Test_Prepare(t *testing.T) {
 						IgnoredLines: 0,
 					},
 					Format: tcs.format,
+					Option: defaultOption,
 				}
 				extern.JsonData = tcs.jsondata
 				json_byte, err = json.Marshal(extern)
@@ -135,12 +137,13 @@ func Test_Prepare(t *testing.T) {
 				convey.So(param.FileList, convey.ShouldResemble, []string(nil))
 				convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
 
-				extern.JsonData = "test"
+				extern.Option = []string{"filepath", "abc", "format", "jsonline", "jsondata", "test"}
 				json_byte, err = json.Marshal(extern)
 				convey.So(err, convey.ShouldBeNil)
 				param.CreateSql = string(json_byte)
+
 				err = Prepare(tcs.proc, tcs.arg)
-				convey.So(err, convey.ShouldNotBeNil)
+				convey.So(err, convey.ShouldBeNil)
 			}
 		}
 	})
@@ -158,21 +161,22 @@ func Test_Call(t *testing.T) {
 				FileService: tcs.proc.FileService,
 				Format:      tcs.format,
 				JsonData:    tcs.jsondata,
+				Ctx:         context.Background(),
 			}
-			param.extern = extern
+			param.Extern = extern
 			param.Fileparam.End = false
 			param.FileList = []string{"abc.txt"}
-			end, err := Call(1, tcs.proc, tcs.arg)
+			end, err := Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end, convey.ShouldBeFalse)
 
 			param.Fileparam.End = false
-			end, err = Call(1, tcs.proc, tcs.arg)
-			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(end, convey.ShouldBeFalse)
+			end, err = Call(1, tcs.proc, tcs.arg, false, false)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(end, convey.ShouldBeTrue)
 
 			param.Fileparam.End = true
-			end, err = Call(1, tcs.proc, tcs.arg)
+			end, err = Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end, convey.ShouldBeTrue)
 		}
@@ -183,6 +187,7 @@ func Test_getCompressType(t *testing.T) {
 	convey.Convey("getCompressType succ", t, func() {
 		param := &tree.ExternParam{
 			CompressType: tree.GZIP,
+			Ctx:          context.Background(),
 		}
 		compress := getCompressType(param)
 		convey.So(compress, convey.ShouldEqual, param.CompressType)
@@ -214,6 +219,7 @@ func Test_getUnCompressReader(t *testing.T) {
 	convey.Convey("getUnCompressReader succ", t, func() {
 		param := &tree.ExternParam{
 			CompressType: tree.NOCOMPRESS,
+			Ctx:          context.Background(),
 		}
 		read, err := getUnCompressReader(param, nil)
 		convey.So(read, convey.ShouldBeNil)
@@ -260,7 +266,7 @@ func Test_makeBatch(t *testing.T) {
 		plh := &ParseLineHandler{
 			batchSize: 1,
 		}
-		_ = makeBatch(param, plh, testutil.TestUtilMp)
+		_ = makeBatch(param, plh.batchSize, testutil.TestUtilMp)
 	})
 }
 
@@ -424,11 +430,12 @@ func Test_GetBatchData(t *testing.T) {
 		param := &ExternalParam{
 			Attrs: atrrs,
 			Cols:  cols,
-			extern: &tree.ExternParam{
+			Extern: &tree.ExternParam{
 				Tail: &tree.TailParameter{
 					Fields: &tree.Fields{},
 				},
 				Format: tree.CSV,
+				Ctx:    context.Background(),
 			},
 		}
 		param.Name2ColIndex = make(map[string]int32)
@@ -472,7 +479,7 @@ func Test_GetBatchData(t *testing.T) {
 			convey.So(err, convey.ShouldNotBeNil)
 		}
 
-		param.extern.Tail.Fields.EnclosedBy = 't'
+		param.Extern.Tail.Fields.EnclosedBy = 't'
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -494,8 +501,8 @@ func Test_GetBatchData(t *testing.T) {
 		}
 
 		//test jsonline
-		param.extern.Format = tree.JSONLINE
-		param.extern.JsonData = tree.OBJECT
+		param.Extern.Format = tree.JSONLINE
+		param.Extern.JsonData = tree.OBJECT
 		param.Attrs = atrrs
 		param.Cols = cols
 		plh.simdCsvLineArray = [][]string{jsonline_object}
@@ -508,17 +515,27 @@ func Test_GetBatchData(t *testing.T) {
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		param.extern.Format = tree.CSV
+		param.Extern.Format = tree.CSV
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		param.extern.Format = tree.JSONLINE
-		param.extern.JsonData = tree.ARRAY
+		param.Extern.Format = tree.JSONLINE
+		param.Extern.JsonData = tree.ARRAY
+		param.prevStr = ""
 		plh.simdCsvLineArray = [][]string{jsonline_array}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
+		prevStr, str := jsonline_array[0][:len(jsonline_array[0])-2], jsonline_array[0][len(jsonline_array[0])-2:]
+		plh.simdCsvLineArray = [][]string{{prevStr}}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(param.prevStr, convey.ShouldEqual, prevStr)
 
-		param.extern.JsonData = "test"
+		plh.simdCsvLineArray = [][]string{{str}}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldBeNil)
+
+		param.Extern.JsonData = "test"
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -539,6 +556,7 @@ func Test_GetBatchData(t *testing.T) {
 
 func TestReadDirSymlink(t *testing.T) {
 	root := t.TempDir()
+	ctx := context.Background()
 
 	// create a/b/c
 	err := os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0755)
@@ -559,9 +577,19 @@ func TestReadDirSymlink(t *testing.T) {
 	fooPathInB := filepath.Join(root, "a", "b", "d", "foo")
 	files, err := ReadDir(&tree.ExternParam{
 		Filepath: fooPathInB,
+		Ctx:      ctx,
 	})
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(files))
 	assert.Equal(t, fooPathInB, files[0])
 
+	path1 := root + "/a//b/./../b/c/foo"
+	files1, err := ReadDir(&tree.ExternParam{
+		Filepath: path1,
+		Ctx:      ctx,
+	})
+	assert.Nil(t, err)
+	pathWant1 := root + "/a/b/c/foo"
+	assert.Equal(t, 1, len(files1))
+	assert.Equal(t, pathWant1, files1[0])
 }

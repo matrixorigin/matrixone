@@ -98,6 +98,15 @@ Disguise the COMMAND CMD_FIELD_LIST as sql query.
 */
 const (
 	cmdFieldListSql = "__++__internal_cmd_field_list"
+	intereSql       = "internal_sql"
+	cloudUserSql    = "cloud_user_sql"
+	cloudNoUserSql  = "cloud_nouser_sql"
+	externSql       = "external_sql"
+)
+
+// Cache size of auto_increment_columns cache.
+const (
+	cacheSize = 3000
 )
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
@@ -111,9 +120,9 @@ func makeCmdFieldListSql(query string) string {
 }
 
 // parseCmdFieldList parses the internal cmd field list
-func parseCmdFieldList(sql string) (*InternalCmdFieldList, error) {
+func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, error) {
 	if !isCmdFieldListSql(sql) {
-		return nil, moerr.NewInternalError("it is not the CMD_FIELD_LIST")
+		return nil, moerr.NewInternalError(ctx, "it is not the CMD_FIELD_LIST")
 	}
 	rest := strings.TrimSpace(sql[len(cmdFieldListSql):])
 	//find null
@@ -125,7 +134,7 @@ func parseCmdFieldList(sql string) (*InternalCmdFieldList, error) {
 		//wildcard := payload[nullIdx+1:]
 		return &InternalCmdFieldList{tableName: tableName}, nil
 	} else {
-		return nil, moerr.NewInternalError("wrong format for COM_FIELD_LIST")
+		return nil, moerr.NewInternalError(ctx, "wrong format for COM_FIELD_LIST")
 	}
 }
 
@@ -144,15 +153,18 @@ func (icfl *InternalCmdFieldList) Format(ctx *tree.FmtCtx) {
 	ctx.WriteString(makeCmdFieldListSql(icfl.tableName))
 }
 
+func (icfl *InternalCmdFieldList) GetStatementType() string { return "InternalCmd" }
+func (icfl *InternalCmdFieldList) GetQueryType() string     { return tree.QueryTypeDQL }
+
 // ExecResult is the result interface of the execution
 type ExecResult interface {
 	GetRowCount() uint64
 
-	GetString(rindex, cindex uint64) (string, error)
+	GetString(ctx context.Context, rindex, cindex uint64) (string, error)
 
-	GetUint64(rindex, cindex uint64) (uint64, error)
+	GetUint64(ctx context.Context, rindex, cindex uint64) (uint64, error)
 
-	GetInt64(rindex, cindex uint64) (int64, error)
+	GetInt64(ctx context.Context, rindex, cindex uint64) (int64, error)
 }
 
 func execResultArrayHasData(arr []ExecResult) bool {

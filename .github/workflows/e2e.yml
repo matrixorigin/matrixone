@@ -9,13 +9,14 @@ on:
 
 jobs:
   bvt-linux-x86:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     name: e2e BVT Test on Linux/x64
     timeout-minutes: 60
 
     steps:
       - name: checkout head
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           fetch-depth: '3'
           path: ./head
@@ -41,7 +42,7 @@ jobs:
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-CN-tae-DN
 
       - name: Clone test-tool repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
           path: ./mo-tester
@@ -77,7 +78,7 @@ jobs:
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
@@ -93,7 +94,7 @@ jobs:
 
     steps:
       - name: checkout head
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           fetch-depth: '3'
           path: ./head
@@ -119,7 +120,7 @@ jobs:
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-multi-CN-tae-DN
 
       - name: Clone test-tool repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
           path: ./mo-tester
@@ -155,7 +156,7 @@ jobs:
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:

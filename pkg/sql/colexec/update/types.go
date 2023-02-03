@@ -23,29 +23,37 @@ import (
 type Argument struct {
 	Ts           uint64
 	AffectedRows uint64
-	UpdateCtxs   []*UpdateCtx
-	TableDefVec  []*plan.TableDef
 	Engine       engine.Engine
-	DB           []engine.Database
-	TableID      []string
-	DBName       []string
-	TblName      []string
+	UpdateCtx    *UpdateCtx
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 type UpdateCtx struct {
-	PriKey      string
-	PriKeyIdx   int32 // delete if -1
-	HideKey     string
-	HideKeyIdx  int32
-	UpdateAttrs []string
-	OtherAttrs  []string
-	IndexAttrs  []string
-	OrderAttrs  []string
-	TableSource engine.Relation
-	CPkeyColDef *plan.ColDef
-	IndexTables []engine.Relation
-	IndexInfos  []*plan.IndexInfo
+	Source     []engine.Relation
+	Idxs       [][]int32
+	Ref        []*plan.ObjectRef
+	TableDefs  []*plan.TableDef
+	HasAutoCol []bool
+	UpdateCol  []map[string]int32
+
+	IdxSource []engine.Relation
+	IdxIdx    []int32
+
+	OnRestrictIdx []int32
+
+	OnCascadeSource    []engine.Relation
+	OnCascadeIdx       [][]int32
+	OnCascadeRef       []*plan.ObjectRef
+	OnCascadeTableDef  []*plan.TableDef
+	OnCascadeUpdateCol []map[string]int32
+
+	OnSetSource    []engine.Relation
+	OnSetIdx       [][]int32
+	OnSetRef       []*plan.ObjectRef
+	OnSetTableDef  []*plan.TableDef
+	OnSetUpdateCol []map[string]int32
+
+	ParentIdx []map[string]int32
 }

@@ -15,6 +15,7 @@
 package types
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 	"math/rand"
 	"testing"
@@ -29,16 +30,17 @@ func TestSimpleTupleAllTypes(t *testing.T) {
 		{
 			args: Tuple{true, int8(1), int16(2), int32(3), int64(4), uint8(5), uint16(6), uint32(7), uint64(8), float32(1),
 				float64(1),
-				FromCalendar(2000, 1, 1), FromClock(2000, 1, 1, 1, 1, 0, 0),
+				DateFromCalendar(2000, 1, 1), DatetimeFromClock(2000, 1, 1, 1, 1, 0, 0),
 				FromClockUTC(2000, 2, 2, 2, 2, 0, 0), Decimal64_FromInt32(123),
 				Decimal128_FromInt32(123), []byte{1, 2, 3}},
 		},
 	}
 	for _, test := range tests {
 		tuple := test.args
-		packer := NewPacker()
+		mp := mpool.MustNewZero()
+		packer := NewPacker(mp)
 		encodeBufToPacker(tuple, packer)
-		tt, _ := Unpack(packer.buf)
+		tt, _ := Unpack(packer.GetBuf())
 		require.Equal(t, tuple.String(), tt.String())
 		for i := range tuple {
 			require.Equal(t, tuple[i], tt[i])
@@ -104,9 +106,10 @@ func TestSingleTypeTuple(t *testing.T) {
 	}
 	for _, test := range tests {
 		tuple := test.args
-		packer := NewPacker()
+		mp := mpool.MustNewZero()
+		packer := NewPacker(mp)
 		encodeBufToPacker(tuple, packer)
-		tt, _ := Unpack(packer.buf)
+		tt, _ := Unpack(packer.GetBuf())
 		for i := range tuple {
 			require.Equal(t, tuple[i], tt[i])
 		}
@@ -133,9 +136,10 @@ func TestMulTypeTuple(t *testing.T) {
 
 	for _, test := range tests {
 		tuple := test.args
-		packer := NewPacker()
+		mp := mpool.MustNewZero()
+		packer := NewPacker(mp)
 		encodeBufToPacker(tuple, packer)
-		tt, _ := Unpack(packer.buf)
+		tt, _ := Unpack(packer.GetBuf())
 		for i := range tuple {
 			require.Equal(t, tuple[i], tt[i])
 		}
@@ -354,7 +358,7 @@ func randDate() Date {
 	year := rand.Intn(MaxDateYear) + MinDateYear
 	month := rand.Intn(12) + 1
 	day := rand.Intn(int(LastDay(int32(year), uint8(month)))) + 1
-	return FromCalendar(int32(year), uint8(month), uint8(day))
+	return DateFromCalendar(int32(year), uint8(month), uint8(day))
 }
 
 func randDatetime() Datetime {
@@ -365,7 +369,7 @@ func randDatetime() Datetime {
 	minute := rand.Intn(60)
 	second := rand.Intn(60)
 	microSecond := rand.Intn(1e6)
-	return FromClock(int32(year), uint8(month), uint8(day), uint8(hour), uint8(minute), uint8(second), uint32(microSecond))
+	return DatetimeFromClock(int32(year), uint8(month), uint8(day), uint8(hour), uint8(minute), uint8(second), uint32(microSecond))
 }
 
 func randTimestamp() Timestamp {

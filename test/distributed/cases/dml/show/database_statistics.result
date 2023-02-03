@@ -1,0 +1,512 @@
+show table_number from mo_task;
+Number of tables in mo_task
+2
+show table_number from information_schema;
+Number of tables in information_schema
+13
+show table_number from mysql;
+Number of tables in mysql
+5
+show table_number from mo_catalog;
+Number of tables in mo_catalog
+11
+show table_number from system_metrics;
+Number of tables in system_metrics
+17
+show table_number from system;
+Number of tables in system
+5
+use mo_task;
+show column_number from sys_async_task;
+Number of columns in sys_async_task
+15
+show column_number from sys_cron_task;
+Number of columns in sys_cron_task
+11
+use information_schema;
+show column_number from key_column_usage;
+Number of columns in key_column_usage
+13
+show column_number from columns;
+Number of columns in columns
+23
+show column_number from profiling;
+Number of columns in profiling
+19
+show column_number from PROCESSLIST;
+[unknown result because it is related to issue#7520]
+show column_number from schemata;
+Number of columns in schemata
+7
+show column_number from character_sets;
+Number of columns in character_sets
+5
+show column_number from triggers;
+Number of columns in triggers
+23
+show column_number from tables;
+Number of columns in tables
+22
+show column_number from engines;
+Number of columns in engines
+7
+show column_number from routines;
+Number of columns in routines
+32
+show column_number from parameters;
+Number of columns in parameters
+17
+show column_number from keywords;
+Number of columns in keywords
+3
+use mysql;
+show column_number from user;
+Number of columns in user
+53
+show column_number from db;
+Number of columns in db
+24
+show column_number from procs_priv;
+Number of columns in procs_priv
+10
+show column_number from columns_priv;
+Number of columns in columns_priv
+9
+show column_number from tables_priv;
+Number of columns in tables_priv
+10
+use mo_catalog;
+show column_number from mo_user;
+Number of columns in mo_user
+12
+show column_number from mo_account;
+Number of columns in mo_account
+7
+show column_number from mo_role;
+Number of columns in mo_role
+7
+show column_number from mo_user_grant;
+Number of columns in mo_user_grant
+5
+show column_number from mo_role_grant;
+Number of columns in mo_role_grant
+7
+show column_number from mo_role_privs;
+Number of columns in mo_role_privs
+11
+show column_number from mo_user_defined_function;
+Number of columns in mo_user_defined_function
+17
+show column_number from mo_tables;
+Number of columns in mo_tables
+15
+show column_number from mo_database;
+Number of columns in mo_database
+8
+show column_number from mo_columns;
+Number of columns in mo_columns
+22
+use system_metrics;
+show column_number from metric;
+Number of columns in metric
+8
+show column_number from sql_statement_total;
+Number of columns in sql_statement_total
+8
+show column_number from sql_statement_errors;
+Number of columns in sql_statement_errors
+8
+show column_number from sql_transaction_total;
+Number of columns in sql_transaction_total
+7
+show column_number from sql_transaction_errors;
+Number of columns in sql_transaction_errors
+8
+show column_number from server_connections;
+Number of columns in server_connections
+7
+show column_number from process_cpu_percent;
+Number of columns in process_cpu_percent
+7
+show column_number from process_resident_memory_bytes;
+Number of columns in process_resident_memory_bytes
+7
+show column_number from process_open_fds;
+Number of columns in process_open_fds
+7
+show column_number from sys_cpu_seconds_total;
+Number of columns in sys_cpu_seconds_total
+7
+show column_number from sys_cpu_combined_percent;
+Number of columns in sys_cpu_combined_percent
+7
+show column_number from sys_memory_used;
+Number of columns in sys_memory_used
+7
+show column_number from sys_memory_available;
+Number of columns in sys_memory_available
+7
+show column_number from sys_disk_read_bytes;
+Number of columns in sys_disk_read_bytes
+7
+show column_number from sys_disk_write_bytes;
+Number of columns in sys_disk_write_bytes
+7
+show column_number from sys_net_recv_bytes;
+Number of columns in sys_net_recv_bytes
+7
+show column_number from sys_net_sent_bytes;
+Number of columns in sys_net_sent_bytes
+7
+use system;
+show column_number from statement_info;
+Number of columns in statement_info
+27
+show column_number from rawlog;
+Number of columns in rawlog
+22
+show column_number from log_info;
+Number of columns in log_info
+14
+show column_number from error_info;
+Number of columns in error_info
+11
+show column_number from span_info;
+Number of columns in span_info
+13
+drop database if exists test_db;
+create database test_db;
+show table_number from test_db;
+Number of tables in test_db
+0
+use test_db;
+drop table if exists t1;
+create table t1(
+col1 int,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+);
+show table_number from test_db;
+Number of tables in test_db
+1
+show table_values from t1;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
+0    0
+insert into t1 values(100,10.34,"你好",'aaa','2011-10-10',0);
+show table_values from t1;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+insert into t1 values(10,1.34,"你",'aa','2011-10-11',1);
+show table_values from t1;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
+2    154
+drop table if exists t11;
+create table t11(
+col1 int primary key,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+);
+show table_number from test_db;
+Number of tables in test_db
+2
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
+0    0
+insert into t11 values(100,10.34,"你好",'aaa','2011-10-10',0);
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+insert into t11 values(10,1.34,"你",'aa','2011-10-11',1);
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
+2    154
+create external table external_table(
+col1 int,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+)infile{"filepath"='$resources/external_table_file/external_table.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select * from external_table;
+col1    col2    col3    col4    col6    col7
+null    null            null    null
+100    10.34    你好    aaa    2011-10-10    false
+10    1.34    你    aa    2011-10-11    true
+show table_number from test_db;
+Number of tables in test_db
+3
+show table_values from external_table;
+[unknown result because it is related to issue#7568]
+create table t2(
+col1 json
+);
+show table_values from t2;
+max(col1)    min(col1)
+insert into t2 values();
+show table_values from t2;
+max(col1)    min(col1)
+null    null
+insert into t2 values(('{"x": 17}'));
+show table_values from t2;
+max(col1)    min(col1)
+null    null
+insert into t2 values (('{"x": [18]}'));
+show table_values from t2;
+max(col1)    min(col1)
+null    null
+create table t3(
+col1 decimal
+);
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+insert into t3 values();
+[unknown result because it is related to issue#7562]
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+insert into t3 values(3.3);
+[unknown result because it is related to issue#7562]
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+insert into t3 values(3.2);
+[unknown result because it is related to issue#7562]
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+drop database test_db;
+drop account if exists test_account;
+create account test_account admin_name = 'test_user' identified by '111';
+show table_number from information_schema;
+Number of tables in information_schema
+13
+show table_number from mysql;
+Number of tables in mysql
+5
+show table_number from mo_catalog;
+Number of tables in mo_catalog
+11
+show table_number from system_metrics;
+Number of tables in system_metrics
+7
+show table_number from system;
+Number of tables in system
+1
+use information_schema;
+show column_number from key_column_usage;
+Number of columns in key_column_usage
+13
+show column_number from columns;
+Number of columns in columns
+23
+show column_number from profiling;
+Number of columns in profiling
+19
+show column_number from PROCESSLIST;
+[unknown result because it is related to issue#7520]
+show column_number from schemata;
+Number of columns in schemata
+7
+show column_number from character_sets;
+Number of columns in character_sets
+5
+show column_number from triggers;
+Number of columns in triggers
+23
+show column_number from tables;
+Number of columns in tables
+22
+show column_number from engines;
+Number of columns in engines
+7
+show column_number from routines;
+Number of columns in routines
+32
+show column_number from parameters;
+Number of columns in parameters
+17
+show column_number from keywords;
+Number of columns in keywords
+3
+use mysql;
+show column_number from user;
+Number of columns in user
+53
+show column_number from db;
+Number of columns in db
+24
+show column_number from procs_priv;
+Number of columns in procs_priv
+10
+show column_number from columns_priv;
+Number of columns in columns_priv
+9
+show column_number from tables_priv;
+Number of columns in tables_priv
+10
+use mo_catalog;
+show column_number from mo_user;
+Number of columns in mo_user
+12
+show column_number from mo_role;
+Number of columns in mo_role
+7
+show column_number from mo_user_grant;
+Number of columns in mo_user_grant
+5
+show column_number from mo_role_grant;
+Number of columns in mo_role_grant
+7
+show column_number from mo_role_privs;
+Number of columns in mo_role_privs
+11
+show column_number from mo_user_defined_function;
+Number of columns in mo_user_defined_function
+17
+show column_number from mo_tables;
+Number of columns in mo_tables
+15
+show column_number from mo_database;
+Number of columns in mo_database
+8
+show column_number from mo_columns;
+Number of columns in mo_columns
+22
+use system;
+show column_number from statement_info;
+Number of columns in statement_info
+27
+drop database if exists test_db;
+create database test_db;
+show table_number from test_db;
+Number of tables in test_db
+0
+use test_db;
+drop table if exists t1;
+create table t1(
+col1 int,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+);
+show table_number from test_db;
+Number of tables in test_db
+1
+show table_values from t1;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
+0    0
+insert into t1 values(100,10.34,"你好",'aaa','2011-10-10',0);
+show table_values from t1;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+insert into t1 values(10,1.34,"你",'aa','2011-10-11',1);
+show table_values from t1;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
+2    154
+drop table if exists t11;
+create table t11(
+col1 int primary key,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+);
+show table_number from test_db;
+Number of tables in test_db
+2
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
+0    0
+insert into t11 values(100,10.34,"你好",'aaa','2011-10-10',0);
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+insert into t11 values(10,1.34,"你",'aa','2011-10-11',1);
+show table_values from t11;
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
+2    154
+create external table external_table(
+col1 int,
+col2 float,
+col3 varchar,
+col4 blob,
+col6 date,
+col7 bool
+)infile{"filepath"='$resources/external_table_file/external_table.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select * from external_table;
+col1    col2    col3    col4    col6    col7
+null    null            null    null
+100    10.34    你好    aaa    2011-10-10    false
+10    1.34    你    aa    2011-10-11    true
+show table_number from test_db;
+Number of tables in test_db
+3
+show table_values from external_table;
+[unknown result because it is related to issue#7568]
+create table t2(
+col1 json
+);
+show table_values from t2;
+max(col1)    min(col1)
+insert into t2 values();
+show table_values from t2;
+max(col1)    min(col1)
+null    null
+insert into t2 values(('{"x": 17}'));
+show table_values from t2;
+max(col1)    min(col1)
+null    null
+insert into t2 values (('{"x": [18]}'));
+show table_values from t2;
+max(col1)    min(col1)
+null    null
+create table t3(
+col1 decimal
+);
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+insert into t3 values();
+[unknown result because it is related to issue#7562]
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+insert into t3 values(3.3);
+[unknown result because it is related to issue#7562]
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+insert into t3 values(3.2);
+[unknown result because it is related to issue#7562]
+show table_values from t3;
+[unknown result because it is related to issue#7562]
+drop database test_db;
+drop account if exists test_account;

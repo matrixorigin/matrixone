@@ -27,11 +27,11 @@ func TestDayOfYear(t *testing.T) {
 		want []uint16
 	}{
 		{
-			args: []types.Date{types.FromCalendar(2021, 8, 13)},
+			args: []types.Date{types.DateFromCalendar(2021, 8, 13)},
 			want: []uint16{225},
 		},
 		{
-			args: []types.Date{types.FromCalendar(2022, 3, 28)},
+			args: []types.Date{types.DateFromCalendar(2022, 3, 28)},
 			want: []uint16{87},
 		},
 	}

@@ -15,13 +15,78 @@ role_id    role_name    owner
 1    public    0
 show databases;
 Database
-mo_catalog
 system
 system_metrics
 information_schema
 mysql
-update mo_catalog.mo_tables set relanme='mo_aaaa';
-
+mo_catalog
+show grants;
+Grants for account1:admin@localhost
+use system;
+show triggers;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+use mo_catalog;
+show columns from mo_tables;
+Field    Type    Null    Key    Default    Extra    Comment
+creator    INT UNSIGNED    YES        NULL
+account_id    INT UNSIGNED    YES        NULL
+owner    INT UNSIGNED    YES        NULL
+rel_comment    VARCHAR(5000)    YES        NULL
+relkind    VARCHAR(5000)    YES        NULL
+reldatabase    VARCHAR(5000)    YES        NULL
+rel_createsql    TEXT    YES        NULL
+viewdef    BLOB    YES        NULL
+relname    VARCHAR(5000)    YES        NULL
+reldatabase_id    BIGINT UNSIGNED    YES        NULL
+rel_id    BIGINT UNSIGNED    NO    PRI    NULL
+created_time    TIMESTAMP    YES        NULL
+constraint    VARCHAR(5000)    YES        NULL
+relpersistence    VARCHAR(5000)    YES        NULL
+partitioned    BLOB    YES        NULL
+select datname, dat_createsql from mo_database;
+datname    dat_createsql
+system    create database system;
+system_metrics    create database system_metrics;
+information_schema    create database information_schema;
+mysql    create database mysql;
+mo_catalog    
+select relname from mo_tables where relname="sql_statement_total";
+relname
+sql_statement_total
+select relname from mo_tables where relname="mo_user";
+relname
+mo_user
+select relname from mo_tables where relname="tables";
+relname
+tables
+select user_name,authentication_string from mo_user;
+user_name    authentication_string
+admin    123456
+select role_name from mo_role;
+role_name
+accountadmin
+public
+create database account_db;
+use account_db;
+show tables;
+tables_in_account_db
+create table a(col int);
+show create table a;
+Table    Create Table
+a    CREATE TABLE `a` (\n`col` INT DEFAULT NULL\n)
+show tables;
+tables_in_account_db
+a
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+account_db
+mo_catalog
+update mo_catalog.mo_tables set relname='mo_aaaa';
+internal error: do not have privilege to execute the statement
 insert into mo_catalog.mo_role values (1763,'apple',0,1,'2022-09-22 06:53:34','');
 internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_user;
@@ -35,9 +100,9 @@ internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_role_privs;
 internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_database;
-
+internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_columns;
-
+internal error: do not have privilege to execute the statement
 drop database information_schema;
 internal error: do not have privilege to execute the statement
 drop database mo_catalog;
@@ -52,11 +117,11 @@ select count(*) from mo_catalog.mo_role_privs where role_name in ('moadmin','pub
 count(*)
 34
 drop role if exists moadmin,public;
-
+internal error: can not delete the role moadmin
 select role_name from mo_role where role_name in('moadmin','public');
 SQL parser error: table "mo_role" does not exist
 drop user if exists admin,root;
-
+internal error: can not delete the user root
 create account inner_account ADMIN_NAME 'admin' IDENTIFIED BY '111';
 revoke accountadmin from admin;
 internal error: the role accountadmin can not be revoked
@@ -64,7 +129,7 @@ select count(*) from mo_catalog.mo_role_privs where role_name in ('accountadmin'
 count(*)
 30
 drop role if exists accountadmin;
-
+internal error: can not delete the role accountadmin
 select role_name from mo_catalog.mo_role where role_name in('accountadmin');
 role_name
 accountadmin

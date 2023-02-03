@@ -118,6 +118,10 @@ const (
 	ErrDragonboatShardNotFound      uint16 = 20437
 	ErrDragonboatOtherSystemError   uint16 = 20438
 	ErrDropNonExistsDB              uint16 = 20439
+	ErrQueryIdNotFound              uint16 = 20440
+	ErrFunctionAlreadyExists        uint16 = 20441
+	ErrDropNonExistsFunction        uint16 = 20442
+	ErrNoConfig                     uint16 = 20443
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -166,6 +170,11 @@ const (
 	ErrAppendableSegmentNotFound uint16 = 20624
 	ErrAppendableBlockNotFound   uint16 = 20625
 	ErrTAEDebug                  uint16 = 20626
+	ErrDuplicateKey              uint16 = 20626
+
+	// Group 7: lock service
+	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
+	ErrDeadLockDetected uint16 = 20701
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -187,7 +196,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 	// Warn
 	ErrWarn:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "warning: %s"},
-	ErrWarnDataTruncated: {WARN_DATA_TRUNCATED, []string{MySQLDefaultSqlState}, "warning: data trucncated"},
+	ErrWarnDataTruncated: {WARN_DATA_TRUNCATED, []string{MySQLDefaultSqlState}, "warning: data truncated"},
 
 	// Group 1: Internal errors
 	ErrStart:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: error code start"},
@@ -221,8 +230,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNoSuchTable:                  {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such table %s.%s"},
 	ErrEmptyVector:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty vector"},
 	ErrFileNotFound:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s is not found"},
-	ErrFileAlreadyExists:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s alread exists"},
-	ErrUnexpectedEOF:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unexpteded end of file %s"},
+	ErrFileAlreadyExists:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s already exists"},
+	ErrUnexpectedEOF:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unexpected end of file %s"},
 	ErrEmptyRange:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty range of file %s"},
 	ErrSizeNotMatch:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s size does not match"},
 	ErrNoProgress:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s has no io progress"},
@@ -237,6 +246,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNotLeaseHolder:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not lease holder, current lease holder ID %d"},
 	ErrDBAlreadyExists:              {ER_DB_CREATE_EXISTS, []string{MySQLDefaultSqlState}, "database %s already exists"},
 	ErrTableAlreadyExists:           {ER_TABLE_EXISTS_ERROR, []string{MySQLDefaultSqlState}, "table %s already exists"},
+	ErrFunctionAlreadyExists:        {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "function %s already exists"},
+	ErrDropNonExistsFunction:        {ER_CANT_FIND_UDF, []string{MySQLDefaultSqlState}, "function %s doesn't exist"},
 	ErrNoService:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service %s not found"},
 	ErrDupServiceName:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicate service name %s"},
 	ErrWrongService:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "wrong service, expecting %s, got %s"},
@@ -255,7 +266,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDragonboatShardNotFound:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDragonboatOtherSystemError:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDropNonExistsDB:              {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
-
+	ErrQueryIdNotFound:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s is not found, or invalid tenant"},
+	ErrNoConfig:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
 	// Group 5: rpc timeout
 	ErrRPCTimeout:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
 	ErrClientClosed:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
@@ -290,16 +302,20 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrPrimaryKeyDuplicated:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicated primary key %v"},
 	ErrAppendableSegmentNotFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable segment not found"},
 	ErrAppendableBlockNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
+	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
+
+	// Group 7: lock service
+	ErrDeadLockDetected: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
 }
 
-func newWithDepth(ctx context.Context, code uint16, args ...any) *Error {
+func newError(ctx context.Context, code uint16, args ...any) *Error {
 	var err *Error
 	item, has := errorMsgRefer[code]
 	if !has {
-		panic(NewInternalError("not exist MOErrorCode: %d", code))
+		panic(NewInternalError(ctx, "not exist MOErrorCode: %d", code))
 	}
 	if len(args) == 0 {
 		err = &Error{
@@ -361,7 +377,7 @@ func (e *Error) MarshalBinary() ([]byte, error) {
 	}
 	buf := new(bytes.Buffer)
 	if err := gob.NewEncoder(buf).Encode(ee); err != nil {
-		return nil, ConvertGoError(err)
+		return nil, ConvertGoError(Context(), err)
 	}
 	return buf.Bytes(), nil
 }
@@ -371,7 +387,7 @@ var _ encoding.BinaryUnmarshaler = new(Error)
 func (e *Error) UnmarshalBinary(data []byte) error {
 	var ee encodingErr
 	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&ee); err != nil {
-		return ConvertGoError(err)
+		return ConvertGoError(Context(), err)
 	}
 	e.code = ee.Code
 	e.mysqlCode = ee.MysqlCode
@@ -394,23 +410,23 @@ func IsMoErrCode(e error, rc uint16) bool {
 }
 
 // ConvertPanicError converts a runtime panic to internal error.
-func ConvertPanicError(v interface{}) *Error {
+func ConvertPanicError(ctx context.Context, v interface{}) *Error {
 	if e, ok := v.(*Error); ok {
 		return e
 	}
-	return newWithDepth(Context(), ErrInternal, fmt.Sprintf("panic %v: %+v", v, stack.Callers(3)))
+	return newError(ctx, ErrInternal, fmt.Sprintf("panic %v: %+v", v, stack.Callers(3)))
 }
 
 // ConvertGoError converts a go error into mo error.
 // Note here we must return error, because nil error
 // is the same as nil *Error -- Go strangeness.
-func ConvertGoError(err error) error {
+func ConvertGoError(ctx context.Context, err error) error {
 	// nil is nil
 	if err == nil {
 		return err
 	}
 
-	// alread a moerr, return it as is
+	// already a moerr, return it as is
 	if _, ok := err.(*Error); ok {
 		return err
 	}
@@ -418,10 +434,10 @@ func ConvertGoError(err error) error {
 	// Convert a few well known os/go error.
 	if err == io.EOF || err == io.ErrUnexpectedEOF {
 		// if io.EOF reaches here, we believe it is not expected.
-		return NewUnexpectedEOF(err.Error())
+		return NewUnexpectedEOF(ctx, err.Error())
 	}
 
-	return NewInternalError("convert go error to mo error %v", err)
+	return NewInternalError(ctx, "convert go error to mo error %v", err)
 }
 
 func (e *Error) Succeeded() bool {
@@ -445,8 +461,8 @@ func (e *Error) Succeeded() bool {
 // They are both fast, one with less typing and the other is consistent
 // with other error code checking.
 var errOkStopCurrRecur = Error{OkStopCurrRecur, 0, "StopCurrRecur", "00000"}
-var errOkExptededEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
-var errOkExptededEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
+var errOkExpectedEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
+var errOkExpectedEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
 var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000"}
 var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000"}
 
@@ -464,11 +480,11 @@ func GetOkStopCurrRecur() *Error {
 }
 
 func GetOkExpectedEOF() *Error {
-	return &errOkExptededEOF
+	return &errOkExpectedEOF
 }
 
 func GetOkExpectedEOB() *Error {
-	return &errOkExptededEOB
+	return &errOkExpectedEOB
 }
 
 func GetOkExpectedDup() *Error {
@@ -479,392 +495,408 @@ func GetOkExpectedPossibleDup() *Error {
 	return &errOkExpectedPossibleDup
 }
 
-func NewInfo(msg string) *Error {
-	return newWithDepth(Context(), ErrInfo, msg)
+func NewInfo(ctx context.Context, msg string) *Error {
+	return newError(ctx, ErrInfo, msg)
 }
 
-func NewLoadInfo(rec, del, skip, warn, writeTimeOut uint64) *Error {
-	return newWithDepth(Context(), ErrLoadInfo, rec, del, skip, warn, writeTimeOut)
+func NewLoadInfo(ctx context.Context, rec, del, skip, warn, writeTimeOut uint64) *Error {
+	return newError(ctx, ErrLoadInfo, rec, del, skip, warn, writeTimeOut)
 }
 
-func NewWarn(msg string) *Error {
-	return newWithDepth(Context(), ErrWarn, msg)
+func NewWarn(ctx context.Context, msg string) *Error {
+	return newError(ctx, ErrWarn, msg)
 }
 
-func NewBadS3Config(msg string) *Error {
-	return newWithDepth(Context(), ErrBadS3Config, msg)
+func NewBadS3Config(ctx context.Context, msg string) *Error {
+	return newError(ctx, ErrBadS3Config, msg)
 }
 
-func NewInternalError(msg string, args ...any) *Error {
+func NewInternalError(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrInternal, xmsg)
+	return newError(ctx, ErrInternal, xmsg)
 }
 
-func NewNYI(msg string, args ...any) *Error {
+func NewNYI(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrNYI, xmsg)
+	return newError(ctx, ErrNYI, xmsg)
 }
 
-func NewNotSupported(msg string, args ...any) *Error {
+func NewNotSupported(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrNotSupported, xmsg)
+	return newError(ctx, ErrNotSupported, xmsg)
 }
 
-func NewOOM() *Error {
-	return newWithDepth(Context(), ErrOOM)
+func NewOOM(ctx context.Context) *Error {
+	return newError(ctx, ErrOOM)
 }
 
-func NewQueryInterrupted() *Error {
-	return newWithDepth(Context(), ErrQueryInterrupted)
+func NewQueryInterrupted(ctx context.Context) *Error {
+	return newError(ctx, ErrQueryInterrupted)
 }
 
-func NewDivByZero() *Error {
-	return newWithDepth(Context(), ErrDivByZero)
+func NewDivByZero(ctx context.Context) *Error {
+	return newError(ctx, ErrDivByZero)
 }
 
-func NewOutOfRange(typ string, msg string, args ...any) *Error {
+func NewOutOfRange(ctx context.Context, typ string, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrOutOfRange, typ, xmsg)
+	return newError(ctx, ErrOutOfRange, typ, xmsg)
 }
 
-func NewDataTruncated(typ string, msg string, args ...any) *Error {
+func NewDataTruncated(ctx context.Context, typ string, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrDataTruncated, typ, xmsg)
+	return newError(ctx, ErrDataTruncated, typ, xmsg)
 }
 
-func NewInvalidArg(arg string, val any) *Error {
-	return newWithDepth(Context(), ErrInvalidArg, arg, fmt.Sprintf("%v", val))
+func NewInvalidArg(ctx context.Context, arg string, val any) *Error {
+	return newError(ctx, ErrInvalidArg, arg, fmt.Sprintf("%v", val))
 }
 
-func NewTruncatedValueForField(t, v, c string, idx int) *Error {
-	return newWithDepth(Context(), ErrTruncatedWrongValueForField, t, v, c, idx)
+func NewTruncatedValueForField(ctx context.Context, t, v, c string, idx int) *Error {
+	return newError(ctx, ErrTruncatedWrongValueForField, t, v, c, idx)
 }
 
-func NewBadConfig(msg string, args ...any) *Error {
+func NewBadConfig(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrBadConfig, xmsg)
+	return newError(ctx, ErrBadConfig, xmsg)
 }
 
-func NewInvalidInput(msg string, args ...any) *Error {
+func NewInvalidInput(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrInvalidInput, xmsg)
+	return newError(ctx, ErrInvalidInput, xmsg)
 }
 
-func NewSyntaxError(msg string, args ...any) *Error {
+func NewSyntaxError(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrSyntaxError, xmsg)
+	return newError(ctx, ErrSyntaxError, xmsg)
 }
 
-func NewParseError(msg string, args ...any) *Error {
+func NewParseError(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrParseError, xmsg)
+	return newError(ctx, ErrParseError, xmsg)
 }
 
-func NewConstraintViolation(msg string, args ...any) *Error {
+func NewConstraintViolation(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrConstraintViolation, xmsg)
+	return newError(ctx, ErrConstraintViolation, xmsg)
 }
 
-func NewEmptyVector() *Error {
-	return newWithDepth(Context(), ErrEmptyVector)
+func NewEmptyVector(ctx context.Context) *Error {
+	return newError(ctx, ErrEmptyVector)
 }
 
-func NewFileNotFound(f string) *Error {
-	return newWithDepth(Context(), ErrFileNotFound, f)
+func NewFileNotFound(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrFileNotFound, f)
 }
 
-func NewFileAlreadyExists(f string) *Error {
-	return newWithDepth(Context(), ErrFileAlreadyExists, f)
+func NewQueryIdNotFound(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrQueryIdNotFound, f)
 }
 
-func NewDBAlreadyExists(db string) *Error {
-	return newWithDepth(Context(), ErrDBAlreadyExists, db)
+func NewNoConfig(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrNoConfig, f)
 }
 
-func NewTableAlreadyExists(t string) *Error {
-	return newWithDepth(Context(), ErrTableAlreadyExists, t)
+func NewFileAlreadyExists(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrFileAlreadyExists, f)
 }
 
-func NewUnexpectedEOF(f string) *Error {
-	return newWithDepth(Context(), ErrUnexpectedEOF, f)
+func NewDBAlreadyExists(ctx context.Context, db string) *Error {
+	return newError(ctx, ErrDBAlreadyExists, db)
 }
 
-func NewEmptyRange(f string) *Error {
-	return newWithDepth(Context(), ErrEmptyRange, f)
+func NewTableAlreadyExists(ctx context.Context, t string) *Error {
+	return newError(ctx, ErrTableAlreadyExists, t)
 }
 
-func NewSizeNotMatch(f string) *Error {
-	return newWithDepth(Context(), ErrSizeNotMatch, f)
+func NewUnexpectedEOF(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrUnexpectedEOF, f)
 }
 
-func NewNoProgress(f string) *Error {
-	return newWithDepth(Context(), ErrNoProgress, f)
+func NewEmptyRange(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrEmptyRange, f)
 }
 
-func NewInvalidPath(f string) *Error {
-	return newWithDepth(Context(), ErrInvalidPath, f)
+func NewSizeNotMatch(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrSizeNotMatch, f)
 }
 
-func NewInvalidState(msg string, args ...any) *Error {
+func NewNoProgress(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrNoProgress, f)
+}
+
+func NewInvalidPath(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrInvalidPath, f)
+}
+
+func NewInvalidState(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrInvalidState, xmsg)
+	return newError(ctx, ErrInvalidState, xmsg)
 }
 
-func NewInvalidTask(runner string, id uint64) *Error {
-	return newWithDepth(Context(), ErrInvalidTask, runner, id)
+func NewInvalidTask(ctx context.Context, runner string, id uint64) *Error {
+	return newError(ctx, ErrInvalidTask, runner, id)
 }
 
-func NewInvalidServiceIndex(idx int) *Error {
-	return newWithDepth(Context(), ErrInvalidServiceIndex, idx)
+func NewInvalidServiceIndex(ctx context.Context, idx int) *Error {
+	return newError(ctx, ErrInvalidServiceIndex, idx)
 }
 
-func NewLogServiceNotReady() *Error {
-	return newWithDepth(Context(), ErrLogServiceNotReady)
+func NewLogServiceNotReady(ctx context.Context) *Error {
+	return newError(ctx, ErrLogServiceNotReady)
 }
 
-func NewBadDB(name string) *Error {
-	return newWithDepth(Context(), ErrBadDB, name)
+func NewBadDB(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrBadDB, name)
 }
 
-func NewNoDB() *Error {
-	return newWithDepth(Context(), ErrNoDB)
+func NewNoDB(ctx context.Context) *Error {
+	return newError(ctx, ErrNoDB)
 }
 
-func NewNoWorkingStore() *Error {
-	return newWithDepth(Context(), ErrNoWorkingStore)
+func NewNoWorkingStore(ctx context.Context) *Error {
+	return newError(ctx, ErrNoWorkingStore)
 }
 
-func NewNoService(name string) *Error {
-	return newWithDepth(Context(), ErrNoService, name)
+func NewNoService(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrNoService, name)
 }
 
-func NewDupServiceName(name string) *Error {
-	return newWithDepth(Context(), ErrDupServiceName, name)
+func NewDupServiceName(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrDupServiceName, name)
 }
 
-func NewWrongService(exp, got string) *Error {
-	return newWithDepth(Context(), ErrWrongService, exp, got)
+func NewWrongService(ctx context.Context, exp, got string) *Error {
+	return newError(ctx, ErrWrongService, exp, got)
 }
 
-func NewNoHAKeeper() *Error {
-	return newWithDepth(Context(), ErrNoHAKeeper)
+func NewNoHAKeeper(ctx context.Context) *Error {
+	return newError(ctx, ErrNoHAKeeper)
 }
 
-func NewInvalidTruncateLsn(shardId, idx uint64) *Error {
-	return newWithDepth(Context(), ErrInvalidTruncateLsn, shardId, idx)
+func NewInvalidTruncateLsn(ctx context.Context, shardId, idx uint64) *Error {
+	return newError(ctx, ErrInvalidTruncateLsn, shardId, idx)
 }
 
-func NewNotLeaseHolder(holderId uint64) *Error {
-	return newWithDepth(Context(), ErrNotLeaseHolder, holderId)
+func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
+	return newError(ctx, ErrNotLeaseHolder, holderId)
 }
 
-func NewNoSuchTable(db, tbl string) *Error {
-	return newWithDepth(Context(), ErrNoSuchTable, db, tbl)
+func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
+	return newError(ctx, ErrNoSuchTable, db, tbl)
 }
 
-func NewBadView(db, v string) *Error {
-	return newWithDepth(Context(), ErrBadView, db, v)
+func NewBadView(ctx context.Context, db, v string) *Error {
+	return newError(ctx, ErrBadView, db, v)
 }
 
-func NewRPCTimeout() *Error {
-	return newWithDepth(Context(), ErrRPCTimeout)
+func NewRPCTimeout(ctx context.Context) *Error {
+	return newError(ctx, ErrRPCTimeout)
 }
 
-func NewClientClosed() *Error {
-	return newWithDepth(Context(), ErrClientClosed)
+func NewClientClosed(ctx context.Context) *Error {
+	return newError(ctx, ErrClientClosed)
 }
 
-func NewBackendClosed() *Error {
-	return newWithDepth(Context(), ErrBackendClosed)
+func NewBackendClosed(ctx context.Context) *Error {
+	return newError(ctx, ErrBackendClosed)
 }
 
-func NewStreamClosed() *Error {
-	return newWithDepth(Context(), ErrStreamClosed)
+func NewStreamClosed(ctx context.Context) *Error {
+	return newError(ctx, ErrStreamClosed)
 }
 
-func NewNoAvailableBackend() *Error {
-	return newWithDepth(Context(), ErrNoAvailableBackend)
+func NewNoAvailableBackend(ctx context.Context) *Error {
+	return newError(ctx, ErrNoAvailableBackend)
 }
 
-func NewTxnClosed(txnID []byte) *Error {
+func NewTxnClosed(ctx context.Context, txnID []byte) *Error {
 	id := "unknown"
 	if len(txnID) > 0 {
 		id = hex.EncodeToString(txnID)
 	}
-	return newWithDepth(Context(), ErrTxnClosed, id)
+	return newError(ctx, ErrTxnClosed, id)
 }
 
-func NewTxnWriteConflict(msg string, args ...any) *Error {
+func NewTxnWriteConflict(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrTxnWriteConflict, xmsg)
+	return newError(ctx, ErrTxnWriteConflict, xmsg)
 }
 
-func NewMissingTxn() *Error {
-	return newWithDepth(Context(), ErrMissingTxn)
+func NewMissingTxn(ctx context.Context) *Error {
+	return newError(ctx, ErrMissingTxn)
 }
 
-func NewUnresolvedConflict() *Error {
-	return newWithDepth(Context(), ErrUnresolvedConflict)
+func NewUnresolvedConflict(ctx context.Context) *Error {
+	return newError(ctx, ErrUnresolvedConflict)
 }
 
-func NewTxnError(msg string, args ...any) *Error {
+func NewTxnError(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrTxnError, xmsg)
+	return newError(ctx, ErrTxnError, xmsg)
 }
 
-func NewTAEError(msg string, args ...any) *Error {
+func NewTAEError(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrTAEError, xmsg)
+	return newError(ctx, ErrTAEError, xmsg)
 }
 
-func NewDNShardNotFound(uuid string, id uint64) *Error {
-	return newWithDepth(Context(), ErrDNShardNotFound, uuid, id)
+func NewDNShardNotFound(ctx context.Context, uuid string, id uint64) *Error {
+	return newError(ctx, ErrDNShardNotFound, uuid, id)
 }
 
-func NewShardNotReported(uuid string, id uint64) *Error {
-	return newWithDepth(Context(), ErrShardNotReported, uuid, id)
+func NewShardNotReported(ctx context.Context, uuid string, id uint64) *Error {
+	return newError(ctx, ErrShardNotReported, uuid, id)
 }
 
-func NewDragonboatTimeout(msg string, args ...any) *Error {
+func NewDragonboatTimeout(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrDragonboatTimeout, xmsg)
+	return newError(ctx, ErrDragonboatTimeout, xmsg)
 }
 
-func NewDragonboatTimeoutTooSmall(msg string, args ...any) *Error {
+func NewDragonboatTimeoutTooSmall(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrDragonboatTimeoutTooSmall, xmsg)
+	return newError(ctx, ErrDragonboatTimeoutTooSmall, xmsg)
 }
 
-func NewDragonboatInvalidDeadline(msg string, args ...any) *Error {
+func NewDragonboatInvalidDeadline(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrDragonboatInvalidDeadline, xmsg)
+	return newError(ctx, ErrDragonboatInvalidDeadline, xmsg)
 }
 
-func NewDragonboatRejected(msg string, args ...any) *Error {
+func NewDragonboatRejected(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrDragonboatRejected, xmsg)
+	return newError(ctx, ErrDragonboatRejected, xmsg)
 }
 
-func NewDragonboatInvalidPayloadSize(msg string, args ...any) *Error {
+func NewDragonboatInvalidPayloadSize(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrDragonboatInvalidPayloadSize, xmsg)
+	return newError(ctx, ErrDragonboatInvalidPayloadSize, xmsg)
 }
 
-func NewDragonboatShardNotReady(msg string, args ...any) *Error {
+func NewDragonboatShardNotReady(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrDragonboatShardNotReady, xmsg)
+	return newError(ctx, ErrDragonboatShardNotReady, xmsg)
 }
 
-func NewDragonboatSystemClosed(msg string, args ...any) *Error {
+func NewDragonboatSystemClosed(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrDragonboatSystemClosed, xmsg)
+	return newError(ctx, ErrDragonboatSystemClosed, xmsg)
 }
 
-func NewDragonboatInvalidRange(msg string, args ...any) *Error {
+func NewDragonboatInvalidRange(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrDragonboatInvalidRange, xmsg)
+	return newError(ctx, ErrDragonboatInvalidRange, xmsg)
 }
 
-func NewDragonboatShardNotFound(msg string, args ...any) *Error {
+func NewDragonboatShardNotFound(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrDragonboatShardNotFound, xmsg)
+	return newError(ctx, ErrDragonboatShardNotFound, xmsg)
 }
 
-func NewDragonboatOtherSystemError(msg string, args ...any) *Error {
+func NewDragonboatOtherSystemError(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrDragonboatOtherSystemError, xmsg)
+	return newError(ctx, ErrDragonboatOtherSystemError, xmsg)
 }
 
-func NewErrDropNonExistsDB(name string) *Error {
-	return newWithDepth(Context(), ErrDropNonExistsDB, name)
+func NewErrDropNonExistsDB(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrDropNonExistsDB, name)
 }
 
-func NewTAERead() *Error {
-	return newWithDepth(Context(), ErrTAERead)
+func NewTAERead(ctx context.Context) *Error {
+	return newError(ctx, ErrTAERead)
 }
 
-func NewRpcError(msg string) *Error {
-	return newWithDepth(Context(), ErrRpcError, msg)
+func NewRpcError(ctx context.Context, msg string) *Error {
+	return newError(ctx, ErrRpcError, msg)
 }
 
-func NewWaitTxn() *Error {
-	return newWithDepth(Context(), ErrWaitTxn)
+func NewWaitTxn(ctx context.Context) *Error {
+	return newError(ctx, ErrWaitTxn)
 }
 
-func NewTxnNotFound() *Error {
-	return newWithDepth(Context(), ErrTxnNotFound)
+func NewTxnNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrTxnNotFound)
 }
 
-func NewTxnNotActive(st string) *Error {
-	return newWithDepth(Context(), ErrTxnNotActive, st)
+func NewTxnNotActive(ctx context.Context, st string) *Error {
+	return newError(ctx, ErrTxnNotActive, st)
 }
 
-func NewTAEWrite() *Error {
-	return newWithDepth(Context(), ErrTAEWrite)
+func NewTAEWrite(ctx context.Context) *Error {
+	return newError(ctx, ErrTAEWrite)
 }
 
-func NewTAECommit(msg string, args ...any) *Error {
+func NewTAECommit(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrTAECommit, xmsg)
+	return newError(ctx, ErrTAECommit, xmsg)
 }
 
-func NewTAERollback(msg string, args ...any) *Error {
+func NewTAERollback(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrTAERollback, xmsg)
+	return newError(ctx, ErrTAERollback, xmsg)
 }
 
-func NewTAEPrepare(msg string, args ...any) *Error {
+func NewTAEPrepare(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrTAEPrepare, xmsg)
+	return newError(ctx, ErrTAEPrepare, xmsg)
 }
 
-func NewTAEPossibleDuplicate() *Error {
-	return newWithDepth(Context(), ErrTAEPossibleDuplicate)
+func NewTAEPossibleDuplicate(ctx context.Context) *Error {
+	return newError(ctx, ErrTAEPossibleDuplicate)
 }
 
-func NewTxnRWConflict() *Error {
-	return newWithDepth(Context(), ErrTxnRWConflict)
+func NewTxnRWConflict(ctx context.Context) *Error {
+	return newError(ctx, ErrTxnRWConflict)
 }
 
-func NewTxnWWConflict() *Error {
-	return newWithDepth(Context(), ErrTxnWWConflict)
+func NewTxnWWConflict(ctx context.Context) *Error {
+	return newError(ctx, ErrTxnWWConflict)
 }
 
-func NewNotFound() *Error {
-	return newWithDepth(Context(), ErrNotFound)
+func NewNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrNotFound)
 }
 
-func NewDuplicate() *Error {
-	return newWithDepth(Context(), ErrDuplicate)
+func NewDuplicate(ctx context.Context) *Error {
+	return newError(ctx, ErrDuplicate)
 }
 
-func NewDuplicateEntry(entry string, key string) *Error {
-	return newWithDepth(Context(), ErrDuplicateEntry, entry, key)
+func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
+	return newError(ctx, ErrDuplicateEntry, entry, key)
 }
 
-func NewRoleGrantedToSelf(from, to string) *Error {
-	return newWithDepth(Context(), ErrRoleGrantedToSelf, from, to)
+func NewRoleGrantedToSelf(ctx context.Context, from, to string) *Error {
+	return newError(ctx, ErrRoleGrantedToSelf, from, to)
 }
 
-func NewTxnInternal() *Error {
-	return newWithDepth(Context(), ErrTxnInternal)
+func NewTxnInternal(ctx context.Context) *Error {
+	return newError(ctx, ErrTxnInternal)
 }
 
-func NewTxnReadConflict(msg string, args ...any) *Error {
+func NewTxnReadConflict(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newWithDepth(Context(), ErrTxnReadConflict, xmsg)
+	return newError(ctx, ErrTxnReadConflict, xmsg)
 }
 
-func NewPrimaryKeyDuplicated(k any) *Error {
-	return newWithDepth(Context(), ErrPrimaryKeyDuplicated, k)
+func NewPrimaryKeyDuplicated(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrPrimaryKeyDuplicated, k)
 }
 
-func NewAppendableSegmentNotFound() *Error {
-	return newWithDepth(Context(), ErrAppendableSegmentNotFound)
+func NewDuplicateKey(ctx context.Context, k string) *Error {
+	return newError(ctx, ErrDuplicateKey, k)
 }
 
-func NewAppendableBlockNotFound() *Error {
-	return newWithDepth(Context(), ErrAppendableBlockNotFound)
+func NewAppendableSegmentNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrAppendableSegmentNotFound)
+}
+
+func NewAppendableBlockNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrAppendableBlockNotFound)
+}
+
+func NewDeadLockDetected(ctx context.Context) *Error {
+	return newError(ctx, ErrDeadLockDetected)
 }
 
 var contextFunc atomic.Value

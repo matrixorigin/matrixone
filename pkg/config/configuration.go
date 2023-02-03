@@ -53,9 +53,6 @@ var (
 	//listening unix domain socket
 	defaultUnixAddr = "/var/lib/mysql/mysql.sock"
 
-	//host mmu limitation. 1 << 40 = 1099511627776
-	defaultHostMmuLimitation = 1099511627776
-
 	//guest mmu limitation.  1 << 40 = 1099511627776
 	defaultGuestMmuLimitation = 1099511627776
 
@@ -120,6 +117,9 @@ var (
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
 
+	// defaultMetricUpdateStorageUsageInterval default: 15 min.
+	defaultMetricUpdateStorageUsageInterval = 15 * time.Minute
+
 	// defaultMergeCycle default: 4 hours
 	defaultMergeCycle = 4 * time.Hour
 
@@ -131,6 +131,12 @@ var (
 
 	// defaultSessionTimeout default: 10 minutes
 	defaultSessionTimeout = 24 * time.Hour
+
+	// defaultLogsExtension default: tae. Support val in [csv, tae]
+	defaultLogsExtension = "tae"
+
+	// defaultMergedExtension default: tae. Support val in [csv, tae]
+	defaultMergedExtension = "tae"
 )
 
 // FrontendParameters of the frontend
@@ -159,9 +165,6 @@ type FrontendParameters struct {
 	//listening unix domain socket
 	UAddr string `toml:"UAddr"`
 
-	//host mmu limitation. default: 1 << 40 = 1099511627776
-	HostMmuLimitation int64 `toml:"hostMmuLimitation"`
-
 	//guest mmu limitation. default: 1 << 40 = 1099511627776
 	GuestMmuLimitation int64 `toml:"guestMmuLimitation"`
 
@@ -183,9 +186,6 @@ type FrontendParameters struct {
 	//process.Limitation.PartitionRows. default: 10 << 32 = 42949672960
 	ProcessLimitationPartitionRows int64 `toml:"processLimitationPartitionRows"`
 
-	//record the time elapsed of executing sql request
-	DisableRecordTimeElapsedOfSqlRequest bool `toml:"DisableRecordTimeElapsedOfSqlRequest"`
-
 	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
 	StorePath string `toml:"storePath"`
 
@@ -203,9 +203,6 @@ type FrontendParameters struct {
 
 	//default is false. Skip writing batch into the storage
 	LoadDataSkipWritingBatch bool `toml:"loadDataSkipWritingBatch"`
-
-	//default is false. true for profiling the getDataFromPipeline
-	EnableProfileGetDataFromPipeline bool `toml:"enableProfileGetDataFromPipeline"`
 
 	//KB. When the number of bytes in the outbuffer exceeds it,the outbuffer will be flushed.
 	MaxBytesInOutbufToFlush int64 `toml:"maxBytesInOutbufToFlush"`
@@ -265,6 +262,15 @@ type FrontendParameters struct {
 
 	// MaxMessageSize max size for read messages from dn. Default is 10M
 	MaxMessageSize uint64 `toml:"max-message-size"`
+
+	// default off
+	SaveQueryResult string `toml:"saveQueryResult"`
+
+	// default 24 (h)
+	QueryResultTimeout uint64 `toml:"queryResultTimeout"`
+
+	// default 100 (MB)
+	QueryResultMaxsize uint64 `toml:"queryResultMaxsize"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -294,10 +300,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.UAddr == "" {
 		fp.UAddr = defaultUnixAddr
-	}
-
-	if fp.HostMmuLimitation == 0 {
-		fp.HostMmuLimitation = int64(defaultHostMmuLimitation)
 	}
 
 	if fp.GuestMmuLimitation == 0 {
@@ -371,6 +373,18 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.SessionTimeout.Duration == 0 {
 		fp.SessionTimeout.Duration = defaultSessionTimeout
 	}
+
+	if fp.SaveQueryResult == "" {
+		fp.SaveQueryResult = "off"
+	}
+
+	if fp.QueryResultTimeout == 0 {
+		fp.QueryResultTimeout = 24
+	}
+
+	if fp.QueryResultMaxsize == 0 {
+		fp.QueryResultMaxsize = 100
+	}
 }
 
 func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
@@ -429,6 +443,9 @@ type ObservabilityParameters struct {
 	// MetricGatherInterval default is 15 sec.
 	MetricGatherInterval int `toml:"metricGatherInterval"`
 
+	// MetricUpdateStorageUsageInterval, default: 30 min
+	MetricUpdateStorageUsageInterval toml.Duration `toml:"metricUpdateStorageUsageInterval"`
+
 	// MergeCycle default: 14400 sec (4 hours).
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"mergeCycle"`
@@ -437,7 +454,13 @@ type ObservabilityParameters struct {
 	MergeMaxFileSize int `toml:"mergeMaxFileSize"`
 
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
-	PathBuilder string `toml:"PathBuilder"`
+	PathBuilder string `toml:"pathBuilder"`
+
+	// LogsExtension default: tae. Support val in [csv, tae]
+	LogsExtension string `toml:"logsExtension"`
+
+	// MergedExtension default: tae. Support val in [csv, tae]
+	MergedExtension string `toml:"mergedExtension"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
@@ -467,6 +490,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 		op.MetricGatherInterval = defaultMetricGatherInterval
 	}
 
+	if op.MetricUpdateStorageUsageInterval.Duration <= 0 {
+		op.MetricUpdateStorageUsageInterval.Duration = defaultMetricUpdateStorageUsageInterval
+	}
+
 	if op.MergeCycle.Duration <= 0 {
 		op.MergeCycle.Duration = defaultMergeCycle
 	}
@@ -477,6 +504,14 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.MergeMaxFileSize <= 0 {
 		op.MergeMaxFileSize = defaultMaxFileSize
+	}
+
+	if op.LogsExtension == "" {
+		op.LogsExtension = defaultLogsExtension
+	}
+
+	if op.MergedExtension == "" {
+		op.MergedExtension = defaultMergedExtension
 	}
 }
 

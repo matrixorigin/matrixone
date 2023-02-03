@@ -16,7 +16,6 @@ package types
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -50,7 +49,8 @@ func (d Weekday) String() string {
 	return "%Weekday(" + strconv.FormatUint(uint64(d), 10) + ")"
 }
 
-var unixEpoch = int64(FromClock(1970, 1, 1, 0, 0, 0, 0))
+var unixEpochSecs = int64(DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0))
+var unixEpochDays = int32(DateFromCalendar(1970, 1, 1))
 
 var (
 	leapYearMonthDays = []uint8{31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
@@ -72,128 +72,198 @@ const (
 	TimeStampType = 2
 )
 
-// ParseDate will parse a string to be a Date
-// Support Format:
-// `yyyy-mm-dd`
-// `yyyy-mm-d`
-// `yyyy-m-dd`
-// `yyyy-m-d`
-// `yyyymmdd`
-func ParseDate(s string) (Date, error) {
-	var y int32
-	var m, d uint8
+const (
+	Start = iota
+	YearState
+	MonthState
+	DayState
+	HourState
+	MinuteState
+	SecondState
+	MsState
+	End
+)
 
-	if len(s) < 8 {
-		return -1, moerr.NewInvalidArg("parsedate", s)
+func IsNumber(s *string, idx int) bool {
+	if (*s)[idx] >= '0' && (*s)[idx] <= '9' {
+		return true
 	}
-
-	y = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
-	if s[4] == '-' {
-		if len(s) < 8 || len(s) > 10 {
-			return -1, moerr.NewInvalidArg("parsedate", s)
-		}
-		if len(s) == 8 {
-			if s[6] != '-' {
-				return -1, moerr.NewInvalidArg("parsedate", s)
-			}
-			m = s[5] - '0'
-			d = s[7] - '0'
-		} else if len(s) == 9 {
-			if s[6] == '-' {
-				m = s[5] - '0'
-				d = (s[7]-'0')*10 + (s[8] - '0')
-			} else if s[7] == '-' {
-				m = (s[5]-'0')*10 + (s[6] - '0')
-				d = s[8] - '0'
-			} else {
-				return -1, moerr.NewInvalidArg("parsedate", s)
-			}
-		} else {
-			if s[7] != '-' {
-				return -1, moerr.NewInvalidArg("parsedate", s)
-			}
-			m = (s[5]-'0')*10 + (s[6] - '0')
-			d = (s[8]-'0')*10 + (s[9] - '0')
-		}
-	} else {
-		if len(s) != 8 {
-			return -1, moerr.NewInvalidArg("parsedate", s)
-		}
-		m = (s[4]-'0')*10 + (s[5] - '0')
-		d = (s[6]-'0')*10 + (s[7] - '0')
-	}
-
-	if ValidDate(y, m, d) {
-		return FromCalendar(y, m, d), nil
-	}
-	return -1, moerr.NewInvalidArg("parsedate", s)
+	return false
 }
 
-// ParseDateCast will parse a string to be a Date (this is used for cast string to date,it's different from above)
-// Support Format: we exchange '.' with '-' anyway.
-// `yyyy-mm-dd`
-// `yyyymmdd`
-// `yyyy-mm.dd`
-// `yyyy-mm.dd hh`
-// `yyyy-mm.dd hh:mm:ss`
-// `yyyy-mm.dd hh:mm:ss.(msc)`
-func ParseDateCast(s string) (Date, error) {
-	var y int32
-	var m, d uint8
-	//special case
-	flag_spcial, _ := regexp.MatchString("^[0-9]{4}[.|-]{1}[0-9]{2}$", s)
-	if flag_spcial {
-		return -1, moerr.NewInvalidArg("parsedate", s)
-	}
-	//if it's pure number series like yyyymmdd,it must be 8 or 6 digits, otherwise there will be obfuscate
-	flag1, _ := regexp.MatchString("^[0-9]{4}[0-9]{1,2}[0-9]{1,2}$", s)
-	//the reg rule test: here refers to https://regex101.com/r/NlaiAo/1
-	flag2, _ := regexp.MatchString("^[0-9]{4}[./-]{0,1}[0-9]{1,2}[./-]{0,1}[0-9]{1,2}([ ](([0-9]{1,2})|([0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}(\\.[0-9]*){0,1}))){0,1}$", s)
-	if !flag2 {
-		return -1, moerr.NewInvalidArg("parsedate", s)
-	}
-	y = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
-	if flag1 {
-		if len(s) == 8 {
-			m = (s[4]-'0')*10 + (s[5] - '0')
-			d = (s[6]-'0')*10 + (s[7] - '0')
-		} else if len(s) == 6 {
-			m = (s[4] - '0')
-			d = (s[5] - '0')
-		} else {
-			return -1, moerr.NewInvalidArg("parsedate", s)
+func IsAllNumber(s *string) bool {
+	for i := 0; i < len(*s); i++ {
+		if !IsNumber(s, i) {
+			return false
 		}
-	} else {
-		// if len(s) < 8 {
-		// 	return -1, errIncorrectDateValue
-		// }
-		strs := strings.Split(s, " ")
-		strs = strings.FieldsFunc(strs[0], func(r rune) bool {
-			return r == '.' || r == '-'
-		})
-		v, _ := strconv.ParseUint(strs[1], 10, 8)
-		m = uint8(v)
-		v, _ = strconv.ParseUint(strs[2], 10, 8)
-		d = uint8(v)
-		// if s[4] == '-' {
-		// 	if len(s) != 10 && len(s) != 13 || (s[7] != '-' && s[7] != '.') {
-		// 		return -1, errIncorrectDateValue
-		// 	}
-		// 	m = (s[5]-'0')*10 + (s[6] - '0')
-		// 	d = (s[8]-'0')*10 + (s[9] - '0')
-		// } else {
-		// 	if len(s) != 8 {
-		// 		return -1, errIncorrectDateValue
-		// 	}
-		// 	m = (s[4]-'0')*10 + (s[5] - '0')
-		// 	d = (s[6]-'0')*10 + (s[7] - '0')
-		// }
 	}
+	return true
+}
 
-	if ValidDate(y, m, d) {
-		return FromCalendar(y, m, d), nil
+func ToNumber(s string) int64 {
+	var result int64
+	for i := 0; i < len(s); i++ {
+		result = 10*result + int64((s[i] - '0'))
 	}
-	return -1, moerr.NewInvalidArg("parsedate", s)
+	return result
+}
+
+// rewrite ParseDateCast, don't use regexp, that's too slow
+// the format we need to support:
+// 1.yyyy-mm-dd hh:mm:ss.ms
+// 2.yyyy-mm-dd
+// 3.yyyymmdd
+func ParseDateCast(s string) (Date, error) {
+	var y, m, d, hh, mm, ss string
+	s = strings.TrimSpace(s)
+	if len(s) < 7 && IsAllNumber(&s) {
+		return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+	}
+	// a special we need to process
+	// we need to support 2220919,so we need to add a '0' to extend
+	if len(s) == 7 && IsAllNumber(&s) {
+		s = string('0') + s
+	}
+	// for the third type, process here
+	if len(s) == 8 && IsAllNumber(&s) {
+		y = s[:4]
+		m = s[4:6]
+		d = s[6:8]
+	} else {
+		// state is used to flag the state of the DAG, we process 1,2 below
+		var state = Start
+		for i := 0; i < len(s); i++ {
+			switch state {
+			case Start:
+				if !IsNumber(&s, i) {
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+				}
+				state = YearState
+				y = y + string(s[i])
+				if len(y) >= 5 {
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+				}
+			case YearState:
+				if IsNumber(&s, i) {
+					y = y + string(s[i])
+				} else if s[i] == '-' {
+					state = MonthState
+					if y == "" {
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+				} else {
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+				}
+			case MonthState:
+				if IsNumber(&s, i) {
+					m = m + string(s[i])
+					if len(m) >= 3 {
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+				} else if s[i] == '-' {
+					// Can't go into DayState, because the Month is empty
+					if m == "" {
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					} else {
+						state = DayState
+					}
+				}
+			case DayState:
+				if IsNumber(&s, i) {
+					d = d + string(s[i])
+					if len(d) >= 3 {
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+				} else {
+					if s[i] == ' ' {
+						if d == "" {
+							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+						}
+						state = HourState
+					} else {
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+				}
+				if i == len(s)-1 {
+					state = End
+				}
+			case HourState:
+				// we need to support '2022-09-01                   23:11:12.3'
+				// not only '2022-09-01 23:11:12.3'
+				if s[i] == ' ' {
+					continue
+				} else {
+					if IsNumber(&s, i) {
+						hh += string(s[i])
+						if len(hh) >= 3 {
+							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+						}
+					} else {
+						if s[i] == ':' {
+							if hh == "" {
+								return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+							}
+							state = MinuteState
+						} else {
+							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+						}
+					}
+				}
+			case MinuteState:
+				if IsNumber(&s, i) {
+					mm = mm + string(s[i])
+					if len(mm) >= 3 {
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+				} else if s[i] == ':' {
+					// Can't go into SecondState, because the Minute is empty
+					if mm == "" {
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					} else {
+						state = SecondState
+					}
+				}
+			case SecondState:
+				if IsNumber(&s, i) {
+					ss = ss + string(s[i])
+					if len(d) >= 3 {
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+				} else {
+					if s[i] == '.' {
+						if d == "" {
+							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+						}
+						state = MsState
+					} else {
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+				}
+				if i == len(s)-1 {
+					state = End
+				}
+			case MsState:
+				temp_s := string(s[i:])
+				if IsAllNumber(&temp_s) {
+					state = End
+					// break out loop
+					i = len(s)
+				} else {
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+				}
+			}
+		}
+		if state != End {
+			return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+		}
+	}
+	year := ToNumber(y)
+	month := ToNumber(m)
+	day := ToNumber(d)
+	if ValidDate(int32(year), uint8(month), uint8(day)) {
+		return DateFromCalendar(int32(year), uint8(month), uint8(day)), nil
+	}
+	return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 }
 
 // date[0001-01-01 to 9999-12-31]
@@ -421,7 +491,7 @@ var daysBefore = [...]uint16{
 	31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30 + 31,
 }
 
-func FromCalendar(year int32, month, day uint8) Date {
+func DateFromCalendar(year int32, month, day uint8) Date {
 	// Compute days since the absolute epoch.
 	d := daysSinceEpoch(year - 1)
 
@@ -661,7 +731,7 @@ func (d Date) ToTime() Time {
 func (d Date) ToTimestamp(loc *time.Location) Timestamp {
 	year, mon, day, _ := d.Calendar(true)
 	t := time.Date(int(year), time.Month(mon), int(day), 0, 0, 0, 0, loc)
-	return Timestamp(t.UnixMicro() + unixEpoch)
+	return Timestamp(t.UnixMicro() + unixEpochSecs)
 }
 
 func (d Date) Month() uint8 {
@@ -679,4 +749,12 @@ func LastDay(year int32, month uint8) uint8 {
 func (d Date) Day() uint8 {
 	_, _, day, _ := d.Calendar(true)
 	return day
+}
+
+func (d Date) DaysSinceUnixEpoch() int32 {
+	return int32(d) - unixEpochDays
+}
+
+func GetUnixEpochSecs() int64 {
+	return unixEpochSecs
 }

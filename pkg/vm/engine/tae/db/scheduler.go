@@ -28,8 +28,8 @@ import (
 )
 
 var (
-	ErrTaskDuplicated = moerr.NewInternalError("tae task: duplicated task found")
-	ErrTaskNotFound   = moerr.NewInternalError("tae task: task not found")
+	ErrTaskDuplicated = moerr.NewInternalErrorNoCtx("tae task: duplicated task found")
+	ErrTaskNotFound   = moerr.NewInternalErrorNoCtx("tae task: task not found")
 )
 
 type taskScheduler struct {
@@ -64,7 +64,7 @@ func newTaskScheduler(db *DB, asyncWorkers int, ioWorkers int) *taskScheduler {
 		handler.Start()
 	}
 
-	ioDispatcher := tasks.NewBaseScopedDispatcher(tasks.DefaultScopeSharder)
+	ioDispatcher := tasks.NewBaseScopedDispatcher(nil)
 	for i := 0; i < ioWorkers; i++ {
 		handler := tasks.NewSingleWorkerHandler(fmt.Sprintf("[ioworker-%d]", i))
 		ioDispatcher.AddHandle(handler)

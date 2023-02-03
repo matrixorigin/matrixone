@@ -29,7 +29,7 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	ap := arg.(*Argument)
 	reg := ap.Reg
 	bat := proc.InputBatch()
@@ -57,6 +57,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		bat.Clean(proc.Mp())
 		return true, nil
 	case reg.Ch <- bat:
+		proc.SetInputBatch(nil)
 		return false, nil
 	}
 }

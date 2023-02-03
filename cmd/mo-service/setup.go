@@ -15,13 +15,17 @@
 package main
 
 import (
+	"context"
 	"sync"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"go.uber.org/zap"
 )
 
 const (
@@ -30,8 +34,6 @@ const (
 )
 
 var (
-	defaultMaxClockOffset = time.Millisecond * 500
-
 	supportTxnClockBackends = map[string]struct{}{
 		localClockBackend: {},
 		hlcClockBackend:   {},
@@ -39,42 +41,74 @@ var (
 )
 
 var (
-	setupLoggerOnce sync.Once
-	setupClockOnce  sync.Once
+	logOnce          sync.Once
+	setupRuntimeOnce sync.Once
 )
 
-func setupGlobalComponents(cfg *Config, stopper *stopper.Stopper) error {
-	if err := setupClock(cfg, stopper); err != nil {
-		return err
-	}
-
-	setupLogger(cfg)
-	return nil
-}
-
-func setupClock(cfg *Config, stopper *stopper.Stopper) error {
-	var err error
-	setupClockOnce.Do(func() {
-		var defaultClock clock.Clock
-		switch cfg.Clock.Backend {
-		case localClockBackend:
-			defaultClock = newLocalClock(cfg, stopper)
-		default:
-			err = moerr.NewInternalError("not implment for %s", cfg.Clock.Backend)
+func setupProcessLevelRuntime(cfg *Config, stopper *stopper.Stopper) error {
+	var e error
+	setupRuntimeOnce.Do(func() {
+		mpool.InitCap(int64(cfg.Limit.Memory))
+		r, err := newRuntime(cfg, stopper)
+		if err != nil {
+			e = err
 			return
 		}
-		defaultClock.SetNodeID(cfg.hashNodeID())
-		clock.SetupDefaultClock(defaultClock)
+		runtime.SetupProcessLevelRuntime(r)
 	})
-	return err
+	return e
 }
 
-func setupLogger(cfg *Config) {
-	setupLoggerOnce.Do(func() {
-		logutil.SetupMOLogger(&cfg.Log)
-	})
+func getRuntime(st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper) (runtime.Runtime, error) {
+	switch st {
+	case metadata.ServiceType_DN:
+		return newRuntime(cfg, stopper)
+	default:
+		return runtime.ProcessLevelRuntime(), nil
+	}
+}
+
+func newRuntime(cfg *Config, stopper *stopper.Stopper) (runtime.Runtime, error) {
+	clock, err := getClock(cfg, stopper)
+	if err != nil {
+		return nil, err
+	}
+
+	logger, err := getLogger(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return runtime.NewRuntime(cfg.mustGetServiceType(),
+		cfg.mustGetServiceUUID(),
+		logger,
+		runtime.WithClock(clock)), nil
+}
+
+func getClock(cfg *Config, stopper *stopper.Stopper) (clock.Clock, error) {
+	var c clock.Clock
+	switch cfg.Clock.Backend {
+	case localClockBackend:
+		c = newLocalClock(cfg, stopper)
+	default:
+		return nil, moerr.NewInternalError(context.Background(), "not implment for %s", cfg.Clock.Backend)
+	}
+	c.SetNodeID(cfg.hashNodeID())
+	return c, nil
+}
+
+func getLogger(cfg *Config) (*zap.Logger, error) {
+	initLogger(cfg)
+	logger := logutil.GetGlobalLogger()
+	return logger, nil
 }
 
 func newLocalClock(cfg *Config, stopper *stopper.Stopper) clock.Clock {
 	return clock.NewUnixNanoHLCClockWithStopper(stopper, cfg.Clock.MaxClockOffset.Duration)
+}
+
+func initLogger(cfg *Config) {
+	logOnce.Do(func() {
+		logutil.SetupMOLogger(&cfg.Log)
+	})
 }

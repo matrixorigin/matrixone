@@ -77,13 +77,13 @@ func TestDispatch(t *testing.T) {
 				}
 			}
 		}
-		_, _ = Call(0, tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg, false, false)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		_, _ = Call(0, tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg, false, false)
 		tc.proc.Reg.InputBatch = nil
-		_, _ = Call(0, tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg, false, false)
 		tc.arg.Free(tc.proc, false)
-		for _, re := range tc.arg.Regs {
+		for _, re := range tc.arg.LocalRegs {
 			for len(re.Ch) > 0 {
 				bat = <-re.Ch
 				if bat == nil {
@@ -107,8 +107,8 @@ func newTestCase(all bool) dispatchTestCase {
 			{Oid: types.T_int8},
 		},
 		arg: &Argument{
-			All:  all,
-			Regs: []*process.WaitRegister{reg},
+			All:       all,
+			LocalRegs: []*process.WaitRegister{reg},
 		},
 		cancel: cancel,
 	}

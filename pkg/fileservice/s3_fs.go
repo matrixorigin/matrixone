@@ -28,12 +28,17 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -44,7 +49,8 @@ type S3FS struct {
 	bucket    string
 	keyPrefix string
 
-	memCache *MemCache
+	memCache  *MemCache
+	diskCache *DiskCache
 }
 
 // key mapping scheme:
@@ -59,31 +65,30 @@ func NewS3FS(
 	bucket string,
 	keyPrefix string,
 	memCacheCapacity int64,
+	diskCacheCapacity int64,
+	diskCachePath string,
 ) (*S3FS, error) {
 
-	u, err := url.Parse(endpoint)
+	fs, err := newS3FS([]string{
+		"shared-config-profile=" + sharedConfigProfile,
+		"name=" + name,
+		"endpoint=" + endpoint,
+		"bucket=" + bucket,
+		"prefix=" + keyPrefix,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if u.Scheme == "" {
-		u.Scheme = "https"
-	}
-	endpoint = u.String()
 
-	return newS3FS(
-		sharedConfigProfile,
-		name,
-		endpoint,
-		bucket,
-		keyPrefix,
+	if err := fs.initCaches(
 		memCacheCapacity,
-		nil,
-		[]func(*s3.Options){
-			s3.WithEndpointResolver(
-				s3.EndpointResolverFromURL(endpoint),
-			),
-		},
-	)
+		diskCacheCapacity,
+		diskCachePath,
+	); err != nil {
+		return nil, err
+	}
+
+	return fs, nil
 }
 
 // NewS3FSOnMinio creates S3FS on minio server
@@ -95,116 +100,62 @@ func NewS3FSOnMinio(
 	bucket string,
 	keyPrefix string,
 	memCacheCapacity int64,
+	diskCacheCapacity int64,
+	diskCachePath string,
 ) (*S3FS, error) {
 
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return nil, err
-	}
-	if u.Scheme == "" {
-		u.Scheme = "https"
-	}
-	endpoint = u.String()
-
-	endpointResolver := s3.EndpointResolverFunc(
-		func(
-			region string,
-			options s3.EndpointResolverOptions,
-		) (
-			ep aws.Endpoint,
-			err error,
-		) {
-			_ = options
-			ep.URL = endpoint
-			ep.Source = aws.EndpointSourceCustom
-			ep.HostnameImmutable = true
-			ep.SigningRegion = region
-			return
-		},
-	)
-
-	return newS3FS(
-		sharedConfigProfile,
-		name,
-		endpoint,
-		bucket,
-		keyPrefix,
-		memCacheCapacity,
-		nil,
-		[]func(*s3.Options){
-			s3.WithEndpointResolver(
-				endpointResolver,
-			),
-		},
-	)
-
-}
-
-func newS3FS(
-	sharedConfigProfile string,
-	name string,
-	endpoint string,
-	bucket string,
-	keyPrefix string,
-	memCacheCapacity int64,
-	configOptions []func(*config.LoadOptions) error,
-	s3Options []func(*s3.Options),
-) (*S3FS, error) {
-
-	if endpoint == "" {
-		moerr.NewBadS3Config("empty endpoint")
-	}
-	if bucket == "" {
-		moerr.NewBadS3Config("empty bucket")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*17)
-	defer cancel()
-
-	configOptions = append(configOptions,
-		config.WithSharedConfigProfile(sharedConfigProfile),
-		config.WithLogger(logutil.GetS3Logger()),
-		config.WithClientLogMode(
-			aws.LogSigning|
-				aws.LogRetries|
-				aws.LogRequest|
-				aws.LogResponse|
-				aws.LogDeprecatedUsage|
-				aws.LogRequestEventMessage|
-				aws.LogResponseEventMessage,
-		),
-	)
-	cfg, err := config.LoadDefaultConfig(ctx,
-		configOptions...,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	client := s3.NewFromConfig(
-		cfg,
-		s3Options...,
-	)
-
-	// head bucket to validate config
-	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
-		Bucket: ptrTo(bucket),
+	fs, err := newS3FS([]string{
+		"shared-config-profile=" + sharedConfigProfile,
+		"name=" + name,
+		"endpoint=" + endpoint,
+		"bucket=" + bucket,
+		"prefix=" + keyPrefix,
+		"is-minio=true",
 	})
 	if err != nil {
-		return nil, moerr.NewInternalError("bad s3 config: %v", err)
+		return nil, err
 	}
 
-	fs := &S3FS{
-		name:      name,
-		client:    client,
-		bucket:    bucket,
-		keyPrefix: keyPrefix,
-	}
-	if memCacheCapacity > 0 {
-		fs.memCache = NewMemCache(memCacheCapacity)
+	if err := fs.initCaches(
+		memCacheCapacity,
+		diskCacheCapacity,
+		diskCachePath,
+	); err != nil {
+		return nil, err
 	}
 
 	return fs, nil
+}
+
+func (s *S3FS) initCaches(
+	memCacheCapacity int64,
+	diskCacheCapacity int64,
+	diskCachePath string,
+) error {
+
+	// memory cache
+	if memCacheCapacity == 0 {
+		memCacheCapacity = 512 << 20
+	}
+	if memCacheCapacity > 0 {
+		s.memCache = NewMemCache(memCacheCapacity)
+		logutil.Info("fileservice: mem cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", memCacheCapacity))
+	}
+
+	// disk cache
+	if diskCacheCapacity == 0 {
+		diskCacheCapacity = 8 << 30
+	}
+	if diskCacheCapacity > 0 && diskCachePath != "" {
+		var err error
+		s.diskCache, err = NewDiskCache(diskCachePath, diskCacheCapacity)
+		if err != nil {
+			return err
+		}
+		logutil.Info("fileservice: disk cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", memCacheCapacity))
+	}
+
+	return nil
 }
 
 func (s *S3FS) Name() string {
@@ -212,6 +163,14 @@ func (s *S3FS) Name() string {
 }
 
 func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	ctx, span := trace.Start(ctx, "S3FS.List")
+	defer span.End()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -272,9 +231,14 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
-	if ctx == nil {
-		ctx = context.Background()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
+
+	ctx, span := trace.Start(ctx, "S3FS.Write")
+	defer span.End()
 
 	// check existence
 	path, err := ParsePathAtService(vector.FilePath, s.name)
@@ -303,13 +267,15 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}
 	if output != nil {
 		// key existed
-		return moerr.NewFileAlreadyExists(path.File)
+		return moerr.NewFileAlreadyExistsNoCtx(path.File)
 	}
 
 	return s.write(ctx, vector)
 }
 
 func (s *S3FS) write(ctx context.Context, vector IOVector) error {
+	ctx, span := trace.Start(ctx, "S3FS.write")
+	defer span.End()
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
@@ -329,9 +295,13 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 	}
 
 	// put
-	content, err := io.ReadAll(newIOEntriesReader(vector.Entries))
+	content, err := io.ReadAll(newIOEntriesReader(ctx, vector.Entries))
 	if err != nil {
 		return err
+	}
+	var expire *time.Time
+	if !vector.ExpireAt.IsZero() {
+		expire = &vector.ExpireAt
 	}
 	_, err = s.client.PutObject(
 		ctx,
@@ -340,6 +310,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 			Key:           ptrTo(key),
 			Body:          bytes.NewReader(content),
 			ContentLength: size,
+			Expires:       expire,
 		},
 	)
 	if err != nil {
@@ -349,21 +320,45 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 	return nil
 }
 
-func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
-	if ctx == nil {
-		ctx = context.Background()
+func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
+
+	ctx, span := trace.Start(ctx, "S3FS.Read")
+	defer span.End()
 
 	if len(vector.Entries) == 0 {
-		return moerr.NewEmptyVector()
+		return moerr.NewEmptyVectorNoCtx()
 	}
 
-	if s.memCache == nil {
-		// no cache
-		return s.read(ctx, vector)
+	if s.memCache != nil {
+		if err := s.memCache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = s.memCache.Update(ctx, vector)
+		}()
 	}
 
-	if err := s.memCache.Read(ctx, vector, s.read); err != nil {
+	if s.diskCache != nil {
+		if err := s.diskCache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = s.diskCache.Update(ctx, vector)
+		}()
+	}
+
+	if err := s.read(ctx, vector); err != nil {
 		return err
 	}
 
@@ -371,6 +366,12 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
+	if vector.allDone() {
+		return nil
+	}
+
+	ctx, span := trace.Start(ctx, "S3FS.read")
+	defer span.End()
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
@@ -382,7 +383,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	max := int64(0)
 	readToEnd := false
 	for _, entry := range vector.Entries {
-		if entry.ignore {
+		if entry.done {
 			continue
 		}
 		if entry.Offset < min {
@@ -398,7 +399,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	}
 
 	// a function to get an io.ReadCloser
-	getReader := func(readToEnd bool, min int64, max int64) (io.ReadCloser, error) {
+	getReader := func(ctx context.Context, readToEnd bool, min int64, max int64) (io.ReadCloser, error) {
+		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
+		defer spanR.End()
 		if readToEnd {
 			rang := fmt.Sprintf("bytes=%d-", min)
 			output, err := s.client.GetObject(
@@ -439,7 +442,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	var contentBytes []byte
 	var contentErr error
 	var getContentDone bool
-	getContent := func() (bs []byte, err error) {
+	getContent := func(ctx context.Context) (bs []byte, err error) {
+		ctx, spanC := trace.Start(ctx, "S3FS.read.getContent")
+		defer spanC.End()
 		if getContentDone {
 			return contentBytes, contentErr
 		}
@@ -449,7 +454,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			getContentDone = true
 		}()
 
-		reader, err := getReader(readToEnd, min, max)
+		reader, err := getReader(ctx, readToEnd, min, max)
 		if err != nil {
 			return nil, err
 		}
@@ -464,47 +469,49 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	}
 
 	for i, entry := range vector.Entries {
-		if entry.ignore {
+		if entry.done {
 			continue
 		}
 
 		start := entry.Offset - min
 
 		if entry.Size == 0 {
-			return moerr.NewEmptyRange(path.File)
+			return moerr.NewEmptyRangeNoCtx(path.File)
 		} else if entry.Size > 0 {
-			content, err := getContent()
+			content, err := getContent(ctx)
 			if err != nil {
 				return err
 			}
 			if start >= int64(len(content)) {
-				return moerr.NewEmptyRange(path.File)
+				return moerr.NewEmptyRangeNoCtx(path.File)
 			}
 		}
 
 		// a function to get entry data lazily
-		getData := func() ([]byte, error) {
+		getData := func(ctx context.Context) ([]byte, error) {
+			ctx, spanD := trace.Start(ctx, "S3FS.reader.getData")
+			defer spanD.End()
 			if entry.Size < 0 {
 				// read to end
-				content, err := getContent()
+				content, err := getContent(ctx)
 				if err != nil {
 					return nil, err
 				}
 				if start >= int64(len(content)) {
-					return nil, moerr.NewEmptyRange(path.File)
+					return nil, moerr.NewEmptyRangeNoCtx(path.File)
 				}
 				return content[start:], nil
 			}
-			content, err := getContent()
+			content, err := getContent(ctx)
 			if err != nil {
 				return nil, err
 			}
 			end := start + entry.Size
 			if end > int64(len(content)) {
-				return nil, moerr.NewUnexpectedEOF(path.File)
+				return nil, moerr.NewUnexpectedEOFNoCtx(path.File)
 			}
 			if start == end {
-				return nil, moerr.NewEmptyRange(path.File)
+				return nil, moerr.NewEmptyRangeNoCtx(path.File)
 			}
 			return content[start:end], nil
 		}
@@ -515,7 +522,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			setData = false
 			if getContentDone {
 				// data is ready
-				data, err := getData()
+				data, err := getData(ctx)
 				if err != nil {
 					return err
 				}
@@ -526,7 +533,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 			} else {
 				// get a reader and copy
-				reader, err := getReader(entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
+				reader, err := getReader(ctx, entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
 				if err != nil {
 					return err
 				}
@@ -543,7 +550,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			setData = false
 			if getContentDone {
 				// data is ready
-				data, err := getData()
+				data, err := getData(ctx)
 				if err != nil {
 					return err
 				}
@@ -551,7 +558,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 			} else {
 				// get a new reader
-				reader, err := getReader(entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
+				reader, err := getReader(ctx, entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
 				if err != nil {
 					return err
 				}
@@ -564,12 +571,15 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 		// set Data field
 		if setData {
-			data, err := getData()
+			data, err := getData(ctx)
 			if err != nil {
 				return err
 			}
 			if int64(len(entry.Data)) < entry.Size || entry.Size < 0 {
 				entry.Data = data
+				if entry.Size < 0 {
+					entry.Size = int64(len(data))
+				}
 			} else {
 				copy(entry.Data, data)
 			}
@@ -587,9 +597,14 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
-	if ctx == nil {
-		ctx = context.Background()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
+
+	ctx, span := trace.Start(ctx, "S3FS.Delete")
+	defer span.End()
 
 	if len(filePaths) == 0 {
 		return nil
@@ -619,6 +634,8 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 }
 
 func (s *S3FS) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier) error {
+	ctx, span := trace.Start(ctx, "S3FS.deleteMultiObj")
+	defer span.End()
 	output, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 		Bucket: ptrTo(s.bucket),
 		Delete: &types.Delete{
@@ -642,12 +659,14 @@ func (s *S3FS) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier
 		}
 	}
 	if message.Len() > 0 {
-		return moerr.NewInternalError("S3 Delete failed: %s", message.String())
+		return moerr.NewInternalErrorNoCtx("S3 Delete failed: %s", message.String())
 	}
 	return nil
 }
 
 func (s *S3FS) deleteSingle(ctx context.Context, filePath string) error {
+	ctx, span := trace.Start(ctx, "S3FS.deleteSingle")
+	defer span.End()
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
 		return err
@@ -683,7 +702,7 @@ func (s *S3FS) mapError(err error, path string) error {
 	var httpError *http.ResponseError
 	if errors.As(err, &httpError) {
 		if httpError.Response.StatusCode == 404 {
-			return moerr.NewFileNotFound(path)
+			return moerr.NewFileNotFoundNoCtx(path)
 		}
 	}
 	return err
@@ -706,4 +725,181 @@ func (s *S3FS) CacheStats() *CacheStats {
 		return s.memCache.CacheStats()
 	}
 	return nil
+}
+
+func newS3FS(arguments []string) (*S3FS, error) {
+	if len(arguments) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid S3 arguments")
+	}
+
+	var endpoint, region, bucket, apiKey, apiSecret, prefix, roleARN, externalID, name, sharedConfigProfile, isMinio string
+	for _, pair := range arguments {
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok {
+			return nil, moerr.NewInvalidInputNoCtx("invalid S3 argument: %s", pair)
+		}
+		switch key {
+		case "endpoint":
+			endpoint = value
+		case "region":
+			region = value
+		case "bucket":
+			bucket = value
+		case "key":
+			apiKey = value
+		case "secret":
+			apiSecret = value
+		case "prefix":
+			prefix = value
+		case "role-arn":
+			roleARN = value
+		case "external-id":
+			externalID = value
+		case "name":
+			name = value
+		case "shared-config-profile":
+			sharedConfigProfile = value
+		case "is-minio":
+			isMinio = value
+		default:
+			return nil, moerr.NewInvalidInputNoCtx("invalid S3 argument: %s", pair)
+		}
+	}
+
+	if endpoint != "" {
+		u, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, err
+		}
+		if u.Scheme == "" {
+			u.Scheme = "https"
+		}
+		endpoint = u.String()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	var credentialProvider aws.CredentialsProvider
+
+	loadConfigOptions := []func(*config.LoadOptions) error{
+		config.WithLogger(logutil.GetS3Logger()),
+		config.WithClientLogMode(
+			aws.LogSigning |
+				aws.LogRetries |
+				aws.LogRequest |
+				aws.LogResponse |
+				aws.LogDeprecatedUsage |
+				aws.LogRequestEventMessage |
+				aws.LogResponseEventMessage,
+		),
+	}
+	if sharedConfigProfile != "" {
+		loadConfigOptions = append(loadConfigOptions,
+			config.WithSharedConfigProfile(sharedConfigProfile),
+		)
+	}
+
+	if apiKey != "" && apiSecret != "" {
+		// static
+		credentialProvider = credentials.NewStaticCredentialsProvider(apiKey, apiSecret, "")
+
+	} else if roleARN != "" {
+		// role arn
+		config, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
+		if err != nil {
+			return nil, err
+		}
+		stsSvc := sts.NewFromConfig(config)
+		credentialProvider = stscreds.NewAssumeRoleProvider(
+			stsSvc,
+			roleARN,
+			func(opts *stscreds.AssumeRoleOptions) {
+				opts.ExternalID = &externalID
+			},
+		)
+	}
+
+	if credentialProvider != nil {
+		loadConfigOptions = append(loadConfigOptions,
+			config.WithCredentialsProvider(
+				credentialProvider,
+			),
+		)
+	}
+	config, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
+	if err != nil {
+		return nil, err
+	}
+
+	s3Options := []func(*s3.Options){}
+
+	if credentialProvider != nil {
+		s3Options = append(s3Options,
+			func(opt *s3.Options) {
+				opt.Credentials = credentialProvider
+			},
+		)
+	}
+
+	if endpoint != "" {
+		if isMinio != "" {
+			// for minio
+			s3Options = append(s3Options,
+				s3.WithEndpointResolver(
+					s3.EndpointResolverFunc(
+						func(
+							region string,
+							_ s3.EndpointResolverOptions,
+						) (
+							ep aws.Endpoint,
+							err error,
+						) {
+							ep.URL = endpoint
+							ep.Source = aws.EndpointSourceCustom
+							ep.HostnameImmutable = true
+							ep.SigningRegion = region
+							return
+						},
+					),
+				),
+			)
+		} else {
+			s3Options = append(s3Options,
+				s3.WithEndpointResolver(
+					s3.EndpointResolverFromURL(endpoint),
+				),
+			)
+		}
+	}
+
+	if region != "" {
+		s3Options = append(s3Options,
+			func(opt *s3.Options) {
+				opt.Region = region
+			},
+		)
+	}
+
+	client := s3.NewFromConfig(
+		config,
+		s3Options...,
+	)
+
+	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: ptrTo(bucket),
+	})
+	if err != nil {
+		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
+	}
+
+	fs := &S3FS{
+		name:      name,
+		client:    client,
+		bucket:    bucket,
+		keyPrefix: prefix,
+	}
+
+	return fs, nil
+
 }

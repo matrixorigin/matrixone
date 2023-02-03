@@ -47,6 +47,10 @@ func NewDynamicStorage(
 
 var _ storage.TxnStorage = new(DynamicStorage)
 
+func (d *DynamicStorage) Start() error {
+	return nil
+}
+
 func (d *DynamicStorage) Close(ctx context.Context) error {
 	storage, err := d.get(ctx)
 	if err != nil {
@@ -139,5 +143,5 @@ func (d *DynamicStorage) get(ctx context.Context) (*Storage, error) {
 }
 
 func (d *DynamicStorage) Debug(context.Context, txn.TxnMeta, uint32, []byte) ([]byte, error) {
-	return nil, moerr.NewNotSupported("DynamicStorage not support debug method")
+	return nil, moerr.NewNotSupportedNoCtx("DynamicStorage not support debug method")
 }

@@ -15,12 +15,14 @@
 package db
 
 import (
+	"context"
 	"math/rand"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -71,7 +73,8 @@ func TestReplayCatalog1(t *testing.T) {
 			}
 			assert.Nil(t, txn.Commit())
 			if forceCkp || rand.Intn(100) > 80 {
-				tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+				err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+				assert.NoError(t, err)
 			}
 		}
 	}
@@ -169,7 +172,8 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 	tae.Close()
 
 	tae2, err := Open(tae.Dir, nil)
@@ -457,7 +461,10 @@ func TestReplay2(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	tae2.BGCheckpointRunner.MockCheckpoint(tae2.TxnMgr.StatMaxCommitTS())
+	err = tae2.BGCheckpointRunner.ForceFlush(tae2.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
+	assert.NoError(t, err)
+	err = tae2.BGCheckpointRunner.ForceIncrementalCheckpoint(tae2.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 
 	txn, err = tae2.StartTxn(nil)
 	assert.Nil(t, err)
@@ -567,7 +574,8 @@ func TestReplay3(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	txn, _ = tae.getRelation()
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 }
 
@@ -812,7 +820,10 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
+	assert.NoError(t, err)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:4]), false)
 	assert.NoError(t, txn.Commit())
@@ -831,7 +842,10 @@ func TestReplay5(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit())
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
+	assert.NoError(t, err)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	printCheckpointStats(t, tae)
@@ -861,9 +875,16 @@ func TestReplay5(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	assert.NoError(t, txn.Commit())
 
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
-	testutils.WaitExpect(3000, func() bool {
-		return tae.Wal.GetCheckpointed() == tae.Wal.GetCurrSeqNum()
+	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
+	assert.NoError(t, err)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
+	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
+	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
+	assert.NoError(t, err)
+	assert.NoError(t, entry.WaitDone())
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	printCheckpointStats(t, tae)
 	assert.Equal(t, tae.Wal.GetCurrSeqNum(), tae.Wal.GetCheckpointed())
@@ -913,7 +934,10 @@ func TestReplay6(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 	mergeBlocks(t, 0, tae, defaultTestDB, schema, false)
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
+	assert.NoError(t, err)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 
 	_ = tae.Close()
 	tae, err = Open(tae.Dir, opts)
@@ -1086,7 +1110,10 @@ func TestReplay8(t *testing.T) {
 	_ = txn.Rollback()
 
 	tae.compactBlocks(false)
-	tae.checkpointCatalog()
+	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
+	assert.NoError(t, err)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 	tae.restart()
 
 	txn, rel = tae.getRelation()
@@ -1210,20 +1237,21 @@ func TestReplay10(t *testing.T) {
 	expr := &plan.Expr{}
 	exprbuf, err := expr.Marshal()
 	assert.NoError(t, err)
-	schema.ColDefs[1].Default = catalog.Default{
+
+	schema.ColDefs[1].Default, _ = types.Encode(&plan.Default{
 		NullAbility: false,
-		Expr:        exprbuf,
-	}
-	schema.ColDefs[1].OnUpdate = catalog.OnUpdate{
-		Expr: exprbuf,
-	}
-	schema.ColDefs[2].Default = catalog.Default{
+		Expr:        &plan.Expr{},
+	})
+	schema.ColDefs[1].OnUpdate, _ = types.Encode(&plan.OnUpdate{
+		Expr: &plan.Expr{},
+	})
+	schema.ColDefs[2].Default, _ = types.Encode(plan.Default{
 		NullAbility: true,
 		Expr:        nil,
-	}
-	schema.ColDefs[2].OnUpdate = catalog.OnUpdate{
+	})
+	schema.ColDefs[2].OnUpdate, _ = types.Encode(plan.OnUpdate{
 		Expr: nil,
-	}
+	})
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
 	defer bat.Close()
@@ -1239,11 +1267,23 @@ func TestReplay10(t *testing.T) {
 	checkAllColRowsByScan(t, rel, bat.Length(), false)
 	assert.NoError(t, txn.Commit())
 	schema1 := rel.GetMeta().(*catalog.TableEntry).GetSchema()
-	assert.Equal(t, exprbuf, schema1.ColDefs[1].Default.Expr)
-	assert.Equal(t, exprbuf, schema1.ColDefs[1].OnUpdate.Expr)
-	assert.Equal(t, []byte(nil), schema1.ColDefs[2].Default.Expr)
-	assert.Equal(t, []byte(nil), schema1.ColDefs[2].OnUpdate.Expr)
-	assert.Equal(t, true, schema1.ColDefs[2].Default.NullAbility)
+
+	d1 := &plan.Default{}
+	assert.NoError(t, types.Decode(schema1.ColDefs[1].Default, d1))
+	buf, _ := d1.Expr.Marshal()
+	assert.Equal(t, exprbuf, buf)
+	u1 := &plan.OnUpdate{}
+	assert.NoError(t, types.Decode(schema1.ColDefs[1].OnUpdate, u1))
+	buf, _ = u1.Expr.Marshal()
+	assert.Equal(t, exprbuf, buf)
+
+	d2 := &plan.Default{}
+	assert.NoError(t, types.Decode(schema1.ColDefs[2].Default, d2))
+	assert.Nil(t, d2.Expr)
+	u2 := &plan.OnUpdate{}
+	assert.NoError(t, types.Decode(schema1.ColDefs[2].OnUpdate, u2))
+	assert.Nil(t, u2.Expr)
+	assert.True(t, d2.NullAbility)
 }
 
 // create db,tbl,seg,blk
@@ -1269,7 +1309,8 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -1281,7 +1322,8 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	assert.NoError(t, err)
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	tae.restart()

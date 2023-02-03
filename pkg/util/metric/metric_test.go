@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"io"
 	"net/http"
 	"strings"
@@ -25,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,10 +44,11 @@ func TestMetric(t *testing.T) {
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = true
 		SV.BatchProcessor = FileService
+		SV.MetricExportInterval = 1
+		SV.MetricMultiTable = true
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true),
-			WithMultiTable(true), WithExportInterval(1))
+		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 
 		const (
@@ -99,10 +100,11 @@ func TestMetricNoProm(t *testing.T) {
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = false
 		SV.BatchProcessor = FileService
+		SV.MetricMultiTable = true
 
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true), WithMultiTable(true))
+		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 
 		client := http.Client{
@@ -126,7 +128,7 @@ func TestDescExtra(t *testing.T) {
 	assert.Equal(t, extra.labels[2].GetName(), "xy")
 }
 
-var dummyOptionsFactory = export.GetOptionFactory(export.NormalTableEngine)
+var dummyOptionsFactory = table.GetOptionFactory(context.TODO(), table.NormalTableEngine)
 
 func TestCreateTable(t *testing.T) {
 	buf := new(bytes.Buffer)
@@ -155,10 +157,11 @@ func TestMetricSingleTable(t *testing.T) {
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = true
 		SV.BatchProcessor = FileService
+		SV.MetricExportInterval = 1
+		SV.MetricMultiTable = false
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true),
-			WithMultiTable(false), WithExportInterval(1))
+		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 
 		const (
@@ -212,18 +215,21 @@ func TestGetSchemaForAccount(t *testing.T) {
 		name     string
 		args     args
 		wantPath string
+		wantSche int
 	}{
 		{
 			name: "test_account_user1",
 			args: args{
 				account: "user1",
 			},
-			wantPath: "/user1/*/*/*/*/metric/*.csv",
+			wantPath: "/user1/*/*/*/*/metric/*",
+			wantSche: 7,
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			schemas := GetSchemaForAccount(tt.args.account)
+			schemas := GetSchemaForAccount(ctx, tt.args.account)
 			found := false
 			for _, sche := range schemas {
 				t.Logf("schma: %s", sche)
@@ -231,10 +237,10 @@ func TestGetSchemaForAccount(t *testing.T) {
 					found = true
 				}
 			}
-			require.Equal(t, 6, len(schemas))
+			require.Equal(t, tt.wantSche, len(schemas))
 			require.Equal(t, true, found)
 			found = false
-			if strings.Contains(SingleMetricTable.ToCreateSql(true), "/*/*/*/*/*/metric/*.csv") {
+			if strings.Contains(SingleMetricTable.ToCreateSql(ctx, true), "/*/*/*/*/*/metric/*") {
 				found = true
 			}
 			require.Equal(t, true, found)

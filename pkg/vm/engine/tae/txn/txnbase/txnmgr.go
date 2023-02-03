@@ -169,7 +169,7 @@ func (mgr *TxnManager) DeleteTxn(id string) (err error) {
 	defer mgr.Unlock()
 	txn := mgr.IDMap[id]
 	if txn == nil {
-		err = moerr.NewTxnNotFound()
+		err = moerr.NewTxnNotFoundNoCtx()
 		logutil.Warnf("Txn %s not found", id)
 		return
 	}
@@ -352,7 +352,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 
 		// Idempotent check
 		if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
-			op.Txn.WaitDone(moerr.NewTxnNotActive(txnif.TxnStrState(state)), false)
+			op.Txn.WaitDone(moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state)), false)
 			continue
 		}
 
@@ -414,6 +414,21 @@ func (mgr *TxnManager) OnException(new error) {
 		}
 		old = mgr.Exception.Load()
 	}
+}
+
+// MinTSForTest is only be used in ut to ensure that
+// files that have been gc will not be used.
+func (mgr *TxnManager) MinTSForTest() types.TS {
+	mgr.RLock()
+	defer mgr.RUnlock()
+	minTS := types.MaxTs()
+	for _, txn := range mgr.IDMap {
+		startTS := txn.GetStartTS()
+		if startTS.Less(minTS) {
+			minTS = startTS
+		}
+	}
+	return minTS
 }
 
 func (mgr *TxnManager) Start() {

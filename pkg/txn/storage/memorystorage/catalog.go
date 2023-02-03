@@ -19,7 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
@@ -111,6 +111,7 @@ type RelationRow struct {
 	Properties   map[string]string
 	PartitionDef []byte
 	ViewDef      []byte
+	Constraint   []byte
 }
 
 func (r *RelationRow) Key() ID {
@@ -189,6 +190,8 @@ func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name stri
 		ret.Value = r.ID.ToRowID()
 	case catalog.SystemRelAttr_ViewDef:
 		ret.Value = []byte(r.ViewDef)
+	case catalog.SystemRelAttr_Constraint:
+		ret.Value = r.Constraint
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
@@ -335,40 +338,12 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 		ret.Value = []byte(a.Comment)
 	case rowIDColumnName:
 		ret.Value = a.ID.ToRowID()
+	case catalog.SystemColAttr_IsClusterBy:
+		ret.Value = boolToInt8(a.ClusterBy)
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
 	return
-}
-
-type IndexRow struct {
-	ID         ID
-	RelationID ID
-	IndexName  string
-	Unique     bool
-	TableName  string
-	Field      []string
-}
-
-func (i *IndexRow) Key() ID {
-	return i.ID
-}
-
-func (i *IndexRow) Value() *IndexRow {
-	return i
-}
-
-func (i *IndexRow) Indexes() []Tuple {
-	return []Tuple{
-		{index_RelationID, i.RelationID},
-		{index_RelationID_Name, i.RelationID, Text(i.IndexName)},
-	}
-}
-
-func (i *IndexRow) UniqueIndexes() []Tuple {
-	return []Tuple{
-		{index_RelationID_Name, i.RelationID, Text(i.IndexName)},
-	}
 }
 
 func verifyAttr(
@@ -384,7 +359,7 @@ func verifyAttr(
 		if value == nil {
 			panic(fmt.Sprintf("%s should not be nil", attrName))
 		}
-		if !memtable.TypeMatch(value, types[i].Oid) {
+		if !memorytable.TypeMatch(value, types[i].Oid) {
 			panic(fmt.Sprintf("%s should be %v typed", name, types[i]))
 		}
 	}

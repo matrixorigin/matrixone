@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"context"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,7 +37,7 @@ func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 const TableScan = "Table Scan"
 const ExternalScan = "External Scan"
 
-func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string, error) {
+func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	var result string
 	var pname string /* node type name for text output */
 
@@ -48,8 +49,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		pname = "Values Scan"
 	case plan.Node_TABLE_SCAN:
 		pname = TableScan
-	case plan.Node_FUNCTION_SCAN:
-		pname = "Function Scan"
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
 	case plan.Node_MATERIAL_SCAN:
@@ -108,7 +107,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		pname = "Minus"
 	case plan.Node_MINUS_ALL:
 		pname = "Minus All"
-	case plan.Node_TABLE_FUNCTION:
+	case plan.Node_FUNCTION_SCAN:
 		pname = ndesc.Node.TableDef.TblFunc.Name
 	default:
 		panic("error node type")
@@ -129,13 +128,13 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 			}
 		case plan.Node_UPDATE:
 			result += " on "
-			if ndesc.Node.UpdateCtxs != nil {
+			if ndesc.Node.UpdateCtx != nil {
 				first := true
-				for _, ctx := range ndesc.Node.UpdateCtxs {
+				for _, ctx := range ndesc.Node.UpdateCtx.Ref {
 					if !first {
 						result += ", "
 					}
-					result += ctx.DbName + "." + ctx.TblName
+					result += ctx.SchemaName + "." + ctx.ObjName
 					if first {
 						first = false
 					}
@@ -143,13 +142,13 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 			}
 		case plan.Node_DELETE:
 			result += " on "
-			if ndesc.Node.DeleteTablesCtx != nil {
+			if ndesc.Node.DeleteCtx != nil {
 				first := true
-				for _, ctx := range ndesc.Node.DeleteTablesCtx {
+				for _, ctx := range ndesc.Node.DeleteCtx.Ref {
 					if !first {
 						result += ", "
 					}
-					result += ctx.DbName + "." + ctx.TblName
+					result += ctx.SchemaName + "." + ctx.ObjName
 					if first {
 						first = false
 					}
@@ -164,38 +163,38 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 
 		if options.Verbose {
 			costDescImpl := &CostDescribeImpl{
-				Cost: ndesc.Node.GetCost(),
+				Stats: ndesc.Node.GetStats(),
 			}
-			costInfo, err := costDescImpl.GetDescription(options)
+			costInfo, err := costDescImpl.GetDescription(ctx, options)
 			if err != nil {
 				return result, err
 			}
 			result += " " + costInfo
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI("explain format json")
+		return result, moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI("explain format dot")
+		return result, moerr.NewNYI(ctx, "explain format dot")
 	}
 	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetActualAnalyzeInfo(options *ExplainOptions) (string, error) {
+func (ndesc *NodeDescribeImpl) GetActualAnalyzeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Analyze: "
 	if ndesc.Node.AnalyzeInfo != nil {
 		impl := NewAnalyzeInfoDescribeImpl(ndesc.Node.AnalyzeInfo)
-		describe, err := impl.GetDescription(options)
+		describe, err := impl.GetDescription(ctx, options)
 		if err != nil {
 			return result, err
 		}
 		result += describe
 	} else {
-		result += "timeConsumed=0ms  inputRows=0  outputRows=0 inputSize=0 bytes outputSize:0 bytes, memorySize=0 bytes"
+		result += "timeConsumed=0ms waitTime=0ms inputRows=0  outputRows=0 inputSize=0 bytes outputSize:0 bytes, memorySize=0 bytes"
 	}
 	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetTableDef(options *ExplainOptions) (string, error) {
+func (ndesc *NodeDescribeImpl) GetTableDef(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Table: "
 	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN {
 		tableDef := ndesc.Node.TableDef
@@ -216,11 +215,11 @@ func (ndesc *NodeDescribeImpl) GetTableDef(options *ExplainOptions) (string, err
 	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, error) {
+func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
 	lines := make([]string, 0)
 	// Get Sort list info
 	if len(ndesc.Node.OrderBy) > 0 {
-		orderByInfo, err := ndesc.GetOrderByInfo(options)
+		orderByInfo, err := ndesc.GetOrderByInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -229,7 +228,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 
 	// Get Join type info
 	if ndesc.Node.NodeType == plan.Node_JOIN {
-		joinTypeInfo, err := ndesc.GetJoinTypeInfo(options)
+		joinTypeInfo, err := ndesc.GetJoinTypeInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -238,7 +237,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 
 	// Get Join Condition info
 	if len(ndesc.Node.OnList) > 0 {
-		joinOnInfo, err := ndesc.GetJoinConditionInfo(options)
+		joinOnInfo, err := ndesc.GetJoinConditionInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -247,7 +246,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 
 	// Get Group key info
 	if len(ndesc.Node.GroupBy) > 0 {
-		groupByInfo, err := ndesc.GetGroupByInfo(options)
+		groupByInfo, err := ndesc.GetGroupByInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -256,7 +255,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 
 	// Get Aggregate function info
 	if len(ndesc.Node.AggList) > 0 {
-		aggListInfo, err := ndesc.GetAggregationInfo(options)
+		aggListInfo, err := ndesc.GetAggregationInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -265,7 +264,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 
 	// Get Filter list info
 	if len(ndesc.Node.FilterList) > 0 {
-		filterInfo, err := ndesc.GetFilterConditionInfo(options)
+		filterInfo, err := ndesc.GetFilterConditionInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -275,13 +274,13 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 	// Get Limit And Offset info
 	if ndesc.Node.Limit != nil {
 		var temp string
-		limitInfo, err := describeExpr(ndesc.Node.Limit, options)
+		limitInfo, err := describeExpr(ctx, ndesc.Node.Limit, options)
 		if err != nil {
 			return nil, err
 		}
 		temp += "Limit: " + limitInfo
 		if ndesc.Node.Offset != nil {
-			offsetInfo, err := describeExpr(ndesc.Node.Offset, options)
+			offsetInfo, err := describeExpr(ctx, ndesc.Node.Offset, options)
 			if err != nil {
 				return nil, err
 			}
@@ -303,10 +302,10 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 	return lines, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) (string, error) {
+func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Output: "
 	exprs := NewExprListDescribeImpl(ndesc.Node.ProjectList)
-	describe, err := exprs.GetDescription(options)
+	describe, err := exprs.GetDescription(ctx, options)
 	if err != nil {
 		return result, err
 	}
@@ -314,15 +313,15 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) (stri
 	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(options *ExplainOptions) (string, error) {
+func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Join Type: " + ndesc.Node.JoinType.String()
 	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) (string, error) {
+func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Join Cond: "
 	exprs := NewExprListDescribeImpl(ndesc.Node.OnList)
-	describe, err := exprs.GetDescription(options)
+	describe, err := exprs.GetDescription(ctx, options)
 	if err != nil {
 		return result, err
 	}
@@ -330,7 +329,7 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) (st
 	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(options *ExplainOptions) (string, error) {
+func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Filter Cond: "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
@@ -339,21 +338,21 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(options *ExplainOptions) (
 				result += ", "
 			}
 			first = false
-			descV, err := describeExpr(v, options)
+			descV, err := describeExpr(ctx, v, options)
 			if err != nil {
 				return result, err
 			}
 			result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI("explain format json")
+		return result, moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI("explain format dot")
+		return result, moerr.NewNYI(ctx, "explain format dot")
 	}
 	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) (string, error) {
+func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Group Key: "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
@@ -362,21 +361,21 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) (string, 
 				result += ", "
 			}
 			first = false
-			descV, err := describeExpr(v, options)
+			descV, err := describeExpr(ctx, v, options)
 			if err != nil {
 				return result, err
 			}
 			result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI("explain format json")
+		return result, moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI("explain format dot")
+		return result, moerr.NewNYI(ctx, "explain format dot")
 	}
 	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetAggregationInfo(options *ExplainOptions) (string, error) {
+func (ndesc *NodeDescribeImpl) GetAggregationInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Aggregate Functions: "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
@@ -385,34 +384,34 @@ func (ndesc *NodeDescribeImpl) GetAggregationInfo(options *ExplainOptions) (stri
 				result += ", "
 			}
 			first = false
-			descV, err := describeExpr(v, options)
+			descV, err := describeExpr(ctx, v, options)
 			if err != nil {
 				return result, err
 			}
 			result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI("explain format json")
+		return result, moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI("explain format dot")
+		return result, moerr.NewNYI(ctx, "explain format dot")
 	}
 	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) (string, error) {
+func (ndesc *NodeDescribeImpl) GetOrderByInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	var result string
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		result = "Sort Key: "
 		orderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.OrderBy)
-		describe, err := orderByDescImpl.GetDescription(options)
+		describe, err := orderByDescImpl.GetDescription(ctx, options)
 		if err != nil {
 			return result, err
 		}
 		result += describe
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI("explain format json")
+		return result, moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI("explain format dot")
+		return result, moerr.NewNYI(ctx, "explain format dot")
 	}
 	return result, nil
 }
@@ -435,8 +434,9 @@ func NewAnalyzeInfoDescribeImpl(analyze *plan.AnalyzeInfo) *AnalyzeInfoDescribeI
 	}
 }
 
-func (a AnalyzeInfoDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
+func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "timeConsumed=" + strconv.FormatInt(a.AnalyzeInfo.TimeConsumed, 10) + "us" +
+		" waitTime=" + strconv.FormatInt(a.AnalyzeInfo.WaitTimeConsumed, 10) + "us" +
 		" inputRows=" + strconv.FormatInt(a.AnalyzeInfo.InputRows, 10) +
 		" outputRows=" + strconv.FormatInt(a.AnalyzeInfo.OutputRows, 10) +
 		" inputSize=" + strconv.FormatInt(a.AnalyzeInfo.InputSize, 10) + "bytes" +
@@ -446,25 +446,27 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(options *ExplainOptions) (string
 }
 
 type CostDescribeImpl struct {
-	Cost *plan.Cost
+	Stats *plan.Stats
 }
 
-func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
-	//(cost=11.75..13.15 rows=140 width=4)
+func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	var result string
-	if c.Cost == nil {
-		result = " (cost=0.0..0.0 rows=0 ndv=0 rowsize=0)"
+	if c.Stats == nil {
+		result = " (cost=0)"
 		//result = " (cost=%.2f..%.2f rows=%.2f ndv=%.2f rowsize=%.f)"
 	} else {
-		result = " (cost=" +
-			strconv.FormatFloat(c.Cost.Start, 'f', 2, 64) +
-			".." + strconv.FormatFloat(c.Cost.Total, 'f', 2, 64) +
-			" card=" + strconv.FormatFloat(c.Cost.Card, 'f', 2, 64) +
-			" ndv=" + strconv.FormatFloat(c.Cost.Ndv, 'f', 2, 64) +
-			" rowsize=" + strconv.FormatFloat(c.Cost.Rowsize, 'f', 0, 64) +
-			")"
-	}
+		var blockNumStr, hashmapSizeStr string
+		if c.Stats.BlockNum > 0 {
+			blockNumStr = " blockNum=" + strconv.FormatInt(int64(c.Stats.BlockNum), 10)
+		}
+		if c.Stats.HashmapSize > 0 {
+			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapSize, 'f', 2, 64)
+		}
 
+		result = " (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
+			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +
+			blockNumStr + hashmapSizeStr + ")"
+	}
 	return result, nil
 }
 
@@ -478,7 +480,7 @@ func NewExprListDescribeImpl(ExprList []*plan.Expr) *ExprListDescribeImpl {
 	}
 }
 
-func (e *ExprListDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
+func (e *ExprListDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	first := true
 	var result string
 	if options.Format == EXPLAIN_FORMAT_TEXT {
@@ -487,16 +489,16 @@ func (e *ExprListDescribeImpl) GetDescription(options *ExplainOptions) (string, 
 				result += ", "
 			}
 			first = false
-			descV, err := describeExpr(v, options)
+			descV, err := describeExpr(ctx, v, options)
 			if err != nil {
 				return result, err
 			}
 			result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI("explain format json")
+		return result, moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI("explain format dot")
+		return result, moerr.NewNYI(ctx, "explain format dot")
 	}
 	return result, nil
 }
@@ -511,7 +513,7 @@ func NewOrderByDescribeImpl(OrderBy []*plan.OrderBySpec) *OrderByDescribeImpl {
 	}
 }
 
-func (o *OrderByDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
+func (o *OrderByDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	var result string
 	if options.Format == EXPLAIN_FORMAT_TEXT || options.Format == EXPLAIN_FORMAT_JSON {
 		first := true
@@ -520,7 +522,7 @@ func (o *OrderByDescribeImpl) GetDescription(options *ExplainOptions) (string, e
 				result += ", "
 			}
 			first = false
-			descExpr, err := describeExpr(v.Expr, options)
+			descExpr, err := describeExpr(ctx, v.Expr, options)
 			if err != nil {
 				return result, err
 			}
@@ -532,7 +534,7 @@ func (o *OrderByDescribeImpl) GetDescription(options *ExplainOptions) (string, e
 		}
 		return result, nil
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return "", moerr.NewNYI("explain format dot")
+		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 	return result, nil
 }
@@ -541,7 +543,7 @@ type WinSpecDescribeImpl struct {
 	WinSpec *plan.WindowSpec
 }
 
-func (w *WinSpecDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
+func (w *WinSpecDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	// TODO implement me
 	panic("implement me")
 }
@@ -550,7 +552,7 @@ type RowsetDataDescribeImpl struct {
 	RowsetData *plan.RowsetData
 }
 
-func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
+func (r *RowsetDataDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Value:"
 	if r.RowsetData == nil {
 		return result, nil
@@ -568,21 +570,21 @@ func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) (string
 }
 
 type UpdateCtxsDescribeImpl struct {
-	UpdateCtxs []*plan.UpdateCtx
+	UpdateCtx *plan.UpdateCtx
 }
 
-func (u *UpdateCtxsDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
+func (u *UpdateCtxsDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Update Columns: "
 	first := true
-	for _, ctx := range u.UpdateCtxs {
-		if ctx.UpdateCols != nil {
-			for _, col := range ctx.UpdateCols {
+	for i, ctx := range u.UpdateCtx.Ref {
+		if u.UpdateCtx.UpdateCol[i] != nil {
+			for colName := range u.UpdateCtx.UpdateCol[i].Map {
 				if !first {
 					result += ", "
 				} else {
 					first = false
 				}
-				result += ctx.DbName + "." + ctx.TblName + "." + col.Name
+				result += ctx.SchemaName + "." + ctx.ObjName + "." + colName
 			}
 		}
 	}

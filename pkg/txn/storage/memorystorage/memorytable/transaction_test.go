@@ -379,3 +379,39 @@ func TestWriteWriteConflict(t *testing.T) {
 	})
 
 }
+
+func TestMultiTableRollback(t *testing.T) {
+	table1 := NewTable[Int, int, TestRow]()
+	table2 := NewTable[Int, int, TestRow]()
+	table3 := NewTable[Int, int, TestRow]()
+
+	row := TestRow{
+		key:   1,
+		value: 1,
+	}
+
+	tx1 := NewTransaction(ts(1))
+	tx2 := NewTransaction(ts(1))
+
+	err := table3.Insert(tx1, row)
+	assert.Nil(t, err)
+	err = tx1.Commit(ts(1))
+	assert.Nil(t, err)
+
+	err = table1.Insert(tx2, row)
+	assert.Nil(t, err)
+	err = table2.Insert(tx2, row)
+	assert.Nil(t, err)
+	err = table3.Insert(tx2, row)
+	assert.Nil(t, err)
+	err = tx2.Commit(ts(1))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
+
+	// should rollback
+	tx3 := NewTransaction(ts(2))
+	_, err = table1.Get(tx3, Int(1))
+	assert.ErrorIs(t, err, sql.ErrNoRows)
+	_, err = table2.Get(tx3, Int(1))
+	assert.ErrorIs(t, err, sql.ErrNoRows)
+
+}

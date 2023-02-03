@@ -16,10 +16,12 @@ package disttae
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"math"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,13 +32,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+/*
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
 	rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1],
 		catalog.MoTablesTableDefs, []string{
@@ -44,7 +50,7 @@ func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
 		},
-		genTableListExpr(getAccountId(ctx), databaseId))
+		genTableListExpr(ctx, getAccountId(ctx), databaseId))
 	if err != nil {
 		return nil, err
 	}
@@ -61,22 +67,20 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	key := genTableIndexKey(name, databaseId, accountId)
 	rows, err := txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, "",
 		txn.dnStores[:1], catalog.MoTablesSchema, key,
-		genTableInfoExpr(accountId, databaseId, name))
+		genTableInfoExpr(ctx, accountId, databaseId, name))
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(rows) != 1 {
-		return nil, nil, moerr.NewDuplicate()
+		return nil, nil, moerr.NewDuplicate(ctx)
 	}
 	row := rows[0]
-	/*
-		row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			txn.dnStores[:1], catalog.MoTablesTableDefs, catalog.MoTablesSchema,
-			genTableInfoExpr(accountId, databaseId, name))
-		if err != nil {
-			return nil, nil, err
-		}
-	*/
+	//	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+	//		txn.dnStores[:1], catalog.MoTablesTableDefs, catalog.MoTablesSchema,
+	//		genTableInfoExpr(accountId, databaseId, name))
+	//	if err != nil {
+	//		return nil, nil, err
+	//	}
 	tbl := new(table)
 	tbl.primaryIdx = -1
 	tbl.tableId = row[catalog.MO_TABLES_REL_ID_IDX].(uint64)
@@ -85,17 +89,16 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	tbl.comment = string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))
 	tbl.partition = string(row[catalog.MO_TABLES_PARTITIONED_IDX].([]byte))
 	tbl.createSql = string(row[catalog.MO_TABLES_REL_CREATESQL_IDX].([]byte))
-	/*
-		rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-			txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
-			genColumnInfoExpr(accountId, databaseId, tbl.tableId))
-		if err != nil {
-			return nil, nil, err
-		}
-	*/
+	tbl.constraint = row[catalog.MO_TABLES_CONSTRAINT_IDX].([]byte)
+	//	rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+	//		txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
+	//		genColumnInfoExpr(accountId, databaseId, tbl.tableId))
+	//	if err != nil {
+	//		return nil, nil, err
+	//	}
 	rows, err = txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, "",
 		txn.dnStores[:1], catalog.MoColumnsSchema, genColumnIndexKey(tbl.tableId),
-		genColumnInfoExpr(accountId, databaseId, tbl.tableId))
+		genColumnInfoExpr(ctx, accountId, databaseId, tbl.tableId))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -105,6 +108,9 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	for i, col := range cols {
 		if col.constraintType == catalog.SystemColPKConstraint {
 			tbl.primaryIdx = i
+		}
+		if col.isClusterBy == 1 {
+			tbl.clusterByIdx = i
 		}
 		defs = append(defs, genTableDefOfColumn(col))
 	}
@@ -122,7 +128,7 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
 		},
-		genTableIdExpr(accountId, databaseId, name))
+		genTableIdExpr(ctx, accountId, databaseId, name))
 	if err != nil {
 		return 0, err
 	}
@@ -136,7 +142,7 @@ func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
 		},
-		genDatabaseListExpr(getAccountId(ctx)))
+		genDatabaseListExpr(ctx, getAccountId(ctx)))
 	if err != nil {
 		return nil, err
 	}
@@ -155,30 +161,29 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-		}, key, genDatabaseIdExpr(accountId, name))
+		}, key, genDatabaseIdExpr(ctx, accountId, name))
 	if err != nil {
 		return 0, err
 	}
 	if len(rows) != 1 {
-		return 0, moerr.NewDuplicate()
+		return 0, moerr.NewDuplicate(ctx)
 	}
-	/*
-		row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
-			catalog.MoDatabaseTableDefs, []string{
-				catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
-				catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
-				catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-			},
-			genDatabaseIdExpr(accountId, name))
-		if err != nil {
-			return 0, err
-		}
-	*/
+	//	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
+	//		catalog.MoDatabaseTableDefs, []string{
+	//			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
+	//			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
+	//			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
+	//		},
+	//		genDatabaseIdExpr(accountId, name))
+	//	if err != nil {
+	//		return 0, err
+	//	}
 	return rows[0][0].(uint64), nil
 }
+*/
 
 func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
-	name string, needUpdated bool, columnLength int) (*tableMeta, error) {
+	name string, needUpdated bool, columnLength int, prefetch bool) (*tableMeta, error) {
 	blocks := make([][]BlockMeta, len(txn.dnStores))
 	if needUpdated {
 		for i, dnStore := range txn.dnStores {
@@ -190,7 +195,8 @@ func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 			if err != nil {
 				return nil, err
 			}
-			blocks[i], err = genBlockMetas(ctx, rows, columnLength, txn.proc.FileService, txn.proc.GetMPool())
+			blocks[i], err = genBlockMetas(ctx, rows, columnLength, txn.proc.FileService,
+				txn.proc.GetMPool(), prefetch)
 			if err != nil {
 				return nil, err
 			}
@@ -227,6 +233,7 @@ func (txn *Transaction) WriteBatch(
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
 ) error {
 	txn.readOnly = false
+	bat.Cnt = 1
 	if typ == INSERT {
 		len := bat.Length()
 		vec := vector.New(types.New(types.T_Rowid, 0, 0, 0))
@@ -239,6 +246,7 @@ func (txn *Transaction) WriteBatch(
 		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
 		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	}
+	txn.Lock()
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
 		bat:          bat,
@@ -248,6 +256,7 @@ func (txn *Transaction) WriteBatch(
 		databaseName: databaseName,
 		dnStore:      dnStore,
 	})
+	txn.Unlock()
 
 	if err := txn.checkPrimaryKey(typ, primaryIdx, bat, tableName, tableId); err != nil {
 		return err
@@ -274,11 +283,9 @@ func (txn *Transaction) checkPrimaryKey(
 		return nil
 	}
 
-	t := memtable.Time{
-		Timestamp: txn.nextLocalTS(),
-	}
-	tx := memtable.NewTransaction(uuid.NewString(), t, memtable.SnapshotIsolation)
-	iter := memtable.NewBatchIter(bat)
+	t := txn.nextLocalTS()
+	tx := memorytable.NewTransaction(t)
+	iter := memorytable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
@@ -307,6 +314,7 @@ func (txn *Transaction) checkPrimaryKey(
 			}
 			if len(entries) > 0 {
 				return moerr.NewDuplicateEntry(
+					txn.proc.Ctx,
 					common.TypeStringValue(bat.Vecs[idx].Typ, tuple[idx].Value),
 					bat.Attrs[idx],
 				)
@@ -327,7 +335,7 @@ func (txn *Transaction) checkPrimaryKey(
 
 		case DELETE:
 			err := txn.workspace.Delete(tx, rowID)
-			if err != nil {
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
 
@@ -345,15 +353,10 @@ func (txn *Transaction) nextLocalTS() timestamp.Timestamp {
 	return txn.localTS
 }
 
-func (txn *Transaction) RegisterFile(fileName string) {
-	txn.fileMap[fileName] = txn.blockId
-	txn.blockId++
-}
-
 // WriteFile used to add a s3 file information to the transaction buffer
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
-	databaseName, tableName string, fileName string) error {
+	databaseName, tableName string, fileName string, bat *batch.Batch, dnStore DNStore) error {
 	txn.readOnly = false
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
@@ -362,12 +365,14 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 		tableName:    tableName,
 		databaseName: databaseName,
 		fileName:     fileName,
-		blockId:      txn.fileMap[fileName],
+		bat:          bat,
+		dnStore:      dnStore,
 	})
 	return nil
 }
 
 // getRow used to get a row of table based on a condition
+/*
 func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId uint64,
 	dnList []DNStore, defs []engine.TableDef, columns []string, expr *plan.Expr) ([]any, error) {
 	bats, err := txn.readTable(ctx, "", databaseId, tableId, defs, dnList, columns, expr)
@@ -388,10 +393,11 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	if len(rows) != 1 {
-		return nil, moerr.NewInvalidInput("table is not unique")
+		return nil, moerr.NewInvalidInput(ctx, "table is not unique")
 	}
 	return rows[0], nil
 }
+*/
 
 // getRows used to get rows of table
 func (txn *Transaction) getRows(ctx context.Context, name string, databaseId uint64, tableId uint64,
@@ -413,6 +419,7 @@ func (txn *Transaction) getRows(ctx context.Context, name string, databaseId uin
 	return rows, nil
 }
 
+/*
 func (txn *Transaction) getRowsByIndex(databaseId, tableId uint64, name string,
 	dnList []DNStore, columns []string, index memtable.Tuple, expr *plan.Expr) ([][]any, error) {
 	var rows [][]any
@@ -505,6 +512,7 @@ func (txn *Transaction) getRowsByIndex(databaseId, tableId uint64, name string,
 	}
 	return rows, nil
 }
+*/
 
 // readTable used to get tuples of table based on a condition
 // only used to read data from catalog, for which the execution is currently single-core
@@ -550,7 +558,7 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 		}
 		for _, rd := range rds {
 			for {
-				bat, err := rd.Read(columns, expr, txn.proc.Mp())
+				bat, err := rd.Read(ctx, columns, expr, txn.proc.Mp())
 				if err != nil {
 					return nil, err
 				}
@@ -595,10 +603,8 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
 
 	// tx for workspace operations
-	t := memtable.Time{
-		Timestamp: txn.nextLocalTS(),
-	}
-	tx := memtable.NewTransaction(uuid.NewString(), t, memtable.SnapshotIsolation)
+	t := txn.nextLocalTS()
+	tx := memorytable.NewTransaction(t)
 	defer func() {
 		if err := tx.Commit(t); err != nil {
 			panic(err)
@@ -611,7 +617,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		mp[rowid] = 0
 		// update workspace
 		err := txn.workspace.Delete(tx, RowID(rowid))
-		if err != nil {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			panic(err)
 		}
 	}
@@ -682,50 +688,34 @@ func (h *transactionHeap) Pop() any {
 }
 
 // needRead determine if a block needs to be read
-func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc *process.Process) bool {
+func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
 	var err error
 	if expr == nil {
 		return true
 	}
-
-	// key = expr's ColPos,  value = tableDef's ColPos
-	columnMap := getColumnsByExpr(expr, tableDef)
+	notReportErrCtx := errutil.ContextWithNoReport(ctx, true)
 
 	// if expr match no columns, just eval expr
-	if len(columnMap) == 0 {
+	if len(columns) == 0 {
 		bat := batch.NewWithSize(0)
-		ifNeed, err := evalFilterExpr(expr, bat, proc)
+		defer bat.Clean(proc.Mp())
+		ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
 		if err != nil {
 			return true
 		}
-		bat.Clean(proc.Mp())
 		return ifNeed
-	}
-	if !checkExprIsMonotonic(expr) {
-		return true
-	}
-
-	maxCol := 0
-	useColumn := len(columnMap)
-	columns := make([]int, useColumn)
-	i := 0
-	for k, v := range columnMap {
-		if k > maxCol {
-			maxCol = k
-		}
-		columns[i] = v //tableDef's ColPos
-		i = i + 1
 	}
 
 	// get min max data from Meta
-	datas, dataTypes, err := getZonemapDataFromMeta(columns, blkInfo, tableDef)
-	if err != nil {
+	datas, dataTypes, err := getZonemapDataFromMeta(ctx, columns, blkInfo, tableDef)
+	if err != nil || datas == nil {
 		return true
 	}
 
 	// use all min/max data to build []vectors.
-	buildVectors := buildVectorsByData(datas, dataTypes, proc.Mp())
+	buildVectors := plan2.BuildVectorsByData(datas, dataTypes, proc.Mp())
 	bat := batch.NewWithSize(maxCol + 1)
+	defer bat.Clean(proc.Mp())
 	for k, v := range columnMap {
 		for i, realIdx := range columns {
 			if realIdx == v {
@@ -736,13 +726,10 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 	bat.SetZs(buildVectors[0].Length(), proc.Mp())
 
-	ifNeed, err := evalFilterExpr(expr, bat, proc)
+	ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
 	if err != nil {
-		bat.Clean(proc.Mp())
 		return true
 	}
-	bat.Clean(proc.Mp())
-
 	return ifNeed
 
 }
@@ -805,8 +792,8 @@ func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileServic
 	return writer.WriteEnd(ctx)
 }
 
-func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
-	priKeys []*engine.Attribute, dnStores []DNStore) []int {
+func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef,
+	priKeys []*engine.Attribute, dnStores []DNStore, proc *process.Process) []int {
 	var pk *engine.Attribute
 
 	fullList := func() []int {
@@ -815,6 +802,9 @@ func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
 			dnList[i] = i
 		}
 		return dnList
+	}
+	if len(dnStores) == 1 {
+		return []int{0}
 	}
 	for _, key := range priKeys {
 		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
@@ -828,15 +818,24 @@ func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
 	if expr == nil || pk == nil || tableDef == nil {
 		return fullList()
 	}
-	pkIndex := tableDef.Name2ColIndex[pk.Name]
 	if pk.Type.IsIntOrUint() {
-		canComputeRange, pkRange := computeRangeByIntPk(expr, pkIndex, "")
+		canComputeRange, intPkRange := computeRangeByIntPk(expr, pk.Name, "")
 		if !canComputeRange {
 			return fullList()
 		}
-		return getListByRange(dnStores, pkRange)
+		if intPkRange.isRange {
+			r := intPkRange.ranges
+			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
+				return fullList()
+			}
+			intPkRange.isRange = false
+			for i := intPkRange.ranges[0]; i <= intPkRange.ranges[1]; i++ {
+				intPkRange.items = append(intPkRange.items, i)
+			}
+		}
+		return getListByItems(dnStores, intPkRange.items)
 	}
-	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pkIndex)
+	canComputeRange, hashVal := computeRangeByNonIntPk(ctx, expr, pk.Name, proc)
 	if !canComputeRange {
 		return fullList()
 	}

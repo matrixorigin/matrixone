@@ -16,6 +16,7 @@ package anti
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,7 +39,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	var err error
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -55,7 +56,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			ctr.state = Probe
 
 		case Probe:
+			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
+			anal.WaitStop(start)
+
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -64,9 +68,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				err = ctr.emptyProbe(bat, ap, proc, anal)
+				err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast)
 			} else {
-				err = ctr.probe(bat, ap, proc, anal)
+				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
 			}
 			if err != nil {
 				ap.Free(proc, true)
@@ -82,18 +86,21 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+	start := time.Now()
 	bat := <-proc.Reg.MergeReceivers[1].Ch
+	anal.WaitStop(start)
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
 		ctr.hasNull = ctr.mp.HasNull()
+		anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
@@ -116,21 +123,21 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 	}
 	rbat.ExpandNulls()
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
 	if (ctr.bat.Length() == 1 && ctr.hasNull) || ctr.bat.Length() == 0 {
-		anal.Output(rbat)
+		anal.Output(rbat, isLast)
 		proc.SetInputBatch(rbat)
 		return nil
 	}
@@ -143,6 +150,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
+	eligible := make([]int64, 0, hashmap.UnitLimit)
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -155,12 +163,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				continue
 			}
 			if vals[k] == 0 {
-				for j, pos := range ap.Result {
-					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
-						return err
-					}
-				}
+				eligible = append(eligible, int64(i+k))
 				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 				continue
 			}
@@ -183,18 +186,20 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				if matched {
 					continue
 				}
-				for j, pos := range ap.Result {
-					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
-						return err
-					}
-				}
+				eligible = append(eligible, int64(i+k))
 				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 			}
 		}
+		for j, pos := range ap.Result {
+			if err := vector.Union(rbat.Vecs[j], bat.Vecs[pos], eligible, true, proc.Mp()); err != nil {
+				rbat.Clean(proc.Mp())
+				return err
+			}
+		}
+		eligible = eligible[:0]
 	}
 	rbat.ExpandNulls()
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
 }
@@ -202,7 +207,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}

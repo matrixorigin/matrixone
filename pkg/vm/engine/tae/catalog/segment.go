@@ -40,8 +40,10 @@ type SegmentEntry struct {
 	*MetaBaseEntry
 	table   *TableEntry
 	entries map[uint64]*common.GenericDLNode[*BlockEntry]
+	//link.head and tail is nil when new a segmentEntry object.
 	link    *common.GenericSortedDList[*BlockEntry]
 	state   EntryState
+	sorted  bool
 	segData data.Segment
 }
 
@@ -160,7 +162,11 @@ func (entry *SegmentEntry) StringLocked() string {
 
 func (entry *SegmentEntry) Repr() string {
 	id := entry.AsCommonID()
-	return fmt.Sprintf("[%s]SEG[%s]", entry.state.Repr(), id.String())
+	sorted := "-US"
+	if entry.sorted {
+		sorted = "-S"
+	}
+	return fmt.Sprintf("[%s%s]SEG[%s]", entry.state.Repr(), sorted, id.String())
 }
 
 func (entry *SegmentEntry) String() string {
@@ -176,11 +182,15 @@ func (entry *SegmentEntry) StringWithLevel(level common.PPLevel) string {
 }
 
 func (entry *SegmentEntry) StringWithLevelLocked(level common.PPLevel) string {
-	if level <= common.PPL1 {
-		return fmt.Sprintf("[%s]SEG[%d][C@%s,D@%s]",
-			entry.state.Repr(), entry.ID, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+	sorted := "-US"
+	if entry.sorted {
+		sorted = "-S"
 	}
-	return fmt.Sprintf("[%s]SEG%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
+	if level <= common.PPL1 {
+		return fmt.Sprintf("[%s%s]SEG[%d][C@%s,D@%s]",
+			entry.state.Repr(), sorted, entry.ID, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+	}
+	return fmt.Sprintf("[%s%s]SEG%s", entry.state.Repr(), sorted, entry.MetaBaseEntry.StringLocked())
 }
 
 func (entry *SegmentEntry) BlockCnt() int {
@@ -189,6 +199,20 @@ func (entry *SegmentEntry) BlockCnt() int {
 
 func (entry *SegmentEntry) IsAppendable() bool {
 	return entry.state == ES_Appendable
+}
+
+func (entry *SegmentEntry) SetSorted() {
+	// modifing segment interface to supporte a borned sorted seg is verbose
+	// use Lock instead, the contention won't be intense
+	entry.Lock()
+	defer entry.Unlock()
+	entry.sorted = true
+}
+
+func (entry *SegmentEntry) IsSorted() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.sorted
 }
 
 func (entry *SegmentEntry) GetTable() *TableEntry {
@@ -206,6 +230,21 @@ func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 	}
 	return cnt
 }
+
+// GetNonAppendableBlockCnt Non-appendable segment only can contain non-appendable blocks;
+// Appendable segment can contain both of appendable blocks and non-appendable blocks
+func (entry *SegmentEntry) GetNonAppendableBlockCnt() int {
+	cnt := 0
+	it := entry.MakeBlockIt(true)
+	for it.Valid() {
+		if !it.Get().GetPayload().IsAppendable() {
+			cnt++
+		}
+		it.Next()
+	}
+	return cnt
+}
+
 func (entry *SegmentEntry) GetAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
 	for it.Valid() {
@@ -236,6 +275,19 @@ func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dat
 	entry.Lock()
 	defer entry.Unlock()
 	created = NewBlockEntry(entry, txn, state, dataFactory)
+	entry.AddEntryLocked(created)
+	return
+}
+
+func (entry *SegmentEntry) CreateBlockWithMeta(
+	txn txnif.AsyncTxn,
+	state EntryState,
+	dataFactory BlockDataFactory,
+	metaLoc string,
+	deltaLoc string) (created *BlockEntry, err error) {
+	entry.Lock()
+	defer entry.Unlock()
+	created = NewBlockEntryWithMeta(entry, txn, state, dataFactory, metaLoc, deltaLoc)
 	entry.AddEntryLocked(created)
 	return
 }
@@ -297,9 +349,31 @@ func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 		entry.link.Delete(n)
 		delete(entry.entries, block.GetID())
 	}
+	block.blkData.Close()
+	block.blkData = nil
 	return nil
 }
+func (entry *SegmentEntry) Close() {
+	blks := entry.getAllBlks()
+	entry.Lock()
+	defer entry.Unlock()
+	for _, blk := range blks {
+		err := entry.deleteEntryLocked(blk)
+		if err != nil {
+			panic(err)
+		}
+	}
+}
 
+func (entry *SegmentEntry) getAllBlks() []*BlockEntry {
+	blks := make([]*BlockEntry, 0)
+	it := entry.MakeBlockIt(false)
+	for it.Valid() {
+		blks = append(blks, it.Get().GetPayload())
+		it.Next()
+	}
+	return blks
+}
 func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
 	logutil.Debug("[Catalog]", common.OperationField("remove"),
 		common.OperandField(block.String()))
@@ -317,12 +391,6 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 		if err = entry.GetTable().RemoveEntry(entry); err != nil {
 			return
 		}
-		//TODO: maybe scheduled?
-		// entry.GetCatalog().GetScheduler().ScheduleScopedFn(nil, tasks.IOTask, entry.AsCommonID(), entry.DestroyData)
-		if err = entry.DestroyData(); err != nil {
-			logutil.Fatalf("Cannot destroy uncommitted segment [%s] data: %v", entry.Repr(), err)
-			return
-		}
 	}
 	return
 }
@@ -336,6 +404,10 @@ func (entry *SegmentEntry) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n = sn + 1
+	if err = binary.Write(w, binary.BigEndian, entry.sorted); err != nil {
+		return
+	}
+	n = sn + 1
 	return
 }
 
@@ -343,7 +415,13 @@ func (entry *SegmentEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	if n, err = entry.MetaBaseEntry.ReadAllFrom(r); err != nil {
 		return
 	}
-	err = binary.Read(r, binary.BigEndian, &entry.state)
+	if err = binary.Read(r, binary.BigEndian, &entry.state); err != nil {
+		return
+	}
+	n += 1
+	if err = binary.Read(r, binary.BigEndian, &entry.sorted); err != nil {
+		return
+	}
 	n += 1
 	return
 }
@@ -375,13 +453,6 @@ func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *MetaBaseEnt
 		blkIt.Next()
 	}
 	return blks
-}
-
-func (entry *SegmentEntry) DestroyData() (err error) {
-	if entry.segData != nil {
-		err = entry.segData.Destroy()
-	}
-	return
 }
 
 // IsActive is coarse API: no consistency check

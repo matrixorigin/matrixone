@@ -38,12 +38,12 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 	parameter := vector.MustStrCols(vs[2])[0]
 
 	if _, ok := supportedServiceTypes[service]; !ok {
-		return nil, moerr.NewNotSupported("service type %s not supported", service)
+		return nil, moerr.NewNotSupported(proc.Ctx, "service type %s not supported", service)
 	}
 
 	f, ok := supportedCmds[command]
 	if !ok {
-		return nil, moerr.NewNotSupported("command %s not supported", command)
+		return nil, moerr.NewNotSupported(proc.Ctx, "command %s not supported", command)
 	}
 
 	result, err := f(proc,
@@ -63,10 +63,13 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 					return nil, err
 				}
 				txnOp = v
+				defer func() {
+					_ = txnOp.Commit(proc.Ctx)
+				}()
 			}
 			op, ok := txnOp.(client.DebugableTxnOperator)
 			if !ok {
-				return nil, moerr.NewNotSupported("debug function not supported")
+				return nil, moerr.NewNotSupported(proc.Ctx, "debug function not supported")
 			}
 
 			debugRequests := make([]txn.TxnRequest, 0, len(requests))
@@ -91,7 +94,7 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		return nil, err
 	}
 
-	value := vector.New(types.New(types.T_varchar, 0, 0, 0))
+	value := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
 	if err := value.Append(json.Pretty(result), false, proc.Mp()); err != nil {
 		return nil, err
 	}

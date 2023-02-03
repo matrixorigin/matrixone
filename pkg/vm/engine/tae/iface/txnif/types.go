@@ -30,7 +30,7 @@ import (
 )
 
 var (
-	ErrTxnWWConflict = moerr.NewTxnWWConflict()
+	ErrTxnWWConflict = moerr.NewTxnWWConflictNoCtx()
 )
 
 type Txn2PC interface {
@@ -187,6 +187,8 @@ type MVCCNode interface {
 	ReadFrom(r io.Reader) (n int64, err error)
 	CloneData() MVCCNode
 	CloneAll() MVCCNode
+
+	Close()
 }
 type AppendNode interface {
 	MVCCNode
@@ -221,6 +223,9 @@ type TxnStore interface {
 	LogBlockID(dbId, tid, bid uint64)
 
 	Append(dbId, id uint64, data *containers.Batch) error
+	AddBlksWithMetaLoc(dbId, id uint64,
+		pkVecs []containers.Vector,
+		file string, metaLocs []string, flag int32) error
 
 	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
@@ -243,10 +248,11 @@ type TxnStore interface {
 
 	GetSegment(dbId uint64, id *common.ID) (handle.Segment, error)
 	CreateSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
-	CreateNonAppendableSegment(dbId, tid uint64) (handle.Segment, error)
+	CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
 	CreateBlock(dbId, tid, sid uint64, is1PC bool) (handle.Block, error)
 	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
 	CreateNonAppendableBlock(dbId uint64, id *common.ID) (handle.Block, error)
+	CreateNonAppendableBlockWithMeta(dbId uint64, id *common.ID, metaLoc string, deltaLoc string) (handle.Block, error)
 	SoftDeleteSegment(dbId uint64, id *common.ID) error
 	SoftDeleteBlock(dbId uint64, id *common.ID) error
 	UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error)

@@ -19,9 +19,8 @@ jobs:
           go-version: "1.19"
       - name: Build normal
         run: |
-          make config
           make build
-          zip mo-linux-amd64.zip mo-service ./etc/cn-standalone-test.toml
+          zip -r mo-linux-amd64.zip mo-service ./etc/launch-tae-CN-tae-DN
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.2.3
@@ -48,7 +47,6 @@ jobs:
           go-version: "1.19"
       - name: Build normal
         run: |
-          make config
           make build
       - name: Import Code-Signing Certificates
         uses: Apple-Actions/import-codesign-certs@v1
@@ -66,11 +64,12 @@ jobs:
           cp ./optools/sign/gon.json ./gon.json
           gon -log-json ./gon.json
           unzip -d ./mo-macos11 mo-macos11.zip
-          cp system_vars_config.toml ./mo-macos11/
+          mkdir -p ./mo-macos11/etc
+          cp -r ./etc/launch-tae-CN-tae-DN ./mo-macos11/etc/
           cd ./mo-macos11
-          spctl -a -vvv -t install mo-server
-          codesign --test-requirement="=notarized" -vv mo-server
-          zip mo-darwin-x86_64.zip mo-service ./etc/cn-standalone-test.toml
+          spctl -a -vvv -t install mo-service
+          codesign --test-requirement="=notarized" -vv mo-service
+          zip -r mo-darwin-x86_64.zip mo-service ./etc/launch-tae-CN-tae-DN
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.2.3

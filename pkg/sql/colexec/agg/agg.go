@@ -139,7 +139,12 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 				continue
 			}
 			j := vps[i] - 1
-			a.vs[j], a.es[j] = a.fill(int64(j), (any)(vec.GetBytes(int64(i)+start)).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+			if !vec.IsConst() {
+				a.vs[j], a.es[j] = a.fill(int64(j), (any)(vec.GetBytes(int64(i)+start)).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+			} else {
+				a.vs[j], a.es[j] = a.fill(int64(j), (any)(vec.GetBytes(0)).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+			}
+
 		}
 		return nil
 	}
@@ -185,8 +190,13 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 		len := vec.Length()
 		for j := 0; j < len; j++ {
 			hasNull := vec.GetNulls().Contains(uint64(j))
-			a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytes(int64(j))).(T1), a.vs[i], zs[j], a.es[i], hasNull)
+			if !vec.IsConst() {
+				a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytes(int64(j))).(T1), a.vs[i], zs[j], a.es[i], hasNull)
+			} else {
+				a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytes(0)).(T1), a.vs[i], zs[j], a.es[i], hasNull)
+			}
 		}
+
 		return nil
 	}
 	vs := vector.GetColumn[T1](vec)
@@ -224,6 +234,7 @@ func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, vps [
 
 func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 	defer func() {
+		a.Free(m)
 		a.da = nil
 		a.vs = nil
 		a.es = nil
@@ -309,8 +320,11 @@ func getUnaryAggStrVs(strUnaryAgg any) []string {
 }
 
 func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
 	decoded := new(EncodeAgg)
-	if err := types.Decode(data, decoded); err != nil {
+	if err := types.Decode(copyData, decoded); err != nil {
 		return err
 	}
 
@@ -319,7 +333,10 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	a.otyp = types.DecodeType(decoded.OutputType)
 	a.isCount = decoded.IsCount
 	a.es = decoded.Es
-	a.da = decoded.Da
+	data = make([]byte, len(decoded.Da))
+	copy(data, decoded.Da)
+	a.da = data
+
 	setAggValues[T1, T2](a, a.otyp)
 
 	return a.priv.UnmarshalBinary(decoded.Private)

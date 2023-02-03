@@ -15,12 +15,18 @@
 package plan
 
 import (
+	"context"
 	"sort"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 var (
@@ -28,6 +34,11 @@ var (
 	_ VisitPlanRule = &ResetParamOrderRule{}
 	_ VisitPlanRule = &ResetParamRefRule{}
 	_ VisitPlanRule = &ResetVarRefRule{}
+	_ VisitPlanRule = &ConstantFoldRule{}
+)
+
+var (
+	constantFoldRule = rule.NewConstantFold(false)
 )
 
 type GetParamRule struct {
@@ -78,7 +89,7 @@ func (rule *GetParamRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_P:
 		pos := int(exprImpl.P.Pos)
 		rule.params[pos] = 0
-		if e.Typ.Id == int32(types.T_any) && !e.Typ.Nullable {
+		if e.Typ.Id == int32(types.T_any) && e.Typ.NotNullable {
 			// is not null, use string
 			rule.mapTypes[pos] = int32(types.T_varchar)
 		} else {
@@ -146,11 +157,13 @@ func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 // ---------------------------
 
 type ResetParamRefRule struct {
+	ctx    context.Context
 	params []*Expr
 }
 
-func NewResetParamRefRule(params []*Expr) *ResetParamRefRule {
+func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
 	return &ResetParamRefRule{
+		ctx:    ctx,
 		params: params,
 	}
 }
@@ -184,7 +197,7 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
-			return bindFuncExprImplByPlanExpr(exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+			return bindFuncExprImplByPlanExpr(rule.ctx, exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
 		}
 		return e, nil
 	case *plan.Expr_P:
@@ -201,11 +214,17 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 type ResetVarRefRule struct {
 	compCtx CompilerContext
+	proc    *process.Process
+	bat     *batch.Batch
 }
 
-func NewResetVarRefRule(compCtx CompilerContext) *ResetVarRefRule {
+func NewResetVarRefRule(compCtx CompilerContext, proc *process.Process) *ResetVarRefRule {
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
 	return &ResetVarRefRule{
 		compCtx: compCtx,
+		proc:    proc,
+		bat:     bat,
 	}
 }
 
@@ -238,61 +257,186 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
-			return bindFuncExprImplByPlanExpr(exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+			return bindFuncExprImplByPlanExpr(rule.getContext(), exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
 		}
 		return e, nil
 	case *plan.Expr_V:
-		var getVal interface{}
-		var expr *plan.Expr
-		getVal, err = rule.compCtx.ResolveVariable(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+		return getVarValue(e, rule)
+	case *plan.Expr_C:
+		if exprImpl.C.Src != nil {
+			if _, ok := exprImpl.C.Src.Expr.(*plan.Expr_V); ok {
+				return getVarValue(exprImpl.C.Src, rule)
+			}
+		}
+		return e, nil
+	default:
+		return e, nil
+	}
+}
+
+func (rule *ResetVarRefRule) getContext() context.Context { return rule.compCtx.GetContext() }
+
+func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
+	exprImpl := e.Expr.(*plan.Expr_V)
+	var expr *plan.Expr
+	getVal, err := r.compCtx.ResolveVariable(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+	if err != nil {
+		return nil, err
+	}
+
+	switch val := getVal.(type) {
+	case string:
+		expr = makePlan2StringConstExprWithType(val)
+	case int:
+		expr = makePlan2Int64ConstExprWithType(int64(val))
+	case uint8:
+		expr = makePlan2Int64ConstExprWithType(int64(val))
+	case uint16:
+		expr = makePlan2Int64ConstExprWithType(int64(val))
+	case uint32:
+		expr = makePlan2Int64ConstExprWithType(int64(val))
+	case int8:
+		expr = makePlan2Int64ConstExprWithType(int64(val))
+	case int16:
+		expr = makePlan2Int64ConstExprWithType(int64(val))
+	case int32:
+		expr = makePlan2Int64ConstExprWithType(int64(val))
+	case int64:
+		expr = makePlan2Int64ConstExprWithType(val)
+	case uint64:
+		expr = makePlan2Uint64ConstExprWithType(val)
+	case float32:
+		// when we build plan with constant in float, we cast them to decimal.
+		// so we cast @float_var to decimal too.
+		strVal := strconv.FormatFloat(float64(val), 'f', -1, 64)
+		expr, err = makePlan2DecimalExprWithType(r.getContext(), strVal)
+	case float64:
+		// when we build plan with constant in float, we cast them to decimal.
+		// so we cast @float_var to decimal too.
+		strVal := strconv.FormatFloat(val, 'f', -1, 64)
+		expr, err = makePlan2DecimalExprWithType(r.getContext(), strVal)
+	case bool:
+		expr = makePlan2BoolConstExprWithType(val)
+	case nil:
+		if e.Typ.Id == int32(types.T_any) {
+			expr = makePlan2NullConstExprWithType()
+		} else {
+			expr = &plan.Expr{
+				Expr: &plan.Expr_C{
+					C: &Const{
+						Isnull: true,
+					},
+				},
+				Typ: e.Typ,
+			}
+		}
+	case types.Decimal64, types.Decimal128:
+		err = moerr.NewNYI(r.getContext(), "decimal var")
+	default:
+		err = moerr.NewParseError(r.getContext(), "type of var %q is not supported now", exprImpl.V.Name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
+		expr, err = appendCastBeforeExpr(r.getContext(), expr, e.Typ)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if c, ok := expr.Expr.(*plan.Expr_C); ok {
+		c.C.Src = e
+	} else if _, ok = expr.Expr.(*plan.Expr_F); ok {
+		vec, err := colexec.EvalExpr(r.bat, r.proc, expr)
 		if err != nil {
 			return nil, err
 		}
+		constValue := rule.GetConstantValue(vec, true)
+		constValue.Src = e
+		expr.Typ = &plan.Type{Id: int32(vec.Typ.Oid), Precision: vec.Typ.Precision, Scale: vec.Typ.Scale, Width: vec.Typ.Width, Size: vec.Typ.Size}
+		expr.Expr = &plan.Expr_C{
+			C: constValue,
+		}
+	}
+	return expr, err
+}
 
-		switch val := getVal.(type) {
-		case string:
-			expr = makePlan2StringConstExprWithType(val)
-		case int:
-			expr = makePlan2Int64ConstExprWithType(int64(val))
-		case uint8:
-			expr = makePlan2Int64ConstExprWithType(int64(val))
-		case uint16:
-			expr = makePlan2Int64ConstExprWithType(int64(val))
-		case uint32:
-			expr = makePlan2Int64ConstExprWithType(int64(val))
-		case int8:
-			expr = makePlan2Int64ConstExprWithType(int64(val))
-		case int16:
-			expr = makePlan2Int64ConstExprWithType(int64(val))
-		case int32:
-			expr = makePlan2Int64ConstExprWithType(int64(val))
-		case int64:
-			expr = makePlan2Int64ConstExprWithType(val)
-		case uint64:
-			expr = makePlan2Uint64ConstExprWithType(val)
-		case float32:
-			// when we build plan with constant in float, we cast them to decimal.
-			// so we cast @float_var to decimal too.
-			strVal := strconv.FormatFloat(float64(val), 'f', -1, 64)
-			expr, err = makePlan2DecimalExprWithType(strVal)
-		case float64:
-			// when we build plan with constant in float, we cast them to decimal.
-			// so we cast @float_var to decimal too.
-			strVal := strconv.FormatFloat(val, 'f', -1, 64)
-			expr, err = makePlan2DecimalExprWithType(strVal)
-		case bool:
-			expr = makePlan2BoolConstExprWithType(val)
-		case nil:
-			expr = makePlan2NullConstExprWithType()
-		case types.Decimal64, types.Decimal128:
-			err = moerr.NewNYI("decimal var")
-		default:
-			err = moerr.NewParseError("type of var %q is not supported now", exprImpl.V.Name)
+type ConstantFoldRule struct {
+	compCtx CompilerContext
+	rule    *rule.ConstantFold
+}
+
+func NewConstantFoldRule(compCtx CompilerContext) *ConstantFoldRule {
+	return &ConstantFoldRule{
+		compCtx: compCtx,
+		rule:    constantFoldRule,
+	}
+}
+
+func (r *ConstantFoldRule) MatchNode(node *Node) bool {
+	return r.rule.Match(node)
+}
+
+func (r *ConstantFoldRule) IsApplyExpr() bool {
+	return false
+}
+
+func (r *ConstantFoldRule) ApplyNode(node *Node) error {
+	r.rule.Apply(node, nil, r.compCtx.GetProcess())
+	return nil
+}
+
+func (r *ConstantFoldRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	return e, nil
+}
+
+type RecomputeRealTimeRelatedFuncRule struct {
+	bat  *batch.Batch
+	proc *process.Process
+}
+
+func NewRecomputeRealTimeRelatedFuncRule(proc *process.Process) *RecomputeRealTimeRelatedFuncRule {
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	return &RecomputeRealTimeRelatedFuncRule{bat, proc}
+}
+
+func (r *RecomputeRealTimeRelatedFuncRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (r *RecomputeRealTimeRelatedFuncRule) IsApplyExpr() bool {
+	return true
+}
+
+func (r *RecomputeRealTimeRelatedFuncRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	var err error
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i], err = r.ApplyExpr(arg)
+			if err != nil {
+				return nil, err
+			}
 		}
-		if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
-			return appendCastBeforeExpr(expr, e.Typ)
+		return e, nil
+	case *plan.Expr_C:
+		if exprImpl.C.Src != nil {
+			if _, ok := exprImpl.C.Src.Expr.(*plan.Expr_F); ok {
+				vec, err := colexec.EvalExpr(r.bat, r.proc, exprImpl.C.Src)
+				if err != nil {
+					return nil, err
+				}
+				constValue := rule.GetConstantValue(vec, false)
+				constValue.Src = exprImpl.C.Src
+				exprImpl.C = constValue
+			}
 		}
-		return expr, err
+		return e, nil
 	default:
 		return e, nil
 	}

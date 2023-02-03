@@ -60,6 +60,12 @@ func (l *LocalETLFS) ensureTempDir() (err error) {
 }
 
 func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
@@ -70,7 +76,7 @@ func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
 	_, err = os.Stat(nativePath)
 	if err == nil {
 		// existed
-		return moerr.NewFileAlreadyExists(path.File)
+		return moerr.NewFileAlreadyExistsNoCtx(path.File)
 	}
 
 	return l.write(ctx, vector)
@@ -106,12 +112,21 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 	if err != nil {
 		return err
 	}
-	n, err := io.Copy(f, newIOEntriesReader(vector.Entries))
+	n, err := io.Copy(f, newIOEntriesReader(ctx, vector.Entries))
 	if err != nil {
 		return err
 	}
 	if n != size {
-		return moerr.NewSizeNotMatch(path.File)
+		sizeUnknown := false
+		for _, entry := range vector.Entries {
+			if entry.Size < 0 {
+				sizeUnknown = true
+				break
+			}
+		}
+		if !sizeUnknown {
+			return moerr.NewSizeNotMatchNoCtx(path.File)
+		}
 	}
 	if err := f.Close(); err != nil {
 		return err
@@ -137,9 +152,14 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	if len(vector.Entries) == 0 {
-		return moerr.NewEmptyVector()
+		return moerr.NewEmptyVectorNoCtx()
 	}
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
@@ -150,7 +170,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
 	_, err = os.Stat(nativePath)
 	if os.IsNotExist(err) {
-		return moerr.NewFileNotFound(path.File)
+		return moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	if err != nil {
 		return err
@@ -158,17 +178,17 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
 	for i, entry := range vector.Entries {
 		if entry.Size == 0 {
-			return moerr.NewEmptyRange(path.File)
+			return moerr.NewEmptyRangeNoCtx(path.File)
 		}
 
-		if entry.ignore {
+		if entry.done {
 			continue
 		}
 
 		if entry.WriterForRead != nil {
 			f, err := os.Open(nativePath)
 			if os.IsNotExist(err) {
-				return moerr.NewFileNotFound(path.File)
+				return moerr.NewFileNotFoundNoCtx(path.File)
 			}
 			if err != nil {
 				return err
@@ -195,8 +215,8 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				}
 				vector.Entries[i].Object = obj
 				vector.Entries[i].ObjectSize = size
-				if cr.N != entry.Size {
-					return moerr.NewUnexpectedEOF(path.File)
+				if entry.Size > 0 && cr.N != entry.Size {
+					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
 
 			} else {
@@ -204,15 +224,15 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				if err != nil {
 					return err
 				}
-				if n != int64(entry.Size) {
-					return moerr.NewUnexpectedEOF(path.File)
+				if entry.Size > 0 && n != int64(entry.Size) {
+					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
 			}
 
 		} else if entry.ReadCloserForRead != nil {
 			f, err := os.Open(nativePath)
 			if os.IsNotExist(err) {
-				return moerr.NewFileNotFound(path.File)
+				return moerr.NewFileNotFoundNoCtx(path.File)
 			}
 			if err != nil {
 				return err
@@ -251,7 +271,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 		} else {
 			f, err := os.Open(nativePath)
 			if os.IsNotExist(err) {
-				return moerr.NewFileNotFound(path.File)
+				return moerr.NewFileNotFoundNoCtx(path.File)
 			}
 			if err != nil {
 				return err
@@ -275,6 +295,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					return err
 				}
 				entry.Data = data
+				entry.Size = int64(len(data))
 
 			} else {
 				if int64(len(entry.Data)) < entry.Size {
@@ -285,7 +306,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					return err
 				}
 				if int64(n) != entry.Size {
-					return moerr.NewUnexpectedEOF(path.File)
+					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
 			}
 
@@ -303,6 +324,11 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 
 	path, err := ParsePathAtService(dirPath, l.name)
 	if err != nil {
@@ -353,6 +379,12 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, 
 }
 
 func (l *LocalETLFS) Delete(ctx context.Context, filePaths ...string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	for _, filePath := range filePaths {
 		if err := l.deleteSingle(ctx, filePath); err != nil {
 			return err
@@ -370,7 +402,7 @@ func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
 
 	_, err = os.Stat(nativePath)
 	if os.IsNotExist(err) {
-		return moerr.NewFileNotFound(path.File)
+		return moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	if err != nil {
 		return err
@@ -478,7 +510,7 @@ func (l *LocalETLFS) NewMutator(filePath string) (Mutator, error) {
 	nativePath := l.toNativeFilePath(path.File)
 	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
 	if os.IsNotExist(err) {
-		return nil, moerr.NewFileNotFound(path.File)
+		return nil, moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	return &LocalETLFSMutator{
 		osFile: f,
@@ -502,6 +534,11 @@ func (l *LocalETLFSMutator) Append(ctx context.Context, entries ...IOEntry) erro
 }
 
 func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int64, entries ...IOEntry) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	// write
 	for _, entry := range entries {
@@ -517,7 +554,7 @@ func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int64, entrie
 				return err
 			}
 			if n != entry.Size {
-				return moerr.NewSizeNotMatch("")
+				return moerr.NewSizeNotMatchNoCtx("")
 			}
 
 		} else {
@@ -527,7 +564,7 @@ func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int64, entrie
 				return err
 			}
 			if int64(n) != entry.Size {
-				return moerr.NewSizeNotMatch("")
+				return moerr.NewSizeNotMatchNoCtx("")
 			}
 		}
 

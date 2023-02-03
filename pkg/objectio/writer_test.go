@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"os"
 	"path"
@@ -94,7 +95,12 @@ func TestNewObjectWriter(t *testing.T) {
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
-	blocks, err := objectWriter.WriteEnd(context.Background())
+	ts := time.Now()
+	option := WriteOptions{
+		Type: WriteTS,
+		Val:  ts,
+	}
+	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
 	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
@@ -102,7 +108,7 @@ func TestNewObjectWriter(t *testing.T) {
 	objectReader, _ := NewObjectReader(name, service)
 	extents := make([]Extent, 2)
 	for i, blk := range blocks {
-		extents[i] = NewExtent(blk.GetExtent().offset, blk.GetExtent().length, blk.GetExtent().originSize)
+		extents[i] = NewExtent(blk.GetID(), blk.GetExtent().offset, blk.GetExtent().length, blk.GetExtent().originSize)
 	}
 	pool, err := mpool.NewMPool("objectio_test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
@@ -131,14 +137,6 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(indexes))
 	assert.Equal(t, "test index 0", string(indexes[0].(*BloomFilter).buf))
-	assert.False(t, nb0 == pool.CurrNB())
-	for i := range vec.Entries {
-		pool.Free(vec.Entries[i].Object.([]byte))
-	}
-	assert.False(t, nb0 == pool.CurrNB())
-	for i := range indexes {
-		pool.Free(indexes[i].(*BloomFilter).buf)
-	}
 	assert.True(t, nb0 == pool.CurrNB())
 
 	fs := NewObjectFS(service, dir)
@@ -173,14 +171,6 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(indexes))
 	assert.Equal(t, "test index 0", string(indexes[0].(*BloomFilter).buf))
-	assert.False(t, nb0 == pool.CurrNB())
-	for i := range vec.Entries {
-		pool.Free(vec.Entries[i].Object.([]byte))
-	}
-	assert.False(t, nb0 == pool.CurrNB())
-	for i := range indexes {
-		pool.Free(indexes[i].(*BloomFilter).buf)
-	}
 	assert.True(t, nb0 == pool.CurrNB())
 
 }

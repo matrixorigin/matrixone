@@ -15,6 +15,8 @@
 package explain
 
 import (
+	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -33,7 +35,7 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 	}
 }
 
-func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) error {
+func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {
 	nodes := e.QueryPlan.Nodes
 	for index, rootNodeID := range e.QueryPlan.Steps {
 		logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
@@ -43,7 +45,7 @@ func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *Expla
 			indent: 2,
 			level:  0,
 		}
-		err := traversalPlan(nodes[rootNodeID], nodes, &settings, options)
+		err := traversalPlan(ctx, nodes[rootNodeID], nodes, &settings, options)
 		if err != nil {
 			return err
 		}
@@ -51,22 +53,34 @@ func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *Expla
 	return nil
 }
 
-func (e *ExplainQueryImpl) BuildJsonPlan(uuid uuid.UUID, options *ExplainOptions) *ExplainData {
+func (e *ExplainQueryImpl) BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions) *ExplainData {
 	nodes := e.QueryPlan.Nodes
 	expdata := NewExplainData(uuid)
 	for index, rootNodeId := range e.QueryPlan.Steps {
 		graphData := NewGraphData()
-		err := PreOrderPlan(nodes[rootNodeId], nodes, graphData, options)
+		err := PreOrderPlan(ctx, nodes[rootNodeId], nodes, graphData, options)
 		if err != nil {
 			var errdata *ExplainData
 			if moErr, ok := err.(*moerr.Error); ok {
 				errdata = NewExplainDataFail(uuid, moErr.MySQLCode(), moErr.Error())
 			} else {
-				newError := moerr.NewInternalError("An error occurred when plan is serialized to json")
+				newError := moerr.NewInternalError(ctx, "An error occurred when plan is serialized to json")
 				errdata = NewExplainDataFail(uuid, newError.MySQLCode(), newError.Error())
 			}
 			return errdata
 		}
+		err = graphData.StatisticsGlobalResource(ctx)
+		if err != nil {
+			var errdata *ExplainData
+			if moErr, ok := err.(*moerr.Error); ok {
+				errdata = NewExplainDataFail(uuid, moErr.MySQLCode(), moErr.Error())
+			} else {
+				newError := moerr.NewInternalError(ctx, "An error occurred when plan is serialized to json")
+				errdata = NewExplainDataFail(uuid, newError.MySQLCode(), newError.Error())
+			}
+			return errdata
+		}
+
 		step := NewStep(index)
 		step.GraphData = *graphData
 
@@ -75,11 +89,11 @@ func (e *ExplainQueryImpl) BuildJsonPlan(uuid uuid.UUID, options *ExplainOptions
 	return expdata
 }
 
-func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOptions) error {
+func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings, options *ExplainOptions) error {
 	nodedescImpl := NewNodeDescriptionImpl(step)
 
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		basicNodeInfo, err1 := nodedescImpl.GetNodeBasicInfo(options)
+		basicNodeInfo, err1 := nodedescImpl.GetNodeBasicInfo(ctx, options)
 		if err1 != nil {
 			return nil
 		}
@@ -88,7 +102,7 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 		// Process verbose optioan information , "Output:"
 		if options.Verbose {
 			if nodedescImpl.Node.GetProjectList() != nil {
-				projecrtInfo, err := nodedescImpl.GetProjectListInfo(options)
+				projecrtInfo, err := nodedescImpl.GetProjectListInfo(ctx, options)
 				if err != nil {
 					return err
 				}
@@ -97,7 +111,7 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 
 			if nodedescImpl.Node.NodeType == plan.Node_TABLE_SCAN {
 				if nodedescImpl.Node.TableDef != nil {
-					tableDef, err := nodedescImpl.GetTableDef(options)
+					tableDef, err := nodedescImpl.GetTableDef(ctx, options)
 					if err != nil {
 						return err
 					}
@@ -110,7 +124,7 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 					rowsetDataDescImpl := &RowsetDataDescribeImpl{
 						RowsetData: nodedescImpl.Node.RowsetData,
 					}
-					rowsetInfo, err := rowsetDataDescImpl.GetDescription(options)
+					rowsetInfo, err := rowsetDataDescImpl.GetDescription(ctx, options)
 					if err != nil {
 						return err
 					}
@@ -119,11 +133,11 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 			}
 
 			if nodedescImpl.Node.NodeType == plan.Node_UPDATE {
-				if nodedescImpl.Node.UpdateCtxs != nil {
+				if nodedescImpl.Node.UpdateCtx != nil {
 					updateCtxsDescImpl := &UpdateCtxsDescribeImpl{
-						UpdateCtxs: nodedescImpl.Node.UpdateCtxs,
+						UpdateCtx: nodedescImpl.Node.UpdateCtx,
 					}
-					updateCols, err := updateCtxsDescImpl.GetDescription(options)
+					updateCols, err := updateCtxsDescImpl.GetDescription(ctx, options)
 					if err != nil {
 						return err
 					}
@@ -135,7 +149,7 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 		// print out the actual operation information
 		if options.Analyze {
 			if nodedescImpl.Node.AnalyzeInfo != nil {
-				analyze, err := nodedescImpl.GetActualAnalyzeInfo(options)
+				analyze, err := nodedescImpl.GetActualAnalyzeInfo(ctx, options)
 				if err != nil {
 					return err
 				}
@@ -144,7 +158,7 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 		}
 
 		// Get other node descriptions, such as "Filter:", "Group Key:", "Sort Key:"
-		extraInfo, err := nodedescImpl.GetExtraInfo(options)
+		extraInfo, err := nodedescImpl.GetExtraInfo(ctx, options)
 		if err != nil {
 			return err
 		}
@@ -152,18 +166,18 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 			settings.buffer.PushNewLine(line, false, settings.level)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return moerr.NewNYI("explain format json")
+		return moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return moerr.NewNYI("explain format dot")
+		return moerr.NewNYI(ctx, "explain format dot")
 	}
 	return nil
 }
 
-func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings, options *ExplainOptions) error {
+func traversalPlan(ctx context.Context, node *plan.Node, Nodes []*plan.Node, settings *FormatSettings, options *ExplainOptions) error {
 	if node == nil {
 		return nil
 	}
-	err1 := explainStep(node, settings, options)
+	err1 := explainStep(ctx, node, settings, options)
 	if err1 != nil {
 		return err1
 	}
@@ -171,11 +185,11 @@ func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings
 	// Recursive traversal Query Plan
 	if len(node.Children) > 0 {
 		for _, childNodeID := range node.Children {
-			index, err := serachNodeIndex(childNodeID, Nodes)
+			index, err := serachNodeIndex(ctx, childNodeID, Nodes)
 			if err != nil {
 				return err
 			}
-			err = traversalPlan(Nodes[index], Nodes, settings, options)
+			err = traversalPlan(ctx, Nodes[index], Nodes, settings, options)
 			if err != nil {
 				return err
 			}
@@ -186,25 +200,25 @@ func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings
 }
 
 // serach target node's index in Nodes slice
-func serachNodeIndex(nodeID int32, Nodes []*plan.Node) (int32, error) {
+func serachNodeIndex(ctx context.Context, nodeID int32, Nodes []*plan.Node) (int32, error) {
 	for i, node := range Nodes {
 		if node.NodeId == nodeID {
 			return int32(i), nil
 		}
 	}
-	return -1, moerr.NewInvalidInput("invliad plan nodeID %d", nodeID)
+	return -1, moerr.NewInvalidInput(ctx, "invliad plan nodeID %d", nodeID)
 }
 
-func PreOrderPlan(node *plan.Node, Nodes []*plan.Node, graphData *GraphData, options *ExplainOptions) error {
+func PreOrderPlan(ctx context.Context, node *plan.Node, Nodes []*plan.Node, graphData *GraphData, options *ExplainOptions) error {
 	if node != nil {
-		newNode, err := ConvertNode(node, options)
+		newNode, err := ConvertNode(ctx, node, options)
 		if err != nil {
 			return err
 		}
 		graphData.Nodes = append(graphData.Nodes, *newNode)
 		if len(node.Children) > 0 {
 			for _, childNodeID := range node.Children {
-				index, err2 := serachNodeIndex(childNodeID, Nodes)
+				index, err2 := serachNodeIndex(ctx, childNodeID, Nodes)
 				if err2 != nil {
 					return err2
 				}
@@ -212,7 +226,7 @@ func PreOrderPlan(node *plan.Node, Nodes []*plan.Node, graphData *GraphData, opt
 				edge := buildEdge(node, Nodes[index], index)
 				graphData.Edges = append(graphData.Edges, *edge)
 
-				err = PreOrderPlan(Nodes[index], Nodes, graphData, options)
+				err = PreOrderPlan(ctx, Nodes[index], Nodes, graphData, options)
 				if err != nil {
 					return err
 				}
@@ -240,4 +254,104 @@ func (d *ExplainData) StatisticsRead() (rows int64, size int64) {
 		}
 	}
 	return
+}
+
+// Statistics of global resource usage, adding resources of all nodes
+func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error {
+	if graphData == nil {
+		return moerr.NewInternalError(ctx, "explain graphData data is null")
+	} else {
+		// time
+		gtimeConsumed := NewStatisticValue(TimeConsumed, "us")
+		gwaitTime := NewStatisticValue(WaitTime, "us")
+
+		// Throughput
+		ginputRows := NewStatisticValue(InputRows, "count")
+		goutputRows := NewStatisticValue(OutputRows, "count")
+		ginputSize := NewStatisticValue(InputSize, "byte")
+		goutputSize := NewStatisticValue(OutputSize, "byte")
+
+		// memory
+		gMemorySize := NewStatisticValue(MemorySize, "byte")
+
+		//io
+		gDiskIO := NewStatisticValue(DiskIO, "byte")
+		gS3IOByte := NewStatisticValue(S3IOByte, "byte")
+		gS3IOCount := NewStatisticValue(S3IOCount, "count")
+
+		// network
+		gNetwork := NewStatisticValue(Network, "byte")
+
+		gtotalStats := TotalStats{
+			Name:  "Time spent",
+			Value: 0,
+			Unit:  "us",
+		}
+
+		for _, node := range graphData.Nodes {
+			for _, timeStatValue := range node.Statistics.Time {
+				if timeStatValue.Name == TimeConsumed {
+					gtimeConsumed.Value += timeStatValue.Value
+				}
+				if timeStatValue.Name == WaitTime {
+					gwaitTime.Value += timeStatValue.Value
+				}
+			}
+
+			for _, throughputValue := range node.Statistics.Throughput {
+				if throughputValue.Name == InputRows {
+					ginputRows.Value += throughputValue.Value
+				}
+				if throughputValue.Name == OutputRows {
+					goutputRows.Value += throughputValue.Value
+				}
+				if throughputValue.Name == InputSize {
+					ginputSize.Value += throughputValue.Value
+				}
+				if throughputValue.Name == OutputSize {
+					goutputSize.Value += throughputValue.Value
+				}
+			}
+
+			for _, memoryValue := range node.Statistics.Memory {
+				if memoryValue.Name == MemorySize {
+					gMemorySize.Value += memoryValue.Value
+				}
+			}
+
+			for _, ioValue := range node.Statistics.IO {
+				if ioValue.Name == DiskIO {
+					gDiskIO.Value += ioValue.Value
+				}
+				if ioValue.Name == S3IOByte {
+					gS3IOByte.Value += ioValue.Value
+				}
+				if ioValue.Name == S3IOCount {
+					gS3IOCount.Value += ioValue.Value
+				}
+			}
+
+			for _, networkValue := range node.Statistics.Network {
+				if networkValue.Name == Network {
+					gNetwork.Value += networkValue.Value
+				}
+			}
+			gtotalStats.Value += node.TotalStats.Value
+		}
+
+		times := []StatisticValue{*gtimeConsumed, *gwaitTime}
+		mbps := []StatisticValue{*ginputRows, *goutputRows, *ginputSize, *goutputSize}
+		mems := []StatisticValue{*gMemorySize}
+		io := []StatisticValue{*gDiskIO, *gS3IOByte, *gS3IOCount}
+		nw := []StatisticValue{*gNetwork}
+
+		graphData.Global.Statistics.Time = append(graphData.Global.Statistics.Time, times...)
+		graphData.Global.Statistics.Throughput = append(graphData.Global.Statistics.Throughput, mbps...)
+		graphData.Global.Statistics.Memory = append(graphData.Global.Statistics.Memory, mems...)
+		graphData.Global.Statistics.IO = append(graphData.Global.Statistics.IO, io...)
+		graphData.Global.Statistics.Network = append(graphData.Global.Statistics.Network, nw...)
+
+		graphData.Global.TotalStats = gtotalStats
+	}
+	return nil
 }

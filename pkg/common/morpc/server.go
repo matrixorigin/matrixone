@@ -191,11 +191,35 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 	}
 	// get requestID here to avoid data race, because the request maybe released in handler
 	requestID := request.Message.GetID()
+
+	if request.stream &&
+		!cs.validateStreamRequest(requestID, request.streamSequence) {
+		s.logger.Error("failed to handle stream request",
+			zap.Uint32("last-sequence", cs.receivedStreamSequences[requestID]),
+			zap.Uint32("current-sequence", request.streamSequence),
+			zap.String("client", rs.RemoteAddress()))
+		cs.cancelWrite()
+		return moerr.NewStreamClosedNoCtx()
+	}
+
+	// handle internal message
+	if request.internal {
+		if m, ok := request.Message.(*flagOnlyMessage); ok {
+			switch m.flag {
+			case flagPing:
+				return cs.Write(request.Ctx, &flagOnlyMessage{flag: flagPong, id: m.id})
+			default:
+				panic(fmt.Sprintf("invalid internal message, flag %d", m.flag))
+			}
+		}
+	}
+
 	if err := s.handler(request.Ctx, request.Message, sequence, cs); err != nil {
 		s.logger.Error("handle request failed",
 			zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddress()),
 			zap.Error(err))
+		cs.cancelWrite()
 		return err
 	}
 
@@ -224,12 +248,18 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					case <-ctx.Done():
 						responses = nil
 						return
+					case <-cs.ctx.Done():
+						responses = nil
+						return
 					case resp := <-cs.c:
 						responses = append(responses, resp)
 					}
 				} else {
 					select {
 					case <-ctx.Done():
+						responses = nil
+						return
+					case <-cs.ctx.Done():
 						responses = nil
 						return
 					case resp := <-cs.c:
@@ -244,6 +274,8 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 		for {
 			select {
 			case <-ctx.Done():
+				return
+			case <-cs.ctx.Done():
 				return
 			default:
 				fetch()
@@ -298,7 +330,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						}
 					}
 				}
-
 			}
 		}
 	})
@@ -306,7 +337,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 func (s *server) closeClientSession(cs *clientSession) {
 	s.sessions.Delete(cs.conn.ID())
-	if err := cs.close(); err != nil {
+	if err := cs.Close(); err != nil {
 		s.logger.Error("close client session failed",
 			zap.Error(err))
 	}
@@ -335,21 +366,31 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 type clientSession struct {
 	conn goetty.IOSession
 	c    chan RPCMessage
-
-	mu struct {
+	// streaming id -> last received sequence, no concurrent, access in io goroutine
+	receivedStreamSequences map[uint64]uint32
+	// streaming id -> last sent sequence, multi-stream access in multi-goroutines if
+	// the tcp connection is shared. But no concurrent in one stream.
+	sentStreamSequences sync.Map
+	cancel              context.CancelFunc
+	ctx                 context.Context
+	mu                  struct {
 		sync.RWMutex
 		closed bool
 	}
 }
 
 func newClientSession(conn goetty.IOSession) *clientSession {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &clientSession{
-		c:    make(chan RPCMessage, 16),
-		conn: conn,
+		c:                       make(chan RPCMessage, 16),
+		receivedStreamSequences: make(map[uint64]uint32),
+		conn:                    conn,
+		ctx:                     ctx,
+		cancel:                  cancel,
 	}
 }
 
-func (cs *clientSession) close() error {
+func (cs *clientSession) Close() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	if cs.mu.closed {
@@ -366,9 +407,34 @@ func (cs *clientSession) Write(ctx context.Context, message Message) error {
 	defer cs.mu.RUnlock()
 
 	if cs.mu.closed {
-		return moerr.NewClientClosed()
+		return moerr.NewClientClosedNoCtx()
 	}
 
-	cs.c <- RPCMessage{Ctx: ctx, Message: message}
+	msg := RPCMessage{Ctx: ctx, Message: message}
+	id := message.GetID()
+	if v, ok := cs.sentStreamSequences.Load(id); ok {
+		seq := v.(uint32) + 1
+		cs.sentStreamSequences.Store(id, seq)
+		msg.stream = true
+		msg.streamSequence = seq
+	}
+
+	cs.c <- msg
 	return nil
+}
+
+func (cs *clientSession) cancelWrite() {
+	cs.cancel()
+}
+
+func (cs *clientSession) validateStreamRequest(id uint64, sequence uint32) bool {
+	expectSequence := cs.receivedStreamSequences[id] + 1
+	if sequence != expectSequence {
+		return false
+	}
+	cs.receivedStreamSequences[id] = sequence
+	if sequence == 1 {
+		cs.sentStreamSequences.Store(id, uint32(0))
+	}
+	return true
 }

@@ -54,7 +54,11 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 	}
 	return node
 }
-
+func (n *MVCCHandle) Close() {
+	n.deletes.Close()
+	n.appends.Close()
+	n.meta = nil
+}
 func (n *MVCCHandle) SetAppendListener(l func(txnif.AppendNode) error) {
 	n.appendListener = l
 }
@@ -128,7 +132,7 @@ func (n *MVCCHandle) AddAppendNodeLocked(
 	if txn != nil {
 		ts = txn.GetStartTS()
 	}
-	if n.appends.IsEmpty() || n.appends.SearchNode(NewCommittedAppendNode(ts, 0, 0, nil)) == nil {
+	if n.appends.IsEmpty() || !n.appends.GetUpdateNodeLocked().(*AppendNode).Start.Equal(ts) {
 		an = NewAppendNode(txn, startRow, maxRow, n)
 		n.appends.InsertNode(an)
 		created = true
@@ -265,9 +269,11 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 	return an.maxRow - n.deletes.cnt.Load()
 }
 
-func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, commitTSVec, abortVec containers.Vector, abortedBitmap *roaring.Bitmap) {
-	n.RLock()
-	defer n.RUnlock()
+func (n *MVCCHandle) CollectAppendLocked(
+	start, end types.TS) (
+	minRow, maxRow uint32,
+	commitTSVec, abortVec containers.Vector,
+	abortedBitmap *roaring.Bitmap) {
 	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
 	if node != nil && node.GetPrepare().Less(start) {
 		startOffset++

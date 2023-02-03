@@ -30,13 +30,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/google/gops/agent"
-	"github.com/lni/goutils/leaktest"
-	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
 )
 
 func init() {
+	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 	logutil.SetupMOLogger(&logutil.LogConfig{
 		Level:      zapcore.DebugLevel.String(),
 		Format:     "console",
@@ -75,18 +74,20 @@ type dummyBuffer struct {
 	arr    []batchpipe.HasName
 	mux    sync.Mutex
 	signal func()
+	ctx    context.Context
 }
 
 func (s *dummyBuffer) Add(item batchpipe.HasName) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
+	ctx := s.ctx
 	s.arr = append(s.arr, item)
 	if s.signal != nil {
 		val := int(*item.(*Num))
 		length := len(s.arr)
 		logutil.Infof("accept: %v, len: %d", *item.(*Num), length)
 		if (val <= 3 && val != length) && (val-3) != length {
-			panic(moerr.NewInternalError("len not rignt, elem: %d, len: %d", val, length))
+			panic(moerr.NewInternalError(ctx, "len not rignt, elem: %d, len: %d", val, length))
 		}
 		s.signal()
 	}
@@ -106,9 +107,13 @@ func (s *dummyBuffer) ShouldFlush() bool {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	length := len(s.arr)
-	return length >= 3
+	should := length >= 3
+	if should {
+		logutil.Infof("buffer shouldFlush: %v", should)
+	}
+	return should
 }
-func (s *dummyBuffer) GetBatch(buf *bytes.Buffer) any {
+func (s *dummyBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if len(s.arr) == 0 {
@@ -136,7 +141,7 @@ type dummyPipeImpl struct {
 }
 
 func (n *dummyPipeImpl) NewItemBuffer(string) batchpipe.ItemBuffer[batchpipe.HasName, any] {
-	return &dummyBuffer{Reminder: batchpipe.NewConstantClock(n.duration), signal: signalFunc}
+	return &dummyBuffer{Reminder: batchpipe.NewConstantClock(n.duration), signal: signalFunc, ctx: context.Background()}
 }
 
 func (n *dummyPipeImpl) NewItemBatchHandler(ctx context.Context) func(any) {
@@ -145,100 +150,12 @@ func (n *dummyPipeImpl) NewItemBatchHandler(ctx context.Context) func(any) {
 	}
 }
 
-func Test_newBufferHolder(t *testing.T) {
-	type args struct {
-		name          batchpipe.HasName
-		impl          batchpipe.PipeImpl[batchpipe.HasName, any]
-		signal        bufferSignalFunc
-		elems         []*Num
-		elemsReminder []*Num
-		interval      time.Duration
-	}
-	ch := make(chan string)
-	byteBuf := new(bytes.Buffer)
-	signalC := make(chan *bufferHolder, 1)
-	var signal = func(b *bufferHolder) {
-		signalC <- b
-	}
-	var signalAcceptableCh = make(chan struct{}, 1)
-	go func() {
-		for {
-			<-signalAcceptableCh
-			b, ok := <-signalC
-			if !ok {
-				break
-			}
-			if ok := b.StopAndGetBatch(byteBuf); !ok {
-				t.Errorf("GenBatch failed by in readwrite mode")
-			} else {
-				content := b.batch
-				b.batch = nil // aim to ignore FlushAndReset process
-				ch <- (*content).(string)
-			}
-		}
-	}()
-	tests := []struct {
-		name         string
-		args         args
-		want         string
-		wantReminder string
-	}{
-		{
-			name: "normal",
-			args: args{
-				name:          newDummy(0),
-				impl:          &dummyPipeImpl{ch: ch, duration: 100 * time.Millisecond},
-				signal:        signal,
-				elems:         []*Num{newDummy(1), newDummy(2), newDummy(3)},
-				elemsReminder: []*Num{newDummy(4), newDummy(5)},
-				interval:      100 * time.Millisecond,
-			},
-			want:         `(1),(2),(3)`,
-			wantReminder: `(4),(5)`,
-		},
-		{
-			name: "emptyReminder",
-			args: args{
-				name:          newDummy(0),
-				impl:          &dummyPipeImpl{ch: ch, duration: 100 * time.Millisecond},
-				signal:        signal,
-				elems:         []*Num{newDummy(1), newDummy(2), newDummy(3)},
-				elemsReminder: []*Num{},
-				interval:      100 * time.Millisecond,
-			},
-			want:         `(1),(2),(3)`,
-			wantReminder: ``,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf := newBufferHolder(tt.args.name, tt.args.impl, tt.args.signal)
-			buf.Start()
-			for _, v := range tt.args.elems {
-				buf.Add(v)
-			}
-			signalAcceptableCh <- struct{}{}
-			got := <-ch
-			require.Equal(t, got, tt.want)
-			buf.FlushAndReset()
-
-			for _, v := range tt.args.elemsReminder {
-				buf.Add(v)
-			}
-			signalAcceptableCh <- struct{}{}
-			got = <-ch
-			if got != tt.wantReminder {
-				t.Errorf("newBufferHolder() = %v, want %v", got, tt.wantReminder)
-			}
-			buf.StopAndGetBatch(new(bytes.Buffer))
-		})
-	}
-	//signalAcceptable.Done() // release started-lock
-	close(signalC)
-	signalAcceptableCh <- struct{}{}
-}
+var MOCollectorMux sync.Mutex
 
 func TestNewMOCollector(t *testing.T) {
+	MOCollectorMux.Lock()
+	defer MOCollectorMux.Unlock()
+	ctx := context.Background()
 	ch := make(chan string, 3)
 	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
 		t.Logf("TestNewMOCollector::ErrorReport: %+v", err)
@@ -247,21 +164,21 @@ func TestNewMOCollector(t *testing.T) {
 	var acceptSignal = func() { <-signalC }
 	signalFunc = func() { signalC <- struct{}{} }
 
-	Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
-	collector := NewMOCollector()
+	collector := NewMOCollector(ctx)
+	collector.Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector.Start()
 
-	collector.Collect(DefaultContext(), newDummy(1))
+	collector.Collect(ctx, newDummy(1))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newDummy(2))
+	collector.Collect(ctx, newDummy(2))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newDummy(3))
+	collector.Collect(ctx, newDummy(3))
 	acceptSignal()
 	got := <-ch
 	require.Equal(t, `(1),(2),(3)`, got)
-	collector.Collect(DefaultContext(), newDummy(4))
+	collector.Collect(ctx, newDummy(4))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newDummy(5))
+	collector.Collect(ctx, newDummy(5))
 	acceptSignal()
 	collector.Stop(true)
 	logutil.GetGlobalLogger().Sync()
@@ -270,87 +187,5 @@ func TestNewMOCollector(t *testing.T) {
 	for i := len(ch); i > 0; i-- {
 		got = <-ch
 		t.Logf("left ch: %s", got)
-	}
-}
-
-func TestMOCollector_HangBug(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	ch := make(chan string, 3)
-	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
-		t.Logf("TestNewMOCollector::ErrorReport: %+v", err)
-	})
-
-	timeo := 30 * time.Second
-
-	// prepare signalFunc
-	var signalC = make(chan struct{}, 16)
-	var acceptSignal = func() { <-signalC }
-	_stubSignalFunc := gostub.Stub(&signalFunc, func() { signalC <- struct{}{} })
-	defer _stubSignalFunc.Reset()
-	// prepare awakeBuffer
-	var ctrlC = make(chan *bufferHolder, 1)
-	var ctrlTimeoutCnt = 0
-	_stubAwakeBuffer := gostub.Stub(&awakeBuffer, func(c *MOCollector) func(holder *bufferHolder) {
-		var ctrlTimer = time.NewTimer(timeo)
-		return func(holder *bufferHolder) {
-			//c.awakeGenerate <- holder
-			select {
-			case ctrlC <- holder:
-			case <-ctrlTimer.C:
-				ctrlTimeoutCnt += 1
-				ctrlTimer = time.NewTimer(timeo)
-			}
-		}
-	})
-	defer _stubAwakeBuffer.Reset()
-
-	// init Collector, with disabled-trigger
-	Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
-	collector := NewMOCollector()
-	collector.Start()
-	defer collector.Stop(true)
-
-	t.Logf("fill up the buffer")
-	collector.Collect(DefaultContext(), newDummy(1))
-	acceptSignal()
-	collector.Collect(DefaultContext(), newDummy(2))
-	acceptSignal()
-	t.Logf("trigger ShouldFlush calling")
-	collector.Collect(DefaultContext(), newDummy(3))
-	acceptSignal()
-	// fill up the collect channel(awakeCollect) ==> fill up the Batch channel(awakeGenerate)
-	collector.Collect(DefaultContext(), newDummy(4))
-	acceptSignal()
-	collector.Collect(DefaultContext(), newDummy(5))
-	acceptSignal()
-	collector.Collect(DefaultContext(), newDummy(6))
-	t.Logf("length collect channel: %d", len(collector.awakeCollect))
-	t.Logf("length generate channel: %d", len(ctrlC))
-	require.Equal(t, 1, len(collector.awakeCollect))
-	require.Equal(t, 1, len(ctrlC))
-	t.Logf("if Hang, caused by accept one generate req and lock itself")
-
-	timer := time.NewTimer(2 * timeo)
-	buf := new(bytes.Buffer)
-	var jobs = 0
-loop:
-	for {
-		select {
-		case holder := <-ctrlC:
-			holder.StopAndGetBatch(buf)
-			jobs++
-			t.Logf("job done count: %d, timeoutCnt: %d", jobs, ctrlTimeoutCnt)
-			if jobs > 1 && ctrlTimeoutCnt == 0 {
-				break loop
-			}
-		case <-timer.C:
-			require.Equal(t, 0, len(collector.awakeGenerate), "meet timeout, means dead lock")
-			require.Equal(t, 0, ctrlTimeoutCnt, "meet timeout, means dead lock")
-			break loop
-		}
-	}
-
-	for _, holder := range collector.buffers {
-		holder.FlushAndReset()
 	}
 }

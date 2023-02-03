@@ -33,19 +33,26 @@ const (
 	DefaultIndexCacheSize = 128 * common.M
 	DefaultMTCacheSize    = 4 * common.G
 
-	DefaultBlockMaxRows     = uint32(40000)
-	DefaultBlocksPerSegment = uint16(40)
+	DefaultBlockMaxRows     = uint32(8192)
+	DefaultBlocksPerSegment = uint16(256)
 
 	DefaultScannerInterval              = time.Second * 5
 	DefaultCheckpointFlushInterval      = time.Minute
 	DefaultCheckpointMinCount           = int64(100)
 	DefaultCheckpointIncremetalInterval = time.Minute
-	DefaultCheckpointGlobalInterval     = time.Minute * 60
+	DefaultCheckpointGlobalMinCount     = 10
+	DefaultGlobalVersionInterval        = time.Hour
+	DefaultGCCheckpointInterval         = time.Minute
 
-	DefaultIOWorkers    = int(8)
+	DefaultScanGCInterval = time.Minute * 30
+	DefaultGCTTL          = time.Hour
+
+	DefaultCatalogGCInterval = time.Minute * 30
+
+	DefaultIOWorkers    = int(16)
 	DefaultAsyncWorkers = int(16)
 
-	DefaultLogtailTxnPageSize = 1024
+	DefaultLogtailTxnPageSize = 100
 
 	DefaultLogstoreType = LogstoreBatchStore
 )
@@ -62,7 +69,9 @@ type Options struct {
 	StorageCfg    *StorageCfg    `toml:"storage-cfg"`
 	CheckpointCfg *CheckpointCfg `toml:"checkpoint-cfg"`
 	SchedulerCfg  *SchedulerCfg  `toml:"scheduler-cfg"`
+	GCCfg         *GCCfg
 	LogtailCfg    *LogtailCfg
+	CatalogCfg    *CatalogCfg
 	Catalog       *catalog.Catalog
 
 	TransferTableTTL time.Duration

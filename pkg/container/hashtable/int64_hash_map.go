@@ -277,6 +277,17 @@ func (ht *Int64HashMap) Cardinality() uint64 {
 	return ht.elemCnt
 }
 
+func (ht *Int64HashMap) Size() int64 {
+	// 41 is the fixed size of Int64HashMap
+	ret := int64(41)
+	for i := range ht.rawData {
+		ret += int64(len(ht.rawData[i]))
+		// 16 is the len of ht.cells[i]
+		ret += 16
+	}
+	return ret
+}
+
 type Int64HashMapIterator struct {
 	table *Int64HashMap
 	pos   uint64
@@ -298,7 +309,7 @@ func (it *Int64HashMapIterator) Next() (cell *Int64HashMapCell, err error) {
 	}
 
 	if it.pos >= it.table.cellCnt {
-		err = moerr.NewInternalError("out of range")
+		err = moerr.NewInternalErrorNoCtx("out of range")
 		return
 	}
 

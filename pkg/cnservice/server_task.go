@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -31,7 +32,7 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"go.uber.org/zap"
 )
 
@@ -59,11 +60,13 @@ func (s *service) initTaskServiceHolder() {
 	s.task.Lock()
 	defer s.task.Unlock()
 	if s.task.storageFactory == nil {
-		s.task.holder = taskservice.NewTaskServiceHolder(s.logger,
-			func() (string, error) { return s.cfg.SQLAddress, nil })
+		s.task.holder = taskservice.NewTaskServiceHolder(
+			runtime.ProcessLevelRuntime(),
+			func(context.Context) (string, error) { return s.cfg.SQLAddress, nil })
 	} else {
-		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(s.logger,
-			func() (string, error) { return s.cfg.SQLAddress, nil },
+		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
+			runtime.ProcessLevelRuntime(),
+			func(context.Context) (string, error) { return s.cfg.SQLAddress, nil },
 			func(_, _, _ string) taskservice.TaskStorageFactory {
 				return s.task.storageFactory
 			})
@@ -154,7 +157,7 @@ func (s *service) waitSystemInitCompleted(ctx context.Context) {
 			ts, ok := s.GetTaskService()
 			if ok {
 				tasks, err := ts.QueryTask(ctx,
-					taskservice.WithTaskExecutorCond(taskservice.EQ, uint32(task.TaskCode_SystemInit)),
+					taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_SystemInit),
 					taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Completed))
 				if err != nil {
 					s.logger.Error("wait all init task completed failed", zap.Error(err))
@@ -211,16 +214,16 @@ func (s *service) registerExecutorsLocked() {
 	pu.FileService = s.fileService
 	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu)
+		return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCache())
 	}
 
 	ts, ok := s.task.holder.Get()
 	if !ok {
-		panic(moerr.NewInternalError("task Service not ok"))
+		panic(moerr.NewInternalErrorNoCtx("task Service not ok"))
 	}
-	s.task.runner.RegisterExecutor(uint32(task.TaskCode_SystemInit),
+	s.task.runner.RegisterExecutor(task.TaskCode_SystemInit,
 		func(ctx context.Context, t task.Task) error {
-			if err := frontend.InitSysTenant(moServerCtx); err != nil {
+			if err := frontend.InitSysTenant(moServerCtx, s.mo.GetRoutineManager().GetAutoIncrCache()); err != nil {
 				return err
 			}
 			if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
@@ -229,7 +232,7 @@ func (s *service) registerExecutorsLocked() {
 			if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
 			}
-			if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
+			if err := motrace.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
 			}
 
@@ -238,10 +241,18 @@ func (s *service) registerExecutorsLocked() {
 				return err
 			}
 
+			// init metric task
+			if err := metric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
+				return err
+			}
+
 			return nil
 		})
 
 	// init metric/log merge task executor
-	s.task.runner.RegisterExecutor(uint32(task.TaskCode_MetricLogMerge),
+	s.task.runner.RegisterExecutor(task.TaskCode_MetricLogMerge,
 		export.MergeTaskExecutorFactory(export.WithFileService(s.fileService)))
+	// init metric task
+	s.task.runner.RegisterExecutor(task.TaskCode_MetricStorageUsage,
+		metric.GetMetricStorageUsageExecutor(ieFactory))
 }

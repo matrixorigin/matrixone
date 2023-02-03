@@ -15,7 +15,9 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,6 +37,7 @@ type Node struct {
 	Id   string   `json:"id"`
 	Addr string   `json:"address"`
 	Data [][]byte `json:"payload"`
+	Rel  Relation // local relation
 }
 
 // Attribute is a column
@@ -43,6 +46,8 @@ type Attribute struct {
 	IsHidden bool
 	// IsRowId whether the attribute is rowid or not
 	IsRowId bool
+	// Column ID
+	ID uint64
 	// Name name of attribute
 	Name string
 	// Alg compression algorithm
@@ -55,6 +60,8 @@ type Attribute struct {
 	OnUpdate *plan.OnUpdate
 	// Primary is primary key or not
 	Primary bool
+	// Clusterby means sort by this column
+	ClusterBy bool
 	// Comment of attribute
 	Comment string
 	// AutoIncrement is auto incr or not
@@ -74,7 +81,13 @@ type Property struct {
 	Value string
 }
 
+type ClusterByDef struct {
+	Name string
+}
+
 type Statistics interface {
+	FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error)
+	Stats(ctx context.Context) (int32, int64, error)
 	Rows(ctx context.Context) (int64, error)
 	Size(ctx context.Context, columnName string) (int64, error)
 }
@@ -120,11 +133,20 @@ type ViewDef struct {
 	View string
 }
 
-type ComputeIndexDef struct {
-	IndexNames []string
-	TableNames []string
-	Uniques    []bool
-	Fields     [][]string
+type UniqueIndexDef struct {
+	UniqueIndex string
+}
+
+type SecondaryIndexDef struct {
+	SecondaryIndex string
+}
+
+type ForeignKeyDef struct {
+	Fkeys []*plan.ForeignKeyDef
+}
+
+type RefChildTableDef struct {
+	Tables []uint64
 }
 
 type TableDef interface {
@@ -138,7 +160,141 @@ func (*AttributeDef) tableDef()    {}
 func (*IndexTableDef) tableDef()   {}
 func (*PropertiesDef) tableDef()   {}
 func (*PrimaryIndexDef) tableDef() {}
-func (*ComputeIndexDef) tableDef() {}
+func (*ClusterByDef) tableDef()    {}
+func (*ConstraintDef) tableDef()   {}
+
+type ConstraintDef struct {
+	Cts []Constraint
+}
+
+type ConstraintType int8
+
+const (
+	UniqueIndex ConstraintType = iota
+	SecondaryIndex
+	RefChildTable
+	ForeignKey
+)
+
+func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	for _, ct := range c.Cts {
+		switch def := ct.(type) {
+		case *UniqueIndexDef:
+			if err := binary.Write(buf, binary.BigEndian, UniqueIndex); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64(len([]byte(def.UniqueIndex)))); err != nil {
+				return nil, err
+			}
+			buf.Write([]byte(def.UniqueIndex))
+
+		case *SecondaryIndexDef:
+			if err := binary.Write(buf, binary.BigEndian, SecondaryIndex); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64(len([]byte(def.SecondaryIndex)))); err != nil {
+				return nil, err
+			}
+			buf.Write([]byte(def.SecondaryIndex))
+
+		case *RefChildTableDef:
+			if err := binary.Write(buf, binary.BigEndian, RefChildTable); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Tables))); err != nil {
+				return nil, err
+			}
+			for _, tblId := range def.Tables {
+				if err := binary.Write(buf, binary.BigEndian, tblId); err != nil {
+					return nil, err
+				}
+			}
+
+		case *ForeignKeyDef:
+			if err := binary.Write(buf, binary.BigEndian, ForeignKey); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Fkeys))); err != nil {
+				return nil, err
+			}
+			for _, fk := range def.Fkeys {
+				bytes, err := fk.Marshal()
+				if err != nil {
+					return nil, err
+				}
+
+				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
+					return nil, err
+				}
+				buf.Write(bytes)
+			}
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
+	l := 0
+	var length uint64
+	for l < len(data) {
+		typ := ConstraintType(data[l])
+		l += 1
+		switch typ {
+		case UniqueIndex:
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			c.Cts = append(c.Cts, &UniqueIndexDef{UniqueIndex: string(data[l : l+int(length)])})
+			l += int(length)
+
+		case SecondaryIndex:
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			c.Cts = append(c.Cts, &SecondaryIndexDef{SecondaryIndex: string(data[l : l+int(length)])})
+			l += int(length)
+
+		case RefChildTable:
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			tables := make([]uint64, length)
+			for i := 0; i < int(length); i++ {
+				tblId := binary.BigEndian.Uint64(data[l : l+8])
+				l += 8
+				tables[i] = tblId
+			}
+			c.Cts = append(c.Cts, &RefChildTableDef{tables})
+
+		case ForeignKey:
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			fKeys := make([]*plan.ForeignKeyDef, length)
+
+			for i := 0; i < int(length); i++ {
+				dataLength := binary.BigEndian.Uint64(data[l : l+8])
+				l += 8
+				fKey := &plan.ForeignKeyDef{}
+				err := fKey.Unmarshal(data[l : l+int(dataLength)])
+				if err != nil {
+					return err
+				}
+				l += int(dataLength)
+				fKeys[i] = fKey
+			}
+			c.Cts = append(c.Cts, &ForeignKeyDef{fKeys})
+		}
+	}
+	return nil
+}
+
+type Constraint interface {
+	constraint()
+}
+
+// TODO: UniqueIndexDef, SecondaryIndexDef will not be tabledef and need to be moved in Constraint to be able modified
+func (*UniqueIndexDef) constraint()    {}
+func (*SecondaryIndexDef) constraint() {}
+func (*ForeignKeyDef) constraint()     {}
+func (*RefChildTableDef) constraint()  {}
 
 type Relation interface {
 	Statistics
@@ -161,17 +317,23 @@ type Relation interface {
 	AddTableDef(context.Context, TableDef) error
 	DelTableDef(context.Context, TableDef) error
 
-	GetTableID(context.Context) string
+	// only ConstraintDef can be modified
+	UpdateConstraint(context.Context, *ConstraintDef) error
+
+	GetTableID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)
+
+	//max and min values
+	MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error)
 }
 
 type Reader interface {
 	Close() error
-	Read([]string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
+	Read(context.Context, []string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
 }
 
 type Database interface {
@@ -180,7 +342,7 @@ type Database interface {
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
-	Truncate(context.Context, string) error
+	Truncate(context.Context, string) (uint64, error)
 	GetDatabaseId(context.Context) string
 }
 
@@ -212,6 +374,12 @@ type Engine interface {
 
 	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
 		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error)
+
+	// Get database name & table name by table id
+	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)
+
+	// Get relation by table id
+	GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel Relation, err error)
 }
 
 type Hints struct {
@@ -219,3 +387,9 @@ type Hints struct {
 }
 
 type GetClusterDetailsFunc = func() (logservicepb.ClusterDetails, error)
+
+// EntireEngine is a wrapper for Engine to support temporary table
+type EntireEngine struct {
+	Engine     Engine // original engine
+	TempEngine Engine // new engine for temporarily table
+}

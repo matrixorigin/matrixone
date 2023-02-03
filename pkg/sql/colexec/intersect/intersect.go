@@ -16,6 +16,7 @@ package intersect
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,7 +40,7 @@ func Prepare(proc *process.Process, argument any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, argument any) (bool, error) {
+func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (bool, error) {
 	arg := argument.(*Argument)
 
 	analyze := proc.GetAnalyze(idx)
@@ -49,16 +50,19 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 	for {
 		switch arg.ctr.state {
 		case build:
-			if err := arg.ctr.buildHashTable(proc, analyze, 1); err != nil {
+			if err := arg.ctr.buildHashTable(proc, analyze, 1, isFirst); err != nil {
 				arg.Free(proc, true)
 				return false, err
+			}
+			if arg.ctr.hashTable != nil {
+				analyze.Alloc(arg.ctr.hashTable.Size())
 			}
 			arg.ctr.state = probe
 
 		case probe:
 			var err error
 			isLast := false
-			if isLast, err = arg.ctr.probeHashTable(proc, analyze, 0); err != nil {
+			if isLast, err = arg.ctr.probeHashTable(proc, analyze, 0, isFirst, isLast); err != nil {
 				return true, err
 			}
 			if isLast {
@@ -77,9 +81,11 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 }
 
 // build hash table
-func (c *container) buildHashTable(proc *process.Process, analyse process.Analyze, idx int) error {
+func (c *container) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
 	for {
+		start := time.Now()
 		btc := <-proc.Reg.MergeReceivers[idx].Ch
+		analyse.WaitStop(start)
 
 		// last batch of block
 		if btc == nil {
@@ -91,7 +97,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 			continue
 		}
 
-		analyse.Input(btc)
+		analyse.Input(btc, isFirst)
 
 		cnt := btc.Length()
 		itr := c.hashTable.NewIterator()
@@ -126,9 +132,11 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 	return nil
 }
 
-func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int) (bool, error) {
+func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool) (bool, error) {
 	for {
+		start := time.Now()
 		btc := <-proc.Reg.MergeReceivers[idx].Ch
+		analyze.WaitStop(start)
 
 		// last batch of block
 		if btc == nil {
@@ -140,7 +148,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 			continue
 		}
 
-		analyze.Input(btc)
+		analyze.Input(btc, isFirst)
 
 		c.btc = batch.NewWithSize(len(btc.Vecs))
 		for i := range btc.Vecs {
@@ -200,7 +208,8 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 
 		btc.Clean(proc.Mp())
-		analyze.Output(c.btc)
+		analyze.Alloc(int64(c.btc.Size()))
+		analyze.Output(c.btc, isLast)
 		proc.SetInputBatch(c.btc)
 		return false, nil
 	}

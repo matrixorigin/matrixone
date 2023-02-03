@@ -76,7 +76,8 @@ select cast(t2 as text)from text_04;
 cast(t2 as text)
 12:00:00
 select cast(t3 as text)from text_04;
-invalid argument operator cast, bad value [JSON TEXT]
+cast(t3 as text)
+{"a": "1", "b": "2"}
 select cast(t4 as text)from text_04;
 cast(t4 as text)
 yes
@@ -84,9 +85,9 @@ select count(t1),max(t2),min(t3) from text_01;
 count(t1)    max(t2)    min(t3)
 5    7834    20
 select bin(t3) from text_01;
-invalid argument cast to uint, bad value 
+Data truncation: data out of range: data type uint8, value '983'
 select space(t3) from text_01;
-invalid argument cast to uint, bad value 
+invalid argument cast to uint64, bad value 中文
 select * from text_01 where t3 is null or length (t1)  >3;
 t1    t2    t3
 中文123abcd        null
@@ -150,7 +151,7 @@ yef&&190     wwww     983
 select * from text_01 where not exists(select t2 from text_05);
 t1    t2    t3
 create table text_02(t1 int,t2 text,t3 text,primary key(t1,t2));
-not supported: text type in index
+not supported: TEXT column 't2' cannot be in index
 create table text_02(t1 int,t2 text primary key,t3 text);
 not supported: text type in primary key
 prepare stmt1 from 'select * from text_01';
@@ -194,7 +195,7 @@ null
 create table blob_02(b1 blob primary key,b2 int);
 not supported: blob type in primary key
 create table blob_02(b1 blob,b2 int,primary key(b1,b2));
-not supported: blob type in index
+not supported: BLOB column 'b1' cannot be in index
 create table blob_02(b1 blob not null,b2 int);
 insert into blob_02 values (null,40);
 constraint violation: Column 'b1' cannot be null
@@ -229,7 +230,7 @@ cast(苏轼 as blob)    cast(alex as blob)    cast(123 as blob)
 select cast('@#$%^' as blob),cast('hhh@123'as blob);
 cast(@#$%^ as blob)    cast(hhh@123 as blob)
 @#$%^    hhh@123
-create table blob_03(t1 text,t2 time,t3 json,t4 blob,t5 int,t6 varchar,t7 double,t8 decimal(6,3));
+create table blob_03(t1 text,t2 time,t3 json,t4 blob,t5 int,t6 varchar(100),t7 double,t8 decimal(6,3));
 insert into blob_03 values ('枫叶','0150','{"a":"1","b":"2"}','checkin',30,'zzzow',89.02,23.90);
 select cast(t1 as blob),cast(t2 as blob),cast(t5 as blob),cast(t6 as blob),cast(t7 as blob),cast(t8 as blob) from blob_03;
 cast(t1 as blob)    cast(t2 as blob)    cast(t5 as blob)    cast(t6 as blob)    cast(t7 as blob)    cast(t8 as blob)

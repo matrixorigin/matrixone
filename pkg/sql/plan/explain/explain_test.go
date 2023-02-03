@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -27,26 +28,16 @@ import (
 
 func TestSingleSql(t *testing.T) {
 	// input := "explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20"
-	input := "explain verbose SELECT N_REGIONKEY + 2 as a FROM NATION WHERE -N_NATIONKEY < -20"
+	//input := "explain verbose SELECT N_REGIONKEY + 2 as a FROM NATION WHERE -N_NATIONKEY < -20"
 	// input := "explain verbose select c_custkey from (select c_custkey from CUSTOMER group by c_custkey ) a"
 	// input := "explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA'"
 	// input := "explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 AND N_NATIONKEY < 10"
 	//input := "explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 OR N_NATIONKEY < 10"
 	//input := "explain verbose select * from part where p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')"
-	//input := `explain verbose
-	//    select
-	//         case
-	//              when p_type like 'PROMO%'
-	//                  then l_extendedprice * (1 - l_discount)
-	//              when p_type like 'PRX%'
-	//                  then l_extendedprice * (2 - l_discount)
-	//         else 0 end
-	//	from lineitem,part
-	//	where l_shipdate < date '1996-04-01' + interval '1 month'`
 	//input := "explain select abs(N_REGIONKEY) from NATION"
 	//input := "explain verbose SELECT l.L_ORDERKEY a FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERKEY < 10"
-
-	mock := plan.NewMockOptimizer()
+	input := "explain verbose update emp set sal = sal + 500, comm = 1200 where deptno = 10"
+	mock := plan.NewMockOptimizer(true)
 	err := runOneStmt(mock, t, input)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -69,7 +60,7 @@ func TestBasicSqlExplain(t *testing.T) {
 		"explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10 offset 20",
 		"explain verbose select case when p_type like 'PROMO%' then l_extendedprice * (1 - l_discount) when p_type like 'PRX%' then l_extendedprice * (2 - l_discount) else 0 end from lineitem,part where l_shipdate < date '1996-04-01' + interval '1' month",
 	}
-	mockOptimizer := plan.NewMockOptimizer()
+	mockOptimizer := plan.NewMockOptimizer(false)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -104,7 +95,7 @@ func TestSingleTableQuery(t *testing.T) {
 		// "explain verbose SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",
 		// "explain SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",
 	}
-	mockOptimizer := plan.NewMockOptimizer()
+	mockOptimizer := plan.NewMockOptimizer(false)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -137,7 +128,7 @@ func TestJoinQuery(t *testing.T) {
 		"explain verbose SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE a.N_REGIONKEY > 0",
 		"explain SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE a.N_REGIONKEY > 0",
 	}
-	mockOptimizer := plan.NewMockOptimizer()
+	mockOptimizer := plan.NewMockOptimizer(false)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -164,7 +155,7 @@ func TestNestedQuery(t *testing.T) {
 				l_partkey = p_partkey
 		);`, //tpch q17
 	}
-	mockOptimizer := plan.NewMockOptimizer()
+	mockOptimizer := plan.NewMockOptimizer(false)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -182,7 +173,7 @@ func TestDerivedTableQuery(t *testing.T) {
 		"explain select * from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
 		"explain verbose select * from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
 	}
-	mockOptimizer := plan.NewMockOptimizer()
+	mockOptimizer := plan.NewMockOptimizer(false)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -205,7 +196,7 @@ func TestCollectionQuery(t *testing.T) {
 		"explain verbose SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPINSTRUCT='DELIVER IN PERSON' UNION SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPMODE='AIR' OR  l.L_SHIPMODE='AIR REG'",
 		"explain verbose SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPMODE IN ('AIR','AIR REG') EXCEPT SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPINSTRUCT='DELIVER IN PERSON'",
 	}
-	mockOptimizer := plan.NewMockOptimizer()
+	mockOptimizer := plan.NewMockOptimizer(false)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -218,7 +209,7 @@ func TestDMLInsert(t *testing.T) {
 		"explain INSERT INTO NATION SELECT * FROM NATION2",
 		"explain verbose INSERT INTO NATION SELECT * FROM NATION2",
 	}
-	mockOptimizer := plan.NewMockOptimizer()
+	mockOptimizer := plan.NewMockOptimizer(false)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -231,7 +222,7 @@ func TestDMLUpdate(t *testing.T) {
 		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 	}
-	mockOptimizer := plan.NewMockOptimizer()
+	mockOptimizer := plan.NewMockOptimizer(true)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -248,7 +239,7 @@ func TestDMLDelete(t *testing.T) {
 		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"explain verbose UPDATE NATION,NATION2 SET NATION.N_NAME ='U1',NATION2.N_NATIONKEY=15 WHERE NATION.N_NATIONKEY = NATION2.N_NATIONKEY",
 	}
-	mockOptimizer := plan.NewMockOptimizer()
+	mockOptimizer := plan.NewMockOptimizer(true)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -266,7 +257,56 @@ func TestSystemVariableAndUserVariable(t *testing.T) {
 		"explain verbose select @@session.autocommit,@val from NATION",
 		"explain verbose select @@session.autocommit,@val,N_NAME from NATION",
 	}
-	mockOptimizer := plan.NewMockOptimizer()
+	mockOptimizer := plan.NewMockOptimizer(false)
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
+
+// test index table
+func TestSingleTableDeleteSQL(t *testing.T) {
+	sqls := []string{
+		"explain verbose DELETE FROM emp where sal > 2000",
+		"explain verbose delete from emp t1 where t1.sal > 2000",
+		"explain verbose delete from emp where empno > 3000",
+		"explain verbose delete from emp where ename = 'SMITH'",
+		"explain verbose delete from dept where deptno = 10",
+		"explain verbose delete from dept where dname = 'RESEARCH'",
+		"explain verbose delete from dept where deptno = 10 order by dname limit 1",
+		"explain verbose delete from emp where deptno = 20 order by sal limit 2",
+		"explain verbose delete from emp where empno > 7800 order by empno limit 2",
+	}
+	mockOptimizer := plan.NewMockOptimizer(true)
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
+
+// Composite unique index
+func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {
+	sqls := []string{
+		"explain verbose delete from employees where sal > 2000",
+		"explain verbose delete from employees t1 where t1.sal > 2000",
+		"explain verbose delete from employees where empno > 3000",
+		"explain verbose delete from employees where ename = 'SMITH'",
+		"explain verbose delete from employees where empno = 7698",
+		"explain verbose delete from employees where empno = 7698 and ename = 'BLAKE'",
+		"explain verbose delete from employees where deptno = 20 order by sal limit 2",
+		"explain verbose delete from employees where empno > 7800 order by empno limit 2",
+		"explain verbose delete employees, dept from employees, dept where employees.deptno = dept.deptno and sal > 2000",
+		"explain verbose DELETE FROM employees, dept USING employees INNER JOIN dept WHERE employees.deptno = dept.deptno",
+	}
+	mockOptimizer := plan.NewMockOptimizer(true)
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
+
+func TestMultiTableDeleteSQL(t *testing.T) {
+	sqls := []string{
+		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and emp.deptno = 10",
+		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and sal > 2000",
+		"explain verbose delete t1,t2  from emp as t1,dept as t2 where t1.deptno = t2.deptno and t1.deptno = 10",
+		"explain verbose delete t1,dept from emp as t1,dept where t1.deptno = dept.deptno and t1.deptno = 10",
+		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and empno > 7800",
+		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and empno = 7839",
+		"explain verbose DELETE FROM emp, dept USING emp INNER JOIN dept WHERE emp.deptno = dept.deptno",
+	}
+	mockOptimizer := plan.NewMockOptimizer(true)
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -281,11 +321,12 @@ func runTestShouldPass(opt plan.Optimizer, t *testing.T, sqls []string) {
 
 func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 	t.Logf("SQL: %v\n", sql)
-	stmts, err := mysql.Parse(sql)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
 
+	ctx := context.TODO()
 	if stmt, ok := stmts[0].(*tree.ExplainStmt); ok {
 		es := NewExplainDefaultOptions()
 		for _, v := range stmt.Options {
@@ -295,7 +336,7 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Verbose = false
 				} else {
-					return moerr.NewInvalidInput("boolean value %v", v.Value)
+					return moerr.NewInvalidInput(ctx, "boolean value %v", v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "ANALYZE") {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
@@ -303,20 +344,20 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Analyze = false
 				} else {
-					return moerr.NewInvalidInput("boolean value %v", v.Value)
+					return moerr.NewInvalidInput(ctx, "boolean value %v", v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "FORMAT") {
 				if v.Name == "NULL" {
-					return moerr.NewInvalidInput("parameter name %v", v.Name)
+					return moerr.NewInvalidInput(ctx, "parameter name %v", v.Name)
 				} else if strings.EqualFold(v.Value, "TEXT") {
 					es.Format = EXPLAIN_FORMAT_TEXT
 				} else if strings.EqualFold(v.Value, "JSON") {
 					es.Format = EXPLAIN_FORMAT_JSON
 				} else {
-					return moerr.NewInvalidInput("explain format %v", v.Value)
+					return moerr.NewInvalidInput(ctx, "explain format %v", v.Value)
 				}
 			} else {
-				return moerr.NewInvalidInput("EXPLAIN option %v", v.Name)
+				return moerr.NewInvalidInput(ctx, "EXPLAIN option %v", v.Name)
 			}
 		}
 
@@ -329,7 +370,7 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 		}
 		buffer := NewExplainDataBuffer()
 		explainQuery := NewExplainQueryImpl(logicPlan.GetQuery())
-		err = explainQuery.ExplainPlan(buffer, es)
+		err = explainQuery.ExplainPlan(ctx.GetContext(), buffer, es)
 		if err != nil {
 			t.Errorf("explain Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
 			return err

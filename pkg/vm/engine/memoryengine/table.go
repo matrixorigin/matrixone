@@ -16,7 +16,8 @@ package memoryengine
 
 import (
 	"context"
-	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -33,7 +34,11 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) Rows(ctx context.Context) (int64, error) {
+func (t *Table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error) {
+	return t.Stats(ctx)
+}
+
+func (t *Table) Stats(ctx context.Context) (int32, int64, error) {
 
 	resps, err := DoTxnRequest[TableStatsResp](
 		ctx,
@@ -46,12 +51,17 @@ func (t *Table) Rows(ctx context.Context) (int64, error) {
 		},
 	)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
 	resp := resps[0]
 
-	return int64(resp.Rows), nil
+	return 0, int64(resp.Rows), nil
+}
+
+func (t *Table) Rows(ctx context.Context) (int64, error) {
+	_, rows, err := t.Stats(ctx)
+	return rows, err
 }
 
 func (t *Table) Size(ctx context.Context, columnName string) (int64, error) {
@@ -240,6 +250,11 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 //	return uint64(affectedRows), nil
 //}
 
+func (t *Table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
+	// implement me
+	return nil
+}
+
 func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 
 	clusterDetails, err := t.engine.getClusterDetails()
@@ -344,6 +359,10 @@ func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err
 	return resp.Attrs, nil
 }
 
-func (t *Table) GetTableID(ctx context.Context) string {
-	return fmt.Sprintf("%d", t.id)
+func (t *Table) GetTableID(ctx context.Context) uint64 {
+	return uint64(t.id)
+}
+
+func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
+	return nil, nil, nil
 }

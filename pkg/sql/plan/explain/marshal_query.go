@@ -15,33 +15,35 @@
 package explain
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"context"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func ConvertNode(node *plan.Node, options *ExplainOptions) (*Node, error) {
+func ConvertNode(ctx context.Context, node *plan.Node, options *ExplainOptions) (*Node, error) {
 	marshalNodeImpl := NewMarshalNodeImpl(node)
 	newNode := &Node{
 		NodeId:     strconv.FormatInt(int64(node.NodeId), 10),
-		Statistics: marshalNodeImpl.GetStatistics(options),
-		Cost:       marshalNodeImpl.GetCost(),
+		Statistics: marshalNodeImpl.GetStatistics(ctx, options),
+		Stats:      marshalNodeImpl.GetStats(),
 		TotalStats: marshalNodeImpl.GetTotalStats(),
 	}
-	name, err := marshalNodeImpl.GetNodeName()
+	name, err := marshalNodeImpl.GetNodeName(ctx)
 	if err != nil {
 		return nil, err
 	}
 	newNode.Name = name
 
-	title, err := marshalNodeImpl.GetNodeTitle(options)
+	title, err := marshalNodeImpl.GetNodeTitle(ctx, options)
 	if err != nil {
 		return nil, err
 	}
 	newNode.Title = title
 
-	labels, err := marshalNodeImpl.GetNodeLabels(options)
+	labels, err := marshalNodeImpl.GetNodeLabels(ctx, options)
 	if err != nil {
 		return nil, err
 	}
@@ -50,11 +52,11 @@ func ConvertNode(node *plan.Node, options *ExplainOptions) (*Node, error) {
 }
 
 type MarshalNode interface {
-	GetNodeName() (string, error)
-	GetNodeTitle(options *ExplainOptions) (string, error)
-	GetNodeLabels(options *ExplainOptions) ([]Label, error)
-	GetStatistics(options *ExplainOptions) Statistics
-	GetCost() Cost
+	GetNodeName(ctx context.Context) (string, error)
+	GetNodeTitle(ctx context.Context, options *ExplainOptions) (string, error)
+	GetNodeLabels(ctx context.Context, options *ExplainOptions) ([]Label, error)
+	GetStatistics(ctx context.Context, options *ExplainOptions) Statistics
+	GetStats() Stats
 	GetTotalStats() TotalStats
 }
 
@@ -68,21 +70,21 @@ func NewMarshalNodeImpl(node *plan.Node) *MarshalNodeImpl {
 	}
 }
 
-func (m MarshalNodeImpl) GetCost() Cost {
-	if m.node.Cost != nil {
-		return Cost{
-			Start:   m.node.Cost.Start,
-			Total:   m.node.Cost.Total,
-			Card:    m.node.Cost.Card,
-			Ndv:     m.node.Cost.Ndv,
-			Rowsize: m.node.Cost.Rowsize,
+func (m MarshalNodeImpl) GetStats() Stats {
+	if m.node.Stats != nil {
+		return Stats{
+			BlockNum:    m.node.Stats.BlockNum,
+			Cost:        m.node.Stats.Cost,
+			Outcnt:      m.node.Stats.Outcnt,
+			HashmapSize: m.node.Stats.HashmapSize,
+			Rowsize:     m.node.Stats.Rowsize,
 		}
 	} else {
-		return Cost{}
+		return Stats{}
 	}
 }
 
-func (m MarshalNodeImpl) GetNodeName() (string, error) {
+func (m MarshalNodeImpl) GetNodeName(ctx context.Context) (string, error) {
 	var name string
 	// Get the Node Name
 	switch m.node.NodeType {
@@ -153,12 +155,12 @@ func (m MarshalNodeImpl) GetNodeName() (string, error) {
 	case plan.Node_MINUS_ALL:
 		name = "Minus All"
 	default:
-		return name, moerr.NewInternalError("Unsupported node type when plan is serialized to json")
+		return name, moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}
 	return name, nil
 }
 
-func (m MarshalNodeImpl) GetNodeTitle(options *ExplainOptions) (string, error) {
+func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptions) (string, error) {
 	var result string
 	var err error
 	switch m.node.NodeType {
@@ -169,81 +171,81 @@ func (m MarshalNodeImpl) GetNodeTitle(options *ExplainOptions) (string, error) {
 		} else if m.node.TableDef != nil {
 			result += m.node.TableDef.GetName()
 		} else {
-			return result, moerr.NewInvalidInput("Table definition not found when plan is serialized to json")
+			return result, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_UPDATE:
-		if m.node.UpdateCtxs != nil {
+		if m.node.UpdateCtx != nil {
 			first := true
-			for _, ctx := range m.node.UpdateCtxs {
+			for _, ctx := range m.node.UpdateCtx.Ref {
 				if !first {
 					result += ", "
 				}
-				result += ctx.DbName + "." + ctx.TblName
+				result += ctx.SchemaName + "." + ctx.ObjName
 				if first {
 					first = false
 				}
 			}
 		} else {
-			return result, moerr.NewInvalidInput("Table definition not found when plan is serialized to json")
+			return result, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_DELETE:
-		if m.node.DeleteTablesCtx != nil {
+		if m.node.DeleteCtx != nil {
 			first := true
-			for _, ctx := range m.node.DeleteTablesCtx {
+			for _, ctx := range m.node.DeleteCtx.Ref {
 				if !first {
 					result += ", "
 				}
-				result += ctx.DbName + "." + ctx.TblName
+				result += ctx.SchemaName + "." + ctx.ObjName
 				if first {
 					first = false
 				}
 			}
 		} else {
-			return result, moerr.NewInternalError("Table definition not found when plan is serialized to json")
+			return result, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_PROJECT, plan.Node_VALUE_SCAN, plan.Node_UNION, plan.Node_UNION_ALL,
 		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS:
 		//"title" : "STORE.S_STORE_NAME,STORE.S_STORE_ID,WSS.D_WEEK_SEQ"
 		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		result, err = exprs.GetDescription(options)
+		result, err = exprs.GetDescription(ctx, options)
 		if err != nil {
 			return result, err
 		}
 	case plan.Node_AGG:
 		// "SUM(IFF(DATE_DIM.D_DAY_NAME = 'Sunday', STORE_SALES.SS_SALES_PRICE, null))"
 		exprs := NewExprListDescribeImpl(m.node.AggList)
-		result, err = exprs.GetDescription(options)
+		result, err = exprs.GetDescription(ctx, options)
 		if err != nil {
 			return result, err
 		}
 	case plan.Node_FILTER:
 		//"title" : "(D_0.D_MONTH_SEQ >= 1189) AND (D_0.D_MONTH_SEQ <= 1200)",
 		exprs := NewExprListDescribeImpl(m.node.FilterList)
-		result, err = exprs.GetDescription(options)
+		result, err = exprs.GetDescription(ctx, options)
 		if err != nil {
 			return result, err
 		}
 	case plan.Node_JOIN:
 		//"title" : "(DATE_DIM.D_DATE_SK = STORE_SALES.SS_SOLD_DATE_SK)",
 		exprs := NewExprListDescribeImpl(m.node.OnList)
-		result, err = exprs.GetDescription(options)
+		result, err = exprs.GetDescription(ctx, options)
 		if err != nil {
 			return result, err
 		}
 	case plan.Node_SORT:
 		//"title" : "STORE.S_STORE_NAME ASC NULLS LAST,STORE.S_STORE_ID ASC NULLS LAST,WSS.D_WEEK_SEQ ASC NULLS LAST",
 		orderByDescImpl := NewOrderByDescribeImpl(m.node.OrderBy)
-		result, err = orderByDescImpl.GetDescription(options)
+		result, err = orderByDescImpl.GetDescription(ctx, options)
 		if err != nil {
 			return result, err
 		}
 	default:
-		return "", moerr.NewInternalError("Unsupported node type when plan is serialized to json")
+		return "", moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}
 	return strings.TrimSpace(result), nil
 }
 
-func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error) {
+func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOptions) ([]Label, error) {
 	labels := make([]Label, 0)
 
 	switch m.node.NodeType {
@@ -257,7 +259,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 		} else if tableDef != nil {
 			fullTableName += tableDef.GetName()
 		} else {
-			return nil, moerr.NewInternalError("Table definition not found when plan is serialized to json")
+			return nil, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
 		}
 
 		labels = append(labels, Label{
@@ -266,7 +268,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 		})
 
 		// "name" : "Columns (2 / 28)",
-		columns := GetTableColsLableValue(tableDef.Cols, options)
+		columns := GetTableColsLableValue(ctx, tableDef.Cols, options)
 
 		labels = append(labels, Label{
 			Name:  "Columns",
@@ -292,7 +294,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 		} else if tableDef != nil {
 			fullTableName += tableDef.GetName()
 		} else {
-			return nil, moerr.NewInternalError("Table definition not found when plan is serialized to json")
+			return nil, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
 		}
 
 		labels = append(labels, Label{
@@ -301,7 +303,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 		})
 
 		// "name" : "Columns (2 / 28)",
-		columns := GetTableColsLableValue(tableDef.Cols, options)
+		columns := GetTableColsLableValue(ctx, tableDef.Cols, options)
 
 		labels = append(labels, Label{
 			Name:  "Columns",
@@ -318,17 +320,17 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			Value: len(tableDef.Cols),
 		})
 	case plan.Node_UPDATE:
-		if m.node.UpdateCtxs != nil {
-			updateTableNames := GetUpdateTableLableValue(m.node.UpdateCtxs, options)
+		if m.node.UpdateCtx != nil {
+			updateTableNames := GetUpdateTableLableValue(ctx, m.node.UpdateCtx, options)
 			labels = append(labels, Label{
 				Name:  "Full table name",
 				Value: updateTableNames,
 			})
 
 			updateCols := make([]string, 0)
-			for _, ctx := range m.node.UpdateCtxs {
-				if ctx.UpdateCols != nil {
-					upcols := GetUpdateTableColsLableValue(ctx.UpdateCols, ctx.DbName, ctx.TblName, options)
+			for i, ctx := range m.node.UpdateCtx.Ref {
+				if m.node.UpdateCtx.UpdateCol[i] != nil {
+					upcols := GetUpdateTableColsLableValue(m.node.UpdateCtx.UpdateCol[i].Map, ctx.SchemaName, ctx.ObjName, options)
 					updateCols = append(updateCols, upcols...)
 				}
 			}
@@ -337,20 +339,20 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 				Value: updateCols,
 			})
 		} else {
-			return nil, moerr.NewInvalidInput("Table definition not found when plan is serialized to json")
+			return nil, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_DELETE:
-		if m.node.DeleteTablesCtx != nil {
-			deleteTableNames := GetDeleteTableLableValue(m.node.DeleteTablesCtx, options)
+		if m.node.DeleteCtx != nil {
+			deleteTableNames := GetDeleteTableLableValue(ctx, m.node.DeleteCtx, options)
 			labels = append(labels, Label{
 				Name:  "Full table name",
 				Value: deleteTableNames,
 			})
 		} else {
-			return nil, moerr.NewInvalidInput("Table definition not found when plan is serialized to json")
+			return nil, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_PROJECT:
-		value, err := GetExprsLabelValue(m.node.ProjectList, options)
+		value, err := GetExprsLabelValue(ctx, m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
@@ -362,7 +364,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 		// Get Group key info
 		if len(m.node.GroupBy) > 0 {
 			// Get Grouping Key
-			value, err := GetExprsLabelValue(m.node.GroupBy, options)
+			value, err := GetExprsLabelValue(ctx, m.node.GroupBy, options)
 			if err != nil {
 				return nil, err
 			}
@@ -374,7 +376,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 
 		// Get Aggregate function info
 		if len(m.node.AggList) > 0 {
-			value, err := GetExprsLabelValue(m.node.AggList, options)
+			value, err := GetExprsLabelValue(ctx, m.node.AggList, options)
 			if err != nil {
 				return nil, err
 			}
@@ -384,7 +386,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			})
 		}
 	case plan.Node_FILTER:
-		value, err := GetExprsLabelValue(m.node.FilterList, options)
+		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
 		if err != nil {
 			return nil, err
 		}
@@ -401,7 +403,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 
 		// Get Join Condition info
 		if len(m.node.OnList) > 0 {
-			value, err := GetExprsLabelValue(m.node.OnList, options)
+			value, err := GetExprsLabelValue(ctx, m.node.OnList, options)
 			if err != nil {
 				return nil, err
 			}
@@ -419,7 +421,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			Value: m.node.Children[1],
 		})
 	case plan.Node_SORT:
-		result, err := GettOrderByLabelValue(m.node.OrderBy, options)
+		result, err := GettOrderByLabelValue(ctx, m.node.OrderBy, options)
 		if err != nil {
 			return nil, err
 		}
@@ -428,7 +430,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			Value: result,
 		})
 	case plan.Node_VALUE_SCAN:
-		value, err := GetExprsLabelValue(m.node.ProjectList, options)
+		value, err := GetExprsLabelValue(ctx, m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
@@ -437,7 +439,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			Value: value,
 		})
 	case plan.Node_UNION:
-		value, err := GetExprsLabelValue(m.node.ProjectList, options)
+		value, err := GetExprsLabelValue(ctx, m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
@@ -446,7 +448,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			Value: value,
 		})
 	case plan.Node_UNION_ALL:
-		value, err := GetExprsLabelValue(m.node.ProjectList, options)
+		value, err := GetExprsLabelValue(ctx, m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
@@ -455,7 +457,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			Value: value,
 		})
 	case plan.Node_INTERSECT:
-		value, err := GetExprsLabelValue(m.node.ProjectList, options)
+		value, err := GetExprsLabelValue(ctx, m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
@@ -464,7 +466,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			Value: value,
 		})
 	case plan.Node_INTERSECT_ALL:
-		value, err := GetExprsLabelValue(m.node.ProjectList, options)
+		value, err := GetExprsLabelValue(ctx, m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
@@ -473,7 +475,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			Value: value,
 		})
 	case plan.Node_MINUS:
-		value, err := GetExprsLabelValue(m.node.ProjectList, options)
+		value, err := GetExprsLabelValue(ctx, m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
@@ -482,12 +484,12 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			Value: value,
 		})
 	default:
-		return nil, moerr.NewInternalError("Unsupported node type when plan is serialized to json")
+		return nil, moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}
 
 	if m.node.NodeType != plan.Node_FILTER && m.node.FilterList != nil {
 		// Where condition
-		value, err := GetExprsLabelValue(m.node.FilterList, options)
+		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
 		if err != nil {
 			return nil, err
 		}
@@ -499,7 +501,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 
 	// Get Limit And Offset info
 	if m.node.Limit != nil {
-		limitInfo, err := describeExpr(m.node.Limit, options)
+		limitInfo, err := describeExpr(ctx, m.node.Limit, options)
 		if err != nil {
 			return nil, err
 		}
@@ -509,7 +511,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 		})
 
 		if m.node.Offset != nil {
-			offsetInfo, err := describeExpr(m.node.Offset, options)
+			offsetInfo, err := describeExpr(ctx, m.node.Offset, options)
 			if err != nil {
 				return nil, err
 			}
@@ -527,13 +529,35 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 	return labels, nil
 }
 
-const InputRows = "Input Rows"
-const InputSize = "Input Size"
+const TimeConsumed = "Time Consumed"
+const WaitTime = "Wait Time"
 
-func (m MarshalNodeImpl) GetStatistics(options *ExplainOptions) Statistics {
+const InputRows = "Input Rows"
+const OutputRows = "Output Rows"
+const InputSize = "Input Size"
+const OutputSize = "Output Size"
+const MemorySize = "Memory Size"
+const DiskIO = "Disk IO"
+const S3IOByte = "S3 IO Byte"
+const S3IOCount = "S3 IO Count"
+const Network = "Network"
+
+func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOptions) Statistics {
 	statistics := NewStatistics()
 	if options.Analyze && m.node.AnalyzeInfo != nil {
 		analyzeInfo := m.node.AnalyzeInfo
+		times := []StatisticValue{
+			{
+				Name:  TimeConsumed,
+				Value: analyzeInfo.TimeConsumed,
+				Unit:  "us",
+			},
+			{
+				Name:  WaitTime,
+				Value: analyzeInfo.WaitTimeConsumed,
+				Unit:  "us",
+			},
+		}
 		mbps := []StatisticValue{
 			{
 				Name:  InputRows,
@@ -541,7 +565,7 @@ func (m MarshalNodeImpl) GetStatistics(options *ExplainOptions) Statistics {
 				Unit:  "count",
 			},
 			{
-				Name:  "Output Rows",
+				Name:  OutputRows,
 				Value: analyzeInfo.OutputRows,
 				Unit:  "count",
 			},
@@ -551,7 +575,7 @@ func (m MarshalNodeImpl) GetStatistics(options *ExplainOptions) Statistics {
 				Unit:  "byte",
 			},
 			{
-				Name:  "Output Size",
+				Name:  OutputSize,
 				Value: analyzeInfo.OutputSize,
 				Unit:  "byte",
 			},
@@ -559,13 +583,43 @@ func (m MarshalNodeImpl) GetStatistics(options *ExplainOptions) Statistics {
 
 		mems := []StatisticValue{
 			{
-				Name:  "Memory Size",
+				Name:  MemorySize,
 				Value: analyzeInfo.MemorySize,
 				Unit:  "byte",
 			},
 		}
+
+		io := []StatisticValue{
+			{
+				Name:  DiskIO,
+				Value: analyzeInfo.DiskIO,
+				Unit:  "byte",
+			},
+			{
+				Name:  S3IOByte,
+				Value: analyzeInfo.S3IOByte,
+				Unit:  "byte",
+			},
+			{
+				Name:  S3IOCount,
+				Value: analyzeInfo.S3IOCount,
+				Unit:  "count",
+			},
+		}
+
+		nw := []StatisticValue{
+			{
+				Name:  Network,
+				Value: analyzeInfo.NetworkIO,
+				Unit:  "byte",
+			},
+		}
+
+		statistics.Time = append(statistics.Time, times...)
 		statistics.Throughput = append(statistics.Throughput, mbps...)
 		statistics.Memory = append(statistics.Memory, mems...)
+		statistics.IO = append(statistics.IO, io...)
+		statistics.Network = append(statistics.Network, nw...)
 	}
 	return *statistics
 }
@@ -585,13 +639,13 @@ func (m MarshalNodeImpl) GetTotalStats() TotalStats {
 
 var _ MarshalNode = MarshalNodeImpl{}
 
-func GetExprsLabelValue(exprList []*plan.Expr, options *ExplainOptions) ([]string, error) {
+func GetExprsLabelValue(ctx context.Context, exprList []*plan.Expr, options *ExplainOptions) ([]string, error) {
 	if exprList == nil {
 		return make([]string, 0), nil
 	}
 	result := make([]string, 0)
 	for _, v := range exprList {
-		descV, err := describeExpr(v, options)
+		descV, err := describeExpr(ctx, v, options)
 		if err != nil {
 			return result, err
 		}
@@ -600,13 +654,13 @@ func GetExprsLabelValue(exprList []*plan.Expr, options *ExplainOptions) ([]strin
 	return result, nil
 }
 
-func GettOrderByLabelValue(orderbyList []*plan.OrderBySpec, options *ExplainOptions) ([]string, error) {
+func GettOrderByLabelValue(ctx context.Context, orderbyList []*plan.OrderBySpec, options *ExplainOptions) ([]string, error) {
 	if orderbyList == nil {
 		return make([]string, 0), nil
 	}
 	result := make([]string, 0)
 	for _, v := range orderbyList {
-		descExpr, err := describeExpr(v.Expr, options)
+		descExpr, err := describeExpr(ctx, v.Expr, options)
 		if err != nil {
 			return result, err
 		}
@@ -618,29 +672,29 @@ func GettOrderByLabelValue(orderbyList []*plan.OrderBySpec, options *ExplainOpti
 	return result, nil
 }
 
-func GetDeleteTableLableValue(deleteCtxs []*plan.DeleteTableCtx, options *ExplainOptions) []string {
-	if deleteCtxs == nil {
+func GetDeleteTableLableValue(ctx context.Context, deleteCtx *plan.DeleteCtx, options *ExplainOptions) []string {
+	if deleteCtx == nil {
 		return make([]string, 0)
 	}
 	result := make([]string, 0)
-	for _, ctx := range deleteCtxs {
-		result = append(result, ctx.DbName+"."+ctx.TblName)
+	for _, ctx := range deleteCtx.Ref {
+		result = append(result, ctx.SchemaName+"."+ctx.ObjName)
 	}
 	return result
 }
 
-func GetUpdateTableLableValue(updateCtxs []*plan.UpdateCtx, options *ExplainOptions) []string {
-	if updateCtxs == nil {
+func GetUpdateTableLableValue(ctx context.Context, updateCtx *plan.UpdateCtx, options *ExplainOptions) []string {
+	if updateCtx == nil {
 		return make([]string, 0)
 	}
 	result := make([]string, 0)
-	for _, ctx := range updateCtxs {
-		result = append(result, ctx.DbName+"."+ctx.TblName)
+	for _, ctx := range updateCtx.Ref {
+		result = append(result, ctx.SchemaName+"."+ctx.ObjName)
 	}
 	return result
 }
 
-func GetTableColsLableValue(cols []*plan.ColDef, options *ExplainOptions) []string {
+func GetTableColsLableValue(ctx context.Context, cols []*plan.ColDef, options *ExplainOptions) []string {
 	columns := make([]string, len(cols))
 	for i, col := range cols {
 		columns[i] = col.Name
@@ -648,10 +702,12 @@ func GetTableColsLableValue(cols []*plan.ColDef, options *ExplainOptions) []stri
 	return columns
 }
 
-func GetUpdateTableColsLableValue(cols []*plan.ColDef, db string, tname string, options *ExplainOptions) []string {
+func GetUpdateTableColsLableValue(cols map[string]int32, db string, tname string, options *ExplainOptions) []string {
 	columns := make([]string, len(cols))
-	for i, col := range cols {
-		columns[i] = db + "." + tname + "." + col.Name
+	i := 0
+	for col := range cols {
+		columns[i] = db + "." + tname + "." + col
+		i++
 	}
 	return columns
 }

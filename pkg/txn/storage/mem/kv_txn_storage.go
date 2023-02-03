@@ -185,6 +185,10 @@ func (kv *KVTxnStorage) StartRecovery(ctx context.Context, c chan txn.TxnMeta) {
 	}
 }
 
+func (kv *KVTxnStorage) Start() error {
+	return nil
+}
+
 func (kv *KVTxnStorage) Close(ctx context.Context) error {
 	return nil
 }
@@ -258,7 +262,7 @@ func (kv *KVTxnStorage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint3
 	for idx, key := range req.Keys {
 		if t, ok := kv.uncommittedKeyTxnMap[string(key)]; ok {
 			if !bytes.Equal(t.ID, txnMeta.ID) {
-				return nil, moerr.NewTxnWriteConflict("%s %s", t.ID, txnMeta.ID)
+				return nil, moerr.NewTxnWriteConflictNoCtx("%s %s", t.ID, txnMeta.ID)
 			}
 		} else {
 			kv.uncommittedKeyTxnMap[string(key)] = &newTxn
@@ -278,7 +282,7 @@ func (kv *KVTxnStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (times
 	defer kv.Unlock()
 
 	if _, ok := kv.uncommittedTxn[string(txnMeta.ID)]; !ok {
-		return timestamp.Timestamp{}, moerr.NewMissingTxn()
+		return timestamp.Timestamp{}, moerr.NewMissingTxnNoCtx()
 	}
 
 	txnMeta.PreparedTS, _ = kv.clock.Now()
@@ -286,7 +290,7 @@ func (kv *KVTxnStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (times
 	if kv.hasConflict(txnMeta.SnapshotTS,
 		timestamp.Timestamp{PhysicalTime: math.MaxInt64, LogicalTime: math.MaxUint32},
 		writeKeys) {
-		return timestamp.Timestamp{}, moerr.NewTxnWriteConflict("")
+		return timestamp.Timestamp{}, moerr.NewTxnWriteConflictNoCtx("")
 	}
 
 	log := kv.getLogWithDataLocked(txnMeta)
@@ -309,7 +313,7 @@ func (kv *KVTxnStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) err
 	defer kv.Unlock()
 
 	if _, ok := kv.uncommittedTxn[string(txnMeta.ID)]; !ok {
-		return moerr.NewMissingTxn()
+		return moerr.NewMissingTxnNoCtx()
 	}
 
 	log := &KVLog{Txn: txnMeta}
@@ -336,7 +340,7 @@ func (kv *KVTxnStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
 
 	writeKeys := kv.getWriteKeysLocked(txnMeta)
 	if kv.hasConflict(txnMeta.SnapshotTS, txnMeta.CommitTS.Next(), writeKeys) {
-		return moerr.NewTxnWriteConflict("")
+		return moerr.NewTxnWriteConflictNoCtx("")
 	}
 
 	var log *KVLog
@@ -537,7 +541,7 @@ func (rs *readResult) WaitTxns() [][]byte {
 
 func (rs *readResult) Read() ([]byte, error) {
 	if !rs.continueReadFunc(rs) {
-		return nil, moerr.NewMissingTxn()
+		return nil, moerr.NewMissingTxnNoCtx()
 	}
 
 	resp := &message{Values: rs.values}
