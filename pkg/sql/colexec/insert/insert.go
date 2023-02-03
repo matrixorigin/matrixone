@@ -28,9 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -41,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -266,102 +263,6 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 	}
 	atomic.AddUint64(&n.Affected, uint64(bat.Vecs[0].Length()))
 	return nil
-}
-
-func NewTxn(n *Argument, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
-	if proc.TxnClient == nil {
-		return nil, moerr.NewInternalError(ctx, "must set txn client")
-	}
-	txn, err = proc.TxnClient.New()
-	if err != nil {
-		return nil, err
-	}
-	if ctx == nil {
-		return nil, moerr.NewInternalError(ctx, "context should not be nil")
-	}
-	if err = n.Engine.New(ctx, txn); err != nil {
-		return nil, err
-	}
-	return txn, nil
-}
-
-func CommitTxn(n *Argument, txn client.TxnOperator, ctx context.Context) error {
-	if txn == nil {
-		return nil
-	}
-	if ctx == nil {
-		return moerr.NewInternalError(ctx, "context should not be nil")
-	}
-	ctx, cancel := context.WithTimeout(
-		ctx,
-		n.Engine.Hints().CommitOrRollbackTimeout,
-	)
-	defer cancel()
-	if err := n.Engine.Commit(ctx, txn); err != nil {
-		if err2 := RolllbackTxn(n, txn, ctx); err2 != nil {
-			logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
-		}
-		return err
-	}
-	err := txn.Commit(ctx)
-	txn = nil
-	return err
-}
-
-func RolllbackTxn(n *Argument, txn client.TxnOperator, ctx context.Context) error {
-	if txn == nil {
-		return nil
-	}
-	if ctx == nil {
-		return moerr.NewInternalError(ctx, "context should not be nil")
-	}
-	ctx, cancel := context.WithTimeout(
-		ctx,
-		n.Engine.Hints().CommitOrRollbackTimeout,
-	)
-	defer cancel()
-	if err := n.Engine.Rollback(ctx, txn); err != nil {
-		return err
-	}
-	err := txn.Rollback(ctx)
-	txn = nil
-	return err
-}
-
-func GetNewRelation(n *Argument, txn client.TxnOperator, proc *process.Process, ctx context.Context) (engine.Relation, error) {
-	dbHandler, err := n.Engine.Database(ctx, n.DBName, txn)
-	if err != nil {
-		return nil, err
-	}
-	tableHandler, err := dbHandler.Relation(ctx, n.TableName)
-	if err != nil {
-		return nil, err
-	}
-	return tableHandler, nil
-}
-
-func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) (bool, error) {
-	var err error
-	proc.TxnOperator, err = NewTxn(n, proc, ctx)
-	if err != nil {
-		return false, err
-	}
-
-	n.TargetTable, err = GetNewRelation(n, proc.TxnOperator, proc, ctx)
-	if err != nil {
-		return false, err
-	}
-	if err = handleWrite(n, proc, ctx, bat); err != nil {
-		if err2 := RolllbackTxn(n, proc.TxnOperator, ctx); err2 != nil {
-			return false, err2
-		}
-		return false, err
-	}
-
-	if err = CommitTxn(n, proc.TxnOperator, ctx); err != nil {
-		return false, err
-	}
-	return false, nil
 }
 
 // referece to pkg/sql/colexec/order/order.go logic
@@ -677,10 +578,7 @@ func writeBatch(ctx context.Context,
 	if n.IsRemote {
 		return false, handleWrite(n, proc, ctx, bat)
 	}
-	if !proc.LoadTag {
-		return false, handleWrite(n, proc, ctx, bat)
-	}
-	return handleLoadWrite(n, proc, ctx, bat)
+	return false, handleWrite(n, proc, ctx, bat)
 }
 
 func getIndexDataFromVec(block objectio.BlockObject, writer objectio.Writer,
