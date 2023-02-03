@@ -33,33 +33,44 @@ func ColumnCntLargerErrorInfo() string {
 
 // Use for External table scan param
 type ExternalParam struct {
+	// Externally passed parameters that will not change
+	ExParamConst
+	// Inner parameters
+	ExParam
+}
+
+type ExParamConst struct {
+	IgnoreLine    int
+	IgnoreLineTag int
+	maxBatchSize  uint64
+	CreateSql     string
 	Attrs         []string
 	Cols          []*plan.ColDef
 	FirstColType  *plan.Type
+	FileList      []string
+	FileOffset    [][2]int
 	Name2ColIndex map[string]int32
-	CreateSql     string
 	Ctx           context.Context
-	plh           *ParseLineHandler
 	Extern        *tree.ExternParam
-	IgnoreLine    int
-	IgnoreLineTag int
-	// tag indicate the fileScan is finished
-	Fileparam    *ExternalFileparam
-	Zoneparam    *ZonemapFileparam
-	Filter       *FilterParam
-	FileList     []string
-	reader       io.ReadCloser
-	maxBatchSize uint64
-	tableDef     *plan.TableDef
-	ClusterTable *plan.ClusterTable
-	prevStr      string
+	tableDef      *plan.TableDef
+	ClusterTable  *plan.ClusterTable
 }
 
-type ExternalFileparam struct {
+type ExParam struct {
+	prevStr   string
+	reader    io.ReadCloser
+	plh       *ParseLineHandler
+	Fileparam *ExFileparam
+	Zoneparam *ZonemapFileparam
+	Filter    *FilterParam
+}
+
+type ExFileparam struct {
 	End       bool
 	FileCnt   int
 	FileFin   int
 	FileIndex int
+	Filepath  string
 }
 
 type ZonemapFileparam struct {
@@ -70,7 +81,8 @@ type ZonemapFileparam struct {
 type FilterParam struct {
 	maxCol       int
 	exprMono     bool
-	columns      []uint16
+	columns      []uint16 // save real index in table to read column's data from files
+	defColumns   []uint16 // save col index in tableDef.Cols, cooperate with columnMap
 	columnMap    map[int]int
 	File2Size    map[string]int64
 	FilterExpr   *plan.Expr

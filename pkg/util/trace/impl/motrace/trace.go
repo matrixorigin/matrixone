@@ -23,16 +23,16 @@ package motrace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 var gTracerProvider atomic.Value
@@ -50,10 +50,22 @@ func init() {
 
 var inited uint32
 
-func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, error) {
+func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opts ...TracerProviderOption) error {
+	opts = append(opts,
+		withMOVersion(SV.MoVersion),
+		EnableTracer(!SV.DisableTrace),
+		WithBatchProcessMode(SV.BatchProcessor),
+		WithExportInterval(SV.TraceExportInterval),
+		WithLongQueryTime(SV.LongQueryTime),
+		DebugMode(SV.EnableTraceDebug),
+	)
+	return Init(ctx, opts...)
+}
+
+func Init(ctx context.Context, opts ...TracerProviderOption) error {
 	// fix multi-init in standalone
 	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
-		return trace.ContextWithSpanContext(ctx, *DefaultSpanContext()), nil
+		return nil
 	}
 
 	// init TraceProvider
@@ -71,11 +83,12 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	spanId.SetByUUID(config.getNodeResource().NodeUuid)
 	sc := trace.SpanContextWithIDs(trace.NilTraceID, spanId)
 	SetDefaultSpanContext(&sc)
-	SetDefaultContext(trace.ContextWithSpanContext(ctx, sc))
+	serviceCtx := context.Background()
+	SetDefaultContext(trace.ContextWithSpanContext(serviceCtx, sc))
 
 	// init Exporter
 	if err := initExporter(ctx, config); err != nil {
-		return nil, err
+		return err
 	}
 
 	// init tool dependence
@@ -85,7 +98,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 
 	logutil.Infof("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
 
-	return DefaultContext(), nil
+	return nil
 }
 
 func initExporter(ctx context.Context, config *tracerProviderConfig) error {
@@ -141,12 +154,8 @@ func Shutdown(ctx context.Context) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
-
 	GetTracerProvider().SetEnable(false)
-	tracer := trace.NoopTracer{}
-	_ = atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(gTracer.(*MOTracer))), unsafe.Pointer(&tracer))
 
-	// fixme: need stop timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	for _, p := range GetTracerProvider().spanProcessors {
@@ -154,6 +163,7 @@ func Shutdown(ctx context.Context) error {
 			return err
 		}
 	}
+	logutil.Info("Shutdown trace complete.")
 	return nil
 }
 

@@ -34,6 +34,7 @@ message Message {
   bytes   analyse = 6;
   uint64  id = 7;
   bytes   uuid = 8;
+  uint64  batch_cnt = 9;
 }
 
 message Connector {
@@ -43,7 +44,9 @@ message Connector {
 
 message Dispatch {
   bool all = 1;
-  repeated Connector connector = 2;
+  bool cross_cn = 2;
+  repeated Connector connector = 3;
+  repeated WrapNode remote_connector = 4;
 }
 
 message Aggregate {
@@ -59,6 +62,20 @@ message Group {
   repeated plan.Expr  exprs = 4;
   repeated plan.Type  types = 5;
   repeated Aggregate  aggs = 6;
+}
+
+message Insert{
+  repeated plan.ColDef TargetColDefs = 1;
+  uint64 Affected = 2;
+  uint64 TableID = 3;
+  plan.ColDef CPkeyColDef = 4;
+  string DBName = 5;
+  string TableName = 6;
+  plan.UniqueIndexDef UniqueIndexDef = 7;
+  plan.ClusterTable ClusterTable = 8;
+  plan.ClusterByDef ClusterByDef = 9;
+  bool IsRemote = 10;
+  bool HasAutoCol = 11;
 }
 
 message Join {
@@ -192,15 +209,16 @@ message Instruction{
   TableFunction table_function = 14;
   HashBuild hash_build = 15;
   ExternalScan external_scan = 16;
-  repeated plan.OrderBySpec order_by = 17;
-  repeated plan.Expr    project_list = 18;
-  plan.Expr    filter = 19;
-  uint64    limit = 20;
-  uint64    offset = 21;
+  Insert insert = 17;
+  repeated plan.OrderBySpec order_by = 18;
+  repeated plan.Expr    project_list = 19;
+  plan.Expr    filter = 20;
+  uint64    limit = 21;
+  uint64    offset = 22;
   // isFirst identifies whether it is the first instruction of analyzeInfo corresponding to idx
-  bool isFirst = 22;
+  bool isFirst = 23;
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
-  bool isLast = 23;
+  bool isLast = 24;
 }
 
 message AnalysisList {
@@ -275,5 +293,15 @@ message Pipeline {
   int32 push_down_info = 10;
   int32 children_count = 11;
 
-  repeated bytes uuids = 12;
+  repeated UuidToRegIdx uuids_to_reg_idx = 12;
+}
+
+message WrapNode {
+  string node_addr = 1;
+  repeated bytes uuids = 2;
+}
+
+message UuidToRegIdx {
+  bytes uuid = 1;
+  int32 idx = 2;
 }

@@ -15,6 +15,8 @@
 package logtail
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -52,7 +54,7 @@ func (mgr *Manager) GetReader(from, to types.TS) *Reader {
 	}
 }
 
-func (mgr *Manager) GCTruncate(ts types.TS) {
+func (mgr *Manager) GCByTS(ctx context.Context, ts types.TS) {
 	if ts.Equal(mgr.truncated) {
 		return
 	}

@@ -130,21 +130,19 @@ func (w *StoreImpl) onLogCKPInfoQueue(items ...any) {
 
 func (w *StoreImpl) onCheckpoint() {
 	w.StoreInfo.onCheckpoint()
-	_, err := w.truncatingQueue.Enqueue(struct{}{})
-	if err != nil {
-		panic(err)
-	}
+	w.ckpCkp()
 }
 
-func (w *StoreImpl) CkpCkp() {
+func (w *StoreImpl) ckpCkp() {
 	e := w.makeInternalCheckpointEntry()
-	_, err := w.Append(GroupInternal, e)
+	driverEntry, _, err := w.doAppend(GroupInternal, e)
 	if err == common.ErrClose {
 		return
 	}
 	if err != nil {
 		panic(err)
 	}
+	w.truncatingQueue.Enqueue(driverEntry)
 	err = e.WaitDone()
 	if err != nil {
 		panic(err)
@@ -153,16 +151,17 @@ func (w *StoreImpl) CkpCkp() {
 }
 
 func (w *StoreImpl) onTruncatingQueue(items ...any) {
+	for _, item := range items {
+		e := item.(*driverEntry.Entry)
+		err := e.WaitDone()
+		if err != nil {
+			panic(err)
+		}
+		w.logCheckpointInfo(e.Info)
+	}
 	gid, driverLsn := w.getDriverCheckpointed()
 	if gid == 0 {
 		return
-	}
-	if gid == GroupCKP || gid == GroupInternal {
-		w.CkpCkp()
-		gid, driverLsn = w.getDriverCheckpointed()
-		if gid == 0 {
-			panic("logic error")
-		}
 	}
 	w.driverCheckpointing.Store(driverLsn)
 	_, err := w.truncateQueue.Enqueue(struct{}{})

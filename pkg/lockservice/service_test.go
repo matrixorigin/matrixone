@@ -16,12 +16,14 @@ package lockservice
 
 import (
 	"context"
+	"encoding/binary"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,24 +40,24 @@ func TestRowLock(t *testing.T) {
 
 	ok, err := l.Lock(context.Background(), 0, [][]byte{{1}}, []byte{1}, option)
 	assert.NoError(t, err)
-	assert.Equal(t, true, ok)
+	assert.True(t, ok)
 	go func() {
 		ok, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte{2}, option)
 		assert.NoError(t, err)
-		assert.Equal(t, true, ok)
+		assert.True(t, ok)
 		acquired = true
 		err = l.Unlock([]byte{2})
 		assert.NoError(t, err)
 	}()
-	time.Sleep(time.Second)
+	time.Sleep(time.Second / 2)
 	err = l.Unlock([]byte{1})
 	assert.NoError(t, err)
-	time.Sleep(time.Second)
+	time.Sleep(time.Second / 2)
 	ok, err = l.Lock(context.Background(), 0, [][]byte{{1}}, []byte{3}, option)
 	assert.NoError(t, err)
-	assert.Equal(t, true, ok)
+	assert.True(t, ok)
 
-	assert.Equal(t, true, acquired)
+	assert.True(t, acquired)
 
 	err = l.Unlock([]byte{3})
 	assert.NoError(t, err)
@@ -70,7 +72,7 @@ func TestMultipleRowLocks(t *testing.T) {
 		policy:      Wait,
 	}
 	iter := 0
-	sum := 1000
+	sum := 10000
 	var wg sync.WaitGroup
 
 	for i := 0; i < sum; i++ {
@@ -78,7 +80,7 @@ func TestMultipleRowLocks(t *testing.T) {
 		go func(i int) {
 			ok, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte(strconv.Itoa(i)), option)
 			assert.NoError(t, err)
-			assert.Equal(t, true, ok)
+			assert.True(t, ok)
 			iter++
 			err = l.Unlock([]byte(strconv.Itoa(i)))
 			assert.NoError(t, err)
@@ -90,7 +92,7 @@ func TestMultipleRowLocks(t *testing.T) {
 }
 
 func TestDeadLock(t *testing.T) {
-	l := NewLockService().(*lockTable)
+	l := NewLockService().(*service)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -128,7 +130,7 @@ func TestDeadLock(t *testing.T) {
 }
 
 func TestDeadLockWithRange(t *testing.T) {
-	l := NewLockService().(*lockTable)
+	l := NewLockService().(*service)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -167,7 +169,7 @@ func TestDeadLockWithRange(t *testing.T) {
 
 func mustAddTestLock(t *testing.T,
 	ctx context.Context,
-	l *lockTable,
+	l *service,
 	txnID []byte,
 	lock [][]byte,
 	granularity Granularity) {
@@ -183,7 +185,7 @@ func mustAddTestLock(t *testing.T,
 
 func maybeAddTestLockWithDeadlock(t *testing.T,
 	ctx context.Context,
-	l *lockTable,
+	l *service,
 	txnID []byte,
 	lock [][]byte,
 	granularity Granularity,
@@ -218,24 +220,24 @@ func TestRangeLock(t *testing.T) {
 
 	ok, err := l.Lock(context.Background(), 0, [][]byte{{1}, {2}}, []byte{1}, option)
 	assert.NoError(t, err)
-	assert.Equal(t, true, ok)
+	assert.True(t, ok)
 	go func() {
 		ok, err := l.Lock(ctx, 0, [][]byte{{1}, {2}}, []byte{2}, option)
 		assert.NoError(t, err)
-		assert.Equal(t, true, ok)
+		assert.True(t, ok)
 		acquired = true
 		err = l.Unlock([]byte{2})
 		assert.NoError(t, err)
 	}()
-	time.Sleep(time.Second)
+	time.Sleep(time.Second / 2)
 	err = l.Unlock([]byte{1})
 	assert.NoError(t, err)
-	time.Sleep(time.Second)
+	time.Sleep(time.Second / 2)
 	ok, err = l.Lock(context.Background(), 0, [][]byte{{1}, {2}}, []byte{3}, option)
 	assert.NoError(t, err)
-	assert.Equal(t, true, ok)
+	assert.True(t, ok)
 
-	assert.Equal(t, true, acquired)
+	assert.True(t, acquired)
 
 	err = l.Unlock([]byte{3})
 	assert.NoError(t, err)
@@ -264,7 +266,7 @@ func TestMultipleRangeLocks(t *testing.T) {
 			end := (i + 1) % 10
 			ok, err := l.Lock(ctx, 0, [][]byte{{byte(start)}, {byte(end)}}, []byte(strconv.Itoa(i)), option)
 			assert.NoError(t, err)
-			assert.Equal(t, true, ok)
+			assert.True(t, ok)
 			err = l.Unlock([]byte(strconv.Itoa(i)))
 			assert.NoError(t, err)
 		}(i)
@@ -273,22 +275,71 @@ func TestMultipleRangeLocks(t *testing.T) {
 }
 
 func BenchmarkMultipleRowLock(b *testing.B) {
-	l := NewLockService()
-	ctx := context.Background()
-	option := LockOptions{
-		granularity: Row,
-		mode:        Exclusive,
-		policy:      Wait,
-	}
-	iter := 0
-
 	b.Run("lock-service", func(b *testing.B) {
+		l := NewLockService()
+		ctx := context.Background()
+		option := LockOptions{
+			granularity: Row,
+			mode:        Exclusive,
+			policy:      Wait,
+		}
+		iter := 0
+
 		for i := 0; i < b.N; i++ {
 			go func(i int) {
-				l.Lock(ctx, 0, [][]byte{{1}}, []byte{byte(i)}, option)
+				bs := make([]byte, 4)
+				binary.LittleEndian.PutUint32(bs, uint32(i))
+				ok, err := l.Lock(ctx, 0, [][]byte{{1}}, bs, option)
+				assert.NoError(b, err)
+				assert.True(b, ok)
 				iter++
-				l.Unlock([]byte{byte(i)})
+				err = l.Unlock(bs)
+				assert.NoError(b, err)
 			}(i)
 		}
 	})
+}
+
+func BenchmarkWithoutConflict(b *testing.B) {
+	runBenchmark(b, "1-table", 1)
+	runBenchmark(b, "unlimited-table", 32)
+}
+
+var tableID atomic.Uint64
+var txnID atomic.Uint64
+var rowID atomic.Uint64
+
+func runBenchmark(b *testing.B, name string, t uint64) {
+	b.Run(name, func(b *testing.B) {
+		l := NewLockService()
+		getTableID := func() uint64 {
+			if t == 1 {
+				return 0
+			}
+			return tableID.Add(1)
+		}
+
+		// total p goroutines to run test
+		b.ReportAllocs()
+		b.ResetTimer()
+
+		b.RunParallel(func(p *testing.PB) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			row := [][]byte{buf.Uint64ToBytes(rowID.Add(1))}
+			txn := buf.Uint64ToBytes(txnID.Add(1))
+			table := getTableID()
+			// fmt.Printf("on table %d\n", table)
+			for p.Next() {
+				if _, err := l.Lock(ctx, table, row, txn, LockOptions{}); err != nil {
+					panic(err)
+				}
+				if err := l.Unlock(txn); err != nil {
+					panic(err)
+				}
+			}
+		})
+	})
+
 }

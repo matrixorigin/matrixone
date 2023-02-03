@@ -32,8 +32,10 @@ type Table[
 ] struct {
 	id int64
 	sync.Mutex
-	state   atomic.Pointer[tableState[K, V]]
-	history []*history[K, V]
+	state atomic.Pointer[tableState[K, V]]
+
+	disableHistory atomic.Bool
+	history        []*history[K, V]
 }
 
 var nextTableID = int64(1)
@@ -126,6 +128,10 @@ func (t *Table[K, V, R]) getTransactionTableSlow(
 	tx.tables.Map[t.id] = txTable
 
 	return
+}
+
+func (t *Table[K, V, R]) DisableHistory() {
+	t.disableHistory.Store(true)
 }
 
 // Insert inserts a row to the table

@@ -17,11 +17,11 @@ package disttae
 import (
 	"context"
 	"math/rand"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,60 +34,41 @@ import (
 
 var _ engine.Relation = new(table)
 
-func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error) {
+func (tbl *table) Stats(ctx context.Context, expr *plan.Expr) (int32, int64, int64, error) {
 	switch tbl.tableId {
 	case catalog.MO_DATABASE_ID:
-		return 1, 1000, nil
+		return 1, 1000, 1000, nil
 	case catalog.MO_TABLES_ID:
-		return 10, 10000, nil
+		return 4, 4000, 4000, nil
 	case catalog.MO_COLUMNS_ID:
-		return 10, 10000, nil
+		return 4, 4000, 4000, nil
 	}
+	var blockNum int
+	var cost, outcnt int64
 
-	if expr == nil {
-		return tbl.Stats(ctx)
+	if tbl.meta == nil || !tbl.updated {
+		err := GetTableMeta(ctx, tbl, expr)
+		if err != nil {
+			return 0, 0, 0, err
+		}
 	}
-	var blockNum, totalBlockCnt int
-	var outcnt int64
-
-	exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
-	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
-
 	if tbl.meta != nil {
+		exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
+		columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 		for _, blockmetas := range tbl.meta.blocks {
-			totalBlockCnt += len(blockmetas)
 			for _, blk := range blockmetas {
 				if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
-					outcnt += blockRows(blk)
+					cost += blockRows(blk)
 					blockNum++
 				}
 			}
 		}
+		outcnt = int64(float64(cost) * plan2.DeduceSelectivity(expr, tbl.getCbName()))
+		return int32(blockNum), cost, outcnt, nil
+	} else {
+		// no meta means not flushed yet, very small table
+		return 1, 100, 100, nil
 	}
-	// before first execution, no metadata.
-	if totalBlockCnt == 0 {
-		return 100, 1000000, nil
-	}
-	return int32(blockNum), outcnt, nil
-}
-
-func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
-	var rows int64
-	var totalBlockCnt int
-
-	if tbl.meta != nil {
-		for _, blks := range tbl.meta.blocks {
-			totalBlockCnt += len(blks)
-			for _, blk := range blks {
-				rows += blockRows(blk)
-			}
-		}
-	}
-	// before first execution, no metadata.
-	if totalBlockCnt == 0 {
-		return 100, 1000000, nil
-	}
-	return int32(totalBlockCnt), rows, nil
 }
 
 func (tbl *table) Rows(ctx context.Context) (int64, error) {
@@ -122,7 +103,7 @@ func (tbl *table) Rows(ctx context.Context) (int64, error) {
 		Timestamp: tbl.db.txn.meta.SnapshotTS,
 	}
 	tx := memtable.NewTransaction(
-		uuid.NewString(),
+		newMemTableTransactionID(),
 		t,
 		memtable.SnapshotIsolation,
 	)
@@ -222,41 +203,10 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-	priKeys := make([]*engine.Attribute, 0, 1)
-	if tbl.primaryIdx >= 0 {
-		for _, def := range tbl.defs {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				if attr.Attr.Primary {
-					priKeys = append(priKeys, &attr.Attr)
-				}
-			}
-		}
-	}
-	dnList := needSyncDnStores(ctx, expr, tbl.tableDef, priKeys,
-		tbl.db.txn.dnStores, tbl.db.txn.proc)
-	switch {
-	case tbl.tableId == catalog.MO_DATABASE_ID:
-		tbl.dnList = []int{0}
-	case tbl.tableId == catalog.MO_TABLES_ID:
-		tbl.dnList = []int{0}
-	case tbl.tableId == catalog.MO_COLUMNS_ID:
-		tbl.dnList = []int{0}
-	default:
-		tbl.dnList = dnList
-	}
-	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
-	if !created && !tbl.updated {
-		if err := tbl.db.txn.db.Update(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
-			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-			return nil, err
-		}
-		columnLength := len(tbl.tableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
-		meta, err := tbl.db.txn.getTableMeta(ctx, tbl.db.databaseId, genMetaTableName(tbl.tableId), true, columnLength, true)
-		if err != nil {
-			return nil, err
-		}
-		tbl.meta = meta
-		tbl.updated = true
+
+	err := GetTableMeta(ctx, tbl, expr)
+	if err != nil {
+		return nil, err
 	}
 
 	ranges := make([][]byte, 0, 1)
@@ -269,7 +219,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
-	for _, i := range dnList {
+	for _, i := range tbl.dnList {
 		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
 		for _, blk := range blks {
@@ -401,6 +351,14 @@ func (tbl *table) TableColumns(ctx context.Context) ([]*engine.Attribute, error)
 	return attrs, nil
 }
 
+func (tbl *table) getCbName() string {
+	if tbl.clusterByIdx == -1 {
+		return ""
+	} else {
+		return tbl.tableDef.Cols[tbl.clusterByIdx].Name
+	}
+}
+
 func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
 	attrs := make([]*engine.Attribute, 0, 1)
 	for _, def := range tbl.defs {
@@ -426,6 +384,23 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
+	if bat == nil {
+		return nil
+	}
+
+	// Write S3 Block
+	if bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+		fileName := strings.Split(bat.Vecs[0].GetString(0), ":")[0]
+		ibat := batch.New(true, bat.Attrs)
+		for j := range bat.Vecs {
+			ibat.SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
+		}
+		if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
+			return err
+		}
+		i := rand.Int() % len(tbl.db.txn.dnStores)
+		return tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, fileName, ibat, tbl.db.txn.dnStores[i])
+	}
 	if tbl.insertExpr == nil {
 		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
@@ -592,6 +567,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		if tbl.meta != nil {
 			blks = tbl.meta.modifedBlocks[i]
 		}
+		tbl.parts[i].txn = tbl.db.txn
 		rds0, err := tbl.parts[i].NewReader(ctx, num, index, tbl.defs, tbl.tableDef,
 			tbl.skipBlocks, blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
 		if err != nil {
