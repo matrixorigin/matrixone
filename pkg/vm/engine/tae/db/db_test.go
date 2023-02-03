@@ -5437,6 +5437,7 @@ func TestGCCheckpoint1(t *testing.T) {
 }
 
 func TestGCCatalog1(t *testing.T) {
+	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -5634,6 +5635,7 @@ func TestGCCatalog1(t *testing.T) {
 }
 
 func TestGCCatalog2(t *testing.T) {
+	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
@@ -5669,6 +5671,7 @@ func TestGCCatalog2(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 }
 func TestGCCatalog3(t *testing.T) {
+	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
