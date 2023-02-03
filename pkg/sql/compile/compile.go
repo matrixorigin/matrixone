@@ -203,13 +203,6 @@ func (c *Compile) Run(_ uint64) (err error) {
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
-	case InsertValues:
-		affectedRows, err := c.scope.InsertValues(c, c.stmt.(*tree.Insert))
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(affectedRows)
-		return nil
 	}
 	return nil
 }
@@ -269,11 +262,6 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 			// 2、show variables will not return query
 			// 3、show create database/table need rewrite to create sql
 		}
-	case *plan.Plan_Ins:
-		return &Scope{
-			Magic: InsertValues,
-			Plan:  pn,
-		}, nil
 	}
 	return nil, moerr.NewNYI(ctx, fmt.Sprintf("query '%s'", pn))
 }

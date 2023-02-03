@@ -107,20 +107,20 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 	return nil
 }
 
-func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch, dbName, tblName string) error {
-	ColDefs := p.ExplicitCols
-	orderColDefs(p.OrderAttrs, ColDefs, p.Columns)
-	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
-	if err != nil {
-		return err
-	}
-	rel, err := db.Relation(ctx, p.TblName)
-	if err != nil {
-		return err
-	}
+// func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch, dbName, tblName string) error {
+// 	ColDefs := p.ExplicitCols
+// 	orderColDefs(p.OrderAttrs, ColDefs, p.Columns)
+// 	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	rel, err := db.Relation(ctx, p.TblName)
+// 	if err != nil {
+// 		return err
+// 	}
 
-	return UpdateInsertBatch(e, ctx, proc, ColDefs, bat, rel.GetTableID(ctx), dbName, tblName)
-}
+// 	return UpdateInsertBatch(e, ctx, proc, ColDefs, bat, rel.GetTableID(ctx), dbName, tblName)
+// }
 
 // get autoincr columns values.  This function updates the auto incr table.
 // multiple txn may cause a conflicts, but we retry off band transactions.

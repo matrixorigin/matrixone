@@ -3490,17 +3490,6 @@ func Test_determineDML(t *testing.T) {
 				},
 			},
 		},
-		{ //insert into values
-			stmt: &tree.Insert{},
-			p: &plan2.Plan{
-				Plan: &plan.Plan_Ins{
-					Ins: &plan.InsertValues{
-						DbName:  "t",
-						TblName: "a",
-					},
-				},
-			},
-		},
 		{ //insert into select
 			stmt: &tree.Insert{},
 			p: &plan2.Plan{

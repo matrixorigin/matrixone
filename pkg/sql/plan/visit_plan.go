@@ -151,21 +151,6 @@ func (vq *VisitPlan) Visit(ctx context.Context) error {
 			}
 		}
 
-	case *plan.Plan_Ins:
-		var err error
-		for _, rule := range vq.rules {
-			if rule.IsApplyExpr() {
-				for _, column := range pl.Ins.Columns {
-					for i := range column.Column {
-						column.Column[i], err = rule.ApplyExpr(column.Column[i])
-						if err != nil {
-							return err
-						}
-					}
-				}
-			}
-		}
-
 	default:
 		// do nothing
 
