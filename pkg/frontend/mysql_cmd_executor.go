@@ -556,7 +556,10 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 		}
 	}
 	for _, col := range tableDef.Cols {
-		mrs.AddRow(colNameToColContent[col.Name])
+		if row, ok := colNameToColContent[col.Name]; ok {
+			mrs.AddRow(row)
+		}
+
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
 		logErrorf(ses.GetConciseProfile(), "handleShowColumns error %v", err)
