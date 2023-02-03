@@ -138,6 +138,9 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 }
 
 func StopMetricSync() {
+	if !atomic.CompareAndSwapUint32(&inited, 1, 0) {
+		return
+	}
 	if moCollector != nil {
 		if ch, effect := moCollector.Stop(true); effect {
 			<-ch
@@ -154,8 +157,6 @@ func StopMetricSync() {
 		_ = statusSvr.Shutdown(context.TODO())
 		statusSvr = nil
 	}
-	// mark inited = false
-	_ = atomic.CompareAndSwapUint32(&inited, 1, 0)
 	logutil.Info("Shutdown metric complete.")
 }
 
