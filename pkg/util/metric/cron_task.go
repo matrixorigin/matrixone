@@ -99,18 +99,20 @@ var QuitableWait = func(ctx context.Context) (*time.Ticker, error) {
 	return next, nil
 }
 
-func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
+func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) (err error) {
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
-	defer logger.Info("finished.")
+	defer func() {
+		logger.Info("finished", zap.Error(err))
+	}()
 
 	next := time.NewTicker(time.Second)
 
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Error("meet context error", zap.Error(ctx.Err()))
+			logger.Info("receive context signal", zap.Error(ctx.Err()))
 			StorageUsageFactory.Reset() // clean CN data for next cron task.
 			return ctx.Err()
 		case <-next.C:
@@ -125,8 +127,9 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		// | query_tae_table | admin      | 2023-01-17 09:56:26 | open   | NULL           |        6 |          34 |       792 | 0.036 |                |
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
 		executor := sqlExecutor()
+		logger.Info("query storage size")
 		result := executor.Query(ctx, ShowAccountSQL, ie.NewOptsBuilder().Finish())
-		err := result.Error()
+		err = result.Error()
 		if err != nil {
 			return err
 		}
