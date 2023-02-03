@@ -29,7 +29,7 @@ SELECT * FROM `mysql`.`user` LIMIT 0,1000;
 host    user    select_priv    insert_priv    update_priv    delete_priv    create_priv    drop_priv    reload_priv    shutdown_priv    process_priv    file_priv    grant_priv    references_priv    index_priv    alter_priv    show_db_priv    super_priv    create_tmp_table_priv    lock_tables_priv    execute_priv    repl_slave_priv    repl_client_priv    create_view_priv    show_view_priv    create_routine_priv    alter_routine_priv    create_user_priv    event_priv    trigger_priv    create_tablespace_priv    ssl_type    ssl_cipher    x509_issuer    x509_subject    max_questions    max_updates    max_connections    max_user_connections    plugin    authentication_string    password_expired    password_last_changed    password_lifetime    account_locked    create_role_priv    drop_role_priv    password_reuse_history    password_reuse_time    password_require_current    user_attributes
 use mysql;
 show tables;
-Tables_in_mysql
+tables_in_mysql
 user
 db
 procs_priv
@@ -143,7 +143,7 @@ table_priv    VARCHAR(10)    NO        ''
 column_priv    VARCHAR(10)    NO        ''        
 use information_schema;
 show tables;
-Tables_in_information_schema
+tables_in_information_schema
 key_column_usage
 columns
 profiling
