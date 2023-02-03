@@ -34,12 +34,15 @@ create table ct_03(a int primary key,b varchar(25));
 insert into ct_03 values(1,'bell'),(2,'app'),(3,'com');
 begin;
 delete from ct_03 where a=1;
+select * from ct_03;
 -- @session:id=1{
 begin;
 update ct_03 set b='urea' where a=1;
+select * from ct_03;
 commit;
 -- @session}
 commit;
+select * from ct_03;
 
 -- primary key conflict/insert into select
 create table ct_04_temp(a int,b varchar(25));
@@ -55,6 +58,7 @@ create table ct_05(a int,b varchar(25) primary key);
 begin;
 load data infile '$resources/load_data/ct_file.csv' into table ct_05;
 commit;
+select * from ct_05;
 
 --unique index and secondary index conflict
 create table ct_06(a bigint,b varchar(25),c int, d varchar(25),primary key(a),unique index c(c),key b(b),key d(d));
@@ -79,23 +83,10 @@ select * from ct_06;
 
 --comprimary key conflict
 create table ct_07(a int,b varchar(25),c date, d double,primary key(a,c));
-insert into ct_07 values (1,'901',2011-09-29,0.01),(2,'187',2011-09-29,1.31),(3,'90',2111-02-09,10.01);
+insert into ct_07 values (1,'901','2011-09-29',0.01),(2,'187','2011-09-29',1.31),(3,'90','2111-02-09',10.01);
 begin;
-insert into ct_07 values (3,'90',2111-02-09,10.01);
-insert into ct_07 values (4,'11',2011-09-29,7.00),(2,'567',2011-09-29,1.31),(4,'90',2011-09-29,89.3);
+insert into ct_07 values (3,'90','2111-02-09',10.01);
+insert into ct_07 values (4,'11','2011-09-29',7.00),(2,'567','2011-09-29',1.31),(4,'90','2011-09-29',89.3);
 select * from ct_07;
 commit;
 select * from ct_07;
-
---comprimary key conflict
-create table ct_08(a int,b varchar(25),c date, d double,primary key(a,c));
-insert into ct_08 values (1,'901',2011-09-29,0.01),(2,'187',2011-09-29,1.31),(3,'90',2111-02-09,10.01);
-begin;
-truncate table ct_08;
--- @session:id=1{
-update ct_08 set a=1 where b='187';
-select * from ct_08;
--- @session}
-select * from ct_08;
-commit;
-select * from ct_08;

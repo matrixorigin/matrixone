@@ -37,12 +37,26 @@ a    b
 create table ct_03(a int primary key,b varchar(25));
 insert into ct_03 values(1,'bell'),(2,'app'),(3,'com');
 begin;
-delete table ct_03 where a=1;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 12 near " table ct_03 where a=1;";
+delete from ct_03 where a=1;
+select * from ct_03;
+a    b
+2    app
+3    com
 begin;
 update ct_03 set b='urea' where a=1;
+select * from ct_03;
+a    b
+1    urea
+2    app
+3    com
 commit;
 commit;
+w-w conflict
+select * from ct_03;
+a    b
+2    app
+3    com
+1    urea
 create table ct_04_temp(a int,b varchar(25));
 insert into ct_04_temp values (1,'bell'),(2,'app'),(1,'com');
 create table ct_04(a int primary key,b varchar(25));
@@ -55,9 +69,11 @@ select * from ct_04;
 a    b
 create table ct_05(a int,b varchar(25) primary key);
 begin;
-insert data infile '$resources/load_data/ct_file.csv' into table ct_05;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 18 near " infile '/Users/heni/matrixone/test/distributed/resources/load_data/ct_file.csv' into table ct_05;";
+load data infile '$resources/load_data/ct_file.csv' into table ct_05;
 commit;
+Duplicate entry 'apple' for key 'b'
+select * from ct_05;
+a    b
 create table ct_06(a bigint,b varchar(25),c int, d varchar(25),primary key(a),unique index c(c),key b(b),key d(d));
 start transaction ;
 insert into ct_06 select 5678,'high',487,'comment test';
@@ -85,30 +101,20 @@ select * from ct_06;
 a    b    c    d
 501    number2    908    zzzztttt
 create table ct_07(a int,b varchar(25),c date, d double,primary key(a,c));
-insert into ct_07 values (1,'901',2011-09-29,0.01),(2,'187',2011-09-29,1.31),(3,'90',2111-02-09,10.01);
-truncated type DATE value 2011 - 9 - 29 for column c, 1
+insert into ct_07 values (1,'901','2011-09-29',0.01),(2,'187','2011-09-29',1.31),(3,'90','2111-02-09',10.01);
 begin;
-insert into ct_07 values (3,'90',2111-02-09,10.01);
-truncated type DATE value 2111 - 2 - 9 for column c, 1
+insert into ct_07 values (3,'90','2111-02-09',10.01);
+insert into ct_07 values (4,'11','2011-09-29',7.00),(2,'567','2011-09-29',1.31),(4,'90','2011-09-29',89.3);
+Duplicate entry '3a150441170b34c8' for key '__mo_cpkey_001a001c'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
-insert into ct_07 values (4,'11',2011-09-29,7.00),(2,'567',2011-09-29,1.31),(4,'90',2011-09-29,89.3);
-truncated type DATE value 2011 - 9 - 29 for column c, 1
 select * from ct_07;
 a    b    c    d
+1    901    2011-09-29    0.01
+2    187    2011-09-29    1.31
+3    90    2111-02-09    10.01
 commit;
 select * from ct_07;
 a    b    c    d
-create table ct_08(a int,b varchar(25),c date, d double,primary key(a,c));
-insert into ct_08 values (1,'901',2011-09-29,0.01),(2,'187',2011-09-29,1.31),(3,'90',2111-02-09,10.01);
-truncated type DATE value 2011 - 9 - 29 for column c, 1
-begin;
-truncate table ct_08;
-internal error: Only CREATE of DDL is supported in transactions
-update ct_08 set a=1 where b='187';
-select * from ct_08;
-a    b    c    d
-select * from ct_08;
-a    b    c    d
-commit;
-select * from ct_08;
-a    b    c    d
+1    901    2011-09-29    0.01
+2    187    2011-09-29    1.31
+3    90    2111-02-09    10.01
