@@ -19,12 +19,14 @@ import (
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 const DefaultTenantMoAdmin = "sys:internal:moadmin"
@@ -147,6 +149,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	defer sess.Dispose()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = true
+	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
 	err := ie.executor.doComQuery(ctx, sql)
 	res := ie.proto.swapOutResult()
 	res.err = err
