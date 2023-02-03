@@ -1003,14 +1003,14 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			}
 		}
 	case types.T_Rowid:
-		if !nulls.Any(vec.Nsp) {
-			vs := vec.Col.([]types.Rowid)
+		if !nulls.Any(vec.GetNulls()) {
+			vs := vector.MustTCols[types.Rowid](vec)
 			row[i] = vs[rowIndex]
 		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
-				vs := vec.Col.([]types.Rowid)
+				vs := vector.MustTCols[types.Rowid](vec)
 				row[i] = vs[rowIndex]
 			}
 		}

@@ -50,14 +50,12 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 func (arg *Argument) GetMetaLocBat(name string) {
 	bat := batch.New(true, []string{name})
 	bat.Cnt = 1
-	bat.Vecs[0] = vector.New(types.New(types.T_varchar,
-		types.MaxVarcharLen, 0, 0))
+	bat.Vecs[0] = vector.New(vector.FLAT, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
 	arg.container.mp[0] = bat
 	for i := range arg.Unique_tbls {
 		bat := batch.New(true, []string{name})
 		bat.Cnt = 1
-		bat.Vecs[0] = vector.New(types.New(types.T_varchar,
-			types.MaxVarcharLen, 0, 0))
+		bat.Vecs[0] = vector.New(vector.FLAT, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
 		arg.container.mp[i+1] = bat
 	}
 }
@@ -74,7 +72,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 			}
 			arg.AffectedRows += val
 		}
-		arg.container.mp[int(tblIdx[i])].Vecs[0].Append([]byte(metaLocs[i]), false, proc.GetMPool())
+		vector.AppendString(arg.container.mp[int(tblIdx[i])].Vecs[0], metaLocs[i], false, proc.GetMPool())
 	}
 	for _, bat := range arg.container.mp {
 		bat.SetZs(bat.Vecs[0].Length(), proc.GetMPool())

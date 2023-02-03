@@ -105,7 +105,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		for _, b := range bs {
 			if b {
 				for k, pos := range ap.Result {
-					if err := rbat.Vecs[k].UnionOne(bat.Vecs[pos], int64(i), bat.Vecs[pos].Length() == 0, proc.Mp()); err != nil {
+					if err := rbat.Vecs[k].UnionOne(bat.Vecs[pos], int64(i), proc.Mp()); err != nil {
 						vec.Free(proc.Mp())
 						rbat.Clean(proc.Mp())
 						return err

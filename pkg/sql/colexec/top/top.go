@@ -157,7 +157,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		}
 		for i := int64(0); i < start; i++ {
 			for j, vec := range ctr.bat.Vecs {
-				if err := vec.UnionOne(bat.Vecs[j], i, bat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+				if err := vec.UnionOne(bat.Vecs[j], i, proc.Mp()); err != nil {
 					return err
 				}
 			}

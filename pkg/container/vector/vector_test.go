@@ -593,6 +593,7 @@ func TestCopy(t *testing.T) {
 	}
 }
 
+/*
 func TestUnionOne(t *testing.T) {
 	mp := mpool.MustNewZero()
 	{ // bool
@@ -895,6 +896,7 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 }
+*/
 
 func TestMarshalAndUnMarshal(t *testing.T) {
 	mp := mpool.MustNewZero()

@@ -63,8 +63,8 @@ func GetBlockMeta(bats []*batch.Batch, n *Argument, proc *process.Process) (*bat
 	// vecs[1] store relative block metadata
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
 	metaLocBat := batch.New(true, attrs)
-	metaLocBat.Vecs[0] = vector.New(types.Type{Oid: types.T(types.T_uint16)})
-	metaLocBat.Vecs[1] = vector.New(types.New(types.T_varchar,
+	metaLocBat.Vecs[0] = vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_uint16)})
+	metaLocBat.Vecs[1] = vector.New(vector.FLAT, types.New(types.T_varchar,
 		types.MaxVarcharLen, 0, 0))
 
 	for i := range bats {
@@ -135,7 +135,7 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 	copy(attrs, bat.Attrs)
 	newBat := batch.New(true, attrs)
 	for i := range bat.Vecs {
-		newBat.Vecs[i] = vector.New(bat.Vecs[i].GetType())
+		newBat.Vecs[i] = vector.New(vector.FLAT, *bat.Vecs[i].GetType())
 	}
 	return newBat
 }
@@ -166,7 +166,7 @@ func reSizeBatch(n *Argument, bat *batch.Batch, proc *process.Process) (bats []*
 
 		for cnt >= options.DefaultBlockMaxRows {
 			for i := range newBat.Vecs {
-				vector.UnionOne(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
+				newBat.Vecs[i].UnionOne(bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
 			}
 			idx++
 			if idx%int(options.DefaultBlockMaxRows) == 0 {
@@ -184,7 +184,7 @@ func reSizeBatch(n *Argument, bat *batch.Batch, proc *process.Process) (bats []*
 		}
 		for i := 0; i < bat.Length(); i++ {
 			for j := range n.container.cacheBat.Vecs {
-				vector.UnionOne(n.container.cacheBat.Vecs[j], bat.Vecs[j], int64(i), proc.GetMPool())
+				n.container.cacheBat.Vecs[j].UnionOne(bat.Vecs[j], int64(i), proc.GetMPool())
 			}
 		}
 		n.container.cacheBat.SetZs(n.container.cacheBat.Vecs[0].Length(), proc.GetMPool())
@@ -195,7 +195,7 @@ func reSizeBatch(n *Argument, bat *batch.Batch, proc *process.Process) (bats []*
 			}
 			for cnt > 0 {
 				for i := range newBat.Vecs {
-					vector.UnionOne(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
+					newBat.Vecs[i].UnionOne(bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
 				}
 				idx++
 				cnt--
@@ -368,7 +368,7 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 func SortByPrimaryKey(proc *process.Process, n *Argument, bat *batch.Batch, pkIdx []int, m *mpool.MPool) error {
 	// Not-Null Check
 	for i := 0; i < len(pkIdx); i++ {
-		if nulls.Any(bat.Vecs[i].Nsp) {
+		if nulls.Any(bat.Vecs[i].GetNulls()) {
 			return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 		}
 	}
@@ -378,8 +378,8 @@ func SortByPrimaryKey(proc *process.Process, n *Argument, bat *batch.Batch, pkId
 		sels[i] = int64(i)
 	}
 	ovec := bat.GetVector(int32(pkIdx[0]))
-	if ovec.Typ.IsString() {
-		strCol = vector.GetStrVectorValues(ovec)
+	if ovec.GetType().IsString() {
+		strCol = vector.MustStrCols(ovec)
 	} else {
 		strCol = nil
 	}
@@ -392,8 +392,8 @@ func SortByPrimaryKey(proc *process.Process, n *Argument, bat *batch.Batch, pkId
 	for i, j := 1, len(pkIdx); i < j; i++ {
 		ps = partition.Partition(sels, ds, ps, ovec)
 		vec := bat.Vecs[pkIdx[i]]
-		if vec.Typ.IsString() {
-			strCol = vector.GetStrVectorValues(vec)
+		if vec.GetType().IsString() {
+			strCol = vector.MustStrCols(vec)
 		} else {
 			strCol = nil
 		}
@@ -475,8 +475,8 @@ func WriteEndBlocks(n *Argument, proc *process.Process, metaLocBat *batch.Batch)
 		if err != nil {
 			return err
 		}
-		metaLocBat.Vecs[0].Append(uint16(0), false, proc.GetMPool())
-		metaLocBat.Vecs[1].Append([]byte(metaLoc), false, proc.GetMPool())
+		vector.Append(metaLocBat.Vecs[0], uint16(0), false, proc.GetMPool())
+		vector.AppendString(metaLocBat.Vecs[1], metaLoc, false, proc.GetMPool())
 	}
 	for i := range n.container.unique_writer {
 		if blocks, err = n.container.unique_writer[i].WriteEnd(proc.Ctx); err != nil {
@@ -491,8 +491,8 @@ func WriteEndBlocks(n *Argument, proc *process.Process, metaLocBat *batch.Batch)
 			if err != nil {
 				return err
 			}
-			metaLocBat.Vecs[0].Append(uint16(i+1), false, proc.GetMPool())
-			metaLocBat.Vecs[1].Append([]byte(metaLoc), false, proc.GetMPool())
+			vector.Append(metaLocBat.Vecs[0], uint16(i+1), false, proc.GetMPool())
+			vector.AppendString(metaLocBat.Vecs[1], metaLoc, false, proc.GetMPool())
 		}
 	}
 	return nil
@@ -596,7 +596,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 						targetVec := bat.Vecs[colIdx]
 						targetVec.Free(proc.Mp())
 						for k := int64(0); k < int64(vecLen); k++ {
-							err := targetVec.UnionOne(savedAutoIncrVectors[j], k, savedAutoIncrVectors[j].Length() == 0, proc.Mp())
+							err := targetVec.UnionOne(savedAutoIncrVectors[j], k, proc.Mp())
 							if err != nil {
 								return false, err
 							}
@@ -633,7 +633,7 @@ func fillRow(tmpBat *batch.Batch,
 	//if vec.Size() == 0 {
 	//	vec = vec.ConstExpand(false, proc.Mp())
 	//}
-	if err := targetVec.UnionOne(vec, 0, vec.Length() == 0, proc.Mp()); err != nil {
+	if err := targetVec.UnionOne(vec, 0, proc.Mp()); err != nil {
 		vec.Free(proc.Mp())
 		return err
 	}

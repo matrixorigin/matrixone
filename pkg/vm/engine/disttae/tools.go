@@ -948,7 +948,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 		vec := bat.GetVector(int32(i))
 		for j, v := range vs {
 			idx := uint64(v) % uint64(dnNum)
-			if err := bats[idx].GetVector(int32(i)).UnionOne(vec, int64(j), false, proc.Mp()); err != nil {
+			if err := bats[idx].GetVector(int32(i)).UnionOne(vec, int64(j), proc.Mp()); err != nil {
 				for _, bat := range bats {
 					bat.Clean(proc.Mp())
 				}
@@ -981,7 +981,7 @@ func partitionDeleteBatch(tbl *table, bat *batch.Batch) ([]*batch.Batch, error) 
 				blks = tbl.meta.blocks[j]
 			}
 			if inParttion(v, part, txn.meta.SnapshotTS, blks) {
-				if err := bats[j].GetVector(0).UnionOne(vec, int64(i), false, txn.proc.Mp()); err != nil {
+				if err := bats[j].GetVector(0).UnionOne(vec, int64(i), txn.proc.Mp()); err != nil {
 					for _, bat := range bats {
 						bat.Clean(txn.proc.Mp())
 					}

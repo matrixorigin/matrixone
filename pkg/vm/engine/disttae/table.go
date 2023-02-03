@@ -436,7 +436,7 @@ func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
 		fileName := strings.Split(bat.Vecs[0].GetString(0), ":")[0]
 		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
-			ibat.SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
+			ibat.SetVector(int32(j), vector.New(vector.FLAT, *bat.GetVector(int32(j)).GetType()))
 		}
 		if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
 			return err

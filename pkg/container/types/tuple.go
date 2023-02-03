@@ -31,8 +31,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )

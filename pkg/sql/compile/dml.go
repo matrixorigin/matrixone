@@ -198,7 +198,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 						targetVec := bat.Vecs[colIdx]
 						targetVec.Free(c.proc.Mp())
 						for k := int64(0); k < int64(vecLen); k++ {
-							err = targetVec.UnionOne(savedAutoIncrVectors[j], k, savedAutoIncrVectors[j].Length() == 0, c.proc.Mp())
+							err = targetVec.UnionOne(savedAutoIncrVectors[j], k, c.proc.Mp())
 							if err != nil {
 								return 0, err
 							}
@@ -334,7 +334,7 @@ func fillRow(ctx context.Context,
 	if err != nil {
 		return y.MakeInsertError(ctx, targetVec.GetType().Oid, colDef, rows, colIdx, rowIdx, err)
 	}
-	if err := targetVec.UnionOne(vec, 0, vec.Length() == 0, proc.Mp()); err != nil {
+	if err := targetVec.UnionOne(vec, 0, proc.Mp()); err != nil {
 		vec.Free(proc.Mp())
 		return err
 	}

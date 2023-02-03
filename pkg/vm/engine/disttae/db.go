@@ -121,7 +121,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool, catalogCache *cache.Cata
 				}
 			}
 			for i, vec := range bat0.Vecs {
-				if err := bat.Vecs[i].UnionOne(vec, 0, false, m); err != nil {
+				if err := bat.Vecs[i].UnionOne(vec, 0, m); err != nil {
 					bat.Clean(m)
 					bat0.Clean(m)
 					return err
@@ -180,7 +180,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool, catalogCache *cache.Cata
 				}
 			}
 			for i, vec := range bat0.Vecs {
-				if err := bat.Vecs[i].UnionOne(vec, 0, false, m); err != nil {
+				if err := bat.Vecs[i].UnionOne(vec, 0, m); err != nil {
 					bat.Clean(m)
 					bat0.Clean(m)
 					return err
@@ -239,7 +239,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool, catalogCache *cache.Cata
 				}
 			}
 			for i, vec := range bat0.Vecs {
-				if err := bat.Vecs[i].UnionOne(vec, 0, false, m); err != nil {
+				if err := bat.Vecs[i].UnionOne(vec, 0, m); err != nil {
 					bat.Clean(m)
 					bat0.Clean(m)
 					return err

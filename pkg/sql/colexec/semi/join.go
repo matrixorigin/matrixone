@@ -150,7 +150,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
 		for j, pos := range ap.Result {
-			if err := vector.Union(rbat.Vecs[j], bat.Vecs[pos], eligible, true, proc.Mp()); err != nil {
+			if err := rbat.Vecs[j].Union(bat.Vecs[pos], eligible, proc.Mp()); err != nil {
 				rbat.Clean(proc.Mp())
 				return err
 			}

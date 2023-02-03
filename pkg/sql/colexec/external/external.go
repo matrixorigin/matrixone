@@ -609,7 +609,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				if newVec.GetNulls().Contains(uint64(j)) {
 					continue
 				}
-				err := vector.Copy(newVec, bat.Vecs[i], j, j, proc.Mp())
+				err := newVec.Copy(bat.Vecs[i], j, j, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
@@ -762,7 +762,7 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 		for j := 0; j < len(sels); j++ {
 			sels[j] = int64(j)
 		}
-		vector.Union(bat.Vecs[i], vecTmp, sels, true, proc.GetMPool())
+		bat.Vecs[i].Union(vecTmp, sels, proc.GetMPool())
 	}
 
 	n := bat.Vecs[0].Length()

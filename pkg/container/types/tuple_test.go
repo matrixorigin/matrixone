@@ -15,10 +15,11 @@
 package types
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 	"math/rand"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/stretchr/testify/require"
 )

@@ -100,12 +100,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		for j := 0; j < len(ctr.bat.Zs); j++ {
 			for k, rp := range ap.Result {
 				if rp.Rel == 0 {
-					if err := rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), bat.Vecs[rp.Pos].Length() == 0, proc.Mp()); err != nil {
+					if err := rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 						rbat.Clean(proc.Mp())
 						return err
 					}
 				} else {
-					if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), ctr.bat.Vecs[rp.Pos].Length() == 0, proc.Mp()); err != nil {
+					if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
 						rbat.Clean(proc.Mp())
 						return err
 					}

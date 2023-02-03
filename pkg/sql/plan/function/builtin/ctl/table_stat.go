@@ -124,13 +124,13 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	resultValues := make([]string, count)
 	resultNsp := nulls.NewWithSize(count)
 
-	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
+	if vecs[0].IsConstNull() || vecs[1].IsConstNull() || vecs[2].IsConstNull() {
 		return proc.AllocScalarNullVector(returnType), nil
 	}
 
 	// set null row
-	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
-	nulls.Or(vecs[2].Nsp, resultNsp, resultNsp)
+	nulls.Or(vecs[0].GetNulls(), vecs[1].GetNulls(), resultNsp)
+	nulls.Or(vecs[2].GetNulls(), resultNsp, resultNsp)
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	txn, err := proc.TxnClient.New()
@@ -196,13 +196,13 @@ func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	resultValues := make([]string, count)
 	resultNsp := nulls.NewWithSize(count)
 
-	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
+	if vecs[0].IsConstNull() || vecs[1].IsConstNull() || vecs[2].IsConstNull() {
 		return proc.AllocScalarNullVector(returnType), nil
 	}
 
 	// set null row
-	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
-	nulls.Or(vecs[2].Nsp, resultNsp, resultNsp)
+	nulls.Or(vecs[0].GetNulls(), vecs[1].GetNulls(), resultNsp)
+	nulls.Or(vecs[2].GetNulls(), resultNsp, resultNsp)
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	txn, err := proc.TxnClient.New()

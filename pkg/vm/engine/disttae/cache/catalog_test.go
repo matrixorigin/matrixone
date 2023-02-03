@@ -311,7 +311,7 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 				vec = testutil.NewVector(Rows, typ, mp, false, nil)
 			}
 			for k := 0; k < Rows; k++ {
-				err := bat.Vecs[j].UnionOne(vec, int64(k), false, mp)
+				err := bat.Vecs[j].UnionOne(vec, int64(k), mp)
 				require.NoError(t, err)
 			}
 			vec.Free(mp)

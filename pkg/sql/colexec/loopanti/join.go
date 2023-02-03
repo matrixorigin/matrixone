@@ -127,7 +127,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 		if !matched && !nulls.Any(vec.GetNulls()) {
 			for k, pos := range ap.Result {
-				if err := rbat.Vecs[k].UnionOne(bat.Vecs[pos], int64(i), bat.Vecs[pos].Length() == 0, proc.Mp()); err != nil {
+				if err := rbat.Vecs[k].UnionOne(bat.Vecs[pos], int64(i), proc.Mp()); err != nil {
 					rbat.Clean(proc.Mp())
 					vec.Free(proc.Mp())
 					return err

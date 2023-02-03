@@ -36,7 +36,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.New(typ)
+		ap.ctr.bat.Vecs[i] = vector.New(vector.FLAT, typ)
 	}
 	return nil
 }
@@ -103,7 +103,8 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp]
 			bat.Vecs[rp] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), count, false, proc.Mp())
+			rbat.Vecs[i] = vector.New(vector.CONSTANT, types.T_bool.ToType())
+			vector.SetConst(rbat.Vecs[i], false, false, count, proc.Mp())
 		}
 	}
 	rbat.Zs = bat.Zs
@@ -119,7 +120,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	markPos := -1
 	for i, pos := range ap.Result {
 		if pos == -1 {
-			rbat.Vecs[i] = vector.New(types.T_bool.ToType())
+			rbat.Vecs[i] = vector.New(vector.FLAT, types.T_bool.ToType())
 			markPos = i
 			break
 		}
@@ -138,18 +139,18 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		hasTrue := false
 		hasNull := false
 		for j := range exprVals {
-			if vec.Nsp.Contains(uint64(j)) {
+			if vec.GetNulls().Contains(uint64(j)) {
 				hasNull = true
 			} else if exprVals[j] {
 				hasTrue = true
 			}
 		}
 		if hasTrue {
-			rbat.Vecs[markPos].Append(true, false, proc.Mp())
+			vector.Append(rbat.Vecs[markPos], true, false, proc.Mp())
 		} else if hasNull {
-			rbat.Vecs[markPos].Append(false, true, proc.Mp())
+			vector.Append(rbat.Vecs[markPos], false, true, proc.Mp())
 		} else {
-			rbat.Vecs[markPos].Append(false, false, proc.Mp())
+			vector.Append(rbat.Vecs[markPos], false, false, proc.Mp())
 		}
 		vec.Free(proc.Mp())
 	}

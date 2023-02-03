@@ -114,7 +114,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 		for k := 0; k < n; k++ {
 			for j, pos := range ap.Result {
-				if err := rbat.Vecs[j].UnionOne(bat.Vecs[pos], int64(i+k), bat.Vecs[pos].Length() == 0, proc.Mp()); err != nil {
+				if err := rbat.Vecs[j].UnionOne(bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
 					rbat.Clean(proc.Mp())
 					return err
 				}
@@ -191,7 +191,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 		for j, pos := range ap.Result {
-			if err := vector.Union(rbat.Vecs[j], bat.Vecs[pos], eligible, true, proc.Mp()); err != nil {
+			if err := rbat.Vecs[j].Union(bat.Vecs[pos], eligible, proc.Mp()); err != nil {
 				rbat.Clean(proc.Mp())
 				return err
 			}

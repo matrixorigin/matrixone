@@ -155,7 +155,8 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp]
 			bat.Vecs[rp] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), count, false, proc.Mp())
+			rbat.Vecs[i] = vector.New(vector.CONSTANT, types.T_bool.ToType())
+			vector.SetConst(rbat.Vecs[i], false, false, count, proc.Mp())
 		}
 	}
 	rbat.Zs = bat.Zs
@@ -169,7 +170,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	ctr.markVals = make([]bool, bat.Length())
+	markVec := vector.New(vector.FLAT, types.T_bool.ToType())
+	markVec.PreExtend(bat.Length(), proc.Mp())
+	ctr.markVals = vector.MustTCols[bool](markVec)
 	ctr.markNulls = nulls.NewWithSize(bat.Length())
 	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc, anal); err != nil {
@@ -243,7 +246,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Vecs[i] = bat.Vecs[pos]
 			bat.Vecs[pos] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewWithFixed(types.T_bool.ToType(), ctr.markVals, ctr.markNulls, proc.Mp())
+			markVec.SetNulls(ctr.markNulls)
+			rbat.Vecs[i] = markVec
 		}
 	}
 	rbat.Zs = bat.Zs

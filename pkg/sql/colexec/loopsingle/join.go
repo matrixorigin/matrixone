@@ -136,7 +136,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				unmatched = false
 				for k, rp := range ap.Result {
 					if rp.Rel != 0 {
-						if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], 0, ctr.bat.Vecs[rp.Pos].Length() == 0, proc.Mp()); err != nil {
+						if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], 0, proc.Mp()); err != nil {
 							vec.Free(proc.Mp())
 							rbat.Clean(proc.Mp())
 							return err
@@ -153,7 +153,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					unmatched = false
 					for k, rp := range ap.Result {
 						if rp.Rel != 0 {
-							if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), ctr.bat.Vecs[rp.Pos].Length() == 0, proc.Mp()); err != nil {
+							if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
 								vec.Free(proc.Mp())
 								rbat.Clean(proc.Mp())
 								return err

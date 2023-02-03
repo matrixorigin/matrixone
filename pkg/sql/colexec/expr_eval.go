@@ -530,7 +530,6 @@ func evalFunction(proc *process.Process, f *function.Function, args []*vector.Ve
 			return nil, err
 		}
 		v.SetLength(length)
-		v.FillDefaultValue()
 		return v, nil
 	}
 	var resultWrapper vector.FunctionResultWrapper
