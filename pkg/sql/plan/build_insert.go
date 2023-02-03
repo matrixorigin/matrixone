@@ -99,8 +99,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 
 	node := &Node{
 		NodeType:  plan.Node_INSERT,
-		ObjRef:    nil,
-		TableDef:  nil,
+		ObjRef:    insertCtx.Ref,
+		TableDef:  insertCtx.TableDef,
 		Children:  []int32{query.Steps[len(query.Steps)-1]},
 		NodeId:    int32(len(query.Nodes)),
 		InsertCtx: insertCtx,
