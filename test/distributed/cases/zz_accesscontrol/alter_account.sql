@@ -105,12 +105,12 @@ create account if not exists testsuspend ADMIN_NAME 'admin' IDENTIFIED BY '12345
 select user_name, authentication_string from mo_catalog.mo_user;
 -- @session
 alter account testsuspend suspend;
-select account_name,status from mo_catalog.mo_account;
+select account_name,status from mo_catalog.mo_account order by account_name;
 alter account testsuspend OPEN;
-select account_name,status from mo_catalog.mo_account;
+select account_name,status from mo_catalog.mo_account order by account_name;
 --suspend status alter ADMIN_NAME/comment,drop account
 alter account testsuspend suspend;
-select account_name,status from mo_catalog.mo_account;
+select account_name,status from mo_catalog.mo_account order by account_name;
 alter account testsuspend ADMIN_NAME 'admin' IDENTIFIED BY '1234567890';
 alter account testsuspend comment 'aaaaaaa';
 select account_name,status,comments from mo_catalog.mo_account where account_name='testsuspend';

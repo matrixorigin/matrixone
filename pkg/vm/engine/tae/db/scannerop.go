@@ -303,9 +303,11 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 
 	_, err := s.db.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 	if err != nil {
-		logutil.Infof("[Mergeblocks] Scheduled errinfo=%v", err)
+		logutil.Infof("[Mergeblocks] Schedule errinfo=%v", err)
 	} else {
-		logutil.Infof("[Mergeblocks] Scheduled | State=%v | Scopes=%v,%s", err, segIds, common.BlockIDArraryString(scopes))
+		logutil.Infof("[Mergeblocks] Scheduled | Scopes=%v,[%d]%s",
+			segIds, len(scopes),
+			common.BlockIDArraryString(scopes[:constMergeMinBlks]))
 	}
 }
 
@@ -336,11 +338,11 @@ func (s *MergeTaskBuilder) PostExecute() error {
 }
 
 func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
-	if !tableEntry.IsActive() {
-		return moerr.GetOkStopCurrRecur()
-	}
 	s.trySchedMergeTask()
 	s.resetForTable(tableEntry.ID)
+	if !tableEntry.IsActive() {
+		err = moerr.GetOkStopCurrRecur()
+	}
 	return
 }
 

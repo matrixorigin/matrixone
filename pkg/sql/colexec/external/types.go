@@ -69,7 +69,8 @@ type ZonemapFileparam struct {
 type FilterParam struct {
 	maxCol       int
 	exprMono     bool
-	columns      []uint16
+	columns      []uint16 // save real index in table to read column's data from files
+	defColumns   []uint16 // save col index in tableDef.Cols, cooperate with columnMap
 	columnMap    map[int]int
 	File2Size    map[string]int64
 	FilterExpr   *plan.Expr

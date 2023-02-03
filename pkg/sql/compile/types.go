@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"sync"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -59,6 +58,7 @@ const (
 	InsertValues
 	TruncateTable
 	AlterView
+	MergeInsert
 )
 
 // Source contains information of a relation which will be used in execution,
@@ -111,8 +111,9 @@ type Scope struct {
 	// Proc contains the execution context.
 	Proc *process.Process
 
-	Reg   *process.WaitRegister
-	uuids []uuid.UUID
+	Reg *process.WaitRegister
+
+	UuidToRegIdx []UuidToRegIdx
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
@@ -134,18 +135,6 @@ type anaylze struct {
 	isFirst   bool
 	qry       *plan.Query
 	analInfos []*process.AnalyzeInfo
-}
-
-type Server struct {
-	sync.Mutex
-	id uint64
-	mp map[uint64]*process.WaitRegister // k = id, v = reg
-	// chanMp will be used in two ways
-	// 1. uuid --> WaitRegister, we need to know the batch which is recieved from
-	// remote CN should be filled into which chan
-	// 2. messgage.Id --> dataBuf (when a batch is too large, it will be split into small ones in the source
-	// CN, and the target CN need to recieve them all and then merge them into one batch)
-	chanBufMp sync.Map
 }
 
 // Compile contains all the information needed for compilation.
@@ -184,4 +173,9 @@ type Compile struct {
 	// remote, but now the tempEngine is just standlone. So for now use this to read
 	// table locally. But int the future, this will disappear.
 	isTemporaryScan bool
+}
+
+type UuidToRegIdx struct {
+	Uuid uuid.UUID
+	Idx  int
 }

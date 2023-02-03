@@ -333,6 +333,7 @@ var functionIdRegister = map[string]int32{
 	"is_null":      ISNULL,
 	"isnull":       ISNULL,
 	"ifnull":       ISNULL,
+	"ilike":        ILIKE,
 	"is_not_null":  ISNOTNULL,
 	"isnotnull":    ISNOTNULL,
 	"isunknown":    ISUNKNOWN,

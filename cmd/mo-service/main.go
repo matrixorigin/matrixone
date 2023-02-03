@@ -252,7 +252,7 @@ func startLogService(
 }
 
 func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService) error {
-	var writerFactory export.FSWriterFactory
+	var writerFactory table.WriterFactory
 	var err error
 	var UUID string
 	var initWG sync.WaitGroup
@@ -282,42 +282,39 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
 
 	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetFSWriterFactory(fs, UUID, nodeRole)
+		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, SV.LogsExtension)
 		_ = table.SetPathBuilder(ctx, SV.PathBuilder)
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
+		collector := export.NewMOCollector(ctx)
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
-			if ctx, err = motrace.Init(ctx,
-				motrace.WithMOVersion(SV.MoVersion),
+			if ctx, err = motrace.InitWithConfig(ctx,
+				&SV,
 				motrace.WithNode(UUID, nodeRole),
-				motrace.EnableTracer(!SV.DisableTrace),
-				motrace.WithBatchProcessMode(SV.BatchProcessor),
-				motrace.WithBatchProcessor(export.NewMOCollector(ctx)),
-				motrace.WithFSWriterFactory(export.GetFSWriterFactory4Trace(fs, UUID, nodeRole)),
-				motrace.WithExportInterval(SV.TraceExportInterval),
-				motrace.WithLongQueryTime(SV.LongQueryTime),
+				motrace.WithBatchProcessor(collector),
+				motrace.WithFSWriterFactory(writerFactory),
 				motrace.WithSQLExecutor(nil),
-				motrace.DebugMode(SV.EnableTraceDebug),
 			); err != nil {
 				panic(err)
 			}
 			initWG.Done()
 			<-ctx.Done()
 			// flush trace/log/error framework
-			if err = motrace.Shutdown(motrace.DefaultContext()); err != nil {
+			if err = motrace.Shutdown(ctx); err != nil {
 				logutil.Warn("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
 			}
 		})
 		initWG.Wait()
 	}
 	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, &SV, UUID, nodeRole, metric.WithWriterFactory(writerFactory),
-			metric.WithExportInterval(SV.MetricExportInterval),
-			metric.WithUpdateInterval(SV.MetricUpdateStorageUsageInterval.Duration),
-			metric.WithMultiTable(SV.MetricMultiTable))
+		stopper.RunNamedTask("metric", func(ctx context.Context) {
+			metric.InitMetric(ctx, nil, &SV, UUID, nodeRole, metric.WithWriterFactory(writerFactory))
+			<-ctx.Done()
+			metric.StopMetricSync()
+		})
 	}
-	if err = export.InitMerge(ctx, SV.MergeCycle.Duration, SV.MergeMaxFileSize); err != nil {
+	if err = export.InitMerge(ctx, &SV); err != nil {
 		return err
 	}
 	return nil

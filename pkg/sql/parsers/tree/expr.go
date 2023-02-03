@@ -191,8 +191,10 @@ const (
 	NOT_IN                               // NOT IN
 	LIKE                                 // LIKE
 	NOT_LIKE                             // NOT LIKE
-	REG_MATCH                            // REG_MATCH
-	NOT_REG_MATCH                        // NOT REG_MATCH
+	ILIKE
+	NOT_ILIKE
+	REG_MATCH     // REG_MATCH
+	NOT_REG_MATCH // NOT REG_MATCH
 	IS_DISTINCT_FROM
 	IS_NOT_DISTINCT_FROM
 	NULL_SAFE_EQUAL // <=>
@@ -242,6 +244,10 @@ func (op ComparisonOp) ToString() string {
 		return "some"
 	case ALL:
 		return "all"
+	case ILIKE:
+		return "ilike"
+	case NOT_ILIKE:
+		return "not ilike"
 	default:
 		return "Unknown ComparisonExprOperator"
 	}

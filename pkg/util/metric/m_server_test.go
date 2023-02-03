@@ -12,40 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package export
+package metric
 
 import (
-	"reflect"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/assert"
 	"testing"
-	"time"
 )
 
-func TestString2Bytes(t *testing.T) {
+func TestConnectionCounter(t *testing.T) {
 	type args struct {
-		s string
+		account string
 	}
 	tests := []struct {
-		name    string
-		args    args
-		wantRet []byte
+		name string
+		args args
+		want float64
 	}{
 		{
-			name: "normal",
-			args: args{
-				s: "12345a",
-			},
-			wantRet: []byte{'1', '2', '3', '4', '5', 'a'},
+			name: "count_1",
+			args: args{account: "sys"},
+			want: 1.0,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if gotRet := String2Bytes(tt.args.s); !reflect.DeepEqual(gotRet, tt.wantRet) {
-				t.Errorf("String2Bytes() = %v, want %v", gotRet, tt.wantRet)
-			}
+			c := ConnectionCounter(tt.args.account)
+			c.Inc()
+			dtom := new(dto.Metric)
+			c.Write(dtom)
+			assert.Equal(t, tt.want, dtom.Gauge.GetValue())
 		})
 	}
-}
-
-func init() {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 }
