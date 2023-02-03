@@ -126,6 +126,11 @@ func (vec CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
 	cnVector.Shrink(vec.downstreamVector, sels)
 }
 
+func (vec CnTaeVector[T]) Delete(delRowId int) {
+	deletes := roaring.BitmapOf(uint32(delRowId))
+	vec.Compact(deletes)
+}
+
 func (vec CnTaeVector[T]) String() string {
 	// TODO: Replace with CN vector String
 	s := fmt.Sprintf("StrVector:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Capacity(), vec.Allocated())
@@ -160,14 +165,12 @@ func (vec CnTaeVector[T]) Update(i int, v any) {
 }
 
 func (vec CnTaeVector[T]) Reset() {
-
 	if vec.Length() == 0 {
 		return
 	}
 
-	vec.downstreamVector.Nsp = nil
+	vec.downstreamVector.Nsp.Np.Clear()
 	cnVector.Reset(vec.downstreamVector)
-
 }
 
 func (vec CnTaeVector[T]) Slice() any {
@@ -453,10 +456,6 @@ func (vec CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roari
 
 // TODO: I am not sure, if the below code will work as expected
 
-func (vec CnTaeVector[T]) Delete(i int) {
-	cnVector.Delete[T](vec.downstreamVector, i)
-}
-
 func (vec CnTaeVector[T]) Allocated() int {
 	if vec.GetType().IsVarlen() {
 		// Only VarLen is allocated using mpool.
@@ -473,5 +472,9 @@ func (vec CnTaeVector[T]) Capacity() int {
 
 func (vec CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 	vec.Reset()
-	vec.downstreamVector = CreateMoVectorFromBytes(vec.GetType(), bs, nulls)
+
+	src := CreateMoVectorFromBytes(vec.GetType(), bs, nulls)
+	vec.downstreamVector = src
+
+	fmt.Println("From Adaptor --", vec.String())
 }
