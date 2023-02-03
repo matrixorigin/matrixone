@@ -479,6 +479,7 @@ func InsertBatch(
 
 		container.metaLocBat.SetZs(container.metaLocBat.Vecs[0].Length(), proc.GetMPool())
 		proc.SetInputBatch(container.metaLocBat)
+		container.resetMetaLocBat()
 	} else {
 		// write unique key table
 		err = writeUniqueTable(nil, eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos)

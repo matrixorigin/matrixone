@@ -88,9 +88,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		TableDef: rewriteInfo.tblInfo.tableDefs[0],
 		Idx:      make([]int32, len(rewriteInfo.tblInfo.tableDefs[0].Cols)),
 
-		IdxRef: rewriteInfo.onIdxTbl,
-		IdxIdx: rewriteInfo.onIdx,
-
 		ClusterTable: clusterTable,
 	}
 	for j := range tblDef.Cols {

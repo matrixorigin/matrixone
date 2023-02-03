@@ -104,7 +104,12 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 	if tableDef.ClusterBy != nil {
 		container.nameToNullablity[tableDef.ClusterBy.Name] = true
 	}
+	container.resetMetaLocBat()
 
+	return container
+}
+
+func (container *WriteS3Container) resetMetaLocBat() {
 	// A simple explanation of the two vectors held by metaLocBat
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
@@ -115,8 +120,6 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 		types.MaxVarcharLen, 0, 0))
 
 	container.metaLocBat = metaLocBat
-
-	return container
 }
 
 func WriteS3CacheBatch(container *WriteS3Container, proc *process.Process) error {
@@ -132,6 +135,7 @@ func WriteS3CacheBatch(container *WriteS3Container, proc *process.Process) error
 		if container.metaLocBat.Vecs[0].Length() > 0 {
 			container.metaLocBat.SetZs(container.metaLocBat.Vecs[0].Length(), proc.GetMPool())
 			proc.SetInputBatch(container.metaLocBat)
+			container.resetMetaLocBat()
 		}
 	}
 	return nil

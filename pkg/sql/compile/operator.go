@@ -468,9 +468,6 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		Ref:      oldCtx.Ref,
 		TableDef: oldCtx.TableDef,
 
-		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
-		IdxIdx:    oldCtx.IdxIdx,
-
 		ParentIdx: oldCtx.ParentIdx,
 	}
 
@@ -479,13 +476,6 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		return nil, err
 	}
 	newCtx.Source = rel
-	for i, ref := range oldCtx.IdxRef {
-		rel, err := getRel(ctx, proc, eg, ref)
-		if err != nil {
-			return nil, err
-		}
-		newCtx.IdxSource[i] = rel
-	}
 
 	return &insert.Argument{
 		InsertCtx: newCtx,
