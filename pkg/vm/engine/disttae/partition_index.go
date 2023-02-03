@@ -15,6 +15,8 @@
 package disttae
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -22,8 +24,8 @@ import (
 )
 
 type PartitionIndex struct {
-	RowIDs *Map[types.Rowid, Versions[RowRef]]
-	Index  *TreeIndex
+	rowVersions *Map[types.Rowid, Versions[RowRef]]
+	index       *btree.BTreeG[*IndexEntry]
 }
 
 type RowRef struct {
@@ -32,40 +34,77 @@ type RowRef struct {
 	Offset int
 }
 
+type IndexEntry struct {
+	Tuple Tuple
+	RowID types.Rowid
+	// this is required, because a row's value may change (wow!) and tuple may be different.
+	// we need to validate the entry by checking the current version of row ref.
+	RowRefID int64
+}
+
+func (i *IndexEntry) Less(than *IndexEntry) bool {
+	if i.Tuple.Less(than.Tuple) {
+		return true
+	} else if than.Tuple.Less(i.Tuple) {
+		return false
+	}
+	if res := bytes.Compare(i.RowID[:], than.RowID[:]); res < 0 {
+		return true
+	} else if res > 0 {
+		return false
+	}
+	if i.RowRefID < than.RowRefID {
+		return true
+	} else if than.RowRefID < i.RowRefID {
+		return false
+	}
+	return false
+}
+
 var nextRowRefID int64
 
 func NewPartitionIndex() *PartitionIndex {
 	return &PartitionIndex{
-		RowIDs: new(Map[types.Rowid, Versions[RowRef]]),
-		Index:  NewTreeIndex(),
+		rowVersions: new(Map[types.Rowid, Versions[RowRef]]),
+		index: btree.NewBTreeG(func(a, b *IndexEntry) bool {
+			return a.Less(b)
+		}),
 	}
+}
+
+func (p *PartitionIndex) SetIndex(tuple Tuple, rowID types.Rowid, rowRefID int64) {
+	p.index.Set(&IndexEntry{
+		Tuple:    tuple,
+		RowID:    rowID,
+		RowRefID: rowRefID,
+	})
 }
 
 func (p *PartitionIndex) Iter(
 	ts timestamp.Timestamp,
 	lower Tuple,
 	upper Tuple,
-) *TreeIndexIter {
-	return &TreeIndexIter{
-		iter:   p.Index.tree.Iter(),
-		rowIDs: p.RowIDs,
-		time:   ts,
-		lower:  lower,
-		upper:  upper,
+) *PartitionIndexIter {
+	return &PartitionIndexIter{
+		iter:        p.index.Iter(),
+		rowVersions: p.rowVersions,
+		time:        ts,
+		lower:       lower,
+		upper:       upper,
 	}
 }
 
-type TreeIndexIter struct {
-	iter   btree.GenericIter[*IndexEntry]
-	rowIDs *Map[types.Rowid, Versions[RowRef]]
-	time   timestamp.Timestamp
-	lower  Tuple
-	upper  Tuple
+type PartitionIndexIter struct {
+	iter        btree.GenericIter[*IndexEntry]
+	rowVersions *Map[types.Rowid, Versions[RowRef]]
+	time        timestamp.Timestamp
+	lower       Tuple
+	upper       Tuple
 
 	firstCalled bool
 }
 
-func (t *TreeIndexIter) Next() bool {
+func (t *PartitionIndexIter) Next() bool {
 	for {
 
 		if !t.firstCalled {
@@ -95,7 +134,7 @@ func (t *TreeIndexIter) Next() bool {
 		}
 
 		// check row ref
-		versions, ok := t.rowIDs.Get(entry.RowID)
+		versions, ok := t.rowVersions.Get(entry.RowID)
 		if !ok {
 			continue
 		}
@@ -111,11 +150,11 @@ func (t *TreeIndexIter) Next() bool {
 	}
 }
 
-func (t *TreeIndexIter) Entry() *IndexEntry {
+func (t *PartitionIndexIter) Entry() *IndexEntry {
 	return t.iter.Item()
 }
 
-func (t *TreeIndexIter) Close() error {
+func (t *PartitionIndexIter) Close() error {
 	t.iter.Release()
 	return nil
 }

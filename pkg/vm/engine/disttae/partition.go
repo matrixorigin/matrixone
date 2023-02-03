@@ -127,7 +127,7 @@ func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error 
 }
 
 func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) bool {
-	versions, ok := p.index.RowIDs.Get(key)
+	versions, ok := p.index.rowVersions.Get(key)
 	if !ok {
 		return false
 	}
@@ -173,7 +173,7 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			memtable.Uint(opDelete),
 		})
 
-		p.index.RowIDs.Update(rowId, func(p *Versions[RowRef]) *Versions[RowRef] {
+		p.index.rowVersions.Update(rowId, func(p *Versions[RowRef]) *Versions[RowRef] {
 			if p == nil {
 				versions := new(Versions[RowRef])
 				versions.Set(ts.ToTimestamp(), nil)
@@ -293,7 +293,10 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			Batch:  bat,
 			Offset: offset,
 		}
-		p.index.RowIDs.Update(rowId, func(p *Versions[RowRef]) *Versions[RowRef] {
+		for _, tuple := range indexes {
+			p.index.SetIndex(tuple, rowId, rowRef.ID)
+		}
+		p.index.rowVersions.Update(rowId, func(p *Versions[RowRef]) *Versions[RowRef] {
 			if p == nil {
 				versions := new(Versions[RowRef])
 				versions.Set(ts.ToTimestamp(), &rowRef)
@@ -302,9 +305,6 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			p.Set(ts.ToTimestamp(), &rowRef)
 			return p
 		})
-		for _, tuple := range indexes {
-			p.index.Index.Set(tuple, rowId, rowRef.ID)
-		}
 
 		err = p.data.Upsert(tx, &DataRow{
 			rowID:   rowID,
@@ -487,7 +487,7 @@ func (p *Partition) Rows(
 ) (int64, error) {
 	rows := int64(0)
 
-	p.index.RowIDs.Range(func(rowID types.Rowid, versions *Versions[RowRef]) bool {
+	p.index.rowVersions.Range(func(rowID types.Rowid, versions *Versions[RowRef]) bool {
 		if _, ok := deletes[rowID]; ok {
 			return true
 		}
