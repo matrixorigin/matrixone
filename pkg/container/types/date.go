@@ -146,7 +146,7 @@ func ParseDateCast(s string) (Date, error) {
 			case YearState:
 				if IsNumber(&s, i) {
 					y = y + string(s[i])
-				} else if s[i] == '-' {
+				} else if s[i] == '-' || s[i] == '/' {
 					state = MonthState
 					if y == "" {
 						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
@@ -160,7 +160,7 @@ func ParseDateCast(s string) (Date, error) {
 					if len(m) >= 3 {
 						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
-				} else if s[i] == '-' {
+				} else if s[i] == '-' || s[i] == '/' {
 					// Can't go into DayState, because the Month is empty
 					if m == "" {
 						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
