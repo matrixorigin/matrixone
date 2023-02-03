@@ -31,29 +31,32 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 type UpdateCtx struct {
-	Source     []engine.Relation
-	Idxs       [][]int32
-	Ref        []*plan.ObjectRef
-	TableDefs  []*plan.TableDef
-	HasAutoCol []bool
-	UpdateCol  []map[string]int32
+	Source       []engine.Relation
+	UniqueSource [][]engine.Relation
+	Idxs         [][]int32
+	Ref          []*plan.ObjectRef
+	TableDefs    []*plan.TableDef
+	HasAutoCol   []bool
+	UpdateCol    []map[string]int32
 
 	IdxSource []engine.Relation
 	IdxIdx    []int32
 
 	OnRestrictIdx []int32
 
-	OnCascadeSource    []engine.Relation
-	OnCascadeIdx       [][]int32
-	OnCascadeRef       []*plan.ObjectRef
-	OnCascadeTableDef  []*plan.TableDef
-	OnCascadeUpdateCol []map[string]int32
+	OnCascadeSource       []engine.Relation
+	OnCascadeUniqueSource [][]engine.Relation
+	OnCascadeIdx          [][]int32
+	OnCascadeRef          []*plan.ObjectRef
+	OnCascadeTableDef     []*plan.TableDef
+	OnCascadeUpdateCol    []map[string]int32
 
-	OnSetSource    []engine.Relation
-	OnSetIdx       [][]int32
-	OnSetRef       []*plan.ObjectRef
-	OnSetTableDef  []*plan.TableDef
-	OnSetUpdateCol []map[string]int32
+	OnSetSource       []engine.Relation
+	OnSetUniqueSource [][]engine.Relation
+	OnSetIdx          [][]int32
+	OnSetRef          []*plan.ObjectRef
+	OnSetTableDef     []*plan.TableDef
+	OnSetUpdateCol    []map[string]int32
 
 	ParentIdx []map[string]int32
 }

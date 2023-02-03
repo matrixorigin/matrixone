@@ -67,6 +67,7 @@ func FilterAndUpdateByRowId(
 	tableDefs []*plan.TableDef,
 	updateCols []map[string]int32,
 	parentIdxs []map[string]int32,
+	uniqueRels [][]engine.Relation,
 ) (uint64, error) {
 	var affectedRows uint64
 	var delBatch *batch.Batch
@@ -85,6 +86,7 @@ func FilterAndUpdateByRowId(
 		// get attrs, hasAutoCol
 		tableDef := tableDefs[i]
 		updateCol := updateCols[i]
+		uniqueRel := uniqueRels[i]
 		var parentIdx map[string]int32 // nil means don't need check parent constraint
 		if len(parentIdxs) > 0 {
 			parentIdx = parentIdxs[i]
@@ -128,7 +130,7 @@ func FilterAndUpdateByRowId(
 			}
 
 			// write unique key table
-			writeUniqueTable(nil, eg, proc, updateBatch, tableDef, ref[i].SchemaName, info.updateNameToPos, info.pkPos)
+			writeUniqueTable(nil, eg, proc, updateBatch, tableDef, ref[i].SchemaName, info.updateNameToPos, info.pkPos, uniqueRel)
 
 			// write origin table
 			err = rels[i].Write(proc.Ctx, updateBatch)
@@ -141,7 +143,7 @@ func FilterAndUpdateByRowId(
 }
 
 func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *process.Process, updateBatch *batch.Batch,
-	tableDef *plan.TableDef, dbName string, updateNameToPos map[string]int, pkPos int) error {
+	tableDef *plan.TableDef, dbName string, updateNameToPos map[string]int, pkPos int, rels []engine.Relation) error {
 	var ukBatch *batch.Batch
 
 	defer func() {
@@ -150,12 +152,11 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 		}
 	}()
 
-	uIdx := 1
+	uIdx := 0
 	for _, def := range tableDef.Defs {
 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
 			// how to get relation?
-			for idx, tblName := range idxDef.UIdx.TableNames {
-
+			for idx, _ := range idxDef.UIdx.TableNames {
 				partsLength := len(idxDef.UIdx.Fields[idx].Parts)
 				uniqueColumnPos := make([]int, partsLength)
 				for p, column := range idxDef.UIdx.Fields[idx].Parts {
@@ -191,23 +192,25 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 					ukBatch.SetVector(1, vec)
 				}
 
-				db, err := eg.Database(proc.Ctx, dbName, proc.TxnOperator)
-				if err != nil {
-					return err
-				}
-				rel, err := db.Relation(proc.Ctx, tblName)
-				if err != nil {
-					return err
-				}
+				// db, err := eg.Database(proc.Ctx, dbName, proc.TxnOperator)
+				// if err != nil {
+				// 	return err
+				// }
+				// rel, err := db.Relation(proc.Ctx, tblName)
+				// if err != nil {
+				// 	return err
+				// }
 
 				if s3Container == nil {
-					err = rel.Write(proc.Ctx, ukBatch)
+					rel := rels[uIdx]
+					err := rel.Write(proc.Ctx, ukBatch)
 					if err != nil {
 						return err
 					}
-				} else {
-					s3Container.WriteS3Batch(ukBatch, proc, uIdx)
 					uIdx++
+				} else {
+					uIdx++
+					s3Container.WriteS3Batch(ukBatch, proc, uIdx)
 				}
 			}
 		}
@@ -424,7 +427,8 @@ func InsertBatch(
 	rel engine.Relation,
 	ref *plan.ObjectRef,
 	tableDef *plan.TableDef,
-	parentIdx map[string]int32) (uint64, error) {
+	parentIdx map[string]int32,
+	uniqueRel []engine.Relation) (uint64, error) {
 	var insertBatch *batch.Batch
 	var err error
 	affectedRows := bat.Vecs[0].Length()
@@ -470,14 +474,14 @@ func InsertBatch(
 			return 0, err
 		}
 
-		err = writeUniqueTable(container, eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos)
+		err = writeUniqueTable(container, eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos, uniqueRel)
 		if err != nil {
 			return 0, err
 		}
 
 	} else {
 		// write unique key table
-		err = writeUniqueTable(nil, eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos)
+		err = writeUniqueTable(nil, eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos, uniqueRel)
 		if err != nil {
 			return 0, err
 		}

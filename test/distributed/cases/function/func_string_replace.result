@@ -203,9 +203,9 @@ zhang
 zhang
 zhang
 INSERT INTO replace_01 VALUES(6, 'HHANjdncd','445478855');
-truncated type CHAR value HHANjdncd for column s_name, 1
+internal error: Can't cast 'HHANjdncd' from VARCHAR type to CHAR type. Src length 9 is larger than Dest length 5
 INSERT INTO replace_01 VALUES(7, 'Wl', '11111124841550');
-Data truncation: data out of range: data type varchar/char , 11111124841550 oversize of 11 
+internal error: Can't cast '11111124841550' from VARCHAR type to VARCHAR type. Src length 14 is larger than Dest length 11
 UPDATE replace_01 set s_name = REPLACE(s_name,'Tom','efjhhoiwuwnvnjwiewori');
 internal error: Can't cast column from VARCHAR type to CHAR type because of one or more values in that column. Src length 21 is larger than Dest length 5
 SELECT s_name, phone FROM replace_01 WHERE REPLACE(s_name, 'Tom', 'Bo') LIKE 'B%';

@@ -59,12 +59,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	// ctx := proc.Ctx
+
 	insertCtx := insertArg.InsertCtx
 	clusterTable := insertCtx.ClusterTable
-	// if clusterTable.GetIsClusterTable() {
-	// 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	// }
 
 	var insertBat *batch.Batch
 	defer func() {
@@ -80,7 +77,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		var affectedRow uint64
 
 		affectedRow, err = colexec.InsertBatch(insertArg.Container, insertArg.Engine, proc, bat, insertCtx.Source,
-			insertCtx.Ref, insertCtx.TableDef, insertCtx.ParentIdx)
+			insertCtx.Ref, insertCtx.TableDef, insertCtx.ParentIdx, insertCtx.UniqueSource)
 		if err != nil {
 			return err
 		}

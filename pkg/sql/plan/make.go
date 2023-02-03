@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -188,7 +189,7 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 			Id:          int32(types.T_varchar),
 			NotNullable: true,
 			Size:        4,
-			Width:       int32(len(v)),
+			Width:       int32(utf8.RuneCountInString(v)),
 		},
 	}
 }
@@ -207,7 +208,7 @@ func MakePlan2NullTextConstExprWithType(v string) *plan.Expr {
 			Id:          int32(types.T_text),
 			NotNullable: false,
 			Size:        4,
-			Width:       int32(len(v)),
+			Width:       int32(utf8.RuneCountInString(v)),
 		},
 	}
 }

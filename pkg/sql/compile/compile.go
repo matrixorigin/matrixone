@@ -360,7 +360,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
 					Tbl:         arg.InsertCtx.Source,
-					Unique_tbls: arg.InsertCtx.IdxSource,
+					Unique_tbls: arg.InsertCtx.UniqueSource,
 				},
 			})
 		} else {

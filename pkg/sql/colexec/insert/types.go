@@ -52,13 +52,11 @@ type Argument struct {
 }
 
 type InsertCtx struct {
-	Source   engine.Relation
-	Idx      []int32
-	Ref      *plan.ObjectRef
-	TableDef *plan.TableDef
-
-	IdxSource []engine.Relation
-	IdxIdx    []int32
+	Source       engine.Relation
+	Idx          []int32
+	Ref          *plan.ObjectRef
+	TableDef     *plan.TableDef
+	UniqueSource []engine.Relation
 
 	ParentIdx map[string]int32
 
@@ -70,54 +68,3 @@ type InsertCtx struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 }
-
-// func (arg *Argument) GetPkIndexes() {
-// 	arg.container.pkIndex = make([]int, 0, 1)
-// 	// Get CPkey index
-// 	if arg.InsertCtx.TableDef.CompositePkey != nil {
-// 		names := util.SplitCompositePrimaryKeyColumnName(arg.InsertCtx.TableDef.CompositePkey.Name)
-// 		for num, colDef := range arg.InsertCtx.TableDef.Cols {
-// 			for _, name := range names {
-// 				if colDef.Name == name {
-// 					arg.container.pkIndex = append(arg.container.pkIndex, num)
-// 				}
-// 			}
-// 		}
-// 	} else {
-// 		// Get Single Col pk index
-// 		for num, colDef := range arg.InsertCtx.TableDef.Cols {
-// 			if colDef.Primary {
-// 				arg.container.pkIndex = append(arg.container.pkIndex, num)
-// 				break
-// 			}
-// 		}
-// 	}
-// }
-
-// func (arg *Argument) GetNameNullAbility() bool {
-// 	for _, def := range arg.InsertCtx.TableDef.Cols {
-// 		arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
-// 		if def.Primary {
-// 			arg.container.pk[def.Name] = true
-// 		}
-// 	}
-// 	if arg.InsertCtx.TableDef.CompositePkey != nil {
-// 		def := arg.InsertCtx.TableDef.CompositePkey
-// 		arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
-// 		arg.container.pk[def.Name] = true
-// 	}
-// 	for _, def := range arg.InsertCtx.TableDef.Defs {
-// 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-// 			for i := range idxDef.UIdx.Fields {
-// 				for j := range idxDef.UIdx.Fields[i].Cols {
-// 					def := idxDef.UIdx.Fields[i].Cols[j]
-// 					arg.container.nameToNullablity[def.Name] = def.Default.NullAbility
-// 				}
-// 			}
-// 		}
-// 	}
-// 	if arg.InsertCtx.TableDef.ClusterBy != nil {
-// 		arg.container.nameToNullablity[arg.InsertCtx.TableDef.ClusterBy.Name] = true
-// 	}
-// 	return false
-// }
