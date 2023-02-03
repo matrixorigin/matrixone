@@ -289,7 +289,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		initWG.Add(1)
 		collector := export.NewMOCollector(ctx)
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
-			if ctx, err = motrace.InitWithConfig(ctx,
+			if err = motrace.InitWithConfig(ctx,
 				&SV,
 				motrace.WithNode(UUID, nodeRole),
 				motrace.WithBatchProcessor(collector),

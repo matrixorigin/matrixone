@@ -61,7 +61,7 @@ var dummyFSWriterFactory = func(context.Context, string, *table.Table, time.Time
 	return &dummyStringWriter{}
 }
 
-func bootstrap(ctx context.Context) (context.Context, error) {
+func bootstrap(ctx context.Context) error {
 	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", DisableStore: false})
 	SV := config.ObservabilityParameters{}
 	SV.SetDefaultValues("v0.6.0")
@@ -234,11 +234,12 @@ func shutdown(ctx context.Context) {
 func main() {
 	ctx := context.Background()
 
-	// rootCtx should be root Context of Server running, you can get it also by trace.DefaultContext()
-	rootCtx, err := bootstrap(ctx)
+	// rootCtx should be root Context of Server running, you can get it also by motrace.DefaultContext()
+	err := bootstrap(ctx)
 	if err != nil {
 		panic(err)
 	}
+	rootCtx := motrace.DefaultContext()
 	// show rootCtx in zap.logger format
 	logutil.Info("root ctx", trace.ContextField(rootCtx))
 	logutil.Info("default ctx", trace.ContextField(motrace.DefaultContext()))
