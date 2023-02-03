@@ -15,41 +15,50 @@
 package ctl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"regexp"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/date"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const ZeroDate = "0001-01-01"
+
+// MOLogDate parse 'YYYY/MM/DD' date from input string.
+// return '0001-01-01' if input string not container 'YYYY/MM/DD' substr, until DateParse Function support return NULL for invalid date string.
 func MOLogDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if !vectors[1].IsScalar() {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "the second parameter of function to_date", "not constant")
+	inputVector := vectors[0]
+	resultType := types.Type{Oid: types.T_date, Size: 4}
+	inputValues := vector.MustStrCols(inputVector)
+
+	// regexp
+	parsedInput := make([]string, len(inputValues))
+	reg := regexp.MustCompile(`\d{4}/\d{1,2}/\d{1,2}`)
+	for idx, ori := range inputValues {
+		parsedInput[idx] = reg.FindString(ori)
+		if len(parsedInput[idx]) == 0 {
+			parsedInput[idx] = ZeroDate
+		}
 	}
-	inputBytes0 := vector.MustStrCols(vectors[0])
-	inputBytes1 := vector.MustStrCols(vectors[1])
-	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
-	if vectors[0].IsScalar() && vectors[1].IsScalar() {
-		results := make([]string, 1)
-		format := inputBytes1[0]
-		inputNsp := vectors[0].Nsp
-		result, resultNsp, err := binary.ToDateInputBytes(proc.Ctx, inputBytes0, format, inputNsp, results)
-		if err != nil {
-			return nil, err
+	// end of regexp
+
+	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstString(resultType, 1, result[0], proc.Mp())
-		nulls.Set(resultVector.Nsp, resultNsp)
-		return resultVector, nil
+		resultVector := vector.NewConst(resultType, 1)
+		resultValues := make([]types.Date, 1)
+		result, err := date.DateStringToDate(parsedInput, resultValues)
+		vector.SetCol(resultVector, result)
+		return resultVector, err
 	} else {
-		results := make([]string, len(inputBytes0))
-		format := inputBytes1[0]
-		inputNsp := vectors[0].Nsp
-		results, resultNsp, err := binary.ToDateInputBytes(proc.Ctx, inputBytes0, format, inputNsp, results)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(parsedInput)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.NewWithStrings(resultType, results, resultNsp, proc.Mp())
-		return resultVector, nil
+		resultValues := vector.MustTCols[types.Date](resultVector)
+		_, err = date.DateStringToDate(parsedInput, resultValues)
+		return resultVector, err
 	}
 }
