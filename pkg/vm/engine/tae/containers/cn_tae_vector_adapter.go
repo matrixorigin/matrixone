@@ -225,10 +225,6 @@ func (vec CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.MP
 	return cloned
 }
 
-func (vec CnTaeVector[T]) Delete(i int) {
-	cnVector.Delete[T](vec.downstreamVector, i)
-}
-
 // TODO: Remove below functions as they don't have any usage
 
 func (vec CnTaeVector[T]) IsView() bool {
@@ -427,6 +423,10 @@ func (vec CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roari
 
 // TODO: Below code is a little uncertain
 
+func (vec CnTaeVector[T]) Delete(i int) {
+	cnVector.Delete[T](vec.downstreamVector, i)
+}
+
 func (vec CnTaeVector[T]) Allocated() int {
 	if vec.GetType().IsVarlen() {
 		// Only VarLen is allocated using mpool.
@@ -449,17 +449,21 @@ func (vec CnTaeVector[T]) SlicePtr() unsafe.Pointer {
 
 func (vec CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 	var moVector *cnVector.Vector
+
 	if vec.GetType().IsVarlen() {
 		moVector, _ = cnVector.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
 	} else {
 		moVector = cnVector.NewOriginalWithData(vec.GetType(), bs.StorageBuf(), &cnNulls.Nulls{})
 	}
 
-	if vec.Nullable() {
+	if !nulls.IsEmpty() {
 		moVector.Nsp.Np = bitmap.New(vec.Length())
 		moVector.Nsp.Np.AddMany(nulls.ToArray())
 	}
+
 	vec.downstreamVector = moVector
+	fmt.Println("DNVec", vec.String())
+
 }
 
 // --- Improve

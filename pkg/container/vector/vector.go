@@ -1776,14 +1776,17 @@ func Delete[T any](v *Vector, i int) {
 		vCol = vCol[0:len(vCol):len(vCol)]
 
 		v.Col = vCol
-		v.data = v.encodeColToByteSlice()
 	} else {
 		vCol := v.Col.([]T)
 		vCol = append(vCol[:i], vCol[i+1:]...)
+
+		// This is used to reset the capacity
+		vCol = vCol[0:len(vCol):len(vCol)]
+
 		v.Col = vCol
-		v.data = v.encodeColToByteSlice()
 	}
 
+	v.data = v.encodeColToByteSlice()
 }
 
 func nullSet(i int, oldNulls *bitmap.Bitmap) {
