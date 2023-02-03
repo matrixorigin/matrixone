@@ -483,8 +483,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
-		isEq := isEquiJoin(n.OnList)
-		needSwap, joinTyp := joinType(ctx, n, ns, isEq)
+		needSwap, joinTyp := joinType(ctx, n, ns)
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
@@ -498,9 +497,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		}
 		c.SetAnalyzeCurrent(children, curr)
 		if needSwap {
-			return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[1]], ns[n.Children[0]], children, ss, joinTyp, isEq)), nil
+			return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[1]], ns[n.Children[0]], children, ss, joinTyp)), nil
 		}
-		return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], ns[n.Children[1]], ss, children, joinTyp, isEq)), nil
+		return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], ns[n.Children[1]], ss, children, joinTyp)), nil
 	case plan.Node_SORT:
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
@@ -894,8 +893,10 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag, isEq bool) []*Scope {
+func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
 	var rs []*Scope
+	isEq := isEquiJoin(n.OnList)
+
 	right_typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
 		right_typs[i] = dupType(expr.Typ)
@@ -1654,7 +1655,7 @@ func extraRegisters(ss []*Scope, i int) []*process.WaitRegister {
 	return regs
 }
 
-func joinType(ctx context.Context, n *plan.Node, ns []*plan.Node, isEq bool) (bool, plan.Node_JoinFlag) {
+func joinType(ctx context.Context, n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
 	switch n.JoinType {
 	case plan.Node_INNER:
 		return false, plan.Node_INNER
@@ -1665,11 +1666,7 @@ func joinType(ctx context.Context, n *plan.Node, ns []*plan.Node, isEq bool) (bo
 	case plan.Node_ANTI:
 		return false, plan.Node_ANTI
 	case plan.Node_RIGHT:
-		if isEq {
-			return false, plan.Node_RIGHT
-		} else {
-			return true, plan.Node_LEFT
-		}
+		return false, plan.Node_RIGHT
 	case plan.Node_SINGLE:
 		return false, plan.Node_SINGLE
 	case plan.Node_MARK:
