@@ -374,7 +374,7 @@ find_in_set(bbb, b)
 delete from t9 where a is not NULL;
 insert into t9 values ('', 'abcd');
 insert into t1 values ('1111', '');
-invalid input: insert table is invalid 't1'
+no such table text_1.t1
 select empty(a),empty(b) from t9;
 empty(a)    empty(b)
 1    0

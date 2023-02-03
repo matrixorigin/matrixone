@@ -449,9 +449,9 @@ a
 -2147483648
 2147483647
 insert into t1 values(-2147483649);
-data out of range: data type int32, value '-2147483649'
+Data truncation: data out of range: data type int32, value '-2147483649'
 insert into t1 values(2147483648);
-data out of range: data type int32, value '2147483648'
+Data truncation: data out of range: data type int32, value '2147483648'
 create table t2(a int unsigned);
 insert into t2 values(2147483647);
 insert into t1 select * from t2;
@@ -502,7 +502,7 @@ a
 insert into t1 values(-1);
 data out of range: data type uint32, value '-1'
 insert into t1 values(4294967296);
-data out of range: data type uint32, value '4294967296'
+Data truncation: data out of range: data type uint32, value '4294967296'
 create table t2(a tinyint);
 insert into t2 values(-1);
 insert into t1 select * from t2;

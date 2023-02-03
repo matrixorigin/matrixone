@@ -509,10 +509,10 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			}
 			valueScanTableDef.Cols = make([]*plan.ColDef, colCount)
 			projectList = make([]*Expr, colCount)
-			binder := NewWhereBinder(builder, bindCtx)
 			for i, colName := range updateColumns {
 				col := tableDef.Cols[colToIdx[colName]]
 				rows := make([]*Expr, len(slt.Rows))
+				binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 				var defExpr *Expr
 				for j, r := range slt.Rows {
 					if _, ok := r[i].(*tree.DefaultVal); ok {

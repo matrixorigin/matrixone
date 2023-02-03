@@ -448,9 +448,9 @@ a
 -128
 127
 insert into t1 values(-129);
-data out of range: data type int8, value '-129'
+Data truncation: data out of range: data type int8, value '-129'
 insert into t1 values(128);
-data out of range: data type int8, value '128'
+Data truncation: data out of range: data type int8, value '128'
 create table t2(a tinyint unsigned);
 insert into t2 values(128);
 insert into t1 select * from t2;
@@ -505,9 +505,9 @@ a
 0
 255
 insert into t1 values(-1);
-data out of range: data type uint8, value '-1'
+Data truncation: data out of range: data type uint8, value '-1'
 insert into t1 values(256);
-data out of range: data type uint8, value '256'
+Data truncation: data out of range: data type uint8, value '256'
 drop table t2;
 create table t2(a tinyint);
 insert into t2 values(-1);

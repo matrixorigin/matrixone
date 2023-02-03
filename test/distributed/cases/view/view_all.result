@@ -42,9 +42,9 @@ DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(c1 INT PRIMARY KEY, c2 INT);
 CREATE VIEW v1 AS SELECT * FROM t1;
 INSERT INTO v1 VALUES(1,20);
-invalid input: cannot insert into view 'v1'
+invalid input: cannot insert/update/delete from view
 INSERT INTO v1 VALUES(1,5);
-invalid input: cannot insert into view 'v1'
+invalid input: cannot insert/update/delete from view
 SELECT * FROM t1;
 c1    c2
 SELECT * FROM v1;
@@ -95,7 +95,7 @@ drop table if exists t2;
 create table t2 (a int);
 create view t1 as select a from t2;
 insert into t1 (a) values (1);
-invalid input: cannot insert into view 't1'
+invalid input: cannot insert/update/delete from view
 select * from t1;
 a
 create table t1 (a int);
@@ -113,14 +113,14 @@ drop table if exists t2;
 create table t2 (a int);
 create view t1 as select a + 5 as a from t2;
 insert into t1 (a) values (1);
-invalid input: cannot insert into view 't1'
+invalid input: cannot insert/update/delete from view
 update t1 set a=3 where a=2;
 invalid input: cannot insert/update/delete from view
 drop view if exists t1;
 drop table if exists t2;
 create view t1 as select 1 as a;
 insert into t1 (a) values (1);
-invalid input: cannot insert into view 't1'
+invalid input: cannot insert/update/delete from view
 update t1 set a=3 where a=2;
 invalid input: cannot insert/update/delete from view
 drop view if exists t1;

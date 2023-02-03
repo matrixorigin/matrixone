@@ -40,9 +40,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	if tblInfo.haveConstraint {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "table '%v' have contraint, can not use load statement", tblName)
-	}
+	// if tblInfo.haveConstraint {
+	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "table '%v' have contraint, can not use load statement", tblName)
+	// }
 
 	tableDef.Name2ColIndex = map[string]int32{}
 	node1 := &plan.Node{}
