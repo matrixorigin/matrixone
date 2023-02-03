@@ -34,6 +34,7 @@ message Message {
   bytes   analyse = 6;
   uint64  id = 7;
   bytes   uuid = 8;
+  uint64  batch_cnt = 9;
 }
 
 message Connector {
@@ -43,7 +44,9 @@ message Connector {
 
 message Dispatch {
   bool all = 1;
-  repeated Connector connector = 2;
+  bool cross_cn = 2;
+  repeated Connector connector = 3;
+  repeated WrapNode remote_connector = 4;
 }
 
 message Aggregate {
@@ -289,5 +292,15 @@ message Pipeline {
   int32 push_down_info = 10;
   int32 children_count = 11;
 
-  repeated bytes uuids = 12;
+  repeated UuidToRegIdx uuids_to_reg_idx = 12;
+}
+
+message WrapNode {
+  string node_addr = 1;
+  repeated bytes uuids = 2;
+}
+
+message UuidToRegIdx {
+  bytes uuid = 1;
+  int32 idx = 2;
 }

@@ -1237,7 +1237,7 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 }
 
 // ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
-func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
+func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
 	filePath := strings.TrimSpace(param.Filepath)
 	if strings.HasPrefix(filePath, "etl:") {
 		filePath = path.Clean(filePath)
@@ -1248,6 +1248,7 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	sep := "/"
 	pathDir := strings.Split(filePath, sep)
 	l := list.New()
+	l2 := list.New()
 	if pathDir[0] == "" {
 		l.PushBack(sep)
 	} else {
@@ -1260,11 +1261,11 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 			prefix := l.Front().Value.(string)
 			fs, readPath, err := GetForETLWithType(param, prefix)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			entries, err := fs.List(param.Ctx, readPath)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			for _, entry := range entries {
 				if !entry.IsDir && i+1 != len(pathDir) {
@@ -1275,12 +1276,15 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 				}
 				matched, err := path.Match(pathDir[i], entry.Name)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				if !matched {
 					continue
 				}
 				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
+				if !entry.IsDir {
+					l2.PushBack(entry.Size)
+				}
 			}
 			l.Remove(l.Front())
 		}
@@ -1289,6 +1293,8 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	for j := 0; j < len; j++ {
 		fileList = append(fileList, l.Front().Value.(string))
 		l.Remove(l.Front())
+		fileSize = append(fileSize, l2.Front().Value.(int64))
+		l2.Remove(l2.Front())
 	}
-	return fileList, err
+	return fileList, fileSize, err
 }

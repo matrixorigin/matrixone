@@ -15,6 +15,7 @@
 package external
 
 import (
+	"bufio"
 	"bytes"
 	"compress/bzip2"
 	"compress/flate"
@@ -145,7 +146,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
-		param.Extern.Filepath = param.FileList[param.Fileparam.FileIndex]
+		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
 	bat, err := ScanFileData(param, proc)
@@ -325,7 +326,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 	return bat
 }
 
-func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string) ([]string, error) {
+func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
 	filterList := make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
 		if judgeContainColname(node.FilterList[i]) {
@@ -333,31 +334,33 @@ func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList
 		}
 	}
 	if len(filterList) == 0 {
-		return fileList, nil
+		return fileList, fileSize, nil
 	}
 	bat := makeFilepathBatch(node, proc, filterList, fileList)
 	filter := colexec.RewriteFilterExprList(filterList)
 	vec, err := colexec.EvalExpr(bat, proc, filter)
 	if err != nil {
-		return nil, err
+		return nil, fileSize, err
 	}
-	ret := make([]string, 0)
+	fileListTmp := make([]string, 0)
+	fileSizeTmp := make([]int64, 0)
 	bs := vector.GetColumn[bool](vec)
 	for i := 0; i < len(bs); i++ {
 		if bs[i] {
-			ret = append(ret, fileList[i])
+			fileListTmp = append(fileListTmp, fileList[i])
+			fileSizeTmp = append(fileSizeTmp, fileSize[i])
 		}
 	}
-	return ret, nil
+	return fileListTmp, fileSizeTmp, nil
 }
 
-func FliterFileList(node *plan.Node, proc *process.Process, fileList []string) ([]string, error) {
+func FliterFileList(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
 	var err error
-	fileList, err = fliterByAccountAndFilename(node, proc, fileList)
+	fileList, fileSize, err = fliterByAccountAndFilename(node, proc, fileList, fileSize)
 	if err != nil {
-		return fileList, err
+		return fileList, fileSize, err
 	}
-	return fileList, nil
+	return fileList, fileSize, nil
 }
 
 func IsSysTable(dbName string, tableName string) bool {
@@ -369,10 +372,42 @@ func IsSysTable(dbName string, tableName string) bool {
 	return false
 }
 
-func ReadFile(param *tree.ExternParam, proc *process.Process) (io.ReadCloser, error) {
+func ReadFile(param *tree.ExternParam, fileParam *ExFileparam, offset [][2]int, proc *process.Process) (io.ReadCloser, error) {
 	if param.Local {
 		return io.NopCloser(proc.LoadLocalReader), nil
 	}
+	fs, readPath, err := plan2.GetForETLWithType(param, fileParam.Filepath)
+	if err != nil {
+		return nil, err
+	}
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+	if param.Parallel {
+		vec.Entries[0].Offset = int64(offset[fileParam.FileIndex-1][0])
+		vec.Entries[0].Size = int64(offset[fileParam.FileIndex-1][1] - offset[fileParam.FileIndex-1][0])
+	}
+	if vec.Entries[0].Size == 0 {
+		return nil, nil
+	}
+	err = fs.Read(param.Ctx, &vec)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fileSize int64) ([][2]int, error) {
+	arr := make([][2]int, 0)
+
 	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return nil, err
@@ -388,22 +423,57 @@ func ReadFile(param *tree.ExternParam, proc *process.Process) (io.ReadCloser, er
 			},
 		},
 	}
+	var tailSize []int64
+	var offset []int64
+	for i := 0; i < mcpu; i++ {
+		vec.Entries[0].Offset = int64(i) * (fileSize / int64(mcpu))
+		if err = fs.Read(param.Ctx, &vec); err != nil {
+			return nil, err
+		}
+		r2 := bufio.NewReader(r)
+		line, _ := r2.ReadString('\n')
+		tailSize = append(tailSize, int64(len(line)))
+		offset = append(offset, vec.Entries[0].Offset)
+	}
+
+	vec.Entries[0].Offset = 0
 	err = fs.Read(param.Ctx, &vec)
 	if err != nil {
 		return nil, err
 	}
-	return r, nil
+
+	r2 := bufio.NewReader(r)
+	for {
+		_, err := r2.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+		if err == io.EOF {
+			break
+		}
+	}
+
+	start := 0
+	for i := 0; i < mcpu; i++ {
+		if i+1 < mcpu {
+			arr = append(arr, [2]int{start, int(offset[i+1] + tailSize[i+1])})
+			start = int(offset[i+1] + tailSize[i+1])
+		} else {
+			arr = append(arr, [2]int{start, -1})
+		}
+	}
+	return arr, nil
 }
 
-func getCompressType(param *tree.ExternParam) string {
+func getCompressType(param *tree.ExternParam, filepath string) string {
 	if param.CompressType != "" && param.CompressType != tree.AUTO {
 		return param.CompressType
 	}
-	index := strings.LastIndex(param.Filepath, ".")
+	index := strings.LastIndex(filepath, ".")
 	if index == -1 {
 		return tree.NOCOMPRESS
 	}
-	tail := string([]byte(param.Filepath)[index+1:])
+	tail := string([]byte(filepath)[index+1:])
 	switch tail {
 	case "gz", "gzip":
 		return tree.GZIP
@@ -416,8 +486,8 @@ func getCompressType(param *tree.ExternParam) string {
 	}
 }
 
-func getUnCompressReader(param *tree.ExternParam, r io.ReadCloser) (io.ReadCloser, error) {
-	switch strings.ToLower(getCompressType(param)) {
+func getUnCompressReader(param *tree.ExternParam, filepath string, r io.ReadCloser) (io.ReadCloser, error) {
+	switch strings.ToLower(getCompressType(param, filepath)) {
 	case tree.NOCOMPRESS:
 		return r, nil
 	case tree.GZIP, tree.GZ:
@@ -565,11 +635,11 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 // GetSimdcsvReader get file reader from external file
 func GetSimdcsvReader(param *ExternalParam, proc *process.Process) (*ParseLineHandler, error) {
 	var err error
-	param.reader, err = ReadFile(param.Extern, proc)
-	if err != nil {
+	param.reader, err = ReadFile(param.Extern, param.Fileparam, param.FileOffset, proc)
+	if err != nil || param.reader == nil {
 		return nil, err
 	}
-	param.reader, err = getUnCompressReader(param.Extern, param.reader)
+	param.reader, err = getUnCompressReader(param.Extern, param.Fileparam.Filepath, param.reader)
 	if err != nil {
 		return nil, err
 	}
@@ -600,7 +670,7 @@ func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, err
 	if param.plh == nil {
 		param.IgnoreLine = param.IgnoreLineTag
 		param.plh, err = GetSimdcsvReader(param, proc)
-		if err != nil {
+		if err != nil || param.plh == nil {
 			return nil, err
 		}
 	}
@@ -625,14 +695,16 @@ func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, err
 		}
 	}
 	if param.IgnoreLine != 0 {
-		if cnt >= param.IgnoreLine {
-			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:cnt]
-			cnt -= param.IgnoreLine
-		} else {
-			plh.simdCsvLineArray = nil
-			cnt = 0
+		if !param.Extern.Parallel || param.FileOffset[param.Fileparam.FileIndex-1][0] == 0 {
+			if cnt >= param.IgnoreLine {
+				plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:cnt]
+				cnt -= param.IgnoreLine
+			} else {
+				plh.simdCsvLineArray = nil
+				cnt = 0
+			}
+			param.IgnoreLine = 0
 		}
-		param.IgnoreLine = 0
 	}
 	plh.batchSize = cnt
 	bat, err = GetBatchData(param, plh, proc)
@@ -678,7 +750,7 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 			vecTmp = vector.New(makeType(param.Cols, i))
 			vector.PreAlloc(vecTmp, rows, rows, proc.GetMPool())
 			for j := 0; j < rows; j++ {
-				err := vector.SetStringAt(vecTmp, j, param.Extern.Filepath, proc.GetMPool())
+				err := vector.SetStringAt(vecTmp, j, param.Fileparam.Filepath, proc.GetMPool())
 				if err != nil {
 					return nil, err
 				}
@@ -809,7 +881,7 @@ func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, ob
 
 func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	if param.Filter.objectReader == nil || param.Extern.QueryResult {
-		dir, _ := filepath.Split(param.Extern.Filepath)
+		dir, _ := filepath.Split(param.Fileparam.Filepath)
 		var service fileservice.FileService
 		var err error
 		var p fileservice.Path
@@ -838,7 +910,7 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 				return nil, err
 			}
 		}
-		_, ok := param.Filter.File2Size[param.Extern.Filepath]
+		_, ok := param.Filter.File2Size[param.Fileparam.Filepath]
 		if !ok {
 			fs := objectio.NewObjectFS(service, dir)
 			dirs, err := fs.ListDir(dir)
@@ -850,15 +922,15 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 			}
 		}
 
-		param.Filter.objectReader, err = objectio.NewObjectReader(param.Extern.Filepath, service)
+		param.Filter.objectReader, err = objectio.NewObjectReader(param.Fileparam.Filepath, service)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	size, ok := param.Filter.File2Size[param.Extern.Filepath]
+	size, ok := param.Filter.File2Size[param.Fileparam.Filepath]
 	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("can' t find the filepath %s", param.Extern.Filepath)
+		return nil, moerr.NewInternalErrorNoCtx("can' t find the filepath %s", param.Fileparam.Filepath)
 	}
 	bat, err := getZonemapBatch(param, proc, size, param.Filter.objectReader)
 	if err != nil {
@@ -880,7 +952,7 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 
 // ScanFileData read batch data from external file
 func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	if strings.HasSuffix(param.Extern.Filepath, ".tae") || param.Extern.QueryResult {
+	if strings.HasSuffix(param.Fileparam.Filepath, ".tae") || param.Extern.QueryResult {
 		return ScanZonemapFile(param, proc)
 	} else {
 		return ScanCsvFile(param, proc)
@@ -1018,7 +1090,7 @@ func judgeInteger(field string) bool {
 
 func getStrFromLine(Line []string, colIdx int, param *ExternalParam) string {
 	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
-		return param.Extern.Filepath
+		return param.Fileparam.Filepath
 	} else {
 		var str string
 		if param.Extern.SysTable && int(param.Name2ColIndex[param.Attrs[colIdx]]) >= len(Line) {

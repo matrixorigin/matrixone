@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -65,4 +66,60 @@ func TestCheckWithDeadlock(t *testing.T) {
 		assert.Fail(t, "can not found dead lock")
 	case <-time.After(time.Millisecond * 100):
 	}
+}
+
+type rowToLock struct {
+	tableID uint64
+	row     []byte
+}
+
+func TestTwoTxsDeadlock(t *testing.T) {
+	cases := []struct {
+		row1, row2 rowToLock
+	}{
+		{
+			rowToLock{0, []byte{1}},
+			rowToLock{0, []byte{2}},
+		},
+		{
+			rowToLock{0, []byte{1}},
+			rowToLock{1, []byte{1}},
+		},
+	}
+
+	for _, c := range cases {
+		runDeadlock(t, c.row1, c.row2)
+	}
+}
+
+//			txnA			txnB
+//	   locks row1		locks row2
+//					 	locks row1 		(txnB waits for txnA)
+//	   locks row2						(deadlock happens)
+func runDeadlock(t *testing.T, row1, row2 rowToLock) {
+	txnA := []byte("txnA")
+	txnB := []byte("txnB")
+	l := NewLockService()
+	ctx := context.Background()
+	option := LockOptions{
+		granularity: Row,
+		mode:        Exclusive,
+		policy:      Wait,
+	}
+
+	ok, err := l.Lock(context.Background(), row1.tableID, [][]byte{row1.row}, txnA, option)
+	assert.NoError(t, err)
+	assert.Equal(t, true, ok)
+	go func() {
+		ok, err := l.Lock(ctx, row2.tableID, [][]byte{row2.row}, txnB, option)
+		assert.NoError(t, err)
+		assert.Equal(t, true, ok)
+		ok, err = l.Lock(ctx, row1.tableID, [][]byte{row1.row}, txnB, option)
+		assert.NoError(t, err)
+		assert.Equal(t, true, ok)
+	}()
+	time.Sleep(time.Second / 2)
+	ok, err = l.Lock(context.Background(), row2.tableID, [][]byte{row2.row}, txnA, option)
+	assert.Error(t, err)
+	assert.False(t, ok)
 }

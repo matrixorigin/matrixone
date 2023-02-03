@@ -30,7 +30,7 @@ import (
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	stmt.Param.Ctx = context.TODO()
-	fileList, err := ReadDir(stmt.Param)
+	fileList, _, err := ReadDir(stmt.Param)
 	if err != nil {
 		return nil, err
 	}
