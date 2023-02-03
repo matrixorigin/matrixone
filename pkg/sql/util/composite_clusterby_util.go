@@ -15,8 +15,9 @@
 package util
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,10 +27,10 @@ import (
 )
 
 func JudgeIsCompositeClusterByColumn(s string) bool {
-	if len(s) < len(catalog.PrefixPriColName) {
+	if len(s) < len(catalog.PrefixCBColName) {
 		return false
 	}
-	return s[0:len(catalog.PrefixPriColName)] == catalog.PrefixCBColName
+	return s[0:len(catalog.PrefixCBColName)] == catalog.PrefixCBColName
 }
 
 func BuildCompositeClusterByColumnName(s []string) string {
