@@ -207,7 +207,7 @@ INSERT INTO format_01 VALUES(3, 21, 37821, 3782, 0);
 INSERT INTO format_01 VALUES(4, 0, 0, 0, 0);
 INSERT INTO format_01 VALUES(5, 127, 3892, 743482 , 938256415);
 INSERT INTO format_01 VALUES(6, 22, 3, 4, 184467440737095516152);
-truncated type BIGINT UNSIGNED value 184467440737095516152 for column d4, 1
+data out of range: data type uint64, value '184467440737095516152'
 SELECT format(d1, id) from format_01;
 format(d1, id)
 -3.0

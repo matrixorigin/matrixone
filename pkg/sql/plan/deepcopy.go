@@ -56,10 +56,9 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		return nil
 	}
 	newCtx := &plan.InsertCtx{
-		Ref:       DeepCopyObjectRef(ctx.Ref),
-		Idx:       make([]int32, len(ctx.Idx)),
-		TableDef:  DeepCopyTableDef(ctx.TableDef),
-		UpdateCol: make(map[string]int32),
+		Ref:      DeepCopyObjectRef(ctx.Ref),
+		Idx:      make([]int32, len(ctx.Idx)),
+		TableDef: DeepCopyTableDef(ctx.TableDef),
 
 		ClusterTable: DeepCopyClusterTable(ctx.ClusterTable),
 	}
@@ -71,10 +70,6 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		for k, v := range ctx.ParentIdx {
 			newCtx.ParentIdx[k] = v
 		}
-	}
-
-	for k, v := range ctx.UpdateCol {
-		newCtx.UpdateCol[k] = v
 	}
 
 	return newCtx

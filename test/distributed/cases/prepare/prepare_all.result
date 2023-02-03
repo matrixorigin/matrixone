@@ -141,9 +141,9 @@ time3 TIMESTAMP
 );
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '2038-01-19 03:14:07.999999');
 insert into t2 values ('1000-01-01', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
-truncated type DATETIME value 9999-12-31 23:59:59.999999 for column time2, 1
+invalid input: invalid datatime value 9999-12-31 23:59:59.999999
 insert into t2 values ('9999-12-31', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
-truncated type DATETIME value 9999-12-31 23:59:59.999999 for column time2, 1
+invalid input: invalid datatime value 9999-12-31 23:59:59.999999
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');

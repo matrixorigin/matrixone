@@ -456,9 +456,9 @@ a
 999.99
 -999.99
 insert into t1 values(999.995);
-truncated type DECIMAL64 value 999.995 for column a, 1
+data out of range: data type dec64, value '999.995'
 insert into t1 values(-999.995);
-truncated type DECIMAL64 value -999.995 for column a, 1
+data out of range: data type dec64, value '-999.995'
 drop table t1;
 create table t1(a decimal(17,2));
 insert into t1 values(0), (2.1), (2.994), (2.995);

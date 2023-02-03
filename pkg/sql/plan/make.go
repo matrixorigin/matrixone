@@ -276,9 +276,14 @@ func makePlan2Type(typ *types.Type) *plan.Type {
 var MakeTypeByPlan2Type = makeTypeByPlan2Type
 
 func makeTypeByPlan2Type(typ *plan.Type) types.Type {
+	var size int32 = 0
+	oid := types.T(typ.Id)
+	if oid != types.T_any && oid != types.T_interval {
+		size = int32(oid.TypeLen())
+	}
 	return types.Type{
 		Oid:       types.T(typ.Id),
-		Size:      typ.Size,
+		Size:      size,
 		Width:     typ.Width,
 		Scale:     typ.Scale,
 		Precision: typ.Precision,
