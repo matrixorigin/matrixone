@@ -93,11 +93,16 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	return
 }
 
-func CopyToMoVec(vec Vector) (mov *movec.Vector) {
+func CopyToMoVec(vec Vector) *movec.Vector {
 	bs := vec.Bytes()
 	typ := vec.GetType()
+	nullMask := vec.NullMask()
 
-	if vec.GetType().IsVarlen() {
+	return CreateMoVectorFromBytes(typ, bs, nullMask)
+}
+
+func CreateMoVectorFromBytes(typ types.Type, bs *Bytes, nullMask *roaring64.Bitmap) (mov *movec.Vector) {
+	if typ.IsVarlen() {
 		var header []types.Varlena
 		if bs.AsWindow {
 			header = make([]types.Varlena, bs.WinLength)
@@ -111,8 +116,8 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 			copy(storage, bs.Storage)
 		}
 		mov, _ = movec.BuildVarlenaVector(typ, header, storage)
-	} else if vec.GetType().IsTuple() {
-		mov = movec.NewOriginal(vec.GetType())
+	} else if typ.IsTuple() {
+		mov = movec.NewOriginal(typ)
 		cnt := types.DecodeInt32(bs.Storage)
 		if cnt != 0 {
 			if err := types.Decode(bs.Storage, &mov.Col); err != nil {
@@ -124,13 +129,12 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 		if len(data) > 0 {
 			copy(data, bs.Storage)
 		}
-		mov = movec.NewOriginalWithData(vec.GetType(), data, new(nulls.Nulls))
+		mov = movec.NewOriginalWithData(typ, data, new(nulls.Nulls))
 	}
 
-	if vec.HasNull() {
-		mov.Nsp.Np = bitmap.New(vec.Length())
-		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
-		//mov.Nsp.Np = vec.NullMask()
+	if !nullMask.IsEmpty() {
+		mov.Nsp = nulls.NewWithSize(0)
+		nulls.Add(mov.Nsp, nullMask.ToArray()...)
 	}
 
 	return mov

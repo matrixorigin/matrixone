@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package containers
 
 import (
@@ -5,7 +19,6 @@ import (
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -152,8 +165,9 @@ func (vec CnTaeVector[T]) Reset() {
 		return
 	}
 
-	cnVector.Reset(vec.downstreamVector)
 	vec.downstreamVector.Nsp = nil
+	cnVector.Reset(vec.downstreamVector)
+
 }
 
 func (vec CnTaeVector[T]) Slice() any {
@@ -458,19 +472,6 @@ func (vec CnTaeVector[T]) Capacity() int {
 }
 
 func (vec CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
-	var moVector *cnVector.Vector
-
-	if vec.GetType().IsVarlen() {
-		moVector, _ = cnVector.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
-	} else {
-		moVector = cnVector.NewOriginalWithData(vec.GetType(), bs.StorageBuf(), &cnNulls.Nulls{})
-	}
-
-	if !nulls.IsEmpty() {
-		moVector.Nsp.Np = bitmap.New(vec.Length())
-		moVector.Nsp.Np.AddMany(nulls.ToArray())
-	}
-
-	vec.downstreamVector = moVector
-	fmt.Println("DNVec", vec.String())
+	vec.Reset()
+	vec.downstreamVector = CreateMoVectorFromBytes(vec.GetType(), bs, nulls)
 }
