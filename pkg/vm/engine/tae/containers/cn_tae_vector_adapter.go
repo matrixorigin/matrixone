@@ -225,6 +225,18 @@ func (vec CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.MP
 	return cloned
 }
 
+func (vec CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+
+	if srcLen <= 0 {
+		return
+	}
+
+	for i := srcOff; i < srcOff+srcLen; i++ {
+		vec.Append(src.Get(i))
+	}
+
+}
+
 // TODO: Remove below functions as they don't have any usage
 
 func (vec CnTaeVector[T]) IsView() bool {
@@ -240,6 +252,10 @@ func (vec CnTaeVector[T]) DataWindow(offset, length int) []byte {
 }
 
 func (vec CnTaeVector[T]) Data() []byte {
+	panic("Soon Deprecated")
+}
+
+func (vec CnTaeVector[T]) SlicePtr() unsafe.Pointer {
 	panic("Soon Deprecated")
 }
 
@@ -421,7 +437,7 @@ func (vec CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roari
 	return
 }
 
-// TODO: Below code is a little uncertain
+// TODO: I am not sure, if the below code will work as expected
 
 func (vec CnTaeVector[T]) Delete(i int) {
 	cnVector.Delete[T](vec.downstreamVector, i)
@@ -436,15 +452,9 @@ func (vec CnTaeVector[T]) Allocated() int {
 }
 
 func (vec CnTaeVector[T]) Capacity() int {
-	// TODO: Not sure if it is correct
-	return vec.downstreamVector.Length()
-}
-
-func (vec CnTaeVector[T]) SlicePtr() unsafe.Pointer {
-	if vec.GetType().IsVarlen() {
-		panic("not support")
-	}
-	return cnVector.GetPtrAt(vec.downstreamVector, 0)
+	// TODO: Can we use Length() instead of Capacity?
+	// Not used much. Can we remove?
+	return vec.Length()
 }
 
 func (vec CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
@@ -463,48 +473,4 @@ func (vec CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 
 	vec.downstreamVector = moVector
 	fmt.Println("DNVec", vec.String())
-
-}
-
-// --- Improve
-
-func (vec CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
-
-	//TODO: Benchmark score is very poor in this implementation when compared to the original DN implementation.
-	if srcLen <= 0 {
-		return
-	}
-
-	if src.Nullable() && src.HasNull() {
-		if vec.downstreamVector.GetNulls() == nil {
-			vec.downstreamVector.Nsp = cnNulls.NewWithSize(0)
-		}
-		it := src.NullMask().Iterator()
-		offset := vec.Length()
-		vec.downstreamVector.Nsp.Np.TryExpandWithSize(src.Length())
-		for it.HasNext() {
-			pos := it.Next()
-			if pos < uint64(srcOff) {
-				continue
-			} else if pos >= uint64(srcOff+srcLen) {
-				break
-			}
-
-			vec.downstreamVector.Nsp.Np.Add(uint64(offset) + pos - uint64(srcOff))
-		}
-	}
-
-	if vec.downstreamVector.GetType().IsVarlen() {
-		bs := src.Bytes()
-		for i := srcOff; i < srcOff+srcLen; i++ {
-			vec.Append(any(bs.GetVarValueAt(i)).(T))
-		}
-		return
-	}
-
-	// TODO: Where should slicePtr fetch data from ?
-	slice := unsafe.Slice((*T)(src.SlicePtr()), srcOff+srcLen)
-	for i := srcOff; i < srcOff+srcLen; i++ {
-		vec.Append(any(slice[i]).(T))
-	}
 }
