@@ -2256,7 +2256,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				}
 			}
 
-			if canTurnInner && node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0 && rejectsNull(filter, builder.compCtx.GetProcess()) {
+			canTurnInner = canTurnInner && rejectsNull(filter, builder.compCtx.GetProcess())
+			leftOrRightJoin := (node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0) || (node.JoinType == plan.Node_RIGHT && joinSides[i]&JoinSideLeft != 0)
+			if canTurnInner && leftOrRightJoin {
 				for _, cond := range node.OnList {
 					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
 				}
@@ -2318,14 +2320,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				}
 
 			case JoinSideLeft:
-				if node.JoinType != plan.Node_OUTER {
+				if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_LEFT {
 					leftPushdown = append(leftPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
 				}
 
 			case JoinSideRight:
-				if node.JoinType == plan.Node_INNER {
+				if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_RIGHT {
 					rightPushdown = append(rightPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
