@@ -1242,7 +1242,11 @@ func Test_getSqlType(t *testing.T) {
 
 func TestProcessLoadLocal(t *testing.T) {
 	convey.Convey("call processLoadLocal func", t, func() {
-		param := &tree.ExternParam{Filepath: "test.csv"}
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "test.csv",
+			},
+		}
 		proc := testutil.NewProc()
 		var writer *io.PipeWriter
 		proc.LoadLocalReader, writer = io.Pipe()
