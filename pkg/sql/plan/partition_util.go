@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -57,68 +58,68 @@ func checkListColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo *
 			switch tuple := val.Expr.(type) {
 			case *plan.Expr_List:
 				if len(colTypes) != len(tuple.List.List) {
-					return moerr.NewInternalError("Inconsistency in usage of column lists for partitioning")
+					return moerr.NewInternalError(binder.GetContext(), "Inconsistency in usage of column lists for partitioning")
 				}
 				for i, elem := range tuple.List.List {
 					switch elem.Expr.(type) {
 					case *plan.Expr_C:
 					case *plan.Expr_F:
 					default:
-						return moerr.NewInternalError("This partition function is not allowed")
+						return moerr.NewInternalError(binder.GetContext(), "This partition function is not allowed")
 					}
 
 					colType := colTypes[i]
 					// Check val.ConvertTo(colType) doesn't work, so we need this case by case check.
-					err = partitionValueTypeCheck(colType, elem.Typ)
+					err = partitionValueTypeCheck(binder.GetContext(), colType, elem.Typ)
 					if err != nil {
 						return err
 					}
 				}
 			case *plan.Expr_C, *plan.Expr_F:
 				if len(colTypes) != 1 {
-					return moerr.NewInternalError("Inconsistency in usage of column lists for partitioning")
+					return moerr.NewInternalError(binder.GetContext(), "Inconsistency in usage of column lists for partitioning")
 				} else {
-					err = partitionValueTypeCheck(colTypes[0], val.Typ)
+					err = partitionValueTypeCheck(binder.GetContext(), colTypes[0], val.Typ)
 					if err != nil {
 						return err
 					}
 				}
 			default:
-				return moerr.NewInternalError("This partition function is not allowed")
+				return moerr.NewInternalError(binder.GetContext(), "This partition function is not allowed")
 			}
 		}
 		return nil
 	} else {
-		return moerr.NewInternalError("list partition function is not values in expression")
+		return moerr.NewInternalError(binder.GetContext(), "list partition function is not values in expression")
 	}
 }
 
 // check whether the types of partition functions and partition values match
-func partitionValueTypeCheck(funcTyp *Type, valueTyp *Type) error {
+func partitionValueTypeCheck(ctx context.Context, funcTyp *Type, valueTyp *Type) error {
 	switch types.T(funcTyp.Id) {
 	case types.T_date, types.T_datetime:
 		switch types.T(valueTyp.Id) {
 		case types.T_varchar, types.T_char:
 		default:
-			return moerr.NewInternalError("Partition column values of incorrect type")
+			return moerr.NewInternalError(ctx, "Partition column values of incorrect type")
 		}
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		switch types.T(valueTyp.Id) {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
 		default:
-			return moerr.NewInternalError("Partition column values of incorrect type")
+			return moerr.NewInternalError(ctx, "Partition column values of incorrect type")
 		}
 	case types.T_float32, types.T_float64:
 		switch types.T(valueTyp.Id) {
 		case types.T_float32, types.T_float64, types.T_any:
 		default:
-			return moerr.NewInternalError("Partition column values of incorrect type")
+			return moerr.NewInternalError(ctx, "Partition column values of incorrect type")
 		}
 	case types.T_varchar, types.T_char:
 		switch types.T(valueTyp.Id) {
 		case types.T_varchar, types.T_char, types.T_any:
 		default:
-			return moerr.NewInternalError("Partition column values of incorrect type")
+			return moerr.NewInternalError(ctx, "Partition column values of incorrect type")
 		}
 	}
 	return nil
@@ -137,14 +138,14 @@ func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Part
 				return err
 			}
 
-			evalExpr, err := EvalPlanExpr(val)
+			evalExpr, err := EvalPlanExpr(binder.GetContext(), val)
 			if err != nil {
 				return err
 			}
 
 			cval, ok1 := evalExpr.Expr.(*plan.Expr_C)
 			if !ok1 {
-				return moerr.NewInternalError("This partition function is not allowed")
+				return moerr.NewInternalError(binder.GetContext(), "This partition function is not allowed")
 			}
 
 			switch types.T(evalExpr.Typ.Id) {
@@ -153,25 +154,25 @@ func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Part
 				switch value := cval.C.Value.(type) {
 				case *plan.Const_I8Val:
 					if value.I8Val < 0 && unsignedFlag {
-						return moerr.NewInternalError("Partition constant is out of partition function domain")
+						return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 					}
 				case *plan.Const_I16Val:
 					if value.I16Val < 0 && unsignedFlag {
-						return moerr.NewInternalError("Partition constant is out of partition function domain")
+						return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 					}
 				case *plan.Const_I32Val:
 					if value.I32Val < 0 && unsignedFlag {
-						return moerr.NewInternalError("Partition constant is out of partition function domain")
+						return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 					}
 				case *plan.Const_I64Val:
 					if value.I64Val < 0 && unsignedFlag {
-						return moerr.NewInternalError("Partition constant is out of partition function domain")
+						return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 					}
 				default:
-					return moerr.NewInternalError("VALUES value for partition '%-.64s' must have type INT", partition.Name)
+					return moerr.NewInternalError(binder.GetContext(), "VALUES value for partition '%-.64s' must have type INT", partition.Name)
 				}
 			default:
-				return moerr.NewInternalError("VALUES value for partition '%-.64s' must have type INT", partition.Name)
+				return moerr.NewInternalError(binder.GetContext(), "VALUES value for partition '%-.64s' must have type INT", partition.Name)
 			}
 		}
 	}
@@ -216,7 +217,7 @@ func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo 
 			case *plan.Expr_C, *plan.Expr_Max:
 			case *plan.Expr_F:
 			default:
-				return moerr.NewInternalError("This partition function is not allowed")
+				return moerr.NewInternalError(binder.GetContext(), "This partition function is not allowed")
 			}
 
 			// Check val.ConvertTo(colType) doesn't work, so we need this case by case check.
@@ -226,31 +227,31 @@ func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo 
 				switch types.T(vkind.Id) {
 				case types.T_varchar, types.T_char:
 				default:
-					return moerr.NewInternalError("Partition column values of incorrect type")
+					return moerr.NewInternalError(binder.GetContext(), "Partition column values of incorrect type")
 				}
 			case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 				switch types.T(vkind.Id) {
 				case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64: //+types.T_null:
 				default:
-					return moerr.NewInternalError("Partition column values of incorrect type")
+					return moerr.NewInternalError(binder.GetContext(), "Partition column values of incorrect type")
 				}
 			case types.T_float32, types.T_float64:
 				switch types.T(vkind.Id) {
 				case types.T_float32, types.T_float64: //+types.T_null:
 				default:
-					return moerr.NewInternalError("Partition column values of incorrect type")
+					return moerr.NewInternalError(binder.GetContext(), "Partition column values of incorrect type")
 				}
 			case types.T_varchar, types.T_char:
 				switch types.T(vkind.Id) {
 				case types.T_varchar, types.T_char: //+types.T_null:
 				default:
-					return moerr.NewInternalError("Partition column values of incorrect type")
+					return moerr.NewInternalError(binder.GetContext(), "Partition column values of incorrect type")
 				}
 			}
 		}
 		return nil
 	} else {
-		return moerr.NewInternalError("list partition function is not values in expression")
+		return moerr.NewInternalError(binder.GetContext(), "list partition function is not values in expression")
 	}
 }
 
@@ -267,14 +268,14 @@ func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partitio
 				return err
 			}
 
-			evalExpr, err := EvalPlanExpr(val)
+			evalExpr, err := EvalPlanExpr(binder.GetContext(), val)
 			if err != nil {
 				return err
 			}
 
 			cval, ok1 := evalExpr.Expr.(*plan.Expr_C)
 			if !ok1 {
-				return moerr.NewInternalError("This partition function is not allowed")
+				return moerr.NewInternalError(binder.GetContext(), "This partition function is not allowed")
 			}
 
 			switch types.T(evalExpr.Typ.Id) {
@@ -283,25 +284,25 @@ func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partitio
 				switch value := cval.C.Value.(type) {
 				case *plan.Const_I8Val:
 					if value.I8Val < 0 && unsignedFlag {
-						return moerr.NewInternalError("Partition constant is out of partition function domain")
+						return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 					}
 				case *plan.Const_I16Val:
 					if value.I16Val < 0 && unsignedFlag {
-						return moerr.NewInternalError("Partition constant is out of partition function domain")
+						return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 					}
 				case *plan.Const_I32Val:
 					if value.I32Val < 0 && unsignedFlag {
-						return moerr.NewInternalError("Partition constant is out of partition function domain")
+						return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 					}
 				case *plan.Const_I64Val:
 					if value.I64Val < 0 && unsignedFlag {
-						return moerr.NewInternalError("Partition constant is out of partition function domain")
+						return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 					}
 				default:
-					return moerr.NewInternalError("VALUES value for partition '%-.64s' must have type INT", partition.Name)
+					return moerr.NewInternalError(binder.GetContext(), "VALUES value for partition '%-.64s' must have type INT", partition.Name)
 				}
 			default:
-				return moerr.NewInternalError("VALUES value for partition '%-.64s' must have type INT", partition.Name)
+				return moerr.NewInternalError(binder.GetContext(), "VALUES value for partition '%-.64s' must have type INT", partition.Name)
 			}
 		}
 	}
@@ -331,7 +332,7 @@ func findColumnByName(colName string, tbdef *TableDef) *ColDef {
 	return nil
 }
 
-func EvalPlanExpr(expr *plan.Expr) (*plan.Expr, error) {
+func EvalPlanExpr(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
 	switch expr.Expr.(type) {
 	case *plan.Expr_C:
 		return expr, nil
@@ -346,14 +347,14 @@ func EvalPlanExpr(expr *plan.Expr) (*plan.Expr, error) {
 		if _, ok := newExpr.Expr.(*plan.Expr_C); ok {
 			return newExpr, nil
 		} else {
-			return nil, moerr.NewInternalError("This partition function is not allowed")
+			return nil, moerr.NewInternalError(ctx, "This partition function is not allowed")
 		}
 
 	}
 }
 
 // checkPartitionFuncValid checks partition function validly.
-func checkPartitionFuncValid(tbdef *TableDef, partby tree.PartitionBy) error {
+func checkPartitionFuncValid(ctx context.Context, tbdef *TableDef, partby tree.PartitionBy) error {
 	if partby.PType == nil {
 		return nil
 	}
@@ -368,27 +369,27 @@ func checkPartitionFuncValid(tbdef *TableDef, partby tree.PartitionBy) error {
 	case *tree.KeyType:
 		if partitionType.ColumnList != nil {
 			for _, expr := range partitionType.ColumnList {
-				PartitionExprSemanticCheck(tbdef, expr, checker)
+				PartitionExprSemanticCheck(ctx, tbdef, expr, checker)
 				if checker.err != nil {
 					return checker.err
 				}
 			}
 		}
 	case *tree.HashType:
-		PartitionExprSemanticCheck(tbdef, partitionType.Expr, checker)
+		PartitionExprSemanticCheck(ctx, tbdef, partitionType.Expr, checker)
 		if checker.err != nil {
 			return checker.err
 		}
 	case *tree.RangeType:
 		if partitionType.ColumnList != nil {
 			for _, expr := range partitionType.ColumnList {
-				PartitionExprSemanticCheck(tbdef, expr, checker)
+				PartitionExprSemanticCheck(ctx, tbdef, expr, checker)
 				if checker.err != nil {
 					return checker.err
 				}
 			}
 		} else {
-			PartitionExprSemanticCheck(tbdef, partitionType.Expr, checker)
+			PartitionExprSemanticCheck(ctx, tbdef, partitionType.Expr, checker)
 			if checker.err != nil {
 				return checker.err
 			}
@@ -396,13 +397,13 @@ func checkPartitionFuncValid(tbdef *TableDef, partby tree.PartitionBy) error {
 	case *tree.ListType:
 		if partitionType.ColumnList != nil {
 			for _, expr := range partitionType.ColumnList {
-				PartitionExprSemanticCheck(tbdef, expr, checker)
+				PartitionExprSemanticCheck(ctx, tbdef, expr, checker)
 				if checker.err != nil {
 					return checker.err
 				}
 			}
 		} else {
-			PartitionExprSemanticCheck(tbdef, partitionType.Expr, checker)
+			PartitionExprSemanticCheck(ctx, tbdef, partitionType.Expr, checker)
 			if checker.err != nil {
 				return checker.err
 			}
@@ -411,16 +412,16 @@ func checkPartitionFuncValid(tbdef *TableDef, partby tree.PartitionBy) error {
 	return nil
 }
 
-type partitionExprProcessor func(def *TableDef, expr tree.Expr) error
+type partitionExprProcessor func(ctx context.Context, def *TableDef, expr tree.Expr) error
 type partitionExprChecker struct {
 	processors []partitionExprProcessor
 	tbdef      *TableDef
 	err        error
 }
 
-func PartitionExprSemanticCheck(tbdef *TableDef, expr tree.Expr, checker *partitionExprChecker) (canNext bool) {
+func PartitionExprSemanticCheck(ctx context.Context, tbdef *TableDef, expr tree.Expr, checker *partitionExprChecker) (canNext bool) {
 	for _, processor := range checker.processors {
-		if err := processor(tbdef, expr); err != nil {
+		if err := processor(ctx, tbdef, expr); err != nil {
 			checker.err = err
 			return false
 		}
@@ -429,28 +430,28 @@ func PartitionExprSemanticCheck(tbdef *TableDef, expr tree.Expr, checker *partit
 	switch v := expr.(type) {
 	case *tree.FuncExpr:
 		for _, e := range v.Exprs {
-			next := PartitionExprSemanticCheck(tbdef, e, checker)
+			next := PartitionExprSemanticCheck(ctx, tbdef, e, checker)
 			if !next {
 				return next
 			}
 		}
 	case *tree.BinaryExpr:
-		next := PartitionExprSemanticCheck(tbdef, v.Left, checker)
+		next := PartitionExprSemanticCheck(ctx, tbdef, v.Left, checker)
 		if !next {
 			return next
 		}
 
-		next = PartitionExprSemanticCheck(tbdef, v.Right, checker)
+		next = PartitionExprSemanticCheck(ctx, tbdef, v.Right, checker)
 		if !next {
 			return next
 		}
 	case *tree.UnaryExpr:
-		next := PartitionExprSemanticCheck(tbdef, v.Expr, checker)
+		next := PartitionExprSemanticCheck(ctx, tbdef, v.Expr, checker)
 		if !next {
 			return next
 		}
 	case *tree.ParenExpr:
-		next := PartitionExprSemanticCheck(tbdef, v.Expr, checker)
+		next := PartitionExprSemanticCheck(ctx, tbdef, v.Expr, checker)
 		if !next {
 			return next
 		}
@@ -459,18 +460,18 @@ func PartitionExprSemanticCheck(tbdef *TableDef, expr tree.Expr, checker *partit
 	case *tree.MaxValue:
 		return false
 	default:
-		checker.err = moerr.NewInternalError("This partition function is not allowed")
+		checker.err = moerr.NewInternalError(ctx, "This partition function is not allowed")
 		return false
 	}
 	return true
 }
 
-func checkPartitionExprAllowed(tb *TableDef, e tree.Expr) error {
+func checkPartitionExprAllowed(ctx context.Context, tb *TableDef, e tree.Expr) error {
 	switch v := e.(type) {
 	case *tree.FuncExpr:
 		funcRef, ok := v.Func.FunctionReference.(*tree.UnresolvedName)
 		if !ok {
-			return moerr.NewNYI("function expr '%v'", v)
+			return moerr.NewNYI(ctx, "function expr '%v'", v)
 		}
 		funcName := funcRef.Parts[0]
 		if _, ok = AllowedPartitionFuncMap[funcName]; ok {
@@ -478,30 +479,30 @@ func checkPartitionExprAllowed(tb *TableDef, e tree.Expr) error {
 		}
 	case *tree.BinaryExpr:
 		if _, ok := AllowedPartition4BinaryOpMap[v.Op]; ok {
-			return checkNoTimestampArgs(tb, v.Left, v.Right)
+			return checkNoTimestampArgs(ctx, tb, v.Left, v.Right)
 		}
 	case *tree.UnaryExpr:
 		if _, ok := AllowedPartition4UnaryOpMap[v.Op]; ok {
-			return checkNoTimestampArgs(tb, v.Expr)
+			return checkNoTimestampArgs(ctx, tb, v.Expr)
 		}
 	case *tree.ParenExpr, *tree.MaxValue, *tree.UnresolvedName:
 		return nil
 	}
-	return moerr.NewInternalError("This partition function is not allowed")
+	return moerr.NewInternalError(ctx, "This partition function is not allowed")
 }
 
-func checkNoTimestampArgs(tbInfo *TableDef, exprs ...tree.Expr) error {
-	argsType, err := collectArgsType(tbInfo, exprs...)
+func checkNoTimestampArgs(ctx context.Context, tbInfo *TableDef, exprs ...tree.Expr) error {
+	argsType, err := collectArgsType(ctx, tbInfo, exprs...)
 	if err != nil {
 		return err
 	}
 	if hasTimestampArgs(argsType...) {
-		return moerr.NewInternalError("Constant, random or timezone-dependent expressions in (sub)partitioning function are not allowed")
+		return moerr.NewInternalError(ctx, "Constant, random or timezone-dependent expressions in (sub)partitioning function are not allowed")
 	}
 	return nil
 }
 
-func collectArgsType(tblInfo *TableDef, exprs ...tree.Expr) ([]*Type, error) {
+func collectArgsType(ctx context.Context, tblInfo *TableDef, exprs ...tree.Expr) ([]*Type, error) {
 	ts := make([]*Type, 0, len(exprs))
 	for _, arg := range exprs {
 		col, ok := arg.(*tree.UnresolvedName)
@@ -510,7 +511,7 @@ func collectArgsType(tblInfo *TableDef, exprs ...tree.Expr) ([]*Type, error) {
 		}
 		columnInfo := findColumnByName(col.Parts[0], tblInfo)
 		if columnInfo == nil {
-			return nil, moerr.NewInternalError("Unknown column '%-.192s' in '%-.192s'", col.Parts[0], "partition function")
+			return nil, moerr.NewInternalError(ctx, "Unknown column '%-.192s' in '%-.192s'", col.Parts[0], "partition function")
 		}
 		ts = append(ts, columnInfo.GetTyp())
 	}
