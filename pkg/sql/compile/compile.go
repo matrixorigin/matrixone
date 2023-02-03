@@ -970,21 +970,30 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 			}
 		}
 	case plan.Node_RIGHT:
-		rs = make([]*Scope, len(ss))
-		for i := range rs {
-			rs[i] = new(Scope)
-			rs[i].Magic = Remote
-			rs[i].IsJoin = true
-			rs[i].NodeInfo = ss[i].NodeInfo
-			rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-		}
-		rs = c.newJoinScopeListWithBucket(rs, ss, children)
-		for i := range rs {
-			if isEq {
+		if isEq {
+			rs = make([]*Scope, len(ss))
+			for i := range rs {
+				rs[i] = new(Scope)
+				rs[i].Magic = Remote
+				rs[i].IsJoin = true
+				rs[i].NodeInfo = ss[i].NodeInfo
+				rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+			}
+			rs = c.newJoinScopeListWithBucket(rs, ss, children)
+			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
 					Idx: c.anal.curr,
 					Arg: constructRight(n, left_typs, right_typs, uint64(i), uint64(len(rs)), c.proc),
+				})
+			}
+		} else {
+			rs = c.newShuffleJoinScopeList(children, ss)
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.LoopLeft,
+					Idx: c.anal.curr,
+					Arg: constructLoopRight(n, left_typs, c.proc),
 				})
 			}
 		}

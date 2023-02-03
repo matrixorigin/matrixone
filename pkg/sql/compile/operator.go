@@ -1166,6 +1166,21 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 		Cond:   colexec.RewriteFilterExprList(n.OnList),
 	}
 }
+func constructLoopRight(n *plan.Node, typs []types.Type, proc *process.Process) *loopleft.Argument {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	
+	swap := []int{1, 0}//swap left and right, let 0->1 and 1->0
+
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
+		result[i].Rel = int32(swap[int(result[i].Rel)])
+	}
+	return &loopleft.Argument{
+		Typs:   typs,
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
 
 func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
