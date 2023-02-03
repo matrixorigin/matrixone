@@ -1,0 +1,237 @@
+create table sort_key_01(col1 int not null,col2 Bool)cluster by col2;
+insert into sort_key_01 values (10,TRUE);
+insert into sort_key_01 values (4,FALSE);
+insert into sort_key_01 values (20,NULL);
+insert into sort_key_01 values (6,FALSE);
+select * from sort_key_01;
+col1    col2
+10    true
+4    false
+20    null
+6    false
+select col2 from sort_key_01;
+col2
+true
+false
+null
+false
+drop table sort_key_01;
+create table sort_key_02(col1 int not null,col2 char(20))cluster by  col2;
+insert into sort_key_02 values (10,'zacc'),(4,'del'),(20,'中国'),(2,'134'),(6,NULL),(3,''),(1,'a few mo');
+select col2 from sort_key_02;
+col2
+zacc
+del
+中国
+134
+null
+
+a few mo
+select * from sort_key_02;
+col1    col2
+10    zacc
+4    del
+20    中国
+2    134
+6    null
+3    
+1    a few mo
+create table sort_key_03(col2 char(255));
+insert into sort_key_03 select col2 from sort_key_02;
+select * from sort_key_03;
+col2
+zacc
+del
+中国
+134
+null
+
+a few mo
+create table sort_key_04(col1 int,col2 varchar(255))cluster by  col2;
+insert into sort_key_04 select * from sort_key_02;
+select col2 from sort_key_04;
+col2
+zacc
+del
+中国
+134
+null
+
+a few mo
+drop table sort_key_04;
+create external table ex_table_sort(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 char(255) ,col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 blob,col20 json)infile{"filepath"='$resouces/load_data/sort_key_1.csv'};
+create table sort_key_05(col1 tinyint,col2 text)cluster by  col2;
+insert into sort_key_05 select col1,col17 from ex_table_sort;
+select col2 from sort_key_05;
+col2
+create table sort_key_06(col1 int,col2 tinyint)cluster by  col2;
+insert into sort_key_06 select col3,col1 from ex_table_sort;
+select col2 from sort_key_06;
+col2
+drop table sort_key_06;
+create table sort_key_06(col1 int,col2 tinyint auto_increment)cluster by  col2;
+insert into sort_key_06 select col3,col1 from ex_table_sort;
+select col2 from sort_key_06;
+col2
+create table sort_key_07(col1 int,col2 tinyint unsigned)cluster by  col2;
+insert into sort_key_07 select col3,col5 from ex_table_sort;
+select col2 from sort_key_07;
+col2
+drop table sort_key_07;
+create table sort_key_07(col1 int,col2 tinyint unsigned default 240)cluster by  col2;
+insert into sort_key_07 select col3,col5 from ex_table_sort;
+select col2 from sort_key_07;
+col2
+drop table sort_key_07;
+create table sort_key_08(col1 int,col2 smallint)cluster by  col2;
+insert into sort_key_08 select col3,col2 from ex_table_sort;
+select * from sort_key_08;
+col1    col2
+select col2 from sort_key_08 order by col2;
+col2
+drop table sort_key_08;
+create table sort_key_09(col1 char,col2 smallint unsigned)cluster by col2;
+insert into sort_key_09 select col11,col6 from ex_table_sort;
+select col2 from sort_key_09;
+col2
+drop table sort_key_09;
+create table sort_key_10(col1 char,col2 int)cluster by col2;
+insert into sort_key_10 select col11,col3 from ex_table_sort;
+select col2 from sort_key_10;
+col2
+create view sort_key_view as select * from sort_key_10;
+select * from sort_key_view;
+col1    col2
+alter view sort_key_view as select '2',3 ;
+select * from sort_key_view;
+2    3
+2    3
+drop table sort_key_10;
+drop view sort_key_view;
+create table sort_key_11(col1 char,col2 int)cluster by col2;
+insert into sort_key_11 select col11,col7 from ex_table_sort;
+select * from sort_key_11;
+col1    col2
+drop table sort_key_11;
+create table sort_key_12(col1 tinyint auto_increment,col2 bigint not null)cluster by col2;
+insert into sort_key_12 select col1,col4 from ex_table_sort;
+select col2 from sort_key_12;
+col2
+drop table sort_key_12;
+create table sort_key_13(col1 tinyint default 1,col2 bigint unsigned)cluster by col2;
+insert into sort_key_13 select col1,col8 from ex_table_sort;
+select col2 from sort_key_13;
+col2
+drop table sort_key_13;
+create table sort_key_14(col1 tinyint,col2 decimal(15,6))cluster by col2;
+insert into sort_key_14 select col1,col16 from ex_table_sort;
+select col2 from sort_key_14;
+col2
+drop table sort_key_14;
+create table sort_key_15(col1 tinyint,col2 float)cluster by col2;
+insert into sort_key_15 select col1,col9 from ex_table_sort;
+select col2 from sort_key_15;
+col2
+drop table sort_key_15;
+create table sort_key_16(col1 tinyint,col2 double)cluster by col2;
+insert into sort_key_16 select col1,col10 from ex_table_sort;
+select col2 from sort_key_16;
+col2
+drop table sort_key_16;
+create table sort_key_17(col1 tinyint,col2 date)cluster by col2;
+insert into sort_key_17 select col1,col12 from ex_table_sort;
+select col2 from sort_key_17;
+col2
+drop table sort_key_17;
+create table sort_key_18(col1 tinyint,col2 datetime)cluster by col2;
+insert into sort_key_18 select col1,col13 from ex_table_sort;
+select col2 from sort_key_18;
+col2
+drop table sort_key_18;
+create table sort_key_19(col1 tinyint,col2 timestamp)cluster by col2;
+insert into sort_key_19 select col1,col14 from ex_table_sort;
+select col2 from sort_key_19;
+col2
+drop table sort_key_19;
+create table sort_key_20(col1 tinyint,col2 blob)cluster by col2;
+insert into sort_key_20 select col1,col19 from ex_table_sort;
+select col2 from sort_key_20;
+col2
+drop table sort_key_20;
+create table sort_key_21(col1 tinyint,col2 json)cluster by col2;
+insert into sort_key_21 select col1,col20 from ex_table_sort;
+select col2 from sort_key_21;
+col2
+drop table sort_key_21;
+create temporary table sort_key_10(col1 char,col2 int)cluster by col2;
+internal error: panic gob: type not registered for interface: engine.ClusterByDef: 
+github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine.DoTxnRequest[...]
+	/Users/heni/test-envir/matrixone/pkg/vm/engine/memoryengine/request.go:69
+github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine.(*Database).Create
+	/Users/heni/test-envir/matrixone/pkg/vm/engine/memoryengine/database.go:43
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).CreateTempTable
+	/Users/heni/test-envir/matrixone/pkg/sql/compile/ddl.go:300
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).Run
+	/Users/heni/test-envir/matrixone/pkg/sql/compile/compile.go:168
+github.com/matrixorigin/matrixone/pkg/frontend.(*MysqlCmdExecutor).doComQuery
+	/Users/heni/test-envir/matrixone/pkg/frontend/mysql_cmd_executor.go:3926
+github.com/matrixorigin/matrixone/pkg/frontend.(*MysqlCmdExecutor).ExecRequest
+	/Users/heni/test-envir/matrixone/pkg/frontend/mysql_cmd_executor.go:4297
+github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
+	/Users/heni/test-envir/matrixone/pkg/frontend/routine.go:168
+github.com/matrixorigin/matrixone/pkg/frontend.(*RoutineManager).Handler
+	/Users/heni/test-envir/matrixone/pkg/frontend/routine_manager.go:311
+github.com/fagongzi/goetty/v2.(*server).doConnection
+	/Users/heni/go/pkg/mod/github.com/fagongzi/goetty/v2@v2.0.3-0.20221212132037-abf2d4c05484/application.go:381
+github.com/fagongzi/goetty/v2.(*server).doStart.func2.1
+	/Users/heni/go/pkg/mod/github.com/fagongzi/goetty/v2@v2.0.3-0.20221212132037-abf2d4c05484/application.go:344
+runtime.goexit
+	/opt/homebrew/Cellar/go/1.19.3/libexec/src/runtime/asm_arm64.s:1172
+insert into sort_key_10 select col11,col3 from ex_table_sort;
+invalid input: insert target table 'sort_key_10' does not exist
+select col2 from sort_key_10;
+SQL parser error: table "sort_key_10" does not exist
+drop table sort_key_10;
+no such table cluster_by.sort_key_10
+create table sort_key_11(col1 int,col2 double not null,col3 date,col4 char(25) default 'abc',unique key col1 (col1),key col2(col2))cluster by col1;
+insert into sort_key_11 values (563,23.01,'2022-10-01','');
+insert into sort_key_11 values (777,0.01,'2022-12-08','90');
+select * from sort_key_11;
+col1    col2    col3    col4
+563    23.01    2022-10-01    
+777    0.01    2022-12-08    90
+drop table sort_key_11;
+create table sort_key_11(col1 int,col2 double not null,col3 date,col4 char(25) default 'abc')cluster by col1;
+create unique index index1 on sort_key_11(col1) comment'test';
+create unique index index2 on sort_key_11(col1,col2) comment'test';
+show create table sort_key_11;
+Table    Create Table
+sort_key_11    CREATE TABLE `sort_key_11` (\n`col1` INT DEFAULT NULL,\n`col2` DOUBLE NOT NULL,\n`col3` DATE DEFAULT NULL,\n`col4` CHAR(25) DEFAULT 'abc',\nUNIQUE KEY `index1` (`col1`) COMMENT `test`,\nUNIQUE KEY `index2` (`col1`,`col2`) COMMENT `test`\n) CLUSTER BY (`col1`)
+insert into sort_key_11 values (563,23.01,'2022-10-01','');
+drop index index1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 18 near ";";
+drop index index2;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 18 near ";";
+create table sort_key_15(col1 tinyint,col2 float)cluster by col2;
+insert into sort_key_15 select col1,col9 from ex_table_sort;
+select col2 from sort_key_15;
+col2
+update sort_key_15 set col2=9.01 where col1 is null;
+select col2 from sort_key_15;
+col2
+delete from sort_key_15 where col1=70;
+select col2 from sort_key_15;
+col2
+select * from sort_key_15;
+col1    col2
+truncate table sort_key_15;
+select col2 from sort_key_15;
+col2
+drop table sort_key_15;
+create table sort_key_22(col1 char,col2 int primary key)cluster by col2;
+not supported: cluster by with primary key is not support
+create table sort_key_23(col1 int,col2 date,col3 char(20),primary key(col1,col3))cluster by col2;
+not supported: cluster by with primary key is not support
+create table sort_key_24(col1 int,col2 date,col3 char(20))order by col4;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 63 near "order by col4;";
+create table sort_key_24(col1 int,col2 date,col3 char(20)) partition by hash(col1)cluster by col2;
