@@ -218,6 +218,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				RelationName: s.DataSource.RelationName,
 				Attributes:   s.DataSource.Attributes,
 			},
+			NodeInfo: s.NodeInfo,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
@@ -260,7 +261,8 @@ func (s *Scope) JoinRun(c *Compile) error {
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
-			Magic: Merge,
+			Magic:    Merge,
+			NodeInfo: s.NodeInfo,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
@@ -403,6 +405,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 		}
 		s.Instructions[0] = vm.Instruction{
 			Op:  vm.Merge,
+			Idx: s.Instructions[0].Idx, // TODO: remove it
 			Arg: &merge.Argument{},
 		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
@@ -432,7 +435,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			ss[i].appendInstruction(vm.Instruction{
 				Op: vm.Connector,
 				Arg: &connector.Argument{
-					Reg: s.Proc.Reg.MergeReceivers[i],
+					Reg: s.Proc.Reg.MergeReceivers[j],
 				},
 			})
 			j++

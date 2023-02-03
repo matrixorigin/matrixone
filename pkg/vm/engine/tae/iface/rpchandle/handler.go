@@ -79,7 +79,7 @@ type Handler interface {
 	HandleForceCheckpoint(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req db.FlushTable,
+		req db.Checkpoint,
 		resp *apipb.SyncLogTailResp,
 	) error
 }

@@ -20,6 +20,5 @@ select current_account_name();
 select current_user_name();
 select current_user_id();
 select current_role_name();
-select current_role_id();
 -- select * from current_account() as t;
 -- @session
