@@ -39,7 +39,7 @@ import (
 )
 
 type WriteS3Container struct {
-	pkIndex          []int
+	sortIndex        []int
 	nameToNullablity map[string]bool
 	pk               map[string]bool
 
@@ -54,7 +54,7 @@ type WriteS3Container struct {
 
 func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 	container := &WriteS3Container{
-		pkIndex:          make([]int, 0, 1),
+		sortIndex:        make([]int, 0, 1),
 		pk:               make(map[string]bool),
 		nameToNullablity: make(map[string]bool),
 	}
@@ -65,7 +65,7 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 		for num, colDef := range tableDef.Cols {
 			for _, name := range names {
 				if colDef.Name == name {
-					container.pkIndex = append(container.pkIndex, num)
+					container.sortIndex = append(container.sortIndex, num)
 				}
 			}
 		}
@@ -73,8 +73,34 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 		// Get Single Col pk index
 		for num, colDef := range tableDef.Cols {
 			if colDef.Primary {
-				container.pkIndex = append(container.pkIndex, num)
+				container.sortIndex = append(container.sortIndex, num)
 				break
+			}
+		}
+	}
+
+	// Get CPkey index
+	if tableDef.CompositePkey != nil {
+		// the serialized cpk col is located in the last of the bat.vecs
+		container.sortIndex = append(container.sortIndex, len(tableDef.Cols))
+	} else {
+		// Get Single Col pk index
+		for num, colDef := range tableDef.Cols {
+			if colDef.Primary {
+				container.sortIndex = append(container.sortIndex, num)
+				break
+			}
+		}
+		if tableDef.ClusterBy != nil {
+			if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+				// the serialized clusterby col is located in the last of the bat.vecs
+				container.sortIndex = append(container.sortIndex, len(tableDef.Cols))
+			} else {
+				for num, colDef := range tableDef.Cols {
+					if colDef.Name == tableDef.ClusterBy.Name {
+						container.sortIndex = append(container.sortIndex, num)
+					}
+				}
 			}
 		}
 	}
@@ -162,8 +188,8 @@ func GetBlockMeta(bats []*batch.Batch, container *WriteS3Container, proc *proces
 		if err := GenerateWriter(container, proc); err != nil {
 			return err
 		}
-		if idx == 0 && len(container.pkIndex) != 0 {
-			SortByPrimaryKey(proc, bats[i], container.pkIndex, proc.GetMPool())
+		if idx == 0 && len(container.sortIndex) != 0 {
+			SortByPrimaryKey(proc, bats[i], container.sortIndex, proc.GetMPool())
 		}
 		if bats[i].Length() == 0 {
 			continue

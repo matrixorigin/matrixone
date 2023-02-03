@@ -156,7 +156,7 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 	for _, def := range tableDef.Defs {
 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
 			// how to get relation?
-			for idx, _ := range idxDef.UIdx.TableNames {
+			for idx := range idxDef.UIdx.TableNames {
 				partsLength := len(idxDef.UIdx.Fields[idx].Parts)
 				uniqueColumnPos := make([]int, partsLength)
 				for p, column := range idxDef.UIdx.Fields[idx].Parts {
