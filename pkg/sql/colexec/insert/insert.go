@@ -68,8 +68,8 @@ func GetBlockMeta(bats []*batch.Batch, n *Argument, proc *process.Process) (*bat
 		if err := GenerateWriter(n, proc); err != nil {
 			return nil, err
 		}
-		if len(n.container.pkIndex) != 0 {
-			SortByPrimaryKey(proc, n, bats[i], n.container.pkIndex, proc.GetMPool())
+		if len(n.container.sortIndex) != 0 {
+			SortByKey(proc, n, bats[i], n.container.sortIndex, proc.GetMPool())
 		}
 		if bats[i].Length() == 0 {
 			continue
@@ -208,7 +208,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	if ap.IsRemote {
 		ap.container = new(Container)
-		ap.GetPkIndexes()
+		ap.GetSortKeyIndexes()
 		ap.container.nameToNullablity = make(map[string]bool)
 		ap.container.pk = make(map[string]bool)
 		ap.GetNameNullAbility()
@@ -266,7 +266,7 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 }
 
 // referece to pkg/sql/colexec/order/order.go logic
-func SortByPrimaryKey(proc *process.Process, n *Argument, bat *batch.Batch, pkIdx []int, m *mpool.MPool) error {
+func SortByKey(proc *process.Process, n *Argument, bat *batch.Batch, pkIdx []int, m *mpool.MPool) error {
 	// Not-Null Check
 	for i := 0; i < len(pkIdx); i++ {
 		if nulls.Any(bat.Vecs[i].Nsp) {

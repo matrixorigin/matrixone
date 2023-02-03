@@ -31,7 +31,7 @@ const (
 type Container struct {
 	writer        objectio.Writer
 	unique_writer []objectio.Writer
-	pkIndex       []int
+	sortIndex     []int
 	// record every batch's Length
 	lengths []uint64
 	// record unique batch's Length
@@ -70,24 +70,33 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 }
 
-func (arg *Argument) GetPkIndexes() {
-	arg.container.pkIndex = make([]int, 0, 1)
+// remember that, sortIdx can hold cpkeys, or single col pk, or clusterBy key
+// but it can't hold them above two of them , that means it can only hold
+// one of them at most.
+func (arg *Argument) GetSortKeyIndexes() {
+	arg.container.sortIndex = make([]int, 0, 1)
 	// Get CPkey index
 	if arg.CPkeyColDef != nil {
-		names := util.SplitCompositePrimaryKeyColumnName(arg.CPkeyColDef.Name)
-		for num, colDef := range arg.TargetColDefs {
-			for _, name := range names {
-				if colDef.Name == name {
-					arg.container.pkIndex = append(arg.container.pkIndex, num)
-				}
-			}
-		}
+		// the serialized cpk col is located in the last of the bat.vecs
+		arg.container.sortIndex = append(arg.container.sortIndex, len(arg.TargetColDefs))
 	} else {
 		// Get Single Col pk index
 		for num, colDef := range arg.TargetColDefs {
 			if colDef.Primary {
-				arg.container.pkIndex = append(arg.container.pkIndex, num)
+				arg.container.sortIndex = append(arg.container.sortIndex, num)
 				break
+			}
+		}
+		if arg.ClusterByDef != nil {
+			if util.JudgeIsCompositeClusterByColumn(arg.ClusterByDef.Name) {
+				// the serialized clusterby col is located in the last of the bat.vecs
+				arg.container.sortIndex = append(arg.container.sortIndex, len(arg.TargetColDefs))
+			} else {
+				for num, colDef := range arg.TargetColDefs {
+					if colDef.Name == arg.ClusterByDef.Name {
+						arg.container.sortIndex = append(arg.container.sortIndex, num)
+					}
+				}
 			}
 		}
 	}
