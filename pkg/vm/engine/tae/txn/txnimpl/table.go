@@ -829,9 +829,14 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
-	pks := tbl.localSegment.GetPKColumn()
-	defer pks.Close()
-	err = tbl.DoPrecommitDedup(pks)
+	pkVecs := tbl.localSegment.GetPKVecs()
+	for _, pkVec := range pkVecs {
+		defer pkVec.Close()
+		err = tbl.DoPrecommitDedup(pkVec)
+		if err != nil {
+			return
+		}
+	}
 	return
 }
 
