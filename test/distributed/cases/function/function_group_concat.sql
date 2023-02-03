@@ -101,7 +101,7 @@ SELECT group_concat(bar order by concat(bar,bar) ASC) FROM group_concat_07;
 -- Abnormal test
 SELECT bar FROM group_concat_07 HAVING group_concat(bar)='';
 SELECT bar FROM group_concat_07 HAVING instr(group_concat(bar), "test") > 0;
-SELECT bar FROM group_concat_07 HAVING instr(group_concat(bar order by concat(bar,bar) desc), "tesgroup_concat_09,tesgroup_concat_08")>0;
+SELECT bar FROM group_concat_07 HAVING instr(group_concat(bar order by concat(bar,bar) desc), "tesgroup_concat_09,tesgroup_concat_08") > 0;
 
 
 -- @suite
