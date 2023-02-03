@@ -306,6 +306,7 @@ func (ses *Session) Dispose() {
 		mpool.DeleteMPool(mp)
 		ses.SetMemPool(mp)
 	}
+	ses.cleanCache()
 }
 
 type errInfo struct {
@@ -456,7 +457,7 @@ func (ses *Session) IsBackgroundSession() bool {
 	return ses.isBackgroundSession
 }
 
-func (ses *Session) cachePlan(sql string, stmts []*tree.Statement, plans []*plan.Plan) {
+func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.planCache.cache(sql, stmts, plans)
