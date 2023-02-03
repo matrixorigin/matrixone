@@ -402,7 +402,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 
 	if delCtx.CanTruncate {
 		for i, ref := range oldCtx.Ref {
-			rel, err := getRel(proc.Ctx, proc, eg, ref)
+			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -419,28 +419,28 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			}
 		}
 		for i, ref := range oldCtx.Ref {
-			rel, err := getRel(proc.Ctx, proc, eg, ref)
+			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
 			if err != nil {
 				return nil, err
 			}
 			delCtx.DelSource[i] = rel
 		}
 		for i, ref := range oldCtx.IdxRef {
-			rel, err := getRel(proc.Ctx, proc, eg, ref)
+			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
 			if err != nil {
 				return nil, err
 			}
 			delCtx.IdxSource[i] = rel
 		}
 		for i, ref := range oldCtx.OnCascadeRef {
-			rel, err := getRel(proc.Ctx, proc, eg, ref)
+			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
 			if err != nil {
 				return nil, err
 			}
 			delCtx.OnCascadeSource[i] = rel
 		}
 		for i, ref := range oldCtx.OnSetRef {
-			rel, err := getRel(proc.Ctx, proc, eg, ref)
+			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -471,11 +471,12 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		ParentIdx: oldCtx.ParentIdx,
 	}
 
-	rel, err := getRel(ctx, proc, eg, oldCtx.Ref)
+	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
 	if err != nil {
 		return nil, err
 	}
-	newCtx.Source = rel
+	newCtx.Source = originRel
+	newCtx.IdxSource = indexRels
 
 	return &insert.Argument{
 		InsertCtx: newCtx,
@@ -483,107 +484,107 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	}, nil
 }
 
-// func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
-// 	var db engine.Database
-// 	var relation engine.Relation
-// 	var err error
-// 	var isTemp bool
-// 	ctx := proc.Ctx
-// 	if n.GetClusterTable().GetIsClusterTable() {
-// 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-// 	}
-// 	db, err = eg.Database(ctx, n.ObjRef.SchemaName, proc.TxnOperator)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	relation, err = db.Relation(ctx, n.TableDef.Name)
-// 	if err != nil {
-// 		var e error
-// 		db, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-// 		if e != nil {
-// 			return nil, err
-// 		}
-
-// 		relation, e = db.Relation(proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
-// 		if e != nil {
-// 			return nil, err
-// 		}
-// 		isTemp = true
-// 	}
-// 	uniqueIndexTables := make([]engine.Relation, 0)
-// 	secondaryIndexTables := make([]engine.Relation, 0)
-// 	uDef, sDef := buildIndexDefs(n.TableDef.Defs)
-// 	if uDef != nil {
-// 		for i := range uDef.TableNames {
-// 			var indexTable engine.Relation
-// 			var err error
-// 			if uDef.TableExists[i] {
-// 				if isTemp {
-// 					indexTable, err = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, uDef.TableNames[i]))
-// 				} else {
-// 					indexTable, err = db.Relation(ctx, uDef.TableNames[i])
-// 				}
-// 				if err != nil {
-// 					return nil, err
-// 				}
-// 				uniqueIndexTables = append(uniqueIndexTables, indexTable)
-// 			}
-// 		}
-// 	}
-// 	if sDef != nil {
-// 		for i := range sDef.TableNames {
-// 			var indexTable engine.Relation
-// 			var err error
-// 			if sDef.TableExists[i] {
-// 				if isTemp {
-// 					indexTable, err = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, sDef.TableNames[i]))
-// 				} else {
-// 					indexTable, err = db.Relation(ctx, sDef.TableNames[i])
-// 				}
-// 				if err != nil {
-// 					return nil, err
-// 				}
-// 				secondaryIndexTables = append(secondaryIndexTables, indexTable)
-// 			}
-// 		}
-// 	}
-
-// 	var dbName string
-// 	var tblName string
-// 	if isTemp {
-// 		dbName = defines.TEMPORARY_DBNAME
-// 		tblName = engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name)
-// 	} else {
-// 		dbName = n.ObjRef.SchemaName
-// 		tblName = n.TableDef.Name
-// 	}
-
-// 	hasAutoCol := false
-// 	for i := 0; i < len(n.TableDef.Cols); i++ {
-// 		if n.TableDef.Cols[i].Typ.AutoIncr {
-// 			hasAutoCol = true
-// 			break
-// 		}
-// 	}
-
-// 	return &insert.Argument{
-// 		TargetTable:          relation,
-// 		TargetColDefs:        n.TableDef.Cols,
-// 		Engine:               eg,
-// 		DB:                   db,
-// 		TableID:              relation.GetTableID(proc.Ctx),
-// 		DBName:               dbName,
-// 		TableName:            tblName,
-// 		CPkeyColDef:          n.TableDef.CompositePkey,
-// 		UniqueIndexTables:    uniqueIndexTables,
-// 		UniqueIndexDef:       uDef,
-// 		SecondaryIndexTables: secondaryIndexTables,
-// 		SecondaryIndexDef:    sDef,
-// 		ClusterByDef:         n.TableDef.ClusterBy,
-// 		ClusterTable:         n.GetClusterTable(),
-// 		HasAutoCol:           hasAutoCol,
-// 	}, nil
-// }
+//func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
+//	var db engine.Database
+//	var relation engine.Relation
+//	var err error
+//	var isTemp bool
+//	ctx := proc.Ctx
+//	if n.GetClusterTable().GetIsClusterTable() {
+//		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+//	}
+//	db, err = eg.Database(ctx, n.ObjRef.SchemaName, proc.TxnOperator)
+//	if err != nil {
+//		return nil, err
+//	}
+//	relation, err = db.Relation(ctx, n.TableDef.Name)
+//	if err != nil {
+//		var e error
+//		db, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+//		if e != nil {
+//			return nil, err
+//		}
+//
+//		relation, e = db.Relation(proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
+//		if e != nil {
+//			return nil, err
+//		}
+//		isTemp = true
+//	}
+//	uniqueIndexTables := make([]engine.Relation, 0)
+//	secondaryIndexTables := make([]engine.Relation, 0)
+//	uDef, sDef := buildIndexDefs(n.TableDef.Defs)
+//	if uDef != nil {
+//		for i := range uDef.TableNames {
+//			var indexTable engine.Relation
+//			var err error
+//			if uDef.TableExists[i] {
+//				if isTemp {
+//					indexTable, err = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, uDef.TableNames[i]))
+//				} else {
+//					indexTable, err = db.Relation(ctx, uDef.TableNames[i])
+//				}
+//				if err != nil {
+//					return nil, err
+//				}
+//				uniqueIndexTables = append(uniqueIndexTables, indexTable)
+//			}
+//		}
+//	}
+//	if sDef != nil {
+//		for i := range sDef.TableNames {
+//			var indexTable engine.Relation
+//			var err error
+//			if sDef.TableExists[i] {
+//				if isTemp {
+//					indexTable, err = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, sDef.TableNames[i]))
+//				} else {
+//					indexTable, err = db.Relation(ctx, sDef.TableNames[i])
+//				}
+//				if err != nil {
+//					return nil, err
+//				}
+//				secondaryIndexTables = append(secondaryIndexTables, indexTable)
+//			}
+//		}
+//	}
+//
+//	var dbName string
+//	var tblName string
+//	if isTemp {
+//		dbName = defines.TEMPORARY_DBNAME
+//		tblName = engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name)
+//	} else {
+//		dbName = n.ObjRef.SchemaName
+//		tblName = n.TableDef.Name
+//	}
+//
+//	hasAutoCol := false
+//	for i := 0; i < len(n.TableDef.Cols); i++ {
+//		if n.TableDef.Cols[i].Typ.AutoIncr {
+//			hasAutoCol = true
+//			break
+//		}
+//	}
+//
+//	return &insert.Argument{
+//		TargetTable:          relation,
+//		TargetColDefs:        n.TableDef.Cols,
+//		Engine:               eg,
+//		DB:                   db,
+//		TableID:              relation.GetTableID(proc.Ctx),
+//		DBName:               dbName,
+//		TableName:            tblName,
+//		CPkeyColDef:          n.TableDef.CompositePkey,
+//		UniqueIndexTables:    uniqueIndexTables,
+//		UniqueIndexDef:       uDef,
+//		SecondaryIndexTables: secondaryIndexTables,
+//		SecondaryIndexDef:    sDef,
+//		ClusterByDef:         n.TableDef.ClusterBy,
+//		ClusterTable:         n.GetClusterTable(),
+//		HasAutoCol:           hasAutoCol,
+//	}, nil
+//}
 
 func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
 	oldCtx := n.UpdateCtx
@@ -636,28 +637,28 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 		}
 	}
 	for i, ref := range oldCtx.Ref {
-		rel, err := getRel(proc.Ctx, proc, eg, ref)
+		rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
 		if err != nil {
 			return nil, err
 		}
 		updateCtx.Source[i] = rel
 	}
 	for i, ref := range oldCtx.IdxRef {
-		rel, err := getRel(proc.Ctx, proc, eg, ref)
+		rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
 		if err != nil {
 			return nil, err
 		}
 		updateCtx.IdxSource[i] = rel
 	}
 	for i, ref := range oldCtx.OnCascadeRef {
-		rel, err := getRel(proc.Ctx, proc, eg, ref)
+		rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
 		if err != nil {
 			return nil, err
 		}
 		updateCtx.OnCascadeSource[i] = rel
 	}
 	for i, ref := range oldCtx.OnSetRef {
-		rel, err := getRel(proc.Ctx, proc, eg, ref)
+		rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1319,43 +1320,105 @@ func exprRelPos(expr *plan.Expr) int32 {
 	return -1
 }
 
-// func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.SecondaryIndexDef) {
-// 	var uIdxDef *plan.UniqueIndexDef = nil
-// 	var sIdxDef *plan.SecondaryIndexDef = nil
-// 	for _, def := range defs {
-// 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-// 			uIdxDef = idxDef.UIdx
-// 		}
-// 		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
-// 			sIdxDef = idxDef.SIdx
-// 		}
-// 	}
-// 	return uIdxDef, sIdxDef
-// }
+func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.SecondaryIndexDef) {
+	var uIdxDef *plan.UniqueIndexDef = nil
+	var sIdxDef *plan.SecondaryIndexDef = nil
+	for _, def := range defs {
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+			uIdxDef = idxDef.UIdx
+		}
+		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
+			sIdxDef = idxDef.SIdx
+		}
+	}
+	return uIdxDef, sIdxDef
+}
 
-func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (rel engine.Relation, err error) {
+//func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (rel engine.Relation, err error) {
+//	var dbSource engine.Database
+//	if ref.SchemaName != "" {
+//		dbSource, err = eg.Database(ctx, ref.SchemaName, proc.TxnOperator)
+//		if err != nil {
+//			return nil, err
+//		}
+//		rel, err = dbSource.Relation(ctx, ref.ObjName)
+//		if err == nil {
+//			return
+//		}
+//
+//		dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+//		if err != nil {
+//			return nil, err
+//		}
+//		newObjeName := engine.GetTempTableName(ref.SchemaName, ref.ObjName)
+//		newSchemaName := defines.TEMPORARY_DBNAME
+//		ref.SchemaName = newSchemaName
+//		ref.ObjName = newObjeName
+//		return dbSource.Relation(ctx, newObjeName)
+//	} else {
+//		_, _, rel, err = eg.GetRelationById(ctx, proc.TxnOperator, uint64(ref.Obj))
+//		return
+//	}
+//}
+
+// Get the 'engine.Relation' of the table by using 'ObjectRef' and 'TableDef', if 'TableDef' is nil, the relations of its index table will not be obtained
+// the first return value is Relation of the original table
+// the second return value is Relations of index tables
+func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef, tableDef *plan.TableDef) (engine.Relation, []engine.Relation, error) {
 	var dbSource engine.Database
+	var relation engine.Relation
+	var err error
+	var isTemp bool
 	if ref.SchemaName != "" {
 		dbSource, err = eg.Database(ctx, ref.SchemaName, proc.TxnOperator)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		rel, err = dbSource.Relation(ctx, ref.ObjName)
+		relation, err = dbSource.Relation(ctx, ref.ObjName)
 		if err == nil {
-			return
+			isTemp = false
+		} else {
+			dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+			if err != nil {
+				return nil, nil, err
+			}
+			newObjeName := engine.GetTempTableName(ref.SchemaName, ref.ObjName)
+			newSchemaName := defines.TEMPORARY_DBNAME
+			ref.SchemaName = newSchemaName
+			ref.ObjName = newObjeName
+			relation, err = dbSource.Relation(ctx, newObjeName)
+			if err != nil {
+				return nil, nil, err
+			}
+			isTemp = true
 		}
-
-		dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-		if err != nil {
-			return nil, err
-		}
-		newObjeName := engine.GetTempTableName(ref.SchemaName, ref.ObjName)
-		newSchemaName := defines.TEMPORARY_DBNAME
-		ref.SchemaName = newSchemaName
-		ref.ObjName = newObjeName
-		return dbSource.Relation(ctx, newObjeName)
 	} else {
-		_, _, rel, err = eg.GetRelationById(ctx, proc.TxnOperator, uint64(ref.Obj))
-		return
+		_, _, relation, err = eg.GetRelationById(ctx, proc.TxnOperator, uint64(ref.Obj))
+		if err != nil {
+			return nil, nil, err
+		}
 	}
+
+	var uniqueIndexTables []engine.Relation
+	if tableDef != nil {
+		uniqueIndexTables = make([]engine.Relation, 0)
+		uDef, _ := buildIndexDefs(tableDef.Defs)
+		if uDef != nil {
+			for i := range uDef.TableNames {
+				var indexTable engine.Relation
+				if uDef.TableExists[i] {
+					if isTemp {
+						indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(ref.SchemaName, uDef.TableNames[i]))
+					} else {
+						indexTable, err = dbSource.Relation(ctx, uDef.TableNames[i])
+					}
+					if err != nil {
+						return nil, nil, err
+					}
+					uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				}
+			}
+		}
+	}
+	return relation, uniqueIndexTables, err
 }

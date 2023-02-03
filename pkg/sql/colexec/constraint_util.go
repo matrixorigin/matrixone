@@ -208,7 +208,6 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 				} else {
 					WriteS3Batch(s3Container, ukBatch, proc, uIdx)
 					uIdx++
-					s3Container.UniqueRels = append(s3Container.UniqueRels, rel)
 				}
 			}
 		}
