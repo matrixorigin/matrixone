@@ -17,12 +17,13 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/fagongzi/goetty/v2"
 
@@ -847,7 +848,7 @@ func Test_handleShowColumns(t *testing.T) {
 		tableName.Parts[0] = "y"
 		err = handleShowColumns(ses, &tree.ShowColumns{
 			Table: tableName,
-		}, ses.GetTxnCompileCtx())
+		})
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

@@ -438,7 +438,7 @@ const (
 /*
 handle show columns from table in plan2 and tae
 */
-func handleShowColumns(ses *Session, stmt *tree.ShowColumns, ctx plan2.CompilerContext) error {
+func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 	data := ses.GetData()
 	mrs := ses.GetMysqlResultSet()
 	dbName := stmt.Table.GetDBName()
@@ -447,6 +447,7 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns, ctx plan2.CompilerC
 	}
 
 	tableName := string(stmt.Table.ToTableName().ObjectName)
+	ctx := ses.GetTxnCompileCtx()
 	_, tableDef := ctx.Resolve(dbName, tableName)
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tableName)
@@ -3860,7 +3861,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 			switch ses.GetShowStmtType() {
 			case ShowColumns:
-				if err = handleShowColumns(ses, statement.(*tree.ShowColumns), ses.GetTxnCompileCtx()); err != nil {
+				if err = handleShowColumns(ses, statement.(*tree.ShowColumns)); err != nil {
 					goto handleFailed
 				}
 			case ShowTableStatus:
