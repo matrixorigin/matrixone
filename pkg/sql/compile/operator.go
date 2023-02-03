@@ -308,19 +308,24 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*external.Argument)
 		res.Arg = &external.Argument{
 			Es: &external.ExternalParam{
-				Attrs:         t.Es.Attrs,
-				Cols:          t.Es.Cols,
-				Name2ColIndex: t.Es.Name2ColIndex,
-				CreateSql:     t.Es.CreateSql,
-				FileList:      t.Es.FileList,
-				Filter:        t.Es.Filter,
-				Fileparam: &external.ExternalFileparam{
-					End:       t.Es.Fileparam.End,
-					FileCnt:   t.Es.Fileparam.FileCnt,
-					FileFin:   t.Es.Fileparam.FileFin,
-					FileIndex: t.Es.Fileparam.FileIndex,
+				ExParamConst: external.ExParamConst{
+					Attrs:         t.Es.Attrs,
+					Cols:          t.Es.Cols,
+					Name2ColIndex: t.Es.Name2ColIndex,
+					CreateSql:     t.Es.CreateSql,
+					FileList:      t.Es.FileList,
+
+					Extern: t.Es.Extern,
 				},
-				Extern: t.Es.Extern,
+				ExParam: external.ExParam{
+					Filter: t.Es.Filter,
+					Fileparam: &external.ExFileparam{
+						End:       t.Es.Fileparam.End,
+						FileCnt:   t.Es.Fileparam.FileCnt,
+						FileFin:   t.Es.Fileparam.FileFin,
+						FileIndex: t.Es.Fileparam.FileIndex,
+					},
+				},
 			},
 		}
 	case vm.Connector:
@@ -671,25 +676,30 @@ func constructProjection(n *plan.Node) *projection.Argument {
 	}
 }
 
-func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string) *external.Argument {
+func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, fileOffset [][2]int) *external.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
 	return &external.Argument{
 		Es: &external.ExternalParam{
-			Attrs:         attrs,
-			Cols:          n.TableDef.Cols,
-			Extern:        param,
-			Name2ColIndex: n.TableDef.Name2ColIndex,
-			CreateSql:     n.TableDef.Createsql,
-			Ctx:           ctx,
-			FileList:      fileList,
-			Fileparam:     new(external.ExternalFileparam),
-			Filter: &external.FilterParam{
-				FilterExpr: colexec.RewriteFilterExprList(n.FilterList),
+			ExParamConst: external.ExParamConst{
+				Attrs:         attrs,
+				Cols:          n.TableDef.Cols,
+				Extern:        param,
+				Name2ColIndex: n.TableDef.Name2ColIndex,
+				FileOffset:    fileOffset,
+				CreateSql:     n.TableDef.Createsql,
+				Ctx:           ctx,
+				FileList:      fileList,
+				ClusterTable:  n.GetClusterTable(),
 			},
-			ClusterTable: n.GetClusterTable(),
+			ExParam: external.ExParam{
+				Fileparam: new(external.ExFileparam),
+				Filter: &external.FilterParam{
+					FilterExpr: colexec.RewriteFilterExprList(n.FilterList),
+				},
+			},
 		},
 	}
 }

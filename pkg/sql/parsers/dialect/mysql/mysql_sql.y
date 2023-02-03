@@ -355,7 +355,7 @@ import (
 %token <str> ARROW
 
 // Insert
-%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
+%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL
 
 %token <str> UNUSED BINDINGS
 
@@ -540,7 +540,7 @@ import (
 
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
-%type <unsignedOpt> unsigned_opt header_opt
+%type <unsignedOpt> unsigned_opt header_opt parallel_opt
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt
 %type <item> pwd_expire clear_pwd_opt
@@ -777,7 +777,7 @@ import_data_stmt:
     }
 
 load_data_stmt:
-    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name accounts_opt tail_param_opt
+    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name accounts_opt tail_param_opt parallel_opt
     {
         $$ = &tree.Load{
             Local: $3,
@@ -787,6 +787,7 @@ load_data_stmt:
             Accounts: $9,
         }
         $$.(*tree.Load).Param.Tail = $10
+        $$.(*tree.Load).Param.Parallel = $11
     }
 
 load_extension_stmt:
@@ -829,6 +830,23 @@ load_set_item:
         $$ = &tree.UpdateExpr{
             Names: []*tree.UnresolvedName{$1},
             Expr: $3,
+        }
+    }
+
+parallel_opt:
+    {
+        $$ = false
+    }
+|   PARALLEL STRING
+    {
+        str := strings.ToLower($2)
+        if str == "true" {
+            $$ = true
+        } else if str == "false" {
+            $$ = false
+        } else {
+            yylex.Error("error parallel flag")
+            return 1
         }
     }
 
@@ -4869,22 +4887,28 @@ load_param_opt:
     INFILE STRING
     {
         $$ = &tree.ExternParam{
-            Filepath: $2,
-            CompressType: tree.AUTO,
-            Format: tree.CSV,
+            ExParamConst: tree.ExParamConst{
+                Filepath: $2,
+                CompressType: tree.AUTO,
+                Format: tree.CSV,
+            },
         }
     }
 |   INFILE '{' infile_or_s3_params '}'
     {
-	$$ = &tree.ExternParam{
-	    Option: $3,
-	}
+        $$ = &tree.ExternParam{
+            ExParamConst: tree.ExParamConst{
+                Option: $3,
+            },
+        }
     }
 |   URL S3OPTION '{' infile_or_s3_params '}'
     {
         $$ = &tree.ExternParam{
-            ScanType: tree.S3,
-            Option: $4,
+            ExParamConst: tree.ExParamConst{
+                ScanType: tree.S3,
+                Option: $4,
+            },
         }
     }
 
@@ -8354,6 +8378,7 @@ non_reserved_keyword:
 |   EXTENSION
 |   NODE
 |   UUID
+|   PARALLEL
 
 func_not_keyword:
     DATE_ADD

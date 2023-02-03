@@ -815,7 +815,9 @@ func newS3FS(arguments []string) (*S3FS, error) {
 			stsSvc,
 			roleARN,
 			func(opts *stscreds.AssumeRoleOptions) {
-				opts.ExternalID = &externalID
+				if externalID != "" {
+					opts.ExternalID = &externalID
+				}
 			},
 		)
 	}
