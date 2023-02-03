@@ -1234,12 +1234,16 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 		v.Arg = &external.Argument{
 			Es: &external.ExternalParam{
-				Attrs:         t.Attrs,
-				Cols:          t.Cols,
-				CreateSql:     t.CreateSql,
-				Name2ColIndex: name2ColIndex,
-				Fileparam:     new(external.ExternalFileparam),
-				FileList:      t.FileList,
+				ExParamConst: external.ExParamConst{
+					Attrs:         t.Attrs,
+					Cols:          t.Cols,
+					CreateSql:     t.CreateSql,
+					Name2ColIndex: name2ColIndex,
+					FileList:      t.FileList,
+				},
+				ExParam: external.ExParam{
+					Fileparam: new(external.ExFileparam),
+				},
 			},
 		}
 	default:

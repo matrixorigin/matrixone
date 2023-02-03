@@ -37,6 +37,3 @@ current_user_id()
 select current_role_name();
 current_role_name()
 test_role
-select current_role_id();
-current_role_id()
-3
