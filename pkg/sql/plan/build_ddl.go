@@ -618,6 +618,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	//handle cluster by keys
 	if stmt.ClusterByOption != nil {
+		if stmt.Temporary {
+			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with temporary table is not support")
+		}
 		if len(primaryKeys) > 0 {
 			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
 		}
