@@ -164,3 +164,19 @@ drop table t;
 
 create database `.quote`;
 show tables from `.quote`;
+drop database if exists `.quote`;
+
+drop database if exists showDB;
+create database showDB;
+use showDB;
+create table a (a int,b int);
+create view va as select a from a;
+
+begin;
+show create table a;
+show create table va;
+show create view va;
+show collation;
+show collation like '%';
+rollback;
+drop database if exists showDb;

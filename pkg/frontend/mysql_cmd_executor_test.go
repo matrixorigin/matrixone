@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"io"
 	"os"
 	"strconv"
@@ -1285,4 +1286,43 @@ func TestProcessLoadLocal(t *testing.T) {
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
 	})
+}
+
+func Test_StatementClassify(t *testing.T) {
+	type arg struct {
+		stmt tree.Statement
+		want bool
+	}
+
+	args := []arg{
+		{&tree.ShowCreateTable{}, true},
+		{&tree.ShowCreateView{}, true},
+		{&tree.ShowCreateDatabase{}, true},
+		{&tree.ShowColumns{}, true},
+		{&tree.ShowDatabases{}, true},
+		{&tree.ShowTarget{}, true},
+		{&tree.ShowTableStatus{}, true},
+		{&tree.ShowGrants{}, true},
+		{&tree.ShowTables{}, true},
+		{&tree.ShowProcessList{}, true},
+		{&tree.ShowErrors{}, true},
+		{&tree.ShowWarnings{}, true},
+		{&tree.ShowCollation{}, true},
+		{&tree.ShowVariables{}, true},
+		{&tree.ShowStatus{}, true},
+		{&tree.ShowIndex{}, true},
+		{&tree.ShowFunctionStatus{}, true},
+		{&tree.ShowNodeList{}, true},
+		{&tree.ShowLocks{}, true},
+		{&tree.ShowTableNumber{}, true},
+		{&tree.ShowColumnNumber{}, true},
+		{&tree.ShowTableValues{}, true},
+		{&tree.ShowAccounts{}, true},
+	}
+
+	for _, a := range args {
+		ret, err := StatementCanBeExecutedInUncommittedTransaction(nil, a.stmt)
+		assert.Nil(t, err)
+		assert.Equal(t, ret, a.want)
+	}
 }

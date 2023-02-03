@@ -289,3 +289,27 @@ drop table t;
 create database `.quote`;
 show tables from `.quote`;
 Tables_in_.quote
+drop database if exists `.quote`;
+drop database if exists showDB;
+create database showDB;
+use showDB;
+create table a (a int,b int);
+create view va as select a from a;
+begin;
+show create table a;
+Table    Create Table
+a    CREATE TABLE `a` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n)
+show create table va;
+View    Create View
+va    create view va as select a from a;
+show create view va;
+View    Create View
+va    create view va as select a from a;
+show collation;
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like '%';
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+rollback;
+drop database if exists showDb;
