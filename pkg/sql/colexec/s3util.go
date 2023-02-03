@@ -122,7 +122,15 @@ func (container *WriteS3Container) resetMetaLocBat() {
 	container.metaLocBat = metaLocBat
 }
 
-func WriteS3CacheBatch(container *WriteS3Container, proc *process.Process) error {
+func (container *WriteS3Container) WriteEnd(proc *process.Process) {
+	if container.metaLocBat.Vecs[0].Length() > 0 {
+		container.metaLocBat.SetZs(container.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+		proc.SetInputBatch(container.metaLocBat)
+		container.resetMetaLocBat()
+	}
+}
+
+func (container *WriteS3Container) WriteS3CacheBatch(proc *process.Process) error {
 	if len(container.cacheBat) > 0 {
 		for i, bat := range container.cacheBat {
 			if bat != nil {
@@ -132,16 +140,12 @@ func WriteS3CacheBatch(container *WriteS3Container, proc *process.Process) error
 				}
 			}
 		}
-		if container.metaLocBat.Vecs[0].Length() > 0 {
-			container.metaLocBat.SetZs(container.metaLocBat.Vecs[0].Length(), proc.GetMPool())
-			proc.SetInputBatch(container.metaLocBat)
-			container.resetMetaLocBat()
-		}
+		container.WriteEnd(proc)
 	}
 	return nil
 }
 
-func WriteS3Batch(container *WriteS3Container, bat *batch.Batch, proc *process.Process, idx int) error {
+func (container *WriteS3Container) WriteS3Batch(bat *batch.Batch, proc *process.Process, idx int) error {
 	bats := reSizeBatch(container, bat, proc, idx)
 	if len(bats) == 0 {
 		proc.SetInputBatch(&batch.Batch{})

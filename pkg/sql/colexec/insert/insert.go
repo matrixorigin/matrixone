@@ -49,7 +49,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if insertArg.IsRemote {
 			// handle the last Batch that batchSize less than DefaultBlockMaxRows
 			// for more info, refer to the comments about reSizeBatch
-			err = colexec.WriteS3CacheBatch(insertArg.Container, proc)
+			err = insertArg.Container.WriteS3CacheBatch(proc)
 			if err != nil {
 				return false, err
 			}
@@ -153,6 +153,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if err != nil {
 			return false, err
 		}
+	}
+
+	if insertArg.IsRemote {
+		insertArg.Container.WriteEnd(proc)
 	}
 	atomic.AddUint64(&insertArg.Affected, affectedRows)
 	return false, nil
