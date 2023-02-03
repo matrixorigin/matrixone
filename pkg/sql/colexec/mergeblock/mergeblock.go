@@ -51,13 +51,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 		}()
 	}
-	if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
-		return false, err
-	}
 	for i := range ap.Unique_tbls {
 		if err = ap.Unique_tbls[i].Write(proc.Ctx, ap.container.mp[i+1]); err != nil {
 			return false, err
 		}
+	}
+	if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
+		return false, err
 	}
 	return false, nil
 }

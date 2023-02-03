@@ -206,7 +206,7 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 						return err
 					}
 				} else {
-					WriteS3Batch(s3Container, ukBatch, proc, uIdx)
+					s3Container.WriteS3Batch(ukBatch, proc, uIdx)
 					uIdx++
 					s3Container.UniqueRels = append(s3Container.UniqueRels, rel)
 				}
@@ -433,7 +433,6 @@ func InsertBatch(
 		if insertBatch != nil {
 			insertBatch.Clean(proc.Mp())
 		}
-		bat.Clean(proc.Mp())
 	}()
 
 	info := getInfoForInsertAndUpdate(tableDef, nil)
@@ -467,7 +466,7 @@ func InsertBatch(
 
 	if container != nil {
 		// write to s3
-		err = WriteS3Batch(container, insertBatch, proc, 0)
+		err = container.WriteS3Batch(insertBatch, proc, 0)
 		if err != nil {
 			return 0, err
 		}
@@ -477,9 +476,6 @@ func InsertBatch(
 			return 0, err
 		}
 
-		container.metaLocBat.SetZs(container.metaLocBat.Vecs[0].Length(), proc.GetMPool())
-		proc.SetInputBatch(container.metaLocBat)
-		container.resetMetaLocBat()
 	} else {
 		// write unique key table
 		err = writeUniqueTable(nil, eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos)

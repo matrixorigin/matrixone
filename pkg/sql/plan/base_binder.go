@@ -158,9 +158,6 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	case *tree.DefaultVal:
 		return &Expr{
-			Typ: &plan.Type{
-				Id: int32(types.T_any),
-			},
 			Expr: &plan.Expr_C{
 				C: &Const{
 					Isnull: false,
