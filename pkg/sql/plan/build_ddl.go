@@ -56,8 +56,17 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	}
 	tableDef.Cols = cols
 
+	// Check alter and change the viewsql.
+	stmt_ := ctx.GetRootSql()
+	if stmt_[0] == 'A' {
+		stmt_ = strings.Replace(stmt_, "ALTER", "CREATE", 1)
+	}
+	if stmt_[0] == 'a' {
+		stmt_ = strings.Replace(stmt_, "alter", "create", 1)
+	}
+
 	viewData, err := json.Marshal(ViewData{
-		Stmt:            ctx.GetRootSql(),
+		Stmt:            stmt_,
 		DefaultDatabase: ctx.DefaultDatabase(),
 	})
 	if err != nil {
