@@ -106,6 +106,8 @@ a    b    c
 2    2    2
 create table test05(a int, b int, c varchar(10)) cluster by (b,c,d);
 invalid input: column 'd' doesn't exist in table
+create temporary table test05(a int, b int, c varchar(10)) cluster by (b,c);
+not supported: cluster by with temporary table is not support
 show create table test01;
 Table    Create Table
 test01    CREATE TABLE `test01` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n) CLUSTER BY (`a`)

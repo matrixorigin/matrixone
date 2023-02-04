@@ -306,6 +306,7 @@ func (ses *Session) Dispose() {
 		mpool.DeleteMPool(mp)
 		ses.SetMemPool(mp)
 	}
+	ses.cleanCache()
 }
 
 type errInfo struct {
@@ -456,7 +457,7 @@ func (ses *Session) IsBackgroundSession() bool {
 	return ses.isBackgroundSession
 }
 
-func (ses *Session) cachePlan(sql string, stmts []*tree.Statement, plans []*plan.Plan) {
+func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.planCache.cache(sql, stmts, plans)
@@ -2336,12 +2337,12 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	blockNum, rows, err := table.FilteredStats(ctx, e)
+	blockNum, cost, outcnt, err := table.Stats(ctx, e)
 	if err != nil {
 		return
 	}
-	stats.Cost = float64(rows)
-	stats.Outcnt = stats.Cost * plan2.DeduceSelectivity(e)
+	stats.Cost = float64(cost)
+	stats.Outcnt = float64(outcnt)
 	stats.BlockNum = blockNum
 	return
 }
