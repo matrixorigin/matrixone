@@ -90,7 +90,7 @@ func (p *PartitionIndex) IterIndex(
 	upper Tuple,
 ) *PartitionIndexIter {
 	return &PartitionIndexIter{
-		iter:        p.index.Iter(),
+		iter:        p.index.Copy().Iter(),
 		rowVersions: p.rowVersions,
 		time:        ts,
 		lower:       lower,
@@ -159,6 +159,63 @@ func (t *PartitionIndexIter) Entry() *IndexEntry {
 }
 
 func (t *PartitionIndexIter) Close() error {
+	t.iter.Release()
+	return nil
+}
+
+func (p *PartitionIndex) IterRows(
+	ts timestamp.Timestamp,
+) *PartitionRowsIter {
+	return &PartitionRowsIter{
+		iter:        p.rowIDs.Copy().Iter(),
+		rowVersions: p.rowVersions,
+		time:        ts,
+	}
+}
+
+type PartitionRowsIter struct {
+	iter        btree.GenericIter[types.Rowid]
+	rowVersions *Map[types.Rowid, Versions[RowRef]]
+	time        timestamp.Timestamp
+
+	firstCalled bool
+}
+
+func (t *PartitionRowsIter) Next() bool {
+	for {
+
+		if !t.firstCalled {
+			t.firstCalled = true
+			if !t.iter.First() {
+				return false
+			}
+		} else {
+			if !t.iter.Next() {
+				return false
+			}
+		}
+
+		rowID := t.iter.Item()
+
+		// check version
+		versions, ok := t.rowVersions.Get(rowID)
+		if !ok {
+			continue
+		}
+		p := versions.Get(t.time)
+		if p == nil {
+			continue
+		}
+
+		return true
+	}
+}
+
+func (t *PartitionRowsIter) RowID() types.Rowid {
+	return t.iter.Item()
+}
+
+func (t *PartitionRowsIter) Close() error {
 	t.iter.Release()
 	return nil
 }
