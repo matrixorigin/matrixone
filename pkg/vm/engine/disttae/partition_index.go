@@ -25,6 +25,7 @@ import (
 
 type PartitionIndex struct {
 	rowVersions *Map[types.Rowid, Versions[RowRef]]
+	rowIDs      *btree.BTreeG[types.Rowid]
 	index       *btree.BTreeG[*IndexEntry]
 }
 
@@ -66,6 +67,9 @@ var nextRowRefID int64
 func NewPartitionIndex() *PartitionIndex {
 	return &PartitionIndex{
 		rowVersions: new(Map[types.Rowid, Versions[RowRef]]),
+		rowIDs: btree.NewBTreeG(func(a, b types.Rowid) bool {
+			return bytes.Compare(a[:], b[:]) < 0
+		}),
 		index: btree.NewBTreeG(func(a, b *IndexEntry) bool {
 			return a.Less(b)
 		}),
@@ -80,7 +84,7 @@ func (p *PartitionIndex) SetIndex(tuple Tuple, rowID types.Rowid, rowRefID int64
 	})
 }
 
-func (p *PartitionIndex) Iter(
+func (p *PartitionIndex) IterIndex(
 	ts timestamp.Timestamp,
 	lower Tuple,
 	upper Tuple,

@@ -173,6 +173,7 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			memtable.Uint(opDelete),
 		})
 
+		p.index.rowIDs.Set(rowId)
 		p.index.rowVersions.Update(rowId, func(p *Versions[RowRef]) *Versions[RowRef] {
 			if p == nil {
 				versions := new(Versions[RowRef])
@@ -243,7 +244,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 				index_PrimaryKey,
 				primaryKey,
 			}
-			iter := p.index.Iter(ts.ToTimestamp(), tuple, tuple)
+			iter := p.index.IterIndex(ts.ToTimestamp(), tuple, tuple)
 			for iter.Next() {
 				if needCheck {
 					iter.Close()
@@ -296,6 +297,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 		for _, tuple := range indexes {
 			p.index.SetIndex(tuple, rowId, rowRef.ID)
 		}
+		p.index.rowIDs.Set(rowId)
 		p.index.rowVersions.Update(rowId, func(p *Versions[RowRef]) *Versions[RowRef] {
 			if p == nil {
 				versions := new(Versions[RowRef])
