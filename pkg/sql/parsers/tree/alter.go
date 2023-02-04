@@ -110,20 +110,14 @@ func (ca *AlterAccount) GetQueryType() string     { return QueryTypeDCL }
 
 type AlterView struct {
 	statementImpl
-	IfExists    bool
-	Name        *TableName
-	ColNames    IdentifierList
-	AsSource    *Select
-	IfNotExists bool
-	Temporary   bool
+	IfExists bool
+	Name     *TableName
+	ColNames IdentifierList
+	AsSource *Select
 }
 
 func (node *AlterView) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter ")
-
-	if node.Temporary {
-		ctx.WriteString("temporary ")
-	}
 
 	ctx.WriteString("view ")
 

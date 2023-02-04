@@ -204,6 +204,11 @@ func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs 
 	return
 }
 
+func (c *CompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {}
+func (c *CompilerContext) GetBuildingAlterView() (bool, string, string) {
+	return false, "", ""
+}
+
 func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 	return &plan.ColDef{
 		ColId: uint64(attr.ID),

@@ -796,6 +796,13 @@ func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string
 	return nil, "", nil
 }
 
+func (m *MockCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
+}
+
+func (m *MockCompilerContext) GetBuildingAlterView() (bool, string, string) {
+	return false, "", ""
+}
+
 type MockOptimizer struct {
 	ctxt MockCompilerContext
 }
