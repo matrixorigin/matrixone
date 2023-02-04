@@ -43,3 +43,5 @@ f1
 2
 3
 6
+drop database if exists db;
+drop database if exists db2;

@@ -29,3 +29,6 @@ select * from vx;
 
 alter view v as select f1 from t;
 select * from v;
+
+drop database if exists db;
+drop database if exists db2;
