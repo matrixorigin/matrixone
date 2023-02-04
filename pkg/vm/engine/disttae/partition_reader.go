@@ -34,18 +34,17 @@ import (
 )
 
 type PartitionReader struct {
-	end         bool
-	typsMap     map[string]types.Type
-	firstCalled bool
-	readTime    memtable.Time
-	tx          *memtable.Transaction
-	index       memtable.Tuple
-	inserts     []*batch.Batch
-	deletes     map[types.Rowid]uint8
-	skipBlocks  map[uint64]uint8
-	iter        *memtable.TableIter[RowID, DataValue]
-	data        *memtable.Table[RowID, DataValue, *DataRow]
-	proc        *process.Process
+	end        bool
+	typsMap    map[string]types.Type
+	readTime   memtable.Time
+	tx         *memtable.Transaction
+	index      memtable.Tuple
+	inserts    []*batch.Batch
+	deletes    map[types.Rowid]uint8
+	skipBlocks map[uint64]uint8
+	rowsIter   *PartitionRowsIter
+	data       *memtable.Table[RowID, DataValue, *DataRow]
+	proc       *process.Process
 
 	// the following attributes are used to support cn2s3
 	s3FileService   fileservice.FileService
@@ -85,7 +84,7 @@ func (blockBatch *BlockBatch) setBat(bat *batch.Batch) {
 var _ engine.Reader = new(PartitionReader)
 
 func (p *PartitionReader) Close() error {
-	p.iter.Close()
+	p.rowsIter.Close()
 	return nil
 }
 
@@ -169,7 +168,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	}
 	rows := 0
 	if len(p.index) > 0 {
-		p.iter.Close()
+		p.rowsIter.Close()
 		itr := p.data.NewIndexIter(p.tx, p.index, p.index)
 		for ok := itr.First(); ok; ok = itr.Next() {
 			entry := itr.Item()
@@ -218,36 +217,30 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		return b, nil
 	}
 
-	fn := p.iter.Next
-	if !p.firstCalled {
-		fn = p.iter.First
-		p.firstCalled = true
-	}
-
 	maxRows := 8192 // i think 8192 is better than 4096
-	for ok := fn(); ok; ok = p.iter.Next() {
-		dataKey, dataValue, err := p.iter.Read()
-		if err != nil {
-			return nil, err
-		}
+	for p.rowsIter.Next() {
+		rowID, rowRef := p.rowsIter.Data()
 
-		if _, ok := p.deletes[types.Rowid(dataKey)]; ok {
-			continue
-		}
-
-		if dataValue.op == opDelete {
+		if _, ok := p.deletes[rowID]; ok {
 			continue
 		}
 
 		if p.skipBlocks != nil {
-			if _, ok := p.skipBlocks[rowIDToBlockID(dataKey)]; ok {
+			if _, ok := p.skipBlocks[rowIDToBlockID(RowID(rowID))]; ok {
 				continue
 			}
 		}
 
+		//TODO get data by row ref
+		_ = rowRef
+		dataValue, err := p.data.Get(p.tx, RowID(rowID))
+		if err != nil {
+			return nil, err
+		}
+
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
-				if err := b.Vecs[i].Append(types.Rowid(dataKey), false, mp); err != nil {
+				if err := b.Vecs[i].Append(rowID, false, mp); err != nil {
 					return nil, err
 				}
 				continue

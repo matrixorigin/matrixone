@@ -574,7 +574,7 @@ func (p *Partition) NewReader(
 		deletes:         deletes,
 		skipBlocks:      skipBlocks,
 		data:            p.data,
-		iter:            p.data.NewIter(tx),
+		rowsIter:        p.index.IterRows(ts),
 		colIdxMp:        colIdxMp,
 		extendId2s3File: make(map[string]int),
 		s3FileService:   fs,

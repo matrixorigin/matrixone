@@ -178,11 +178,13 @@ type PartitionRowsIter struct {
 	rowVersions *Map[types.Rowid, Versions[RowRef]]
 	time        timestamp.Timestamp
 
+	rowRef      RowRef
 	firstCalled bool
 }
 
 func (t *PartitionRowsIter) Next() bool {
 	for {
+		t.rowRef = RowRef{}
 
 		if !t.firstCalled {
 			t.firstCalled = true
@@ -206,13 +208,14 @@ func (t *PartitionRowsIter) Next() bool {
 		if p == nil {
 			continue
 		}
+		t.rowRef = *p
 
 		return true
 	}
 }
 
-func (t *PartitionRowsIter) RowID() types.Rowid {
-	return t.iter.Item()
+func (t *PartitionRowsIter) Data() (types.Rowid, RowRef) {
+	return t.iter.Item(), t.rowRef
 }
 
 func (t *PartitionRowsIter) Close() error {
