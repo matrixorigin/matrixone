@@ -474,4 +474,6 @@ func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 
 	src := CreateMoVectorFromBytes(vec.GetType(), bs, nulls)
 	vec.downstreamVector = src
+
+	// TODO: Doesn't reset the capacity
 }
