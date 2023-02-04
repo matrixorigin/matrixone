@@ -314,8 +314,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 					Name2ColIndex: t.Es.Name2ColIndex,
 					CreateSql:     t.Es.CreateSql,
 					FileList:      t.Es.FileList,
-					FirstColType: t.Es.FirstColType,
-					Extern: t.Es.Extern,
+					FirstColType:  t.Es.FirstColType,
+					Extern:        t.Es.Extern,
 				},
 				ExParam: external.ExParam{
 					Filter: t.Es.Filter,
@@ -692,7 +692,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				CreateSql:     n.TableDef.Createsql,
 				Ctx:           ctx,
 				FileList:      fileList,
-				FirstColType: n.TableDef.OriginCols[0].Typ,
+				FirstColType:  n.TableDef.OriginCols[0].Typ,
 				ClusterTable:  n.GetClusterTable(),
 			},
 			ExParam: external.ExParam{
