@@ -327,15 +327,24 @@ enum PartitionType {
 
 message PartitionInfo {
 	PartitionType type = 1;
-	Expr Expr = 2;
+	PartitionExpr partition_expr = 2;
 	Expr partition_expression = 3;
-	repeated Expr Columns = 4;
-	repeated string partition_columns = 5;
-	uint64 partitionNum = 6;
-	repeated PartitionItem partitions = 7;
-	int64 algorithm = 8;
-	bool is_sub_partition = 9;
-	string partition_msg = 10;
+	PartitionColumns partition_columns = 4;
+	uint64 partitionNum = 5;
+	repeated PartitionItem partitions = 6;
+	int64 algorithm = 7;
+	bool is_sub_partition = 8;
+	string partition_msg = 9;
+}
+
+message PartitionExpr {
+	Expr expr = 1;
+	string expr_str = 2;
+}
+
+message PartitionColumns {
+	repeated Expr columns = 1;
+	repeated string partition_columns = 2;
 }
 
 message PartitionItem {

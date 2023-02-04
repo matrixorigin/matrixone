@@ -543,20 +543,31 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		case *TableDef_DefType_Partition:
 			partitionDef := &plan.PartitionInfo{
 				Type:                defImpl.Partition.GetType(),
-				Expr:                DeepCopyExpr(defImpl.Partition.Expr),
 				PartitionExpression: defImpl.Partition.GetPartitionExpression(),
-				Columns:             make([]*plan.Expr, len(defImpl.Partition.Columns)),
-				PartitionColumns:    make([]string, len(defImpl.Partition.PartitionColumns)),
 				PartitionNum:        defImpl.Partition.GetPartitionNum(),
 				Partitions:          make([]*plan.PartitionItem, len(defImpl.Partition.Partitions)),
 				Algorithm:           defImpl.Partition.GetAlgorithm(),
 				IsSubPartition:      defImpl.Partition.GetIsSubPartition(),
 				PartitionMsg:        defImpl.Partition.GetPartitionMsg(),
 			}
-			for i, e := range defImpl.Partition.Columns {
-				partitionDef.Columns[i] = DeepCopyExpr(e)
+			if defImpl.Partition.PartitionExpr != nil {
+				partitionDef.PartitionExpr = &plan.PartitionExpr{
+					Expr:    DeepCopyExpr(defImpl.Partition.PartitionExpr.Expr),
+					ExprStr: defImpl.Partition.PartitionExpr.GetExprStr(),
+				}
 			}
-			copy(partitionDef.PartitionColumns, defImpl.Partition.PartitionColumns)
+
+			if defImpl.Partition.PartitionColumns != nil {
+				partitionDef.PartitionColumns = &plan.PartitionColumns{
+					Columns:          make([]*plan.Expr, len(defImpl.Partition.PartitionColumns.Columns)),
+					PartitionColumns: make([]string, len(defImpl.Partition.PartitionColumns.PartitionColumns)),
+				}
+				for i, e := range defImpl.Partition.PartitionColumns.Columns {
+					partitionDef.PartitionColumns.Columns[i] = DeepCopyExpr(e)
+				}
+				copy(partitionDef.PartitionColumns.PartitionColumns, defImpl.Partition.PartitionColumns.PartitionColumns)
+			}
+
 			for i, e := range defImpl.Partition.Partitions {
 				partitionDef.Partitions[i] = &plan.PartitionItem{
 					PartitionName:   e.PartitionName,

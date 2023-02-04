@@ -19,15 +19,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/pingcap/errors"
+	"strings"
 )
 
 // add this code in buildListPartitionItem
 // return buildListPartitionItem(partitionBinder, partitionInfo, defs)
 func buildListPartitionItem(binder *PartitionBinder, partitionInfo *plan.PartitionInfo, defs []*tree.Partition) error {
 	for _, def := range defs {
-		if len(partitionInfo.Columns) > 0 {
+		if partitionInfo.PartitionColumns != nil {
 			if err := checkListColumnsTypeAndValuesMatch(binder, partitionInfo, def); err != nil {
 				return err
 			}
@@ -126,7 +130,7 @@ func partitionValueTypeCheck(ctx context.Context, funcTyp *Type, valueTyp *Type)
 }
 
 func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partition, info *plan.PartitionInfo) error {
-	unsignedFlag := types.IsUnsignedInt(types.T(info.Expr.Typ.Id))
+	unsignedFlag := types.IsUnsignedInt(types.T(info.PartitionExpr.Expr.Typ.Id))
 	if valuesIn, ok := partition.Values.(*tree.ValuesIn); ok {
 		exprs := valuesIn.ValueList
 		for _, exp := range exprs {
@@ -138,7 +142,8 @@ func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Part
 				return err
 			}
 
-			evalExpr, err := EvalPlanExpr(binder.GetContext(), val)
+			compilerContext := binder.builder.compCtx
+			evalExpr, err := EvalPlanExpr(binder.GetContext(), val, compilerContext.GetProcess())
 			if err != nil {
 				return err
 			}
@@ -183,7 +188,7 @@ func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Part
 // return buildRangePartitionDefinitionItem(partitionBinder, partitionInfo, defs)
 func buildRangePartitionItem(binder *PartitionBinder, partitionInfo *plan.PartitionInfo, defs []*tree.Partition) error {
 	for _, def := range defs {
-		if len(partitionInfo.Columns) > 0 {
+		if partitionInfo.PartitionColumns != nil && len(partitionInfo.PartitionColumns.Columns) > 0 {
 			if err := checkRangeColumnsTypeAndValuesMatch(binder, partitionInfo, def); err != nil {
 				return err
 			}
@@ -256,7 +261,7 @@ func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo 
 }
 
 func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partition, info *plan.PartitionInfo) error {
-	unsignedFlag := types.IsUnsignedInt(types.T(info.Expr.Typ.Id))
+	unsignedFlag := types.IsUnsignedInt(types.T(info.PartitionExpr.Expr.Typ.Id))
 	if valuesLess, ok := partition.Values.(*tree.ValuesLessThan); ok {
 		exprs := valuesLess.ValueList
 		for _, exp := range exprs {
@@ -268,7 +273,8 @@ func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partitio
 				return err
 			}
 
-			evalExpr, err := EvalPlanExpr(binder.GetContext(), val)
+			compilerContext := binder.builder.compCtx
+			evalExpr, err := EvalPlanExpr(binder.GetContext(), val, compilerContext.GetProcess())
 			if err != nil {
 				return err
 			}
@@ -309,10 +315,94 @@ func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partitio
 	return nil
 }
 
+// checkPartitionByList checks validity of list partition.
+func checkPartitionByList(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo, tableDef *TableDef) error {
+	return checkListPartitionValue(partitionBinder, partitionInfo, tableDef)
+}
+
+func checkListPartitionValue(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo, tableDef *TableDef) error {
+	//pi := tblInfo.Partition
+	ctx := partitionBinder.GetContext()
+	if len(partitionInfo.Partitions) == 0 {
+		return moerr.NewInternalError(ctx, "For %-.64s partitions each partition must be defined", "LIST")
+	}
+	expStrs, err := formatListPartitionValue(partitionBinder, partitionInfo, tableDef)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	partitionsValuesMap := make(map[string]struct{})
+	for _, str := range expStrs {
+		if _, ok := partitionsValuesMap[str]; ok {
+			return moerr.NewInternalError(ctx, "Multiple definition of same constant in list partitioning")
+		}
+		partitionsValuesMap[str] = struct{}{}
+	}
+	return nil
+}
+
+func formatListPartitionValue(binder *PartitionBinder, partitionInfo *plan.PartitionInfo, tableDef *TableDef) ([]string, error) {
+	pi := partitionInfo
+	defs := partitionInfo.Partitions
+	var colTps []*plan.Type
+
+	cols := make([]*plan.ColDef, 0)
+	if pi.PartitionColumns == nil {
+		tp := vector.TypeToProtoType(types.T_int64.ToType())
+		if isColUnsigned(tableDef.Cols, partitionInfo.PartitionExpr) {
+			tp = vector.TypeToProtoType(types.T_uint64.ToType())
+		}
+		colTps = []*plan.Type{tp}
+	} else {
+		colTps = make([]*plan.Type, 0, len(pi.PartitionColumns.Columns))
+		for _, column := range pi.PartitionColumns.PartitionColumns {
+			colInfo := findColumnByName(column, tableDef)
+			if colInfo == nil {
+				return nil, moerr.NewInternalError(binder.GetContext(), "Field in list of fields for partition function not found in table")
+			}
+			colTps = append(colTps, colInfo.Typ)
+			cols = append(cols, colInfo)
+		}
+	}
+
+	exprStrs := make([]string, 0)
+	inValueStrs := make([]string, 0)
+	for i := range defs {
+		inValueStrs = inValueStrs[:0]
+		for _, val := range defs[i].InValues {
+			compilerContext := binder.builder.compCtx
+			evalExpr, err := EvalPlanExpr(binder.GetContext(), val, compilerContext.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+
+			cval, ok1 := evalExpr.Expr.(*plan.Expr_C)
+			if !ok1 {
+				return nil, moerr.NewInternalError(binder.GetContext(), "This partition function is not allowed")
+			}
+			s := cval.C.String()
+			inValueStrs = append(inValueStrs, s)
+		}
+		exprStrs = append(exprStrs, inValueStrs...)
+	}
+	return exprStrs, nil
+}
+
+// isColUnsigned returns true if the partitioning key column is unsigned.
+func isColUnsigned(cols []*ColDef, partitionExpr *plan.PartitionExpr) bool {
+	for _, coldef := range cols {
+		isUnsigned := types.T(coldef.Typ.Id).ToType().IsUInt()
+		if isUnsigned && strings.Contains(partitionExpr.ExprStr, coldef.Name) {
+			return true
+		}
+	}
+	return false
+}
+
 func collectColumnsType(partitionInfo *plan.PartitionInfo) []*Type {
-	if len(partitionInfo.Columns) > 0 {
-		colTypes := make([]*Type, 0, len(partitionInfo.Columns))
-		for _, col := range partitionInfo.Columns {
+	if len(partitionInfo.PartitionColumns.Columns) > 0 {
+		colTypes := make([]*Type, 0, len(partitionInfo.PartitionColumns.Columns))
+		for _, col := range partitionInfo.PartitionColumns.Columns {
 			colTypes = append(colTypes, col.Typ)
 		}
 		return colTypes
@@ -332,7 +422,7 @@ func findColumnByName(colName string, tbdef *TableDef) *ColDef {
 	return nil
 }
 
-func EvalPlanExpr(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
+func EvalPlanExpr(ctx context.Context, expr *plan.Expr, process *process.Process) (*plan.Expr, error) {
 	switch expr.Expr.(type) {
 	case *plan.Expr_C:
 		return expr, nil
@@ -340,7 +430,7 @@ func EvalPlanExpr(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
 		// try to calculate default value, return err if fails
 		bat := batch.NewWithSize(0)
 		bat.Zs = []int64{1}
-		newExpr, err := ConstantFold(bat, expr)
+		newExpr, err := ConstantFold(bat, expr, process)
 		if err != nil {
 			return nil, err
 		}
