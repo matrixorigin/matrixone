@@ -133,11 +133,13 @@ func TestBuildAlterView(t *testing.T) {
 
 	sql4 := "alter view noexists as select a from a"
 	stmt4, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql4)
+	assert.NoError(t, err)
 	_, err = buildAlterView(stmt4.(*tree.AlterView), ctx)
 	assert.Error(t, err)
 
 	sql5 := "alter view verror as select a from a"
 	stmt5, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql5)
+	assert.NoError(t, err)
 	_, err = buildAlterView(stmt5.(*tree.AlterView), ctx)
 	assert.Error(t, err)
 }
