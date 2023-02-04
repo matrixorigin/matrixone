@@ -57,23 +57,23 @@ func NewTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeV
 	return &vec
 }
 
-func (vec CnTaeVector[T]) Get(i int) any {
+func (vec *CnTaeVector[T]) Get(i int) any {
 	return GetValue(vec.downstreamVector, uint32(i))
 }
 
-func (vec CnTaeVector[T]) Length() int {
+func (vec *CnTaeVector[T]) Length() int {
 	return vec.downstreamVector.Length()
 }
 
-func (vec CnTaeVector[T]) Close() {
+func (vec *CnTaeVector[T]) Close() {
 	vec.downstreamVector.Free(vec.mpool)
 }
 
-func (vec CnTaeVector[T]) HasNull() bool {
+func (vec *CnTaeVector[T]) HasNull() bool {
 	return vec.downstreamVector.GetNulls().Any()
 }
 
-func (vec CnTaeVector[T]) Append(v any) {
+func (vec *CnTaeVector[T]) Append(v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
 		_ = vec.downstreamVector.Append(types.DefaultVal[T](), true, vec.mpool)
@@ -83,25 +83,25 @@ func (vec CnTaeVector[T]) Append(v any) {
 
 }
 
-func (vec CnTaeVector[T]) AppendMany(vs ...any) {
+func (vec *CnTaeVector[T]) AppendMany(vs ...any) {
 	for _, v := range vs {
 		vec.Append(v)
 	}
 }
 
-func (vec CnTaeVector[T]) Nullable() bool {
+func (vec *CnTaeVector[T]) Nullable() bool {
 	return vec.downstreamVector.Nsp.Np != nil
 }
 
-func (vec CnTaeVector[T]) GetAllocator() *mpool.MPool {
+func (vec *CnTaeVector[T]) GetAllocator() *mpool.MPool {
 	return vec.mpool
 }
 
-func (vec CnTaeVector[T]) IsNull(i int) bool {
+func (vec *CnTaeVector[T]) IsNull(i int) bool {
 	return vec.downstreamVector.GetNulls() != nil && vec.downstreamVector.GetNulls().Contains(uint64(i))
 }
 
-func (vec CnTaeVector[T]) NullMask() *roaring64.Bitmap {
+func (vec *CnTaeVector[T]) NullMask() *roaring64.Bitmap {
 	input := vec.downstreamVector.GetNulls().Np
 	var np *roaring64.Bitmap
 	if input != nil {
@@ -112,11 +112,11 @@ func (vec CnTaeVector[T]) NullMask() *roaring64.Bitmap {
 	return nil
 }
 
-func (vec CnTaeVector[T]) GetType() types.Type {
+func (vec *CnTaeVector[T]) GetType() types.Type {
 	return vec.downstreamVector.GetType()
 }
 
-func (vec CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
+func (vec *CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
 	var sels []int64
 	for i := 0; i < vec.Length(); i++ {
 		if !deletes.Contains(uint32(i)) {
@@ -126,12 +126,12 @@ func (vec CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
 	cnVector.Shrink(vec.downstreamVector, sels)
 }
 
-func (vec CnTaeVector[T]) Delete(delRowId int) {
+func (vec *CnTaeVector[T]) Delete(delRowId int) {
 	deletes := roaring.BitmapOf(uint32(delRowId))
 	vec.Compact(deletes)
 }
 
-func (vec CnTaeVector[T]) String() string {
+func (vec *CnTaeVector[T]) String() string {
 	// TODO: Replace with CN vector String
 	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Capacity(), vec.Allocated())
 
@@ -156,15 +156,15 @@ func (vec CnTaeVector[T]) String() string {
 	return s
 }
 
-func (vec CnTaeVector[T]) Extend(src Vector) {
+func (vec *CnTaeVector[T]) Extend(src Vector) {
 	vec.ExtendWithOffset(src, 0, src.Length())
 }
 
-func (vec CnTaeVector[T]) Update(i int, v any) {
+func (vec *CnTaeVector[T]) Update(i int, v any) {
 	UpdateValue(vec.downstreamVector, uint32(i), v)
 }
 
-func (vec CnTaeVector[T]) Reset() {
+func (vec *CnTaeVector[T]) Reset() {
 	if vec.Length() == 0 {
 		return
 	}
@@ -173,30 +173,30 @@ func (vec CnTaeVector[T]) Reset() {
 	cnVector.Reset(vec.downstreamVector)
 }
 
-func (vec CnTaeVector[T]) Slice() any {
+func (vec *CnTaeVector[T]) Slice() any {
 	return vec.downstreamVector.Col
 }
 
-func (vec CnTaeVector[T]) Bytes() *Bytes {
+func (vec *CnTaeVector[T]) Bytes() *Bytes {
 	return MoVecToBytes(vec.downstreamVector)
 }
 
-func (vec CnTaeVector[T]) Window(offset, length int) Vector {
+func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
 
 	window := cnVector.New(vec.GetType())
 	cnVector.Window(vec.downstreamVector, offset, offset+length, window)
 
-	return CnTaeVector[T]{
+	return &CnTaeVector[T]{
 		downstreamVector: window,
 		mpool:            vec.GetAllocator(),
 	}
 }
 
-func (vec CnTaeVector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
+func (vec *CnTaeVector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 	return vec.ForeachWindow(0, vec.Length(), op, sels)
 }
 
-func (vec CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
+func (vec *CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 
 	output, _ := vec.downstreamVector.MarshalBinary()
@@ -208,7 +208,7 @@ func (vec CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (vec CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
+func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	all, err := io.ReadAll(r)
 	if err != nil {
 		return 0, err
@@ -221,7 +221,7 @@ func (vec CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	return 0, err
 }
 
-func (vec CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
+func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
 	opts := Options{}
 	if len(allocator) == 0 {
 		opts.Allocator = vec.GetAllocator()
@@ -242,7 +242,7 @@ func (vec CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.MP
 	return cloned
 }
 
-func (vec CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 
 	if srcLen <= 0 {
 		return
@@ -256,33 +256,33 @@ func (vec CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 
 // TODO: Remove below functions as they don't have any usage
 
-func (vec CnTaeVector[T]) IsView() bool {
+func (vec *CnTaeVector[T]) IsView() bool {
 	panic("Soon Deprecated")
 }
 
-func (vec CnTaeVector[T]) GetView() VectorView {
+func (vec *CnTaeVector[T]) GetView() VectorView {
 	panic("Soon Deprecated")
 }
 
-func (vec CnTaeVector[T]) DataWindow(offset, length int) []byte {
+func (vec *CnTaeVector[T]) DataWindow(offset, length int) []byte {
 	panic("Soon Deprecated")
 }
 
-func (vec CnTaeVector[T]) Data() []byte {
+func (vec *CnTaeVector[T]) Data() []byte {
 	panic("Soon Deprecated")
 }
 
-func (vec CnTaeVector[T]) SlicePtr() unsafe.Pointer {
+func (vec *CnTaeVector[T]) SlicePtr() unsafe.Pointer {
 	panic("Soon Deprecated")
 }
 
-func (vec CnTaeVector[T]) AppendNoNulls(s any) {
+func (vec *CnTaeVector[T]) AppendNoNulls(s any) {
 	panic("Soon Deprecated")
 }
 
 // TODO: Can remove below function as they are only used in Testcases.
 
-func (vec CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
+func (vec *CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
 	// No usage except in testcase
 
 	stat := f.Stat()
@@ -328,7 +328,7 @@ func (vec CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (e
 
 // TODO: Can be implemented in CN Vector.
 
-func (vec CnTaeVector[T]) PPString(num int) string {
+func (vec *CnTaeVector[T]) PPString(num int) string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("[T=%s][Len=%d][Data=(", vec.GetType().String(), vec.Length()))
 	limit := vec.Length()
@@ -359,7 +359,7 @@ func (vec CnTaeVector[T]) PPString(num int) string {
 	return w.String()
 }
 
-func (vec CnTaeVector[T]) Equals(o Vector) bool {
+func (vec *CnTaeVector[T]) Equals(o Vector) bool {
 
 	if vec.Length() != o.Length() {
 		return false
@@ -421,7 +421,7 @@ func (vec CnTaeVector[T]) Equals(o Vector) bool {
 	return true
 }
 
-func (vec CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+func (vec *CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 
 	if sels == nil || sels.IsEmpty() {
 		//TODO: When sel is Empty(), should we run it for all the entries or should we not perform at all.
@@ -453,7 +453,7 @@ func (vec CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roari
 
 // TODO: I am not sure, if the below code will work as expected
 
-func (vec CnTaeVector[T]) Allocated() int {
+func (vec *CnTaeVector[T]) Allocated() int {
 	// Only VarLen is allocated using mpool.
 	if vec.GetType().IsVarlen() {
 		return vec.downstreamVector.Size()
@@ -463,17 +463,15 @@ func (vec CnTaeVector[T]) Allocated() int {
 	return vec.Length()
 }
 
-func (vec CnTaeVector[T]) Capacity() int {
+func (vec *CnTaeVector[T]) Capacity() int {
 	// TODO: Can we use Length() instead of Capacity?
 	// Not used much. Can we remove?
 	return vec.Length()
 }
 
-func (vec CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
+func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 	vec.Reset()
 
 	src := CreateMoVectorFromBytes(vec.GetType(), bs, nulls)
 	vec.downstreamVector = src
-
-	fmt.Println("From Adaptor --", vec.String())
 }
