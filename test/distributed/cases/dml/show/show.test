@@ -120,9 +120,9 @@ SHOW TRIGGERS like '*%';
 
 use mo_catalog;
 show tables;
--- @bvt:issue#7564
+
 show table_number from mo_catalog;
--- @bvt:issue
+
 show column_number from mo_database;
 show column_number from hdjshdj;
 
@@ -161,3 +161,22 @@ create table t(a int, b int, c json);
 insert into t values(1, 1, '{"a":1,"b":2,"c":3}'), (2, 2, '{"a":1,"b":2,"c":3}'), (3, 3, '{"a":1,"b":2,"c":3}'), (4, 4, '{"a":1,"b":2,"c":3}'), (5, 5, '{"a":1,"b":2,"c":3}'), (6, 6, '{"a":1,"b":2,"c":3}');
 show table_values from t;
 drop table t;
+
+create database `.quote`;
+show tables from `.quote`;
+drop database if exists `.quote`;
+
+drop database if exists showDB;
+create database showDB;
+use showDB;
+create table a (a int,b int);
+create view va as select a from a;
+
+begin;
+show create table a;
+show create table va;
+show create view va;
+show collation;
+show collation like '%';
+rollback;
+drop database if exists showDb;

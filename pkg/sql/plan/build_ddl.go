@@ -56,8 +56,19 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	}
 	tableDef.Cols = cols
 
+	// Check alter and change the viewsql.
+	viewSql := ctx.GetRootSql()
+	if len(viewSql) != 0 {
+		if viewSql[0] == 'A' {
+			viewSql = strings.Replace(viewSql, "ALTER", "CREATE", 1)
+		}
+		if viewSql[0] == 'a' {
+			viewSql = strings.Replace(viewSql, "alter", "create", 1)
+		}
+	}
+
 	viewData, err := json.Marshal(ViewData{
-		Stmt:            ctx.GetRootSql(),
+		Stmt:            viewSql,
 		DefaultDatabase: ctx.DefaultDatabase(),
 	})
 	if err != nil {
@@ -70,6 +81,10 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 		{
 			Key:   catalog.SystemRelAttr_Kind,
 			Value: catalog.SystemViewRel,
+		},
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: ctx.GetRootSql(),
 		},
 	}
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
@@ -200,10 +215,13 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider":
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id":
 			default:
 				return nil, moerr.NewBadConfig(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
+		}
+		if err := InitNullMap(stmt.Param, ctx); err != nil {
+			return nil, err
 		}
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
@@ -592,10 +610,17 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				},
 			})
 		}
+		for _, primaryKey := range primaryKeys {
+			colMap[primaryKey].Default.NullAbility = false
+			colMap[primaryKey].NotNull = true
+		}
 	}
 
 	//handle cluster by keys
 	if stmt.ClusterByOption != nil {
+		if stmt.Temporary {
+			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with temporary table is not support")
+		}
 		if len(primaryKeys) > 0 {
 			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
 		}

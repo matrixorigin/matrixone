@@ -698,8 +698,13 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 
 	if e.typ == INSERT {
 		ebat = batch.NewWithSize(0)
-		ebat.Vecs = e.bat.Vecs[1:]
-		ebat.Attrs = e.bat.Attrs[1:]
+		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+			ebat.Vecs = e.bat.Vecs
+			ebat.Attrs = e.bat.Attrs
+		} else {
+			ebat.Vecs = e.bat.Vecs[1:]
+			ebat.Attrs = e.bat.Attrs[1:]
+		}
 	} else {
 		ebat = e.bat
 	}

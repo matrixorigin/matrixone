@@ -66,6 +66,7 @@ type InternalExecResult interface {
 	Value(context.Context, uint64, uint64) (interface{}, error)
 	ValueByName(context.Context, uint64, string) (interface{}, error)
 	StringValueByName(context.Context, uint64, string) (string, error)
+	Float64ValueByName(context.Context, uint64, string) (float64, error)
 }
 
 type InternalExecutor interface {

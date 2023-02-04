@@ -16,11 +16,12 @@ package disttae
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"math"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -282,10 +283,8 @@ func (txn *Transaction) checkPrimaryKey(
 		return nil
 	}
 
-	t := memtable.Time{
-		Timestamp: txn.nextLocalTS(),
-	}
-	tx := memtable.NewTransaction(uuid.NewString(), t, memtable.SnapshotIsolation)
+	t := txn.nextLocalTS()
+	tx := memorytable.NewTransaction(t)
 	iter := memorytable.NewBatchIter(bat)
 	for {
 		tuple := iter()
@@ -336,7 +335,7 @@ func (txn *Transaction) checkPrimaryKey(
 
 		case DELETE:
 			err := txn.workspace.Delete(tx, rowID)
-			if err != nil {
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
 
@@ -354,15 +353,10 @@ func (txn *Transaction) nextLocalTS() timestamp.Timestamp {
 	return txn.localTS
 }
 
-func (txn *Transaction) RegisterFile(fileName string) {
-	txn.fileMap[fileName] = txn.blockId
-	txn.blockId++
-}
-
 // WriteFile used to add a s3 file information to the transaction buffer
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
-	databaseName, tableName string, fileName string) error {
+	databaseName, tableName string, fileName string, bat *batch.Batch, dnStore DNStore) error {
 	txn.readOnly = false
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
@@ -371,7 +365,8 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 		tableName:    tableName,
 		databaseName: databaseName,
 		fileName:     fileName,
-		blockId:      txn.fileMap[fileName],
+		bat:          bat,
+		dnStore:      dnStore,
 	})
 	return nil
 }
@@ -608,10 +603,8 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
 
 	// tx for workspace operations
-	t := memtable.Time{
-		Timestamp: txn.nextLocalTS(),
-	}
-	tx := memtable.NewTransaction(uuid.NewString(), t, memtable.SnapshotIsolation)
+	t := txn.nextLocalTS()
+	tx := memorytable.NewTransaction(t)
 	defer func() {
 		if err := tx.Commit(t); err != nil {
 			panic(err)
@@ -624,7 +617,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		mp[rowid] = 0
 		// update workspace
 		err := txn.workspace.Delete(tx, RowID(rowid))
-		if err != nil {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			panic(err)
 		}
 	}

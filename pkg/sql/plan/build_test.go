@@ -793,7 +793,7 @@ func TestShow(t *testing.T) {
 		"show tables",
 		"show tables from tpch",
 		"show tables like '%dd'",
-		"show tables from tpch where Tables_in_tpch = 'aa' or Tables_in_tpch like '%dd'",
+		"show tables from tpch where `Tables_in_tpch` = 'aa' or `Tables_in_tpch` like '%dd'",
 		"show columns from nation",
 		"show columns from nation from tpch",
 		"show columns from nation where `Field` like '%ff' or `Type` = 1 or `Null` = 0",
