@@ -133,7 +133,7 @@ func (vec CnTaeVector[T]) Delete(delRowId int) {
 
 func (vec CnTaeVector[T]) String() string {
 	// TODO: Replace with CN vector String
-	s := fmt.Sprintf("StrVector:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Capacity(), vec.Allocated())
+	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Capacity(), vec.Allocated())
 
 	end := 100
 	if vec.Length() < end {
@@ -277,10 +277,7 @@ func (vec CnTaeVector[T]) SlicePtr() unsafe.Pointer {
 }
 
 func (vec CnTaeVector[T]) AppendNoNulls(s any) {
-	slice := s.([]T)
-	for _, v := range slice {
-		vec.Append(any(v).(T))
-	}
+	panic("Soon Deprecated")
 }
 
 // TODO: Can remove below function as they are only used in Testcases.
@@ -457,11 +454,13 @@ func (vec CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roari
 // TODO: I am not sure, if the below code will work as expected
 
 func (vec CnTaeVector[T]) Allocated() int {
+	// Only VarLen is allocated using mpool.
 	if vec.GetType().IsVarlen() {
-		// Only VarLen is allocated using mpool.
 		return vec.downstreamVector.Size()
 	}
-	return 0
+
+	// TODO: Not sure if the below part should return 0 or len(downstream.data)
+	return vec.Length()
 }
 
 func (vec CnTaeVector[T]) Capacity() int {
