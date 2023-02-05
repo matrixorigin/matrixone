@@ -126,12 +126,6 @@ func (vec *CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
 	cnVector.Shrink(vec.downstreamVector, sels)
 }
 
-// Delete TODO: used very rare.
-func (vec *CnTaeVector[T]) Delete(delRowId int) {
-	deletes := roaring.BitmapOf(uint32(delRowId))
-	vec.Compact(deletes)
-}
-
 func (vec *CnTaeVector[T]) String() string {
 	// TODO: Replace with CN vector String
 	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Capacity(), vec.Allocated())
@@ -245,6 +239,9 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 
 func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 
+	//TODO: ExtendWithOffset impl is having poor benchmark score.
+	//Will migrate the DN implementation to CN once CN vector impl is completed.
+
 	if srcLen <= 0 {
 		return
 	}
@@ -255,7 +252,7 @@ func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 
 }
 
-// TODO: Remove below functions as they don't have any usage
+// TODO: --- We can remove below functions as they don't have any usage
 
 func (vec *CnTaeVector[T]) IsView() bool {
 	panic("Soon Deprecated")
@@ -281,7 +278,13 @@ func (vec *CnTaeVector[T]) AppendNoNulls(s any) {
 	panic("Soon Deprecated")
 }
 
-// TODO: Can remove below function as they are only used in Testcases.
+// Delete TODO: used very rare.
+func (vec *CnTaeVector[T]) Delete(delRowId int) {
+	deletes := roaring.BitmapOf(uint32(delRowId))
+	vec.Compact(deletes)
+}
+
+// TODO: --- We can remove below function as they are only used in Testcases.
 
 func (vec *CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
 	// No usage except in testcase
@@ -327,7 +330,7 @@ func (vec *CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (
 	return err
 }
 
-// TODO: Can be implemented in CN Vector.
+// TODO: --- Below Functions Can be implemented in CN Vector.
 
 func (vec *CnTaeVector[T]) PPString(num int) string {
 	var w bytes.Buffer
@@ -452,7 +455,7 @@ func (vec *CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roar
 	return
 }
 
-// TODO: I am not sure, if the below code will work as expected
+// TODO: --- I am not sure, if the below functions will work as expected
 
 func (vec *CnTaeVector[T]) Allocated() int {
 	// Only VarLen is allocated using mpool.
