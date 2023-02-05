@@ -470,6 +470,8 @@ func (vec *CnTaeVector[T]) Allocated() int {
 func (vec *CnTaeVector[T]) Capacity() int {
 	// TODO: Can we use Length() instead of Capacity?
 	// Not used much. Can we remove?
+
+	// TODO: Capacity should be based on a number and not based on the Length. Fix it later.
 	return vec.Length()
 }
 
