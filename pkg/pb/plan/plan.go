@@ -41,13 +41,13 @@ func (p *Plan) UnmarshalBinary(data []byte) error {
 	return p.Unmarshal(data)
 }
 
-func (p *PartitionInfo) MarshalPartitionInfo() ([]byte, error) {
+func (p *PartitionByDef) MarshalPartitionInfo() ([]byte, error) {
 	data := make([]byte, p.ProtoSize())
 	_, err := p.MarshalTo(data)
 	return data, err
 }
 
-func (p *PartitionInfo) UnMarshalPartitionInfo(data []byte) error {
+func (p *PartitionByDef) UnMarshalPartitionInfo(data []byte) error {
 	return p.Unmarshal(data)
 }
 

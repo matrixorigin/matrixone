@@ -52,7 +52,7 @@ func buildHashPartition(partitionBinder *PartitionBinder, stmt *tree.CreateTable
 	}
 
 	partitionType := partitionOp.PartBy.PType.(*tree.HashType)
-	partitionInfo := &plan.PartitionInfo{
+	partitionInfo := &plan.PartitionByDef{
 		Partitions:     make([]*plan.PartitionItem, partitionsNum),
 		PartitionNum:   partitionsNum,
 		IsSubPartition: partitionOp.PartBy.IsSubPartition,
@@ -114,7 +114,7 @@ func buildKeyPartition(partitionBinder *PartitionBinder, stmt *tree.CreateTable,
 		return moerr.NewInvalidInput(partitionBinder.GetContext(), "the 'ALGORITHM' option has too many values")
 	}
 
-	partitionInfo := &plan.PartitionInfo{
+	partitionInfo := &plan.PartitionByDef{
 		Partitions:     make([]*plan.PartitionItem, partitionsNum),
 		PartitionNum:   partitionsNum,
 		Algorithm:      partitionType.Algorithm,
@@ -159,7 +159,7 @@ func buildRangePartition(partitionBinder *PartitionBinder, stmt *tree.CreateTabl
 		return moerr.NewParseError(partitionBinder.GetContext(), "build range partition")
 	}
 
-	partitionInfo := &plan.PartitionInfo{
+	partitionInfo := &plan.PartitionByDef{
 		IsSubPartition: partitionOp.PartBy.IsSubPartition,
 		Partitions:     make([]*plan.PartitionItem, partitionNum),
 		PartitionNum:   uint64(partitionNum),
@@ -215,7 +215,7 @@ func buildListPartitiion(partitionBinder *PartitionBinder, stmt *tree.CreateTabl
 		return moerr.NewParseError(partitionBinder.GetContext(), "build list partition")
 	}
 
-	partitionInfo := &plan.PartitionInfo{
+	partitionInfo := &plan.PartitionByDef{
 		IsSubPartition: partitionOp.PartBy.IsSubPartition,
 		Partitions:     make([]*plan.PartitionItem, partitionNum),
 		PartitionNum:   uint64(partitionNum),
@@ -260,7 +260,7 @@ func buildListPartitiion(partitionBinder *PartitionBinder, stmt *tree.CreateTabl
 }
 
 // buildPartitionColumns COLUMNS partitioning enables the use of multiple columns in partitioning keys
-func buildPartitionColumns(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo, columnList []*tree.UnresolvedName) error {
+func buildPartitionColumns(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionByDef, columnList []*tree.UnresolvedName) error {
 	columnsExpr := make([]*plan.Expr, len(columnList))
 	partitionColumns := make([]string, len(columnList))
 
@@ -338,7 +338,7 @@ func genPartitionAst(exprs tree.Exprs, partNum int64) tree.Expr {
 }
 
 // This method is used to convert different types of partition structures into plan.Expr
-func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.CreateTable, partitionInfo *plan.PartitionInfo) error {
+func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.CreateTable, partitionInfo *plan.PartitionByDef) error {
 	partitionOp := stmt.PartitionOption
 	switch partitionType := partitionOp.PartBy.PType.(type) {
 	case *tree.KeyType:
@@ -666,7 +666,7 @@ func buildListCaseWhenExpr(listExpr tree.Expr, defs []*tree.Partition) (*tree.Ca
 }
 
 // buildPartitionDefinitionsInfo build partition definitions info without assign partition id.
-func buildPartitionDefinitionsInfo(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo, defs []*tree.Partition) (err error) {
+func buildPartitionDefinitionsInfo(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionByDef, defs []*tree.Partition) (err error) {
 	switch partitionInfo.Type {
 	case plan.PartitionType_HASH, plan.PartitionType_LINEAR_HASH:
 		err = buildHashPartitionDefinitions(partitionBinder, defs, partitionInfo)
@@ -680,7 +680,7 @@ func buildPartitionDefinitionsInfo(partitionBinder *PartitionBinder, partitionIn
 	return err
 }
 
-func buildRangePartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree.Partition, partitionInfo *plan.PartitionInfo) error {
+func buildRangePartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree.Partition, partitionInfo *plan.PartitionByDef) error {
 	// VALUES LESS THAN value must be strictly increasing for each partition
 	for i, partition := range defs {
 		partitionItem := &plan.PartitionItem{
@@ -717,7 +717,7 @@ func buildRangePartitionDefinitions(partitionBinder *PartitionBinder, defs []*tr
 	return buildRangePartitionItem(partitionBinder, partitionInfo, defs)
 }
 
-func buildListPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree.Partition, partitionInfo *plan.PartitionInfo) error {
+func buildListPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree.Partition, partitionInfo *plan.PartitionByDef) error {
 	for i, partition := range defs {
 		partitionItem := &plan.PartitionItem{
 			PartitionName:   string(partition.Name),
@@ -745,7 +745,7 @@ func buildListPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tre
 	return buildListPartitionItem(partitionBinder, partitionInfo, defs)
 }
 
-func buildHashPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree.Partition, partitionInfo *plan.PartitionInfo) error {
+func buildHashPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree.Partition, partitionInfo *plan.PartitionByDef) error {
 	for i := uint64(0); i < partitionInfo.PartitionNum; i++ {
 		partition := &plan.PartitionItem{
 			PartitionName:   "p" + strconv.FormatUint(i, 10),
@@ -756,7 +756,7 @@ func buildHashPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tre
 	return nil
 }
 
-func buildKeyPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree.Partition, partitionInfo *plan.PartitionInfo) error {
+func buildKeyPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree.Partition, partitionInfo *plan.PartitionByDef) error {
 	for i := uint64(0); i < partitionInfo.PartitionNum; i++ {
 		partition := &plan.PartitionItem{
 			PartitionName:   "p" + strconv.FormatUint(i, 10),
@@ -783,7 +783,7 @@ func checkColumnsPartitionType(partitionBinder *PartitionBinder, columnNames []s
 }
 
 // checkTableDefPartition Perform integrity constraint check on partitions of create table statement
-func checkTableDefPartition(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionInfo) error {
+func checkTableDefPartition(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionByDef) error {
 	if err := checkPartitionFuncType(partitionBinder, tableDef, partitionInfo); err != nil {
 		return err
 	}
@@ -803,7 +803,7 @@ func checkTableDefPartition(partitionBinder *PartitionBinder, tableDef *TableDef
 }
 
 // check partition expression type
-func checkPartitionFuncType(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionInfo) error {
+func checkPartitionFuncType(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionByDef) error {
 	//if partitionInfo.Expr == nil {
 	if partitionInfo.PartitionExpr == nil {
 		return nil
@@ -824,7 +824,7 @@ func checkPartitionFuncType(partitionBinder *PartitionBinder, tableDef *TableDef
 }
 
 // checkPartitionKeysConstraints checks the partitioning key is included in the table constraint.
-func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionInfo) error {
+func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionByDef) error {
 	defs := tableDef.Defs
 
 	hasPrimaryKey := false
@@ -911,7 +911,7 @@ func findColumnInIndexCols(c string, pkcols []string) bool {
 	return false
 }
 
-func checkPartitionDefinitionConstraints(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo, tableDef *TableDef) error {
+func checkPartitionDefinitionConstraints(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionByDef, tableDef *TableDef) error {
 	var err error
 	if err = checkPartitionNameUnique(partitionBinder, partitionInfo); err != nil {
 		return err
@@ -944,7 +944,7 @@ func checkPartitionDefinitionConstraints(partitionBinder *PartitionBinder, parti
 }
 
 // checkPartitionColumnsUnique check partition columns for duplicate columns
-func checkPartitionColumnsUnique(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo) error {
+func checkPartitionColumnsUnique(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionByDef) error {
 	if partitionInfo.PartitionColumns == nil || len(partitionInfo.PartitionColumns.PartitionColumns) <= 1 {
 		return nil
 	}
@@ -967,7 +967,7 @@ func checkPartitionsNumber(partitionBinder *PartitionBinder, partNum uint64) err
 }
 
 // Check whether the partition name is duplicate
-func checkPartitionNameUnique(partitionBinder *PartitionBinder, pd *plan.PartitionInfo) error {
+func checkPartitionNameUnique(partitionBinder *PartitionBinder, pd *plan.PartitionByDef) error {
 	partitions := pd.Partitions
 
 	partNames := make(map[string]byte, len(partitions))
@@ -1007,7 +1007,7 @@ func extractColFromFunc(partitionBinder *PartitionBinder, funcExpr *plan.Expr_F)
 	return result
 }
 
-func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionInfo) error {
+func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionByDef) error {
 	defs := tableDef.Defs
 	hasPrimaryKey := false
 	hasUniqueKey := false

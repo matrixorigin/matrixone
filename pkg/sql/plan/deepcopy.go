@@ -521,7 +521,7 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	}
 
 	if table.Partition != nil {
-		partitionDef := &plan.PartitionInfo{
+		partitionDef := &plan.PartitionByDef{
 			Type:                table.Partition.GetType(),
 			PartitionExpression: table.Partition.GetPartitionExpression(),
 			PartitionNum:        table.Partition.GetPartitionNum(),

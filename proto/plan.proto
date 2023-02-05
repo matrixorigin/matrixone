@@ -325,7 +325,7 @@ enum PartitionType {
 	LIST_COLUMNS = 7;
 }
 
-message PartitionInfo {
+message PartitionByDef {
 	PartitionType type = 1;
 	PartitionExpr partition_expr = 2;
 	Expr partition_expression = 3;
@@ -406,7 +406,7 @@ message TableDef {
 	repeated uint64 ref_child_tbls	= 14;
 	repeated CheckDef checks		= 15;
 
-	PartitionInfo partition		= 21;
+	PartitionByDef partition		= 21;
 	ClusterByDef cluster_by		= 22;
 	repeated PropertyDef props	= 23;
 	ViewDef view_sql			= 24;

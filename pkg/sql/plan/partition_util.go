@@ -26,7 +26,7 @@ import (
 
 // add this code in buildListPartitionItem
 // return buildListPartitionItem(partitionBinder, partitionInfo, defs)
-func buildListPartitionItem(binder *PartitionBinder, partitionInfo *plan.PartitionInfo, defs []*tree.Partition) error {
+func buildListPartitionItem(binder *PartitionBinder, partitionInfo *plan.PartitionByDef, defs []*tree.Partition) error {
 	for _, def := range defs {
 		if partitionInfo.PartitionColumns != nil {
 			if err := checkListColumnsTypeAndValuesMatch(binder, partitionInfo, def); err != nil {
@@ -41,7 +41,7 @@ func buildListPartitionItem(binder *PartitionBinder, partitionInfo *plan.Partiti
 	return nil
 }
 
-func checkListColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo *plan.PartitionInfo, partition *tree.Partition) error {
+func checkListColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo *plan.PartitionByDef, partition *tree.Partition) error {
 	if valuesIn, ok := partition.Values.(*tree.ValuesIn); ok {
 		exprs := valuesIn.ValueList
 
@@ -126,7 +126,7 @@ func partitionValueTypeCheck(ctx context.Context, funcTyp *Type, valueTyp *Type)
 	return nil
 }
 
-func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partition, info *plan.PartitionInfo) error {
+func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partition, info *plan.PartitionByDef) error {
 	unsignedFlag := types.IsUnsignedInt(types.T(info.PartitionExpr.Expr.Typ.Id))
 	if valuesIn, ok := partition.Values.(*tree.ValuesIn); ok {
 		exprs := valuesIn.ValueList
@@ -183,7 +183,7 @@ func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Part
 
 // add this code in buildRangePartitionDefinitions
 // return buildRangePartitionDefinitionItem(partitionBinder, partitionInfo, defs)
-func buildRangePartitionItem(binder *PartitionBinder, partitionInfo *plan.PartitionInfo, defs []*tree.Partition) error {
+func buildRangePartitionItem(binder *PartitionBinder, partitionInfo *plan.PartitionByDef, defs []*tree.Partition) error {
 	for _, def := range defs {
 		if partitionInfo.PartitionColumns != nil && len(partitionInfo.PartitionColumns.Columns) > 0 {
 			if err := checkRangeColumnsTypeAndValuesMatch(binder, partitionInfo, def); err != nil {
@@ -198,7 +198,7 @@ func buildRangePartitionItem(binder *PartitionBinder, partitionInfo *plan.Partit
 	return nil
 }
 
-func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo *plan.PartitionInfo, partition *tree.Partition) error {
+func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo *plan.PartitionByDef, partition *tree.Partition) error {
 	if valuesLessThan, ok := partition.Values.(*tree.ValuesLessThan); ok {
 		exprs := valuesLessThan.ValueList
 		// Validate() has already checked len(colNames) = len(exprs)
@@ -257,7 +257,7 @@ func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionInfo 
 	}
 }
 
-func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partition, info *plan.PartitionInfo) error {
+func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partition, info *plan.PartitionByDef) error {
 	unsignedFlag := types.IsUnsignedInt(types.T(info.PartitionExpr.Expr.Typ.Id))
 	if valuesLess, ok := partition.Values.(*tree.ValuesLessThan); ok {
 		exprs := valuesLess.ValueList
@@ -313,11 +313,11 @@ func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partitio
 }
 
 // checkPartitionByList checks validity of list partition.
-func checkPartitionByList(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo, tableDef *TableDef) error {
+func checkPartitionByList(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionByDef, tableDef *TableDef) error {
 	return checkListPartitionValue(partitionBinder, partitionInfo, tableDef)
 }
 
-func checkListPartitionValue(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo, tableDef *TableDef) error {
+func checkListPartitionValue(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionByDef, tableDef *TableDef) error {
 	//pi := tblInfo.Partition
 	ctx := partitionBinder.GetContext()
 	if len(partitionInfo.Partitions) == 0 {
@@ -338,7 +338,7 @@ func checkListPartitionValue(partitionBinder *PartitionBinder, partitionInfo *pl
 	return nil
 }
 
-func formatListPartitionValue(binder *PartitionBinder, partitionInfo *plan.PartitionInfo, tableDef *TableDef) ([]string, error) {
+func formatListPartitionValue(binder *PartitionBinder, partitionInfo *plan.PartitionByDef, tableDef *TableDef) ([]string, error) {
 	pi := partitionInfo
 	defs := partitionInfo.Partitions
 	if pi.PartitionColumns != nil {
@@ -373,7 +373,7 @@ func formatListPartitionValue(binder *PartitionBinder, partitionInfo *plan.Parti
 	return exprStrs, nil
 }
 
-func collectColumnsType(partitionInfo *plan.PartitionInfo) []*Type {
+func collectColumnsType(partitionInfo *plan.PartitionByDef) []*Type {
 	if len(partitionInfo.PartitionColumns.Columns) > 0 {
 		colTypes := make([]*Type, 0, len(partitionInfo.PartitionColumns.Columns))
 		for _, col := range partitionInfo.PartitionColumns.Columns {
