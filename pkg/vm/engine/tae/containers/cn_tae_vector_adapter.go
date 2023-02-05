@@ -126,6 +126,7 @@ func (vec *CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
 	cnVector.Shrink(vec.downstreamVector, sels)
 }
 
+// Delete TODO: used very rare.
 func (vec *CnTaeVector[T]) Delete(delRowId int) {
 	deletes := roaring.BitmapOf(uint32(delRowId))
 	vec.Compact(deletes)
