@@ -2604,7 +2604,7 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 	var cw []ComputationWrapper = nil
 	if cached := ses.getCachedPlan(sql); cached != nil {
 		for i, stmt := range cached.stmts {
-			tcw := InitTxnComputationWrapper(ses, *stmt, proc)
+			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
 			cw = append(cw, tcw)
 		}
@@ -4155,11 +4155,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 	if canCache && !ses.isCached(sql) {
 		plans := make([]*plan.Plan, len(cws))
-		stmts := make([]*tree.Statement, len(cws))
+		stmts := make([]tree.Statement, len(cws))
 		for i, cw := range cws {
 			if cwft, ok := cw.(*TxnComputationWrapper); ok && checkNodeCanCache(cwft.plan) {
 				plans[i] = cwft.plan
-				stmts[i] = &cwft.stmt
+				stmts[i] = cwft.stmt
 			} else {
 				return nil
 			}

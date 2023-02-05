@@ -56,8 +56,19 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	}
 	tableDef.Cols = cols
 
+	// Check alter and change the viewsql.
+	viewSql := ctx.GetRootSql()
+	if len(viewSql) != 0 {
+		if viewSql[0] == 'A' {
+			viewSql = strings.Replace(viewSql, "ALTER", "CREATE", 1)
+		}
+		if viewSql[0] == 'a' {
+			viewSql = strings.Replace(viewSql, "alter", "create", 1)
+		}
+	}
+
 	viewData, err := json.Marshal(ViewData{
-		Stmt:            ctx.GetRootSql(),
+		Stmt:            viewSql,
 		DefaultDatabase: ctx.DefaultDatabase(),
 	})
 	if err != nil {
@@ -607,6 +618,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	//handle cluster by keys
 	if stmt.ClusterByOption != nil {
+		if stmt.Temporary {
+			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with temporary table is not support")
+		}
 		if len(primaryKeys) > 0 {
 			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
 		}
