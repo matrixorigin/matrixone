@@ -250,9 +250,9 @@ message PrimaryKeyDef {
 	IndexOption option		= 3;
 
 	// Composed primary key column name: __mo_cpkey
-
+	string pkey_col_name = 4;
 	// XXX: Deprecated and to be removed soon.
-	repeated string names = 4;
+	repeated string names = 5;
 }
 
 message IndexDef {
@@ -386,10 +386,9 @@ message TableDef {
 	// XXX: Deprecated and to be removed soon.
 	message DefType {
 		oneof def {
-			PrimaryKeyDef pk			= 1;
-			PropertiesDef properties	= 2;
-			UniqueIndexDef uIdx			= 3;
-			SecondaryIndexDef sIdx		= 4;
+			PropertiesDef properties	= 1;
+			UniqueIndexDef uIdx			= 2;
+			SecondaryIndexDef sIdx		= 3;
 		}
 	}
 
@@ -753,6 +752,7 @@ message InsertValues {
 	ClusterTable cluster_table = 10;
 	ClusterByDef cb=11;
 	bool has_auto_col = 12;
+	PrimaryKeyDef primary_key_def = 13;
 }
 
 message column{

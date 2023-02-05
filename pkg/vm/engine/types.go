@@ -68,10 +68,6 @@ type Attribute struct {
 	AutoIncrement bool
 }
 
-type PrimaryIndexDef struct {
-	Names []string
-}
-
 type PropertiesDef struct {
 	Properties []Property
 }
@@ -144,6 +140,10 @@ type ForeignKeyDef struct {
 	Fkeys []*plan.ForeignKeyDef
 }
 
+type PrimaryKeyDef struct {
+	Pkey *plan.PrimaryKeyDef
+}
+
 type RefChildTableDef struct {
 	Tables []uint64
 }
@@ -152,15 +152,14 @@ type TableDef interface {
 	tableDef()
 }
 
-func (*CommentDef) tableDef()      {}
-func (*PartitionDef) tableDef()    {}
-func (*ViewDef) tableDef()         {}
-func (*AttributeDef) tableDef()    {}
-func (*IndexTableDef) tableDef()   {}
-func (*PropertiesDef) tableDef()   {}
-func (*PrimaryIndexDef) tableDef() {}
-func (*ClusterByDef) tableDef()    {}
-func (*ConstraintDef) tableDef()   {}
+func (*CommentDef) tableDef()    {}
+func (*PartitionDef) tableDef()  {}
+func (*ViewDef) tableDef()       {}
+func (*AttributeDef) tableDef()  {}
+func (*IndexTableDef) tableDef() {}
+func (*PropertiesDef) tableDef() {}
+func (*ClusterByDef) tableDef()  {}
+func (*ConstraintDef) tableDef() {}
 
 type ConstraintDef struct {
 	Cts []Constraint
@@ -173,6 +172,7 @@ const (
 	SecondaryIndex
 	RefChildTable
 	ForeignKey
+	PrimaryKey
 )
 
 func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
@@ -228,6 +228,18 @@ func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
 				}
 				buf.Write(bytes)
 			}
+		case *PrimaryKeyDef:
+			if err := binary.Write(buf, binary.BigEndian, PrimaryKey); err != nil {
+				return nil, err
+			}
+			bytes, err := def.Pkey.Marshal()
+			if err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64((len(bytes)))); err != nil {
+				return nil, err
+			}
+			buf.Write(bytes)
 		}
 	}
 	return buf.Bytes(), nil
@@ -280,6 +292,27 @@ func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
 				fKeys[i] = fKey
 			}
 			c.Cts = append(c.Cts, &ForeignKeyDef{fKeys})
+
+		case PrimaryKey:
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			pkey := &plan.PrimaryKeyDef{}
+			err := pkey.Unmarshal(data[l : l+int(length)])
+			if err != nil {
+				return err
+			}
+			l += int(length)
+			c.Cts = append(c.Cts, &PrimaryKeyDef{pkey})
+		}
+	}
+	return nil
+}
+
+// get the primary key definition in the constraint, and return null if there is no primary key
+func (c *ConstraintDef) GetPrimaryKeyDef() *PrimaryKeyDef {
+	for _, ct := range c.Cts {
+		if ctVal, ok := ct.(*PrimaryKeyDef); ok {
+			return ctVal
 		}
 	}
 	return nil
@@ -293,6 +326,7 @@ type Constraint interface {
 func (*UniqueIndexDef) constraint()    {}
 func (*SecondaryIndexDef) constraint() {}
 func (*ForeignKeyDef) constraint()     {}
+func (*PrimaryKeyDef) constraint()     {}
 func (*RefChildTableDef) constraint()  {}
 
 type Relation interface {
