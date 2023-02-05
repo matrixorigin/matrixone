@@ -19,12 +19,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/pingcap/errors"
-	"strings"
 )
 
 // add this code in buildListPartitionItem
@@ -328,7 +325,7 @@ func checkListPartitionValue(partitionBinder *PartitionBinder, partitionInfo *pl
 	}
 	expStrs, err := formatListPartitionValue(partitionBinder, partitionInfo, tableDef)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	partitionsValuesMap := make(map[string]struct{})
@@ -344,24 +341,12 @@ func checkListPartitionValue(partitionBinder *PartitionBinder, partitionInfo *pl
 func formatListPartitionValue(binder *PartitionBinder, partitionInfo *plan.PartitionInfo, tableDef *TableDef) ([]string, error) {
 	pi := partitionInfo
 	defs := partitionInfo.Partitions
-	var colTps []*plan.Type
-
-	cols := make([]*plan.ColDef, 0)
-	if pi.PartitionColumns == nil {
-		tp := vector.TypeToProtoType(types.T_int64.ToType())
-		if isColUnsigned(tableDef.Cols, partitionInfo.PartitionExpr) {
-			tp = vector.TypeToProtoType(types.T_uint64.ToType())
-		}
-		colTps = []*plan.Type{tp}
-	} else {
-		colTps = make([]*plan.Type, 0, len(pi.PartitionColumns.Columns))
+	if pi.PartitionColumns != nil {
 		for _, column := range pi.PartitionColumns.PartitionColumns {
 			colInfo := findColumnByName(column, tableDef)
 			if colInfo == nil {
 				return nil, moerr.NewInternalError(binder.GetContext(), "Field in list of fields for partition function not found in table")
 			}
-			colTps = append(colTps, colInfo.Typ)
-			cols = append(cols, colInfo)
 		}
 	}
 
@@ -386,17 +371,6 @@ func formatListPartitionValue(binder *PartitionBinder, partitionInfo *plan.Parti
 		exprStrs = append(exprStrs, inValueStrs...)
 	}
 	return exprStrs, nil
-}
-
-// isColUnsigned returns true if the partitioning key column is unsigned.
-func isColUnsigned(cols []*ColDef, partitionExpr *plan.PartitionExpr) bool {
-	for _, coldef := range cols {
-		isUnsigned := types.T(coldef.Typ.Id).ToType().IsUInt()
-		if isUnsigned && strings.Contains(partitionExpr.ExprStr, coldef.Name) {
-			return true
-		}
-	}
-	return false
 }
 
 func collectColumnsType(partitionInfo *plan.PartitionInfo) []*Type {
@@ -443,6 +417,8 @@ func EvalPlanExpr(ctx context.Context, expr *plan.Expr, process *process.Process
 	}
 }
 
+// Continue to use this function in the future. Do not delete this function temporarily. Please call @qingxinhome
+/*
 // checkPartitionFuncValid checks partition function validly.
 func checkPartitionFuncValid(ctx context.Context, tbdef *TableDef, partby tree.PartitionBy) error {
 	if partby.PType == nil {
@@ -635,7 +611,7 @@ func hasDatetimeArgs(argsType ...*Type) bool {
 	}
 	return false
 }
-
+*/
 // AllowedPartitionFuncMap stores functions which can be used in the partition expression.
 var AllowedPartitionFuncMap = map[string]int{
 	"to_days":        1,
