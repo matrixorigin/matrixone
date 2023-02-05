@@ -1142,6 +1142,15 @@ func TestPartitioningKeysUniqueKeys(t *testing.T) {
 		)
 			PARTITION BY KEY(col3)
 			PARTITIONS 4;`,
+
+		`CREATE TABLE t4 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL UNIQUE,
+			col4 INT NOT NULL
+		)
+			PARTITION BY KEY(col3)
+			PARTITIONS 4;`,
 	}
 
 	mock := NewMockOptimizer(false)
@@ -1227,6 +1236,24 @@ func TestPartitioningKeysUniqueKeysError(t *testing.T) {
 		)
 		PARTITION BY KEY()
 		PARTITIONS 2;`,
+
+		`CREATE TABLE t6 (
+		col1 INT NOT NULL,
+		col2 DATE NOT NULL,
+		col3 INT NOT NULL UNIQUE,
+		col4 INT NOT NULL
+	   )
+		PARTITION BY KEY(col1)
+		PARTITIONS 4;`,
+
+		`CREATE TABLE t7 (
+		col1 INT NOT NULL,
+		col2 DATE NOT NULL,
+		col3 INT NOT NULL UNIQUE,
+		col4 INT NOT NULL
+	   )
+		PARTITION BY HASH(col4)
+		PARTITIONS 4;`,
 	}
 
 	mock := NewMockOptimizer(false)

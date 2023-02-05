@@ -100,6 +100,27 @@ PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
 PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
 );
 show create table tp18;
+
+CREATE TABLE tp19 (
+col1 INT NOT NULL,
+col2 DATE NOT NULL,
+col3 INT NOT NULL UNIQUE,
+col4 INT NOT NULL
+)
+PARTITION BY KEY(col3)
+PARTITIONS 4;
+show create table tp19;
+
+CREATE TABLE tp20 (
+col1 INT NOT NULL,
+col2 DATE NOT NULL,
+col3 INT NOT NULL UNIQUE,
+col4 INT NOT NULL
+)
+PARTITION BY HASH(col3)
+PARTITIONS 4;
+show create table tp20;
+
 drop table tp1;
 drop table tp2;
 drop table tp3;
@@ -118,3 +139,5 @@ drop table tp15;
 drop table tp16;
 drop table tp17;
 drop table tp18;
+drop table tp19;
+drop table tp20;

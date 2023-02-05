@@ -136,6 +136,28 @@ PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
 show create table tp18;
 Table    Create Table
 tp18    CREATE TABLE `tp18` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n) partition by list columns (a, b) (partition p0 values in ((0, 0), (null, null)), partition p1 values in ((0, 1), (0, 2), (0, 3), (1, 1), (1, 2)), partition p2 values in ((1, 0), (2, 0), (2, 1), (3, 0), (3, 1)), partition p3 values in ((1, 3), (2, 2), (2, 3), (3, 2), (3, 3)))
+CREATE TABLE tp19 (
+col1 INT NOT NULL,
+col2 DATE NOT NULL,
+col3 INT NOT NULL UNIQUE,
+col4 INT NOT NULL
+)
+PARTITION BY KEY(col3)
+PARTITIONS 4;
+show create table tp19;
+Table    Create Table
+tp19    CREATE TABLE `tp19` (\n`col1` INT NOT NULL,\n`col2` DATE NOT NULL,\n`col3` INT NOT NULL,\n`col4` INT NOT NULL,\nUNIQUE KEY `col3` (`col3`)\n) partition by key algorithm = 2 (col3) partitions 4
+CREATE TABLE tp20 (
+col1 INT NOT NULL,
+col2 DATE NOT NULL,
+col3 INT NOT NULL UNIQUE,
+col4 INT NOT NULL
+)
+PARTITION BY HASH(col3)
+PARTITIONS 4;
+show create table tp20;
+Table    Create Table
+tp20    CREATE TABLE `tp20` (\n`col1` INT NOT NULL,\n`col2` DATE NOT NULL,\n`col3` INT NOT NULL,\n`col4` INT NOT NULL,\nUNIQUE KEY `col3` (`col3`)\n) partition by hash (col3) partitions 4
 drop table tp1;
 drop table tp2;
 drop table tp3;
@@ -154,3 +176,5 @@ drop table tp15;
 drop table tp16;
 drop table tp17;
 drop table tp18;
+drop table tp19;
+drop table tp20;
