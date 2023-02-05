@@ -934,6 +934,8 @@ func Window(v *Vector, start, end int, w *Vector) *Vector {
 		_start := uint64(start)
 		_end := uint64(end)
 
+		//TODO: Here, we are creating a deep copy of Nulls. Should it be a concern?
+		// Window's description says that, we don't do deep copy.
 		w.Nsp = nulls.NewWithSize(end - start)
 		for i := _start; i < _end; i++ {
 			if v.Nsp.Contains(i) {
