@@ -2321,12 +2321,12 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	blockNum, rows, err := table.FilteredStats(ctx, e)
+	blockNum, cost, outcnt, err := table.Stats(ctx, e)
 	if err != nil {
 		return
 	}
-	stats.Cost = float64(rows)
-	stats.Outcnt = stats.Cost * plan2.DeduceSelectivity(e)
+	stats.Cost = float64(cost)
+	stats.Outcnt = float64(outcnt)
 	stats.BlockNum = blockNum
 	return
 }

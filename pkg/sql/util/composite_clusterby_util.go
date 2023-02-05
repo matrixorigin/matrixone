@@ -58,6 +58,25 @@ func SplitCompositeClusterByColumnName(s string) []string {
 	return names
 }
 
+func GetClusterByColumnOrder(cbName, colName string) int {
+	if len(cbName) == 0 {
+		return -1
+	}
+	if cbName == colName {
+		return 0
+	}
+	idx := 0
+	for next := len(catalog.PrefixCBColName); next < len(cbName); {
+		strLen, _ := strconv.Atoi(cbName[next : next+3])
+		if cbName[next+3:next+3+strLen] == colName {
+			return idx
+		}
+		next += strLen + 3
+		idx++
+	}
+	return -1
+}
+
 func FillCompositeClusterByBatch(bat *batch.Batch, cbName string, proc *process.Process) {
 	names := SplitCompositeClusterByColumnName(cbName)
 	cCBVecMap := make(map[string]*vector.Vector)
