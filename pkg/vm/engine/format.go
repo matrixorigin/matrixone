@@ -53,19 +53,6 @@ func (node *Attribute) Format(buf *bytes.Buffer) {
 	}
 }
 
-func (node *PrimaryIndexDef) Format(buf *bytes.Buffer) {
-	buf.WriteString("PRIMARY KEY")
-	prefix := " ("
-	for _, n := range node.Names {
-		buf.WriteString(prefix)
-		buf.WriteString("`")
-		buf.WriteString(n)
-		buf.WriteString("`")
-		prefix = ", "
-	}
-	buf.WriteString(")")
-}
-
 func (node *IndexTableDef) Format(buf *bytes.Buffer) {
 	buf.WriteString("KEY")
 	buf.WriteString(" `")

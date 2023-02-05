@@ -570,20 +570,26 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	pkeyName := ""
 	if len(primaryKeys) > 0 {
-		for _, primaryKey := range primaryKeys {
-			if _, ok := colMap[primaryKey]; !ok {
+		pKeyParts := make([]*ColDef, len(primaryKeys))
+		for i, primaryKey := range primaryKeys {
+			if coldef, ok := colMap[primaryKey]; !ok {
 				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", primaryKey)
+			} else {
+				pKeyParts[i] = coldef
 			}
 		}
 		if len(primaryKeys) == 1 {
 			pkeyName = primaryKeys[0]
-			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: &plan.PrimaryKeyDef{
-						Names: primaryKeys,
-					},
-				},
-			})
+			for _, col := range createTable.TableDef.Cols {
+				if col.Name == pkeyName {
+					col.Primary = true
+					createTable.TableDef.Pkey = &PrimaryKeyDef{
+						Names:       primaryKeys,
+						PkeyColName: pkeyName,
+					}
+					break
+				}
+			}
 		} else {
 			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
 			colDef := &ColDef{
@@ -600,15 +606,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					OriginString: "",
 				},
 			}
+			colDef.Primary = true
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[pkeyName] = colDef
-			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: &plan.PrimaryKeyDef{
-						Names: []string{pkeyName},
-					},
-				},
-			})
+
+			pkeyDef := &PrimaryKeyDef{
+				Names:       primaryKeys,
+				PkeyColName: pkeyName,
+			}
+			createTable.TableDef.Pkey = pkeyDef
 		}
 		for _, primaryKey := range primaryKeys {
 			colMap[primaryKey].Default.NullAbility = false
@@ -786,14 +792,11 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: &plan.PrimaryKeyDef{
-						Names: []string{keyName},
-					},
-				},
-			})
 			field.Cols = append(field.Cols, colDef)
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{keyName},
+				PkeyColName: keyName,
+			}
 		} else {
 			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
@@ -811,14 +814,11 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: &plan.PrimaryKeyDef{
-						Names: []string{keyName},
-					},
-				},
-			})
 			field.Cols = append(field.Cols, colDef)
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{keyName},
+				PkeyColName: keyName,
+			}
 		}
 		if pkeyName != "" {
 			colDef := &ColDef{
