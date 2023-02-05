@@ -287,7 +287,7 @@ func writeBatch(ctx context.Context,
 
 	//update unique index table
 	if p.UniqueIndexDef != nil {
-		primaryKeyName := update.GetTablePriKeyName(p.ExplicitCols, p.CompositePkey)
+		primaryKeyName := update.GetTablePriKeyName(p.PrimaryKeyDef, p.CompositePkey)
 		for i := range p.UniqueIndexDef.IndexNames {
 			var indexRelation engine.Relation
 			if p.UniqueIndexDef.TableExists[i] {

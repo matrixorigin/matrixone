@@ -15,11 +15,17 @@
 package jobs
 
 import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"go.uber.org/zap"
 )
 
 func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef *catalog.ColDef, columnData containers.Vector, isPk, isSorted bool) (metas []indexwrapper.IndexMeta, err error) {
@@ -87,4 +93,49 @@ func BuildBlockIndex(writer objectio.Writer, block objectio.BlockObject, schema 
 		blkMetas.AddIndex(colMetas...)
 	}
 	return nil
+}
+
+type delSegTask struct {
+	*tasks.BaseTask
+	delSegs []*catalog.SegmentEntry
+	txn     txnif.AsyncTxn
+}
+
+func NewDelSegTask(ctx *tasks.Context, txn txnif.AsyncTxn, delSegs []*catalog.SegmentEntry) *delSegTask {
+	task := &delSegTask{
+		delSegs: delSegs,
+		txn:     txn,
+	}
+	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
+	return task
+}
+
+func (t *delSegTask) String() string {
+	segs := "DelSeg:"
+	for _, seg := range t.delSegs {
+		segs = fmt.Sprintf("%s%d,", segs, seg.GetID())
+	}
+	return segs
+}
+
+func (t *delSegTask) Execute() (err error) {
+	tdesc := t.String()
+	logutil.Info("Mergeblocks delete merged segments [Start]", zap.String("task", tdesc))
+	dbId := t.delSegs[0].GetTable().GetDB().ID
+	database, err := t.txn.GetDatabaseByID(dbId)
+	if err != nil {
+		return
+	}
+	relId := t.delSegs[0].GetTable().ID
+	rel, err := database.GetRelationByID(relId)
+	if err != nil {
+		return
+	}
+	for _, entry := range t.delSegs {
+		if err = rel.SoftDeleteSegment(entry.GetID()); err != nil {
+			return
+		}
+	}
+	logutil.Info("Mergeblocks delete merged segments [Done]", zap.String("task", tdesc))
+	return
 }

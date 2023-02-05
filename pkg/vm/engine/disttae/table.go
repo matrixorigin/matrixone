@@ -34,66 +34,40 @@ import (
 
 var _ engine.Relation = new(table)
 
-func (tbl *table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error) {
+func (tbl *table) Stats(ctx context.Context, expr *plan.Expr) (int32, int64, int64, error) {
 	switch tbl.tableId {
 	case catalog.MO_DATABASE_ID:
-		return 1, 1000, nil
+		return 1, 1000, 1000, nil
 	case catalog.MO_TABLES_ID:
-		return 10, 10000, nil
+		return 4, 4000, 4000, nil
 	case catalog.MO_COLUMNS_ID:
-		return 10, 10000, nil
+		return 4, 4000, 4000, nil
 	}
-	if expr == nil {
-		return tbl.Stats(ctx)
-	}
-	var blockNum, totalBlockCnt int
-	var outcnt int64
+	var blockNum int
+	var cost, outcnt int64
 
 	if tbl.meta == nil || !tbl.updated {
 		err := GetTableMeta(ctx, tbl, expr)
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, 0, err
 		}
 	}
 	if tbl.meta != nil {
 		exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
 		columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 		for _, blockmetas := range tbl.meta.blocks {
-			totalBlockCnt += len(blockmetas)
 			for _, blk := range blockmetas {
 				if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
-					outcnt += blockRows(blk)
+					cost += blockRows(blk)
 					blockNum++
 				}
 			}
 		}
-		return int32(blockNum), outcnt, nil
+		outcnt = int64(float64(cost) * plan2.DeduceSelectivity(expr, tbl.getCbName()))
+		return int32(blockNum), cost, outcnt, nil
 	} else {
 		// no meta means not flushed yet, very small table
-		return 100, 1, nil
-	}
-}
-
-func (tbl *table) Stats(ctx context.Context) (int32, int64, error) {
-	var rows int64
-	var totalBlockCnt int
-	if tbl.meta == nil || !tbl.updated {
-		err := GetTableMeta(ctx, tbl, nil)
-		if err != nil {
-			return 0, 0, err
-		}
-	}
-	if tbl.meta != nil {
-		for _, blks := range tbl.meta.blocks {
-			totalBlockCnt += len(blks)
-			for _, blk := range blks {
-				rows += blockRows(blk)
-			}
-		}
-		return int32(totalBlockCnt), rows, nil
-	} else {
-		// no meta means not flushed yet, very small table
-		return 100, 1, nil
+		return 1, 100, 100, nil
 	}
 }
 
@@ -375,6 +349,14 @@ func (tbl *table) TableColumns(ctx context.Context) ([]*engine.Attribute, error)
 		}
 	}
 	return attrs, nil
+}
+
+func (tbl *table) getCbName() string {
+	if tbl.clusterByIdx == -1 {
+		return ""
+	} else {
+		return tbl.tableDef.Cols[tbl.clusterByIdx].Name
+	}
 }
 
 func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {

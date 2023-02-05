@@ -248,9 +248,11 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			}
 		}
 		for _, def := range defs {
-			if indexDef, ok := def.(*engine.PrimaryIndexDef); ok {
-				for _, name := range indexDef.Names {
-					attr, _ := defs[mp[name]].(*engine.AttributeDef)
+			if constraintDef, ok := def.(*engine.ConstraintDef); ok {
+				pkeyDef := constraintDef.GetPrimaryKeyDef()
+				if pkeyDef != nil {
+					pkeyColName := pkeyDef.Pkey.PkeyColName
+					attr, _ := defs[mp[pkeyColName]].(*engine.AttributeDef)
 					attr.Attr.Primary = true
 				}
 			}
