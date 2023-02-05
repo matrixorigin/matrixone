@@ -724,6 +724,17 @@ func TestRangeColumnsPartitionError(t *testing.T) {
 				PARTITION p2 VALUES LESS THAN (50,20),
 				PARTITION p3 VALUES LESS THAN (65,30)
          );`,
+
+		`CREATE TABLE rc (
+			a INT NOT NULL,
+			b INT NOT NULL
+		)
+		PARTITION BY RANGE COLUMNS(a,b) (
+			PARTITION p0 VALUES LESS THAN (10,5),
+			PARTITION p1 VALUES IN( 1,2 ),
+			PARTITION p2 VALUES LESS THAN (50,20),
+			PARTITION p3 VALUES LESS THAN (65,30)
+		);`,
 	}
 
 	mock := NewMockOptimizer(false)
@@ -852,6 +863,17 @@ func TestListPartitionError(t *testing.T) {
 			PARTITION p1 VALUES IN( 1,2 ),
 			PARTITION p2 VALUES IN( 3,1 ),
 			PARTITION p3 VALUES IN( 3,3 )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST (a) (
+			PARTITION p0 VALUES IN(0,NULL),
+			PARTITION p1 VALUES IN( 1,2 ),
+			PARTITION p2 VALUES IN( 3,4 ),
+			PARTITION p3 VALUES LESS THAN (50,20)
 		);`,
 
 		`create table pt_table_50(

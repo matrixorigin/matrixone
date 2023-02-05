@@ -720,7 +720,7 @@ func buildRangePartitionDefinitions(partitionBinder *PartitionBinder, defs []*tr
 			partitionItem.LessThan = planExprs
 			partitionItem.Description = tree.String(valuesLessThan.ValueList, dialect.MYSQL)
 		} else {
-			panic("syntax error")
+			return moerr.NewInternalError(partitionBinder.GetContext(), "RANGE PARTITIONING can only use VALUES LESS THAN definition")
 		}
 
 		for _, tableOption := range partition.Options {
@@ -754,7 +754,7 @@ func buildListPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tre
 			partitionItem.InValues = inValues
 			partitionItem.Description = tree.String(valuesIn, dialect.MYSQL)
 		} else {
-			panic("syntax error")
+			return moerr.NewInternalError(partitionBinder.GetContext(), "LIST PARTITIONING can only use VALUES IN definition")
 		}
 		partitionInfo.Partitions[i] = partitionItem
 	}
@@ -952,9 +952,9 @@ func checkPartitionDefinitionConstraints(partitionBinder *PartitionBinder, parti
 
 	switch partitionInfo.Type {
 	case plan.PartitionType_RANGE:
-
+		// TODO
 	case plan.PartitionType_HASH:
-
+		// TODO
 	case plan.PartitionType_LIST:
 		err = checkPartitionByList(partitionBinder, partitionInfo, tableDef)
 	}
