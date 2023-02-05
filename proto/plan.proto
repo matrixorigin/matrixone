@@ -356,29 +356,6 @@ message PartitionItem {
 	repeated Expr in_values = 6;
 }
 
-message PartitionDef {
-	enum PartitionType {
-		KEY = 0;
-		LINEAR_KEY = 1;
-		HASH = 2;
-		LINEAR_HASH = 3;
-		RANGE = 4;
-		RANGE_COLUMNS = 5;
-		LIST = 6;
-		LIST_COLUMNS = 7;
-	}
-
-	PartitionType type = 1;
-	Expr Expr = 2;
-	Expr partition_expression = 3;
-	repeated Expr Columns = 4;
-	repeated string partition_columns = 5;
-	uint64 partitionNum = 6;
-	repeated PartitionItem partitions = 7;
-	int64 algorithm = 8;
-	bool is_sub_partition = 9;
-	string partition_msg = 10;
-}
 
 message ViewDef {
 	string view  = 1;
@@ -411,9 +388,8 @@ message TableDef {
 		oneof def {
 			PrimaryKeyDef pk			= 1;
 			PropertiesDef properties	= 2;
-			PartitionInfo partition		= 3;
-			UniqueIndexDef uIdx			= 4;
-			SecondaryIndexDef sIdx		= 5;
+			UniqueIndexDef uIdx			= 3;
+			SecondaryIndexDef sIdx		= 4;
 		}
 	}
 
@@ -431,7 +407,7 @@ message TableDef {
 	repeated uint64 ref_child_tbls	= 14;
 	repeated CheckDef checks		= 15;
 
-	PartitionDef partition		= 21;
+	PartitionInfo partition		= 21;
 	ClusterByDef cluster_by		= 22;
 	repeated PropertyDef props	= 23;
 	ViewDef view_sql			= 24;

@@ -1994,6 +1994,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var properties []*plan2.Property
 	var TableType, Createsql string
 	var CompositePkey *plan2.ColDef = nil
+	var partitionInfo *plan2.PartitionInfo
 	var viewSql *plan2.ViewDef
 	var foreignKeys []*plan2.ForeignKeyDef
 	var refChildTbls []uint64
@@ -2091,11 +2092,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 			if err != nil {
 				return nil, nil
 			}
-			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_Partition{
-					Partition: p,
-				},
-			})
+			partitionInfo = p
 		}
 	}
 	if len(properties) > 0 {
@@ -2141,6 +2138,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		Createsql:     Createsql,
 		CompositePkey: CompositePkey,
 		ViewSql:       viewSql,
+		Partition:     partitionInfo,
 		Fkeys:         foreignKeys,
 		RefChildTbls:  refChildTbls,
 		ClusterBy:     clusterByDef,

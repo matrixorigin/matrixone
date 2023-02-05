@@ -50,7 +50,6 @@ type Type = plan.Type
 type Plan_Query = plan.Plan_Query
 type Property = plan.Property
 type TableDef_DefType_Properties = plan.TableDef_DefType_Properties
-type TableDef_DefType_Partition = plan.TableDef_DefType_Partition
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
 type PartitionInfo = plan.PartitionInfo
