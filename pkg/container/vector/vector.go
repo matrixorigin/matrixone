@@ -931,10 +931,13 @@ func Window(v *Vector, start, end int, w *Vector) *Vector {
 	if start == 0 {
 		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
 	} else {
+		_start := uint64(start)
+		_end := uint64(end)
+
 		w.Nsp = nulls.NewWithSize(end - start)
-		for i := start; i < end; i++ {
-			if v.Nsp.Contains(uint64(i)) {
-				w.Nsp.Np.Add(uint64(i - start))
+		for i := _start; i < _end; i++ {
+			if v.Nsp.Contains(i) {
+				w.Nsp.Np.Add(i - _start)
 			}
 		}
 	}
