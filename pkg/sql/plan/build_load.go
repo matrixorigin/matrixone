@@ -29,15 +29,9 @@ import (
 )
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
-	stmt.Param.Ctx = context.TODO()
-	fileList, _, err := ReadDir(stmt.Param)
-	if err != nil {
+	if err := checkFileExist(stmt.Param); err != nil {
 		return nil, err
 	}
-	if len(fileList) == 0 {
-		return nil, moerr.NewInvalidInput(stmt.Param.Ctx, "the file does not exist in load flow")
-	}
-	stmt.Param.Ctx = nil
 
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return nil, err
@@ -133,6 +127,29 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	}
 	pn.GetQuery().LoadTag = true
 	return pn, nil
+}
+
+func checkFileExist(param *tree.ExternParam) error {
+	param.Ctx = context.TODO()
+	if param.ScanType == tree.S3 {
+		if err := InitS3Param(param); err != nil {
+			return err
+		}
+	} else {
+		if err := InitInfileParam(param); err != nil {
+			return err
+		}
+	}
+
+	fileList, _, err := ReadDir(param)
+	if err != nil {
+		return err
+	}
+	if len(fileList) == 0 {
+		return moerr.NewInvalidInput(param.Ctx, "the file does not exist in load flow")
+	}
+	param.Ctx = nil
+	return nil
 }
 
 func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2ColIndex map[string]int32, clusterTable *ClusterTable) error {

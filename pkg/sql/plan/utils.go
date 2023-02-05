@@ -22,6 +22,8 @@ import (
 	"path"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -601,7 +603,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	return nil
 }
 
-func DeduceSelectivity(expr *plan.Expr) float64 {
+func DeduceSelectivity(expr *plan.Expr, sortKeyName string) float64 {
 	if expr == nil {
 		return 1
 	}
@@ -611,13 +613,19 @@ func DeduceSelectivity(expr *plan.Expr) float64 {
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=":
+			switch childImpl := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_Col:
+				if util.GetClusterByColumnOrder(sortKeyName, childImpl.Col.Name) != -1 {
+					return 0.5
+				}
+			}
 			return 0.01
 		case "and":
-			sel = math.Min(DeduceSelectivity(exprImpl.F.Args[0]), DeduceSelectivity(exprImpl.F.Args[1]))
+			sel = math.Min(DeduceSelectivity(exprImpl.F.Args[0], sortKeyName), DeduceSelectivity(exprImpl.F.Args[1], sortKeyName))
 			return sel
 		case "or":
-			sel1 := DeduceSelectivity(exprImpl.F.Args[0])
-			sel2 := DeduceSelectivity(exprImpl.F.Args[1])
+			sel1 := DeduceSelectivity(exprImpl.F.Args[0], sortKeyName)
+			sel2 := DeduceSelectivity(exprImpl.F.Args[1], sortKeyName)
 			sel = math.Max(sel1, sel2)
 			if sel < 0.1 {
 				return sel * 1.05
@@ -1216,6 +1224,93 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		return false
 	}
 
+}
+
+func InitInfileParam(param *tree.ExternParam) error {
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "filepath":
+			param.Filepath = param.Option[i+1]
+		case "compression":
+			param.CompressType = param.Option[i+1]
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+		default:
+			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+		}
+	}
+	if len(param.Filepath) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the filepath must be specified")
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
+	}
+	return nil
+}
+
+func InitS3Param(param *tree.ExternParam) error {
+	param.S3Param = &tree.S3Parameter{}
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "endpoint":
+			param.S3Param.Endpoint = param.Option[i+1]
+		case "region":
+			param.S3Param.Region = param.Option[i+1]
+		case "access_key_id":
+			param.S3Param.APIKey = param.Option[i+1]
+		case "secret_access_key":
+			param.S3Param.APISecret = param.Option[i+1]
+		case "bucket":
+			param.S3Param.Bucket = param.Option[i+1]
+		case "filepath":
+			param.Filepath = param.Option[i+1]
+		case "compression":
+			param.CompressType = param.Option[i+1]
+		case "provider":
+			param.S3Param.Provider = param.Option[i+1]
+		case "role_arn":
+			param.S3Param.RoleArn = param.Option[i+1]
+		case "external_id":
+			param.S3Param.ExternalId = param.Option[i+1]
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+
+		default:
+			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+		}
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
+	}
+	return nil
 }
 
 func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {

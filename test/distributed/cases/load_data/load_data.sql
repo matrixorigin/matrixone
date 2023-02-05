@@ -182,3 +182,6 @@ load data infile '$resources/load_data/auto_increment_2.csv' into table t7 paral
 select * from t7 order by col1;
 
 drop table t7;
+
+create table t8(a int, b int);
+load data infile '$resources/load_data/auto_increment_20.csv' into table t7 set col2=nullif(col2, '1');

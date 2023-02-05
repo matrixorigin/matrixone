@@ -565,6 +565,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		TableID:              relation.GetTableID(proc.Ctx),
 		DBName:               dbName,
 		TableName:            tblName,
+		PrimaryKeyDef:        n.TableDef.Pkey,
 		CPkeyColDef:          n.TableDef.CompositePkey,
 		UniqueIndexTables:    uniqueIndexTables,
 		UniqueIndexDef:       uDef,

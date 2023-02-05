@@ -620,11 +620,11 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		return nil, err
 	}
 	if param.ScanType == tree.S3 {
-		if err := external.InitS3Param(param); err != nil {
+		if err := plan2.InitS3Param(param); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := external.InitInfileParam(param); err != nil {
+		if err := plan2.InitInfileParam(param); err != nil {
 			return nil, err
 		}
 	}

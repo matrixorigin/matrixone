@@ -79,15 +79,6 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
 
-	if param.Extern.ScanType == tree.S3 {
-		if err := InitS3Param(param.Extern); err != nil {
-			return err
-		}
-	} else {
-		if err := InitInfileParam(param.Extern); err != nil {
-			return err
-		}
-	}
 	if param.Extern.Format == tree.JSONLINE {
 		if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
 			param.Fileparam.End = true
@@ -160,93 +151,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		anal.Alloc(int64(bat.Size()))
 	}
 	return false, nil
-}
-
-func InitInfileParam(param *tree.ExternParam) error {
-	for i := 0; i < len(param.Option); i += 2 {
-		switch strings.ToLower(param.Option[i]) {
-		case "filepath":
-			param.Filepath = param.Option[i+1]
-		case "compression":
-			param.CompressType = param.Option[i+1]
-		case "format":
-			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE {
-				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
-			}
-			param.Format = format
-		case "jsondata":
-			jsondata := strings.ToLower(param.Option[i+1])
-			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
-				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
-			}
-			param.JsonData = jsondata
-			param.Format = tree.JSONLINE
-		default:
-			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
-		}
-	}
-	if len(param.Filepath) == 0 {
-		return moerr.NewBadConfig(param.Ctx, "the filepath must be specified")
-	}
-	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
-		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
-	}
-	if len(param.Format) == 0 {
-		param.Format = tree.CSV
-	}
-	return nil
-}
-
-func InitS3Param(param *tree.ExternParam) error {
-	param.S3Param = &tree.S3Parameter{}
-	for i := 0; i < len(param.Option); i += 2 {
-		switch strings.ToLower(param.Option[i]) {
-		case "endpoint":
-			param.S3Param.Endpoint = param.Option[i+1]
-		case "region":
-			param.S3Param.Region = param.Option[i+1]
-		case "access_key_id":
-			param.S3Param.APIKey = param.Option[i+1]
-		case "secret_access_key":
-			param.S3Param.APISecret = param.Option[i+1]
-		case "bucket":
-			param.S3Param.Bucket = param.Option[i+1]
-		case "filepath":
-			param.Filepath = param.Option[i+1]
-		case "compression":
-			param.CompressType = param.Option[i+1]
-		case "provider":
-			param.S3Param.Provider = param.Option[i+1]
-		case "role_arn":
-			param.S3Param.RoleArn = param.Option[i+1]
-		case "external_id":
-			param.S3Param.ExternalId = param.Option[i+1]
-		case "format":
-			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE {
-				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
-			}
-			param.Format = format
-		case "jsondata":
-			jsondata := strings.ToLower(param.Option[i+1])
-			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
-				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
-			}
-			param.JsonData = jsondata
-			param.Format = tree.JSONLINE
-
-		default:
-			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
-		}
-	}
-	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
-		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
-	}
-	if len(param.Format) == 0 {
-		param.Format = tree.CSV
-	}
-	return nil
 }
 
 func containColname(col string) bool {

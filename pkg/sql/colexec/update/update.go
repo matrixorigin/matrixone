@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 
@@ -103,15 +102,14 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 }
 
 // Get the primary key name of the table
-func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
-	for _, col := range cols {
-		if col.Name != catalog.Row_ID && col.Primary {
-			return col.Name
-		}
+func GetTablePriKeyName(pKeyDef *plan.PrimaryKeyDef, cPkeyCol *plan.ColDef) string {
+	if pKeyDef != nil && len(pKeyDef.Names) == 1 {
+		return pKeyDef.Names[0]
 	}
 
 	if cPkeyCol != nil {
 		return cPkeyCol.Name
 	}
+
 	return ""
 }
