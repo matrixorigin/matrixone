@@ -695,7 +695,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			Op:      vm.External,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructExternal(n, param, c.ctx, fileListTmp, offset),
+			Arg:     constructExternal(n, param, c.ctx, fileListTmp, fileSize, offset),
 		})
 		if param.Parallel {
 			ss[i].Instructions[0].Arg.(*external.Argument).Es.FileList = fileList
