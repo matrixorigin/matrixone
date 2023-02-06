@@ -789,16 +789,16 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	return nil
 }
 
-func orderColDefs(attrs []string, ColDefs []*plan.ColDef, cols []*plan.Column) {
-	for i, name := range attrs {
-		for j, def := range ColDefs {
-			if name == def.Name {
-				ColDefs[i], ColDefs[j] = ColDefs[j], ColDefs[i]
-				cols[i], cols[j] = cols[j], cols[i]
-			}
-		}
-	}
-}
+// func orderColDefs(attrs []string, ColDefs []*plan.ColDef, cols []*plan.Column) {
+// 	for i, name := range attrs {
+// 		for j, def := range ColDefs {
+// 			if name == def.Name {
+// 				ColDefs[i], ColDefs[j] = ColDefs[j], ColDefs[i]
+// 				cols[i], cols[j] = cols[j], cols[i]
+// 			}
+// 		}
+// 	}
+// }
 
 func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
 	if proc.TxnClient == nil {

@@ -84,9 +84,8 @@ var (
 		{
 			Name: "index",
 			Typ: &plan.Type{
-				Id:          int32(types.T_varchar),
+				Id:          int32(types.T_int32),
 				NotNullable: false,
-				Width:       4,
 			},
 		},
 		{
