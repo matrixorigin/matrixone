@@ -943,7 +943,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 				leftCtx := builder.ctxByNode[info.rootId]
 				joinCtx := NewBindContext(builder, bindCtx)
-				err = joinCtx.mergeContexts(leftCtx, rightCtx)
+				err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 				if err != nil {
 					return err
 				}
@@ -1177,7 +1177,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					// append join node
 					leftCtx := builder.ctxByNode[info.rootId]
 					joinCtx := NewBindContext(builder, bindCtx)
-					err = joinCtx.mergeContexts(leftCtx, rightCtx)
+					err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 					if err != nil {
 						return err
 					}
@@ -1306,7 +1306,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 			// append join node
 			leftCtx := builder.ctxByNode[info.rootId]
 			joinCtx := NewBindContext(builder, bindCtx)
-			err = joinCtx.mergeContexts(leftCtx, rightCtx)
+			err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 			if err != nil {
 				return err
 			}
