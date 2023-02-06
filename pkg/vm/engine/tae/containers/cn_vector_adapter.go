@@ -577,20 +577,18 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 
 	// attach that duplicate to the window
 	// and perform window operation
-	cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
+	cloned.downstreamVector = cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
 
 	return cloned
 }
 
 func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
 
-	window := cnVector.New(vec.GetType())
-	cnVector.Window(vec.downstreamVector, offset, offset+length, window)
-
-	return &CnTaeVector[T]{
-		downstreamVector:     window,
-		mpool:                vec.GetAllocator(),
-		isNullable:           vec.isNullable,
-		isAllocatedFromMpool: false,
+	return &CnTaeVectorWindow[T]{
+		ref: vec,
+		windowBase: &windowBase{
+			offset: offset,
+			length: length,
+		},
 	}
 }
