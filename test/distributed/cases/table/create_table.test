@@ -72,3 +72,12 @@ drop table t1;
 create table test (`a` varchar(255) DEFAULT b'0');
 insert into test values (), ();
 select * from test;
+
+drop table if exists products;
+create table products (
+pid int not null,
+pname varchar(50) not null,
+description varchar(20) not null,
+price decimal(9,2) not null);
+desc products;
+drop table products;
