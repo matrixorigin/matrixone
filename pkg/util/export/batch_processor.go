@@ -476,14 +476,38 @@ func (c *MOCollector) Stop(graceful bool) error {
 		c.mux.Unlock()
 		close(c.stopCh)
 		c.stopWait.Wait()
-		for _, buffer := range c.buffers {
-			if generate := buffer.getGenerateReq(); generate == nil {
-				continue
-			} else if export, err := generate.handle(buf); err != nil {
-				generate.callback(err)
-			} else if err = export.handle(); err != nil {
-				export.callback(err)
+		close(c.awakeCollect)
+		close(c.awakeGenerate)
+		close(c.awakeBatch)
+		if !graceful {
+			// shutdown directly
+			return
+		}
+		// handle remain data
+		handleExport := func(req exportReq) {
+			if err = req.handle(); err != nil {
+				req.callback(err)
 			}
+		}
+		handleGen := func(req generateReq) {
+			if export, err := req.handle(buf); err != nil {
+				req.callback(err)
+			} else {
+				handleExport(export)
+			}
+		}
+		for req := range c.awakeBatch {
+			handleExport(req)
+		}
+		for req := range c.awakeGenerate {
+			handleGen(req)
+		}
+		for _, buffer := range c.buffers {
+			generate := buffer.getGenerateReq()
+			if generate == nil {
+				continue
+			}
+			handleGen(generate)
 		}
 	})
 	return err

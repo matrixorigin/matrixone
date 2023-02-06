@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/google/gops/agent"
+	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
 )
@@ -155,6 +156,7 @@ var MOCollectorMux sync.Mutex
 func TestNewMOCollector(t *testing.T) {
 	MOCollectorMux.Lock()
 	defer MOCollectorMux.Unlock()
+	defer leaktest.AfterTest(t)()
 	ctx := context.Background()
 	ch := make(chan string, 3)
 	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
@@ -174,18 +176,18 @@ func TestNewMOCollector(t *testing.T) {
 	acceptSignal()
 	collector.Collect(ctx, newDummy(3))
 	acceptSignal()
-	got := <-ch
-	require.Equal(t, `(1),(2),(3)`, got)
+	got123 := <-ch
 	collector.Collect(ctx, newDummy(4))
 	acceptSignal()
 	collector.Collect(ctx, newDummy(5))
 	acceptSignal()
 	collector.Stop(true)
 	logutil.GetGlobalLogger().Sync()
-	got = <-ch
-	require.Equal(t, `(4),(5)`, got)
+	got45 := <-ch
 	for i := len(ch); i > 0; i-- {
-		got = <-ch
+		got := <-ch
 		t.Logf("left ch: %s", got)
 	}
+	require.Equal(t, `(1),(2),(3)`, got123)
+	require.Equal(t, `(4),(5)`, got45)
 }
