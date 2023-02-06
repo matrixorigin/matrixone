@@ -312,7 +312,7 @@ show collation like '%';
 Collation    Charset    Id    Compiled    Sortlen
 utf8mb4_bin    utf8mb4    46    Yes    1
 rollback;
-drop database if exists showDb;
+drop database if exists test;
 CREATE DATABASE test;
 USE test;
 DROP TABLE IF EXISTS show_01;
