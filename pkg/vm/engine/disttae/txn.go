@@ -198,7 +198,7 @@ func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 			blocks[i], err = genBlockMetas(ctx, rows, columnLength, txn.proc.FileService,
 				txn.proc.GetMPool(), prefetch)
 			if err != nil {
-				return nil, err
+				return nil, moerr.NewInternalError(ctx, "disttae: getTableMeta err: %v, table: %v", err.Error(), name)
 			}
 		}
 	}
