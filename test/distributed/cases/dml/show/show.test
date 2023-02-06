@@ -223,7 +223,6 @@ CREATE INDEX b ON show_04(b);
 show INDEX FROM show_04;
 DROP TABLE show_04;
 
-
 -- SHOW FUNCTION STATUS [like_or_where]
 -- @bvt:issue#7367
 DROP DATABASE IF EXISTS show_03;
