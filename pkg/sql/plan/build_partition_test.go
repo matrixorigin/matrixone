@@ -45,6 +45,24 @@ func TestSingleDDLPartition(t *testing.T) {
 			PARTITION BY KEY()
 			PARTITIONS 2;`
 
+	//sql := `CREATE TABLE quarterly_report_status (
+	//		report_id INT NOT NULL,
+	//		report_status VARCHAR(20) NOT NULL,
+	//		report_updated TIMESTAMP NOT NULL
+	//	)
+	//		PARTITION BY RANGE ( UNIX_TIMESTAMP(report_updated) ) (
+	//		PARTITION p0 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-01-01 00:00:00') ),
+	//		PARTITION p1 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-04-01 00:00:00') ),
+	//		PARTITION p2 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-07-01 00:00:00') ),
+	//		PARTITION p3 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-10-01 00:00:00') ),
+	//		PARTITION p4 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-01-01 00:00:00') ),
+	//		PARTITION p5 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-04-01 00:00:00') ),
+	//		PARTITION p6 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-07-01 00:00:00') ),
+	//		PARTITION p7 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-10-01 00:00:00') ),
+	//		PARTITION p8 VALUES LESS THAN ( UNIX_TIMESTAMP('2010-01-01 00:00:00') ),
+	//		PARTITION p9 VALUES LESS THAN (MAXVALUE)
+	//	);`
+
 	mock := NewMockOptimizer(false)
 	logicPlan, err := buildSingleStmt(mock, t, sql)
 	if err != nil {
@@ -444,23 +462,23 @@ func TestRangePartition(t *testing.T) {
 			PARTITION p4 VALUES LESS THAN MAXVALUE
 		);`,
 
-		`CREATE TABLE quarterly_report_status (
-			report_id INT NOT NULL,
-			report_status VARCHAR(20) NOT NULL,
-			report_updated TIMESTAMP NOT NULL
-		)
-			PARTITION BY RANGE ( UNIX_TIMESTAMP(report_updated) ) (
-			PARTITION p0 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-01-01 00:00:00') ),
-			PARTITION p1 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-04-01 00:00:00') ),
-			PARTITION p2 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-07-01 00:00:00') ),
-			PARTITION p3 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-10-01 00:00:00') ),
-			PARTITION p4 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-01-01 00:00:00') ),
-			PARTITION p5 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-04-01 00:00:00') ),
-			PARTITION p6 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-07-01 00:00:00') ),
-			PARTITION p7 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-10-01 00:00:00') ),
-			PARTITION p8 VALUES LESS THAN ( UNIX_TIMESTAMP('2010-01-01 00:00:00') ),
-			PARTITION p9 VALUES LESS THAN (MAXVALUE)
-		);`,
+		//`CREATE TABLE quarterly_report_status (
+		//	report_id INT NOT NULL,
+		//	report_status VARCHAR(20) NOT NULL,
+		//	report_updated TIMESTAMP NOT NULL
+		//)
+		//	PARTITION BY RANGE ( UNIX_TIMESTAMP(report_updated) ) (
+		//	PARTITION p0 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-01-01 00:00:00') ),
+		//	PARTITION p1 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-04-01 00:00:00') ),
+		//	PARTITION p2 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-07-01 00:00:00') ),
+		//	PARTITION p3 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-10-01 00:00:00') ),
+		//	PARTITION p4 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-01-01 00:00:00') ),
+		//	PARTITION p5 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-04-01 00:00:00') ),
+		//	PARTITION p6 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-07-01 00:00:00') ),
+		//	PARTITION p7 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-10-01 00:00:00') ),
+		//	PARTITION p8 VALUES LESS THAN ( UNIX_TIMESTAMP('2010-01-01 00:00:00') ),
+		//	PARTITION p9 VALUES LESS THAN (MAXVALUE)
+		//);`,
 	}
 
 	mock := NewMockOptimizer(false)
@@ -706,6 +724,17 @@ func TestRangeColumnsPartitionError(t *testing.T) {
 				PARTITION p2 VALUES LESS THAN (50,20),
 				PARTITION p3 VALUES LESS THAN (65,30)
          );`,
+
+		`CREATE TABLE rc (
+			a INT NOT NULL,
+			b INT NOT NULL
+		)
+		PARTITION BY RANGE COLUMNS(a,b) (
+			PARTITION p0 VALUES LESS THAN (10,5),
+			PARTITION p1 VALUES IN( 1,2 ),
+			PARTITION p2 VALUES LESS THAN (50,20),
+			PARTITION p3 VALUES LESS THAN (65,30)
+		);`,
 	}
 
 	mock := NewMockOptimizer(false)
@@ -765,10 +794,10 @@ func TestListPartition(t *testing.T) {
 			b INT NULL
 		)
 		PARTITION BY LIST (a) (
-			PARTITION p0 VALUES IN(NULL,NULL),
+			PARTITION p0 VALUES IN(0,NULL),
 			PARTITION p1 VALUES IN( 1,2 ),
-			PARTITION p2 VALUES IN( 3,1 ),
-			PARTITION p3 VALUES IN( 3,3 )
+			PARTITION p2 VALUES IN( 3,4 ),
+			PARTITION p3 VALUES IN( 5,6 )
 		);`,
 	}
 
@@ -813,6 +842,97 @@ func TestListPartitionError(t *testing.T) {
 			PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
 			PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST (a) (
+			PARTITION p0 VALUES IN(NULL,NULL),
+			PARTITION p1 VALUES IN( 1,2 ),
+			PARTITION p2 VALUES IN( 3,4 ),
+			PARTITION p3 VALUES IN( 5,6 )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST (a) (
+			PARTITION p0 VALUES IN(NULL,NULL),
+			PARTITION p1 VALUES IN( 1,2 ),
+			PARTITION p2 VALUES IN( 3,1 ),
+			PARTITION p3 VALUES IN( 3,3 )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST (a) (
+			PARTITION p0 VALUES IN(0,NULL),
+			PARTITION p1 VALUES IN( 1,2 ),
+			PARTITION p2 VALUES IN( 3,4 ),
+			PARTITION p3 VALUES LESS THAN (50,20)
+		);`,
+
+		`create table pt_table_50(
+			col1 tinyint,
+			col2 smallint,
+			col3 int,
+			col4 bigint,
+			col5 tinyint unsigned,
+			col6 smallint unsigned,
+			col7 int unsigned,
+			col8 bigint unsigned,
+			col9 float,
+			col10 double,
+			col11 varchar(255),
+			col12 Date,
+			col13 DateTime,
+			col14 timestamp,
+			col15 bool,
+			col16 decimal(5,2),
+			col17 text,
+			col18 varchar(255),
+			col19 varchar(255),
+			col20 text,
+			primary key(col4,col3,col11)
+			) partition by list(col3) (
+			PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),
+			PARTITION r1 VALUES IN (2, 6, 10, 7, 18, 22),
+			PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),
+			PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
+			);`,
+
+		`create table pt_table_50(
+			col1 tinyint,
+			col2 smallint,
+			col3 int,
+			col4 bigint,
+			col5 tinyint unsigned,
+			col6 smallint unsigned,
+			col7 int unsigned,
+			col8 bigint unsigned,
+			col9 float,
+			col10 double,
+			col11 varchar(255),
+			col12 Date,
+			col13 DateTime,
+			col14 timestamp,
+			col15 bool,
+			col16 decimal(5,2),
+			col17 text,
+			col18 varchar(255),
+			col19 varchar(255),
+			col20 text,
+			primary key(col4,col3,col11)
+			) partition by list(col3) (
+			PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),
+			PARTITION r1 VALUES IN (2, 6, 10, 14/2, 18, 22),
+			PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),
+			PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
+			);`,
 	}
 
 	mock := NewMockOptimizer(false)
@@ -841,7 +961,7 @@ func TestListColumnsPartition(t *testing.T) {
 			);`,
 
 		`CREATE TABLE customers_1 (
-				first_name VARCHAR(25),
+			first_name VARCHAR(25),
 			last_name VARCHAR(25),
 			street_1 VARCHAR(30),
 			street_2 VARCHAR(30),
@@ -1022,6 +1142,15 @@ func TestPartitioningKeysUniqueKeys(t *testing.T) {
 		)
 			PARTITION BY KEY(col3)
 			PARTITIONS 4;`,
+
+		`CREATE TABLE t4 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL UNIQUE,
+			col4 INT NOT NULL
+		)
+			PARTITION BY KEY(col3)
+			PARTITIONS 4;`,
 	}
 
 	mock := NewMockOptimizer(false)
@@ -1058,14 +1187,14 @@ func TestPartitioningKeysUniqueKeysError(t *testing.T) {
 		PARTITION BY HASH(col1 + col3)
 		PARTITIONS 4;`,
 
-		//`CREATE TABLE t1 (
-		//	col1 INT UNIQUE NOT NULL,
-		//	col2 DATE NOT NULL,
-		//	col3 INT NOT NULL,
-		//	col4 INT NOT NULL
-		//)
-		//PARTITION BY HASH(col3)
-		//PARTITIONS 4;`,
+		`CREATE TABLE t1 (
+			col1 INT UNIQUE NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL
+		)
+		PARTITION BY HASH(col3)
+		PARTITIONS 4;`,
 
 		`CREATE TABLE t2 (
 			col1 INT NOT NULL,
@@ -1107,6 +1236,24 @@ func TestPartitioningKeysUniqueKeysError(t *testing.T) {
 		)
 		PARTITION BY KEY()
 		PARTITIONS 2;`,
+
+		`CREATE TABLE t6 (
+		col1 INT NOT NULL,
+		col2 DATE NOT NULL,
+		col3 INT NOT NULL UNIQUE,
+		col4 INT NOT NULL
+	   )
+		PARTITION BY KEY(col1)
+		PARTITIONS 4;`,
+
+		`CREATE TABLE t7 (
+		col1 INT NOT NULL,
+		col2 DATE NOT NULL,
+		col3 INT NOT NULL UNIQUE,
+		col4 INT NOT NULL
+	   )
+		PARTITION BY HASH(col4)
+		PARTITIONS 4;`,
 	}
 
 	mock := NewMockOptimizer(false)
@@ -1326,6 +1473,211 @@ func TestPartitionKeysShouldShowError(t *testing.T) {
 			PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
 			PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
 			);`,
+	}
+	mock := NewMockOptimizer(false)
+	for _, sql := range sqls {
+		_, err := buildSingleStmt(mock, t, sql)
+		t.Log(sql)
+		t.Log(err)
+		if err == nil {
+			t.Fatalf("%+v", err)
+		}
+	}
+}
+
+func TestListPartitionFunction(t *testing.T) {
+	sqls := []string{
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(a,b) (
+			PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
+			PARTITION p1 VALUES IN( (0,1), (0,4+2) ),
+			PARTITION p2 VALUES IN( (1,0), (2,0) )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST(a) (
+			PARTITION p0 VALUES IN(0, NULL ),
+			PARTITION p1 VALUES IN(1, 2),
+			PARTITION p2 VALUES IN(3, 4)
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(b) (
+			PARTITION p0 VALUES IN( 0,NULL ),
+			PARTITION p1 VALUES IN( 1,2 ),
+			PARTITION p2 VALUES IN( 3,4 )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(b) (
+			PARTITION p0 VALUES IN( 0,NULL ),
+			PARTITION p1 VALUES IN( 1,1+1 ),
+			PARTITION p2 VALUES IN( 3,4 )
+		);`,
+	}
+
+	mock := NewMockOptimizer(false)
+	for _, sql := range sqls {
+		t.Log(sql)
+		logicPlan, err := buildSingleStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		outPutPlan(logicPlan, true, t)
+	}
+}
+
+func TestListPartitionFunctionError(t *testing.T) {
+	sqls := []string{
+		`create table pt_table_45(
+			col1 tinyint,
+			col2 smallint,
+			col3 int,
+			col4 bigint,
+			col5 tinyint unsigned,
+			col6 smallint unsigned,
+			col7 int unsigned,
+			col8 bigint unsigned,
+			col9 float,
+			col10 double,
+			col11 varchar(255),
+			col12 Date,
+			col13 DateTime,
+			col14 timestamp,
+			col15 bool,
+			col16 decimal(5,2),
+			col17 text,
+			col18 varchar(255),
+			col19 varchar(255),
+			col20 text,
+			primary key(col4,col3,col11))
+		partition by list(col3) (
+			PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),
+			PARTITION r1 VALUES IN (2, 6, 10, 14/2, 18, 22),
+			PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),
+			PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(a,b) (
+			PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
+			PARTITION p1 VALUES IN( (0,1), (0,4/2) ),
+			PARTITION p2 VALUES IN( (1,0), (2,0) )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(a,b) (
+			PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
+			PARTITION p1 VALUES IN( (0,1), (0,4.2) ),
+			PARTITION p2 VALUES IN( (1,0), (2,0) )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(a,b) (
+			PARTITION p0 VALUES IN( 0,NULL ),
+			PARTITION p1 VALUES IN( 0,1 ),
+			PARTITION p2 VALUES IN( 1,0 )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST(a) (
+			PARTITION p0 VALUES IN(0, NULL ),
+			PARTITION p1 VALUES IN(1, 4/2),
+			PARTITION p2 VALUES IN(3, 4)
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(b) (
+			PARTITION p0 VALUES IN( 0,NULL ),
+			PARTITION p1 VALUES IN( 1,4/2 ),
+			PARTITION p2 VALUES IN( 3,4 )
+		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST COLUMNS(a,b) (
+			PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
+			PARTITION p1 VALUES IN( (0,1,3), (0,4,5) ),
+			PARTITION p2 VALUES IN( (1,0), (2,0) )
+		);`,
+	}
+
+	mock := NewMockOptimizer(false)
+	for _, sql := range sqls {
+		_, err := buildSingleStmt(mock, t, sql)
+		t.Log(sql)
+		t.Log(err)
+		if err == nil {
+			t.Fatalf("%+v", err)
+		}
+	}
+}
+
+func TestRangePartitionFunctionError(t *testing.T) {
+	sqls := []string{
+		`CREATE TABLE r1 (
+			a INT,
+			b INT
+		)
+		PARTITION BY RANGE (a) (
+			PARTITION p0 VALUES LESS THAN (5/2),
+			PARTITION p1 VALUES LESS THAN (MAXVALUE)
+		);`,
+
+		`CREATE TABLE r1 (
+			a INT,
+			b INT
+		)
+		PARTITION BY RANGE (a) (
+			PARTITION p0 VALUES LESS THAN (5.2),
+			PARTITION p1 VALUES LESS THAN (12)
+		);`,
+
+		`CREATE TABLE r1 (
+			a INT,
+			b FLOAT
+		)
+		PARTITION BY RANGE (b) (
+			PARTITION p0 VALUES LESS THAN (12),
+			PARTITION p1 VALUES LESS THAN (MAXVALUE)
+		);`,
+		//`create TABLE t1 (
+		//	col1 int,
+		//	col2 float
+		//)
+		//partition by range( case when col1 > 0 then 10 else 20 end ) (
+		//	partition p0 values less than (2),
+		//	partition p1 values less than (6)
+		//);`,
 	}
 	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {

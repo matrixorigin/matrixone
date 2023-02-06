@@ -1791,12 +1791,28 @@ const (
 )
 
 type TxnCompilerContext struct {
-	dbName     string
-	QryTyp     QueryType
-	txnHandler *TxnHandler
-	ses        *Session
-	proc       *process.Process
-	mu         sync.Mutex
+	dbName               string
+	QryTyp               QueryType
+	txnHandler           *TxnHandler
+	ses                  *Session
+	proc                 *process.Process
+	buildAlterView       bool
+	dbOfView, nameOfView string
+	mu                   sync.Mutex
+}
+
+func (tcc *TxnCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tcc.buildAlterView = yesOrNo
+	tcc.dbOfView = dbName
+	tcc.nameOfView = viewName
+}
+
+func (tcc *TxnCompilerContext) GetBuildingAlterView() (bool, string, string) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.buildAlterView, tcc.dbOfView, tcc.nameOfView
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
@@ -1994,6 +2010,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var properties []*plan2.Property
 	var TableType, Createsql string
 	var CompositePkey *plan2.ColDef = nil
+	var partitionInfo *plan2.PartitionByDef
 	var viewSql *plan2.ViewDef
 	var foreignKeys []*plan2.ForeignKeyDef
 	var primarykey *plan2.PrimaryKeyDef
@@ -2089,16 +2106,12 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Value: commnetDef.Comment,
 			})
 		} else if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			p := &plan2.PartitionInfo{}
+			p := &plan2.PartitionByDef{}
 			err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
 			if err != nil {
 				return nil, nil
 			}
-			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_Partition{
-					Partition: p,
-				},
-			})
+			partitionInfo = p
 		}
 	}
 	if len(properties) > 0 {
@@ -2145,6 +2158,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		Pkey:          primarykey,
 		CompositePkey: CompositePkey,
 		ViewSql:       viewSql,
+		Partition:     partitionInfo,
 		Fkeys:         foreignKeys,
 		RefChildTbls:  refChildTbls,
 		ClusterBy:     clusterByDef,
