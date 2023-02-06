@@ -135,21 +135,32 @@ const (
 )
 
 type ExternParam struct {
+	// params which come from parser
+	ExParamConst
+	// params which come from internal construct
+	ExParam
+}
+
+type ExParamConst struct {
 	ScanType     int
 	Filepath     string
 	CompressType string
 	Format       string
-	JsonData     string
-	Tail         *TailParameter
-	FileService  fileservice.FileService
-	NullMap      map[string]([]string)
 	Option       []string
-	S3Param      *S3Parameter
-	Ctx          context.Context
-	LoadFile     bool
-	Local        bool
-	QueryResult  bool
-	SysTable     bool
+	Tail         *TailParameter
+}
+
+type ExParam struct {
+	JsonData    string
+	FileService fileservice.FileService
+	NullMap     map[string]([]string)
+	S3Param     *S3Parameter
+	Ctx         context.Context
+	LoadFile    bool
+	Local       bool
+	QueryResult bool
+	SysTable    bool
+	Parallel    bool
 }
 
 type S3Parameter struct {

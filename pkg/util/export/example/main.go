@@ -103,7 +103,7 @@ func main() {
 			return time.Now().UTC().UnixNano()
 		}, 0)))
 	morun.SetupProcessLevelRuntime(dr)
-	ctx, err = motrace.Init(ctx, motrace.EnableTracer(true))
+	err = motrace.Init(ctx, motrace.EnableTracer(true))
 	if err != nil {
 		panic(err)
 	}

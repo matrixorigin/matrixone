@@ -21,7 +21,7 @@ import (
 	"sync"
 )
 
-// a locktable instance manages the locks on a table
+// a lockTable instance manages the locks on a table
 type lockTable struct {
 	tableID  uint64
 	detector *detector
@@ -170,11 +170,9 @@ func (l *lockTable) addRangeLockLocked(
 
 func (l *lockTable) handleLockConflict(txn *activeTxn, w *waiter, conflictWith Lock) {
 	// find conflict, and wait prev txn completed, and a new
-	// waiter added, we need to active dead lock check.
+	// waiter added, we need to active deadlock check.
 	txn.setBlocked(w)
-	if err := conflictWith.waiter.add(w); err != nil {
-		panic("BUG: add waiter can not failed")
-	}
+	conflictWith.waiter.add(w)
 	if err := l.detector.check(txn.txnID); err != nil {
 		panic("BUG: active dead lock check can not fail")
 	}
