@@ -51,6 +51,30 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 	}
 }
 
+func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
+	if ctx == nil {
+		return nil
+	}
+	newCtx := &plan.InsertCtx{
+		Ref:      DeepCopyObjectRef(ctx.Ref),
+		Idx:      make([]int32, len(ctx.Idx)),
+		TableDef: DeepCopyTableDef(ctx.TableDef),
+
+		ClusterTable: DeepCopyClusterTable(ctx.ClusterTable),
+	}
+
+	copy(newCtx.Idx, ctx.Idx)
+
+	if ctx.ParentIdx != nil {
+		newCtx.ParentIdx = make(map[string]int32)
+		for k, v := range ctx.ParentIdx {
+			newCtx.ParentIdx[k] = v
+		}
+	}
+
+	return newCtx
+}
+
 func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 	if ctx == nil {
 		return nil
@@ -251,6 +275,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
+		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
 	}
 
 	copy(newNode.Children, node.Children)
@@ -630,54 +655,12 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	return newQry
 }
 
-func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
-	newInsert := &plan.InsertValues{
-		DbName:            insert.DbName,
-		TblName:           insert.TblName,
-		ExplicitCols:      make([]*plan.ColDef, len(insert.ExplicitCols)),
-		OtherCols:         make([]*plan.ColDef, len(insert.OtherCols)),
-		Columns:           make([]*plan.Column, len(insert.Columns)),
-		OrderAttrs:        make([]string, len(insert.OrderAttrs)),
-		CompositePkey:     DeepCopyColDef(insert.CompositePkey),
-		PrimaryKeyDef:     DeepCopyPrimaryKeyDef(insert.PrimaryKeyDef),
-		UniqueIndexDef:    DeepCopyUniqueIndexDef(insert.UniqueIndexDef),
-		SecondaryIndexDef: DeepCopySecondaryIndexDef(insert.SecondaryIndexDef),
-		ClusterTable:      DeepCopyClusterTable(insert.GetClusterTable()),
-		HasAutoCol:        insert.HasAutoCol,
-	}
-
-	for idx, col := range insert.ExplicitCols {
-		newInsert.ExplicitCols[idx] = DeepCopyColDef(col)
-	}
-	for idx, col := range insert.OtherCols {
-		newInsert.OtherCols[idx] = DeepCopyColDef(col)
-	}
-	copy(newInsert.OrderAttrs, insert.OrderAttrs)
-	for idx, column := range insert.Columns {
-		newExprs := make([]*Expr, len(column.Column))
-		for i, expr := range column.Column {
-			newExprs[i] = DeepCopyExpr(expr)
-		}
-		newInsert.Columns[idx] = &plan.Column{
-			Column: newExprs,
-		}
-	}
-	return newInsert
-}
-
 func DeepCopyPlan(pl *Plan) *Plan {
 	switch pl := pl.Plan.(type) {
 	case *Plan_Query:
 		return &Plan{
 			Plan: &plan.Plan_Query{
 				Query: DeepCopyQuery(pl.Query),
-			},
-		}
-
-	case *plan.Plan_Ins:
-		return &Plan{
-			Plan: &plan.Plan_Ins{
-				Ins: DeepCopyInsertValues(pl.Ins),
 			},
 		}
 
