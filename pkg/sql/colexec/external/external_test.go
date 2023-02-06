@@ -181,6 +181,7 @@ func Test_Call(t *testing.T) {
 			param.Fileparam.End = false
 			param.FileList = []string{"abc.txt"}
 			param.FileOffset = [][2]int{{0, -1}}
+			param.FileSize = []int64{1}
 			end, err := Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end, convey.ShouldBeFalse)

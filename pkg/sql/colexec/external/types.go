@@ -46,6 +46,7 @@ type ExParamConst struct {
 	CreateSql     string
 	Attrs         []string
 	FileList      []string
+	FileSize      []int64
 	FileOffset    [][2]int
 	Name2ColIndex map[string]int32
 	Ctx           context.Context
