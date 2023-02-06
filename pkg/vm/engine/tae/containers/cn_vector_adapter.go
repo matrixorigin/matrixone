@@ -551,10 +551,16 @@ func (vec *CnTaeVector[T]) Capacity() int {
 }
 
 func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
+	wasNullable := vec.Nullable()
 	vec.Reset()
 
 	src := NewMoVecFromBytesAndNulls(vec.GetType(), bs, nulls)
 	vec.downstreamVector = src
+
+	nowNullable := vec.Nullable()
+	if wasNullable && !nowNullable {
+		vec.downstreamVector.Nsp = cnNulls.NewWithSize(0)
+	}
 
 	vec.isAllocatedFromMpool = false
 	// TODO: Doesn't reset the capacity
