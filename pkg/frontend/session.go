@@ -1791,12 +1791,28 @@ const (
 )
 
 type TxnCompilerContext struct {
-	dbName     string
-	QryTyp     QueryType
-	txnHandler *TxnHandler
-	ses        *Session
-	proc       *process.Process
-	mu         sync.Mutex
+	dbName               string
+	QryTyp               QueryType
+	txnHandler           *TxnHandler
+	ses                  *Session
+	proc                 *process.Process
+	buildAlterView       bool
+	dbOfView, nameOfView string
+	mu                   sync.Mutex
+}
+
+func (tcc *TxnCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tcc.buildAlterView = yesOrNo
+	tcc.dbOfView = dbName
+	tcc.nameOfView = viewName
+}
+
+func (tcc *TxnCompilerContext) GetBuildingAlterView() (bool, string, string) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.buildAlterView, tcc.dbOfView, tcc.nameOfView
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
