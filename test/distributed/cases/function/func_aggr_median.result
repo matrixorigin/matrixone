@@ -124,13 +124,13 @@ INSERT INTO median_01 VALUES(3, 45, 0, 67432648932);
 INSERT INTO median_01 VALUES(4, 45, 5789, 0);
 INSERT INTO median_01 VALUES(5, NULL, 3782, NULL);
 INSERT INTO median_01 VALUES(6, -129, 65534, 5554584122);
-truncated type TINYINT value -129 for column d1, 1
+Data truncation: data out of range: data type int8, value '-129'
 INSERT INTO median_01 VALUES(7, -123, 89555, 5554584122);
-truncated type SMALLINT UNSIGNED value 89555 for column d2, 1
+Data truncation: data out of range: data type uint16, value '89555'
 INSERT INTO median_01 VALUES(8, -62, 33, 9223372036854775808);
-truncated type BIGINT value 9223372036854775808 for column d3, 1
+Data truncation: data out of range: data type int64, 
 INSERT INTO median_01 VALUES(2147483648, -62, 33, 9223372036854775808);
-truncated type INT value 2147483648 for column id, 1
+Data truncation: data out of range: data type int32, value '2147483648'
 SELECT median(d2) from median_01;
 median(d2)
 3782.0
@@ -194,7 +194,7 @@ INSERT INTO median_02 VALUES(5, 382, 0);
 INSERT INTO median_02 VALUES(6, 0, -1.8976931348623157E+308);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 59 near "1.8976931348623157E+308);";
 INSERT INTO median_02 VALUES(7, 4.402823466351E+38, 5554584122);
-truncated type FLOAT value 4.402823466351e+38 for column d1, 1
+Data truncation: data out of range: data type float32, value '4.402823466351e+38'
 INSERT INTO median_02 VALUES(8, -55845.0, NULL);
 constraint violation: Column 'd2' cannot be null
 SELECT median(d1), median(d2) from median_02;

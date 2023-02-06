@@ -469,6 +469,16 @@ message WindowSpec {
 	int32 lag  = 4;
 }
 
+message InsertCtx {
+	ObjectRef ref 					= 1;
+	repeated int32 idx 				= 2;
+	TableDef table_def 				= 3;
+
+	map<string, int32> parent_idx 	= 4;
+
+	ClusterTable cluster_table = 5;
+}
+
 message UpdateCtx {
 	repeated ObjectRef ref 				= 1;
 	repeated IdList idx 				= 2;
@@ -627,6 +637,7 @@ message Node {
 
 	ClusterTable cluster_table = 27;
 	bool not_cacheable = 28;
+	InsertCtx insert_ctx = 29;
 }
 
 message IdList {
@@ -735,24 +746,7 @@ message Plan {
 		TransationControl tcl 	= 2;
 		DataDefinition ddl 		= 3;
 		DataControl	dcl			= 4;
-		InsertValues ins = 5;
 	}
-}
-
-message InsertValues {
-	string db_name = 1;
-	string tbl_name = 2;
-	repeated ColDef explicit_cols = 3;
-	repeated ColDef other_cols = 4;
-	repeated string order_attrs = 5;
-	repeated column columns = 6;
-	ColDef composite_pkey = 7;
-	UniqueIndexDef unique_index_def = 8;
-	SecondaryIndexDef secondary_index_def = 9;
-	ClusterTable cluster_table = 10;
-	ClusterByDef cb=11;
-	bool has_auto_col = 12;
-	PrimaryKeyDef primary_key_def = 13;
 }
 
 message column{
