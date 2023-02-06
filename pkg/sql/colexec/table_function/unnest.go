@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
 )
 
 func genFilterMap(filters []string) map[string]struct{} {
@@ -223,7 +224,7 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestPara
 			case "index":
 				val, ok := ures[i][arg.Attrs[j]]
 				if !ok || val == nil {
-					err = vec.Append(int32(0), true, proc.Mp())
+					err = vec.Append([]byte{}, true, proc.Mp())
 				} else {
 					intVal, _ := strconv.ParseInt(string(val), 10, 32)
 					err = vec.Append(int32(intVal), false, proc.Mp())

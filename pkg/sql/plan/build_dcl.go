@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -107,9 +105,6 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		err = VisitQuery.Visit(ctx.GetContext())
 		if err != nil {
 			return nil, err
-		}
-		if pp.Query.Nodes[pp.Query.Steps[0]].NodeType == plan.Node_INSERT {
-			fmt.Print("ddd")
 		}
 
 		// sort arg
