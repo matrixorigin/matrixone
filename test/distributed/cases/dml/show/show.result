@@ -313,3 +313,44 @@ Collation    Charset    Id    Compiled    Sortlen
 utf8mb4_bin    utf8mb4    46    Yes    1
 rollback;
 drop database if exists showDb;
+
+
+DROP TABLE IF EXISTS show_01;
+CREATE TABLE show_01(sname varchar(30),id int);
+show INDEX FROM show_01;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+show_01    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+show_01    0    id    1    id    A    0    NULL    NULL    YES            YES    NULL
+show_01    0    sname    1    sname    A    0    NULL    NULL    YES            YES    NULL
+DROP TABLE show_01;
+DROP TABLE IF EXISTS show_02;
+CREATE TABLE show_02 (
+Host varchar(16) NOT NULL default '',
+User varchar(16) NOT NULL default '',
+PRIMARY KEY  (Host,User)
+);
+show INDEX FROM show_02;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+show_02    0    host    1    host    A    0    NULL    NULL    NO            YES    NULL
+show_02    0    user    1    user    A    0    NULL    NULL    NO            YES    NULL
+show_02    1    PRIMARY    1    __mo_cpkey_004host004user    A    0    NULL    NULL    NO            YES    NULL
+show_02    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+DROP DATABASE IF EXISTS show_03;
+[unknown result because it is related to issue#7367]
+USE show_03;
+[unknown result because it is related to issue#7367]
+delimiter $$
+CREATE FUNCTION myfun(ia int,ib int) returns int
+BEGIN
+RETURN ia + ib;
+[unknown result because it is related to issue#7367]
+end
+$$
+delimiter;
+[unknown result because it is related to issue#7367]
+show FUNCTION status;
+[unknown result because it is related to issue#7367]
+show FUNCTION status LIKE 'pattern';
+[unknown result because it is related to issue#7367]
+show FUNCTION status where db = 'show_03';
+[unknown result because it is related to issue#7367]

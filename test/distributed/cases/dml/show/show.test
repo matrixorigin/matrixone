@@ -180,3 +180,36 @@ show collation;
 show collation like '%';
 rollback;
 drop database if exists showDb;
+
+-- SHOW INDEX FROM tbl_name [FROM db_name]
+DROP TABLE IF EXISTS show_01;
+CREATE TABLE show_01(sname varchar(30),id int);
+show INDEX FROM show_01;
+DROP TABLE show_01;
+
+
+DROP TABLE IF EXISTS show_02;
+CREATE TABLE show_02 (
+                         Host varchar(16) NOT NULL default '',
+                         User varchar(16) NOT NULL default '',
+                         PRIMARY KEY  (Host,User)
+);
+show INDEX FROM show_02;
+
+
+-- SHOW FUNCTION STATUS [like_or_where]
+-- @bvt:issue#7367
+DROP DATABASE IF EXISTS show_03;
+USE show_03;
+delimiter $$
+CREATE FUNCTION myfun(ia int,ib int) returns int
+BEGIN
+RETURN ia + ib;
+end
+$$
+delimiter;
+
+show FUNCTION status;
+show FUNCTION status LIKE 'pattern';
+show FUNCTION status where db = 'show_03';
+-- @bvt:issue
