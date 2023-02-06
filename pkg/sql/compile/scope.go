@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -138,6 +139,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	}
 
 	err := s.remoteRun(c)
+
 	// tell connect operator that it's over
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
 	arg.Free(s.Proc, err != nil)
@@ -216,6 +218,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				RelationName: s.DataSource.RelationName,
 				Attributes:   s.DataSource.Attributes,
 			},
+			NodeInfo: s.NodeInfo,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
@@ -227,7 +230,7 @@ func (s *Scope) PushdownRun(c *Compile) error {
 	var end bool // exist flag
 	var err error
 
-	reg := srv.GetConnector(s.DataSource.PushdownId)
+	reg := colexec.Srv.GetConnector(s.DataSource.PushdownId)
 	for {
 		bat := <-reg.Ch
 		if bat == nil {
@@ -258,7 +261,8 @@ func (s *Scope) JoinRun(c *Compile) error {
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
-			Magic: Merge,
+			Magic:    Merge,
+			NodeInfo: s.NodeInfo,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
@@ -401,6 +405,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 		}
 		s.Instructions[0] = vm.Instruction{
 			Op:  vm.Merge,
+			Idx: s.Instructions[0].Idx, // TODO: remove it
 			Arg: &merge.Argument{},
 		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
@@ -430,7 +435,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			ss[i].appendInstruction(vm.Instruction{
 				Op: vm.Connector,
 				Arg: &connector.Argument{
-					Reg: s.Proc.Reg.MergeReceivers[i],
+					Reg: s.Proc.Reg.MergeReceivers[j],
 				},
 			})
 			j++

@@ -111,6 +111,8 @@ type Partition struct {
 	columnsIndexDefs []ColumnsIndexDef
 	// last updated timestamp
 	ts timestamp.Timestamp
+	// used for block read in PartitionReader
+	txn *Transaction
 }
 
 // Transaction represents a transaction
@@ -122,7 +124,9 @@ type Transaction struct {
 	// db       *DB
 	// blockId starts at 0 and keeps incrementing,
 	// this is used to name the file on s3 and then give it to tae to use
-	blockId uint64
+	// not-used now
+	// blockId uint64
+
 	// use for solving halloween problem
 	statementId uint64
 	// local timestamp for workspace operations
@@ -163,8 +167,6 @@ type Entry struct {
 	databaseName string
 	// blockName for s3 file
 	fileName string
-	// blockId for s3 file
-	blockId uint64
 	// update or delete tuples
 	bat     *batch.Batch
 	dnStore DNStore

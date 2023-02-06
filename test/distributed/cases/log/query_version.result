@@ -1,0 +1,8 @@
+select @@version_comment limit 1;
+@@version_comment
+MatrixOne
+select sleep(15) as s;
+s
+0
+select count(1) as cnt, statement_id, statement, status from system.statement_info group by statement_id, statement, status having count(1) > 1;
+cnt statement_id    statement   status

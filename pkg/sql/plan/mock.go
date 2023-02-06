@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type MockCompilerContext struct {
@@ -43,10 +42,6 @@ type MockCompilerContext struct {
 
 	// ctx default: nil
 	ctx context.Context
-}
-
-func (m *MockCompilerContext) GetEngine() engine.Engine {
-	return nil
 }
 
 func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
@@ -799,6 +794,13 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {
 	return nil, "", nil
+}
+
+func (m *MockCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
+}
+
+func (m *MockCompilerContext) GetBuildingAlterView() (bool, string, string) {
+	return false, "", ""
 }
 
 type MockOptimizer struct {

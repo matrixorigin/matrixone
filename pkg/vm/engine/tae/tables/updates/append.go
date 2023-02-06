@@ -94,6 +94,9 @@ func NewEmptyAppendNode() txnif.MVCCNode {
 		TxnMVCCNode: &txnbase.TxnMVCCNode{},
 	}
 }
+func (node *AppendNode) Close() {
+	node.mvcc = nil
+}
 func (node *AppendNode) String() string {
 	return node.GeneralDesc()
 }

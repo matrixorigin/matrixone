@@ -214,7 +214,7 @@ func (s *service) registerExecutorsLocked() {
 	pu.FileService = s.fileService
 	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu)
+		return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCache())
 	}
 
 	ts, ok := s.task.holder.Get()
@@ -223,7 +223,7 @@ func (s *service) registerExecutorsLocked() {
 	}
 	s.task.runner.RegisterExecutor(task.TaskCode_SystemInit,
 		func(ctx context.Context, t task.Task) error {
-			if err := frontend.InitSysTenant(moServerCtx); err != nil {
+			if err := frontend.InitSysTenant(moServerCtx, s.mo.GetRoutineManager().GetAutoIncrCache()); err != nil {
 				return err
 			}
 			if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {

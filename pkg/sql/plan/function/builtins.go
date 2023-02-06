@@ -2435,6 +2435,12 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        multi.RegularLike,
 			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_bool,
+				Fn:        multi.RegularLike,
+			},
 		},
 	},
 	REGEXP_SUBSTR: {
@@ -3088,6 +3094,21 @@ var builtins = map[int]Functions{
 				Volatile:        true,
 				RealTimeRelated: true,
 				Fn:              ctl.MoTableColMin,
+			},
+		},
+	},
+	TRIM: {
+		Id:     TRIM,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:               0,
+				Args:                []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp:           types.T_varchar,
+				UseNewFramework:     true,
+				ParameterMustScalar: []bool{true, false, false},
+				NewFn:               multi.Trim,
 			},
 		},
 	},

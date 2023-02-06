@@ -124,20 +124,20 @@ select user_name, authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
 admin    123456
 alter account testsuspend suspend;
-select account_name,status from mo_catalog.mo_account;
+select account_name,status from mo_catalog.mo_account order by account_name;
 account_name    status
-testsuspend    suspend
 sys    open
+testsuspend    suspend
 alter account testsuspend OPEN;
-select account_name,status from mo_catalog.mo_account;
+select account_name,status from mo_catalog.mo_account order by account_name;
 account_name    status
+sys    open
 testsuspend    open
-sys    open
 alter account testsuspend suspend;
-select account_name,status from mo_catalog.mo_account;
+select account_name,status from mo_catalog.mo_account order by account_name;
 account_name    status
-testsuspend    suspend
 sys    open
+testsuspend    suspend
 alter account testsuspend ADMIN_NAME 'admin' IDENTIFIED BY '1234567890';
 alter account testsuspend comment 'aaaaaaa';
 select account_name,status,comments from mo_catalog.mo_account where account_name='testsuspend';

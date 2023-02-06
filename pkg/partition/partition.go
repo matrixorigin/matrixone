@@ -20,6 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// Partitions will return the rowSels; vs[rowSel] != vs[last_rowSel].
+// by default, the 0th row is always not equal to the one before it
+// (though it doesn't exist)
 func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
 	diffs[0] = true
 	diffs = diffs[:len(sels)]

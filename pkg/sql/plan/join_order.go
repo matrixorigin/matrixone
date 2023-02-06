@@ -87,7 +87,7 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 
 		var joinSide int8
 		for _, cond := range node.OnList {
-			joinSide |= getJoinSide(cond, leftTags, rightTags)
+			joinSide |= getJoinSide(cond, leftTags, rightTags, 0)
 		}
 
 		if joinSide == JoinSideLeft {

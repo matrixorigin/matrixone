@@ -195,7 +195,7 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_Length:
 			colData.Append(int32(colDef.Type.Width))
 		case pkgcatalog.SystemColAttr_NullAbility:
-			colData.Append(bool2i8(colDef.NullAbility))
+			colData.Append(bool2i8(!colDef.NullAbility))
 		case pkgcatalog.SystemColAttr_HasExpr:
 			colData.Append(bool2i8(len(colDef.Default) > 0)) // @imlinjunhong says always has Default, expect row_id
 		case pkgcatalog.SystemColAttr_DefaultExpr:

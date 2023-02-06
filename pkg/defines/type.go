@@ -16,6 +16,7 @@ package defines
 
 import (
 	"math"
+	"sync"
 )
 
 // information from: https://dev.mysql.com/doc/internals/en/com-query-response.html
@@ -168,3 +169,14 @@ var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 
 // TemporaryDN use TemporaryDN to get temporary storage from Context
 type TemporaryDN struct{}
+
+type AutoIncrCaches struct {
+	Mu             *sync.Mutex
+	AutoIncrCaches map[string]AutoIncrCache
+}
+
+type AutoIncrCache struct {
+	CurNum uint64
+	MaxNum uint64
+	Step   uint64
+}

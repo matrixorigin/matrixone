@@ -1,0 +1,1583 @@
+drop table if exists test_table;
+create table test_table(
+col1 int,
+col2 float,
+col3 bool,
+col4 Date,
+col5 varchar(255),
+col6 text
+);
+set global save_query_result = on;
+show create table test_table;
+Table    Create Table
+test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` FLOAT DEFAULT NULL,\n`col3` BOOL DEFAULT NULL,\n`col4` DATE DEFAULT NULL,\n`col5` VARCHAR(255) DEFAULT NULL,\n`col6` TEXT DEFAULT NULL\n)
+select * from result_scan(last_query_id()) as u;
+Table    Create Table
+test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` FLOAT DEFAULT NULL,\n`col3` BOOL DEFAULT NULL,\n`col4` DATE DEFAULT NULL,\n`col5` VARCHAR(255) DEFAULT NULL,\n`col6` TEXT DEFAULT NULL\n)
+show tables;
+Tables_in_save_query_result
+test_table
+select * from result_scan(last_query_id()) as u;
+Tables_in_save_query_result
+test_table
+show databases like "mysql";
+Database
+mysql
+select * from result_scan(last_query_id()) as u;
+Database
+mysql
+load data infile '$resources/load_data/test_1.csv' into table test_table;
+select * from test_table;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select col1 from test_table;
+col1
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+select * from result_scan(last_query_id()) as u;
+col1
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+select * from test_table where col1 > 30;
+col1    col2    col3    col4    col5    col6
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select * from test_table where col1 < 10;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+select * from test_table where col1 = 10;
+col1    col2    col3    col4    col5    col6
+10    10.1    true    2003-09-28    varchar_10    text_10
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+10    10.1    true    2003-09-28    varchar_10    text_10
+select * from test_table limit 1;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+select * from test_table order by col1 asc;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select t1.col1,t2.col1 from test_table t1  left join test_table t2 on t1.col1=t2.col1;
+col1    col1
+0    0
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
+7    7
+8    8
+9    9
+10    10
+11    11
+12    12
+13    13
+14    14
+15    15
+16    16
+17    17
+18    18
+19    19
+20    20
+21    21
+22    22
+23    23
+24    24
+25    25
+26    26
+27    27
+28    28
+29    29
+30    30
+31    31
+32    32
+33    33
+34    34
+35    35
+36    36
+37    37
+38    38
+39    39
+40    40
+41    41
+42    42
+43    43
+44    44
+45    45
+46    46
+47    47
+48    48
+49    49
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select t1.col1,t2.col1 from test_table t1  right join test_table t2 on t1.col1=t2.col1;
+col1    col1
+0    0
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
+7    7
+8    8
+9    9
+10    10
+11    11
+12    12
+13    13
+14    14
+15    15
+16    16
+17    17
+18    18
+19    19
+20    20
+21    21
+22    22
+23    23
+24    24
+25    25
+26    26
+27    27
+28    28
+29    29
+30    30
+31    31
+32    32
+33    33
+34    34
+35    35
+36    36
+37    37
+38    38
+39    39
+40    40
+41    41
+42    42
+43    43
+44    44
+45    45
+46    46
+47    47
+48    48
+49    49
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select * from test_table union select * from test_table;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+SELECT col1 FROM test_table where col1 < 30 MINUS SELECT col1  FROM test_table where col1 < 20;
+col1
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+select * from result_scan(last_query_id()) as u;
+col1
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+create view test_view as select * from test_table;
+show tables;
+Tables_in_save_query_result
+test_table
+test_view
+select * from result_scan(last_query_id()) as u;
+Tables_in_save_query_result
+test_table
+test_view
+show create view test_view;
+View    Create View
+test_view    create view test_view as select * from test_table;
+select * from result_scan(last_query_id()) as u;
+View    Create View
+test_view    create view test_view as select * from test_table;
+select * from test_view;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select col1 from test_view;
+col1
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+select * from result_scan(last_query_id()) as u;
+col1
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+select * from test_view where col1 > 30;
+col1    col2    col3    col4    col5    col6
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select * from test_view where col1 < 10;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+select * from test_view where col1 = 10;
+col1    col2    col3    col4    col5    col6
+10    10.1    true    2003-09-28    varchar_10    text_10
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+10    10.1    true    2003-09-28    varchar_10    text_10
+select * from test_view limit 1;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+select * from test_view order by col1 asc;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select t1.col1,t2.col1 from test_view t1  left join test_view t2 on t1.col1=t2.col1;
+col1    col1
+0    0
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
+7    7
+8    8
+9    9
+10    10
+11    11
+12    12
+13    13
+14    14
+15    15
+16    16
+17    17
+18    18
+19    19
+20    20
+21    21
+22    22
+23    23
+24    24
+25    25
+26    26
+27    27
+28    28
+29    29
+30    30
+31    31
+32    32
+33    33
+34    34
+35    35
+36    36
+37    37
+38    38
+39    39
+40    40
+41    41
+42    42
+43    43
+44    44
+45    45
+46    46
+47    47
+48    48
+49    49
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select t1.col1,t2.col1 from test_view t1  right join test_view t2 on t1.col1=t2.col1;
+col1    col1
+0    0
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
+7    7
+8    8
+9    9
+10    10
+11    11
+12    12
+13    13
+14    14
+15    15
+16    16
+17    17
+18    18
+19    19
+20    20
+21    21
+22    22
+23    23
+24    24
+25    25
+26    26
+27    27
+28    28
+29    29
+30    30
+31    31
+32    32
+33    33
+34    34
+35    35
+36    36
+37    37
+38    38
+39    39
+40    40
+41    41
+42    42
+43    43
+44    44
+45    45
+46    46
+47    47
+48    48
+49    49
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select * from test_view union select * from test_view;
+[unknown result because it is related to issue#7832]
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+SELECT col1 FROM test_view where col1 < 30 MINUS SELECT col1  FROM test_view where col1 < 20;
+[unknown result because it is related to issue#7832]
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+begin;
+[unknown result because it is related to issue#7832]
+select * from test_table;
+[unknown result because it is related to issue#7832]
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select col1 from test_table;
+[unknown result because it is related to issue#7832]
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select * from test_table where col1 > 30;
+[unknown result because it is related to issue#7832]
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select * from test_table where col1 < 10;
+[unknown result because it is related to issue#7832]
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select * from test_table where col1 = 10;
+[unknown result because it is related to issue#7832]
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select * from test_table limit 1;
+[unknown result because it is related to issue#7832]
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select * from test_table order by col1 asc;
+[unknown result because it is related to issue#7832]
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select t1.col1,t2.col1 from test_table t1  left join test_table t2 on t1.col1=t2.col1;
+[unknown result because it is related to issue#7832]
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select t1.col1,t2.col1 from test_table t1  right join test_table t2 on t1.col1=t2.col1;
+col1    col1
+0    0
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
+7    7
+8    8
+9    9
+10    10
+11    11
+12    12
+13    13
+14    14
+15    15
+16    16
+17    17
+18    18
+19    19
+20    20
+21    21
+22    22
+23    23
+24    24
+25    25
+26    26
+27    27
+28    28
+29    29
+30    30
+31    31
+32    32
+33    33
+34    34
+35    35
+36    36
+37    37
+38    38
+39    39
+40    40
+41    41
+42    42
+43    43
+44    44
+45    45
+46    46
+47    47
+48    48
+49    49
+select * from result_scan(last_query_id()) as u;
+[unknown result because it is related to issue#7832]
+select * from test_table union select * from test_table;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select * from result_scan(last_query_id()) as u;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+SELECT col1 FROM test_view where col1 < 30 MINUS SELECT col1  FROM test_view where col1 < 20;
+col1
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+select * from result_scan(last_query_id()) as u;
+col1
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+rollback;
+begin;
+select * from test_table;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+rollback;
+select * from result_scan(last_query_id(-2)) as u;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+set @xxx=10;
+prepare s1 from select * from test_table where col1<?;
+execute s1 using @xxx;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+select * from result_scan(last_query_id(-1)) as u;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+deallocate prepare s1;
+set global save_query_result = off;
+select * from test_table;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+set global save_query_result = on;
+set global save_query_result = off;

@@ -28,7 +28,7 @@ import (
 )
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
-	if err := InitNullMap(stmt, ctx); err != nil {
+	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return nil, err
 	}
 	tblName := string(stmt.Table.ObjectName)
@@ -199,23 +199,23 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 	return nil
 }
 
-func InitNullMap(stmt *tree.Load, ctx CompilerContext) error {
-	stmt.Param.NullMap = make(map[string][]string)
+func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
+	param.NullMap = make(map[string][]string)
 
-	for i := 0; i < len(stmt.Param.Tail.Assignments); i++ {
-		expr, ok := stmt.Param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
+	for i := 0; i < len(param.Tail.Assignments); i++ {
+		expr, ok := param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
 		if !ok {
-			stmt.Param.Tail.Assignments[i].Expr = nil
+			param.Tail.Assignments[i].Expr = nil
 			return nil
 		}
 		if len(expr.Exprs) != 2 {
-			stmt.Param.Tail.Assignments[i].Expr = nil
+			param.Tail.Assignments[i].Expr = nil
 			return nil
 		}
 
 		expr2, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
 		if !ok || expr2.Parts[0] != "nullif" {
-			stmt.Param.Tail.Assignments[i].Expr = nil
+			param.Tail.Assignments[i].Expr = nil
 			return nil
 		}
 
@@ -228,14 +228,14 @@ func InitNullMap(stmt *tree.Load, ctx CompilerContext) error {
 		if !ok {
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func second param is not NumVal form")
 		}
-		for j := 0; j < len(stmt.Param.Tail.Assignments[i].Names); j++ {
-			col := stmt.Param.Tail.Assignments[i].Names[j].Parts[0]
+		for j := 0; j < len(param.Tail.Assignments[i].Names); j++ {
+			col := param.Tail.Assignments[i].Names[j].Parts[0]
 			if col != expr3.Parts[0] {
 				return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param must equal to colName")
 			}
-			stmt.Param.NullMap[col] = append(stmt.Param.NullMap[col], strings.ToLower(expr4.String()))
+			param.NullMap[col] = append(param.NullMap[col], strings.ToLower(expr4.String()))
 		}
-		stmt.Param.Tail.Assignments[i].Expr = nil
+		param.Tail.Assignments[i].Expr = nil
 	}
 	return nil
 }

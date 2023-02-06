@@ -38,12 +38,14 @@ func (item treeItem) Less(other btree.Item) bool {
 }
 
 type btreeBasedStorage struct {
-	tree *btree.BTree
+	tree *btree.BTreeG[treeItem]
 }
 
 func newBtreeBasedStorage() LockStorage {
 	return &btreeBasedStorage{
-		tree: btree.New(32),
+		tree: btree.NewG(32, func(a, b treeItem) bool {
+			return bytes.Compare(a.key, b.key) < 0
+		}),
 	}
 }
 
@@ -55,11 +57,8 @@ func (k *btreeBasedStorage) Add(key []byte, value Lock) {
 }
 
 func (k *btreeBasedStorage) Get(key []byte) (Lock, bool) {
-	item := k.tree.Get(treeItem{key: key})
-	if item == nil {
-		return Lock{}, false
-	}
-	return item.(treeItem).value, true
+	item, ok := k.tree.Get(treeItem{key: key})
+	return item.value, ok
 }
 
 func (k *btreeBasedStorage) Len() int {
@@ -72,8 +71,8 @@ func (k *btreeBasedStorage) Delete(key []byte) {
 
 func (k *btreeBasedStorage) Seek(key []byte) ([]byte, Lock, bool) {
 	var result treeItem
-	k.tree.AscendGreaterOrEqual(treeItem{key: key}, func(i btree.Item) bool {
-		result = i.(treeItem)
+	k.tree.AscendGreaterOrEqual(treeItem{key: key}, func(item treeItem) bool {
+		result = item
 		return false
 	})
 	return result.key, result.value, !result.isEmpty()

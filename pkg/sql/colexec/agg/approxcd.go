@@ -114,5 +114,8 @@ func (a *ApproxCountDistic[T]) MarshalBinary() ([]byte, error) {
 }
 
 func (a *ApproxCountDistic[T]) UnmarshalBinary(data []byte) error {
-	return types.Decode(data, &a.Sk)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	return types.Decode(copyData, &a.Sk)
 }

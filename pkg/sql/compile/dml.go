@@ -78,38 +78,6 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 				return 0, err
 			}
 
-			// reset constraint
-			for _, fkRel := range arg.DeleteCtx.ParentSource[i] {
-				fkTableDef, err := fkRel.TableDefs(c.ctx)
-				if err != nil {
-					return 0, err
-				}
-				var oldCt *engine.ConstraintDef
-				for _, def := range fkTableDef {
-					if ct, ok := def.(*engine.ConstraintDef); ok {
-						oldCt = ct
-						break
-					}
-				}
-				for _, ct := range oldCt.Cts {
-					if def, ok := ct.(*engine.RefChildTableDef); ok {
-						for idx, refTable := range def.Tables {
-							if refTable == oldId {
-								def.Tables[idx] = newId
-								break
-							}
-						}
-						break
-					}
-				}
-				if err != nil {
-					return 0, err
-				}
-				err = fkRel.UpdateConstraint(c.ctx, oldCt)
-				if err != nil {
-					return 0, err
-				}
-			}
 		}
 
 		return uint64(affectRows), nil
@@ -319,7 +287,7 @@ func writeBatch(ctx context.Context,
 
 	//update unique index table
 	if p.UniqueIndexDef != nil {
-		primaryKeyName := update.GetTablePriKeyName(p.ExplicitCols, p.CompositePkey)
+		primaryKeyName := update.GetTablePriKeyName(p.PrimaryKeyDef, p.CompositePkey)
 		for i := range p.UniqueIndexDef.IndexNames {
 			var indexRelation engine.Relation
 			if p.UniqueIndexDef.TableExists[i] {

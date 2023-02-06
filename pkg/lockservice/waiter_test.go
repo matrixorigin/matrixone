@@ -42,7 +42,7 @@ func TestAddNewWaiter(t *testing.T) {
 		w1.close()
 	}()
 
-	assert.NoError(t, w.add(w1))
+	w.add(w1)
 	assert.Equal(t, uint64(1), w.waiters.Len())
 	assert.Equal(t, int32(2), w1.refCount.Load())
 	w.close()
@@ -53,8 +53,8 @@ func TestCloseWaiter(t *testing.T) {
 	w1 := acquireWaiter([]byte("w1"))
 	w2 := acquireWaiter([]byte("w2"))
 
-	assert.NoError(t, w.add(w1))
-	assert.NoError(t, w.add(w2))
+	w.add(w1)
+	w.add(w2)
 
 	v := w.close()
 	assert.NotNil(t, v)
@@ -79,7 +79,7 @@ func TestWait(t *testing.T) {
 	w1 := acquireWaiter([]byte("w1"))
 	defer w1.close()
 
-	assert.NoError(t, w.add(w1))
+	w.add(w1)
 	go func() {
 		time.Sleep(time.Millisecond * 10)
 		w.close()
@@ -96,7 +96,7 @@ func TestWaitWithTimeout(t *testing.T) {
 	w1 := acquireWaiter([]byte("w1"))
 	defer w1.close()
 
-	assert.NoError(t, w.add(w1))
+	w.add(w1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 	defer cancel()
@@ -145,9 +145,9 @@ func TestSkipCompletedWaiters(t *testing.T) {
 	w3 := acquireWaiter([]byte("w3"))
 	defer w3.close()
 
-	assert.NoError(t, w.add(w1))
-	assert.NoError(t, w.add(w2))
-	assert.NoError(t, w.add(w3))
+	w.add(w1)
+	w.add(w2)
+	w.add(w3)
 
 	// make w1 completed
 	w1.setCompleted()

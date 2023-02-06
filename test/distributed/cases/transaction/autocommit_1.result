@@ -451,7 +451,7 @@ select * from view_t6;
 a    b
 100000    3000
 update view_t6 set a=100000 where b=3000;
-internal error: view is not support update operation
+invalid input: cannot insert/update/delete from view
 select * from view_t6;
 a    b
 100000    3000

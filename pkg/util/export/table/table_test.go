@@ -54,11 +54,11 @@ func TestNoopTableOptions_FormatDdl(t *testing.T) {
 	}
 }
 
-var dummyStrColumn = Column{Name: "str", Type: "varchar(32)", Default: "", Comment: "str column"}
-var dummyStrCreateSql = "`str` varchar(32) NOT NULL COMMENT \"str column\""
-var dummyInt64Column = Column{Name: "int64", Type: "BIGINT", Default: "0", Comment: "int64 column"}
+var dummyStrColumn = Column{Name: "str", ColType: TVarchar, Precision: 32, Default: "", Comment: "str column"}
+var dummyStrCreateSql = "`str` VARCHAR(32) NOT NULL COMMENT \"str column\""
+var dummyInt64Column = Column{Name: "int64", ColType: TInt64, Default: "0", Comment: "int64 column"}
 var dummyInt64CreateSql = "`int64` BIGINT DEFAULT \"0\" COMMENT \"int64 column\""
-var dummyFloat64Column = Column{Name: "float64", Type: "DOUBLE", Default: "0.0", Comment: "float64 column"}
+var dummyFloat64Column = Column{Name: "float64", ColType: TFloat64, Default: "0.0", Comment: "float64 column"}
 var dummyFloat64CreateSql = "`float64` DOUBLE DEFAULT \"0.0\" COMMENT \"float64 column\""
 
 var dummyTable = &Table{
@@ -77,12 +77,12 @@ var dummyTableCreateExistsSql = "CREATE EXTERNAL TABLE IF NOT EXISTS `db_dummy`.
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
 	",\n" + dummyFloat64CreateSql +
-	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*.csv","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
+	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 var dummyTableCreateSql = "CREATE EXTERNAL TABLE `db_dummy`.`tbl_dummy`(" +
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
 	",\n" + dummyFloat64CreateSql +
-	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*.csv","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
+	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 
 type dummyCondition struct{}
 
@@ -104,7 +104,7 @@ func TestRow_SetFloat64(t *testing.T) {
 		Table *Table
 	}
 	type args struct {
-		col string
+		col Column
 		val float64
 	}
 	tests := []struct {
@@ -118,7 +118,7 @@ func TestRow_SetFloat64(t *testing.T) {
 				Table: dummyTable,
 			},
 			args: args{
-				col: dummyFloat64Column.Name,
+				col: dummyFloat64Column,
 				val: 1.1,
 			},
 		},
@@ -126,71 +126,8 @@ func TestRow_SetFloat64(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := tt.fields.Table.GetRow(context.TODO())
-			r.SetFloat64(tt.args.col, tt.args.val)
-		})
-	}
-}
-
-func TestRow_SetInt64(t *testing.T) {
-	type fields struct {
-		Table *Table
-	}
-	type args struct {
-		col string
-		val int64
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-	}{
-		{
-			name: "normal",
-			fields: fields{
-				Table: dummyTable,
-			},
-			args: args{
-				col: dummyInt64Column.Name,
-				val: 1,
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := tt.fields.Table.GetRow(context.TODO())
-			r.SetInt64(tt.args.col, tt.args.val)
-		})
-	}
-}
-
-func TestRow_SetVal(t *testing.T) {
-	type fields struct {
-		Table *Table
-	}
-	type args struct {
-		col string
-		val string
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-	}{
-		{
-			name: "normal",
-			fields: fields{
-				Table: dummyTable,
-			},
-			args: args{
-				col: dummyStrColumn.Name,
-				val: "0",
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := tt.fields.Table.GetRow(context.TODO())
-			r.SetVal(tt.args.col, tt.args.val)
+			defer r.Free()
+			r.SetColumnVal(tt.args.col, tt.args.val)
 		})
 	}
 }
@@ -207,23 +144,24 @@ func TestRow_ToStrings(t *testing.T) {
 	}{
 		{
 			name:   "nil",
-			fields: fields{Table: dummyTable, prepare: func(*Row) {}},
+			fields: fields{Table: dummyTable, prepare: func(r *Row) { r.Reset() }},
 			want:   []string{"", "0", "0.0"},
 		},
 		{
 			name: "nil",
 			fields: fields{Table: dummyTable,
 				prepare: func(r *Row) {
-					r.SetVal(dummyStrColumn.Name, "0")
-					r.SetFloat64(dummyFloat64Column.Name, 1.1)
-					r.SetInt64(dummyInt64Column.Name, 1)
+					r.SetColumnVal(dummyStrColumn, "0")
+					r.SetColumnVal(dummyFloat64Column, 1.1)
+					r.SetColumnVal(dummyInt64Column, int64(1))
 				}},
-			want: []string{"0", "1", "1.100000"},
+			want: []string{"0", "1", "1.1"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := tt.fields.Table.GetRow(context.TODO())
+			defer r.Free()
 			tt.fields.prepare(r)
 			assert.Equalf(t, tt.want, r.ToStrings(), "ToStrings()")
 		})
@@ -284,7 +222,7 @@ func TestTable_ToCreateSql(t *testing.T) {
 			tbl := tt.fields.Table
 			got := tbl.ToCreateSql(ctx, tt.args.ifNotExists)
 			t.Logf("create sql: %s", got)
-			assert.Equalf(t, tt.want, got, "ToCreateSql(%v)", tt.args.ifNotExists)
+			require.Equalf(t, tt.want, got, "ToCreateSql(%v)", tt.args.ifNotExists)
 		})
 	}
 }

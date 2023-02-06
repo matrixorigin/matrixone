@@ -104,13 +104,14 @@ const (
 	SystemColAttr_Update          = "attr_update"
 	SystemColAttr_IsClusterBy     = "attr_is_clusterby"
 
-	BlockMeta_ID         = "block_id"
-	BlockMeta_EntryState = "entry_state"
-	BlockMeta_Sorted     = "sorted"
-	BlockMeta_MetaLoc    = "meta_loc"
-	BlockMeta_DeltaLoc   = "delta_loc"
-	BlockMeta_CommitTs   = "committs"
-	BlockMeta_SegmentID  = "segment_id"
+	BlockMeta_ID              = "block_id"
+	BlockMeta_EntryState      = "entry_state"
+	BlockMeta_Sorted          = "sorted"
+	BlockMeta_MetaLoc         = "%!%mo__meta_loc"
+	BlockMeta_DeltaLoc        = "delta_loc"
+	BlockMeta_CommitTs        = "committs"
+	BlockMeta_SegmentID       = "segment_id"
+	BlockMeta_TableIdx_Insert = "%!%mo__meta_tbl_index" // mark which table this metaLoc belongs to
 
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"encoding/json"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -80,12 +81,16 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	}
 	// build external param
 	p := &tree.ExternParam{
-		// ScanType: tree.S3,
-		Filepath: path,
-		// FileService: builder.compCtx.GetProcess().FileService,
-		// S3Param:     &tree.S3Parameter{},
-		Tail:        &tree.TailParameter{},
-		QueryResult: true,
+		ExParamConst: tree.ExParamConst{
+			// ScanType: tree.S3,
+			Filepath: path,
+			// FileService: builder.compCtx.GetProcess().FileService,
+			// S3Param:     &tree.S3Parameter{},
+			Tail: &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			QueryResult: true,
+		},
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -109,10 +114,11 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		}})
 	tableDef.Createsql = string(b)
 	node := &plan.Node{
-		NodeType:    plan.Node_EXTERNAL_SCAN,
-		Stats:       &plan.Stats{},
-		TableDef:    tableDef,
-		BindingTags: []int32{builder.genNewTag()},
+		NodeType:     plan.Node_EXTERNAL_SCAN,
+		Stats:        &plan.Stats{},
+		TableDef:     tableDef,
+		BindingTags:  []int32{builder.genNewTag()},
+		NotCacheable: true,
 	}
 	nodeID := builder.appendNode(node, ctx)
 	return nodeID, nil

@@ -48,10 +48,6 @@ func (e *Engine) NewCompilerContext(
 
 var _ plan.CompilerContext = new(CompilerContext)
 
-func (c *CompilerContext) GetEngine() engine.Engine {
-	return nil
-}
-
 func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
 	return []uint32{catalog.System_Account}, nil
 }
@@ -206,6 +202,11 @@ func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs 
 		attrs = append(attrs, &attr.Attr)
 	}
 	return
+}
+
+func (c *CompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {}
+func (c *CompilerContext) GetBuildingAlterView() (bool, string, string) {
+	return false, "", ""
 }
 
 func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {

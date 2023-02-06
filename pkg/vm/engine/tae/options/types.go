@@ -47,6 +47,8 @@ const (
 	DefaultScanGCInterval = time.Minute * 30
 	DefaultGCTTL          = time.Hour
 
+	DefaultCatalogGCInterval = time.Minute * 30
+
 	DefaultIOWorkers    = int(16)
 	DefaultAsyncWorkers = int(16)
 
@@ -69,6 +71,7 @@ type Options struct {
 	SchedulerCfg  *SchedulerCfg  `toml:"scheduler-cfg"`
 	GCCfg         *GCCfg
 	LogtailCfg    *LogtailCfg
+	CatalogCfg    *CatalogCfg
 	Catalog       *catalog.Catalog
 
 	TransferTableTTL time.Duration

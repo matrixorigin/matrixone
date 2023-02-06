@@ -96,7 +96,7 @@ func (bs *baseStore) onTruncate(batch ...any) {
 	if lsn == 0 {
 		return
 	}
-	version, err := bs.GetVersionByGLSN(lsn)
+	version, err := bs.retryGetVersionByGLSN(lsn)
 	if err != nil {
 		logutil.Infof("get %d", lsn)
 		panic(err)
@@ -284,6 +284,19 @@ func (bs *baseStore) Replay(h driver.ApplyHandle) error {
 }
 
 func (bs *baseStore) Read(lsn uint64) (*entry.Entry, error) {
+	ver, err := bs.retryGetVersionByGLSN(lsn)
+	if err != nil {
+		return nil, err
+	}
+	vf, err := bs.file.GetEntryByVersion(ver)
+	if err != nil {
+		return nil, err
+	}
+	e, err := vf.Load(lsn)
+	return e, err
+}
+
+func (bs *baseStore) retryGetVersionByGLSN(lsn uint64) (int, error) {
 	ver, err := bs.GetVersionByGLSN(lsn)
 	if err == ErrGroupNotExist || err == ErrLsnNotExist {
 		syncedLsn := bs.GetCurrSeqNum()
@@ -302,17 +315,9 @@ func (bs *baseStore) Read(lsn uint64) (*entry.Entry, error) {
 				}
 			}
 			if err != nil {
-				return nil, err
+				return 0, err
 			}
 		}
 	}
-	if err != nil {
-		return nil, err
-	}
-	vf, err := bs.file.GetEntryByVersion(ver)
-	if err != nil {
-		return nil, err
-	}
-	e, err := vf.Load(lsn)
-	return e, err
+	return ver, err
 }

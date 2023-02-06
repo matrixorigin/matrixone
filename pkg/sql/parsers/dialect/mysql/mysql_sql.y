@@ -230,7 +230,7 @@ import (
 %right <str> NOT '!'
 %left <str> BETWEEN CASE WHEN THEN ELSE END
 %nonassoc LOWER_THAN_EQ
-%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT
+%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE
 %left <str> '|'
 %left <str> '&'
 %left <str> SHIFT_LEFT SHIFT_RIGHT
@@ -355,7 +355,7 @@ import (
 %token <str> ARROW
 
 // Insert
-%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
+%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL
 
 %token <str> UNUSED BINDINGS
 
@@ -540,7 +540,7 @@ import (
 
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
-%type <unsignedOpt> unsigned_opt header_opt
+%type <unsignedOpt> unsigned_opt header_opt parallel_opt
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt
 %type <item> pwd_expire clear_pwd_opt
@@ -586,7 +586,7 @@ import (
 %type <epxlainOption> utility_option_elem
 %type <str> utility_option_name utility_option_arg
 %type <str> explain_option_key select_option_opt
-%type <str> explain_foramt_value view_recursive_opt trim_direction
+%type <str> explain_foramt_value trim_direction
 %type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
 %type <str> account_name account_admin_name account_role_name
@@ -777,7 +777,7 @@ import_data_stmt:
     }
 
 load_data_stmt:
-    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name accounts_opt tail_param_opt
+    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name accounts_opt tail_param_opt parallel_opt
     {
         $$ = &tree.Load{
             Local: $3,
@@ -787,6 +787,7 @@ load_data_stmt:
             Accounts: $9,
         }
         $$.(*tree.Load).Param.Tail = $10
+        $$.(*tree.Load).Param.Parallel = $11
     }
 
 load_extension_stmt:
@@ -829,6 +830,23 @@ load_set_item:
         $$ = &tree.UpdateExpr{
             Names: []*tree.UnresolvedName{$1},
             Expr: $3,
+        }
+    }
+
+parallel_opt:
+    {
+        $$ = false
+    }
+|   PARALLEL STRING
+    {
+        str := strings.ToLower($2)
+        if str == "true" {
+            $$ = true
+        } else if str == "false" {
+            $$ = false
+        } else {
+            yylex.Error("error parallel flag")
+            return 1
         }
     }
 
@@ -2129,14 +2147,13 @@ alter_stmt:
 // |    alter_ddl_stmt
 
 alter_view_stmt:
-    ALTER temporary_opt view_recursive_opt VIEW exists_opt table_name column_list_opt AS select_stmt
+    ALTER VIEW exists_opt table_name column_list_opt AS select_stmt
     {
         $$ = &tree.AlterView{
-            Name: $6,
-            ColNames: $7,
-            AsSource: $9,
-            Temporary: $2,
-            IfExists: $5,
+            Name: $4,
+            ColNames: $5,
+            AsSource: $7,
+            IfExists: $3,
         }
     }
 
@@ -2610,6 +2627,10 @@ like_opt:
 |   LIKE simple_expr
     {
         $$ = tree.NewComparisonExpr(tree.LIKE, nil, $2)
+    }
+|   ILIKE simple_expr
+    {
+        $$ = tree.NewComparisonExpr(tree.ILIKE, nil, $2)
     }
 
 database_name_opt:
@@ -4255,20 +4276,15 @@ func_return:
     }
 
 create_view_stmt:
-    CREATE temporary_opt view_recursive_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt
+    CREATE VIEW not_exists_opt table_name column_list_opt AS select_stmt
     {
         $$ = &tree.CreateView{
-            Name: $6,
-            ColNames: $7,
-            AsSource: $9,
-            Temporary: $2,
-            IfNotExists: $5,
+            Name: $4,
+            ColNames: $5,
+            AsSource: $7,
+            IfNotExists: $3,
         }
     }
-
-view_recursive_opt:
-    {}
-|    RECURSIVE
 
 create_account_stmt:
     CREATE ACCOUNT not_exists_opt account_name account_auth_option account_status_option account_comment_opt
@@ -4865,22 +4881,28 @@ load_param_opt:
     INFILE STRING
     {
         $$ = &tree.ExternParam{
-            Filepath: $2,
-            CompressType: tree.AUTO,
-            Format: tree.CSV,
+            ExParamConst: tree.ExParamConst{
+                Filepath: $2,
+                CompressType: tree.AUTO,
+                Format: tree.CSV,
+            },
         }
     }
 |   INFILE '{' infile_or_s3_params '}'
     {
-	$$ = &tree.ExternParam{
-	    Option: $3,
-	}
+        $$ = &tree.ExternParam{
+            ExParamConst: tree.ExParamConst{
+                Option: $3,
+            },
+        }
     }
 |   URL S3OPTION '{' infile_or_s3_params '}'
     {
         $$ = &tree.ExternParam{
-            ScanType: tree.S3,
-            Option: $4,
+            ExParamConst: tree.ExParamConst{
+                ScanType: tree.S3,
+                Option: $4,
+            },
         }
     }
 
@@ -6563,35 +6585,43 @@ function_call_generic:
 |   TRIM '(' expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg0 := tree.NewNumValWithType(constant.MakeInt64(0), "0", false, tree.P_int64)
+        arg1 := tree.NewNumValWithType(constant.MakeString("both"), "both", false, tree.P_char)
+        arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$3},
+            Exprs: tree.Exprs{arg0, arg1, arg2, $3},
         }
     }
 |   TRIM '(' expression FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg0 := tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)
+        arg1 := tree.NewNumValWithType(constant.MakeString("both"), "both", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$3},
+            Exprs: tree.Exprs{arg0, arg1, $3, $5},
         }
     }
 |   TRIM '(' trim_direction FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg0 := tree.NewNumValWithType(constant.MakeInt64(2), "2", false, tree.P_int64)
         arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{arg1, $5},
+            Exprs: tree.Exprs{arg0, arg1, arg2, $5},
         }
     }
 |   TRIM '(' trim_direction expression FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg0 := tree.NewNumValWithType(constant.MakeInt64(3), "3", false, tree.P_int64)
         arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{arg1, $4, $6},
+            Exprs: tree.Exprs{arg0, arg1, $4, $6},
         }
     }
 |   VALUES '(' insert_column ')'
@@ -7012,6 +7042,14 @@ predicate:
 |   bit_expr NOT LIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.NOT_LIKE, $1, $4, $5)
+    }
+|   bit_expr ILIKE simple_expr like_escape_opt
+    {
+        $$ = tree.NewComparisonExprWithEscape(tree.ILIKE, $1, $3, $4)
+    }
+|   bit_expr NOT ILIKE simple_expr like_escape_opt
+    {
+        $$ = tree.NewComparisonExprWithEscape(tree.NOT_ILIKE, $1, $4, $5)
     }
 |   bit_expr REGEXP bit_expr
     {
@@ -8049,6 +8087,7 @@ reserved_keyword:
 |   LAST
 |   LEFT
 |   LIKE
+|	ILIKE
 |   LIMIT
 |   LOCALTIME
 |   LOCALTIMESTAMP
@@ -8341,6 +8380,7 @@ non_reserved_keyword:
 |   EXTENSION
 |   NODE
 |   UUID
+|   PARALLEL
 
 func_not_keyword:
     DATE_ADD

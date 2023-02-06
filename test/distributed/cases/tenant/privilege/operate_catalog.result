@@ -81,11 +81,11 @@ internal error: do not have privilege to execute the statement
 create table system.A(a int);
 internal error: do not have privilege to execute the statement
 update statement_info set statement_id = "1111";
-internal error: the external table is not support update operation
+invalid input: cannot insert/update/delete from external table
 update error_info set err_code = "1111";
-internal error: view is not support update operation
+invalid input: cannot insert/update/delete from view
 update system.error_info set err_code = "1111";
-internal error: view is not support update operation
+invalid input: cannot insert/update/delete from view
 insert into error_info values ("2022-10-09 00:00:00", "1", "1", "1", "1", "1");
 invalid input: cannot insert into view 'error_info'
 insert into system.error_info values ("2022-10-09 00:00:00", "1", "1", "1", "1", "1");
@@ -166,9 +166,9 @@ internal error: do not have privilege to execute the statement
 create table system_metrics.A(a int);
 internal error: do not have privilege to execute the statement
 update sql_statement_total set type = "1";
-internal error: view is not support update operation
+invalid input: cannot insert/update/delete from view
 update system_metrics.sql_statement_total set type = "1";
-internal error: view is not support update operation
+invalid input: cannot insert/update/delete from view
 insert into sql_statement_total values ("2022-10-09 00:00:00",0,"1","1","1","1");
 invalid input: cannot insert into view 'sql_statement_total'
 insert into system_metrics.sql_statement_total values ("2022-10-09 00:00:00",0,"1","1","1","1");

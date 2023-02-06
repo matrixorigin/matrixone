@@ -103,6 +103,14 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 	return ctx.WriteString(v)
 }
 
+func (ctx *FmtCtx) WriteStringQuote(v string) (int, error) {
+	if ctx.quoteString {
+		return ctx.WriteString(fmt.Sprintf("%q", v))
+	} else {
+		return ctx.WriteString(v)
+	}
+}
+
 // needParens says if we need a parenthesis
 // op is the operator we are printing
 // val is the value we are checking if we need parens around or not

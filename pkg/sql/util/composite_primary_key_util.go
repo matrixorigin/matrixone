@@ -15,9 +15,10 @@
 package util
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"strconv"
 
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
