@@ -183,6 +183,7 @@ drop database if exists showDb;
 -- SHOW INDEX FROM tbl_name [FROM db_name]
 -- @suite
 -- @setup
+drop database if exists showDB;
 CREATE DATABASE test;
 USE test;
 DROP TABLE IF EXISTS show_01;
