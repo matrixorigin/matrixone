@@ -2392,6 +2392,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			}
 		}
 
+		builder.pushdownFilters(node.Children[0], predsDeduction(rightPushdown, node.OnList))
+		builder.pushdownFilters(node.Children[1], predsDeduction(leftPushdown, node.OnList))
+
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], leftPushdown)
 
 		if len(cantPushdownChild) > 0 {

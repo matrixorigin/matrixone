@@ -419,6 +419,74 @@ func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan
 	return expr
 }
 
+// deduction of new predicates. for example join on a=b where b=1, then a=1 can be deduced
+func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
+	var newFilters []*plan.Expr
+	for _, onPred := range onList {
+		ret, col1, col2 := checkOnPred(onPred)
+		if !ret {
+			continue
+		}
+		for _, filter := range filters {
+			newExpr := DeepCopyExpr(filter)
+			if susbstituteMatchColumn(newExpr, col1, col2) {
+				newFilters = append(newFilters, newExpr)
+			}
+		}
+	}
+	return newFilters
+}
+
+func susbstituteMatchColumn(expr *plan.Expr, onPredCol1, onPredCol2 *ColRef) bool {
+	var ret bool
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		colName := exprImpl.Col.String()
+		if colName == onPredCol1.String() {
+			exprImpl.Col.RelPos = onPredCol2.RelPos
+			exprImpl.Col.ColPos = onPredCol2.ColPos
+			exprImpl.Col.Name = onPredCol2.Name
+			return true
+		} else if colName == onPredCol2.String() {
+			exprImpl.Col.RelPos = onPredCol1.RelPos
+			exprImpl.Col.ColPos = onPredCol1.ColPos
+			exprImpl.Col.Name = onPredCol1.Name
+			return true
+		}
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if susbstituteMatchColumn(arg, onPredCol1, onPredCol2) {
+				ret = true
+			}
+		}
+	}
+	return ret
+}
+
+func checkOnPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
+	//onPred must be equality, children must be column name
+	switch onPredImpl := onPred.Expr.(type) {
+	case *plan.Expr_F:
+		if onPredImpl.F.Func.ObjName != "=" {
+			return false, nil, nil
+		}
+		args := onPredImpl.F.Args
+		var col1, col2 *ColRef
+		switch child1 := args[0].Expr.(type) {
+		case *plan.Expr_Col:
+			col1 = child1.Col
+		}
+		switch child2 := args[1].Expr.(type) {
+		case *plan.Expr_Col:
+			col2 = child2.Col
+		}
+		if col1 != nil && col2 != nil {
+			return true, col1, col2
+		}
+	}
+	return false, nil, nil
+}
+
 func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	var exprs []*plan.Expr
 	switch exprImpl := expr.Expr.(type) {
@@ -604,9 +672,7 @@ func getColumnNameFromExpr(expr *plan.Expr) string {
 		return exprImpl.Col.Name
 
 	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			return getColumnNameFromExpr(arg)
-		}
+		return getColumnNameFromExpr(exprImpl.F.Args[0])
 	}
 	return ""
 }
