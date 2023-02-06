@@ -291,3 +291,14 @@ aaa	bbbb
 2	22
 3	33
 2	33
+drop table c1;
+drop table f2;
+drop table f1;
+create table f1(a int primary key, b int unique key);
+create table c1 (a int, b int, foreign key f_a(a) references f1(a));
+insert into f1 values (1,1), (2,2), (3,3);
+insert into c1 values (11,11);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into c1 values (1,1),(11,11);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into c1 values (1,1);

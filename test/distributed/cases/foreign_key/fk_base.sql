@@ -208,3 +208,13 @@ update c1 set aaa=2, bbb=12 where bbb=11;
 update c1 set aaa=4, bbb=22 where bbb=11;
 update c1 set aaa=2, bbb=33 where bbb=11;
 select * from c1 order by bbb;
+
+drop table c1;
+drop table f2;
+drop table f1;
+create table f1(a int primary key, b int unique key);
+create table c1 (a int, b int, foreign key f_a(a) references f1(a));
+insert into f1 values (1,1), (2,2), (3,3);
+insert into c1 values (11,11);
+insert into c1 values (1,1),(11,11);
+insert into c1 values (1,1);
