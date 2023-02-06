@@ -95,7 +95,7 @@ VALUES
 
 -- @case
 -- @desc:test for func BIT_AND() select
-SELECT Working_At, BIT_AND(Annual_Income) AS BITORINCOME FROM t1 group by Working_At;	
+SELECT Working_At, BIT_AND(Annual_Income) AS BITORINCOME FROM t1 group by Working_At;
 SELECT Work_Location, BIT_AND(Annual_Income) AS BITORINCOME FROM t1 Group By Work_Location;
 
 -- @suite
@@ -466,4 +466,34 @@ insert into t values(1, 'h'), (2, 'b'), (3, 'c'), (4, 'q'), (5, 'd'), (6, 'b'), 
 select mo_ctl('dn', 'flush', 'test01.t');
 select mo_table_col_max('test01', 't', 'a'), mo_table_col_min('test01', 't', 'a');
 drop table t;
+drop database test01;
+
+drop database if exists test01;
+create database test01;
+use test01;
+select trim(' abc '), trim('abc '), trim(' abc'), trim('abc');
+select trim('abc' from ' abc '), trim('abc' from 'abc '), trim('abc' from ' abc'), trim('abc' from 'abc');
+select trim(both from ' abc '), trim(leading from ' abcd'), trim(trailing from ' abc ');
+select trim(both 'abc' from ' abc'), trim(leading 'abc' from 'abcd'), trim(trailing 'abc' from 'axabc');
+select trim('嗷嗷' from '嗷嗷abc嗷嗷'), trim(both '嗷嗷' from '嗷嗷abc嗷嗷'), trim(leading '嗷嗷' from '嗷嗷abcd嗷嗷'), trim(trailing '嗷嗷' from '嗷嗷abc嗷嗷');
+select trim(null from ' abc '), trim('abc' from null), trim(null from null);
+
+drop table if exists t1;
+create table t1(a varchar(100), b varchar(100));
+insert into t1 values('abc', 'abc');
+insert into t1 values('啊abc哦', '啊abc哦');
+insert into t1 values('啊啊o', 'o');
+insert into t1 values('啊啊o', '啊');
+insert into t1 values('啊啊o', 'o啊');
+select trim(a from b) from t1;
+select trim(both a from b) from t1;
+select trim(leading a from b) from t1;
+select trim(trailing a from b) from t1;
+insert into t1 values(null, 'abc');
+select trim(a from b) from t1;
+select trim('a' from a) from t1;
+select trim(null from b) from t1;
+select trim('a' from null) from t1;
+select trim(null from null) from t1;
+drop table t1;
 drop database test01;
