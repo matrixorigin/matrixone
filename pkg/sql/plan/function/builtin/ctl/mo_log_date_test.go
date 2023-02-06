@@ -27,6 +27,7 @@ func TestMOLogDate(t *testing.T) {
 		cases := []struct {
 			dateStr string
 			expect  string
+			isNull  bool
 		}{
 			{
 				dateStr: "2004/04/30",
@@ -58,7 +59,8 @@ func TestMOLogDate(t *testing.T) {
 			},
 			{
 				dateStr: "etl:/i/am/not/include/date/string",
-				expect:  "0001-01-01",
+				expect:  ZeroDate,
+				isNull:  true,
 			},
 			{
 				dateStr: "etl:/sys/logs/2023/02/03/system.metric/filename",
@@ -68,13 +70,17 @@ func TestMOLogDate(t *testing.T) {
 
 		var datestrs []string
 		var expects []string
-		for _, c := range cases {
+		var resultNil []uint64
+		for idx, c := range cases {
 			datestrs = append(datestrs, c.dateStr)
 			expects = append(expects, c.expect)
+			if c.isNull {
+				resultNil = append(resultNil, uint64(idx))
+			}
 		}
 
 		datestrVector := testutil.MakeVarcharVector(datestrs, nil)
-		expectVector := testutil.MakeDateVector(expects, []uint64{})
+		expectVector := testutil.MakeDateVector(expects, resultNil)
 
 		proc := testutil.NewProc()
 		result, err := MOLogDate([]*vector.Vector{datestrVector}, proc)

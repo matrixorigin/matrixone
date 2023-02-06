@@ -15,50 +15,33 @@
 package ctl
 
 import (
-	"regexp"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/date"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const ZeroDate = "0001-01-01"
+const formatMask = "%Y/%m/%d"
+const regexpMask = `\d{1,4}/\d{1,2}/\d{1,2}`
 
 // MOLogDate parse 'YYYY/MM/DD' date from input string.
 // return '0001-01-01' if input string not container 'YYYY/MM/DD' substr, until DateParse Function support return NULL for invalid date string.
 func MOLogDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_date, Size: 4}
-	inputValues := vector.MustStrCols(inputVector)
 
-	// regexp
-	parsedInput := make([]string, len(inputValues))
-	reg := regexp.MustCompile(`\d{4}/\d{1,2}/\d{1,2}`)
-	for idx, ori := range inputValues {
-		parsedInput[idx] = reg.FindString(ori)
-		if len(parsedInput[idx]) == 0 {
-			parsedInput[idx] = ZeroDate
-		}
+	regexpVec := vector.NewWithStrings(types.T_varchar.ToType(), []string{regexpMask}, nil, proc.Mp())
+	regexpInput := append(vectors, regexpVec)
+	parsedInput, err := multi.RegularSubstr(regexpInput, proc)
+	if err != nil {
+		return nil, err
 	}
-	// end of regexp
 
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Date, 1)
-		result, err := date.DateStringToDate(parsedInput, resultValues)
-		vector.SetCol(resultVector, result)
-		return resultVector, err
-	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(parsedInput)), inputVector.Nsp)
-		if err != nil {
-			return nil, err
-		}
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		_, err = date.DateStringToDate(parsedInput, resultValues)
-		return resultVector, err
+	formatVec := vector.NewConstString(types.T_char.ToType(), len(formatMask), formatMask, proc.Mp())
+	strToDateInput := []*vector.Vector{parsedInput, formatVec}
+	resultVector, err := binary.StrToDate(strToDateInput, proc)
+	if err != nil {
+		return nil, err
 	}
+	return resultVector, err
 }
