@@ -9,31 +9,31 @@ drop table tt;
 create table t1 (id int not null, str char(10),name varchar(10));
 create table t2 (a int);
 show tables;
-tables_in_test01
+Tables_in_test01
 t1
 t2
 show tables from test01;
-tables_in_test01
+Tables_in_test01
 t1
 t2
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT    NO        NULL
-name    VARCHAR(10)    YES        NULL
-str    CHAR(10)    YES        NULL
+id    INT    NO        NULL        
+name    VARCHAR(10)    YES        NULL        
+str    CHAR(10)    YES        NULL        
 show full columns from t1;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT    NULL    NO        NULL        select,insert,update,references
-name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references
-str    CHAR(10)    NULL    YES        NULL        select,insert,update,references
+id    INT    NULL    NO        NULL        select,insert,update,references    
+name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references    
+str    CHAR(10)    NULL    YES        NULL        select,insert,update,references    
 show full columns from t1 like '%';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT    NULL    NO        NULL        select,insert,update,references
-name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references
-str    CHAR(10)    NULL    YES        NULL        select,insert,update,references
+id    INT    NULL    NO        NULL        select,insert,update,references    
+name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references    
+str    CHAR(10)    NULL    YES        NULL        select,insert,update,references    
 show full columns from t1 where `Field`='id';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT    NULL    NO        NULL        select,insert,update,references
+id    INT    NULL    NO        NULL        select,insert,update,references    
 drop database if exists test01;
 show charset;
 Charset    Description    Default collation    Maxlen
@@ -44,11 +44,11 @@ create table t1(a tinyint, b smallint, c int, d bigint);
 create database test01;
 use test01;
 show columns from test02.t1;
-Field    Type    Null    Key    Default    Comment
-a    TINYINT    YES        NULL
-b    SMALLINT    YES        NULL
-c    INT    YES        NULL
-d    BIGINT    YES        NULL
+Field    Type    Null    Key    Default    Extra    Comment
+a    TINYINT    YES        NULL        
+b    SMALLINT    YES        NULL        
+c    INT    YES        NULL        
+d    BIGINT    YES        NULL        
 create database if not exists db11111111111;
 show table status from db11111111111;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment
@@ -151,11 +151,11 @@ create table t1(a int, b int);
 insert into t1 values(1,1);
 create view v1 as select * from t1;
 show full tables;
-tables_in_test03    table_type
+Tables_in_test03    table_type
 t1    BASE TABLE
 v1    VIEW
 show full tables from test03;
-tables_in_test03    table_type
+Tables_in_test03    table_type
 t1    BASE TABLE
 v1    VIEW
 show full tables from `1;drop table t1;`;
@@ -210,15 +210,16 @@ autocommit    on
 drop table if exists t1;
 create table t1(c1 int primary key auto_increment,c2 tinyint not null default 4,c3 smallint,c4 bigint,c5 tinyint unsigned,c6 smallint unsigned,c7 int unsigned,c8 bigint unsigned,c9 float,c10 double,c11 date,c12 datetime,c13 timestamp on update current_timestamp,c14 char,c15 varchar default 'q',c16 json,c17 decimal,c18 text,c19 blob,c20 uuid);
 show create table t1;
-Table	Create Table
-t1	CREATE TABLE `t1` (\n`c1` INT NOT NULL AUTO_INCREMENT,\n`c2` TINYINT DEFAULT 4,\n`c3` SMALLINT DEFAULT NULL,\n`c4` BIGINT DEFAULT NULL,\n`c5` TINYINT UNSIGNED DEFAULT NULL,\n`c6` SMALLINT UNSIGNED DEFAULT NULL,\n`c7` INT UNSIGNED DEFAULT NULL,\n`c8` BIGINT UNSIGNED DEFAULT NULL,\n`c9` FLOAT DEFAULT NULL,\n`c10` DOUBLE DEFAULT NULL,\n`c11` DATE DEFAULT NULL,\n`c12` DATETIME DEFAULT NULL,\n`c13` TIMESTAMP DEFAULT NULL ON UPDATE current_timestamp(),\n`c14` CHAR(1) DEFAULT NULL,\n`c15` VARCHAR(65535) DEFAULT 'q',\n`c16` JSON DEFAULT NULL,\n`c17` DECIMAL(34,0) DEFAULT NULL,\n`c18` TEXT DEFAULT NULL,\n`c19` BLOB DEFAULT NULL,\n`c20` UUID DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`c1` INT NOT NULL AUTO_INCREMENT,\n`c2` TINYINT DEFAULT 4,\n`c3` SMALLINT DEFAULT NULL,\n`c4` BIGINT DEFAULT NULL,\n`c5` TINYINT UNSIGNED DEFAULT NULL,\n`c6` SMALLINT UNSIGNED DEFAULT NULL,\n`c7` INT UNSIGNED DEFAULT NULL,\n`c8` BIGINT UNSIGNED DEFAULT NULL,\n`c9` FLOAT DEFAULT NULL,\n`c10` DOUBLE DEFAULT NULL,\n`c11` DATE DEFAULT NULL,\n`c12` DATETIME DEFAULT NULL,\n`c13` TIMESTAMP DEFAULT NULL ON UPDATE current_timestamp(),\n`c14` CHAR(1) DEFAULT NULL,\n`c15` VARCHAR(65535) DEFAULT 'q',\n`c16` JSON DEFAULT NULL,\n`c17` DECIMAL(34,0) DEFAULT NULL,\n`c18` TEXT DEFAULT NULL,\n`c19` BLOB DEFAULT NULL,\n`c20` UUID DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
 SHOW TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 SHOW TRIGGERS like '*%';
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 use mo_catalog;
 show tables;
-tables_in_mo_catalog
+Tables_in_mo_catalog
+mo_tables
 mo_user
 mo_account
 mo_role
@@ -228,7 +229,6 @@ mo_role_privs
 mo_user_defined_function
 mo_mysql_compatbility_mode
 mo_database
-mo_tables
 mo_columns
 show table_number from mo_catalog;
 Number of tables in mo_catalog
@@ -248,9 +248,9 @@ max(a)    min(a)    max(b)    min(b)
 6    1    6    1
 drop table t;
 show node list;
-null
+1
 show locks;
-null
+1
 create role role1;
 grant all on table *.* to role1;
 grant create table, drop table on database *.* to role1;
@@ -313,3 +313,70 @@ Collation    Charset    Id    Compiled    Sortlen
 utf8mb4_bin    utf8mb4    46    Yes    1
 rollback;
 drop database if exists showDb;
+DROP DATABASE IF EXISTS test;
+CREATE DATABASE test;
+USE test;
+DROP TABLE IF EXISTS show_01;
+CREATE TABLE show_01(sname varchar(30),id int);
+show INDEX FROM show_01;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+show_01    0    id    1    id    A    0    NULL    NULL    YES            YES    NULL
+show_01    0    sname    1    sname    A    0    NULL    NULL    YES            YES    NULL
+show_01    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+DROP TABLE show_01;
+DROP TABLE IF EXISTS show_02;
+CREATE TABLE show_02 (
+h1 varchar(16) NOT NULL default '',
+u1 varchar(16) NOT NULL default '',
+PRIMARY KEY  (h1,u1)
+);
+show INDEX FROM show_02;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+show_02    0    h1    1    h1    A    0    NULL    NULL    NO            YES    NULL
+show_02    0    u1    1    u1    A    0    NULL    NULL    NO            YES    NULL
+show_02    1    PRIMARY    1    __mo_cpkey_002h1002u1    A    0    NULL    NULL    NO            YES    NULL
+show_02    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+DROP TABLE show_02;
+DROP TABLE IF EXISTS show_03;
+CREATE TABLE show_03(a int, b int);
+CREATE unique index x ON show_03(a) comment 'x';
+show CREATE table show_03;
+Table    Create Table
+show_03    CREATE TABLE `show_03` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `x` (`a`) COMMENT `x`\n)
+show INDEX FROM show_03;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+show_03    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+show_03    0    a    1    a    A    0    NULL    NULL    YES            YES    NULL
+show_03    0    b    1    b    A    0    NULL    NULL    YES            YES    NULL
+DROP TABLE show_03;
+CREATE TABLE show_04(a int, b int, unique key(a));
+show CREATE TABLE show_04;
+Table    Create Table
+show_04    CREATE TABLE `show_04` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `a` (`a`)\n)
+CREATE INDEX b ON show_04(b);
+show INDEX FROM show_04;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+show_04    0    a    1    a    A    0    NULL    NULL    YES            YES    NULL
+show_04    0    b    1    b    A    0    NULL    NULL    YES            YES    NULL
+show_04    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+DROP TABLE show_04;
+DROP DATABASE IF EXISTS show_03;
+
+USE show_03;
+
+delimiter $$
+CREATE FUNCTION myfun(ia int,ib int) returns int
+BEGIN
+RETURN ia + ib;
+
+end
+$$
+delimiter;
+
+show FUNCTION status;
+
+show FUNCTION status LIKE 'pattern';
+
+show FUNCTION status where db = 'show_03';
+
+DROP DATABASE test;

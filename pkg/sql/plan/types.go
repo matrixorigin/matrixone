@@ -50,10 +50,9 @@ type Type = plan.Type
 type Plan_Query = plan.Plan_Query
 type Property = plan.Property
 type TableDef_DefType_Properties = plan.TableDef_DefType_Properties
-type TableDef_DefType_Partition = plan.TableDef_DefType_Partition
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
-type PartitionInfo = plan.PartitionInfo
+type PartitionByDef = plan.PartitionByDef
 type TableDef_DefType_UIdx = plan.TableDef_DefType_UIdx
 type TableDef_DefType_SIdx = plan.TableDef_DefType_SIdx
 type UniqueIndexDef = plan.UniqueIndexDef
@@ -95,6 +94,10 @@ type CompilerContext interface {
 	GetProcess() *process.Process
 
 	GetQueryResultMeta(uuid string) ([]*ColDef, string, error)
+	SetBuildingAlterView(yesOrNo bool, dbName, viewName string)
+	// is building the alter view or not
+	// return: yes or no, dbName, viewName
+	GetBuildingAlterView() (bool, string, string)
 }
 
 type Optimizer interface {
