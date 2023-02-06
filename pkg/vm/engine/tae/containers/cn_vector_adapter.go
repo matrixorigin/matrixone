@@ -445,16 +445,78 @@ func (vec *CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	all, err := io.ReadAll(r)
-	if err != nil {
-		return 0, err
-	}
-	err = vec.downstreamVector.UnmarshalBinary(all)
-	if err != nil {
-		return 0, err
-	}
+	var marshalledByteArray []byte
 
-	return 0, err
+	// isScalar 1
+	scalar := make([]byte, 1)
+	if _, err = r.Read(scalar); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, scalar...)
+
+	// Length 8
+	length := make([]byte, 8)
+	if _, err = r.Read(length); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, length...)
+
+	// Typ 20
+	vecTyp := make([]byte, 20)
+	if _, err = r.Read(vecTyp); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, vecTyp...)
+
+	//1. Nsp Length 4
+	nspLen := make([]byte, 4)
+	if _, err = r.Read(nspLen); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, nspLen...)
+
+	// Nsp [?]
+	nspLenVal := types.DecodeUint32(nspLen)
+	nsp := make([]byte, nspLenVal)
+	if _, err = r.Read(nsp); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, nsp...)
+
+	//2. Col Length 4
+	colLen := make([]byte, 4)
+	if _, err = r.Read(colLen); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, colLen...)
+
+	// Col [?]
+	colLenVal := types.DecodeUint32(colLen)
+	col := make([]byte, colLenVal)
+	if _, err = r.Read(col); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, col...)
+
+	//3. Col Length 4
+	areaLen := make([]byte, 4)
+	if _, err = r.Read(areaLen); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, areaLen...)
+
+	// Col [?]
+	areaLenVal := types.DecodeUint32(areaLen)
+	area := make([]byte, areaLenVal)
+	if _, err = r.Read(area); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, area...)
+
+	n = int64(len(marshalledByteArray))
+
+	err = vec.downstreamVector.UnmarshalBinary(marshalledByteArray)
+	return
 }
 
 func (vec *CnTaeVector[T]) Allocated() int {
