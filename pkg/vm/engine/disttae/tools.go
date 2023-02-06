@@ -823,12 +823,16 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			}
 		}
 		for _, def := range defs {
-			if indexDef, ok := def.(*engine.PrimaryIndexDef); ok {
-				for _, name := range indexDef.Names {
-					attr, _ := defs[mp[name]].(*engine.AttributeDef)
-					attr.Attr.Primary = true
+			if constraintDef, ok := def.(*engine.ConstraintDef); ok {
+				for _, ct := range constraintDef.Cts {
+					if pkdef, ok2 := ct.(*engine.PrimaryKeyDef); ok2 {
+						pos := mp[pkdef.Pkey.PkeyColName]
+						attr, _ := defs[pos].(*engine.AttributeDef)
+						attr.Attr.Primary = true
+					}
 				}
 			}
+
 			if clusterByDef, ok := def.(*engine.ClusterByDef); ok {
 				attr, _ := defs[mp[clusterByDef.Name]].(*engine.AttributeDef)
 				attr.Attr.ClusterBy = true

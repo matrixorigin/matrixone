@@ -586,7 +586,7 @@ import (
 %type <epxlainOption> utility_option_elem
 %type <str> utility_option_name utility_option_arg
 %type <str> explain_option_key select_option_opt
-%type <str> explain_foramt_value view_recursive_opt trim_direction
+%type <str> explain_foramt_value trim_direction
 %type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
 %type <str> account_name account_admin_name account_role_name
@@ -2147,14 +2147,13 @@ alter_stmt:
 // |    alter_ddl_stmt
 
 alter_view_stmt:
-    ALTER temporary_opt view_recursive_opt VIEW exists_opt table_name column_list_opt AS select_stmt
+    ALTER VIEW exists_opt table_name column_list_opt AS select_stmt
     {
         $$ = &tree.AlterView{
-            Name: $6,
-            ColNames: $7,
-            AsSource: $9,
-            Temporary: $2,
-            IfExists: $5,
+            Name: $4,
+            ColNames: $5,
+            AsSource: $7,
+            IfExists: $3,
         }
     }
 
@@ -4277,20 +4276,15 @@ func_return:
     }
 
 create_view_stmt:
-    CREATE temporary_opt view_recursive_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt
+    CREATE VIEW not_exists_opt table_name column_list_opt AS select_stmt
     {
         $$ = &tree.CreateView{
-            Name: $6,
-            ColNames: $7,
-            AsSource: $9,
-            Temporary: $2,
-            IfNotExists: $5,
+            Name: $4,
+            ColNames: $5,
+            AsSource: $7,
+            IfNotExists: $3,
         }
     }
-
-view_recursive_opt:
-    {}
-|    RECURSIVE
 
 create_account_stmt:
     CREATE ACCOUNT not_exists_opt account_name account_auth_option account_status_option account_comment_opt
@@ -6591,35 +6585,43 @@ function_call_generic:
 |   TRIM '(' expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg0 := tree.NewNumValWithType(constant.MakeInt64(0), "0", false, tree.P_int64)
+        arg1 := tree.NewNumValWithType(constant.MakeString("both"), "both", false, tree.P_char)
+        arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$3},
+            Exprs: tree.Exprs{arg0, arg1, arg2, $3},
         }
     }
 |   TRIM '(' expression FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg0 := tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)
+        arg1 := tree.NewNumValWithType(constant.MakeString("both"), "both", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$3},
+            Exprs: tree.Exprs{arg0, arg1, $3, $5},
         }
     }
 |   TRIM '(' trim_direction FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg0 := tree.NewNumValWithType(constant.MakeInt64(2), "2", false, tree.P_int64)
         arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{arg1, $5},
+            Exprs: tree.Exprs{arg0, arg1, arg2, $5},
         }
     }
 |   TRIM '(' trim_direction expression FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg0 := tree.NewNumValWithType(constant.MakeInt64(3), "3", false, tree.P_int64)
         arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{arg1, $4, $6},
+            Exprs: tree.Exprs{arg0, arg1, $4, $6},
         }
     }
 |   VALUES '(' insert_column ')'

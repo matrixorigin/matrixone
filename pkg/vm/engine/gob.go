@@ -30,7 +30,6 @@ func init() {
 	gob.Register(new(AttributeDef))
 	gob.Register(new(IndexTableDef))
 	gob.Register(new(PropertiesDef))
-	gob.Register(new(PrimaryIndexDef))
 	gob.Register(new(ConstraintDef))
 
 	// register vector column types

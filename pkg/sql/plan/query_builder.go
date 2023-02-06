@@ -1768,7 +1768,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			}
 			tableDef.Cols = append(tableDef.Cols, col)
 		} else if tableDef.TableType == catalog.SystemViewRel {
-
+			if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
+				currentDB := schema
+				if currentDB == "" {
+					currentDB = builder.compCtx.DefaultDatabase()
+				}
+				if dbOfView == currentDB && nameOfView == table {
+					return 0, moerr.NewInternalError(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
+				}
+			}
 			// set view statment to CTE
 			viewDefString := tableDef.ViewSql.View
 
@@ -1799,13 +1807,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					viewStmt.Name = alterstmt.Name
 					viewStmt.ColNames = alterstmt.ColNames
 					viewStmt.AsSource = alterstmt.AsSource
-					viewStmt.Temporary = alterstmt.Temporary
 				}
 
 				viewName := viewStmt.Name.ObjectName
 				var maskedCTEs map[string]any
 				if len(ctx.cteByName) > 0 {
-					maskedCTEs := make(map[string]any)
+					maskedCTEs = make(map[string]any)
 					for name := range ctx.cteByName {
 						maskedCTEs[name] = nil
 					}
@@ -1814,7 +1821,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				ctx.cteByName[string(viewName)] = &CTERef{
 					ast: &tree.CTE{
 						Name: &tree.AliasClause{
-							Alias: tree.Identifier(viewName),
+							Alias: viewName,
 							Cols:  viewStmt.ColNames,
 						},
 						Stmt: viewStmt.AsSource,
@@ -1823,7 +1830,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					maskedCTEs:      maskedCTEs,
 				}
 
-				newTableName := tree.NewTableName(tree.Identifier(viewName), tree.ObjectNamePrefix{
+				newTableName := tree.NewTableName(viewName, tree.ObjectNamePrefix{
 					CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
 					SchemaName:      tree.Identifier(""),
 					ExplicitCatalog: false,

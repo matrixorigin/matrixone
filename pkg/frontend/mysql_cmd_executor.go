@@ -445,7 +445,15 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 	if len(dbName) == 0 {
 		dbName = ses.GetDatabaseName()
 	}
+
 	tableName := string(stmt.Table.ToTableName().ObjectName)
+	ctx := ses.GetTxnCompileCtx()
+	_, tableDef := ctx.Resolve(dbName, tableName)
+	if tableDef == nil {
+		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tableName)
+	}
+
+	colNameToColContent := make(map[string][]interface{})
 	for _, d := range data {
 		colName := string(d[0].([]byte))
 		if colName == catalog.Row_ID {
@@ -500,7 +508,7 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 
 			row[5] = ""
 			row[6] = d[6]
-			mrs.AddRow(row)
+			colNameToColContent[colName] = row
 		} else {
 			row := make([]interface{}, 9)
 			row[0] = colName
@@ -544,8 +552,14 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 			row[6] = ""
 			row[7] = d[7]
 			row[8] = d[8]
+			colNameToColContent[colName] = row
+		}
+	}
+	for _, col := range tableDef.Cols {
+		if row, ok := colNameToColContent[col.Name]; ok {
 			mrs.AddRow(row)
 		}
+
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
 		logErrorf(ses.GetConciseProfile(), "handleShowColumns error %v", err)
@@ -2604,7 +2618,7 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 	var cw []ComputationWrapper = nil
 	if cached := ses.getCachedPlan(sql); cached != nil {
 		for i, stmt := range cached.stmts {
-			tcw := InitTxnComputationWrapper(ses, *stmt, proc)
+			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
 			cw = append(cw, tcw)
 		}
@@ -4155,11 +4169,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 	if canCache && !ses.isCached(sql) {
 		plans := make([]*plan.Plan, len(cws))
-		stmts := make([]*tree.Statement, len(cws))
+		stmts := make([]tree.Statement, len(cws))
 		for i, cw := range cws {
 			if cwft, ok := cw.(*TxnComputationWrapper); ok && checkNodeCanCache(cwft.plan) {
 				plans[i] = cwft.plan
-				stmts[i] = &cwft.stmt
+				stmts[i] = cwft.stmt
 			} else {
 				return nil
 			}

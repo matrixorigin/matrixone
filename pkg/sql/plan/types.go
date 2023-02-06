@@ -63,6 +63,7 @@ type OrderBySpec = plan.OrderBySpec
 type CreateTable_FkColName = plan.CreateTable_FkColName
 type ForeignKeyDef = plan.ForeignKeyDef
 type ClusterTable = plan.ClusterTable
+type PrimaryKeyDef = plan.PrimaryKeyDef
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -94,6 +95,10 @@ type CompilerContext interface {
 	GetProcess() *process.Process
 
 	GetQueryResultMeta(uuid string) ([]*ColDef, string, error)
+	SetBuildingAlterView(yesOrNo bool, dbName, viewName string)
+	// is building the alter view or not
+	// return: yes or no, dbName, viewName
+	GetBuildingAlterView() (bool, string, string)
 }
 
 type Optimizer interface {

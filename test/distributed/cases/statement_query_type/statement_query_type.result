@@ -240,18 +240,18 @@ create account test_account admin_name 'test_name' identified by '111' open comm
 insert into test_table values (1, "a"), (2, "b"), (3, "c")    DML    external_sql
 with cte1 as (select 1), cte2 as (select 2) select * from cte1 inner join cte2    DQL    external_sql
 values row(1, 1), row(2, 2), row(3, 3) order by column_0 desc    DQL    external_sql
-show index from test_table    DQL    external_sql
-show tables    DQL    external_sql
-show processlist    DQL    external_sql
-show privileges    DQL    external_sql
-show profiles    DQL    external_sql
-show plugins    DQL    external_sql
-show events    DQL    external_sql
-show config    DQL    external_sql
-show procedure status    DQL    external_sql
-show triggers    DQL    external_sql
-show create table test_table    DQL    external_sql
-show create database test_db    DQL    external_sql
+show index from test_table    Other    external_sql
+show tables    Other    external_sql
+show processlist    Other    external_sql
+show privileges    Other    external_sql
+show profiles    Other    external_sql
+show plugins    Other    external_sql
+show events    Other    external_sql
+show config    Other    external_sql
+show procedure status    Other    external_sql
+show triggers    Other    external_sql
+show create table test_table    Other    external_sql
+show create database test_db    Other    external_sql
 create view test_view as select * from test_table    DDL    external_sql
 create table test_table (col1 int, col2 varchar)    DDL    external_sql
 use test_db    Other    external_sql
@@ -267,7 +267,7 @@ select * from test_01    DQL    external_sql
 update test_01 set a = 100 where b = "b"    DML    external_sql
 insert into test_01 values (2, "b")    DML    external_sql
 insert into test_01 values (1, "a")    DML    external_sql
-show create table test_01    DQL    external_sql
+show create table test_01    Other    external_sql
 create table test_01 (a int, b varchar)    DDL    external_sql
 drop table if exists test_01    DDL    external_sql
 deallocate prepare s1    Other    external_sql
@@ -298,21 +298,21 @@ update test_table set col2 = "xxx" where col1 = 1    DML    external_sql
 insert into test_table values (1, "a"), (2, "b"), (3, "c")    DML    external_sql
 with cte1 as (select 1), cte2 as (select 2) select * from cte1 inner join cte2    DQL    external_sql
 values row(1, 1), row(2, 2), row(3, 3) order by column_0 desc    DQL    external_sql
-show index from test_table    DQL    external_sql
-show collation    DQL    external_sql
-show collation    DQL    external_sql
-show tables    DQL    external_sql
-show processlist    DQL    external_sql
-show privileges    DQL    external_sql
-show profiles    DQL    external_sql
-show plugins    DQL    external_sql
-show events    DQL    external_sql
-show config    DQL    external_sql
-show procedure status    DQL    external_sql
-show triggers    DQL    external_sql
-show create view test_view    DQL    external_sql
-show create table test_table    DQL    external_sql
-show create database test_db    DQL    external_sql
+show index from test_table    Other    external_sql
+show collation    Other    external_sql
+show collation    Other    external_sql
+show tables    Other    external_sql
+show processlist    Other    external_sql
+show privileges    Other    external_sql
+show profiles    Other    external_sql
+show plugins    Other    external_sql
+show events    Other    external_sql
+show config    Other    external_sql
+show procedure status    Other    external_sql
+show triggers    Other    external_sql
+show create view test_view    Other    external_sql
+show create table test_table    Other    external_sql
+show create database test_db    Other    external_sql
 create view test_view as select * from test_table    DDL    external_sql
 create table test_table (col1 int, col2 varchar)    DDL    external_sql
 drop table if exists test_table    DDL    external_sql
@@ -565,7 +565,7 @@ select * from test_01    DQL    cloud_nouser_sql
 update test_01 set a = 100 where b = "b"    DML    cloud_nouser_sql
 insert into test_01 values (2, "b")    DML    cloud_nouser_sql
 insert into test_01 values (1, "a")    DML    cloud_nouser_sql
-show create table test_01    DQL    cloud_nouser_sql
+show create table test_01    Other    cloud_nouser_sql
 create table test_01 (a int, b varchar)    DDL    cloud_nouser_sql
 drop table if exists test_01    DDL    cloud_nouser_sql
 deallocate prepare s1    Other    cloud_nouser_sql
@@ -596,21 +596,21 @@ update test_table set col2 = "xxx" where col1 = 1    DML    cloud_nouser_sql
 insert into test_table values (1, "a"), (2, "b"), (3, "c")    DML    cloud_nouser_sql
 with cte1 as (select 1), cte2 as (select 2) select * from cte1 inner join cte2    DQL    cloud_nouser_sql
 values row(1, 1), row(2, 2), row(3, 3) order by column_0 desc    DQL    cloud_nouser_sql
-show index from test_table    DQL    cloud_nouser_sql
-show collation    DQL    cloud_nouser_sql
-show collation    DQL    cloud_nouser_sql
-show tables    DQL    cloud_nouser_sql
-show processlist    DQL    cloud_nouser_sql
-show privileges    DQL    cloud_nouser_sql
-show profiles    DQL    cloud_nouser_sql
-show plugins    DQL    cloud_nouser_sql
-show events    DQL    cloud_nouser_sql
-show config    DQL    cloud_nouser_sql
-show procedure status    DQL    cloud_nouser_sql
-show triggers    DQL    cloud_nouser_sql
-show create view test_view    DQL    cloud_nouser_sql
-show create table test_table    DQL    cloud_nouser_sql
-show create database test_db    DQL    cloud_nouser_sql
+show index from test_table    Other    cloud_nouser_sql
+show collation    Other    cloud_nouser_sql
+show collation    Other    cloud_nouser_sql
+show tables    Other    cloud_nouser_sql
+show processlist    Other    cloud_nouser_sql
+show privileges    Other    cloud_nouser_sql
+show profiles    Other    cloud_nouser_sql
+show plugins    Other    cloud_nouser_sql
+show events    Other    cloud_nouser_sql
+show config    Other    cloud_nouser_sql
+show procedure status    Other    cloud_nouser_sql
+show triggers    Other    cloud_nouser_sql
+show create view test_view    Other    cloud_nouser_sql
+show create table test_table    Other    cloud_nouser_sql
+show create database test_db    Other    cloud_nouser_sql
 create view test_view as select * from test_table    DDL    cloud_nouser_sql
 create table test_table (col1 int, col2 varchar)    DDL    cloud_nouser_sql
 drop table if exists test_table    DDL    cloud_nouser_sql
