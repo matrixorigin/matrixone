@@ -125,7 +125,7 @@ func FilterAndUpdateByRowId(
 			if info.compositePkey != "" {
 				util.FillCompositeClusterByBatch(updateBatch, info.compositePkey, proc)
 			}
-			if info.clusterBy != "" {
+			if info.clusterBy != "" && util.JudgeIsCompositeClusterByColumn(info.clusterBy) {
 				util.FillCompositeClusterByBatch(updateBatch, info.clusterBy, proc)
 			}
 
@@ -463,7 +463,7 @@ func InsertBatch(
 	if info.compositePkey != "" {
 		util.FillCompositeClusterByBatch(insertBatch, info.compositePkey, proc)
 	}
-	if info.clusterBy != "" {
+	if info.clusterBy != "" && util.JudgeIsCompositeClusterByColumn(info.clusterBy) {
 		util.FillCompositeClusterByBatch(insertBatch, info.clusterBy, proc)
 	}
 
