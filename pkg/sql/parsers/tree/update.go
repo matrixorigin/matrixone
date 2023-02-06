@@ -402,22 +402,22 @@ func (node *Fields) Format(ctx *FmtCtx) {
 	prefix := ""
 	if node.Terminated != "" {
 		ctx.WriteString(" terminated by ")
-		ctx.WriteString(node.Terminated)
+		ctx.WriteStringQuote(node.Terminated)
 		prefix = " "
 	}
 	if node.Optionally {
 		ctx.WriteString(prefix)
 		ctx.WriteString("optionally enclosed by ")
-		ctx.WriteString(string(node.EnclosedBy))
+		ctx.WriteStringQuote(string(node.EnclosedBy))
 	} else if node.EnclosedBy != 0 {
 		ctx.WriteString(prefix)
 		ctx.WriteString("enclosed by ")
-		ctx.WriteString(string(node.EnclosedBy))
+		ctx.WriteStringQuote(string(node.EnclosedBy))
 	}
 	if node.EscapedBy != 0 {
 		ctx.WriteString(prefix)
 		ctx.WriteString("escaped by ")
-		ctx.WriteString(string(node.EscapedBy))
+		ctx.WriteStringQuote(string(node.EscapedBy))
 	}
 }
 
@@ -439,11 +439,11 @@ func (node *Lines) Format(ctx *FmtCtx) {
 	ctx.WriteString("lines")
 	if node.StartingBy != "" {
 		ctx.WriteString(" starting by ")
-		ctx.WriteString(node.StartingBy)
+		ctx.WriteStringQuote(node.StartingBy)
 	}
 	if node.TerminatedBy != "" {
 		ctx.WriteString(" terminated by ")
-		ctx.WriteString(node.TerminatedBy)
+		ctx.WriteStringQuote(node.TerminatedBy)
 	}
 }
 

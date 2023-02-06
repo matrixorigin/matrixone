@@ -837,12 +837,9 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 
 	hasPrimaryKey := false
 	var primaryKey *plan.PrimaryKeyDef
-	for _, def := range defs {
-		if pkdef, ok := def.Def.(*plan.TableDef_DefType_Pk); ok {
-			hasPrimaryKey = true
-			primaryKey = pkdef.Pk
-			break
-		}
+	if tableDef.Pkey != nil {
+		hasPrimaryKey = true
+		primaryKey = tableDef.Pkey
 	}
 
 	hasUniqueKey := false
@@ -1015,12 +1012,9 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 	var primaryKey *plan.PrimaryKeyDef
 	var uniqueKey *plan.UniqueIndexDef
 
-	for _, def := range defs {
-		if pkdef, ok := def.Def.(*plan.TableDef_DefType_Pk); ok {
-			hasPrimaryKey = true
-			primaryKey = pkdef.Pk
-			break
-		}
+	if tableDef.Pkey != nil {
+		hasPrimaryKey = true
+		primaryKey = tableDef.Pkey
 	}
 
 	for _, def := range defs {

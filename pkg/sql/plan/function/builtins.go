@@ -3097,6 +3097,21 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	TRIM: {
+		Id:     TRIM,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:               0,
+				Args:                []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp:           types.T_varchar,
+				UseNewFramework:     true,
+				ParameterMustScalar: []bool{true, false, false},
+				NewFn:               multi.Trim,
+			},
+		},
+	},
 	MO_LOG_DATE: {
 		Id:     MO_LOG_DATE,
 		Flag:   plan.Function_STRICT,

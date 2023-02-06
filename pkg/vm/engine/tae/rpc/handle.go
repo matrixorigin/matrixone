@@ -527,7 +527,8 @@ func (h *Handle) CacheTxnRequest(
 	h.mu.Unlock()
 	txnCtx.reqs = append(txnCtx.reqs, req)
 	if r, ok := req.(*db.CreateRelationReq); ok {
-		schema, err := moengine.HandleDefsToSchema(r.Name, r.Defs)
+		// Does this place need
+		schema, err := moengine.DefsToSchema(r.Name, r.Defs)
 		if err != nil {
 			return err
 		}

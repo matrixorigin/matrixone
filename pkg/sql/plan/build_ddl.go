@@ -56,8 +56,19 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	}
 	tableDef.Cols = cols
 
+	// Check alter and change the viewsql.
+	viewSql := ctx.GetRootSql()
+	if len(viewSql) != 0 {
+		if viewSql[0] == 'A' {
+			viewSql = strings.Replace(viewSql, "ALTER", "CREATE", 1)
+		}
+		if viewSql[0] == 'a' {
+			viewSql = strings.Replace(viewSql, "alter", "create", 1)
+		}
+	}
+
 	viewData, err := json.Marshal(ViewData{
-		Stmt:            ctx.GetRootSql(),
+		Stmt:            viewSql,
 		DefaultDatabase: ctx.DefaultDatabase(),
 	})
 	if err != nil {
@@ -91,7 +102,6 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	viewName := stmt.Name.ObjectName
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
-		Temporary:   stmt.Temporary,
 		TableDef: &TableDef{
 			Name: string(viewName),
 		},
@@ -559,20 +569,26 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	pkeyName := ""
 	if len(primaryKeys) > 0 {
-		for _, primaryKey := range primaryKeys {
-			if _, ok := colMap[primaryKey]; !ok {
+		pKeyParts := make([]*ColDef, len(primaryKeys))
+		for i, primaryKey := range primaryKeys {
+			if coldef, ok := colMap[primaryKey]; !ok {
 				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", primaryKey)
+			} else {
+				pKeyParts[i] = coldef
 			}
 		}
 		if len(primaryKeys) == 1 {
 			pkeyName = primaryKeys[0]
-			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: &plan.PrimaryKeyDef{
-						Names: primaryKeys,
-					},
-				},
-			})
+			for _, col := range createTable.TableDef.Cols {
+				if col.Name == pkeyName {
+					col.Primary = true
+					createTable.TableDef.Pkey = &PrimaryKeyDef{
+						Names:       primaryKeys,
+						PkeyColName: pkeyName,
+					}
+					break
+				}
+			}
 		} else {
 			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
 			colDef := &ColDef{
@@ -589,15 +605,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					OriginString: "",
 				},
 			}
+			colDef.Primary = true
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[pkeyName] = colDef
-			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: &plan.PrimaryKeyDef{
-						Names: []string{pkeyName},
-					},
-				},
-			})
+
+			pkeyDef := &PrimaryKeyDef{
+				Names:       primaryKeys,
+				PkeyColName: pkeyName,
+			}
+			createTable.TableDef.Pkey = pkeyDef
 		}
 		for _, primaryKey := range primaryKeys {
 			colMap[primaryKey].Default.NullAbility = false
@@ -607,6 +623,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	//handle cluster by keys
 	if stmt.ClusterByOption != nil {
+		if stmt.Temporary {
+			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with temporary table is not support")
+		}
 		if len(primaryKeys) > 0 {
 			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
 		}
@@ -772,14 +791,11 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: &plan.PrimaryKeyDef{
-						Names: []string{keyName},
-					},
-				},
-			})
 			field.Cols = append(field.Cols, colDef)
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{keyName},
+				PkeyColName: keyName,
+			}
 		} else {
 			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
@@ -797,14 +813,11 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: &plan.PrimaryKeyDef{
-						Names: []string{keyName},
-					},
-				},
-			})
 			field.Cols = append(field.Cols, colDef)
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{keyName},
+				PkeyColName: keyName,
+			}
 		}
 		if pkeyName != "" {
 			colDef := &ColDef{
@@ -1269,12 +1282,11 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 
 // Get tabledef(col, viewsql, properties) for alterview.
 func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
-	viewName := stmt.Name.ObjectName
+	viewName := string(stmt.Name.ObjectName)
 	alterView := &plan.AlterView{
-		IfExists:  stmt.IfExists,
-		Temporary: stmt.Temporary,
+		IfExists: stmt.IfExists,
 		TableDef: &plan.TableDef{
-			Name: string(viewName),
+			Name: viewName,
 		},
 	}
 	// get database name
@@ -1283,7 +1295,32 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	} else {
 		alterView.Database = string(stmt.Name.SchemaName)
 	}
+	if alterView.Database == "" {
+		alterView.Database = ctx.DefaultDatabase()
+	}
 
+	//step 1: check the view exists or not
+	_, oldViewDef := ctx.Resolve(alterView.Database, viewName)
+	if oldViewDef == nil {
+		if !alterView.IfExists {
+			return nil, moerr.NewBadView(ctx.GetContext(),
+				alterView.Database,
+				viewName)
+		}
+	} else {
+		if oldViewDef.ViewSql == nil {
+			return nil, moerr.NewBadView(ctx.GetContext(),
+				alterView.Database,
+				viewName)
+		}
+	}
+
+	//step 2: generate new view def
+	ctx.SetBuildingAlterView(true, alterView.Database, viewName)
+	//restore
+	defer func() {
+		ctx.SetBuildingAlterView(false, "", "")
+	}()
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
 	if err != nil {
 		return nil, err
