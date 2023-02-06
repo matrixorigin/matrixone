@@ -194,6 +194,7 @@ func RemoveRange(n *Nulls, start, end uint64) {
 }
 
 // Range adds the numbers in n starting at start and ending at end to m.
+// `bias` represents the starting offset used for the Range Output
 // Return the result
 func Range(n *Nulls, start, end, bias uint64, m *Nulls) *Nulls {
 	switch {
