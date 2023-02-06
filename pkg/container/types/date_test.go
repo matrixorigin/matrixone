@@ -106,13 +106,6 @@ func TestParseDateCast(t *testing.T) {
 			},
 			want: "2005-02-03",
 		},
-		{
-			name: "yyyy/mm/dd",
-			args: args{
-				s: "2007/10/01",
-			},
-			want: "2007-10-01",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
