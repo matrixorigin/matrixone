@@ -166,16 +166,20 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 
 		if m.IsBatchMessageEnd() {
 			requireCnt := m.GetBatchCnt()
-			for {
-				if colexec.Srv.IsEndStatus(opUuid, requireCnt) {
-					wg.Ch <- nil
-					close(wg.Ch)
-					colexec.Srv.RemoveUuidFromUuidMap(opUuid)
-					break
-				} else {
-					runtime.Gosched()
+			if requireCnt > 0 {
+				for {
+					// waiting all batch handle done.
+					if colexec.Srv.IsEndStatus(opUuid, requireCnt) {
+						break
+					} else {
+						runtime.Gosched()
+					}
 				}
 			}
+			wg.Ch <- nil
+			close(wg.Ch)
+			colexec.Srv.RemoveUuidFromUuidMap(opUuid)
+
 			return nil, nil
 		} else {
 			// TODO: handle seperate batch
