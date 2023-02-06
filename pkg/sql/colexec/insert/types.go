@@ -28,26 +28,11 @@ const (
 
 type Argument struct {
 	// Ts is not used
-	Ts uint64
-	// TargetTable          engine.Relation
-	// TargetColDefs        []*plan.ColDef
-	Affected uint64
-	Engine   engine.Engine
-	// DB                   engine.Database
-	// TableID              uint64
-	// CPkeyColDef          *plan.ColDef
-	// DBName               string
-	// TableName            string
-	// UniqueIndexTables    []engine.Relation
-	// UniqueIndexDef       *plan.UniqueIndexDef
-	// SecondaryIndexTables []engine.Relation
-	// SecondaryIndexDef    *plan.SecondaryIndexDef
-	// ClusterTable         *plan.ClusterTable
-	// ClusterByDef         *plan.ClusterByDef
-	IsRemote bool // mark if this insert is cn2s3 directly
-	// HasAutoCol bool
+	Ts        uint64
+	Affected  uint64
+	Engine    engine.Engine
+	IsRemote  bool // mark if this insert is cn2s3 directly
 	Container *colexec.WriteS3Container
-
 	InsertCtx *InsertCtx
 }
 

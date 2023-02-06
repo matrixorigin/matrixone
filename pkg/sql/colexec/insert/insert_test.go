@@ -84,6 +84,12 @@ func TestInsertOperator(t *testing.T) {
 		Engine: eng,
 		InsertCtx: &InsertCtx{
 			Source: &mockRelation{},
+			Idx:    []int32{0, 1, 2, 3, 4},
+			Ref: &plan.ObjectRef{
+				Obj:        0,
+				SchemaName: "testDb",
+				ObjName:    "testTable",
+			},
 			TableDef: &plan.TableDef{
 				Cols: []*plan.ColDef{
 					{Name: "int64_column", Typ: i64typ},
@@ -115,7 +121,7 @@ func TestInsertOperator(t *testing.T) {
 
 	batch2 := &batch.Batch{
 		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
+			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
 		},
 		Zs: []int64{1, 1, 1},
 	}
@@ -123,9 +129,19 @@ func TestInsertOperator(t *testing.T) {
 		Engine: eng,
 		InsertCtx: &InsertCtx{
 			Source: &mockRelation{},
+			Idx:    []int32{0},
+			Ref: &plan.ObjectRef{
+				Obj:        0,
+				SchemaName: "testDb",
+				ObjName:    "testTable",
+			},
 			TableDef: &plan.TableDef{
 				Cols: []*plan.ColDef{
-					{Name: "int64_column_primary", Primary: true, Typ: i64typ},
+					{Name: "int64_column_primary", Primary: true, Typ: i64typ,
+						Default: &plan.Default{
+							NullAbility: false,
+						},
+					},
 				},
 			},
 		},
