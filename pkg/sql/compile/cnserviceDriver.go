@@ -1240,7 +1240,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 					CreateSql:     t.CreateSql,
 					Name2ColIndex: name2ColIndex,
 					FileList:      t.FileList,
-					FirstColType:  t.FirstColType,
+					OriginCols:    t.OriginCols,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),

@@ -46,7 +46,7 @@ type ExParamConst struct {
 	CreateSql     string
 	Attrs         []string
 	Cols          []*plan.ColDef
-	FirstColType  *plan.Type
+	OriginCols    []*plan.ColDef
 	FileList      []string
 	FileOffset    [][2]int
 	Name2ColIndex map[string]int32
