@@ -15,15 +15,15 @@
 package metric
 
 import (
+	"bytes"
 	"context"
-	"io"
 	"regexp"
 	"testing"
 	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
@@ -146,6 +146,8 @@ func TestCollector(t *testing.T) {
 type dummyStringWriter struct {
 	name string
 	ch   chan string
+	// csvWriter
+	writer table.RowWriter
 }
 
 func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
@@ -155,9 +157,21 @@ func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
 	return n, nil
 }
 
-func newDummyFSWriterFactory(csvCh chan string) export.FSWriterFactory {
-	return export.FSWriterFactory(func(_ context.Context, dir string, name batchpipe.HasName, opts ...export.FSWriterOption) io.StringWriter {
-		return &dummyStringWriter{name: name.GetName(), ch: csvCh}
+func (w *dummyStringWriter) WriteRow(row *table.Row) error {
+	return w.writer.WriteRow(row)
+}
+
+func (w *dummyStringWriter) FlushAndClose() (int, error) {
+	return w.writer.FlushAndClose()
+}
+
+func (w *dummyStringWriter) GetContent() string { return "" }
+
+func newDummyFSWriterFactory(csvCh chan string) table.WriterFactory {
+	return table.WriterFactory(func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+		w := &dummyStringWriter{name: tbl.Table, ch: csvCh}
+		w.writer = etl.NewCSVWriter(context.TODO(), bytes.NewBuffer(nil), w)
+		return w
 	})
 }
 

@@ -17,6 +17,8 @@ package db
 import (
 	"context"
 	"encoding/gob"
+	"time"
+
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
@@ -40,7 +42,6 @@ func init() {
 	gob.Register(new(engine.AttributeDef))
 	gob.Register(new(engine.IndexTableDef))
 	gob.Register(new(engine.PropertiesDef))
-	gob.Register(new(engine.PrimaryIndexDef))
 	gob.Register(new(engine.ConstraintDef))
 
 	// register vector column types
@@ -112,6 +113,10 @@ type FlushTable struct {
 	AccessInfo AccessInfo
 	DatabaseID uint64
 	TableID    uint64
+}
+
+type Checkpoint struct {
+	FlushDuration time.Duration
 }
 
 type CreateDatabaseResp struct {

@@ -2435,6 +2435,12 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        multi.RegularLike,
 			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_bool,
+				Fn:        multi.RegularLike,
+			},
 		},
 	},
 	REGEXP_SUBSTR: {

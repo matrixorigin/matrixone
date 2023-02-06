@@ -22,7 +22,8 @@ type waiterQueue interface {
 	Len() uint64
 	Reset()
 	MustGet() *waiter
-	Put(*waiter)
+	MustGetHeadAndTail() (*waiter, []*waiter)
+	Put(...*waiter)
 	IterTxns(func([]byte) bool)
 }
 
@@ -43,21 +44,35 @@ func (q *sliceBasedWaiterQueue) Len() uint64 {
 }
 
 func (q *sliceBasedWaiterQueue) MustGet() *waiter {
-	q.Lock()
-	defer q.Unlock()
-	if uint64(len(q.waiters))-q.offset == 0 {
+	if q.Len() == 0 {
 		panic("BUG: no waiter in queue")
 	}
+
+	q.Lock()
+	defer q.Unlock()
 	v := q.waiters[q.offset]
 	q.waiters[q.offset] = nil
 	q.offset++
 	return v
 }
 
-func (q *sliceBasedWaiterQueue) Put(w *waiter) {
+func (q *sliceBasedWaiterQueue) MustGetHeadAndTail() (*waiter, []*waiter) {
+	if q.Len() == 0 {
+		panic("BUG: no waiter in queue")
+	}
+
 	q.Lock()
 	defer q.Unlock()
-	q.waiters = append(q.waiters, w)
+	v := q.waiters[q.offset]
+	q.waiters[q.offset] = nil
+	q.offset++
+	return v, q.waiters[q.offset:]
+}
+
+func (q *sliceBasedWaiterQueue) Put(w ...*waiter) {
+	q.Lock()
+	defer q.Unlock()
+	q.waiters = append(q.waiters, w...)
 }
 
 func (q *sliceBasedWaiterQueue) IterTxns(fn func([]byte) bool) {

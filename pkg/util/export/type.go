@@ -15,24 +15,24 @@
 package export
 
 import (
-	"io"
-	"reflect"
-	"unsafe"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
-// stringWriter same as io.stringWriter
-type stringWriter interface {
-	io.Writer
-	io.StringWriter
-	//WriteRune(rune) (int, error)
+// ETLWriter handle serialize logic, like csv file and tae file.
+type ETLWriter interface {
+	// WriteRow write table.Row as one line info file.
+	WriteRow(row *table.Row) error
+	// WriteStrings write record as one line into file.
+	WriteStrings(record []string) error
+	// FlushAndClose flush its buffer and close the writer.
+	FlushAndClose() (int, error)
 }
 
-func String2Bytes(s string) (ret []byte) {
-	sliceHead := (*reflect.SliceHeader)(unsafe.Pointer(&ret))
-	strHead := (*reflect.StringHeader)(unsafe.Pointer(&s))
-
-	sliceHead.Data = strHead.Data
-	sliceHead.Len = strHead.Len
-	sliceHead.Cap = strHead.Len
-	return
+type ETLReader interface {
+	// ReadRow read one line as table.Row
+	ReadRow(row *table.Row) error
+	// ReadLine read raw data from file.
+	ReadLine() ([]string, error)
+	// Close files and release all content.
+	Close()
 }

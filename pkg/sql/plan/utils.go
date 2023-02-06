@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"strings"
 
@@ -122,11 +123,11 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side int8) {
+func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			side |= getJoinSide(arg, leftTags, rightTags)
+			side |= getJoinSide(arg, leftTags, rightTags, markTag)
 		}
 
 	case *plan.Expr_Col:
@@ -134,6 +135,8 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side 
 			side = JoinSideLeft
 		} else if _, ok := rightTags[exprImpl.Col.RelPos]; ok {
 			side = JoinSideRight
+		} else if exprImpl.Col.RelPos == markTag {
+			side = JoinSideMark
 		}
 
 	case *plan.Expr_Corr:
@@ -141,22 +144,6 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side 
 	}
 
 	return
-}
-
-func hasTag(expr *plan.Expr, tag int32) bool {
-	var ret bool
-
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			ret = ret || hasTag(arg, tag)
-		}
-
-	case *plan.Expr_Col:
-		ret = exprImpl.Col.RelPos == tag
-	}
-
-	return ret
 }
 
 func containsTag(expr *plan.Expr, tag int32) bool {
@@ -611,7 +598,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	return nil
 }
 
-func DeduceSelectivity(expr *plan.Expr) float64 {
+func DeduceSelectivity(expr *plan.Expr, sortKeyName string) float64 {
 	if expr == nil {
 		return 1
 	}
@@ -621,13 +608,19 @@ func DeduceSelectivity(expr *plan.Expr) float64 {
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=":
+			switch childImpl := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_Col:
+				if util.GetClusterByColumnOrder(sortKeyName, childImpl.Col.Name) != -1 {
+					return 0.5
+				}
+			}
 			return 0.01
 		case "and":
-			sel = math.Min(DeduceSelectivity(exprImpl.F.Args[0]), DeduceSelectivity(exprImpl.F.Args[1]))
+			sel = math.Min(DeduceSelectivity(exprImpl.F.Args[0], sortKeyName), DeduceSelectivity(exprImpl.F.Args[1], sortKeyName))
 			return sel
 		case "or":
-			sel1 := DeduceSelectivity(exprImpl.F.Args[0])
-			sel2 := DeduceSelectivity(exprImpl.F.Args[1])
+			sel1 := DeduceSelectivity(exprImpl.F.Args[0], sortKeyName)
+			sel2 := DeduceSelectivity(exprImpl.F.Args[1], sortKeyName)
 			sel = math.Max(sel1, sel2)
 			if sel < 0.1 {
 				return sel * 1.05

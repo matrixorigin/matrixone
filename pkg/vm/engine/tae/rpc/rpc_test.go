@@ -24,8 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"os"
 	"path"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -59,9 +61,9 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		DataDir: dir,
 	}
 	//create dir;
-	service, err := fileservice.NewFileService(c)
+	fs, err := fileservice.NewFileService(c)
 	assert.Nil(t, err)
-	opts.Fs = service
+	opts.Fs = fs
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
@@ -93,70 +95,53 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	moBats[2] = containers.CopyToMoBatch(taeBats[2])
 	moBats[3] = containers.CopyToMoBatch(taeBats[3])
 
-	//write moBats[0], moBats[1] two blocks into file service
+	//write taeBats[0], taeBats[1] two blocks into file service
 	id := 1
 	objName1 := fmt.Sprintf("%d.seg", id)
-	objectWriter, err := objectio.NewObjectWriter(objName1, service)
-	assert.Nil(t, err)
-	for i, bat := range moBats {
+	writer := blockio.NewWriter(context.Background(),
+		objectio.NewObjectFS(fs, "data"), objName1)
+	for i, bat := range taeBats {
 		if i == 2 {
 			break
 		}
-		fd, err := objectWriter.Write(bat)
+		block, err := writer.WriteBlock(bat)
 		assert.Nil(t, err)
-		for i, mvec := range bat.Vecs {
-			bloomFilter, zoneMap, err := getIndexDataFromVec(uint16(i), mvec)
-			assert.Nil(t, err)
-			if bloomFilter != nil {
-				err = objectWriter.WriteIndex(fd, bloomFilter)
-				assert.Nil(t, err)
-			}
-			if zoneMap != nil {
-				err = objectWriter.WriteIndex(fd, zoneMap)
-				assert.Nil(t, err)
-			}
-		}
+		err = jobs.BuildBlockIndex(writer.GetWriter(), block,
+			schema, bat, true)
+		assert.Nil(t, err)
 	}
-	blocks, err := objectWriter.WriteEnd(context.Background())
+	blocks, err := writer.Sync()
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
 	metaLoc1, err := blockio.EncodeMetaLocWithObject(
 		blocks[0].GetExtent(),
-		uint32(moBats[0].Vecs[0].Length()),
+		uint32(taeBats[0].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
 	metaLoc2, err := blockio.EncodeMetaLocWithObject(
 		blocks[1].GetExtent(),
-		uint32(moBats[1].Vecs[0].Length()),
+		uint32(taeBats[1].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	//write moBats[3] into file service
+
+	//write taeBats[3] into file service
 	id += 1
 	objName2 := fmt.Sprintf("%d.seg", id)
-	objectWriter, err = objectio.NewObjectWriter(objName2, service)
+	writer = blockio.NewWriter(context.Background(),
+		objectio.NewObjectFS(fs, "data"), objName2)
+	block, err := writer.WriteBlock(taeBats[3])
 	assert.Nil(t, err)
-	fd, err := objectWriter.Write(moBats[3])
+	err = jobs.BuildBlockIndex(writer.GetWriter(),
+		block, schema, taeBats[3], true)
 	assert.Nil(t, err)
-	for i, mvec := range moBats[3].Vecs {
-		bloomFilter, zoneMap, err := getIndexDataFromVec(uint16(i), mvec)
-		assert.Nil(t, err)
-		if bloomFilter != nil {
-			err = objectWriter.WriteIndex(fd, bloomFilter)
-			assert.Nil(t, err)
-		}
-		if zoneMap != nil {
-			err = objectWriter.WriteIndex(fd, zoneMap)
-			assert.Nil(t, err)
-		}
-	}
-	blocks, err = objectWriter.WriteEnd(context.Background())
-	assert.Nil(t, err)
+	blocks, err = writer.Sync()
 	assert.Equal(t, 1, len(blocks))
+	assert.Nil(t, err)
 	metaLoc3, err := blockio.EncodeMetaLocWithObject(
 		blocks[0].GetExtent(),
-		uint32(moBats[3].Vecs[0].Length()),
+		uint32(taeBats[3].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
@@ -181,34 +166,25 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	entries = append(entries, createDbEntries...)
 	//create table from "dbtest"
 	defs, err := moengine.SchemaToDefs(schema)
-	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: true,
-		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: "expr1",
+	for i := 0; i < len(defs); i++ {
+		if attrdef, ok := defs[i].(*engine.AttributeDef); ok {
+			attrdef.Attr.Default = &plan.Default{
+				NullAbility: true,
+				Expr: &plan.Expr{
+					Expr: &plan.Expr_C{
+						C: &plan.Const{
+							Isnull: false,
+							Value: &plan.Const_Sval{
+								Sval: "expr" + strconv.Itoa(i),
+							},
+						},
 					},
 				},
-			},
-		},
-		OriginString: "expr1",
+				OriginString: "expr" + strconv.Itoa(i),
+			}
+		}
 	}
-	defs[1].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: false,
-		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: "expr2",
-					},
-				},
-			},
-		},
-		OriginString: "expr2",
-	}
+
 	assert.Nil(t, err)
 	tbTestID := IDAlloc.NextTable()
 	createTbEntries, err := makeCreateTableEntries(
@@ -249,7 +225,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Equal(t, metaLoc2, loc2)
 	entries = append(entries, addS3BlkEntry1)
 
-	//add one block from S3 into "tbtest" table
+	//add one non-appendable block from S3 into "tbtest" table
 	metaLocBat2 := containers.BuildBatch(attrs, vecTypes, nullable, vecOpts)
 	metaLocBat2.Vecs[0].Append([]byte(metaLoc3))
 	metaLocMoBat2 := containers.CopyToMoBatch(metaLocBat2)
@@ -321,13 +297,15 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//write deleted row ids into FS
 	id += 1
 	objName3 := fmt.Sprintf("%d.del", id)
-	objectWriter, err = objectio.NewObjectWriter(objName3, service)
-	assert.Nil(t, err)
+	writer = blockio.NewWriter(context.Background(),
+		objectio.NewObjectFS(fs, "data"), objName3)
 	for _, bat := range hideBats {
-		_, err := objectWriter.Write(bat)
+		taeBat := toTAEBatchWithSharedMemory(schema, bat)
+		//defer taeBat.Close()
+		_, err := writer.WriteBlock(taeBat)
 		assert.Nil(t, err)
 	}
-	blocks, err = objectWriter.WriteEnd(context.Background())
+	blocks, err = writer.Sync()
 	assert.Nil(t, err)
 	assert.Equal(t, len(hideBats), len(blocks))
 	delLoc1, err := blockio.EncodeMetaLocWithObject(
@@ -472,33 +450,23 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 
 	//create table from "dbtest"
 	defs, err := moengine.SchemaToDefs(schema)
-	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: true,
-		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: "expr1",
+	for i := 0; i < len(defs); i++ {
+		if attrdef, ok := defs[i].(*engine.AttributeDef); ok {
+			attrdef.Attr.Default = &plan.Default{
+				NullAbility: true,
+				Expr: &plan.Expr{
+					Expr: &plan.Expr_C{
+						C: &plan.Const{
+							Isnull: false,
+							Value: &plan.Const_Sval{
+								Sval: "expr" + strconv.Itoa(i),
+							},
+						},
 					},
 				},
-			},
-		},
-		OriginString: "expr1",
-	}
-	defs[1].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: false,
-		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: "expr2",
-					},
-				},
-			},
-		},
-		OriginString: "expr2",
+				OriginString: "expr" + strconv.Itoa(i),
+			}
+		}
 	}
 	assert.Nil(t, err)
 

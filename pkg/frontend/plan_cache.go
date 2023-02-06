@@ -23,7 +23,7 @@ import (
 
 type cachedPlan struct {
 	sql   string
-	stmts []*tree.Statement
+	stmts []tree.Statement
 	plans []*plan.Plan
 }
 
@@ -42,7 +42,7 @@ func newPlanCache(capacity int) *planCache {
 	}
 }
 
-func (pc *planCache) cache(sql string, stmts []*tree.Statement, plans []*plan.Plan) {
+func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Plan) {
 	element := pc.lruList.PushFront(&cachedPlan{sql: sql, stmts: stmts, plans: plans})
 	pc.cachePool[sql] = element
 	if pc.lruList.Len() > pc.capacity {

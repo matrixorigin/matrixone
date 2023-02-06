@@ -157,9 +157,10 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 // 	return offset, step, nil
 // }
 
-func getMaxnum[T constraints.Integer](vec *vector.Vector, length, maxNum, step uint64) uint64 {
+func getMaxnum[T constraints.Integer](vec *vector.Vector, length, maxNum, step, cacheSize uint64) uint64 {
 	vs := vector.MustTCols[T](vec)
 	rowIndex := uint64(0)
+	storeNum := maxNum
 	for rowIndex = 0; rowIndex < length; rowIndex++ {
 		if nulls.Contains(vec.Nsp, rowIndex) {
 			maxNum += step
@@ -170,6 +171,12 @@ func getMaxnum[T constraints.Integer](vec *vector.Vector, length, maxNum, step u
 			if uint64(vs[rowIndex]) > maxNum {
 				maxNum = uint64(vs[rowIndex])
 			}
+		}
+	}
+	if cacheSize != 1 {
+		storeNum += step * cacheSize
+		if storeNum > maxNum {
+			maxNum = storeNum
 		}
 	}
 	return maxNum
@@ -194,17 +201,16 @@ func updateVector[T constraints.Integer](vec *vector.Vector, length, curNum, ste
 	}
 }
 
-// Get max get the max number of next id and the vec number.
+// Get max get the max number of next ids and the vec number.
 func GetMax(param *AutoIncrParam, bat *batch.Batch, pos int, step, cachesize, oriNum uint64) (uint64, error) {
 	vec := bat.Vecs[pos]
 	maxNum := oriNum
 	maxNumStore := oriNum
-	stp := step * cachesize
 
 	switch vec.Typ.Oid {
 	case types.T_int8:
-		maxNum = getMaxnum[int8](vec, uint64(bat.Length()), maxNum, step)
-		maxNumStore = getMaxnum[int8](vec, uint64(bat.Length()), maxNumStore, stp)
+		maxNum = getMaxnum[int8](vec, uint64(bat.Length()), maxNum, step, 1)
+		maxNumStore = getMaxnum[int8](vec, uint64(bat.Length()), maxNumStore, step, cachesize)
 		if maxNum > math.MaxInt8 {
 			return 0, moerr.NewOutOfRange(param.ctx, "tinyint", "value %v", maxNum)
 		}
@@ -212,8 +218,8 @@ func GetMax(param *AutoIncrParam, bat *batch.Batch, pos int, step, cachesize, or
 			maxNumStore = math.MaxInt8
 		}
 	case types.T_int16:
-		maxNum = getMaxnum[int16](vec, uint64(bat.Length()), maxNum, step)
-		maxNumStore = getMaxnum[int16](vec, uint64(bat.Length()), maxNumStore, stp)
+		maxNum = getMaxnum[int16](vec, uint64(bat.Length()), maxNum, step, 1)
+		maxNumStore = getMaxnum[int16](vec, uint64(bat.Length()), maxNumStore, step, cachesize)
 		if maxNum > math.MaxInt16 {
 			return 0, moerr.NewOutOfRange(param.ctx, "smallint", "value %v", maxNum)
 		}
@@ -221,8 +227,8 @@ func GetMax(param *AutoIncrParam, bat *batch.Batch, pos int, step, cachesize, or
 			maxNumStore = math.MaxInt16
 		}
 	case types.T_int32:
-		maxNum = getMaxnum[int32](vec, uint64(bat.Length()), maxNum, step)
-		maxNumStore = getMaxnum[int32](vec, uint64(bat.Length()), maxNumStore, stp)
+		maxNum = getMaxnum[int32](vec, uint64(bat.Length()), maxNum, step, 1)
+		maxNumStore = getMaxnum[int32](vec, uint64(bat.Length()), maxNumStore, step, cachesize)
 		if maxNum > math.MaxInt32 {
 			return 0, moerr.NewOutOfRange(param.ctx, "int", "value %v", maxNum)
 		}
@@ -230,8 +236,8 @@ func GetMax(param *AutoIncrParam, bat *batch.Batch, pos int, step, cachesize, or
 			maxNumStore = math.MaxInt32
 		}
 	case types.T_int64:
-		maxNum = getMaxnum[int64](vec, uint64(bat.Length()), maxNum, step)
-		maxNumStore = getMaxnum[int64](vec, uint64(bat.Length()), maxNumStore, stp)
+		maxNum = getMaxnum[int64](vec, uint64(bat.Length()), maxNum, step, 1)
+		maxNumStore = getMaxnum[int64](vec, uint64(bat.Length()), maxNumStore, step, cachesize)
 		if maxNum > math.MaxInt64 {
 			return 0, moerr.NewOutOfRange(param.ctx, "bigint", "value %v", maxNum)
 		}
@@ -239,8 +245,8 @@ func GetMax(param *AutoIncrParam, bat *batch.Batch, pos int, step, cachesize, or
 			maxNumStore = math.MaxInt64
 		}
 	case types.T_uint8:
-		maxNum = getMaxnum[uint8](vec, uint64(bat.Length()), maxNum, step)
-		maxNumStore = getMaxnum[uint8](vec, uint64(bat.Length()), maxNumStore, stp)
+		maxNum = getMaxnum[uint8](vec, uint64(bat.Length()), maxNum, step, 1)
+		maxNumStore = getMaxnum[uint8](vec, uint64(bat.Length()), maxNumStore, step, cachesize)
 		if maxNum > math.MaxUint8 {
 			return 0, moerr.NewOutOfRange(param.ctx, "tinyint unsigned", "value %v", maxNum)
 		}
@@ -248,8 +254,8 @@ func GetMax(param *AutoIncrParam, bat *batch.Batch, pos int, step, cachesize, or
 			maxNumStore = math.MaxUint8
 		}
 	case types.T_uint16:
-		maxNum = getMaxnum[uint16](vec, uint64(bat.Length()), maxNum, step)
-		maxNumStore = getMaxnum[uint16](vec, uint64(bat.Length()), maxNumStore, stp)
+		maxNum = getMaxnum[uint16](vec, uint64(bat.Length()), maxNum, step, 1)
+		maxNumStore = getMaxnum[uint16](vec, uint64(bat.Length()), maxNumStore, step, cachesize)
 		if maxNum > math.MaxUint16 {
 			return 0, moerr.NewOutOfRange(param.ctx, "smallint unsigned", "value %v", maxNum)
 		}
@@ -257,8 +263,8 @@ func GetMax(param *AutoIncrParam, bat *batch.Batch, pos int, step, cachesize, or
 			maxNumStore = math.MaxUint16
 		}
 	case types.T_uint32:
-		maxNum = getMaxnum[uint32](vec, uint64(bat.Length()), maxNum, step)
-		maxNumStore = getMaxnum[uint32](vec, uint64(bat.Length()), maxNumStore, stp)
+		maxNum = getMaxnum[uint32](vec, uint64(bat.Length()), maxNum, step, 1)
+		maxNumStore = getMaxnum[uint32](vec, uint64(bat.Length()), maxNumStore, step, cachesize)
 		if maxNum > math.MaxUint32 {
 			return 0, moerr.NewOutOfRange(param.ctx, "int unsigned", "value %v", maxNum)
 		}
@@ -266,8 +272,8 @@ func GetMax(param *AutoIncrParam, bat *batch.Batch, pos int, step, cachesize, or
 			maxNumStore = math.MaxUint32
 		}
 	case types.T_uint64:
-		maxNum = getMaxnum[uint64](vec, uint64(bat.Length()), maxNum, step)
-		maxNumStore = getMaxnum[uint64](vec, uint64(bat.Length()), maxNumStore, stp)
+		maxNum = getMaxnum[uint64](vec, uint64(bat.Length()), maxNum, step, 1)
+		maxNumStore = getMaxnum[uint64](vec, uint64(bat.Length()), maxNumStore, step, cachesize)
 		if maxNum < oriNum {
 			return 0, moerr.NewOutOfRange(param.ctx, "bigint unsigned", "auto_incrment column constant value overflows bigint unsigned")
 		}
@@ -377,7 +383,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 	}
 
 	expr := getRangeExpr(colName)
-	// 存入表达式
+	// use expression to get ranges
 	ret, err := rel.Ranges(param.ctx, expr)
 	if err != nil {
 		return 0, 0, nil, err
@@ -904,9 +910,15 @@ func getAutoIncrTableDef() []engine.TableDef {
 	defs = append(defs, nameAttr)
 	defs = append(defs, numAttr)
 	defs = append(defs, stepAttr)
-	defs = append(defs, &engine.PrimaryIndexDef{
-		Names: []string{AUTO_INCR_TABLE_COLNAME[1]},
+
+	constrains := &engine.ConstraintDef{Cts: make([]engine.Constraint, 0)}
+	constrains.Cts = append(constrains.Cts, &engine.PrimaryKeyDef{
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{AUTO_INCR_TABLE_COLNAME[1]},
+			PkeyColName: AUTO_INCR_TABLE_COLNAME[1],
+		},
 	})
+	defs = append(defs, constrains)
 
 	return defs
 }

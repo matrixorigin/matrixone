@@ -15,6 +15,8 @@
 package checkpoint
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -45,7 +47,7 @@ type Runner interface {
 	Replay(catalog.DataFactory) (types.TS, error)
 
 	FlushTable(dbID, tableID uint64, ts types.TS) error
-	GCCheckpoint(ts types.TS) error
+	GCByTS(ctx context.Context, ts types.TS) error
 
 	// for test, delete in next phase
 	DebugUpdateOptions(opts ...Option)
