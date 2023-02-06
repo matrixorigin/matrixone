@@ -73,6 +73,7 @@ func (vec *CnTaeVector[T]) Length() int {
 
 func (vec *CnTaeVector[T]) Close() {
 	vec.downstreamVector.Free(vec.mpool)
+	vec.downstreamVector.Nsp = nil
 	vec.isAllocatedFromMpool = false
 }
 
@@ -187,44 +188,8 @@ func (vec *CnTaeVector[T]) Bytes() *Bytes {
 	return MoVecToBytes(vec.downstreamVector)
 }
 
-func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
-
-	window := cnVector.New(vec.GetType())
-	cnVector.Window(vec.downstreamVector, offset, offset+length, window)
-
-	return &CnTaeVector[T]{
-		downstreamVector:     window,
-		mpool:                vec.GetAllocator(),
-		isNullable:           vec.isNullable,
-		isAllocatedFromMpool: false,
-	}
-}
-
 func (vec *CnTaeVector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 	return vec.ForeachWindow(0, vec.Length(), op, sels)
-}
-
-func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
-	opts := Options{}
-	if len(allocator) == 0 {
-		opts.Allocator = vec.GetAllocator()
-	} else {
-		opts.Allocator = allocator[0]
-	}
-
-	// Create a clone
-	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
-	cloned.isAllocatedFromMpool = true
-	cloned.isNullable = vec.Nullable()
-
-	// Create a duplicate of the current vector
-	vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
-
-	// attach that duplicate to the window
-	// and perform window operation
-	cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
-
-	return cloned
 }
 
 func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
@@ -565,8 +530,8 @@ func (vec *CnTaeVector[T]) Allocated() int {
 	}
 
 	// TODO: Not sure if the below part should return 0 or len(downstream.data)
-	return 0
-	//return vec.Length()
+	//return 0
+	return vec.Length()
 }
 
 func (vec *CnTaeVector[T]) Capacity() int {
@@ -592,4 +557,40 @@ func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 
 	vec.isAllocatedFromMpool = false
 	// TODO: Doesn't reset the capacity
+}
+
+func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
+	opts := Options{}
+	if len(allocator) == 0 {
+		opts.Allocator = vec.GetAllocator()
+	} else {
+		opts.Allocator = allocator[0]
+	}
+
+	// Create a clone
+	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
+	cloned.isAllocatedFromMpool = true
+	cloned.isNullable = vec.Nullable()
+
+	// Create a duplicate of the current vector
+	vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
+
+	// attach that duplicate to the window
+	// and perform window operation
+	cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
+
+	return cloned
+}
+
+func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
+
+	window := cnVector.New(vec.GetType())
+	cnVector.Window(vec.downstreamVector, offset, offset+length, window)
+
+	return &CnTaeVector[T]{
+		downstreamVector:     window,
+		mpool:                vec.GetAllocator(),
+		isNullable:           vec.isNullable,
+		isAllocatedFromMpool: false,
+	}
 }
