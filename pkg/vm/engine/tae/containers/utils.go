@@ -96,13 +96,18 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	bs := vec.Bytes()
 	typ := vec.GetType()
-	nullMask := vec.NullMask()
+	mov = NewMoVecFromBytes(typ, bs)
 
-	mov = NewMoVecFromBytesAndNulls(typ, bs, nullMask)
+	if vec.HasNull() {
+		mov.Nsp.Np = bitmap.New(vec.Length())
+		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
+		//mov.Nsp.Np = vec.NullMask()
+	}
+
 	return
 }
 
-func NewMoVecFromBytesAndNulls(typ types.Type, bs *Bytes, nullMask *roaring64.Bitmap) (mov *movec.Vector) {
+func NewMoVecFromBytes(typ types.Type, bs *Bytes) (mov *movec.Vector) {
 	if typ.IsVarlen() {
 		var header []types.Varlena
 		if bs.AsWindow {
@@ -131,11 +136,6 @@ func NewMoVecFromBytesAndNulls(typ types.Type, bs *Bytes, nullMask *roaring64.Bi
 			copy(data, bs.Storage)
 		}
 		mov = movec.NewOriginalWithData(typ, data, new(nulls.Nulls))
-	}
-
-	if nullMask != nil && !nullMask.IsEmpty() {
-		mov.Nsp = nulls.NewWithSize(bs.Length())
-		nulls.Add(mov.Nsp, nullMask.ToArray()...)
 	}
 
 	return mov

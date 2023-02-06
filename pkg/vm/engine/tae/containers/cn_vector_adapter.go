@@ -32,12 +32,14 @@ import (
 type CnTaeVector[T any] struct {
 	downstreamVector     *cnVector.Vector
 	mpool                *mpool.MPool
+	isNullable           bool
 	isAllocatedFromMpool bool
 }
 
 func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeVector[T] {
 	vec := CnTaeVector[T]{
 		downstreamVector: cnVector.New(typ),
+		isNullable:       nullable,
 	}
 
 	// nullable
@@ -56,7 +58,7 @@ func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTa
 	vec.mpool = alloc
 
 	// mpool allocated
-	vec.isAllocatedFromMpool = true
+	vec.isAllocatedFromMpool = false
 
 	return &vec
 }
@@ -86,6 +88,7 @@ func (vec *CnTaeVector[T]) Append(v any) {
 		_ = vec.downstreamVector.Append(v, false, vec.mpool)
 	}
 
+	vec.isAllocatedFromMpool = true
 }
 
 func (vec *CnTaeVector[T]) AppendMany(vs ...any) {
@@ -95,7 +98,7 @@ func (vec *CnTaeVector[T]) AppendMany(vs ...any) {
 }
 
 func (vec *CnTaeVector[T]) Nullable() bool {
-	return vec.downstreamVector.Nsp.Np != nil
+	return vec.isNullable
 }
 
 func (vec *CnTaeVector[T]) GetAllocator() *mpool.MPool {
@@ -107,10 +110,8 @@ func (vec *CnTaeVector[T]) IsNull(i int) bool {
 }
 
 func (vec *CnTaeVector[T]) NullMask() *roaring64.Bitmap {
-	input := vec.downstreamVector.GetNulls().Np
-	var np *roaring64.Bitmap
-	if input != nil {
-		np = roaring64.New()
+	if input := vec.downstreamVector.GetNulls().Np; input != nil {
+		np := roaring64.New()
 		np.AddMany(input.ToArray())
 		return np
 	}
@@ -169,7 +170,11 @@ func (vec *CnTaeVector[T]) Reset() {
 		return
 	}
 
-	vec.downstreamVector.Nsp.Np.Clear()
+	if vec.Nullable() {
+		cnNulls.Reset(vec.downstreamVector.Nsp)
+		//NOTE: We are not resetting the isNullable.
+	}
+
 	cnVector.Reset(vec.downstreamVector)
 	vec.isAllocatedFromMpool = false
 }
@@ -190,6 +195,7 @@ func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
 	return &CnTaeVector[T]{
 		downstreamVector:     window,
 		mpool:                vec.GetAllocator(),
+		isNullable:           vec.isNullable,
 		isAllocatedFromMpool: false,
 	}
 }
@@ -209,6 +215,7 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 	// Create a clone
 	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
 	cloned.isAllocatedFromMpool = true
+	cloned.isNullable = vec.Nullable()
 
 	// Create a duplicate of the current vector
 	vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
@@ -232,12 +239,18 @@ func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	for i := srcOff; i < srcOff+srcLen; i++ {
 		vec.Append(src.Get(i))
 	}
-
 }
 
 func (vec *CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 
+	// 1. Nullable
+	if nr, err = w.Write(types.EncodeFixed(vec.Nullable())); err != nil {
+		return
+	}
+	n += int64(nr)
+
+	// 2. DownStream Vector
 	output, _ := vec.downstreamVector.MarshalBinary()
 	if nr, err = w.Write(output); err != nil {
 		return
@@ -248,35 +261,44 @@ func (vec *CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	var marshalledByteArray []byte
+	// Nullable 1
+	isNullable := make([]byte, 1)
+	if _, err = r.Read(isNullable); err != nil {
+		return
+	}
+	nullable := types.DecodeFixed[bool](isNullable)
+	vec.isNullable = nullable
+	n += 1
+
+	var downStreamVectorByteArr []byte
 
 	// isScalar 1
 	scalar := make([]byte, 1)
 	if _, err = r.Read(scalar); err != nil {
 		return
 	}
-	marshalledByteArray = append(marshalledByteArray, scalar...)
+	downStreamVectorByteArr = append(downStreamVectorByteArr, scalar...)
 
 	// Length 8
 	length := make([]byte, 8)
 	if _, err = r.Read(length); err != nil {
 		return
 	}
-	marshalledByteArray = append(marshalledByteArray, length...)
+	downStreamVectorByteArr = append(downStreamVectorByteArr, length...)
 
 	// Typ 20
 	vecTyp := make([]byte, 20)
 	if _, err = r.Read(vecTyp); err != nil {
 		return
 	}
-	marshalledByteArray = append(marshalledByteArray, vecTyp...)
+	downStreamVectorByteArr = append(downStreamVectorByteArr, vecTyp...)
 
 	//1. Nsp Length 4
 	nspLen := make([]byte, 4)
 	if _, err = r.Read(nspLen); err != nil {
 		return
 	}
-	marshalledByteArray = append(marshalledByteArray, nspLen...)
+	downStreamVectorByteArr = append(downStreamVectorByteArr, nspLen...)
 
 	// Nsp [?]
 	nspLenVal := types.DecodeUint32(nspLen)
@@ -284,14 +306,14 @@ func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	if _, err = r.Read(nsp); err != nil {
 		return
 	}
-	marshalledByteArray = append(marshalledByteArray, nsp...)
+	downStreamVectorByteArr = append(downStreamVectorByteArr, nsp...)
 
 	//2. Col Length 4
 	colLen := make([]byte, 4)
 	if _, err = r.Read(colLen); err != nil {
 		return
 	}
-	marshalledByteArray = append(marshalledByteArray, colLen...)
+	downStreamVectorByteArr = append(downStreamVectorByteArr, colLen...)
 
 	// Col [?]
 	colLenVal := types.DecodeUint32(colLen)
@@ -299,14 +321,14 @@ func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	if _, err = r.Read(col); err != nil {
 		return
 	}
-	marshalledByteArray = append(marshalledByteArray, col...)
+	downStreamVectorByteArr = append(downStreamVectorByteArr, col...)
 
 	//3. Col Length 4
 	areaLen := make([]byte, 4)
 	if _, err = r.Read(areaLen); err != nil {
 		return
 	}
-	marshalledByteArray = append(marshalledByteArray, areaLen...)
+	downStreamVectorByteArr = append(downStreamVectorByteArr, areaLen...)
 
 	// Col [?]
 	areaLenVal := types.DecodeUint32(areaLen)
@@ -314,11 +336,12 @@ func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	if _, err = r.Read(area); err != nil {
 		return
 	}
-	marshalledByteArray = append(marshalledByteArray, area...)
+	downStreamVectorByteArr = append(downStreamVectorByteArr, area...)
 
-	n = int64(len(marshalledByteArray))
+	n = int64(len(downStreamVectorByteArr))
 
-	err = vec.downstreamVector.UnmarshalBinary(marshalledByteArray)
+	err = vec.downstreamVector.UnmarshalBinary(downStreamVectorByteArr)
+
 	return
 }
 
@@ -348,8 +371,8 @@ func (vec *CnTaeVector[T]) AppendNoNulls(s any) {
 	panic("Soon Deprecated")
 }
 
-// Delete TODO: used very rare.
 func (vec *CnTaeVector[T]) Delete(delRowId int) {
+	// TODO: used very rare
 	deletes := roaring.BitmapOf(uint32(delRowId))
 	vec.Compact(deletes)
 }
@@ -396,8 +419,12 @@ func (vec *CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (
 		}
 	}
 
-	err = vec.downstreamVector.UnmarshalBinary(buf)
-	return err
+	_, err = vec.ReadFrom(bytes.NewBuffer(buf))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // TODO: --- Below Functions Can be implemented in CN Vector.
@@ -551,15 +578,16 @@ func (vec *CnTaeVector[T]) Capacity() int {
 }
 
 func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
-	wasNullable := vec.Nullable()
 	vec.Reset()
 
-	src := NewMoVecFromBytesAndNulls(vec.GetType(), bs, nulls)
+	src := NewMoVecFromBytes(vec.GetType(), bs)
 	vec.downstreamVector = src
-
-	nowNullable := vec.Nullable()
-	if wasNullable && !nowNullable {
+	if vec.Nullable() {
 		vec.downstreamVector.Nsp = cnNulls.NewWithSize(0)
+	}
+
+	if nulls != nil && !nulls.IsEmpty() {
+		cnNulls.Add(vec.downstreamVector.Nsp, nulls.ToArray()...)
 	}
 
 	vec.isAllocatedFromMpool = false
