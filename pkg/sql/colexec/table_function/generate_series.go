@@ -17,6 +17,10 @@ package table_function
 import (
 	"bytes"
 	"context"
+	"math"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,9 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"strconv"
-	"strings"
 )
 
 func generateSeriesString(arg any, buf *bytes.Buffer) {
@@ -95,7 +96,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if endVec.Typ.Oid != types.T_int32 || (stepVec != nil && stepVec.Typ.Oid != types.T_int32) {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
 		}
-		err = handleInt[int32](startVec, endVec, stepVec, generateInt32, false, proc, rbat)
+		err = handleInt(startVec, endVec, stepVec, generateInt32, false, proc, rbat)
 		if err != nil {
 			return false, err
 		}
@@ -103,7 +104,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if endVec.Typ.Oid != types.T_int64 || (stepVec != nil && stepVec.Typ.Oid != types.T_int64) {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
 		}
-		err = handleInt[int64](startVec, endVec, stepVec, generateInt64, false, proc, rbat)
+		err = handleInt(startVec, endVec, stepVec, generateInt64, false, proc, rbat)
 		if err != nil {
 			return false, err
 		}
@@ -419,7 +420,7 @@ func tryInt(startStr, endStr, stepStr string, proc *process.Process, rbat *batch
 	if err != nil {
 		return err
 	}
-	err = handleInt[int64](startVec, endVec, stepVec, generateInt64, true, proc, rbat)
+	err = handleInt(startVec, endVec, stepVec, generateInt64, true, proc, rbat)
 	if err != nil {
 		return err
 	}

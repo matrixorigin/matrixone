@@ -81,16 +81,6 @@ func Prepare(proc *process.Process, arg any) error {
 		param.maxBatchSize = proc.Lim.MaxMsgSize
 	}
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
-
-	if param.Extern.ScanType == tree.S3 {
-		if err := InitS3Param(param.Extern); err != nil {
-			return err
-		}
-	} else {
-		if err := InitInfileParam(param.Extern); err != nil {
-			return err
-		}
-	}
 	if param.Extern.Format == tree.JSONLINE {
 		if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
 			param.Fileparam.End = true
@@ -456,11 +446,11 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 	return fileList, fileSize, err
 }
 
-func ReadFile(param *tree.ExternParam, fileParam *ExFileparam, offset [][2]int, proc *process.Process) (io.ReadCloser, error) {
-	if param.Local {
+func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error) {
+	if param.Extern.Local {
 		return io.NopCloser(proc.LoadLocalReader), nil
 	}
-	fs, readPath, err := GetForETLWithType(param, fileParam.Filepath)
+	fs, readPath, err := GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 	if err != nil {
 		return nil, err
 	}
@@ -475,11 +465,11 @@ func ReadFile(param *tree.ExternParam, fileParam *ExFileparam, offset [][2]int, 
 			},
 		},
 	}
-	if param.Parallel {
-		vec.Entries[0].Offset = int64(offset[fileParam.FileIndex-1][0])
-		vec.Entries[0].Size = int64(offset[fileParam.FileIndex-1][1] - offset[fileParam.FileIndex-1][0])
+	if param.Extern.Parallel {
+		vec.Entries[0].Offset = int64(param.FileOffset[param.Fileparam.FileIndex-1][0])
+		vec.Entries[0].Size = int64(param.FileOffset[param.Fileparam.FileIndex-1][1] - param.FileOffset[param.Fileparam.FileIndex-1][0])
 	}
-	if vec.Entries[0].Size == 0 {
+	if vec.Entries[0].Size == 0 || vec.Entries[0].Offset >= param.FileSize[param.Fileparam.FileIndex-1] {
 		return nil, nil
 	}
 	err = fs.Read(param.Ctx, &vec)
@@ -719,7 +709,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 // GetSimdcsvReader get file reader from external file
 func GetSimdcsvReader(param *ExternalParam, proc *process.Process) (*ParseLineHandler, error) {
 	var err error
-	param.reader, err = ReadFile(param.Extern, param.Fileparam, param.FileOffset, proc)
+	param.reader, err = ReadFile(param, proc)
 	if err != nil || param.reader == nil {
 		return nil, err
 	}

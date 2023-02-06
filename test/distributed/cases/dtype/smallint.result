@@ -449,9 +449,9 @@ a
 -32768
 32767
 insert into t1 values(-32769);
-truncated type SMALLINT value -32769 for column a, 1
+Data truncation: data out of range: data type int16, value '-32769'
 insert into t1 values(32768);
-truncated type SMALLINT value 32768 for column a, 1
+Data truncation: data out of range: data type int16, value '32768'
 create table t2(a smallint unsigned);
 insert into t2 values(0), (32767);
 insert into t1 select * from t1;
@@ -494,9 +494,9 @@ a
 0
 65535
 insert into t1 values(-1);
-truncated type SMALLINT UNSIGNED value -1 for column a, 1
+Data truncation: data out of range: data type uint16, value '-1'
 insert into t1 values(65536);
-truncated type SMALLINT UNSIGNED value 65536 for column a, 1
+Data truncation: data out of range: data type uint16, value '65536'
 drop table t2;
 create table t2(a int);
 insert into t2 values(65536);
