@@ -180,10 +180,11 @@ show collation;
 show collation like '%';
 rollback;
 drop database if exists showDb;
-
 -- SHOW INDEX FROM tbl_name [FROM db_name]
 -- @suite
 -- @setup
+CREATE DATABASE test;
+USE test;
 DROP TABLE IF EXISTS show_01;
 CREATE TABLE show_01(sname varchar(30),id int);
 show INDEX FROM show_01;
@@ -199,6 +200,26 @@ CREATE TABLE show_02 (
                          PRIMARY KEY  (h1,u1)
 );
 show INDEX FROM show_02;
+DROP TABLE show_02;
+
+
+-- @suite
+-- @setup
+DROP TABLE IF EXISTS show_03;
+CREATE TABLE show_03(a int, b int);
+CREATE unique index x ON show_03(a) comment 'x';
+show CREATE table show_03;
+show INDEX FROM show_03;
+DROP TABLE show_03;
+
+
+-- @suite
+-- @setup
+CREATE TABLE show_04(a int, b int, unique key(a));
+show CREATE TABLE show_04;
+CREATE INDEX b ON show_04(b);
+show INDEX FROM show_04;
+DROP TABLE show_04;
 
 
 -- SHOW FUNCTION STATUS [like_or_where]
@@ -217,3 +238,5 @@ show FUNCTION status;
 show FUNCTION status LIKE 'pattern';
 show FUNCTION status where db = 'show_03';
 -- @bvt:issue
+
+DROP DATABASE test;
