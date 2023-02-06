@@ -20,15 +20,11 @@ type CreateView struct {
 	ColNames    IdentifierList
 	AsSource    *Select
 	IfNotExists bool
-	Temporary   bool
 }
 
 func (node *CreateView) Format(ctx *FmtCtx) {
 	ctx.WriteString("create ")
 
-	if node.Temporary {
-		ctx.WriteString("temporary ")
-	}
 	ctx.WriteString("view ")
 
 	if node.IfNotExists {
