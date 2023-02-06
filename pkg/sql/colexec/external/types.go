@@ -48,6 +48,7 @@ type ExParamConst struct {
 	Cols          []*plan.ColDef
 	OriginCols    []*plan.ColDef
 	FileList      []string
+	FileSize      []int64
 	FileOffset    [][2]int
 	Name2ColIndex map[string]int32
 	Ctx           context.Context
