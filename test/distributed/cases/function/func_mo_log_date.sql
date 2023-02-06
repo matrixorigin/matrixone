@@ -1,7 +1,11 @@
 -- FUNCTION: mo_log_date
 SELECT mo_log_date('2021/01/01') as date;
+SELECT mo_log_date('2021/01/01') between '2021-01-01' and '2021-01-02' as val;
+SELECT mo_log_date('2021/01/01') > '2021-01-01' as val;
+SELECT mo_log_date('2021/01/01') < '2021-01-02' as val;
 SELECT mo_log_date('2021-01-01') as date;
 SELECT mo_log_date('/i/am/not/include/date/string') as date;
+SELECT mo_log_date('/i/am/not/include/date/string') between '2021-01-01' and '2021-01-02' as val;
 SELECT mo_log_date('etl:/sys/logs/2021/01/01/system.metric/filename') as date;
 SELECT statement, mo_log_date(__mo_filepath) as date from system.statement_info where statement = 'IAMNOTSTATMENT';
 -- check mix csv & tae

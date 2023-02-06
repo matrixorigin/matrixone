@@ -1,11 +1,23 @@
 SELECT mo_log_date('2021/01/01') as date;
 date
 2021-01-01
+SELECT mo_log_date('2021/01/01') between '2021-01-01' and '2021-01-02' as val;
+val
+true
+SELECT mo_log_date('2021/01/01') > '2021-01-01' as val;
+val
+false
+SELECT mo_log_date('2021/01/01') < '2021-01-02' as val;
+val
+true
 SELECT mo_log_date('2021-01-01') as date;
 date
 null
 SELECT mo_log_date('/i/am/not/include/date/string') as date;
 date
+null
+SELECT mo_log_date('/i/am/not/include/date/string') between '2021-01-01' and '2021-01-02' as val;
+val
 null
 SELECT mo_log_date('etl:/sys/logs/2021/01/01/system.metric/filename') as date;
 date
