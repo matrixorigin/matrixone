@@ -319,22 +319,22 @@ DROP TABLE IF EXISTS show_01;
 CREATE TABLE show_01(sname varchar(30),id int);
 show INDEX FROM show_01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-show_01    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 show_01    0    id    1    id    A    0    NULL    NULL    YES            YES    NULL
 show_01    0    sname    1    sname    A    0    NULL    NULL    YES            YES    NULL
+show_01    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 DROP TABLE show_01;
 DROP TABLE IF EXISTS show_02;
 CREATE TABLE show_02 (
-Host varchar(16) NOT NULL default '',
-User varchar(16) NOT NULL default '',
-PRIMARY KEY  (Host,User)
+h1 varchar(16) NOT NULL default '',
+u1 varchar(16) NOT NULL default '',
+PRIMARY KEY  (h1,u1)
 );
 show INDEX FROM show_02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-show_02    0    host    1    host    A    0    NULL    NULL    NO            YES    NULL
-show_02    0    user    1    user    A    0    NULL    NULL    NO            YES    NULL
-show_02    1    PRIMARY    1    __mo_cpkey_004host004user    A    0    NULL    NULL    NO            YES    NULL
 show_02    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+show_02    0    h1    1    h1    A    0    NULL    NULL    NO            YES    NULL
+show_02    0    u1    1    u1    A    0    NULL    NULL    NO            YES    NULL
+show_02    1    PRIMARY    1    __mo_cpkey_002h1002u1    A    0    NULL    NULL    NO            YES    NULL
 DROP DATABASE IF EXISTS show_03;
 [unknown result because it is related to issue#7367]
 USE show_03;
