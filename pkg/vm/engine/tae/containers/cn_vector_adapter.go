@@ -30,8 +30,9 @@ import (
 )
 
 type CnTaeVector[T any] struct {
-	downstreamVector *cnVector.Vector
-	mpool            *mpool.MPool
+	downstreamVector     *cnVector.Vector
+	mpool                *mpool.MPool
+	isAllocatedFromMpool bool
 }
 
 func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeVector[T] {
@@ -54,6 +55,9 @@ func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTa
 	}
 	vec.mpool = alloc
 
+	// mpool allocated
+	vec.isAllocatedFromMpool = true
+
 	return &vec
 }
 
@@ -67,6 +71,7 @@ func (vec *CnTaeVector[T]) Length() int {
 
 func (vec *CnTaeVector[T]) Close() {
 	vec.downstreamVector.Free(vec.mpool)
+	vec.isAllocatedFromMpool = false
 }
 
 func (vec *CnTaeVector[T]) HasNull() bool {
@@ -166,6 +171,7 @@ func (vec *CnTaeVector[T]) Reset() {
 
 	vec.downstreamVector.Nsp.Np.Clear()
 	cnVector.Reset(vec.downstreamVector)
+	vec.isAllocatedFromMpool = false
 }
 
 func (vec *CnTaeVector[T]) Slice() any {
@@ -182,8 +188,9 @@ func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
 	cnVector.Window(vec.downstreamVector, offset, offset+length, window)
 
 	return &CnTaeVector[T]{
-		downstreamVector: window,
-		mpool:            vec.GetAllocator(),
+		downstreamVector:     window,
+		mpool:                vec.GetAllocator(),
+		isAllocatedFromMpool: false,
 	}
 }
 
@@ -201,6 +208,7 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 
 	// Create a clone
 	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
+	cloned.isAllocatedFromMpool = true
 
 	// Create a duplicate of the current vector
 	vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
@@ -225,6 +233,93 @@ func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 		vec.Append(src.Get(i))
 	}
 
+}
+
+func (vec *CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
+	var nr int
+
+	output, _ := vec.downstreamVector.MarshalBinary()
+	if nr, err = w.Write(output); err != nil {
+		return
+	}
+	n += int64(nr)
+
+	return
+}
+
+func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
+	var marshalledByteArray []byte
+
+	// isScalar 1
+	scalar := make([]byte, 1)
+	if _, err = r.Read(scalar); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, scalar...)
+
+	// Length 8
+	length := make([]byte, 8)
+	if _, err = r.Read(length); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, length...)
+
+	// Typ 20
+	vecTyp := make([]byte, 20)
+	if _, err = r.Read(vecTyp); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, vecTyp...)
+
+	//1. Nsp Length 4
+	nspLen := make([]byte, 4)
+	if _, err = r.Read(nspLen); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, nspLen...)
+
+	// Nsp [?]
+	nspLenVal := types.DecodeUint32(nspLen)
+	nsp := make([]byte, nspLenVal)
+	if _, err = r.Read(nsp); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, nsp...)
+
+	//2. Col Length 4
+	colLen := make([]byte, 4)
+	if _, err = r.Read(colLen); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, colLen...)
+
+	// Col [?]
+	colLenVal := types.DecodeUint32(colLen)
+	col := make([]byte, colLenVal)
+	if _, err = r.Read(col); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, col...)
+
+	//3. Col Length 4
+	areaLen := make([]byte, 4)
+	if _, err = r.Read(areaLen); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, areaLen...)
+
+	// Col [?]
+	areaLenVal := types.DecodeUint32(areaLen)
+	area := make([]byte, areaLenVal)
+	if _, err = r.Read(area); err != nil {
+		return
+	}
+	marshalledByteArray = append(marshalledByteArray, area...)
+
+	n = int64(len(marshalledByteArray))
+
+	err = vec.downstreamVector.UnmarshalBinary(marshalledByteArray)
+	return
 }
 
 // TODO: --- We can remove below functions as they don't have any usage
@@ -432,94 +527,11 @@ func (vec *CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roar
 
 // TODO: --- I am not sure, if the below functions will work as expected
 
-func (vec *CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
-	var nr int
-
-	output, _ := vec.downstreamVector.MarshalBinary()
-	if nr, err = w.Write(output); err != nil {
-		return
-	}
-	n += int64(nr)
-
-	return
-}
-
-func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	var marshalledByteArray []byte
-
-	// isScalar 1
-	scalar := make([]byte, 1)
-	if _, err = r.Read(scalar); err != nil {
-		return
-	}
-	marshalledByteArray = append(marshalledByteArray, scalar...)
-
-	// Length 8
-	length := make([]byte, 8)
-	if _, err = r.Read(length); err != nil {
-		return
-	}
-	marshalledByteArray = append(marshalledByteArray, length...)
-
-	// Typ 20
-	vecTyp := make([]byte, 20)
-	if _, err = r.Read(vecTyp); err != nil {
-		return
-	}
-	marshalledByteArray = append(marshalledByteArray, vecTyp...)
-
-	//1. Nsp Length 4
-	nspLen := make([]byte, 4)
-	if _, err = r.Read(nspLen); err != nil {
-		return
-	}
-	marshalledByteArray = append(marshalledByteArray, nspLen...)
-
-	// Nsp [?]
-	nspLenVal := types.DecodeUint32(nspLen)
-	nsp := make([]byte, nspLenVal)
-	if _, err = r.Read(nsp); err != nil {
-		return
-	}
-	marshalledByteArray = append(marshalledByteArray, nsp...)
-
-	//2. Col Length 4
-	colLen := make([]byte, 4)
-	if _, err = r.Read(colLen); err != nil {
-		return
-	}
-	marshalledByteArray = append(marshalledByteArray, colLen...)
-
-	// Col [?]
-	colLenVal := types.DecodeUint32(colLen)
-	col := make([]byte, colLenVal)
-	if _, err = r.Read(col); err != nil {
-		return
-	}
-	marshalledByteArray = append(marshalledByteArray, col...)
-
-	//3. Col Length 4
-	areaLen := make([]byte, 4)
-	if _, err = r.Read(areaLen); err != nil {
-		return
-	}
-	marshalledByteArray = append(marshalledByteArray, areaLen...)
-
-	// Col [?]
-	areaLenVal := types.DecodeUint32(areaLen)
-	area := make([]byte, areaLenVal)
-	if _, err = r.Read(area); err != nil {
-		return
-	}
-	marshalledByteArray = append(marshalledByteArray, area...)
-
-	n = int64(len(marshalledByteArray))
-
-	err = vec.downstreamVector.UnmarshalBinary(marshalledByteArray)
-	return
-}
-
 func (vec *CnTaeVector[T]) Allocated() int {
+
+	if !vec.isAllocatedFromMpool {
+		return 0
+	}
 	// Only VarLen is allocated using mpool.
 	if vec.GetType().IsVarlen() {
 		return vec.downstreamVector.Size()
@@ -544,5 +556,6 @@ func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 	src := NewMoVecFromBytesAndNulls(vec.GetType(), bs, nulls)
 	vec.downstreamVector = src
 
+	vec.isAllocatedFromMpool = false
 	// TODO: Doesn't reset the capacity
 }
