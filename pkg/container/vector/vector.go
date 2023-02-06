@@ -928,21 +928,7 @@ func Dup(v *Vector, m *mpool.MPool) (*Vector, error) {
 // Window just returns a window out of input and no deep copy.
 func Window(v *Vector, start, end int, w *Vector) *Vector {
 	w.Typ = v.Typ
-	if start == 0 {
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	} else {
-		_start := uint64(start)
-		_end := uint64(end)
-
-		//TODO: Here, we are creating a new copy of Nulls. Should it be a concern?
-		// Window's description says that, we don't do deep copy.
-		w.Nsp = nulls.NewWithSize(end - start)
-		for i := _start; i < _end; i++ {
-			if v.Nsp.Contains(i) {
-				w.Nsp.Np.Add(i - _start)
-			}
-		}
-	}
+	w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), uint64(start), w.Nsp)
 	w.data = v.data
 	w.area = v.area
 	w.setupColFromData(start, end)

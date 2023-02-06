@@ -168,14 +168,14 @@ func TestRange(t *testing.T) {
 	t.Run("set test", func(t *testing.T) {
 		n := &Nulls{}
 		m := &Nulls{}
-		Range(n, 0, 16, m)
+		Range(n, 0, 16, 0, m)
 		n = &Nulls{Np: bitmap.New(16)}
 		for i := uint64(0); i < 16; i++ {
 			n.Np.Add(i)
 		}
-		Range(n, 0, 16, m)
+		Range(n, 0, 16, 0, m)
 		assert.Equal(t, Length(n), Length(m))
-		Range(n, 10, 16, m)
+		Range(n, 10, 16, 0, m)
 		correctM := &Nulls{Np: bitmap.New(16)}
 		for i := uint64(10); i < 16; i++ {
 			correctM.Np.Add(i)

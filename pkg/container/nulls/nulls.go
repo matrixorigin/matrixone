@@ -195,21 +195,21 @@ func RemoveRange(n *Nulls, start, end uint64) {
 
 // Range adds the numbers in n starting at start and ending at end to m.
 // Return the result
-func Range(n *Nulls, start, end uint64, m *Nulls) *Nulls {
+func Range(n *Nulls, start, end, startOffset uint64, m *Nulls) *Nulls {
 	switch {
 	case n.Np == nil && m.Np == nil:
 	case n.Np != nil && m.Np == nil:
-		m.Np = bitmap.New(int(end + 1))
+		m.Np = bitmap.New(int(end + 1 - startOffset))
 		for ; start < end; start++ {
 			if n.Np.Contains(start) {
-				m.Np.Add(start)
+				m.Np.Add(start - startOffset)
 			}
 		}
 	case n.Np != nil && m.Np != nil:
-		m.Np = bitmap.New(int(end + 1))
+		m.Np = bitmap.New(int(end + 1 - startOffset))
 		for ; start < end; start++ {
 			if n.Np.Contains(start) {
-				m.Np.Add(start)
+				m.Np.Add(start - startOffset)
 			}
 		}
 	}
