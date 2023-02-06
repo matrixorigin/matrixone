@@ -226,7 +226,7 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 	// notice the number of the index def not equal to the number of the index table
 	// in some special cases, we don't create index table.
 	if n.UniqueIndexDef != nil {
-		primaryKeyName := update.GetTablePriKeyName(n.TargetColDefs, n.CPkeyColDef)
+		primaryKeyName := update.GetTablePriKeyName(n.PrimaryKeyDef, n.CPkeyColDef)
 		idx := 0
 		for i := range n.UniqueIndexDef.TableNames {
 			if n.UniqueIndexDef.TableExists[i] {
@@ -336,7 +336,7 @@ func WriteBlock(n *Argument, bat *batch.Batch, proc *process.Process) error {
 		return err
 	}
 	if n.UniqueIndexDef != nil {
-		primaryKeyName := update.GetTablePriKeyName(n.TargetColDefs, n.CPkeyColDef)
+		primaryKeyName := update.GetTablePriKeyName(n.PrimaryKeyDef, n.CPkeyColDef)
 		idx := 0
 		for i := range n.UniqueIndexDef.TableNames {
 			if n.UniqueIndexDef.TableExists[i] {
