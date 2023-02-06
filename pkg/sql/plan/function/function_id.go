@@ -502,6 +502,7 @@ var functionIdRegister = map[string]int32{
 	"mo_table_size":                  MO_TABLE_SIZE,
 	"mo_table_col_max":               MO_TABLE_COL_MAX,
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
+	"trim":                           TRIM,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
