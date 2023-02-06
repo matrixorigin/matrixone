@@ -910,9 +910,15 @@ func getAutoIncrTableDef() []engine.TableDef {
 	defs = append(defs, nameAttr)
 	defs = append(defs, numAttr)
 	defs = append(defs, stepAttr)
-	defs = append(defs, &engine.PrimaryIndexDef{
-		Names: []string{AUTO_INCR_TABLE_COLNAME[1]},
+
+	constrains := &engine.ConstraintDef{Cts: make([]engine.Constraint, 0)}
+	constrains.Cts = append(constrains.Cts, &engine.PrimaryKeyDef{
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{AUTO_INCR_TABLE_COLNAME[1]},
+			PkeyColName: AUTO_INCR_TABLE_COLNAME[1],
+		},
 	})
+	defs = append(defs, constrains)
 
 	return defs
 }

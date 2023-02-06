@@ -58,8 +58,9 @@ func Test_getAutoIncrTableDef(t *testing.T) {
 		convey.So(stepAttr.Attr.Type, convey.ShouldResemble, types.T_uint64.ToType())
 		convey.So(stepAttr.Attr.Primary, convey.ShouldBeFalse)
 
-		pri, ok := def[3].(*engine.PrimaryIndexDef)
+		constraint, ok := def[3].(*engine.ConstraintDef)
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(pri.Names, convey.ShouldResemble, []string{AUTO_INCR_TABLE_COLNAME[1]})
+		pkeyDef := constraint.GetPrimaryKeyDef()
+		convey.So(pkeyDef.Pkey.Names, convey.ShouldResemble, []string{AUTO_INCR_TABLE_COLNAME[1]})
 	})
 }
