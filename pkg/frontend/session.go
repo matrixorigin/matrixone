@@ -306,6 +306,7 @@ func (ses *Session) Dispose() {
 		mpool.DeleteMPool(mp)
 		ses.SetMemPool(mp)
 	}
+	ses.cleanCache()
 }
 
 type errInfo struct {
@@ -456,7 +457,7 @@ func (ses *Session) IsBackgroundSession() bool {
 	return ses.isBackgroundSession
 }
 
-func (ses *Session) cachePlan(sql string, stmts []*tree.Statement, plans []*plan.Plan) {
+func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.planCache.cache(sql, stmts, plans)
@@ -1995,6 +1996,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var CompositePkey *plan2.ColDef = nil
 	var viewSql *plan2.ViewDef
 	var foreignKeys []*plan2.ForeignKeyDef
+	var primarykey *plan2.PrimaryKeyDef
 	var refChildTbls []uint64
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -2077,6 +2079,8 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 					foreignKeys = k.Fkeys
 				case *engine.RefChildTableDef:
 					refChildTbls = k.Tables
+				case *engine.PrimaryKeyDef:
+					primarykey = k.Pkey
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
@@ -2138,6 +2142,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		Defs:          defs,
 		TableType:     TableType,
 		Createsql:     Createsql,
+		Pkey:          primarykey,
 		CompositePkey: CompositePkey,
 		ViewSql:       viewSql,
 		Fkeys:         foreignKeys,
@@ -2320,12 +2325,12 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	blockNum, rows, err := table.FilteredStats(ctx, e)
+	blockNum, cost, outcnt, err := table.Stats(ctx, e)
 	if err != nil {
 		return
 	}
-	stats.Cost = float64(rows)
-	stats.Outcnt = stats.Cost * plan2.DeduceSelectivity(e)
+	stats.Cost = float64(cost)
+	stats.Outcnt = float64(outcnt)
 	stats.BlockNum = blockNum
 	return
 }

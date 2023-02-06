@@ -256,6 +256,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 				SecondaryIndexDef: sDef,
 				ClusterTable:      clusterTable,
 				HasAutoCol:        hasAutoCol,
+				PrimaryKeyDef:     tblRef.Pkey,
 			},
 		},
 	}, nil
