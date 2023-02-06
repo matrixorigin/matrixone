@@ -91,7 +91,6 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 				return false, err
 			}
 			bat.SetVector(int32(i), nvec)
-
 		}
 	}
 	for i, f := range ap.Fs {
@@ -128,10 +127,7 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 		sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, sels, ovec, strCol)
 	}
 	if len(ctr.vecs) == 1 {
-		if err := bat.Shuffle(sels, proc.Mp()); err != nil {
-			panic(err)
-		}
-		return false, nil
+		return false, bat.Shuffle(sels, proc.Mp())
 	}
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(sels))
@@ -148,18 +144,15 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 			} else {
 				strCol = nil
 			}
-			for i, j := 0, len(ps); i < j; i++ {
-				if i == j-1 {
-					sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[i]:], vec, strCol)
+			for m, n := 0, len(ps); m < n; m++ {
+				if m == n-1 {
+					sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:], vec, strCol)
 				} else {
-					sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[i]:ps[i+1]], vec, strCol)
+					sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:ps[m+1]], vec, strCol)
 				}
 			}
 		}
 		ovec = vec
 	}
-	if err := bat.Shuffle(sels, proc.Mp()); err != nil {
-		panic(err)
-	}
-	return false, nil
+	return false, bat.Shuffle(sels, proc.Mp())
 }
