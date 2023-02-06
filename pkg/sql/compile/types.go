@@ -59,6 +59,7 @@ const (
 	TruncateTable
 	AlterView
 	MergeInsert
+	MagicDelete
 )
 
 // Source contains information of a relation which will be used in execution,
