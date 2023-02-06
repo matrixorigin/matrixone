@@ -598,6 +598,19 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	return nil
 }
 
+func getColumnNameFromExpr(expr *plan.Expr) string {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return exprImpl.Col.Name
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			return getColumnNameFromExpr(arg)
+		}
+	}
+	return ""
+}
+
 func DeduceSelectivity(expr *plan.Expr, sortKeyName string) float64 {
 	if expr == nil {
 		return 1
@@ -608,13 +621,16 @@ func DeduceSelectivity(expr *plan.Expr, sortKeyName string) float64 {
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=":
-			switch childImpl := exprImpl.F.Args[0].Expr.(type) {
-			case *plan.Expr_Col:
-				if util.GetClusterByColumnOrder(sortKeyName, childImpl.Col.Name) != -1 {
-					return 0.5
-				}
+			sortOrder := util.GetClusterByColumnOrder(sortKeyName, getColumnNameFromExpr(expr))
+			if sortOrder == 0 {
+				return 0.9
+			} else if sortOrder == 1 {
+				return 0.6
+			} else if sortOrder == 2 {
+				return 0.3
+			} else {
+				return 0.01
 			}
-			return 0.01
 		case "and":
 			sel = math.Min(DeduceSelectivity(exprImpl.F.Args[0], sortKeyName), DeduceSelectivity(exprImpl.F.Args[1], sortKeyName))
 			return sel
