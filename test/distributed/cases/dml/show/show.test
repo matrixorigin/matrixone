@@ -180,10 +180,11 @@ show collation;
 show collation like '%';
 rollback;
 drop database if exists showDb;
+
 -- SHOW INDEX FROM tbl_name [FROM db_name]
 -- @suite
 -- @setup
-drop database if exists test;
+DROP DATABASE IF EXISTS test;
 CREATE DATABASE test;
 USE test;
 DROP TABLE IF EXISTS show_01;
@@ -196,9 +197,9 @@ DROP TABLE show_01;
 -- @setup
 DROP TABLE IF EXISTS show_02;
 CREATE TABLE show_02 (
-                         h1 varchar(16) NOT NULL default '',
-                         u1 varchar(16) NOT NULL default '',
-                         PRIMARY KEY  (h1,u1)
+  h1 varchar(16) NOT NULL default '',
+  u1 varchar(16) NOT NULL default '',
+  PRIMARY KEY  (h1,u1)
 );
 show INDEX FROM show_02;
 DROP TABLE show_02;
