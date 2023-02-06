@@ -29,7 +29,8 @@ func GetValueFrom[T types.FixedSizeT](tool *CodecTool, i int) (v T) {
 }
 
 type CodecTool struct {
-	storage *vector[[]byte]
+	// TODO: No usage. Can we remove this class?
+	storage *CnTaeVector[[]byte]
 }
 
 func NewCodecTool() *CodecTool {

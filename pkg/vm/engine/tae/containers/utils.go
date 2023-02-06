@@ -96,8 +96,14 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	bs := vec.Bytes()
 	typ := vec.GetType()
+	nullMask := vec.NullMask()
 
-	if vec.GetType().IsVarlen() {
+	mov = NewMoVecFromBytesAndNulls(typ, bs, nullMask)
+	return
+}
+
+func NewMoVecFromBytesAndNulls(typ types.Type, bs *Bytes, nullMask *roaring64.Bitmap) (mov *movec.Vector) {
+	if typ.IsVarlen() {
 		var header []types.Varlena
 		if bs.AsWindow {
 			header = make([]types.Varlena, bs.WinLength)
@@ -111,8 +117,8 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 			copy(storage, bs.Storage)
 		}
 		mov, _ = movec.BuildVarlenaVector(typ, header, storage)
-	} else if vec.GetType().IsTuple() {
-		mov = movec.NewOriginal(vec.GetType())
+	} else if typ.IsTuple() {
+		mov = movec.NewOriginal(typ)
 		cnt := types.DecodeInt32(bs.Storage)
 		if cnt != 0 {
 			if err := types.Decode(bs.Storage, &mov.Col); err != nil {
@@ -124,13 +130,12 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 		if len(data) > 0 {
 			copy(data, bs.Storage)
 		}
-		mov = movec.NewOriginalWithData(vec.GetType(), data, new(nulls.Nulls))
+		mov = movec.NewOriginalWithData(typ, data, new(nulls.Nulls))
 	}
 
-	if vec.HasNull() {
-		mov.Nsp.Np = bitmap.New(vec.Length())
-		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
-		//mov.Nsp.Np = vec.NullMask()
+	if nullMask != nil && !nullMask.IsEmpty() {
+		mov.Nsp = nulls.NewWithSize(bs.Length())
+		nulls.Add(mov.Nsp, nullMask.ToArray()...)
 	}
 
 	return mov
@@ -183,6 +188,17 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 
 func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(v.Typ, nullable)
+	bs := MoVecToBytes(v)
+	var np *roaring64.Bitmap
+	if v.Nsp.Np != nil {
+		np = roaring64.New()
+		np.AddMany(v.Nsp.Np.ToArray())
+	}
+	vec.ResetWithData(bs, np)
+	return vec
+}
+
+func MoVecToBytes(v *movec.Vector) *Bytes {
 	var bs *Bytes
 
 	switch v.Typ.Oid {
@@ -234,13 +250,7 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	default:
 		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.Typ.String())))
 	}
-	var np *roaring64.Bitmap
-	if v.Nsp.Np != nil {
-		np = roaring64.New()
-		np.AddMany(v.Nsp.Np.ToArray())
-	}
-	vec.ResetWithData(bs, np)
-	return vec
+	return bs
 }
 
 func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
