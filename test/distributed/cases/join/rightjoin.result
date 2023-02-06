@@ -1,0 +1,62 @@
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+CREATE TABLE t1 (S1 INT);
+CREATE TABLE t2 (S1 INT);
+CREATE TABLE t3 (S1 INT);
+INSERT INTO t1 VALUES (1),(2),(3),(4),(5),(6),(7),(9),(10),(11),(12),(13);
+INSERT INTO t2 VALUES (5),(6),(7),(8);
+SELECT * FROM t1 RIGHT JOIN t2 on t1.S1=t2.S1;
+s1    s1
+5    5
+6    6
+7    7
+null    8
+SELECT * FROM t2 LEFT JOIN t1 on t1.S1=t2.S1;
+s1    s1
+5    5
+6    6
+7    7
+8    null
+SELECT * FROM t3 LEFT JOIN t1 on t1.S1=t3.S1;
+s1    s1
+SELECT * FROM t3 RIGHT JOIN t3 on t3.S1=t3.S1;
+internal error: panic runtime error: invalid memory address or nil pointer dereference: 
+runtime.panicmem
+	/usr/local/go/src/runtime/panic.go:260
+runtime.sigpanic
+	/usr/local/go/src/runtime/signal_unix.go:835
+github.com/matrixorigin/matrixone/pkg/sql/plan.(*BindContext).mergeContexts
+	/home/luka/matrixone/pkg/sql/plan/bind_context.go:86
+github.com/matrixorigin/matrixone/pkg/sql/plan.(*QueryBuilder).buildJoinTable
+	/home/luka/matrixone/pkg/sql/plan/query_builder.go:2108
+github.com/matrixorigin/matrixone/pkg/sql/plan.(*QueryBuilder).buildTable
+	/home/luka/matrixone/pkg/sql/plan/query_builder.go:1866
+github.com/matrixorigin/matrixone/pkg/sql/plan.(*QueryBuilder).buildFrom
+	/home/luka/matrixone/pkg/sql/plan/query_builder.go:1653
+github.com/matrixorigin/matrixone/pkg/sql/plan.(*QueryBuilder).buildSelect
+	/home/luka/matrixone/pkg/sql/plan/query_builder.go:1256
+github.com/matrixorigin/matrixone/pkg/sql/plan.runBuildSelectByBinder
+	/home/luka/matrixone/pkg/sql/plan/build.go:28
+github.com/matrixorigin/matrixone/pkg/sql/plan.BuildPlan
+	/home/luka/matrixone/pkg/sql/plan/build.go:59
+github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).Optimize
+	/home/luka/matrixone/pkg/sql/plan/optimize.go:56
+github.com/matrixorigin/matrixone/pkg/frontend.buildPlan
+	/home/luka/matrixone/pkg/frontend/mysql_cmd_executor.go:2577
+github.com/matrixorigin/matrixone/pkg/frontend.(*TxnComputationWrapper).Compile
+	/home/luka/matrixone/pkg/frontend/mysql_cmd_executor.go:2328
+github.com/matrixorigin/matrixone/pkg/frontend.(*MysqlCmdExecutor).doComQuery
+	/home/luka/matrixone/pkg/frontend/mysql_cmd_executor.go:3749
+github.com/matrixorigin/matrixone/pkg/frontend.(*MysqlCmdExecutor).ExecRequest
+	/home/luka/matrixone/pkg/frontend/mysql_cmd_executor.go:4297
+github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
+	/home/luka/matrixone/pkg/frontend/routine.go:168
+github.com/matrixorigin/matrixone/pkg/frontend.(*RoutineManager).Handler
+	/home/luka/matrixone/pkg/frontend/routine_manager.go:311
+github.com/fagongzi/goetty/v2.(*server).doConnection
+	/home/luka/go/pkg/mod/github.com/fagongzi/goetty/v2@v2.0.3-0.20221212132037-abf2d4c05484/application.go:381
+github.com/fagongzi/goetty/v2.(*server).doStart.func2.1
+	/home/luka/go/pkg/mod/github.com/fagongzi/goetty/v2@v2.0.3-0.20221212132037-abf2d4c05484/application.go:344
+runtime.goexit
+	/usr/local/go/src/runtime/asm_amd64.s:1594
