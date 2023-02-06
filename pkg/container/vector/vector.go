@@ -793,11 +793,7 @@ func (v *Vector) Append(w any, isNull bool, m *mpool.MPool) error {
 	case types.T_Rowid:
 		return appendOne(v, w.(types.Rowid), isNull, m)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
-		if isNull {
-			return appendOneBytes(v, nil, true, m)
-		}
-		wv := w.([]byte)
-		return appendOneBytes(v, wv, false, m)
+		return appendOneBytes(v, w.([]byte), isNull, m)
 	}
 	return nil
 }

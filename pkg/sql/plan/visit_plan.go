@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -94,6 +95,17 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	if node.RowsetData != nil {
+		for i := range node.RowsetData.Cols {
+			for j := range node.RowsetData.Cols[i].Data {
+				node.RowsetData.Cols[i].Data[j], err = rule.ApplyExpr(node.RowsetData.Cols[i].Data[j])
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	for i := range node.ProjectList {
 		// if prepare statement is:   update set decimal_col = decimal_col + ? ;
 		// and then: 'set @a=12.22; execute stmt1 using @a;'  decimal_col + ? will be float64
@@ -136,21 +148,6 @@ func (vq *VisitPlan) Visit(ctx context.Context) error {
 			err := vq.visitNode(ctx, qry, qry.Nodes[step], step)
 			if err != nil {
 				return err
-			}
-		}
-
-	case *plan.Plan_Ins:
-		var err error
-		for _, rule := range vq.rules {
-			if rule.IsApplyExpr() {
-				for _, column := range pl.Ins.Columns {
-					for i := range column.Column {
-						column.Column[i], err = rule.ApplyExpr(column.Column[i])
-						if err != nil {
-							return err
-						}
-					}
-				}
 			}
 		}
 

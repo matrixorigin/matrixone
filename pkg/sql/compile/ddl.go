@@ -880,14 +880,6 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 			exeDefs = append(exeDefs, &engine.PropertiesDef{
 				Properties: properties,
 			})
-		case *plan.TableDef_DefType_Partition:
-			bytes, err := defVal.Partition.MarshalPartitionInfo()
-			if err != nil {
-				return nil, err
-			}
-			exeDefs = append(exeDefs, &engine.PartitionDef{
-				Partition: string(bytes),
-			})
 		case *plan.TableDef_DefType_UIdx:
 			bytes, err := defVal.UIdx.MarshalUniqueIndexDef()
 			if err != nil {
@@ -905,6 +897,16 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 				SecondaryIndex: string(bytes),
 			})
 		}
+	}
+
+	if tableDef.Partition != nil {
+		bytes, err := tableDef.Partition.MarshalPartitionInfo()
+		if err != nil {
+			return nil, err
+		}
+		exeDefs = append(exeDefs, &engine.PartitionDef{
+			Partition: string(bytes),
+		})
 	}
 
 	if tableDef.ViewSql != nil {

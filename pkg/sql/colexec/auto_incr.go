@@ -107,20 +107,20 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 	return nil
 }
 
-func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch, dbName, tblName string) error {
-	ColDefs := p.ExplicitCols
-	orderColDefs(p.OrderAttrs, ColDefs, p.Columns)
-	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
-	if err != nil {
-		return err
-	}
-	rel, err := db.Relation(ctx, p.TblName)
-	if err != nil {
-		return err
-	}
+// func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch, dbName, tblName string) error {
+// 	ColDefs := p.ExplicitCols
+// 	orderColDefs(p.OrderAttrs, ColDefs, p.Columns)
+// 	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	rel, err := db.Relation(ctx, p.TblName)
+// 	if err != nil {
+// 		return err
+// 	}
 
-	return UpdateInsertBatch(e, ctx, proc, ColDefs, bat, rel.GetTableID(ctx), dbName, tblName)
-}
+// 	return UpdateInsertBatch(e, ctx, proc, ColDefs, bat, rel.GetTableID(ctx), dbName, tblName)
+// }
 
 // get autoincr columns values.  This function updates the auto incr table.
 // multiple txn may cause a conflicts, but we retry off band transactions.
@@ -789,16 +789,16 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	return nil
 }
 
-func orderColDefs(attrs []string, ColDefs []*plan.ColDef, cols []*plan.Column) {
-	for i, name := range attrs {
-		for j, def := range ColDefs {
-			if name == def.Name {
-				ColDefs[i], ColDefs[j] = ColDefs[j], ColDefs[i]
-				cols[i], cols[j] = cols[j], cols[i]
-			}
-		}
-	}
-}
+// func orderColDefs(attrs []string, ColDefs []*plan.ColDef, cols []*plan.Column) {
+// 	for i, name := range attrs {
+// 		for j, def := range ColDefs {
+// 			if name == def.Name {
+// 				ColDefs[i], ColDefs[j] = ColDefs[j], ColDefs[i]
+// 				cols[i], cols[j] = cols[j], cols[i]
+// 			}
+// 		}
+// 	}
+// }
 
 func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
 	if proc.TxnClient == nil {

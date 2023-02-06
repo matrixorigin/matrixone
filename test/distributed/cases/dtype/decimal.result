@@ -456,9 +456,9 @@ a
 999.99
 -999.99
 insert into t1 values(999.995);
-truncated type DECIMAL64 value 999.995 for column a, 1
+invalid argument DECIMAL64, bad value 999.995
 insert into t1 values(-999.995);
-truncated type DECIMAL64 value -999.995 for column a, 1
+invalid argument DECIMAL64, bad value 999.995
 drop table t1;
 create table t1(a decimal(17,2));
 insert into t1 values(0), (2.1), (2.994), (2.995);
@@ -483,9 +483,9 @@ a
 999999999999999.99
 -999999999999999.99
 insert into t1 values(999999999999999.995);
-truncated type DECIMAL128 value 999999999999999.995 for column a, 1
+invalid argument decimal128, bad value 999999999999999.995
 insert into t1 values(-999999999999999.995);
-truncated type DECIMAL128 value -999999999999999.995 for column a, 1
+invalid argument decimal128, bad value 999999999999999.995
 drop table t1;
 create table t1(a decimal(5,5));
 insert into t1 values(0), (0.9), (0.99), (0.999), (0.9999), (0.99999), (0.999994);
@@ -515,9 +515,9 @@ a
 -0.99999
 -0.99999
 insert into t1 values(0.999995);
-truncated type DECIMAL64 value 0.999995 for column a, 1
+invalid argument DECIMAL64, bad value 0.999995
 insert into t1 values(-0.999995);
-truncated type DECIMAL64 value -0.999995 for column a, 1
+invalid argument DECIMAL64, bad value 0.999995
 drop table t1;
 create table t1(a decimal(17,17));
 insert into t1 values(0), (0.99999999999999999), (0.999999999999999994), (-0.99999999999999999), (-0.999999999999999994);
@@ -529,9 +529,9 @@ a
 -0.99999999999999999
 -0.99999999999999999
 insert into t1 values(0.999999999999999995);
-truncated type DECIMAL128 value 0.999999999999999995 for column a, 1
+invalid argument decimal128, bad value 0.999999999999999995
 insert into t1 values(-0.999999999999999995);
-truncated type DECIMAL128 value -0.999999999999999995 for column a, 1
+invalid argument decimal128, bad value 0.999999999999999995
 drop table if exists t1;
 create table t1 (a decimal(12,2), b decimal(12, 2));
 insert into t1 values (301934.27, 301934.27);

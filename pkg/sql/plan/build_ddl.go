@@ -102,7 +102,6 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	viewName := stmt.Name.ObjectName
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
-		Temporary:   stmt.Temporary,
 		TableDef: &TableDef{
 			Name: string(viewName),
 		},
@@ -1283,12 +1282,11 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 
 // Get tabledef(col, viewsql, properties) for alterview.
 func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
-	viewName := stmt.Name.ObjectName
+	viewName := string(stmt.Name.ObjectName)
 	alterView := &plan.AlterView{
-		IfExists:  stmt.IfExists,
-		Temporary: stmt.Temporary,
+		IfExists: stmt.IfExists,
 		TableDef: &plan.TableDef{
-			Name: string(viewName),
+			Name: viewName,
 		},
 	}
 	// get database name
@@ -1297,7 +1295,32 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	} else {
 		alterView.Database = string(stmt.Name.SchemaName)
 	}
+	if alterView.Database == "" {
+		alterView.Database = ctx.DefaultDatabase()
+	}
 
+	//step 1: check the view exists or not
+	_, oldViewDef := ctx.Resolve(alterView.Database, viewName)
+	if oldViewDef == nil {
+		if !alterView.IfExists {
+			return nil, moerr.NewBadView(ctx.GetContext(),
+				alterView.Database,
+				viewName)
+		}
+	} else {
+		if oldViewDef.ViewSql == nil {
+			return nil, moerr.NewBadView(ctx.GetContext(),
+				alterView.Database,
+				viewName)
+		}
+	}
+
+	//step 2: generate new view def
+	ctx.SetBuildingAlterView(true, alterView.Database, viewName)
+	//restore
+	defer func() {
+		ctx.SetBuildingAlterView(false, "", "")
+	}()
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
 	if err != nil {
 		return nil, err
