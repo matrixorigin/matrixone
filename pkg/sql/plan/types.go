@@ -95,6 +95,10 @@ type CompilerContext interface {
 	GetProcess() *process.Process
 
 	GetQueryResultMeta(uuid string) ([]*ColDef, string, error)
+	SetBuildingAlterView(yesOrNo bool, dbName, viewName string)
+	// is building the alter view or not
+	// return: yes or no, dbName, viewName
+	GetBuildingAlterView() (bool, string, string)
 }
 
 type Optimizer interface {
