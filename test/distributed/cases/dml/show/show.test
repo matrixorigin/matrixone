@@ -182,17 +182,21 @@ rollback;
 drop database if exists showDb;
 
 -- SHOW INDEX FROM tbl_name [FROM db_name]
+-- @suite
+-- @setup
 DROP TABLE IF EXISTS show_01;
 CREATE TABLE show_01(sname varchar(30),id int);
 show INDEX FROM show_01;
 DROP TABLE show_01;
 
 
+-- @suite
+-- @setup
 DROP TABLE IF EXISTS show_02;
 CREATE TABLE show_02 (
-                         Host varchar(16) NOT NULL default '',
-                         User varchar(16) NOT NULL default '',
-                         PRIMARY KEY  (Host,User)
+                         h1 varchar(16) NOT NULL default '',
+                         u1 varchar(16) NOT NULL default '',
+                         PRIMARY KEY  (h1,u1)
 );
 show INDEX FROM show_02;
 
