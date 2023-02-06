@@ -428,13 +428,34 @@ func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
 			continue
 		}
 		for _, filter := range filters {
-			newExpr := DeepCopyExpr(filter)
-			if susbstituteMatchColumn(newExpr, col1, col2) {
-				newFilters = append(newFilters, newExpr)
+			if checkFilter(filter) {
+				newExpr := DeepCopyExpr(filter)
+				if susbstituteMatchColumn(newExpr, col1, col2) {
+					newFilters = append(newFilters, newExpr)
+				}
 			}
 		}
 	}
 	return newFilters
+}
+
+// filter must be like func(col)>1 , or (col=1) or (col=2)
+func checkFilter(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "or", "and":
+			return checkFilter(exprImpl.F.Args[0]) && checkFilter(exprImpl.F.Args[1])
+		case "=", ">", "<", ">=", "<=":
+			switch exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				return true
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func susbstituteMatchColumn(expr *plan.Expr, onPredCol1, onPredCol2 *ColRef) bool {
