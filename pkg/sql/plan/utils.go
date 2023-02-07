@@ -424,6 +424,114 @@ func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan
 	return expr
 }
 
+// deduction of new predicates. for example join on a=b where b=1, then a=1 can be deduced
+func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
+	var newFilters []*plan.Expr
+	for _, onPred := range onList {
+		ret, col1, col2 := checkOnPred(onPred)
+		if !ret {
+			continue
+		}
+		for _, filter := range filters {
+			ret, col := checkFilter(filter)
+			if ret && col != nil {
+				newExpr := DeepCopyExpr(filter)
+				if substituteMatchColumn(newExpr, col1, col2) {
+					newFilters = append(newFilters, newExpr)
+				}
+			}
+		}
+	}
+	return newFilters
+}
+
+// for predicate deduction, filter must be like func(col)>1 , or (col=1) or (col=2)
+// and only 1 colRef is allowd in the filter
+func checkFilter(expr *plan.Expr) (bool, *ColRef) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "=", ">", "<", ">=", "<=":
+			switch exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				return checkFilter(exprImpl.F.Args[0])
+			default:
+				return false, nil
+			}
+		default:
+			var col *ColRef
+			for _, arg := range exprImpl.F.Args {
+				ret, c := checkFilter(arg)
+				if !ret {
+					return false, nil
+				} else if c != nil {
+					if col != nil {
+						if col.RelPos != c.RelPos || col.ColPos != c.ColPos {
+							return false, nil
+						}
+					} else {
+						col = c
+					}
+				}
+			}
+			return true, col
+		}
+	case *plan.Expr_Col:
+		return true, exprImpl.Col
+	}
+	return false, nil
+}
+
+func substituteMatchColumn(expr *plan.Expr, onPredCol1, onPredCol2 *ColRef) bool {
+	var ret bool
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		colName := exprImpl.Col.String()
+		if colName == onPredCol1.String() {
+			exprImpl.Col.RelPos = onPredCol2.RelPos
+			exprImpl.Col.ColPos = onPredCol2.ColPos
+			exprImpl.Col.Name = onPredCol2.Name
+			return true
+		} else if colName == onPredCol2.String() {
+			exprImpl.Col.RelPos = onPredCol1.RelPos
+			exprImpl.Col.ColPos = onPredCol1.ColPos
+			exprImpl.Col.Name = onPredCol1.Name
+			return true
+		}
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if substituteMatchColumn(arg, onPredCol1, onPredCol2) {
+				ret = true
+			}
+		}
+	}
+	return ret
+}
+
+func checkOnPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
+	//onPred must be equality, children must be column name
+	switch onPredImpl := onPred.Expr.(type) {
+	case *plan.Expr_F:
+		if onPredImpl.F.Func.ObjName != "=" {
+			return false, nil, nil
+		}
+		args := onPredImpl.F.Args
+		var col1, col2 *ColRef
+		switch child1 := args[0].Expr.(type) {
+		case *plan.Expr_Col:
+			col1 = child1.Col
+		}
+		switch child2 := args[1].Expr.(type) {
+		case *plan.Expr_Col:
+			col2 = child2.Col
+		}
+		if col1 != nil && col2 != nil {
+			return true, col1, col2
+		}
+	}
+	return false, nil, nil
+}
+
 func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	var exprs []*plan.Expr
 	switch exprImpl := expr.Expr.(type) {
@@ -609,9 +717,7 @@ func getColumnNameFromExpr(expr *plan.Expr) string {
 		return exprImpl.Col.Name
 
 	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			return getColumnNameFromExpr(arg)
-		}
+		return getColumnNameFromExpr(exprImpl.F.Args[0])
 	}
 	return ""
 }
