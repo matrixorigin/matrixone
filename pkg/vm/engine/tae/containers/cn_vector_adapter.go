@@ -71,12 +71,6 @@ func (vec *CnTaeVector[T]) Length() int {
 	return vec.downstreamVector.Length()
 }
 
-func (vec *CnTaeVector[T]) Close() {
-	vec.downstreamVector.Free(vec.mpool)
-	vec.downstreamVector.Nsp = nil
-	vec.isAllocatedFromMpool = false
-}
-
 func (vec *CnTaeVector[T]) HasNull() bool {
 	return vec.downstreamVector.GetNulls().Any()
 }
@@ -617,4 +611,11 @@ func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	for i := srcOff; i < srcOff+srcLen; i++ {
 		vec.Append(src.Get(i))
 	}
+}
+
+func (vec *CnTaeVector[T]) Close() {
+	if vec.downstreamVector != nil {
+		vec.downstreamVector.Free(vec.mpool)
+	}
+	vec.downstreamVector = nil
 }
