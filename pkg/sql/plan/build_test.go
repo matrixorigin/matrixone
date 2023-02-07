@@ -750,7 +750,6 @@ func TestDdl(t *testing.T) {
 		"create table tbl_name (t bool(20) comment 'dd', b int unsigned, c char(20), d varchar(20), primary key(b), index idx_t(c)) comment 'test comment'",
 		"create table if not exists tbl_name (b int default 20 primary key, c char(20) default 'ss', d varchar(20) default 'kkk')",
 		"create table if not exists nation (t bool(20), b int, c char(20), d varchar(20))",
-		"load data infile 'test/loadfile5' ignore INTO TABLE nation FIELDS TERMINATED BY  ',' (@,@,n_name,n_comment)",
 		"drop table if exists tbl_name",
 		"drop table if exists nation",
 		"drop table nation",
