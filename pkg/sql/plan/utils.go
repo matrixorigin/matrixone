@@ -15,10 +15,14 @@
 package plan
 
 import (
+	"container/list"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"encoding/csv"
 	"math"
+	"path"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -27,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1238,4 +1243,172 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		return false
 	}
 
+}
+
+func InitInfileParam(param *tree.ExternParam) error {
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "filepath":
+			param.Filepath = param.Option[i+1]
+		case "compression":
+			param.CompressType = param.Option[i+1]
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+		default:
+			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+		}
+	}
+	if len(param.Filepath) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the filepath must be specified")
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
+	}
+	return nil
+}
+
+func InitS3Param(param *tree.ExternParam) error {
+	param.S3Param = &tree.S3Parameter{}
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "endpoint":
+			param.S3Param.Endpoint = param.Option[i+1]
+		case "region":
+			param.S3Param.Region = param.Option[i+1]
+		case "access_key_id":
+			param.S3Param.APIKey = param.Option[i+1]
+		case "secret_access_key":
+			param.S3Param.APISecret = param.Option[i+1]
+		case "bucket":
+			param.S3Param.Bucket = param.Option[i+1]
+		case "filepath":
+			param.Filepath = param.Option[i+1]
+		case "compression":
+			param.CompressType = param.Option[i+1]
+		case "provider":
+			param.S3Param.Provider = param.Option[i+1]
+		case "role_arn":
+			param.S3Param.RoleArn = param.Option[i+1]
+		case "external_id":
+			param.S3Param.ExternalId = param.Option[i+1]
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+
+		default:
+			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+		}
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
+	}
+	return nil
+}
+
+func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
+	if param.ScanType == tree.S3 {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
+			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
+		if param.S3Param.Provider == "minio" {
+			opts = append(opts, "is-minio=true")
+		}
+		if err = w.Write(opts); err != nil {
+			return nil, "", err
+		}
+		w.Flush()
+		return fileservice.GetForETL(nil, fileservice.JoinPath(buf.String(), prefix))
+	}
+	return fileservice.GetForETL(param.FileService, prefix)
+}
+
+// ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
+func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
+	filePath := strings.TrimSpace(param.Filepath)
+	if strings.HasPrefix(filePath, "etl:") {
+		filePath = path.Clean(filePath)
+	} else {
+		filePath = path.Clean("/" + filePath)
+	}
+
+	sep := "/"
+	pathDir := strings.Split(filePath, sep)
+	l := list.New()
+	l2 := list.New()
+	if pathDir[0] == "" {
+		l.PushBack(sep)
+	} else {
+		l.PushBack(pathDir[0])
+	}
+
+	for i := 1; i < len(pathDir); i++ {
+		length := l.Len()
+		for j := 0; j < length; j++ {
+			prefix := l.Front().Value.(string)
+			fs, readPath, err := GetForETLWithType(param, prefix)
+			if err != nil {
+				return nil, nil, err
+			}
+			entries, err := fs.List(param.Ctx, readPath)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, entry := range entries {
+				if !entry.IsDir && i+1 != len(pathDir) {
+					continue
+				}
+				if entry.IsDir && i+1 == len(pathDir) {
+					continue
+				}
+				matched, err := path.Match(pathDir[i], entry.Name)
+				if err != nil {
+					return nil, nil, err
+				}
+				if !matched {
+					continue
+				}
+				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
+				if !entry.IsDir {
+					l2.PushBack(entry.Size)
+				}
+			}
+			l.Remove(l.Front())
+		}
+	}
+	len := l.Len()
+	for j := 0; j < len; j++ {
+		fileList = append(fileList, l.Front().Value.(string))
+		l.Remove(l.Front())
+		fileSize = append(fileSize, l2.Front().Value.(int64))
+		l2.Remove(l2.Front())
+	}
+	return fileList, fileSize, err
 }
