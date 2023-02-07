@@ -1,7 +1,7 @@
 drop table if exists t1;
 create table t1(a uuid);
 desc t1;
-Field    Type    Null    Key    Default    Comment
+Field    Type    Null    Key    Default    Extra    Comment
 a    UUID    YES        NULL    
 show create table t1;
 Table    Create Table
@@ -55,8 +55,8 @@ length(cast(uuid() as text))
 CREATE TABLE ratings (   `book_id` bigint,   `user_id` bigint,   `score` tinyint,   `rated_at` datetime DEFAULT NOW(),   PRIMARY KEY (`book_id`,`user_id`) );
 desc ratings;
 Field    Type    Null    Key    Default    Extra    Comment
-book_id    BIGINT    NO        NULL
-user_id    BIGINT    NO        NULL
-score    TINYINT    YES        NULL
+book_id    BIGINT    NO    PRI    NULL
+user_id    BIGINT    NO    PRI    NULL
+score    TINYINT    YES            NULL
 rated_at    DATETIME    YES        CURRENT_TIMESTAMP
 drop table ratings;

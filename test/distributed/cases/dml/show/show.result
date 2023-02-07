@@ -380,3 +380,30 @@ show FUNCTION status LIKE 'pattern';
 show FUNCTION status where db = 'show_03';
 
 DROP DATABASE test;
+create database test;
+use test;
+drop table if exists t1;
+create table t1(a int, b int, c int, primary key(a));
+show columns from t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT    NO    PRI    NULL
+b    INT    YES        NULL
+c    INT    YES        NULL
+drop table t1;
+drop table if exists t2;
+create table t2(a int, b int, c int, primary key(a, b));
+show columns from t2;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT    NO    PRI    NULL
+b    INT    NO    PRI    NULL
+c    INT    YES        NULL
+drop table t2;
+drop table if exists t3;
+create table t3(a int, b int, c int, primary key(a, b, c));
+show columns from t3;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT    NO    PRI    NULL
+b    INT    NO    PRI    NULL
+c    INT    NO    PRI    NULL
+drop table t3;
+drop database test;
