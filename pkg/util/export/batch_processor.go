@@ -234,8 +234,13 @@ func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 }
 
 func (c *MOCollector) Collect(ctx context.Context, i batchpipe.HasName) error {
-	c.awakeCollect <- i
-	return nil
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		c.awakeCollect <- i
+		return nil
+	}
 }
 
 // Start all goroutine worker, including collector, generator, and exporter

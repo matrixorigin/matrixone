@@ -320,8 +320,11 @@ func getUnaryAggStrVs(strUnaryAgg any) []string {
 }
 
 func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
 	decoded := new(EncodeAgg)
-	if err := types.Decode(data, decoded); err != nil {
+	if err := types.Decode(copyData, decoded); err != nil {
 		return err
 	}
 

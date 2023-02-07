@@ -99,7 +99,10 @@ func (a *Avg[T]) MarshalBinary() ([]byte, error) {
 }
 
 func (a *Avg[T]) UnmarshalBinary(data []byte) error {
-	a.Cnts = types.DecodeSlice[int64](data)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	a.Cnts = types.DecodeSlice[int64](copyData)
 	return nil
 }
 
@@ -167,7 +170,10 @@ func (a *Decimal64Avg) MarshalBinary() ([]byte, error) {
 }
 
 func (a *Decimal64Avg) UnmarshalBinary(data []byte) error {
-	a.Cnts = types.DecodeSlice[int64](data)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	a.Cnts = types.DecodeSlice[int64](copyData)
 	return nil
 }
 
@@ -234,6 +240,9 @@ func (a *Decimal128Avg) MarshalBinary() ([]byte, error) {
 }
 
 func (a *Decimal128Avg) UnmarshalBinary(data []byte) error {
-	a.Cnts = types.DecodeSlice[int64](data)
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	a.Cnts = types.DecodeSlice[int64](copyData)
 	return nil
 }

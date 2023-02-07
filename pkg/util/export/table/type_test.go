@@ -15,9 +15,12 @@
 package table
 
 import (
-	"github.com/stretchr/testify/require"
+	"github.com/prashantv/gostub"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestPathBuilder(t *testing.T) {
@@ -32,6 +35,7 @@ func TestPathBuilder(t *testing.T) {
 		name     string
 		nodeUUID string
 		nodeType string
+		ext      string
 	}
 	tests := []struct {
 		name        string
@@ -52,13 +56,31 @@ func TestPathBuilder(t *testing.T) {
 				name:     "table",
 				nodeUUID: "123456",
 				nodeType: "node",
+				ext:      CsvExtension,
 			},
 			wantDir:     `db`,
 			wantETLPath: `db/table_*.csv`,
 			wantLogFN:   `table_123456_node_19700101.000000.000000.csv`,
 		},
 		{
-			name:  "metric_log",
+			name:  "db_tbl.tae",
+			field: field{builder: NewDBTablePathBuilder()},
+			args: args{
+				account:  "user",
+				typ:      MergeLogTypeLogs,
+				ts:       time.Unix(0, 0),
+				db:       "db",
+				name:     "table",
+				nodeUUID: "123456",
+				nodeType: "node",
+				ext:      TaeExtension,
+			},
+			wantDir:     `db`,
+			wantETLPath: `db/table_*.csv`,
+			wantLogFN:   `table_123456_node_19700101.000000.000000.tae`,
+		},
+		{
+			name:  "account_date",
 			field: field{builder: NewAccountDatePathBuilder()},
 			args: args{
 				account:  "user",
@@ -68,12 +90,34 @@ func TestPathBuilder(t *testing.T) {
 				name:     "table",
 				nodeUUID: "123456",
 				nodeType: "node",
+				ext:      CsvExtension,
 			},
 			wantDir:     `user/logs` + `/1970/01/01` + `/table`,
-			wantETLPath: `/*/*` + `/*/*/*` + `/table/*.csv`,
-			wantLogFN:   `0_123456_node.csv`,
+			wantETLPath: `/*/*` + `/*/*/*` + `/table/*`,
+			wantLogFN:   `0_123456_node_0.csv`,
+		},
+		{
+			name:  "account_date.tae",
+			field: field{builder: NewAccountDatePathBuilder()},
+			args: args{
+				account:  "user",
+				typ:      MergeLogTypeLogs,
+				ts:       time.Unix(0, 0),
+				db:       "db",
+				name:     "table",
+				nodeUUID: "123456",
+				nodeType: "node",
+				ext:      TaeExtension,
+			},
+			wantDir:     `user/logs` + `/1970/01/01` + `/table`,
+			wantETLPath: `/*/*` + `/*/*/*` + `/table/*`,
+			wantLogFN:   `0_123456_node_0.tae`,
 		},
 	}
+
+	ssStub := gostub.Stub(&NSecString, func() string { return "0" })
+	defer ssStub.Reset()
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := tt.field.builder
@@ -81,8 +125,34 @@ func TestPathBuilder(t *testing.T) {
 			require.Equal(t, tt.wantDir, gotDir)
 			gotETLPath := m.BuildETLPath(tt.args.db, tt.args.name, ETLParamAccountAll)
 			require.Equal(t, tt.wantETLPath, gotETLPath)
-			gotLogFN := m.NewLogFilename(tt.args.name, tt.args.nodeUUID, tt.args.nodeType, tt.args.ts)
+			gotLogFN := m.NewLogFilename(tt.args.name, tt.args.nodeUUID, tt.args.nodeType, tt.args.ts, tt.args.ext)
 			require.Equal(t, tt.wantLogFN, gotLogFN)
+		})
+	}
+}
+
+func TestString2Bytes(t *testing.T) {
+	type args struct {
+		s string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantRet []byte
+	}{
+		{
+			name: "normal",
+			args: args{
+				s: "12345a",
+			},
+			wantRet: []byte{'1', '2', '3', '4', '5', 'a'},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if gotRet := String2Bytes(tt.args.s); !reflect.DeepEqual(gotRet, tt.wantRet) {
+				t.Errorf("String2Bytes() = %v, want %v", gotRet, tt.wantRet)
+			}
 		})
 	}
 }

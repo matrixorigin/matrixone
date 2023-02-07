@@ -370,7 +370,18 @@ func (mp *MysqlProtocolImpl) ResetStatistics() {
 }
 
 func (mp *MysqlProtocolImpl) Quit() {
+	mp.m.Lock()
+	defer mp.m.Unlock()
 	mp.ProtocolImpl.Quit()
+	if mp.strconvBuffer != nil {
+		mp.strconvBuffer = nil
+	}
+	if mp.lenEncBuffer != nil {
+		mp.lenEncBuffer = nil
+	}
+	if mp.binaryNullBuffer != nil {
+		mp.binaryNullBuffer = nil
+	}
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {

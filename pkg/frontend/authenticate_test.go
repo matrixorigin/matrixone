@@ -209,7 +209,10 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		convey.So(exists, convey.ShouldBeTrue)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = InitSysTenant(ctx)
+		// A mock autoIncrCaches.
+		aic := defines.AutoIncrCaches{}
+
+		err = InitSysTenant(ctx, aic)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -3483,17 +3486,6 @@ func Test_determineDML(t *testing.T) {
 							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
 							{NodeType: plan.Node_DELETE},
 						},
-					},
-				},
-			},
-		},
-		{ //insert into values
-			stmt: &tree.Insert{},
-			p: &plan2.Plan{
-				Plan: &plan.Plan_Ins{
-					Ins: &plan.InsertValues{
-						DbName:  "t",
-						TblName: "a",
 					},
 				},
 			},

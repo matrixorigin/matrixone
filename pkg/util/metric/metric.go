@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -87,6 +86,11 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		return
 	}
 	var initOpts InitOptions
+	opts = append(opts,
+		withExportInterval(SV.MetricExportInterval),
+		withUpdateInterval(SV.MetricUpdateStorageUsageInterval.Duration),
+		withMultiTable(SV.MetricMultiTable),
+	)
 	for _, opt := range opts {
 		opt.ApplyTo(&initOpts)
 	}
@@ -108,8 +112,9 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	}
 
 	// start the data flow
-	moCollector.Start(ctx)
-	moExporter.Start(ctx)
+	serviceCtx := context.Background()
+	moCollector.Start(serviceCtx)
+	moExporter.Start(serviceCtx)
 
 	if getExportToProm() {
 		// http.HandleFunc("/query", makeDebugHandleFunc(ieFactory))
@@ -127,10 +132,15 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		logutil.Infof("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
 	}
 
+	SetUpdateStorageUsageInterval(initOpts.updateInterval)
 	logutil.Infof("metric with ExportInterval: %v", initOpts.exportInterval)
+	logutil.Infof("metric with UpdateStorageUsageInterval: %v", initOpts.updateInterval)
 }
 
 func StopMetricSync() {
+	if !atomic.CompareAndSwapUint32(&inited, 1, 0) {
+		return
+	}
 	if moCollector != nil {
 		if ch, effect := moCollector.Stop(true); effect {
 			<-ch
@@ -147,8 +157,7 @@ func StopMetricSync() {
 		_ = statusSvr.Shutdown(context.TODO())
 		statusSvr = nil
 	}
-	// mark inited = false
-	_ = atomic.CompareAndSwapUint32(&inited, 1, 0)
+	logutil.Info("Shutdown metric complete.")
 }
 
 func mustRegiterToProm(collector prom.Collector) {
@@ -304,13 +313,16 @@ var allSubSystem = map[string]*SubSystem{
 }
 
 type InitOptions struct {
-	writerFactory export.FSWriterFactory // see WithWriterFactory
+	writerFactory table.WriterFactory // see WithWriterFactory
 	// needInitTable control to do the initTables
 	needInitTable bool // see WithInitAction
 	// initSingleTable
 	multiTable bool // see WithMultiTable
 	// exportInterval
-	exportInterval time.Duration // see WithExportInterval
+	exportInterval time.Duration // see withExportInterval
+	// updateInterval, update StorageUsage interval
+	// set by withUpdateInterval
+	updateInterval time.Duration
 }
 
 type InitOption func(*InitOptions)
@@ -319,7 +331,7 @@ func (f InitOption) ApplyTo(opts *InitOptions) {
 	f(opts)
 }
 
-func WithWriterFactory(factory export.FSWriterFactory) InitOption {
+func WithWriterFactory(factory table.WriterFactory) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.writerFactory = factory
 	})
@@ -331,26 +343,32 @@ func WithInitAction(init bool) InitOption {
 	})
 }
 
-func WithMultiTable(multi bool) InitOption {
+func withMultiTable(multi bool) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.multiTable = multi
 	})
 }
 
-func WithExportInterval(sec int) InitOption {
+func withExportInterval(sec int) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.exportInterval = time.Second * time.Duration(sec)
 	})
 }
 
+func withUpdateInterval(interval time.Duration) InitOption {
+	return InitOption(func(opts *InitOptions) {
+		opts.updateInterval = interval
+	})
+}
+
 var (
-	metricNameColumn        = table.Column{Name: `metric_name`, Type: `VARCHAR(128)`, ColType: table.TVarchar, Default: `unknown`, Comment: `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
-	metricCollectTimeColumn = table.Column{Name: `collecttime`, Type: `DATETIME(6)`, ColType: table.TDatetime, Comment: `metric data collect time`}
-	metricValueColumn       = table.Column{Name: `value`, Type: `DOUBLE`, ColType: table.TFloat64, Default: `0.0`, Comment: `metric value`}
-	metricNodeColumn        = table.Column{Name: `node`, Type: `VARCHAR(36)`, ColType: table.TVarchar, Default: ALL_IN_ONE_MODE, Comment: `mo node uuid`}
-	metricRoleColumn        = table.Column{Name: `role`, Type: `VARCHAR(32)`, ColType: table.TVarchar, Default: ALL_IN_ONE_MODE, Comment: `mo node role, like: CN, DN, LOG`}
-	metricAccountColumn     = table.Column{Name: `account`, Type: `VARCHAR(128)`, ColType: table.TVarchar, Default: `sys`, Comment: `account name`}
-	metricTypeColumn        = table.Column{Name: `type`, Type: `VARCHAR(32)`, ColType: table.TVarchar, Comment: `sql type, like: insert, select, ...`}
+	metricNameColumn        = table.StringDefaultColumn(`metric_name`, `sys`, `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`)
+	metricCollectTimeColumn = table.DatetimeColumn(`collecttime`, `metric data collect time`)
+	metricValueColumn       = table.ValueColumn(`value`, `metric value`)
+	metricNodeColumn        = table.StringDefaultColumn(`node`, ALL_IN_ONE_MODE, `mo node uuid`)
+	metricRoleColumn        = table.StringDefaultColumn(`role`, ALL_IN_ONE_MODE, `mo node role, like: CN, DN, LOG`)
+	metricAccountColumn     = table.StringDefaultColumn(`account`, `sys`, `account name`)
+	metricTypeColumn        = table.StringColumn(`type`, `sql type, like: insert, select, ...`)
 )
 
 var SingleMetricTable = &table.Table{

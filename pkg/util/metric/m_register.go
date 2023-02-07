@@ -29,6 +29,7 @@ var initCollectors = []Collector{
 	TransactionErrorsFactory,
 	// server metric
 	ConnFactory,
+	StorageUsageFactory,
 	// process metric
 	processCollector,
 	// sys metric

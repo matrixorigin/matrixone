@@ -117,6 +117,9 @@ var (
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
 
+	// defaultMetricUpdateStorageUsageInterval default: 15 min.
+	defaultMetricUpdateStorageUsageInterval = 15 * time.Minute
+
 	// defaultMergeCycle default: 4 hours
 	defaultMergeCycle = 4 * time.Hour
 
@@ -128,6 +131,12 @@ var (
 
 	// defaultSessionTimeout default: 10 minutes
 	defaultSessionTimeout = 24 * time.Hour
+
+	// defaultLogsExtension default: tae. Support val in [csv, tae]
+	defaultLogsExtension = "tae"
+
+	// defaultMergedExtension default: tae. Support val in [csv, tae]
+	defaultMergedExtension = "tae"
 )
 
 // FrontendParameters of the frontend
@@ -434,6 +443,9 @@ type ObservabilityParameters struct {
 	// MetricGatherInterval default is 15 sec.
 	MetricGatherInterval int `toml:"metricGatherInterval"`
 
+	// MetricUpdateStorageUsageInterval, default: 30 min
+	MetricUpdateStorageUsageInterval toml.Duration `toml:"metricUpdateStorageUsageInterval"`
+
 	// MergeCycle default: 14400 sec (4 hours).
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"mergeCycle"`
@@ -442,7 +454,13 @@ type ObservabilityParameters struct {
 	MergeMaxFileSize int `toml:"mergeMaxFileSize"`
 
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
-	PathBuilder string `toml:"PathBuilder"`
+	PathBuilder string `toml:"pathBuilder"`
+
+	// LogsExtension default: tae. Support val in [csv, tae]
+	LogsExtension string `toml:"logsExtension"`
+
+	// MergedExtension default: tae. Support val in [csv, tae]
+	MergedExtension string `toml:"mergedExtension"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
@@ -472,6 +490,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 		op.MetricGatherInterval = defaultMetricGatherInterval
 	}
 
+	if op.MetricUpdateStorageUsageInterval.Duration <= 0 {
+		op.MetricUpdateStorageUsageInterval.Duration = defaultMetricUpdateStorageUsageInterval
+	}
+
 	if op.MergeCycle.Duration <= 0 {
 		op.MergeCycle.Duration = defaultMergeCycle
 	}
@@ -482,6 +504,14 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.MergeMaxFileSize <= 0 {
 		op.MergeMaxFileSize = defaultMaxFileSize
+	}
+
+	if op.LogsExtension == "" {
+		op.LogsExtension = defaultLogsExtension
+	}
+
+	if op.MergedExtension == "" {
+		op.MergedExtension = defaultMergedExtension
 	}
 }
 

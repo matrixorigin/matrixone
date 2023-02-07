@@ -793,11 +793,7 @@ func (v *Vector) Append(w any, isNull bool, m *mpool.MPool) error {
 	case types.T_Rowid:
 		return appendOne(v, w.(types.Rowid), isNull, m)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
-		if isNull {
-			return appendOneBytes(v, nil, true, m)
-		}
-		wv := w.([]byte)
-		return appendOneBytes(v, wv, false, m)
+		return appendOneBytes(v, w.([]byte), isNull, m)
 	}
 	return nil
 }
@@ -928,7 +924,7 @@ func Dup(v *Vector, m *mpool.MPool) (*Vector, error) {
 // Window just returns a window out of input and no deep copy.
 func Window(v *Vector, start, end int, w *Vector) *Vector {
 	w.Typ = v.Typ
-	w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+	w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), uint64(start), w.Nsp)
 	w.data = v.data
 	w.area = v.area
 	w.setupColFromData(start, end)

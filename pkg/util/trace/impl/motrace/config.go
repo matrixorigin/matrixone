@@ -16,12 +16,13 @@ package motrace
 
 import (
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 const (
@@ -52,7 +53,7 @@ type tracerProviderConfig struct {
 	idGenerator trace.IDGenerator
 
 	// resource contains attributes representing an entity that produces telemetry.
-	resource *trace.Resource // WithMOVersion, WithNode,
+	resource *trace.Resource // withMOVersion, WithNode,
 
 	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
@@ -61,7 +62,7 @@ type tracerProviderConfig struct {
 	batchProcessor   BatchProcessor // WithBatchProcessor
 
 	// writerFactory gen writer for CSV output
-	writerFactory FSWriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory4Trace
+	writerFactory table.WriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory4Trace
 
 	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
 	// needInit control table schema create
@@ -113,7 +114,7 @@ func (f tracerProviderOption) apply(config *tracerProviderConfig) {
 	f(config)
 }
 
-func WithMOVersion(v string) tracerProviderOption {
+func withMOVersion(v string) tracerProviderOption {
 	return func(config *tracerProviderConfig) {
 		config.resource.Put("version", v)
 	}
@@ -135,7 +136,7 @@ func EnableTracer(enable bool) tracerProviderOption {
 	}
 }
 
-func WithFSWriterFactory(f FSWriterFactory) tracerProviderOption {
+func WithFSWriterFactory(f table.WriterFactory) tracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.writerFactory = f
 	})

@@ -487,6 +487,13 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		newExpr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
+	case tree.ILIKE:
+		op = "ilike"
+
+	case tree.NOT_ILIKE:
+		newExpr := tree.NewComparisonExpr(tree.ILIKE, astExpr.Left, astExpr.Right)
+		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
+
 	case tree.IN:
 		switch astExpr.Right.(type) {
 		case *tree.Tuple:
@@ -695,6 +702,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 		}
+	case "trim":
+		astArgs = astArgs[1:]
 	}
 	// bind ast function's args
 	args := make([]*Expr, len(astArgs))

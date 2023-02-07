@@ -240,6 +240,10 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		if c.Bootstrapping {
 			s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
 		}
+		if c.DeleteCNStore != nil {
+			s.handleDeleteCNCmd(c.UUID)
+			continue
+		}
 		l, ok := s.state.ScheduleCommands[c.UUID]
 		if !ok {
 			l = pb.CommandBatch{
@@ -391,6 +395,11 @@ func (s *stateMachine) handleTaskTableUserCmd(cmd []byte) sm.Result {
 	return result
 }
 
+func (s *stateMachine) handleDeleteCNCmd(uuid string) sm.Result {
+	delete(s.state.CNState.Stores, uuid)
+	return sm.Result{}
+}
+
 // FIXME: NextID should be set to K8SIDRangeEnd once HAKeeper state is
 // set to HAKeeperBootstrapping.
 func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
@@ -517,11 +526,16 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		LogStores: make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
 	}
 	for uuid, info := range s.state.CNState.Stores {
+		state := pb.NormalState
+		if cfg.CNStoreExpired(info.Tick, s.state.Tick) {
+			state = pb.TimeoutState
+		}
 		n := pb.CNStore{
 			UUID:           uuid,
 			Tick:           info.Tick,
 			ServiceAddress: info.ServiceAddress,
 			SQLAddress:     info.SQLAddress,
+			State:          state,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}

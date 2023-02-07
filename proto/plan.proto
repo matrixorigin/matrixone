@@ -250,9 +250,9 @@ message PrimaryKeyDef {
 	IndexOption option		= 3;
 
 	// Composed primary key column name: __mo_cpkey
-
+	string pkey_col_name = 4;
 	// XXX: Deprecated and to be removed soon.
-	repeated string names = 4;
+	repeated string names = 5;
 }
 
 message IndexDef {
@@ -325,17 +325,26 @@ enum PartitionType {
 	LIST_COLUMNS = 7;
 }
 
-message PartitionInfo {
+message PartitionByDef {
 	PartitionType type = 1;
-	Expr Expr = 2;
+	PartitionExpr partition_expr = 2;
 	Expr partition_expression = 3;
-	repeated Expr Columns = 4;
-	repeated string partition_columns = 5;
-	uint64 partitionNum = 6;
-	repeated PartitionItem partitions = 7;
-	int64 algorithm = 8;
-	bool is_sub_partition = 9;
-	string partition_msg = 10;
+	PartitionColumns partition_columns = 4;
+	uint64 partitionNum = 5;
+	repeated PartitionItem partitions = 6;
+	int64 algorithm = 7;
+	bool is_sub_partition = 8;
+	string partition_msg = 9;
+}
+
+message PartitionExpr {
+	Expr expr = 1;
+	string expr_str = 2;
+}
+
+message PartitionColumns {
+	repeated Expr columns = 1;
+	repeated string partition_columns = 2;
 }
 
 message PartitionItem {
@@ -347,29 +356,6 @@ message PartitionItem {
 	repeated Expr in_values = 6;
 }
 
-message PartitionDef {
-	enum PartitionType {
-		KEY = 0;
-		LINEAR_KEY = 1;
-		HASH = 2;
-		LINEAR_HASH = 3;
-		RANGE = 4;
-		RANGE_COLUMNS = 5;
-		LIST = 6;
-		LIST_COLUMNS = 7;
-	}
-
-	PartitionType type = 1;
-	Expr Expr = 2;
-	Expr partition_expression = 3;
-	repeated Expr Columns = 4;
-	repeated string partition_columns = 5;
-	uint64 partitionNum = 6;
-	repeated PartitionItem partitions = 7;
-	int64 algorithm = 8;
-	bool is_sub_partition = 9;
-	string partition_msg = 10;
-}
 
 message ViewDef {
 	string view  = 1;
@@ -400,11 +386,9 @@ message TableDef {
 	// XXX: Deprecated and to be removed soon.
 	message DefType {
 		oneof def {
-			PrimaryKeyDef pk			= 1;
-			PropertiesDef properties	= 2;
-			PartitionInfo partition		= 3;
-			UniqueIndexDef uIdx			= 4;
-			SecondaryIndexDef sIdx		= 5;
+			PropertiesDef properties	= 1;
+			UniqueIndexDef uIdx			= 2;
+			SecondaryIndexDef sIdx		= 3;
 		}
 	}
 
@@ -422,10 +406,11 @@ message TableDef {
 	repeated uint64 ref_child_tbls	= 14;
 	repeated CheckDef checks		= 15;
 
-	PartitionDef partition		= 21;
+	PartitionByDef partition		= 21;
 	ClusterByDef cluster_by		= 22;
 	repeated PropertyDef props	= 23;
 	ViewDef view_sql			= 24;
+	repeated ColDef origin_cols	= 25;
 
 	// XXX: Deprecated and to be removed soon.
 	repeated DefType defs	= 31;
@@ -485,20 +470,39 @@ message WindowSpec {
 	int32 lag  = 4;
 }
 
+message InsertCtx {
+	ObjectRef ref 					= 1;
+	repeated int32 idx 				= 2;
+	TableDef table_def 				= 3;
+
+	map<string, int32> parent_idx 	= 4;
+
+	ClusterTable cluster_table = 5;
+}
+
 message UpdateCtx {
-	string db_name = 1;
-	string tbl_name = 2;
-	string hide_key = 3;
-	int32 hide_key_idx = 4;
-	repeated ColDef update_cols = 5;
-	repeated string other_attrs = 6;
-	repeated string order_attrs = 7;
-	ColDef composite_pkey = 8;
-	bool is_index_table_update = 9;
-	repeated int32 uniqueIndexPos = 10;
-	repeated int32	secondaryIndexPos = 11;
-	repeated string indexParts = 12;
-	ClusterByDef clusterByDef = 13;
+	repeated ObjectRef ref 				= 1;
+	repeated IdList idx 				= 2;
+	repeated TableDef tableDefs 		= 3;
+	repeated ColPosMap update_col 		= 4; 
+
+	repeated ObjectRef idx_ref 			= 5;
+	repeated int32 idx_idx 				= 6;
+
+	repeated ObjectRef on_restrict_ref 	= 7;
+	repeated int32 on_restrict_idx 		= 8;
+
+	repeated ObjectRef on_cascade_ref 			= 9;
+	repeated IdList on_cascade_idx 				= 10;
+	repeated TableDef on_cascade_def			= 11;
+	repeated ColPosMap on_cascade_update_col 	= 12; 
+
+	repeated ObjectRef on_set_ref 			= 13;
+	repeated IdList on_set_idx 				= 14;
+	repeated TableDef on_set_def			= 15;
+	repeated ColPosMap on_set_update_col 	= 16; 
+
+	repeated ColPosMap parent_idx = 17;
 }
 
 message AnalyzeInfo {
@@ -611,7 +615,7 @@ message Node {
 	repeated Expr grouping_set = 10;
 	repeated Expr agg_list = 11;
 	repeated OrderBySpec order_by = 12;
-	repeated UpdateCtx update_ctxs = 13;
+	UpdateCtx update_ctx = 13;
 	WindowSpec win_spec = 14;
 	Expr limit = 15;
 	Expr offset = 16;
@@ -633,14 +637,16 @@ message Node {
     int32   parallelism = 26;
 
 	ClusterTable cluster_table = 27;
+	bool not_cacheable = 28;
+	InsertCtx insert_ctx = 29;
 }
 
 message IdList {
 	repeated int64 list = 1;
 }
 
-message Attrs {
-	repeated string list = 1;
+message ColPosMap {
+	map<string, int32> map = 1;
 }
 
 message DeleteCtx {
@@ -651,13 +657,16 @@ message DeleteCtx {
 
 	repeated ObjectRef on_restrict_ref 	= 4;
 	repeated int32 on_restrict_idx 		= 5;
+
 	repeated ObjectRef on_cascade_ref 	= 6;
 	repeated int32 on_cascade_idx 		= 7;
-	repeated ObjectRef on_set_ref 		= 8;
-	repeated Attrs on_set_attrs 		= 9;
-	repeated IdList on_set_idx 			= 10;
-	bool can_truncate 					= 11;
-	repeated IdList parent_ids 			= 12;
+
+	repeated ObjectRef on_set_ref 			= 8;
+	repeated TableDef on_set_def 			= 9;
+	repeated IdList on_set_idx 				= 10;
+	repeated ColPosMap on_set_update_col 	= 11; 
+	
+	bool can_truncate = 12;
 }
 
 message Query {
@@ -738,23 +747,7 @@ message Plan {
 		TransationControl tcl 	= 2;
 		DataDefinition ddl 		= 3;
 		DataControl	dcl			= 4;
-		InsertValues ins = 5;
 	}
-}
-
-message InsertValues {
-	string db_name = 1;
-	string tbl_name = 2;
-	repeated ColDef explicit_cols = 3;
-	repeated ColDef other_cols = 4;
-	repeated string order_attrs = 5;
-	repeated column columns = 6;
-	ColDef composite_pkey = 7;
-	UniqueIndexDef unique_index_def = 8;
-	SecondaryIndexDef secondary_index_def = 9;
-	ClusterTable cluster_table = 10;
-	ClusterByDef cb=11;
-	bool has_auto_col = 12;
 }
 
 message column{

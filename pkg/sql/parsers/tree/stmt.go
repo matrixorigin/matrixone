@@ -34,7 +34,7 @@ type statementImpl struct {
 }
 
 const (
-	// QueryTypeDQL (Data Query Language) Select, MoDump, Show, ShowCreateTable, ValuesStatement, With
+	// QueryTypeDQL (Data Query Language) Select, MoDump, ValuesStatement, With
 	QueryTypeDQL = "DQL"
 	// QueryTypeDDL (Data Definition Language): CreateDatabase, DropDatabase, DropTable,
 	// Create/Drop/Alter/Rename Database/Table/View/Index/Function, TruncateTable,
@@ -50,5 +50,6 @@ const (
 	// QueryTypeOth (Other.)
 	// statement: AnalyzeStmt(Not Support), ExplainStmt, ExplainAnalyze, ExplainFor,
 	// SetVar, SetDefaultRole, SetRole, SetPassword, Declare, Do, TableFunction, Use, PrepareStmt, Execute, Deallocate, Kill
+	// Show ..., ShowCreateTable, ShowColumns(Desc)
 	QueryTypeOth = "Other"
 )

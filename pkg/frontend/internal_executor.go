@@ -16,14 +16,20 @@ package frontend
 
 import (
 	"context"
-	"github.com/fagongzi/goetty/v2"
 	"sync"
+
+	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
+
+const DefaultTenantMoAdmin = "sys:internal:moadmin"
 
 func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	if opts.Database != nil {
@@ -46,23 +52,25 @@ type internalMiniExec interface {
 
 type internalExecutor struct {
 	sync.Mutex
-	proto        *internalProtocol
-	executor     internalMiniExec // MySqlCmdExecutor struct impls miniExec
-	pu           *config.ParameterUnit
-	baseSessOpts ie.SessionOverrideOptions
+	proto          *internalProtocol
+	executor       internalMiniExec // MySqlCmdExecutor struct impls miniExec
+	pu             *config.ParameterUnit
+	baseSessOpts   ie.SessionOverrideOptions
+	autoIncrCaches defines.AutoIncrCaches
 }
 
-func NewInternalExecutor(pu *config.ParameterUnit) *internalExecutor {
-	return newIe(pu, NewMysqlCmdExecutor())
+func NewInternalExecutor(pu *config.ParameterUnit, autoIncrCaches defines.AutoIncrCaches) *internalExecutor {
+	return newIe(pu, NewMysqlCmdExecutor(), autoIncrCaches)
 }
 
-func newIe(pu *config.ParameterUnit, inner internalMiniExec) *internalExecutor {
+func newIe(pu *config.ParameterUnit, inner internalMiniExec, autoIncrCaches defines.AutoIncrCaches) *internalExecutor {
 	proto := &internalProtocol{result: &internalExecResult{}}
 	ret := &internalExecutor{
-		proto:        proto,
-		executor:     inner,
-		pu:           pu,
-		baseSessOpts: ie.NewOptsBuilder().Finish(),
+		proto:          proto,
+		executor:       inner,
+		pu:             pu,
+		baseSessOpts:   ie.NewOptsBuilder().Finish(),
+		autoIncrCaches: autoIncrCaches,
 	}
 	return ret
 }
@@ -116,6 +124,14 @@ func (res *internalExecResult) StringValueByName(ctx context.Context, ridx uint6
 	}
 }
 
+func (res *internalExecResult) Float64ValueByName(ctx context.Context, ridx uint64, col string) (float64, error) {
+	if cidx, err := res.resultSet.columnName2Index(ctx, col); err != nil {
+		return 0.0, err
+	} else {
+		return res.resultSet.GetFloat64(ctx, ridx, cidx)
+	}
+}
+
 func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
 	ie.Lock()
 	defer ie.Unlock()
@@ -133,6 +149,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	defer sess.Dispose()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = true
+	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
 	err := ie.executor.doComQuery(ctx, sql)
 	res := ie.proto.swapOutResult()
 	res.err = err
@@ -156,6 +173,12 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	}
 	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true)
 	sess.SetRequestContext(ctx)
+
+	// Set AutoIncrCache for this session.
+	sess.SetAutoIncrCaches(ie.autoIncrCaches)
+
+	t, _ := GetTenantInfo(ctx, DefaultTenantMoAdmin)
+	sess.SetTenantInfo(t)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
 	return sess
@@ -334,7 +357,7 @@ func (ip *internalProtocol) SendResponse(ctx context.Context, resp *Response) er
 	ip.ResetStatistics()
 	if resp.category == ResultResponse {
 		if mer := resp.data.(*MysqlExecutionResult); mer != nil && mer.Mrs() != nil {
-			ip.sendRows(mer.Mrs(), mer.affectedRows)
+			ip.sendRows(mer.Mrs(), mer.mrs.GetRowCount())
 		}
 	} else {
 		// OkResponse. this is NOT ErrorResponse because error will be returned by doComQuery

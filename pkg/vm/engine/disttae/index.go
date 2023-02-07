@@ -17,7 +17,6 @@ package disttae
 import "github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 
 const (
-	index_Time               = memtable.Text("time")
 	index_PrimaryKey         = memtable.Text("primary key")
 	index_BlockID_Time_OP    = memtable.Text("block id, time, op")
 	index_TableID_PrimaryKey = memtable.Text("table id, primary key")

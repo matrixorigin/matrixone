@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -144,7 +145,53 @@ func (catalog *Catalog) InitSystemDB() {
 		panic(err)
 	}
 }
-
+func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
+	logutil.Infof("GC Catalog %v", ts.ToString())
+	processor := LoopProcessor{}
+	processor.DatabaseFn = func(d *DBEntry) error {
+		d.RLock()
+		needGC := d.DeleteBefore(ts)
+		d.RUnlock()
+		if needGC {
+			catalog.RemoveEntry(d)
+		}
+		return nil
+	}
+	processor.TableFn = func(te *TableEntry) error {
+		te.RLock()
+		needGC := te.DeleteBefore(ts)
+		te.RUnlock()
+		if needGC {
+			db := te.db
+			db.RemoveEntry(te)
+		}
+		return nil
+	}
+	processor.SegmentFn = func(se *SegmentEntry) error {
+		se.RLock()
+		needGC := se.DeleteBefore(ts)
+		se.RUnlock()
+		if needGC {
+			tbl := se.table
+			tbl.RemoveEntry(se)
+		}
+		return nil
+	}
+	processor.BlockFn = func(be *BlockEntry) error {
+		be.RLock()
+		needGC := be.DeleteBefore(ts)
+		be.RUnlock()
+		if needGC {
+			seg := be.segment
+			seg.RemoveEntry(be)
+		}
+		return nil
+	}
+	err := catalog.RecurLoop(&processor)
+	if err != nil {
+		panic(err)
+	}
+}
 func (catalog *Catalog) ReplayCmd(
 	txncmd txnif.TxnCmd,
 	dataFactory DataFactory,
@@ -870,6 +917,7 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	}
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(database.String()))
+	database.Close()
 	catalog.Lock()
 	defer catalog.Unlock()
 	if n, ok := catalog.entries[database.GetID()]; !ok {

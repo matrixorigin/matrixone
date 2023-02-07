@@ -321,6 +321,10 @@ func (pi *ProtocolImpl) Quit() {
 			return
 		}
 	}
+	//release salt
+	if pi.salt != nil {
+		pi.salt = nil
+	}
 }
 
 func (pi *ProtocolImpl) GetLock() sync.Locker {

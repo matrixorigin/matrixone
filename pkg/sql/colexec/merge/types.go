@@ -15,8 +15,9 @@
 package merge
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"reflect"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type container struct {

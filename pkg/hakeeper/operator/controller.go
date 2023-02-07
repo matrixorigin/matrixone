@@ -137,6 +137,8 @@ func generateScheduleCommand(step OpStep) pb.ScheduleCommand {
 		return stopLogStore(st)
 	case CreateTaskService:
 		return createTaskService(st)
+	case DeleteCNStore:
+		return deleteCNStore(st)
 	}
 	panic("invalid schedule command")
 }
@@ -278,6 +280,16 @@ func createTaskService(st CreateTaskService) pb.ScheduleCommand {
 		CreateTaskService: &pb.CreateTaskService{
 			User:         st.TaskUser,
 			TaskDatabase: "mo_task",
+		},
+	}
+}
+
+func deleteCNStore(st DeleteCNStore) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID:        st.StoreID,
+		ServiceType: pb.CNService,
+		DeleteCNStore: &pb.DeleteCNStore{
+			StoreID: st.StoreID,
 		},
 	}
 }

@@ -202,6 +202,9 @@ func (n *Bitmap) AddMany(rows []uint64) {
 }
 
 func (n *Bitmap) Remove(row uint64) {
+	if row >= uint64(n.len) {
+		return
+	}
 	n.data[row>>6] &^= (uint64(1) << (row & 0x3F))
 	if n.emptyFlag == -1 {
 		n.emptyFlag = 0 //after remove operation, not sure
