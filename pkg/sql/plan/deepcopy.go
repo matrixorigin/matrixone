@@ -506,11 +506,17 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		Createsql:     table.Createsql,
 		Name2ColIndex: table.Name2ColIndex,
 		CompositePkey: nil,
+		OriginCols:    make([]*plan.ColDef, len(table.OriginCols)),
 	}
 
 	for idx, col := range table.Cols {
 		newTable.Cols[idx] = DeepCopyColDef(col)
 	}
+
+	for idx, col := range table.OriginCols {
+		newTable.OriginCols[idx] = DeepCopyColDef(col)
+	}
+
 	if table.TblFunc != nil {
 		newTable.TblFunc = &plan.TableFunction{
 			Name:  table.TblFunc.Name,

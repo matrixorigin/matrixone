@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
@@ -607,7 +608,7 @@ func TestReadDirSymlink(t *testing.T) {
 
 	// read a/b/d/foo
 	fooPathInB := filepath.Join(root, "a", "b", "d", "foo")
-	files, _, err := ReadDir(&tree.ExternParam{
+	files, _, err := plan2.ReadDir(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			Filepath: fooPathInB,
 		},
@@ -620,7 +621,7 @@ func TestReadDirSymlink(t *testing.T) {
 	assert.Equal(t, fooPathInB, files[0])
 
 	path1 := root + "/a//b/./../b/c/foo"
-	files1, _, err := ReadDir(&tree.ExternParam{
+	files1, _, err := plan2.ReadDir(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			Filepath: path1,
 		},
