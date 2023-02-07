@@ -410,6 +410,7 @@ message TableDef {
 	ClusterByDef cluster_by		= 22;
 	repeated PropertyDef props	= 23;
 	ViewDef view_sql			= 24;
+	repeated ColDef origin_cols	= 25;
 
 	// XXX: Deprecated and to be removed soon.
 	repeated DefType defs	= 31;
