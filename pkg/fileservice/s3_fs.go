@@ -477,14 +477,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 		if entry.Size == 0 {
 			return moerr.NewEmptyRangeNoCtx(path.File)
-		} else if entry.Size > 0 {
-			content, err := getContent(ctx)
-			if err != nil {
-				return err
-			}
-			if start >= int64(len(content)) {
-				return moerr.NewEmptyRangeNoCtx(path.File)
-			}
 		}
 
 		// a function to get entry data lazily
