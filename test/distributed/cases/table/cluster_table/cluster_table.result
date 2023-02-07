@@ -303,7 +303,7 @@ drop table cluster_table_4;
 internal error: do not have privilege to execute the statement
 use mo_catalog;
 insert into cluster_table_4 values (3, 'c');
-internal error: only the sys account can insert data into the cluster table
+internal error: only the sys account can insert/update/delete the cluster table
 update cluster_table_4 set col1=10 where col2='a';
 internal error: only the sys account can insert/update/delete the cluster table
 delete from cluster_table_4 where col1=2;

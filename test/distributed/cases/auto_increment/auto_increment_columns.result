@@ -114,10 +114,10 @@ a    b
 202    xefrsdfgds
 insert into t1 values (-9223372036854775808,'xefrsdfgds');
 insert into t1 values (-9223372036854775809,'xefrsdfgds');
-truncated type BIGINT value -9223372036854775809 for column a, 1
+Data truncation: data out of range: data type int64, value '-9223372036854775809'
 insert into t1 values (9223372036854775807,'xefrsdfgds');
 insert into t1 values (9223372036854775808,'xefrsdfgds');
-truncated type BIGINT value 9223372036854775808 for column a, 1
+Data truncation: data out of range: data type int64, 
 insert into t1(b) values ('eeeee');
 Data truncation: data out of range: data type bigint, value 9223372036854775808
 drop table t1;
@@ -131,7 +131,7 @@ select * from t2 order by c;
 c    d
 -2147483648    aaa
 insert into t2 values (-2147483649, 'aaa');
-truncated type INT value -2147483649 for column c, 1
+Data truncation: data out of range: data type int32, value '-2147483649'
 insert into t2(d) values ('1111');
 select * from t2 order by c;
 c    d
@@ -139,7 +139,7 @@ c    d
 1    1111
 insert into t2 values(2147483647, 'bbb');
 insert into t2 values(2147483648, 'bbb');
-truncated type INT value 2147483648 for column c, 1
+Data truncation: data out of range: data type int32, value '2147483648'
 insert into t2(d) values ('22222');
 Data truncation: data out of range: data type int, value 2147483648
 select * from t2 order by c;
@@ -307,10 +307,10 @@ a    b
 202    xefrsdfgds
 insert into t4 values (-9223372036854775808,'xefrsdfgds');
 insert into t4 values (-9223372036854775809,'xefrsdfgds');
-truncated type BIGINT value -9223372036854775809 for column a, 1
+Data truncation: data out of range: data type int64, value '-9223372036854775809'
 insert into t4 values (9223372036854775807,'xefrsdfgds');
 insert into t4 values (9223372036854775808,'xefrsdfgds');
-truncated type BIGINT value 9223372036854775808 for column a, 1
+Data truncation: data out of range: data type int64, 
 insert into t4(b) values ('eeeee');
 Data truncation: data out of range: data type bigint, value 9223372036854775808
 drop table t4;
@@ -324,7 +324,7 @@ select * from t5 order by c;
 c    d
 -2147483648    aaa
 insert into t5 values (-2147483649, 'aaa');
-truncated type INT value -2147483649 for column c, 1
+Data truncation: data out of range: data type int32, value '-2147483649'
 insert into t5(d) values ('1111');
 select * from t5 order by c;
 c    d
@@ -332,7 +332,7 @@ c    d
 1    1111
 insert into t5 values(2147483647, 'bbb');
 insert into t5 values(2147483648, 'bbb');
-truncated type INT value 2147483648 for column c, 1
+Data truncation: data out of range: data type int32, value '2147483648'
 select * from t5 order by c;
 c    d
 -2147483648    aaa
@@ -441,7 +441,7 @@ a    b    c    d    e
 101    401    200    200    200
 102    402    200    400    600
 insert into t6 values ('a','a','a','a','a');
-truncated type INT value a for column a, 1
+invalid argument cast to int, bad value a
 select * from t6 order by a;
 a    b    c    d    e
 0    0    0    0    0

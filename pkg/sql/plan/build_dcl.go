@@ -98,7 +98,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			}
 		}
 
-	case *plan.Plan_Query, *plan.Plan_Ins:
+	case *plan.Plan_Query:
 		// collect args
 		getParamRule := NewGetParamRule()
 		VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
