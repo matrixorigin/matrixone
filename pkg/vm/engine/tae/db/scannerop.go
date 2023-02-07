@@ -159,14 +159,14 @@ func (d *deletableSegBuilder) finish() []*catalog.SegmentEntry {
 	if last := len(d.segCandids) - 1; last >= 0 && d.segCandids[last].ID == d.maxSegId {
 		d.segCandids = d.segCandids[:last]
 	}
-	if len(d.segCandids) == 0 {
+	if len(d.segCandids) == 0 && len(d.nsegCandids) == 0 {
 		return nil
 	}
 	ret := make([]*catalog.SegmentEntry, len(d.segCandids)+len(d.nsegCandids))
 	copy(ret[:len(d.segCandids)], d.segCandids)
 	copy(ret[len(d.segCandids):], d.nsegCandids)
 	if cnt := len(d.nsegCandids); cnt != 0 {
-		logutil.Info("deletable nseg", zap.Int("cnt", cnt))
+		logutil.Info("Mergeblocks deletable nseg", zap.Int("cnt", cnt))
 	}
 	return ret
 }
@@ -280,8 +280,32 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 	if s.tid == 0 {
 		return
 	}
+	// compactable blks
 	mergedBlks := s.blkBuilder.finish()
-	if !s.limiter.canMerge(s.tid, s.tableRowCnt, len(mergedBlks)) {
+	// deletable segs
+	mergedSegs := s.segBuilder.finish()
+	hasDelSeg := len(mergedSegs) > 0
+	hasMergeBlk := s.limiter.canMerge(s.tid, s.tableRowCnt, len(mergedBlks))
+	if !hasDelSeg && !hasMergeBlk {
+		return
+	}
+
+	segScopes := make([]common.ID, len(mergedSegs))
+	for i, s := range mergedSegs {
+		segScopes[i] = *s.AsCommonID()
+	}
+
+	// remove stale segments only
+	if hasDelSeg && !hasMergeBlk {
+		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
+			return jobs.NewDelSegTask(ctx, txn, mergedSegs), nil
+		}
+		_, err := s.db.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, segScopes, factory)
+		if err != nil {
+			logutil.Infof("[Mergeblocks] Schedule del seg errinfo=%v", err)
+			return
+		}
+		logutil.Infof("[Mergeblocks] Scheduled | del %d seg", len(mergedSegs))
 		return
 	}
 
@@ -289,24 +313,16 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 	for i, blk := range mergedBlks {
 		scopes[i] = *blk.AsCommonID()
 	}
-	// deletable segs
-	mergedSegs := s.segBuilder.finish()
-
-	segIds := make([]uint64, len(mergedSegs))
-	for i, s := range mergedSegs {
-		segIds[i] = s.ID
-	}
 
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		return jobs.NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, s.db.Scheduler)
 	}
-
 	_, err := s.db.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 	if err != nil {
 		logutil.Infof("[Mergeblocks] Schedule errinfo=%v", err)
 	} else {
-		logutil.Infof("[Mergeblocks] Scheduled | Scopes=%v,[%d]%s",
-			segIds, len(scopes),
+		logutil.Infof("[Mergeblocks] Scheduled | Scopes=[%d],[%d]%s",
+			len(segScopes), len(scopes),
 			common.BlockIDArraryString(scopes[:constMergeMinBlks]))
 	}
 }
