@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"golang.org/x/sync/errgroup"
 
@@ -3278,9 +3277,9 @@ func (ses *Session) getSqlType(sql string) {
 		return
 	}
 	source := strings.TrimSpace(sql[p1+2 : p2-p1])
-	if source == "cloud_user" {
+	if source == cloudUserTag {
 		ses.sqlSourceType = cloudUserSql
-	} else if source == "cloud_nouser" {
+	} else if source == cloudNoUserTag {
 		ses.sqlSourceType = cloudNoUserSql
 	} else {
 		ses.sqlSourceType = externSql
@@ -3302,8 +3301,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 			}
 		}
 	}()
-
-	err = external.InitInfileParam(param)
+	err = plan2.InitInfileParam(param)
 	if err != nil {
 		return
 	}
