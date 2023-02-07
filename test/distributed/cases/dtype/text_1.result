@@ -52,7 +52,7 @@ col2 datetime,
 col3 timestamp
 );
 insert into t6 values ('2022-02-01', '2022-02-01:23:59 59.999999', '2037-09-08 23:59:59.999999');
-truncated type DATETIME value 2022-02-01:23:59 59.999999 for column col2, 1
+invalid input: invalid datatime value 2022-02-01:23:59 59.999999
 select cast(col1 as text), cast(col2 as text), cast(col3 as text) from t6;
 cast(col1 as text)    cast(col2 as text)    cast(col3 as text)
 drop table t6;
@@ -374,7 +374,7 @@ find_in_set(bbb, b)
 delete from t9 where a is not NULL;
 insert into t9 values ('', 'abcd');
 insert into t1 values ('1111', '');
-invalid input: insert table is invalid 't1'
+no such table text_1.t1
 select empty(a),empty(b) from t9;
 empty(a)    empty(b)
 1    0

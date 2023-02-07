@@ -57,15 +57,15 @@ func getUserName(proc *process.Process) *vector.Vector {
 }
 
 func getAccountId(proc *process.Process) *vector.Vector {
-	return vector.NewConstFixed[uint32](types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.AccountId, proc.Mp())
+	return vector.NewConstFixed(types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.AccountId, proc.Mp())
 }
 
 func getRoleId(proc *process.Process) *vector.Vector {
-	return vector.NewConstFixed[uint32](types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.RoleId, proc.Mp())
+	return vector.NewConstFixed(types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.RoleId, proc.Mp())
 }
 
 func getUserId(proc *process.Process) *vector.Vector {
-	return vector.NewConstFixed[uint32](types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.UserId, proc.Mp())
+	return vector.NewConstFixed(types.Type{Oid: types.T_uint32}, 1, proc.SessionInfo.UserId, proc.Mp())
 }
 
 func currentAccountCall(_ int, proc *process.Process, arg *Argument) (bool, error) {

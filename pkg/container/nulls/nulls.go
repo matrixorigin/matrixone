@@ -194,22 +194,23 @@ func RemoveRange(n *Nulls, start, end uint64) {
 }
 
 // Range adds the numbers in n starting at start and ending at end to m.
+// `bias` represents the starting offset used for the Range Output
 // Return the result
-func Range(n *Nulls, start, end uint64, m *Nulls) *Nulls {
+func Range(n *Nulls, start, end, bias uint64, m *Nulls) *Nulls {
 	switch {
 	case n.Np == nil && m.Np == nil:
 	case n.Np != nil && m.Np == nil:
-		m.Np = bitmap.New(int(end + 1))
+		m.Np = bitmap.New(int(end + 1 - bias))
 		for ; start < end; start++ {
 			if n.Np.Contains(start) {
-				m.Np.Add(start)
+				m.Np.Add(start - bias)
 			}
 		}
 	case n.Np != nil && m.Np != nil:
-		m.Np = bitmap.New(int(end + 1))
+		m.Np = bitmap.New(int(end + 1 - bias))
 		for ; start < end; start++ {
 			if n.Np.Contains(start) {
-				m.Np.Add(start)
+				m.Np.Add(start - bias)
 			}
 		}
 	}
