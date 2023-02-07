@@ -156,6 +156,21 @@ func (vec *CnTaeVector[T]) Extend(src Vector) {
 	vec.ExtendWithOffset(src, 0, src.Length())
 }
 
+func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+
+	if srcLen <= 0 {
+		return
+	}
+
+	// The downstream vector, ie CN vector needs isNull as argument.
+	// So, we can't directly call cn_vector.Append() without parsing the data.
+	// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
+	//it into the current vector for this ExtendWithOffset().
+	for i := srcOff; i < srcOff+srcLen; i++ {
+		vec.Append(src.Get(i))
+	}
+}
+
 func (vec *CnTaeVector[T]) Update(i int, v any) {
 	UpdateValue(vec.downstreamVector, uint32(i), v)
 }
@@ -502,30 +517,7 @@ func (vec *CnTaeVector[T]) Equals(o Vector) bool {
 }
 
 func (vec *CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-
-	if sels == nil || sels.IsEmpty() {
-		for i := offset; i < offset+length; i++ {
-			elem := vec.Get(i)
-			if err = op(elem, i); err != nil {
-				break
-			}
-		}
-	} else {
-
-		selsArray := sels.ToArray()
-		end := offset + length
-		for _, rowId := range selsArray {
-			if int(rowId) < offset {
-				continue
-			} else if int(rowId) >= end {
-				break
-			}
-			elem := vec.Get(int(rowId))
-			if err = op(elem, int(rowId)); err != nil {
-				break
-			}
-		}
-	}
+	err = vec.forEachWindowWithBias(offset, length, op, sels, 0)
 	return
 }
 
@@ -596,21 +588,6 @@ func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 
 	vec.isAllocatedFromMpool = false
 	// TODO: Doesn't reset the capacity
-}
-
-func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
-
-	if srcLen <= 0 {
-		return
-	}
-
-	// The downstream vector, ie CN vector needs isNull as argument.
-	// So, we can't directly call cn_vector.Append() without parsing the data.
-	// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
-	//it into the current vector for this ExtendWithOffset().
-	for i := srcOff; i < srcOff+srcLen; i++ {
-		vec.Append(src.Get(i))
-	}
 }
 
 func (vec *CnTaeVector[T]) Close() {
