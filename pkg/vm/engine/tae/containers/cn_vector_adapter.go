@@ -202,7 +202,7 @@ func (vec *CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	n += int64(nr)
 
 	// 2. DownStream Vector
-	output, _ := vec.downstreamVector.MarshalBinary()
+	output, err := vec.downstreamVector.MarshalBinary()
 	if nr, err = w.Write(output); err != nil {
 		return
 	}
@@ -510,8 +510,6 @@ func (vec *CnTaeVector[T]) Equals(o Vector) bool {
 func (vec *CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 
 	if sels == nil || sels.IsEmpty() {
-		//TODO: When sel is Empty(), should we run it for all the entries or should we not perform at all.
-		// In current DN impl, when sel is empty(), we run it on all the entries.
 		for i := offset; i < offset+length; i++ {
 			elem := vec.Get(i)
 			if err = op(elem, i); err != nil {
@@ -588,7 +586,7 @@ func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	// The downstream vector, ie CN vector needs isNull as argument.
 	// So, we can't directly call cn_vector.Append() without parsing the data.
 	// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
-	//it into the current vector for extending.
+	//it into the current vector for this ExtendWithOffset().
 	for i := srcOff; i < srcOff+srcLen; i++ {
 		vec.Append(src.Get(i))
 	}
