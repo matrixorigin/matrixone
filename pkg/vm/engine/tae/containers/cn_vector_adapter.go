@@ -307,7 +307,6 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 	// Create a clone
 	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
 	cloned.isAllocatedFromMpool = true
-	cloned.isNullable = vec.Nullable()
 
 	// Create a duplicate of the current vector
 	vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
@@ -349,7 +348,8 @@ func (vec *CnTaeVector[T]) Data() []byte {
 }
 
 func (vec *CnTaeVector[T]) SlicePtr() unsafe.Pointer {
-	panic("Soon Deprecated")
+	slice := vec.Slice().([]T)
+	return unsafe.Pointer(&slice[0])
 }
 
 func (vec *CnTaeVector[T]) AppendNoNulls(s any) {
@@ -581,13 +581,14 @@ func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 
 func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 
-	//TODO: ExtendWithOffset impl is having poor benchmark score.
-	//Will migrate the DN implementation to CN once CN vector impl is completed.
-
 	if srcLen <= 0 {
 		return
 	}
 
+	// The downstream vector, ie CN vector needs isNull as argument.
+	// So, we can't directly call cn_vector.Append() without parsing the data.
+	// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
+	//it into the current vector for extending.
 	for i := srcOff; i < srcOff+srcLen; i++ {
 		vec.Append(src.Get(i))
 	}
