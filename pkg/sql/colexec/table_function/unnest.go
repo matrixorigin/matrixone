@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
 )
 
 func genFilterMap(filters []string) map[string]struct{} {

@@ -3276,9 +3276,9 @@ func (ses *Session) getSqlType(sql string) {
 		return
 	}
 	source := strings.TrimSpace(sql[p1+2 : p2-p1])
-	if source == "cloud_user" {
+	if source == cloudUserTag {
 		ses.sqlSourceType = cloudUserSql
-	} else if source == "cloud_nonuser" {
+	} else if source == cloudNoUserTag {
 		ses.sqlSourceType = cloudNoUserSql
 	} else {
 		ses.sqlSourceType = externSql

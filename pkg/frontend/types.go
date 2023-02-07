@@ -102,6 +102,8 @@ const (
 	cloudUserSql    = "cloud_user_sql"
 	cloudNoUserSql  = "cloud_nonuser_sql"
 	externSql       = "external_sql"
+	cloudUserTag    = "cloud_user"
+	cloudNoUserTag  = "cloud_nonuser"
 )
 
 // Cache size of auto_increment_columns cache.
