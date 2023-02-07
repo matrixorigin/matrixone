@@ -50,11 +50,12 @@ type DeleteCtx struct {
 	OnCascadeSource []engine.Relation
 	OnCascadeIdx    []int32
 
-	OnSetSource    []engine.Relation
-	OnSetIdx       [][]int32
-	OnSetRef       []*plan.ObjectRef
-	OnSetTableDef  []*plan.TableDef
-	OnSetUpdateCol []map[string]int32
+	OnSetSource       []engine.Relation
+	OnSetUniqueSource [][]engine.Relation
+	OnSetIdx          [][]int32
+	OnSetRef          []*plan.ObjectRef
+	OnSetTableDef     []*plan.TableDef
+	OnSetUpdateCol    []map[string]int32
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

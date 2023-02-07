@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"golang.org/x/sync/errgroup"
 
@@ -445,7 +444,15 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 	if len(dbName) == 0 {
 		dbName = ses.GetDatabaseName()
 	}
+
 	tableName := string(stmt.Table.ToTableName().ObjectName)
+	ctx := ses.GetTxnCompileCtx()
+	_, tableDef := ctx.Resolve(dbName, tableName)
+	if tableDef == nil {
+		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tableName)
+	}
+
+	colNameToColContent := make(map[string][]interface{})
 	for _, d := range data {
 		colName := string(d[0].([]byte))
 		if colName == catalog.Row_ID {
@@ -500,7 +507,7 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 
 			row[5] = ""
 			row[6] = d[6]
-			mrs.AddRow(row)
+			colNameToColContent[colName] = row
 		} else {
 			row := make([]interface{}, 9)
 			row[0] = colName
@@ -544,8 +551,14 @@ func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
 			row[6] = ""
 			row[7] = d[7]
 			row[8] = d[8]
+			colNameToColContent[colName] = row
+		}
+	}
+	for _, col := range tableDef.Cols {
+		if row, ok := colNameToColContent[col.Name]; ok {
 			mrs.AddRow(row)
 		}
+
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
 		logErrorf(ses.GetConciseProfile(), "handleShowColumns error %v", err)
@@ -3263,9 +3276,9 @@ func (ses *Session) getSqlType(sql string) {
 		return
 	}
 	source := strings.TrimSpace(sql[p1+2 : p2-p1])
-	if source == "cloud_user" {
+	if source == cloudUserTag {
 		ses.sqlSourceType = cloudUserSql
-	} else if source == "cloud_nouser" {
+	} else if source == cloudNoUserTag {
 		ses.sqlSourceType = cloudNoUserSql
 	} else {
 		ses.sqlSourceType = externSql
@@ -3281,7 +3294,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	}()
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
-	err = external.InitInfileParam(param)
+	err = plan2.InitInfileParam(param)
 	if err != nil {
 		return
 	}

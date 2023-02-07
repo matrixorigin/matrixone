@@ -275,7 +275,7 @@ func TestEngineAllType(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	_, n, err := rel.Stats(ctx)
+	_, n, _, err := rel.Stats(ctx, nil)
 	assert.Nil(t, err)
 	assert.Zero(t, n)
 	assert.Nil(t, txn.Commit())

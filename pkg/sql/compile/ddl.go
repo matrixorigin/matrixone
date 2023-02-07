@@ -869,10 +869,6 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	c := new(engine.ConstraintDef)
 	for _, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
-		case *plan.TableDef_DefType_Pk:
-			exeDefs = append(exeDefs, &engine.PrimaryIndexDef{
-				Names: defVal.Pk.GetNames(),
-			})
 		case *plan.TableDef_DefType_Properties:
 			properties := make([]engine.Property, len(defVal.Properties.GetProperties()))
 			for i, p := range defVal.Properties.GetProperties() {
@@ -883,14 +879,6 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 			}
 			exeDefs = append(exeDefs, &engine.PropertiesDef{
 				Properties: properties,
-			})
-		case *plan.TableDef_DefType_Partition:
-			bytes, err := defVal.Partition.MarshalPartitionInfo()
-			if err != nil {
-				return nil, err
-			}
-			exeDefs = append(exeDefs, &engine.PartitionDef{
-				Partition: string(bytes),
 			})
 		case *plan.TableDef_DefType_UIdx:
 			bytes, err := defVal.UIdx.MarshalUniqueIndexDef()
@@ -911,6 +899,16 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 		}
 	}
 
+	if tableDef.Partition != nil {
+		bytes, err := tableDef.Partition.MarshalPartitionInfo()
+		if err != nil {
+			return nil, err
+		}
+		exeDefs = append(exeDefs, &engine.PartitionDef{
+			Partition: string(bytes),
+		})
+	}
+
 	if tableDef.ViewSql != nil {
 		exeDefs = append(exeDefs, &engine.ViewDef{
 			View: tableDef.ViewSql.View,
@@ -920,6 +918,12 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	if len(tableDef.Fkeys) > 0 {
 		c.Cts = append(c.Cts, &engine.ForeignKeyDef{
 			Fkeys: tableDef.Fkeys,
+		})
+	}
+
+	if tableDef.Pkey != nil {
+		c.Cts = append(c.Cts, &engine.PrimaryKeyDef{
+			Pkey: tableDef.Pkey,
 		})
 	}
 
@@ -978,19 +982,16 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 // Get the required columns of the index table from the original table
 func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []string) []string {
 	colNameMap := make(map[string]int)
-	for _, def := range tblDefs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Primary {
-				colNameMap[attr.Attr.Name] = 1
-				break
+	for _, tbldef := range tblDefs {
+		if constraintDef, ok := tbldef.(*engine.ConstraintDef); ok {
+			for _, ct := range constraintDef.Cts {
+				if pk, ok2 := ct.(*engine.PrimaryKeyDef); ok2 {
+					for _, name := range pk.Pkey.Names {
+						colNameMap[name] = 1
+					}
+					break
+				}
 			}
-		} else if cpk, ok := def.(*engine.PrimaryIndexDef); ok {
-			for _, name := range cpk.Names {
-				colNameMap[name] = 1
-			}
-			break
-		} else {
-			continue
 		}
 	}
 
