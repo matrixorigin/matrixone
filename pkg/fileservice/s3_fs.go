@@ -811,11 +811,13 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		if err != nil {
 			return nil, err
 		}
-		if region == "" {
-			return nil, moerr.NewInvalidInput(ctx, "region must not be empty")
-		}
+
 		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
-			options.Region = region
+			if region == "" {
+				options.Region = "ap-east-1" // any region is OK
+			} else {
+				options.Region = region
+			}
 		})
 		credentialProvider = stscreds.NewAssumeRoleProvider(
 			stsSvc,
