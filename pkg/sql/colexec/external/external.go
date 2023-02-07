@@ -258,15 +258,16 @@ func judgeContainColname(expr *plan.Expr) bool {
 		}
 		return flag
 	}
-	switch col := expr_F.F.Args[0].Expr.(type) {
-	case *plan.Expr_Col:
-		return containColname(col.Col.Name)
-	case *plan.Expr_F:
-		return judgeContainColname(expr_F.F.Args[0])
-	default:
-		return false
+	expr_Col, ok := expr_F.F.Args[0].Expr.(*plan.Expr_Col)
+	if ok && containColname(expr_Col.Col.Name) {
+		return true
 	}
-	return true
+	for _, arg := range expr_F.F.Args {
+		if judgeContainColname(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 func getAccountCol(filepath string) string {
