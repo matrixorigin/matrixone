@@ -51,10 +51,6 @@ func (win *CnTaeVectorWindow[T]) NullMask() *roaring64.Bitmap {
 	return common.BM64Window(mask, win.offset, win.offset+win.length)
 }
 
-func (win *CnTaeVectorWindow[T]) Data() []byte {
-	panic("Soon Deprecated")
-}
-
 func (win *CnTaeVectorWindow[T]) Bytes() *Bytes {
 	bs := win.ref.Bytes()
 	bs = bs.Window(win.offset, win.length)
@@ -63,10 +59,6 @@ func (win *CnTaeVectorWindow[T]) Bytes() *Bytes {
 
 func (win *CnTaeVectorWindow[T]) Slice() any {
 	return win.ref.Slice().([]T)[win.offset : win.offset+win.length]
-}
-
-func (win *CnTaeVectorWindow[T]) SlicePtr() unsafe.Pointer {
-	panic("Soon Deprecated")
 }
 
 func (win *CnTaeVectorWindow[T]) Get(i int) any {
@@ -100,14 +92,6 @@ func (win *CnTaeVectorWindow[T]) ForeachWindow(offset, length int, op ItOp, sels
 		panic("bad param")
 	}
 	return win.ref.ForeachWindow(win.offset, win.length, op, sels)
-}
-
-func (win *CnTaeVectorWindow[T]) WriteTo(w io.Writer) (int64, error) {
-	panic("not required")
-}
-
-func (win *CnTaeVectorWindow[T]) GetView() VectorView {
-	panic("not required")
 }
 
 func (win *CnTaeVectorWindow[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
@@ -187,4 +171,20 @@ func (win *CnTaeVectorWindow[T]) Window(offset, length int) Vector {
 			length: length,
 		},
 	}
+}
+
+func (win *CnTaeVectorWindow[T]) WriteTo(w io.Writer) (int64, error) {
+	panic("not implemented")
+}
+
+func (win *CnTaeVectorWindow[T]) GetView() VectorView {
+	panic("Soon Deprecated")
+}
+func (win *CnTaeVectorWindow[T]) Data() []byte {
+	panic("Soon Deprecated")
+}
+
+func (win *CnTaeVectorWindow[T]) SlicePtr() unsafe.Pointer {
+	slice := win.ref.Slice().([]T)[win.offset : win.offset+win.length]
+	return unsafe.Pointer(&slice[0])
 }
