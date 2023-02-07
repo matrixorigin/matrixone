@@ -924,7 +924,7 @@ func Dup(v *Vector, m *mpool.MPool) (*Vector, error) {
 // Window just returns a window out of input and no deep copy.
 func Window(v *Vector, start, end int, w *Vector) *Vector {
 	w.Typ = v.Typ
-	w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+	w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), uint64(start), w.Nsp)
 	w.data = v.data
 	w.area = v.area
 	w.setupColFromData(start, end)
