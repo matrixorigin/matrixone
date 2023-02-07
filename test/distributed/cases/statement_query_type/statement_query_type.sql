@@ -149,7 +149,7 @@ deallocate prepare s1;
 rollback;
 
 use system;
-select sleep(15);
+select sleep(16);
 select statement,query_type,sql_source_type from  statement_info where user="dump" and sql_source_type="external_sql" order by request_at desc limit 114;
 
 
@@ -229,88 +229,86 @@ select statement,query_type,sql_source_type from  statement_info where user="dum
 /* cloud_user */ use system;
 /* cloud_user */ drop database test_db;
 
--- @bvt:issue#7778
-/* cloud_user */ select sleep(15);
+/* cloud_user */ select sleep(16);
 /* cloud_user */ select statement,query_type,sql_source_type from  statement_info where user="dump" and sql_source_type="cloud_user_sql" order by request_at desc limit 68;
--- @bvt:issue
 
 -- test cloud_no_user_sql type
-/* cloud_nouser */ use statement_query_type;
-/* cloud_nouser */ begin;
-/* cloud_nouser */ commit;
-/* cloud_nouser */ start transaction;
-/* cloud_nouser */ rollback;
+/* cloud_nonuser */ use statement_query_type;
+/* cloud_nonuser */ begin;
+/* cloud_nonuser */ commit;
+/* cloud_nonuser */ start transaction;
+/* cloud_nonuser */ rollback;
 
-/* cloud_nouser */ drop database if exists test_db;
-/* cloud_nouser */ create database test_db;
-/* cloud_nouser */ use test_db;
-/* cloud_nouser */ drop table if exists test_table;
-/* cloud_nouser */ create table test_table(col1 int,col2 varchar);
-/* cloud_nouser */ create view test_view as select * from test_table;
-/* cloud_nouser */ show create database test_db;
-/* cloud_nouser */ show create table test_table;
-/* cloud_nouser */ show create view test_view;
-/* cloud_nouser */ show triggers;
-/* cloud_nouser */ show procedure status;
-/* cloud_nouser */ show config;
-/* cloud_nouser */ show events;
-/* cloud_nouser */ show plugins;
-/* cloud_nouser */ show profiles;
-/* cloud_nouser */ show privileges;
-/* cloud_nouser */ show processlist;
-/* cloud_nouser */ show tables;
-/* cloud_nouser */ show collation;
-/* cloud_nouser */ show collation like '%';
-/* cloud_nouser */ show index from test_table;
-/* cloud_nouser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
-/* cloud_nouser */ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+/* cloud_nonuser */ drop database if exists test_db;
+/* cloud_nonuser */ create database test_db;
+/* cloud_nonuser */ use test_db;
+/* cloud_nonuser */ drop table if exists test_table;
+/* cloud_nonuser */ create table test_table(col1 int,col2 varchar);
+/* cloud_nonuser */ create view test_view as select * from test_table;
+/* cloud_nonuser */ show create database test_db;
+/* cloud_nonuser */ show create table test_table;
+/* cloud_nonuser */ show create view test_view;
+/* cloud_nonuser */ show triggers;
+/* cloud_nonuser */ show procedure status;
+/* cloud_nonuser */ show config;
+/* cloud_nonuser */ show events;
+/* cloud_nonuser */ show plugins;
+/* cloud_nonuser */ show profiles;
+/* cloud_nonuser */ show privileges;
+/* cloud_nonuser */ show processlist;
+/* cloud_nonuser */ show tables;
+/* cloud_nonuser */ show collation;
+/* cloud_nonuser */ show collation like '%';
+/* cloud_nonuser */ show index from test_table;
+/* cloud_nonuser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
+/* cloud_nonuser */ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 
-/* cloud_nouser */ insert into test_table values (1,'a'),(2,'b'),(3,'c');
-/* cloud_nouser */ update test_table set col2='xxx' where col1=1;
-/* cloud_nouser */ delete from test_table where col1=3;
+/* cloud_nonuser */ insert into test_table values (1,'a'),(2,'b'),(3,'c');
+/* cloud_nonuser */ update test_table set col2='xxx' where col1=1;
+/* cloud_nonuser */ delete from test_table where col1=3;
 
-/* cloud_nouser */ create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
-/* cloud_nouser */ create role test_role;
-/* cloud_nouser */ create user user_name identified by 'password';
-/* cloud_nouser */ create database if not exists db1;
-/* cloud_nouser */ grant create table,drop table on database *.* to test_role;
-/* cloud_nouser */ revoke test_role from user_name;
-/* cloud_nouser */ drop user user_name;
-/* cloud_nouser */ drop role test_role;
-/* cloud_nouser */ drop account test_account;
-/* cloud_nouser */ drop database db1;
+/* cloud_nonuser */ create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
+/* cloud_nonuser */ create role test_role;
+/* cloud_nonuser */ create user user_name identified by 'password';
+/* cloud_nonuser */ create database if not exists db1;
+/* cloud_nonuser */ grant create table,drop table on database *.* to test_role;
+/* cloud_nonuser */ revoke test_role from user_name;
+/* cloud_nonuser */ drop user user_name;
+/* cloud_nonuser */ drop role test_role;
+/* cloud_nonuser */ drop account test_account;
+/* cloud_nonuser */ drop database db1;
 
-/* cloud_nouser */ create database db2;
-/* cloud_nouser */ create table table_2(col1 int,col2 varchar);
-/* cloud_nouser */ create view view_2 as select * from table_2;
-/* cloud_nouser */ create index index_table_2 on table_2(col1);
+/* cloud_nonuser */ create database db2;
+/* cloud_nonuser */ create table table_2(col1 int,col2 varchar);
+/* cloud_nonuser */ create view view_2 as select * from table_2;
+/* cloud_nonuser */ create index index_table_2 on table_2(col1);
 
-/* cloud_nouser */ drop index index_table_2 on table_2;
-/* cloud_nouser */ drop view view_2;
-/* cloud_nouser */ drop table table_2;
-/* cloud_nouser */ drop database db2;
+/* cloud_nonuser */ drop index index_table_2 on table_2;
+/* cloud_nonuser */ drop view view_2;
+/* cloud_nonuser */ drop table table_2;
+/* cloud_nonuser */ drop database db2;
 
-/* cloud_nouser */ select * from unnest('{"a":1}') as f;
-/* cloud_nouser */ prepare s1 from select * from test_table where col1=?;
-/* cloud_nouser */ set @a=2;
-/* cloud_nouser */ execute s1 using @a;
-/* cloud_nouser */ deallocate prepare s1;
+/* cloud_nonuser */ select * from unnest('{"a":1}') as f;
+/* cloud_nonuser */ prepare s1 from select * from test_table where col1=?;
+/* cloud_nonuser */ set @a=2;
+/* cloud_nonuser */ execute s1 using @a;
+/* cloud_nonuser */ deallocate prepare s1;
 
-/* cloud_nouser */ drop table if exists test_01;
-/* cloud_nouser */ create table test_01(a int, b varchar);
-/* cloud_nouser */ show create table test_01;
-/* cloud_nouser */ insert into test_01 values (1,'a');
-/* cloud_nouser */ insert into test_01 values (2,'b');
-/* cloud_nouser */ update test_01 set a=100 where b='b';
-/* cloud_nouser */ select * from test_01;
-/* cloud_nouser */ explain select * from test_01;
-/* cloud_nouser */ delete from test_01 where a=1;
-/* cloud_nouser */ truncate table test_01;
-/* cloud_nouser */ drop table test_01;
-/* cloud_nouser */ use system;
-/* cloud_nouser */ drop database test_db;
-/* cloud_nouser */ select sleep(15);
-/* cloud_nouser */ select statement,query_type,sql_source_type from  statement_info where user="dump" order by request_at desc limit 68;
+/* cloud_nonuser */ drop table if exists test_01;
+/* cloud_nonuser */ create table test_01(a int, b varchar);
+/* cloud_nonuser */ show create table test_01;
+/* cloud_nonuser */ insert into test_01 values (1,'a');
+/* cloud_nonuser */ insert into test_01 values (2,'b');
+/* cloud_nonuser */ update test_01 set a=100 where b='b';
+/* cloud_nonuser */ select * from test_01;
+/* cloud_nonuser */ explain select * from test_01;
+/* cloud_nonuser */ delete from test_01 where a=1;
+/* cloud_nonuser */ truncate table test_01;
+/* cloud_nonuser */ drop table test_01;
+/* cloud_nonuser */ use system;
+/* cloud_nonuser */ drop database test_db;
+/* cloud_nonuser */ select sleep(16);
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  statement_info where user="dump" order by request_at desc limit 68;
 -- @bvt:issue#7789
 show create view test_view;
 show collation;
