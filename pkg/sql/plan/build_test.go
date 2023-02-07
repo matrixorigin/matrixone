@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/stretchr/testify/assert"
 	"os"
 	"strings"
 	"testing"
@@ -1020,4 +1021,35 @@ func runTestShouldError(opt Optimizer, t *testing.T, sqls []string) {
 			t.Fatalf("should error, but pass: %v", sql)
 		}
 	}
+}
+
+func Test_mergeContexts(t *testing.T) {
+	b1 := NewBinding(0, 1, "a", nil, nil, false)
+	bc1 := NewBindContext(nil, nil)
+	bc1.bindings = append(bc1.bindings, b1)
+
+	b2 := NewBinding(1, 2, "a", nil, nil, false)
+	bc2 := NewBindContext(nil, nil)
+	bc2.bindings = append(bc2.bindings, b2)
+
+	bc := NewBindContext(nil, nil)
+
+	//a merge a
+	err := bc.mergeContexts(context.Background(), bc1, bc2)
+	assert.Error(t, err)
+	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
+
+	//a merge b
+	b3 := NewBinding(2, 3, "b", nil, nil, false)
+	bc3 := NewBindContext(nil, nil)
+	bc3.bindings = append(bc3.bindings, b3)
+
+	err = bc.mergeContexts(context.Background(), bc1, bc3)
+	assert.NoError(t, err)
+
+	// a merge a, ctx is  nil
+	var ctx context.Context
+	err = bc.mergeContexts(ctx, bc1, bc2)
+	assert.Error(t, err)
+	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
 }

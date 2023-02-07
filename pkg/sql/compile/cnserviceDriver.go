@@ -724,17 +724,22 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			TargetColDefs:  t.TargetColDefs,
-			Affected:       t.Affected,
-			TableID:        t.TableID,
-			CPkeyColDef:    t.CPkeyColDef,
-			DBName:         t.DBName,
-			TableName:      t.TableName,
-			ClusterTable:   t.ClusterTable,
-			ClusterByDef:   t.ClusterByDef,
-			UniqueIndexDef: t.UniqueIndexDef,
-			IsRemote:       t.IsRemote,
-			HasAutoCol:     t.HasAutoCol,
+			IsRemote: t.IsRemote,
+			Affected: t.Affected,
+			// TargetColDefs:  t.TargetColDefs,
+			// TableID:        t.TableID,
+			// CPkeyColDef:    t.CPkeyColDef,
+			// DBName:         t.DBName,
+			// TableName:      t.TableName,
+			// ClusterTable:   t.ClusterTable,
+			// ClusterByDef:   t.ClusterByDef,
+			// UniqueIndexDef: t.UniqueIndexDef,
+			// HasAutoCol:     t.HasAutoCol,
+			Ref:          t.InsertCtx.Ref,
+			TableDef:     t.InsertCtx.TableDef,
+			Idx:          t.InsertCtx.Idx,
+			ClusterTable: t.InsertCtx.ClusterTable,
+			ParentIdx:    t.InsertCtx.ParentIdx,
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
@@ -987,17 +992,15 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Insert:
 		t := opr.GetInsert()
 		v.Arg = &insert.Argument{
-			TargetColDefs:  t.TargetColDefs,
-			Affected:       t.Affected,
-			TableID:        t.TableID,
-			CPkeyColDef:    t.CPkeyColDef,
-			DBName:         t.DBName,
-			TableName:      t.TableName,
-			UniqueIndexDef: t.UniqueIndexDef,
-			ClusterTable:   t.ClusterTable,
-			ClusterByDef:   t.ClusterByDef,
-			IsRemote:       t.IsRemote,
-			HasAutoCol:     t.HasAutoCol,
+			Affected: t.Affected,
+			IsRemote: t.IsRemote,
+			InsertCtx: &insert.InsertCtx{
+				Idx:          t.Idx,
+				Ref:          t.Ref,
+				TableDef:     t.TableDef,
+				ParentIdx:    t.ParentIdx,
+				ClusterTable: t.ClusterTable,
+			},
 		}
 	case vm.Anti:
 		t := opr.GetAnti()
