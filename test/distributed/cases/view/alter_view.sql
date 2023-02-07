@@ -41,9 +41,7 @@ SELECT * FROM v1;
 
 alter view if exists v1 AS SELECT CAST(1/3 AS DOUBLE), CAST(1/3 AS FLOAT(2)), CAST(1/3 AS FLOAT(50));
 alter view v1 AS SELECT CAST(1/3 AS DOUBLE), CAST(1/3 AS FLOAT(2)), CAST(1/3 AS FLOAT(50));
--- @bvt:issue#7817
 SHOW CREATE VIEW v1;
--- @bvt:issue
 SELECT * FROM v1;
 DROP VIEW v1;
 
@@ -57,9 +55,7 @@ SELECT f1 FROM (SELECT f1 FROM v) AS dt1 NATURAL JOIN v dt2 WHERE f1 > 5;
 SELECT f1 FROM v NATURAL JOIN v dt2 WHERE f1 > 5;
 
 ALTER VIEW v AS SELECT f1 FROM (SELECT f1 FROM v) AS dt1 NATURAL JOIN v dt2 WHERE f1 > 5;
--- @bvt:issue#7810
 SELECT * FROM v;
--- @bvt:issue
 
 drop table if exists t;
 drop VIEW if exists v;
