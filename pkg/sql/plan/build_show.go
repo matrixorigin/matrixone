@@ -544,6 +544,27 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
+	var keyStr string
+	if dbName == catalog.MO_CATALOG && tblName == catalog.MO_DATABASE {
+		keyStr = "case when attname = '" + catalog.SystemDBAttr_ID + "' then 'PRI' else '' END as `Key`"
+	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_TABLES {
+		keyStr = "case when attname = '" + catalog.SystemRelAttr_ID + "' then 'PRI' else '' END as `Key`"
+	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_COLUMNS {
+		keyStr = "case when attname = '" + catalog.SystemColAttr_UniqName + "' then 'PRI' else '' END as `Key`"
+	} else {
+		if tableDef.Pkey != nil {
+			keyStr += "case"
+			for _, name := range tableDef.Pkey.Names {
+				keyStr += " when attname = "
+				keyStr += "'" + name + "'"
+				keyStr += " then 'PRI'"
+			}
+			keyStr += " else '' END as `Key`"
+		} else {
+			keyStr = "'' as `Key`"
+		}
+	}
+
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
 
 	var sql string
@@ -554,17 +575,17 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			clusterTable = fmt.Sprintf(" or att_relname = '%s'", tblName)
 		}
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = "SELECT attname `Field`, atttyp `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
+		sql = "SELECT attname `Field`, atttyp `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
 		if stmt.Full {
-			sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
+			sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
 		}
-		sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
+		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 	} else {
-		sql = "SELECT attname `Field`, atttyp `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+		sql = "SELECT attname `Field`, atttyp `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
 		if stmt.Full {
-			sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+			sql = "SELECT attname `Field`, atttyp `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
 		}
-		sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName)
+		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
 
 	if stmt.Where != nil {
