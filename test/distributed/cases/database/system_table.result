@@ -37,8 +37,8 @@ columns_priv
 tables_priv
 show columns from `user`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO        ''        
-user    CHAR(32)    NO        ''        
+host    CHAR(255)    NO    PRI    ''
+user    CHAR(32)    NO    PRI    ''
 select_priv    VARCHAR(10)    NO        'N'        
 insert_priv    VARCHAR(10)    NO        'N'        
 update_priv    VARCHAR(10)    NO        'N'        
@@ -90,9 +90,9 @@ password_require_current    VARCHAR(10)    YES        null
 user_attributes    JSON    YES        null        
 show columns from `db`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO        ''        
-db    CHAR(64)    NO        ''        
-user    CHAR(32)    NO        ''        
+host    CHAR(255)    NO    PRI    ''
+db    CHAR(64)    NO    PRI    ''
+user    CHAR(32)    NO    PRI    ''
 select_priv    VARCHAR(10)    NO        'N'        
 insert_priv    VARCHAR(10)    NO        'N'        
 update_priv    VARCHAR(10)    NO        'N'        
@@ -114,29 +114,29 @@ event_priv    VARCHAR(10)    NO        'N'
 trigger_priv    VARCHAR(10)    NO        'N'        
 show columns from `procs_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO        ''        
-db    CHAR(64)    NO        ''        
-user    CHAR(32)    NO        ''        
-routine_name    CHAR(64)    NO        ''        
-routine_type    VARCHAR(10)    NO        NULL        
-grantor    VARCHAR(288)    NO        ''        
+host    CHAR(255)    NO    PRI    ''
+db    CHAR(64)    NO    PRI    ''
+user    CHAR(32)    NO    PRI    ''
+routine_name    CHAR(64)    NO    PRI    ''
+routine_type    VARCHAR(10)    NO    PRI    NULL
+grantor    VARCHAR(288)    NO        ''
 proc_priv    VARCHAR(10)    NO        ''        
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
 show columns from `columns_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO        ''        
-db    CHAR(64)    NO        ''        
-user    CHAR(32)    NO        ''        
-table_name    CHAR(64)    NO        ''        
-column_name    CHAR(64)    NO        ''        
+host    CHAR(255)    NO    PRI    ''
+db    CHAR(64)    NO    PRI    ''
+user    CHAR(32)    NO    PRI    ''
+table_name    CHAR(64)    NO    PRI    ''
+column_name    CHAR(64)    NO    PRI    ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
 column_priv    VARCHAR(10)    NO        ''        
 show columns from `tables_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO        ''        
-db    CHAR(64)    NO        ''        
-user    CHAR(32)    NO        ''        
-table_name    CHAR(64)    NO        ''        
+host    CHAR(255)    NO    PRI    ''
+db    CHAR(64)    NO    PRI    ''
+user    CHAR(32)    NO    PRI    ''
+table_name    CHAR(64)    NO    PRI    ''
 grantor    VARCHAR(288)    NO        ''        
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
 table_priv    VARCHAR(10)    NO        ''        
