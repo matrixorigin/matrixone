@@ -65,17 +65,16 @@ message Group {
 }
 
 message Insert{
-  repeated plan.ColDef TargetColDefs = 1;
-  uint64 Affected = 2;
-  uint64 TableID = 3;
-  plan.ColDef CPkeyColDef = 4;
-  string DBName = 5;
-  string TableName = 6;
-  plan.UniqueIndexDef UniqueIndexDef = 7;
-  plan.ClusterTable ClusterTable = 8;
-  plan.ClusterByDef ClusterByDef = 9;
-  bool IsRemote = 10;
-  bool HasAutoCol = 11;
+  uint64 affected   = 1;
+  bool IsRemote     = 2;
+
+  // InsertCtx
+  repeated int32 idx              = 3;
+  plan.ObjectRef ref              = 4;
+  plan.TableDef table_def         = 5;
+  repeated int32 idx_idx          = 6;
+  map<string, int32> parent_idx   = 7;
+  plan.ClusterTable ClusterTable  = 8;
 }
 
 message Join {

@@ -139,7 +139,7 @@ insert into test values("12332.123456", "4");
 insert into test values("12332.1","4");
 insert into test values("12332.2","0");
 insert into test values("19999999.999999999");
-invalid input: insert values does not match the number of columns
+internal error: Column count doesn't match value count at row '0'
 SELECT FORMAT(a, b) from test;
 format(a, b)
 -0.12
@@ -189,7 +189,7 @@ insert into test values("12332.123456", "4", "en_US");
 insert into test values("12332.1","4", "en_US");
 insert into test values("12332.2","0", "en_US");
 insert into test values("19999999.999999999","en_US");
-invalid input: insert values does not match the number of columns
+internal error: Column count doesn't match value count at row '0'
 create table test(a varchar(100), b varchar(100), c varchar(20));
 table test already exists
 insert into test values("-.12334.2","2", "de_CH");
@@ -197,7 +197,7 @@ insert into test values("12332.123456", "4", "de_CH");
 insert into test values("12332.1","4", "de_CH");
 insert into test values("12332.2","0", "de_CH");
 insert into test values("19999999.999999999","de_CH");
-invalid input: insert values does not match the number of columns
+internal error: Column count doesn't match value count at row '0'
 drop table test;
 DROP TABLE IF EXISTS format_01;
 CREATE TABLE format_01(id INT, d1 tinyint, d2 smallint unsigned, d3 int, d4 bigint unsigned, PRIMARY KEY (id));
@@ -207,7 +207,7 @@ INSERT INTO format_01 VALUES(3, 21, 37821, 3782, 0);
 INSERT INTO format_01 VALUES(4, 0, 0, 0, 0);
 INSERT INTO format_01 VALUES(5, 127, 3892, 743482 , 938256415);
 INSERT INTO format_01 VALUES(6, 22, 3, 4, 184467440737095516152);
-truncated type BIGINT UNSIGNED value 184467440737095516152 for column d4, 1
+Data truncation: data out of range: data type uint64, value '184467440737095516152'
 SELECT format(d1, id) from format_01;
 format(d1, id)
 -3.0

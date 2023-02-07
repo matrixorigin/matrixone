@@ -51,6 +51,30 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 	}
 }
 
+func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
+	if ctx == nil {
+		return nil
+	}
+	newCtx := &plan.InsertCtx{
+		Ref:      DeepCopyObjectRef(ctx.Ref),
+		Idx:      make([]int32, len(ctx.Idx)),
+		TableDef: DeepCopyTableDef(ctx.TableDef),
+
+		ClusterTable: DeepCopyClusterTable(ctx.ClusterTable),
+	}
+
+	copy(newCtx.Idx, ctx.Idx)
+
+	if ctx.ParentIdx != nil {
+		newCtx.ParentIdx = make(map[string]int32)
+		for k, v := range ctx.ParentIdx {
+			newCtx.ParentIdx[k] = v
+		}
+	}
+
+	return newCtx
+}
+
 func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 	if ctx == nil {
 		return nil
@@ -251,6 +275,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
+		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
 	}
 
 	copy(newNode.Children, node.Children)
@@ -526,6 +551,53 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		}
 	}
 
+	if table.Partition != nil {
+		partitionDef := &plan.PartitionByDef{
+			Type:                table.Partition.GetType(),
+			PartitionExpression: table.Partition.GetPartitionExpression(),
+			PartitionNum:        table.Partition.GetPartitionNum(),
+			Partitions:          make([]*plan.PartitionItem, len(table.Partition.Partitions)),
+			Algorithm:           table.Partition.GetAlgorithm(),
+			IsSubPartition:      table.Partition.GetIsSubPartition(),
+			PartitionMsg:        table.Partition.GetPartitionMsg(),
+		}
+		if table.Partition.PartitionExpr != nil {
+			partitionDef.PartitionExpr = &plan.PartitionExpr{
+				Expr:    DeepCopyExpr(table.Partition.PartitionExpr.Expr),
+				ExprStr: table.Partition.PartitionExpr.GetExprStr(),
+			}
+		}
+
+		if table.Partition.PartitionColumns != nil {
+			partitionDef.PartitionColumns = &plan.PartitionColumns{
+				Columns:          make([]*plan.Expr, len(table.Partition.PartitionColumns.Columns)),
+				PartitionColumns: make([]string, len(table.Partition.PartitionColumns.PartitionColumns)),
+			}
+			for i, e := range table.Partition.PartitionColumns.Columns {
+				partitionDef.PartitionColumns.Columns[i] = DeepCopyExpr(e)
+			}
+			copy(partitionDef.PartitionColumns.PartitionColumns, table.Partition.PartitionColumns.PartitionColumns)
+		}
+
+		for i, e := range table.Partition.Partitions {
+			partitionDef.Partitions[i] = &plan.PartitionItem{
+				PartitionName:   e.PartitionName,
+				OrdinalPosition: e.OrdinalPosition,
+				Description:     e.Description,
+				Comment:         e.Comment,
+				LessThan:        make([]*plan.Expr, len(e.LessThan)),
+				InValues:        make([]*plan.Expr, len(e.InValues)),
+			}
+			for j, ee := range e.LessThan {
+				partitionDef.Partitions[i].LessThan[j] = DeepCopyExpr(ee)
+			}
+			for j, ee := range e.InValues {
+				partitionDef.Partitions[i].InValues[j] = DeepCopyExpr(ee)
+			}
+		}
+		newTable.Partition = partitionDef
+	}
+
 	for idx, def := range table.Defs {
 		switch defImpl := def.Def.(type) {
 		case *plan.TableDef_DefType_UIdx:
@@ -553,44 +625,6 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 			newTable.Defs[idx] = &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Properties{
 					Properties: propDef,
-				},
-			}
-		case *TableDef_DefType_Partition:
-			partitionDef := &plan.PartitionInfo{
-				Type:                defImpl.Partition.GetType(),
-				Expr:                DeepCopyExpr(defImpl.Partition.Expr),
-				PartitionExpression: defImpl.Partition.GetPartitionExpression(),
-				Columns:             make([]*plan.Expr, len(defImpl.Partition.Columns)),
-				PartitionColumns:    make([]string, len(defImpl.Partition.PartitionColumns)),
-				PartitionNum:        defImpl.Partition.GetPartitionNum(),
-				Partitions:          make([]*plan.PartitionItem, len(defImpl.Partition.Partitions)),
-				Algorithm:           defImpl.Partition.GetAlgorithm(),
-				IsSubPartition:      defImpl.Partition.GetIsSubPartition(),
-				PartitionMsg:        defImpl.Partition.GetPartitionMsg(),
-			}
-			for i, e := range defImpl.Partition.Columns {
-				partitionDef.Columns[i] = DeepCopyExpr(e)
-			}
-			copy(partitionDef.PartitionColumns, defImpl.Partition.PartitionColumns)
-			for i, e := range defImpl.Partition.Partitions {
-				partitionDef.Partitions[i] = &plan.PartitionItem{
-					PartitionName:   e.PartitionName,
-					OrdinalPosition: e.OrdinalPosition,
-					Description:     e.Description,
-					Comment:         e.Comment,
-					LessThan:        make([]*plan.Expr, len(e.LessThan)),
-					InValues:        make([]*plan.Expr, len(e.InValues)),
-				}
-				for j, ee := range e.LessThan {
-					partitionDef.Partitions[i].LessThan[j] = DeepCopyExpr(ee)
-				}
-				for j, ee := range e.InValues {
-					partitionDef.Partitions[i].InValues[j] = DeepCopyExpr(ee)
-				}
-			}
-			newTable.Defs[idx] = &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Partition{
-					Partition: partitionDef,
 				},
 			}
 		}
@@ -627,54 +661,12 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	return newQry
 }
 
-func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
-	newInsert := &plan.InsertValues{
-		DbName:            insert.DbName,
-		TblName:           insert.TblName,
-		ExplicitCols:      make([]*plan.ColDef, len(insert.ExplicitCols)),
-		OtherCols:         make([]*plan.ColDef, len(insert.OtherCols)),
-		Columns:           make([]*plan.Column, len(insert.Columns)),
-		OrderAttrs:        make([]string, len(insert.OrderAttrs)),
-		CompositePkey:     DeepCopyColDef(insert.CompositePkey),
-		PrimaryKeyDef:     DeepCopyPrimaryKeyDef(insert.PrimaryKeyDef),
-		UniqueIndexDef:    DeepCopyUniqueIndexDef(insert.UniqueIndexDef),
-		SecondaryIndexDef: DeepCopySecondaryIndexDef(insert.SecondaryIndexDef),
-		ClusterTable:      DeepCopyClusterTable(insert.GetClusterTable()),
-		HasAutoCol:        insert.HasAutoCol,
-	}
-
-	for idx, col := range insert.ExplicitCols {
-		newInsert.ExplicitCols[idx] = DeepCopyColDef(col)
-	}
-	for idx, col := range insert.OtherCols {
-		newInsert.OtherCols[idx] = DeepCopyColDef(col)
-	}
-	copy(newInsert.OrderAttrs, insert.OrderAttrs)
-	for idx, column := range insert.Columns {
-		newExprs := make([]*Expr, len(column.Column))
-		for i, expr := range column.Column {
-			newExprs[i] = DeepCopyExpr(expr)
-		}
-		newInsert.Columns[idx] = &plan.Column{
-			Column: newExprs,
-		}
-	}
-	return newInsert
-}
-
 func DeepCopyPlan(pl *Plan) *Plan {
 	switch pl := pl.Plan.(type) {
 	case *Plan_Query:
 		return &Plan{
 			Plan: &plan.Plan_Query{
 				Query: DeepCopyQuery(pl.Query),
-			},
-		}
-
-	case *plan.Plan_Ins:
-		return &Plan{
-			Plan: &plan.Plan_Ins{
-				Ins: DeepCopyInsertValues(pl.Ins),
 			},
 		}
 

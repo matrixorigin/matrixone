@@ -325,17 +325,26 @@ enum PartitionType {
 	LIST_COLUMNS = 7;
 }
 
-message PartitionInfo {
+message PartitionByDef {
 	PartitionType type = 1;
-	Expr Expr = 2;
+	PartitionExpr partition_expr = 2;
 	Expr partition_expression = 3;
-	repeated Expr Columns = 4;
-	repeated string partition_columns = 5;
-	uint64 partitionNum = 6;
-	repeated PartitionItem partitions = 7;
-	int64 algorithm = 8;
-	bool is_sub_partition = 9;
-	string partition_msg = 10;
+	PartitionColumns partition_columns = 4;
+	uint64 partitionNum = 5;
+	repeated PartitionItem partitions = 6;
+	int64 algorithm = 7;
+	bool is_sub_partition = 8;
+	string partition_msg = 9;
+}
+
+message PartitionExpr {
+	Expr expr = 1;
+	string expr_str = 2;
+}
+
+message PartitionColumns {
+	repeated Expr columns = 1;
+	repeated string partition_columns = 2;
 }
 
 message PartitionItem {
@@ -347,29 +356,6 @@ message PartitionItem {
 	repeated Expr in_values = 6;
 }
 
-message PartitionDef {
-	enum PartitionType {
-		KEY = 0;
-		LINEAR_KEY = 1;
-		HASH = 2;
-		LINEAR_HASH = 3;
-		RANGE = 4;
-		RANGE_COLUMNS = 5;
-		LIST = 6;
-		LIST_COLUMNS = 7;
-	}
-
-	PartitionType type = 1;
-	Expr Expr = 2;
-	Expr partition_expression = 3;
-	repeated Expr Columns = 4;
-	repeated string partition_columns = 5;
-	uint64 partitionNum = 6;
-	repeated PartitionItem partitions = 7;
-	int64 algorithm = 8;
-	bool is_sub_partition = 9;
-	string partition_msg = 10;
-}
 
 message ViewDef {
 	string view  = 1;
@@ -401,9 +387,8 @@ message TableDef {
 	message DefType {
 		oneof def {
 			PropertiesDef properties	= 1;
-			PartitionInfo partition		= 2;
-			UniqueIndexDef uIdx			= 3;
-			SecondaryIndexDef sIdx		= 4;
+			UniqueIndexDef uIdx			= 2;
+			SecondaryIndexDef sIdx		= 3;
 		}
 	}
 
@@ -421,7 +406,7 @@ message TableDef {
 	repeated uint64 ref_child_tbls	= 14;
 	repeated CheckDef checks		= 15;
 
-	PartitionDef partition		= 21;
+	PartitionByDef partition		= 21;
 	ClusterByDef cluster_by		= 22;
 	repeated PropertyDef props	= 23;
 	ViewDef view_sql			= 24;
@@ -483,6 +468,16 @@ message WindowSpec {
 	repeated OrderBySpec order_by = 2;
 	int32 lead = 3;
 	int32 lag  = 4;
+}
+
+message InsertCtx {
+	ObjectRef ref 					= 1;
+	repeated int32 idx 				= 2;
+	TableDef table_def 				= 3;
+
+	map<string, int32> parent_idx 	= 4;
+
+	ClusterTable cluster_table = 5;
 }
 
 message UpdateCtx {
@@ -643,6 +638,7 @@ message Node {
 
 	ClusterTable cluster_table = 27;
 	bool not_cacheable = 28;
+	InsertCtx insert_ctx = 29;
 }
 
 message IdList {
@@ -751,24 +747,7 @@ message Plan {
 		TransationControl tcl 	= 2;
 		DataDefinition ddl 		= 3;
 		DataControl	dcl			= 4;
-		InsertValues ins = 5;
 	}
-}
-
-message InsertValues {
-	string db_name = 1;
-	string tbl_name = 2;
-	repeated ColDef explicit_cols = 3;
-	repeated ColDef other_cols = 4;
-	repeated string order_attrs = 5;
-	repeated column columns = 6;
-	ColDef composite_pkey = 7;
-	UniqueIndexDef unique_index_def = 8;
-	SecondaryIndexDef secondary_index_def = 9;
-	ClusterTable cluster_table = 10;
-	ClusterByDef cb=11;
-	bool has_auto_col = 12;
-	PrimaryKeyDef primary_key_def = 13;
 }
 
 message column{
