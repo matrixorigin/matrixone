@@ -428,9 +428,10 @@ func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
 			continue
 		}
 		for _, filter := range filters {
-			if checkFilter(filter) {
+			ret, col := checkFilter(filter)
+			if ret && col != nil {
 				newExpr := DeepCopyExpr(filter)
-				if susbstituteMatchColumn(newExpr, col1, col2) {
+				if substituteMatchColumn(newExpr, col1, col2) {
 					newFilters = append(newFilters, newExpr)
 				}
 			}
@@ -439,26 +440,44 @@ func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
 	return newFilters
 }
 
-// filter must be like func(col)>1 , or (col=1) or (col=2)
-func checkFilter(expr *plan.Expr) bool {
+// for predicate deduction, filter must be like func(col)>1 , or (col=1) or (col=2)
+// and only 1 colRef is allowd in the filter
+func checkFilter(expr *plan.Expr) (bool, *ColRef) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
-		case "or", "and":
-			return checkFilter(exprImpl.F.Args[0]) && checkFilter(exprImpl.F.Args[1])
 		case "=", ">", "<", ">=", "<=":
 			switch exprImpl.F.Args[1].Expr.(type) {
 			case *plan.Expr_C:
-				return true
+				return checkFilter(exprImpl.F.Args[0])
 			default:
-				return false
+				return false, nil
 			}
+		default:
+			var col *ColRef
+			for _, arg := range exprImpl.F.Args {
+				ret, c := checkFilter(arg)
+				if !ret {
+					return false, nil
+				} else if c != nil {
+					if col != nil {
+						if col.RelPos != c.RelPos || col.ColPos != c.ColPos {
+							return false, nil
+						}
+					} else {
+						col = c
+					}
+				}
+			}
+			return true, col
 		}
+	case *plan.Expr_Col:
+		return true, exprImpl.Col
 	}
-	return true
+	return false, nil
 }
 
-func susbstituteMatchColumn(expr *plan.Expr, onPredCol1, onPredCol2 *ColRef) bool {
+func substituteMatchColumn(expr *plan.Expr, onPredCol1, onPredCol2 *ColRef) bool {
 	var ret bool
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
@@ -476,7 +495,7 @@ func susbstituteMatchColumn(expr *plan.Expr, onPredCol1, onPredCol2 *ColRef) boo
 		}
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			if susbstituteMatchColumn(arg, onPredCol1, onPredCol2) {
+			if substituteMatchColumn(arg, onPredCol1, onPredCol2) {
 				ret = true
 			}
 		}
