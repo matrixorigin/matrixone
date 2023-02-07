@@ -23,14 +23,17 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -633,4 +636,204 @@ func TestReadDirSymlink(t *testing.T) {
 	pathWant1 := root + "/a/b/c/foo"
 	assert.Equal(t, 1, len(files1))
 	assert.Equal(t, pathWant1, files1[0])
+}
+
+func Test_fliterByAccountAndFilename(t *testing.T) {
+	type args struct {
+		node     *plan.Node
+		proc     *process.Process
+		fileList []string
+		fileSize []int64
+	}
+
+	files := []struct {
+		date types.Date
+		path string
+		size int64
+	}{
+		{738551, "etl:/sys/logs/2023/02/01/filepath", 1},
+		{738552, "etl:/sys/logs/2023/02/02/filepath", 2},
+		{738553, "etl:/sys/logs/2023/02/03/filepath", 3},
+		{738554, "etl:/sys/logs/2023/02/04/filepath", 4},
+		{738555, "etl:/sys/logs/2023/02/05/filepath", 5},
+		{738556, "etl:/sys/logs/2023/02/06/filepath", 6},
+	}
+
+	toPathArr := func(files []struct {
+		date types.Date
+		path string
+		size int64
+	}) []string {
+		fileList := make([]string, len(files))
+		for idx, f := range files {
+			fileList[idx] = f.path
+		}
+		return fileList
+	}
+	toSizeArr := func(files []struct {
+		date types.Date
+		path string
+		size int64
+	}) []int64 {
+		fileSize := make([]int64, len(files))
+		for idx, f := range files {
+			fileSize[idx] = f.size
+		}
+		return fileSize
+	}
+
+	fileList := toPathArr(files)
+	fileSize := toSizeArr(files)
+
+	equalDate2DateFid := function.EncodeOverloadID(function.EQUAL, 14)
+	lessDate2DateFid := function.EncodeOverloadID(function.LESS_THAN, 14)
+	mologdateFid := function.EncodeOverloadID(function.MO_LOG_DATE, 0)
+	tableName := "dummy_table"
+
+	mologdateConst := func(idx int) *plan.Expr {
+		return &plan.Expr{
+			Typ: &plan.Type{
+				Size: 4,
+				Id:   int32(types.T_date),
+			},
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: false,
+					Value: &plan.Const_Dateval{
+						Dateval: int32(files[idx].date),
+					},
+				},
+			},
+		}
+	}
+	mologdateFunc := func() *plan.Expr {
+		return &plan.Expr{
+			Typ: &plan.Type{
+				Size: 1,
+				Id:   int32(types.T_bool),
+			},
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: mologdateFid, ObjName: "mo_log_date"},
+					Args: []*plan.Expr{
+						{
+							Typ: nil,
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									RelPos: 0,
+									ColPos: 0,
+									Name:   tableName + "." + catalog.ExternalFilePath,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	nodeWithFunction := func(expr *plan.Expr_F) *plan.Node {
+		return &plan.Node{
+			NodeType: plan.Node_EXTERNAL_SCAN,
+			Stats:    &plan.Stats{},
+			TableDef: &plan.TableDef{
+				TableType: "func_table",
+				TblFunc: &plan.TableFunction{
+					Name: tableName,
+				},
+				Cols: []*plan.ColDef{
+					{
+						Name: catalog.ExternalFilePath,
+						Typ: &plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: types.MaxVarcharLen,
+							Table: tableName,
+						},
+					},
+				},
+			},
+			FilterList: []*plan.Expr{
+				{
+					Typ: &plan.Type{
+						Size: 1,
+						Id:   int32(types.T_bool),
+					},
+					Expr: expr,
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name  string
+		args  args
+		want  []string
+		want1 []int64
+	}{
+		{
+			name: "mo_log_date_20230205",
+			args: args{
+				node: nodeWithFunction(&plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{Obj: equalDate2DateFid, ObjName: "="},
+						Args: []*plan.Expr{
+							mologdateConst(5),
+							mologdateFunc(),
+						},
+					},
+				}),
+				proc:     testutil.NewProc(),
+				fileList: fileList,
+				fileSize: fileSize,
+			},
+			want:  []string{files[5].path},
+			want1: []int64{files[5].size},
+		},
+		{
+			name: "mo_log_date_gt_20230202",
+			args: args{
+				node: nodeWithFunction(&plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{Obj: lessDate2DateFid, ObjName: "<"},
+						Args: []*plan.Expr{
+							mologdateConst(2),
+							mologdateFunc(),
+						},
+					},
+				}),
+				proc:     testutil.NewProc(),
+				fileList: fileList,
+				fileSize: fileSize,
+			},
+			want:  toPathArr(files[3:]),
+			want1: toSizeArr(files[3:]),
+		},
+		{
+			name: "mo_log_date_lt_20230202",
+			args: args{
+				node: nodeWithFunction(&plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{Obj: lessDate2DateFid, ObjName: "<"},
+						Args: []*plan.Expr{
+							mologdateFunc(),
+							mologdateConst(2),
+						},
+					},
+				}),
+				proc:     testutil.NewProc(),
+				fileList: fileList,
+				fileSize: fileSize,
+			},
+			want:  toPathArr(files[:2]),
+			want1: toSizeArr(files[:2]),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, got1, err := fliterByAccountAndFilename(tt.args.node, tt.args.proc, tt.args.fileList, tt.args.fileSize)
+			require.Nil(t, err)
+			require.Equal(t, tt.want, got)
+			require.Equal(t, tt.want1, got1)
+		})
+	}
 }
