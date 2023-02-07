@@ -30,9 +30,17 @@ import (
 )
 
 type CnTaeVector[T any] struct {
-	downstreamVector     *cnVector.Vector
-	mpool                *mpool.MPool
-	isNullable           bool
+	downstreamVector *cnVector.Vector
+
+	// Mpool is mostly defined within DN vector. So reusing the same approach for simplicity.
+	mpool *mpool.MPool
+
+	// Nullable is mainly used while SerDe
+	isNullable bool
+
+	// isAllocatedFromMpool is used with Allocated() & ResetWithData()
+	// When ResetWithData(bytes) is called, we are not allocating using the vector's Mpool.
+	// isAllocatedFromMpool  is used to track that.
 	isAllocatedFromMpool bool
 }
 
@@ -47,7 +55,7 @@ func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTa
 		vec.downstreamVector.Nsp = cnNulls.NewWithSize(0)
 	}
 
-	// mpool
+	// setting mpool variables
 	var alloc *mpool.MPool
 	if len(opts) > 0 {
 		alloc = opts[0].Allocator
@@ -56,8 +64,6 @@ func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTa
 		alloc = common.DefaultAllocator
 	}
 	vec.mpool = alloc
-
-	// mpool allocated
 	vec.isAllocatedFromMpool = false
 
 	return &vec
@@ -119,8 +125,9 @@ func (vec *CnTaeVector[T]) GetType() types.Type {
 
 func (vec *CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
 	var sels []int64
-	for i := 0; i < vec.Length(); i++ {
-		if !deletes.Contains(uint32(i)) {
+	vecLen := uint32(vec.Length())
+	for i := uint32(0); i < vecLen; i++ {
+		if !deletes.Contains(i) {
 			sels = append(sels, int64(i))
 		}
 	}
@@ -128,7 +135,6 @@ func (vec *CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
 }
 
 func (vec *CnTaeVector[T]) String() string {
-	// TODO: Replace with CN vector String
 	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Capacity(), vec.Allocated())
 
 	end := 100
@@ -165,7 +171,7 @@ func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	// The downstream vector, ie CN vector needs isNull as argument.
 	// So, we can't directly call cn_vector.Append() without parsing the data.
 	// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
-	//it into the current vector for this ExtendWithOffset().
+	// it into the current CnVectorAdapter via ExtendWithOffset().
 	for i := srcOff; i < srcOff+srcLen; i++ {
 		vec.Append(src.Get(i))
 	}
@@ -204,7 +210,7 @@ func (vec *CnTaeVector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 func (vec *CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 
-	// 1. Nullable
+	// 1. Nullable Flag
 	if nr, err = w.Write(types.EncodeFixed(vec.Nullable())); err != nil {
 		return
 	}
@@ -221,7 +227,7 @@ func (vec *CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	// Nullable 1
+	// Nullable Flag [1 byte]
 	isNullable := make([]byte, 1)
 	if _, err = r.Read(isNullable); err != nil {
 		return
@@ -232,35 +238,35 @@ func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 
 	var downStreamVectorByteArr []byte
 
-	// isScalar 1
+	// isScalar [1 byte]
 	scalar := make([]byte, 1)
 	if _, err = r.Read(scalar); err != nil {
 		return
 	}
 	downStreamVectorByteArr = append(downStreamVectorByteArr, scalar...)
 
-	// Length 8
+	// Length [8 bytes]
 	length := make([]byte, 8)
 	if _, err = r.Read(length); err != nil {
 		return
 	}
 	downStreamVectorByteArr = append(downStreamVectorByteArr, length...)
 
-	// Typ 20
+	// Typ [20 bytes]
 	vecTyp := make([]byte, 20)
 	if _, err = r.Read(vecTyp); err != nil {
 		return
 	}
 	downStreamVectorByteArr = append(downStreamVectorByteArr, vecTyp...)
 
-	//1. Nsp Length 4
+	//1. Nsp Length [4 bytes]
 	nspLen := make([]byte, 4)
 	if _, err = r.Read(nspLen); err != nil {
 		return
 	}
 	downStreamVectorByteArr = append(downStreamVectorByteArr, nspLen...)
 
-	// Nsp [?]
+	// Nsp [variable bytes]
 	nspLenVal := types.DecodeUint32(nspLen)
 	nsp := make([]byte, nspLenVal)
 	if _, err = r.Read(nsp); err != nil {
@@ -268,14 +274,14 @@ func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	downStreamVectorByteArr = append(downStreamVectorByteArr, nsp...)
 
-	//2. Col Length 4
+	//2. Col Length [4 bytes]
 	colLen := make([]byte, 4)
 	if _, err = r.Read(colLen); err != nil {
 		return
 	}
 	downStreamVectorByteArr = append(downStreamVectorByteArr, colLen...)
 
-	// Col [?]
+	// Col [variable bytes]
 	colLenVal := types.DecodeUint32(colLen)
 	col := make([]byte, colLenVal)
 	if _, err = r.Read(col); err != nil {
@@ -283,14 +289,14 @@ func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	downStreamVectorByteArr = append(downStreamVectorByteArr, col...)
 
-	//3. Col Length 4
+	//3. Col Length [4 bytes]
 	areaLen := make([]byte, 4)
 	if _, err = r.Read(areaLen); err != nil {
 		return
 	}
 	downStreamVectorByteArr = append(downStreamVectorByteArr, areaLen...)
 
-	// Col [?]
+	// Col [variable bytes]
 	areaLenVal := types.DecodeUint32(areaLen)
 	area := make([]byte, areaLenVal)
 	if _, err = r.Read(area); err != nil {
@@ -313,15 +319,15 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 		opts.Allocator = allocator[0]
 	}
 
-	// Create a clone
+	// Create a new NewCnTaeVector
 	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
 	cloned.isAllocatedFromMpool = true
 
-	// Create a duplicate of the current vector
+	// Create a duplicate of the downstream CN vector
 	vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
 
-	// attach that duplicate to the window
-	// and perform window operation
+	// Attach that downstream duplicate to the window and perform window action.
+	// The result is subset of downstream vector.
 	cloned.downstreamVector = cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
 
 	return cloned
@@ -329,6 +335,9 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 
 func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
 
+	// In DN Vector, we are using SharedReference for Window.
+	// In CN Vector, we are creating a new Clone for Window.
+	// So inorder to retain the nature of DN vector, we had use CnTaeVectorWindow Adapter.
 	return &CnTaeVectorWindow[T]{
 		ref: vec,
 		windowBase: &windowBase{
@@ -365,17 +374,14 @@ func (vec *CnTaeVector[T]) AppendNoNulls(s any) {
 	panic("Soon Deprecated")
 }
 
+// TODO: --- We can remove below function as they are only used in Testcases.
+
 func (vec *CnTaeVector[T]) Delete(delRowId int) {
-	// TODO: used very rare
 	deletes := roaring.BitmapOf(uint32(delRowId))
 	vec.Compact(deletes)
 }
 
-// TODO: --- We can remove below function as they are only used in Testcases.
-
 func (vec *CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
-	// No usage except in testcase
-
 	stat := f.Stat()
 	var n []byte
 	var buf []byte
@@ -422,37 +428,6 @@ func (vec *CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (
 }
 
 // TODO: --- Below Functions Can be implemented in CN Vector.
-
-func (vec *CnTaeVector[T]) PPString(num int) string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("[T=%s][Len=%d][Data=(", vec.GetType().String(), vec.Length()))
-	limit := vec.Length()
-	if num > 0 && num < limit {
-		limit = num
-	}
-	size := vec.Length()
-	long := false
-	if size > limit {
-		long = true
-		size = limit
-	}
-	for i := 0; i < size; i++ {
-		if vec.IsNull(i) {
-			_, _ = w.WriteString("null")
-			continue
-		}
-		if vec.GetType().IsVarlen() {
-			_, _ = w.WriteString(fmt.Sprintf("%s, ", vec.Get(i).([]byte)))
-		} else {
-			_, _ = w.WriteString(fmt.Sprintf("%v, ", vec.Get(i)))
-		}
-	}
-	if long {
-		_, _ = w.WriteString("...")
-	}
-	_, _ = w.WriteString(")]")
-	return w.String()
-}
 
 func (vec *CnTaeVector[T]) Equals(o Vector) bool {
 
@@ -546,6 +521,37 @@ func (vec *CnTaeVector[T]) forEachWindowWithBias(offset, length int, op ItOp, se
 		}
 	}
 	return
+}
+
+func (vec *CnTaeVector[T]) PPString(num int) string {
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("[T=%s][Len=%d][Data=(", vec.GetType().String(), vec.Length()))
+	limit := vec.Length()
+	if num > 0 && num < limit {
+		limit = num
+	}
+	size := vec.Length()
+	long := false
+	if size > limit {
+		long = true
+		size = limit
+	}
+	for i := 0; i < size; i++ {
+		if vec.IsNull(i) {
+			_, _ = w.WriteString("null")
+			continue
+		}
+		if vec.GetType().IsVarlen() {
+			_, _ = w.WriteString(fmt.Sprintf("%s, ", vec.Get(i).([]byte)))
+		} else {
+			_, _ = w.WriteString(fmt.Sprintf("%v, ", vec.Get(i)))
+		}
+	}
+	if long {
+		_, _ = w.WriteString("...")
+	}
+	_, _ = w.WriteString(")]")
+	return w.String()
 }
 
 // TODO: --- I am not sure, if the below functions will work as expected
