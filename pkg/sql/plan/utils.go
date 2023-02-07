@@ -671,6 +671,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 	switch node.NodeType {
 	case plan.Node_JOIN:
 		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
+		if ndv < 1 {
+			ndv = 1
+		}
 		switch node.JoinType {
 		case plan.Node_INNER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
