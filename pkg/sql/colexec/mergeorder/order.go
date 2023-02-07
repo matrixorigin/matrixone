@@ -249,6 +249,7 @@ func (ctr *container) mergeSort2(bat2 *batch.Batch, proc *process.Process) error
 	}
 	ctr.finalSelectList = sels
 	ctr.bat = bat1
+	bat2.Clean(proc.Mp())
 	return nil
 }
 
