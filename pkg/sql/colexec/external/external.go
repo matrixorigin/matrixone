@@ -251,9 +251,6 @@ func judgeContainColname(expr *plan.Expr) bool {
 	if !ok {
 		return false
 	}
-	if len(expr_F.F.Args) != 2 {
-		return false
-	}
 	if expr_F.F.Func.ObjName == "or" {
 		flag := true
 		for i := 0; i < len(expr_F.F.Args); i++ {
@@ -261,8 +258,12 @@ func judgeContainColname(expr *plan.Expr) bool {
 		}
 		return flag
 	}
-	expr_Col, ok := expr_F.F.Args[0].Expr.(*plan.Expr_Col)
-	if !ok || !containColname(expr_Col.Col.Name) {
+	switch col := expr_F.F.Args[0].Expr.(type) {
+	case *plan.Expr_Col:
+		return containColname(col.Col.Name)
+	case *plan.Expr_F:
+		return judgeContainColname(expr_F.F.Args[0])
+	default:
 		return false
 	}
 	return true
