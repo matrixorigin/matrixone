@@ -15,10 +15,14 @@
 package plan
 
 import (
+	"container/list"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"encoding/csv"
 	"math"
+	"path"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -27,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -419,6 +424,114 @@ func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan
 	return expr
 }
 
+// deduction of new predicates. for example join on a=b where b=1, then a=1 can be deduced
+func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
+	var newFilters []*plan.Expr
+	for _, onPred := range onList {
+		ret, col1, col2 := checkOnPred(onPred)
+		if !ret {
+			continue
+		}
+		for _, filter := range filters {
+			ret, col := checkFilter(filter)
+			if ret && col != nil {
+				newExpr := DeepCopyExpr(filter)
+				if substituteMatchColumn(newExpr, col1, col2) {
+					newFilters = append(newFilters, newExpr)
+				}
+			}
+		}
+	}
+	return newFilters
+}
+
+// for predicate deduction, filter must be like func(col)>1 , or (col=1) or (col=2)
+// and only 1 colRef is allowd in the filter
+func checkFilter(expr *plan.Expr) (bool, *ColRef) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "=", ">", "<", ">=", "<=":
+			switch exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				return checkFilter(exprImpl.F.Args[0])
+			default:
+				return false, nil
+			}
+		default:
+			var col *ColRef
+			for _, arg := range exprImpl.F.Args {
+				ret, c := checkFilter(arg)
+				if !ret {
+					return false, nil
+				} else if c != nil {
+					if col != nil {
+						if col.RelPos != c.RelPos || col.ColPos != c.ColPos {
+							return false, nil
+						}
+					} else {
+						col = c
+					}
+				}
+			}
+			return true, col
+		}
+	case *plan.Expr_Col:
+		return true, exprImpl.Col
+	}
+	return false, nil
+}
+
+func substituteMatchColumn(expr *plan.Expr, onPredCol1, onPredCol2 *ColRef) bool {
+	var ret bool
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		colName := exprImpl.Col.String()
+		if colName == onPredCol1.String() {
+			exprImpl.Col.RelPos = onPredCol2.RelPos
+			exprImpl.Col.ColPos = onPredCol2.ColPos
+			exprImpl.Col.Name = onPredCol2.Name
+			return true
+		} else if colName == onPredCol2.String() {
+			exprImpl.Col.RelPos = onPredCol1.RelPos
+			exprImpl.Col.ColPos = onPredCol1.ColPos
+			exprImpl.Col.Name = onPredCol1.Name
+			return true
+		}
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if substituteMatchColumn(arg, onPredCol1, onPredCol2) {
+				ret = true
+			}
+		}
+	}
+	return ret
+}
+
+func checkOnPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
+	//onPred must be equality, children must be column name
+	switch onPredImpl := onPred.Expr.(type) {
+	case *plan.Expr_F:
+		if onPredImpl.F.Func.ObjName != "=" {
+			return false, nil, nil
+		}
+		args := onPredImpl.F.Args
+		var col1, col2 *ColRef
+		switch child1 := args[0].Expr.(type) {
+		case *plan.Expr_Col:
+			col1 = child1.Col
+		}
+		switch child2 := args[1].Expr.(type) {
+		case *plan.Expr_Col:
+			col2 = child2.Col
+		}
+		if col1 != nil && col2 != nil {
+			return true, col1, col2
+		}
+	}
+	return false, nil, nil
+}
+
 func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	var exprs []*plan.Expr
 	switch exprImpl := expr.Expr.(type) {
@@ -604,9 +717,7 @@ func getColumnNameFromExpr(expr *plan.Expr) string {
 		return exprImpl.Col.Name
 
 	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			return getColumnNameFromExpr(arg)
-		}
+		return getColumnNameFromExpr(exprImpl.F.Args[0])
 	}
 	return ""
 }
@@ -671,6 +782,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 	switch node.NodeType {
 	case plan.Node_JOIN:
 		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
+		if ndv < 1 {
+			ndv = 1
+		}
 		switch node.JoinType {
 		case plan.Node_INNER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
@@ -1235,4 +1349,172 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		return false
 	}
 
+}
+
+func InitInfileParam(param *tree.ExternParam) error {
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "filepath":
+			param.Filepath = param.Option[i+1]
+		case "compression":
+			param.CompressType = param.Option[i+1]
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+		default:
+			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+		}
+	}
+	if len(param.Filepath) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the filepath must be specified")
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
+	}
+	return nil
+}
+
+func InitS3Param(param *tree.ExternParam) error {
+	param.S3Param = &tree.S3Parameter{}
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "endpoint":
+			param.S3Param.Endpoint = param.Option[i+1]
+		case "region":
+			param.S3Param.Region = param.Option[i+1]
+		case "access_key_id":
+			param.S3Param.APIKey = param.Option[i+1]
+		case "secret_access_key":
+			param.S3Param.APISecret = param.Option[i+1]
+		case "bucket":
+			param.S3Param.Bucket = param.Option[i+1]
+		case "filepath":
+			param.Filepath = param.Option[i+1]
+		case "compression":
+			param.CompressType = param.Option[i+1]
+		case "provider":
+			param.S3Param.Provider = param.Option[i+1]
+		case "role_arn":
+			param.S3Param.RoleArn = param.Option[i+1]
+		case "external_id":
+			param.S3Param.ExternalId = param.Option[i+1]
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+
+		default:
+			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+		}
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
+	}
+	return nil
+}
+
+func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
+	if param.ScanType == tree.S3 {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
+			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
+		if param.S3Param.Provider == "minio" {
+			opts = append(opts, "is-minio=true")
+		}
+		if err = w.Write(opts); err != nil {
+			return nil, "", err
+		}
+		w.Flush()
+		return fileservice.GetForETL(nil, fileservice.JoinPath(buf.String(), prefix))
+	}
+	return fileservice.GetForETL(param.FileService, prefix)
+}
+
+// ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
+func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
+	filePath := strings.TrimSpace(param.Filepath)
+	if strings.HasPrefix(filePath, "etl:") {
+		filePath = path.Clean(filePath)
+	} else {
+		filePath = path.Clean("/" + filePath)
+	}
+
+	sep := "/"
+	pathDir := strings.Split(filePath, sep)
+	l := list.New()
+	l2 := list.New()
+	if pathDir[0] == "" {
+		l.PushBack(sep)
+	} else {
+		l.PushBack(pathDir[0])
+	}
+
+	for i := 1; i < len(pathDir); i++ {
+		length := l.Len()
+		for j := 0; j < length; j++ {
+			prefix := l.Front().Value.(string)
+			fs, readPath, err := GetForETLWithType(param, prefix)
+			if err != nil {
+				return nil, nil, err
+			}
+			entries, err := fs.List(param.Ctx, readPath)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, entry := range entries {
+				if !entry.IsDir && i+1 != len(pathDir) {
+					continue
+				}
+				if entry.IsDir && i+1 == len(pathDir) {
+					continue
+				}
+				matched, err := path.Match(pathDir[i], entry.Name)
+				if err != nil {
+					return nil, nil, err
+				}
+				if !matched {
+					continue
+				}
+				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
+				if !entry.IsDir {
+					l2.PushBack(entry.Size)
+				}
+			}
+			l.Remove(l.Front())
+		}
+	}
+	len := l.Len()
+	for j := 0; j < len; j++ {
+		fileList = append(fileList, l.Front().Value.(string))
+		l.Remove(l.Front())
+		fileSize = append(fileSize, l2.Front().Value.(int64))
+		l2.Remove(l2.Front())
+	}
+	return fileList, fileSize, err
 }

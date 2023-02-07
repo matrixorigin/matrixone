@@ -15,40 +15,39 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
+	if err := checkFileExist(stmt.Param); err != nil {
+		return nil, err
+	}
+
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return nil, err
 	}
 	tblName := string(stmt.Table.ObjectName)
-	dbName := string(stmt.Table.SchemaName)
-	objRef, tableDef := ctx.Resolve(dbName, tblName)
-	if tableDef == nil {
-		return nil, moerr.NewInvalidInput(ctx.GetContext(), "load table '%s' does not exists", tree.String(stmt.Table, dialect.MYSQL))
-	}
-	if tableDef.TableType == catalog.SystemExternalRel {
-		return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot load external table")
-	}
-
-	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
-	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can load data into the cluster table")
-	}
-	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, isClusterTable)
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil)
 	if err != nil {
 		return nil, err
 	}
+	tableDef := tblInfo.tableDefs[0]
+	objRef := tblInfo.objRef[0]
+	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
+	if err != nil {
+		return nil, err
+	}
+	// if tblInfo.haveConstraint {
+	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "table '%v' have contraint, can not use load statement", tblName)
+	// }
 
 	tableDef.Name2ColIndex = map[string]int32{}
 	node1 := &plan.Node{}
@@ -67,8 +66,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	node3.Stats = &plan.Stats{}
 	node3.NodeId = 2
 	node3.Children = []int32{1}
-	node3.ClusterTable = clusterTable
+	// node3.ClusterTable = clusterTable
 
+	idxList := make([]int32, len(tableDef.Cols))
 	for i := 0; i < len(tableDef.Cols); i++ {
 		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = int32(i)
 		tmp := &plan.Expr{
@@ -80,8 +80,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		}
+		idxList[i] = int32(i)
 		node1.ProjectList = append(node1.ProjectList, tmp)
-		node3.ProjectList = append(node3.ProjectList, tmp)
+		// node3.ProjectList = append(node3.ProjectList, tmp)
 	}
 	if err := GetProjectNode(stmt, ctx, node2, tableDef.Name2ColIndex, clusterTable); err != nil {
 		return nil, err
@@ -90,8 +91,15 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 		return nil, err
 	}
 
-	node3.TableDef = tableDef
-	node3.ObjRef = objRef
+	// node3.TableDef = tableDef
+	// node3.ObjRef = objRef
+	node3.InsertCtx = &plan.InsertCtx{
+		Ref:          objRef,
+		Idx:          idxList,
+		TableDef:     tableDef,
+		ClusterTable: clusterTable,
+		// ParentIdx:    map[string]int32{},
+	}
 
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.LoadFile = true
@@ -122,6 +130,29 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	}
 	pn.GetQuery().LoadTag = true
 	return pn, nil
+}
+
+func checkFileExist(param *tree.ExternParam) error {
+	param.Ctx = context.TODO()
+	if param.ScanType == tree.S3 {
+		if err := InitS3Param(param); err != nil {
+			return err
+		}
+	} else {
+		if err := InitInfileParam(param); err != nil {
+			return err
+		}
+	}
+
+	fileList, _, err := ReadDir(param)
+	if err != nil {
+		return err
+	}
+	if len(fileList) == 0 {
+		return moerr.NewInvalidInput(param.Ctx, "the file does not exist in load flow")
+	}
+	param.Ctx = nil
+	return nil
 }
 
 func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2ColIndex map[string]int32, clusterTable *ClusterTable) error {

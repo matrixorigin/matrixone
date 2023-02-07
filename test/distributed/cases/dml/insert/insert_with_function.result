@@ -27,7 +27,7 @@ null    null
 null    64
 DELETE FROM char_test;
 INSERT INTO char_test(str1) VALUES(SPACE(100));
-truncated type CHAR value space(100) for column str1, 1
+internal error: Can't cast '                                                                                                    ' from VARCHAR type to CHAR type. Src length 100 is larger than Dest length 50
 INSERT INTO char_test(str1) VALUES('RONALDOSHOOTGOAL');
 INSERT INTO char_test(str2) VALUES(EMPTY(""));
 INSERT INTO char_test(str2) VALUES(EMPTY(null));

@@ -334,3 +334,7 @@ col1    col2    col3
 4    4    4
 4    5    5
 drop table t7;
+
+create table t8(a int, b int);
+load data infile '$resources/load_data/auto_increment_20.csv' into table t7 set col2=nullif(col2, '1');
+invalid input: the file does not exist in load flow
