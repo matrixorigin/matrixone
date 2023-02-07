@@ -105,7 +105,7 @@ a    b
 100000    3000
 commit;
 insert into view_tab1 values (200, 300);
-invalid input: cannot insert into view 'view_tab1'
+invalid input: cannot insert/update/delete from view
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 drop database db;
@@ -444,9 +444,9 @@ select * from view_t6;
 a    b
 100000    3000
 insert into view_t6 values (200, 300);
-invalid input: cannot insert into view 'view_t6'
+invalid input: cannot insert/update/delete from view
 insert into view_t6 values (10, 10);
-invalid input: cannot insert into view 'view_t6'
+invalid input: cannot insert/update/delete from view
 select * from view_t6;
 a    b
 100000    3000
@@ -487,7 +487,7 @@ insert into t8 values (500);
 rollback;
 begin;
 insert into t8 values (1000);
-invalid input: insert table is invalid 't8'
+no such table autocommit_1.t8
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 create table t9 (a char(25));
 commit;

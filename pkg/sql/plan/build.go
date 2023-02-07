@@ -62,7 +62,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt)
 	case *tree.Insert:
-		return buildInsert(stmt, ctx)
+		return buildInsert(stmt, ctx, false)
 	case *tree.Replace:
 		return buildReplace(stmt, ctx)
 	case *tree.Update:
