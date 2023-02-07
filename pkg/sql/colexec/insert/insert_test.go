@@ -81,22 +81,32 @@ func TestInsertOperator(t *testing.T) {
 		Zs: []int64{1, 1, 1},
 	}
 	argument1 := Argument{
-		Engine:      eng,
-		TargetTable: &mockRelation{},
-		TargetColDefs: []*plan.ColDef{
-			{Name: "int64_column", Typ: i64typ},
-			{Name: "scalar_int64", Typ: i64typ},
-			{Name: "varchar_column", Typ: varchartyp},
-			{Name: "scalar_varchar", Typ: varchartyp},
-			{Name: "int64_column", Typ: i64typ},
+		Engine: eng,
+		InsertCtx: &InsertCtx{
+			Source: &mockRelation{},
+			Idx:    []int32{0, 1, 2, 3, 4},
+			Ref: &plan.ObjectRef{
+				Obj:        0,
+				SchemaName: "testDb",
+				ObjName:    "testTable",
+			},
+			TableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{
+					{Name: "int64_column", Typ: i64typ},
+					{Name: "scalar_int64", Typ: i64typ},
+					{Name: "varchar_column", Typ: varchartyp},
+					{Name: "scalar_varchar", Typ: varchartyp},
+					{Name: "int64_column", Typ: i64typ},
+				},
+			},
 		},
 	}
 	proc.Reg.InputBatch = batch1
 	_, err := Call(0, proc, &argument1, false, false)
 	require.NoError(t, err)
-	println(argument1.TargetTable.(*mockRelation).result.Vecs)
+	println(argument1.InsertCtx.Source.(*mockRelation).result.Vecs)
 	{
-		result := argument1.TargetTable.(*mockRelation).result
+		result := argument1.InsertCtx.Source.(*mockRelation).result
 		// check attr names
 		require.True(t, reflect.DeepEqual(
 			[]string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
@@ -111,14 +121,29 @@ func TestInsertOperator(t *testing.T) {
 
 	batch2 := &batch.Batch{
 		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
+			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
 		},
 		Zs: []int64{1, 1, 1},
 	}
 	argument2 := Argument{
-		TargetTable: &mockRelation{},
-		TargetColDefs: []*plan.ColDef{
-			{Name: "int64_column_primary", Primary: true, Typ: i64typ},
+		Engine: eng,
+		InsertCtx: &InsertCtx{
+			Source: &mockRelation{},
+			Idx:    []int32{0},
+			Ref: &plan.ObjectRef{
+				Obj:        0,
+				SchemaName: "testDb",
+				ObjName:    "testTable",
+			},
+			TableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{
+					{Name: "int64_column_primary", Primary: true, Typ: i64typ,
+						Default: &plan.Default{
+							NullAbility: false,
+						},
+					},
+				},
+			},
 		},
 	}
 	proc.Reg.InputBatch = batch2

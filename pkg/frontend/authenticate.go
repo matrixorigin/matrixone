@@ -3871,15 +3871,6 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 				}
 			}
 		}
-	} else if p.GetIns() != nil { //insert into values
-		ins := p.GetIns()
-		appendPt(privilegeTips{
-			typ:                   PrivilegeTypeInsert,
-			databaseName:          ins.GetDbName(),
-			tableName:             ins.GetTblName(),
-			isClusterTable:        ins.GetClusterTable().GetIsClusterTable(),
-			clusterTableOperation: clusterTableModify,
-		})
 	} else if p.GetDdl() != nil {
 		if p.GetDdl().GetTruncateTable() != nil {
 			truncateTable := p.GetDdl().GetTruncateTable()

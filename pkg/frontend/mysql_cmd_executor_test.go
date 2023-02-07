@@ -17,12 +17,13 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/fagongzi/goetty/v2"
 
@@ -848,7 +849,7 @@ func Test_handleShowColumns(t *testing.T) {
 		err = handleShowColumns(ses, &tree.ShowColumns{
 			Table: tableName,
 		})
-		convey.So(err, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 
@@ -1230,7 +1231,7 @@ func Test_getSqlType(t *testing.T) {
 		ses.getSqlType(sql)
 		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudUserSql)
 
-		sql = "/* cloud_nouser */ use db"
+		sql = "/* cloud_nonuser */ use db"
 		ses.getSqlType(sql)
 		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudNoUserSql)
 
@@ -1242,7 +1243,11 @@ func Test_getSqlType(t *testing.T) {
 
 func TestProcessLoadLocal(t *testing.T) {
 	convey.Convey("call processLoadLocal func", t, func() {
-		param := &tree.ExternParam{Filepath: "test.csv"}
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "test.csv",
+			},
+		}
 		proc := testutil.NewProc()
 		var writer *io.PipeWriter
 		proc.LoadLocalReader, writer = io.Pipe()

@@ -17,10 +17,11 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,13 +33,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func appendQueryNode(query *Query, node *Node) int32 {
-	nodeID := int32(len(query.Nodes))
-	node.NodeId = nodeID
-	query.Nodes = append(query.Nodes, node)
+// func appendQueryNode(query *Query, node *Node) int32 {
+// 	nodeID := int32(len(query.Nodes))
+// 	node.NodeId = nodeID
+// 	query.Nodes = append(query.Nodes, node)
 
-	return nodeID
-}
+// 	return nodeID
+// }
 
 func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {

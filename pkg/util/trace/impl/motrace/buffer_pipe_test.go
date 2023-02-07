@@ -54,7 +54,7 @@ func init() {
 	SV.TraceExportInterval = 15
 	SV.LongQueryTime = 0
 	SV.EnableTraceDebug = true
-	if _, err := InitWithConfig(
+	if err := InitWithConfig(
 		context.Background(),
 		&SV,
 		EnableTracer(true),
