@@ -1048,7 +1048,8 @@ func Test_mergeContexts(t *testing.T) {
 	assert.NoError(t, err)
 
 	// a merge a, ctx is  nil
-	err = bc.mergeContexts(nil, bc1, bc2)
+	var ctx context.Context
+	err = bc.mergeContexts(ctx, bc1, bc2)
 	assert.Error(t, err)
 	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
 }
