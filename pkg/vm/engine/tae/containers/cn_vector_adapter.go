@@ -35,7 +35,7 @@ type CnTaeVector[T any] struct {
 	// Mpool is mostly defined within DN vector. So reusing the same approach for simplicity.
 	mpool *mpool.MPool
 
-	// Nullable is mainly used while SerDe
+	// Nullable is mainly used while Marshalling & Unmarshalling
 	isNullable bool
 
 	// isAllocatedFromMpool is used with Allocated() & ResetWithData()
