@@ -3112,4 +3112,19 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	MO_LOG_DATE: {
+		Id:     MO_LOG_DATE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_date,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MOLogDate,
+			},
+		},
+	},
 }
