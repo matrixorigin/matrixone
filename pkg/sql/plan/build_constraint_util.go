@@ -1078,7 +1078,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					joinConds = []*Expr{condExpr}
 
 					leftCtx := builder.ctxByNode[info.rootId]
-					err = joinCtx.mergeContexts(leftCtx, rightCtx)
+					err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 					if err != nil {
 						return err
 					}
@@ -1090,7 +1090,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					}, joinCtx)
 					bindCtx.binder = NewTableBinder(builder, bindCtx)
 					info.rootId = newRootId
-
 					info.onIdxTbl = append(info.onIdxTbl, idxRef)
 					info.onIdx = append(info.onIdx, info.idx)
 					info.idx = info.idx + 1
@@ -1313,7 +1312,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 					// append join node
 					leftCtx := builder.ctxByNode[info.rootId]
-					err = joinCtx.mergeContexts(leftCtx, rightCtx)
+					err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 					if err != nil {
 						return err
 					}
@@ -1443,7 +1442,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 			// append join node
 			leftCtx := builder.ctxByNode[info.rootId]
-			err = joinCtx.mergeContexts(leftCtx, rightCtx)
+			err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 			if err != nil {
 				return err
 			}
