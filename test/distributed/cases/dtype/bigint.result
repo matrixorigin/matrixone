@@ -450,9 +450,9 @@ a
 -9223372036854775808
 9223372036854775807
 insert into t1 values(9223372036854775808);
-truncated type BIGINT value 9223372036854775808 for column a, 1
+Data truncation: data out of range: data type int64,
 insert into t1 values(-9223372036854775809);
-truncated type BIGINT value -9223372036854775809 for column a, 1
+Data truncation: data out of range: data type int64, value '-9223372036854775809'
 create table t2(a decimal(19, 0));
 insert into t2 values(-9223372036854775808), (9223372036854775807);
 select * from t2;
@@ -481,9 +481,9 @@ select * from t1;
 a
 18446744073709551615
 insert into t1 values(18446744073709551616);
-truncated type BIGINT UNSIGNED value 18446744073709551616 for column a, 1
+Data truncation: data out of range: data type uint64, value '18446744073709551616'
 insert into t1 values(-1);
-truncated type BIGINT UNSIGNED value -1 for column a, 1
+Data truncation: data out of range: data type uint64, 
 create table t2(a decimal(20, 0));
 insert into t2 values(0), (18446744073709551615);
 insert into t1 select * from t2;

@@ -299,7 +299,7 @@ count(*)
 4
 create external table ex_table_yccs(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_char.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 insert into ex_table_yccs select 'yellow','apple','2020-09-30','2020-09-30 10:20:08','2020-09-30 10:20:08.09834';
-invalid input: cannot insert into external table
+invalid input: cannot insert/update/delete from external table
 update ex_table_yccs set char_1="cat123";
 invalid input: cannot insert/update/delete from external table
 delete from ex_table_yccs;

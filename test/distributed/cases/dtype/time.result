@@ -72,7 +72,7 @@ t
 drop table if exists t1;
 create table t1(t time);
 insert into t1 values(25620477880000);
-truncated type TIME value 25620477880000 for column t, 1
+Data truncation: data out of range: data type time, value 25620477880000
 drop table if exists t1;
 drop table if exists myd;
 create table myd(d date);
