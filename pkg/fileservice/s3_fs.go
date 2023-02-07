@@ -477,14 +477,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 		if entry.Size == 0 {
 			return moerr.NewEmptyRangeNoCtx(path.File)
-		} else if entry.Size > 0 {
-			content, err := getContent(ctx)
-			if err != nil {
-				return err
-			}
-			if start >= int64(len(content)) {
-				return moerr.NewEmptyRangeNoCtx(path.File)
-			}
 		}
 
 		// a function to get entry data lazily
@@ -803,14 +795,22 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	if apiKey != "" && apiSecret != "" {
 		// static
 		credentialProvider = credentials.NewStaticCredentialsProvider(apiKey, apiSecret, "")
+	}
 
-	} else if roleARN != "" {
+	if roleARN != "" {
 		// role arn
-		config, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
+		awsConfig, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
 		if err != nil {
 			return nil, err
 		}
-		stsSvc := sts.NewFromConfig(config)
+
+		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
+			if region == "" {
+				options.Region = "ap-east-1" // any region is OK
+			} else {
+				options.Region = region
+			}
+		})
 		credentialProvider = stscreds.NewAssumeRoleProvider(
 			stsSvc,
 			roleARN,
@@ -820,6 +820,11 @@ func newS3FS(arguments []string) (*S3FS, error) {
 				}
 			},
 		)
+		// validate
+		_, err = credentialProvider.Retrieve(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if credentialProvider != nil {

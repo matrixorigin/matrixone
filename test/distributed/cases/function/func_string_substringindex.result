@@ -85,7 +85,7 @@ insert into test values('www.mysql.com', '.', 1);
 insert into test values('www.mysql.com', '.', 2);
 insert into test values('www.mysql.com', '.', 3);
 insert into test values('www.mysql.com', '.', 9223372036854775808);
-truncated type INT value 9223372036854775808 for column c, 1
+Data truncation: data out of range: data type int32, value '9223372036854775808'
 insert into test values('www.mysql.com', '.', -1);
 insert into test values('www.mysql.com', '.', -2);
 insert into test values('www.mysql.com', '.', -3);
@@ -143,7 +143,7 @@ insert into test values('www.mysql.com', '.', 1);
 insert into test values('www.mysql.com', '.', 2);
 insert into test values('www.mysql.com', '.', 3);
 insert into test values('www.mysql.com', '.', 9223372036854775808);
-truncated type INT value 9223372036854775808 for column c, 1
+Data truncation: data out of range: data type int32, value '9223372036854775808'
 insert into test values('www.mysql.com', '.', -1);
 insert into test values('www.mysql.com', '.', -2);
 insert into test values('www.mysql.com', '.', -3);
@@ -163,7 +163,7 @@ insert into test values('www.mysql.com', '.', 1);
 insert into test values('www.mysql.com', '.', 2);
 insert into test values('www.mysql.com', '.', 3);
 insert into test values('www.mysql.com', '.', 9223372036854775808);
-truncated type INT value 9223372036854775808 for column c, 1
+Data truncation: data out of range: data type int32, value '9223372036854775808'
 insert into test values('www.mysql.com', '.', -1);
 insert into test values('www.mysql.com', '.', -2);
 insert into test values('www.mysql.com', '.', -3);

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"testing"
 	"time"
 
@@ -176,6 +177,16 @@ func testDatabase(
 							Name:    "b",
 							Type:    types.T_int64.ToType(),
 							Primary: false,
+						},
+					},
+					&engine.ConstraintDef{
+						Cts: []engine.Constraint{
+							&engine.PrimaryKeyDef{
+								Pkey: &plan.PrimaryKeyDef{
+									PkeyColName: "a",
+									Names:       []string{"a"},
+								},
+							},
 						},
 					},
 				},
