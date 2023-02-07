@@ -25,9 +25,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -611,7 +611,7 @@ func TestReadDirSymlink(t *testing.T) {
 
 	// read a/b/d/foo
 	fooPathInB := filepath.Join(root, "a", "b", "d", "foo")
-	files, _, err := ReadDir(&tree.ExternParam{
+	files, _, err := plan2.ReadDir(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			Filepath: fooPathInB,
 		},
@@ -624,7 +624,7 @@ func TestReadDirSymlink(t *testing.T) {
 	assert.Equal(t, fooPathInB, files[0])
 
 	path1 := root + "/a//b/./../b/c/foo"
-	files1, _, err := ReadDir(&tree.ExternParam{
+	files1, _, err := plan2.ReadDir(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			Filepath: path1,
 		},
@@ -690,35 +690,35 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 	mologdateFid := function.EncodeOverloadID(function.MO_LOG_DATE, 0)
 	tableName := "dummy_table"
 
-	mologdateConst := func(idx int) *plan2.Expr {
-		return &plan2.Expr{
+	mologdateConst := func(idx int) *plan.Expr {
+		return &plan.Expr{
 			Typ: &plan.Type{
 				Size: 4,
 				Id:   int32(types.T_date),
 			},
-			Expr: &plan2.Expr_C{
+			Expr: &plan.Expr_C{
 				C: &plan.Const{
 					Isnull: false,
-					Value: &plan2.Const_Dateval{
+					Value: &plan.Const_Dateval{
 						Dateval: int32(files[idx].date),
 					},
 				},
 			},
 		}
 	}
-	mologdateFunc := func() *plan2.Expr {
-		return &plan2.Expr{
+	mologdateFunc := func() *plan.Expr {
+		return &plan.Expr{
 			Typ: &plan.Type{
 				Size: 1,
 				Id:   int32(types.T_bool),
 			},
-			Expr: &plan2.Expr_F{
-				F: &plan2.Function{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
 					Func: &plan.ObjectRef{Obj: mologdateFid, ObjName: "mo_log_date"},
-					Args: []*plan2.Expr{
+					Args: []*plan.Expr{
 						{
 							Typ: nil,
-							Expr: &plan2.Expr_Col{
+							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									RelPos: 0,
 									ColPos: 0,
@@ -732,13 +732,13 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 		}
 	}
 
-	nodeWithFunction := func(expr *plan2.Expr_F) *plan.Node {
+	nodeWithFunction := func(expr *plan.Expr_F) *plan.Node {
 		return &plan.Node{
-			NodeType: plan2.Node_EXTERNAL_SCAN,
+			NodeType: plan.Node_EXTERNAL_SCAN,
 			Stats:    &plan.Stats{},
 			TableDef: &plan.TableDef{
 				TableType: "func_table",
-				TblFunc: &plan2.TableFunction{
+				TblFunc: &plan.TableFunction{
 					Name: tableName,
 				},
 				Cols: []*plan.ColDef{
@@ -752,7 +752,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 					},
 				},
 			},
-			FilterList: []*plan2.Expr{
+			FilterList: []*plan.Expr{
 				{
 					Typ: &plan.Type{
 						Size: 1,
@@ -773,10 +773,10 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 		{
 			name: "mo_log_date_20230205",
 			args: args{
-				node: nodeWithFunction(&plan2.Expr_F{
-					F: &plan2.Function{
+				node: nodeWithFunction(&plan.Expr_F{
+					F: &plan.Function{
 						Func: &plan.ObjectRef{Obj: equalDate2DateFid, ObjName: "="},
-						Args: []*plan2.Expr{
+						Args: []*plan.Expr{
 							mologdateConst(5),
 							mologdateFunc(),
 						},
@@ -792,10 +792,10 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 		{
 			name: "mo_log_date_gt_20230202",
 			args: args{
-				node: nodeWithFunction(&plan2.Expr_F{
-					F: &plan2.Function{
+				node: nodeWithFunction(&plan.Expr_F{
+					F: &plan.Function{
 						Func: &plan.ObjectRef{Obj: lessDate2DateFid, ObjName: "<"},
-						Args: []*plan2.Expr{
+						Args: []*plan.Expr{
 							mologdateConst(2),
 							mologdateFunc(),
 						},
@@ -811,10 +811,10 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 		{
 			name: "mo_log_date_lt_20230202",
 			args: args{
-				node: nodeWithFunction(&plan2.Expr_F{
-					F: &plan2.Function{
+				node: nodeWithFunction(&plan.Expr_F{
+					F: &plan.Function{
 						Func: &plan.ObjectRef{Obj: lessDate2DateFid, ObjName: "<"},
-						Args: []*plan2.Expr{
+						Args: []*plan.Expr{
 							mologdateFunc(),
 							mologdateConst(2),
 						},

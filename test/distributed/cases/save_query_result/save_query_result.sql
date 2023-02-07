@@ -37,13 +37,9 @@ select * from test_table order by col1 asc;
 select * from result_scan(last_query_id()) as u;
 
 select t1.col1,t2.col1 from test_table t1  left join test_table t2 on t1.col1=t2.col1;
--- @bvt:issue#7832
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue
 select t1.col1,t2.col1 from test_table t1  right join test_table t2 on t1.col1=t2.col1;
--- @bvt:issue#7832
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue
 select * from test_table union select * from test_table;
 select * from result_scan(last_query_id()) as u;
 
@@ -74,13 +70,9 @@ select * from result_scan(last_query_id()) as u;
 
 
 select t1.col1,t2.col1 from test_view t1  left join test_view t2 on t1.col1=t2.col1;
--- @bvt:issue#7832
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue
 select t1.col1,t2.col1 from test_view t1  right join test_view t2 on t1.col1=t2.col1;
--- @bvt:issue#7832
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue#7832
 select * from test_view union select * from test_view;
 select * from result_scan(last_query_id()) as u;
 
@@ -106,13 +98,9 @@ select * from test_table order by col1 asc;
 select * from result_scan(last_query_id()) as u;
 
 select t1.col1,t2.col1 from test_table t1  left join test_table t2 on t1.col1=t2.col1;
--- @bvt:issue#7832
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue
 select t1.col1,t2.col1 from test_table t1  right join test_table t2 on t1.col1=t2.col1;
--- @bvt:issue#7832
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue
 select * from test_table union select * from test_table;
 select * from result_scan(last_query_id()) as u;
 
