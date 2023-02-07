@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -3286,15 +3287,22 @@ func (ses *Session) getSqlType(sql string) {
 	}
 }
 
-func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
+func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter, earlyStop *atomic.Bool) (err error) {
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
 	defer func() {
 		err2 := writer.Close()
 		if err == nil {
 			err = err2
 		}
+		if earlyStop.Load() { // if true, means mo get inner error, so we need to close the connection to stop data transfer
+			err2 = proto.GetTcpConnection().Close()
+			if err == nil {
+				err = err2
+			}
+		}
 	}()
-	ses := mce.GetSession()
-	proto := ses.GetMysqlProtocol()
+
 	err = external.InitInfileParam(param)
 	if err != nil {
 		return
@@ -3331,12 +3339,13 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	if err != nil {
 		return
 	}
-	nowStart := time.Now()
+	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := 0, 100, math.MaxFloat64, float64(0), math.MaxFloat64, float64(0)
 	for {
-		logutil.Infof("last time cost %f seconds", time.Since(nowStart).Seconds())
-		nowStart = time.Now()
+		if earlyStop.Load() {
+			break
+		}
+		readStart := time.Now()
 		msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
-		logutil.Infof("read tcp cost %f seconds", time.Since(nowStart).Seconds())
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 				seq += 1
@@ -3344,6 +3353,13 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 				err = nil
 			}
 			break
+		}
+		readTime := time.Since(readStart).Seconds()
+		if readTime > maxReadTime {
+			maxReadTime = readTime
+		}
+		if readTime < minReadTime {
+			minReadTime = readTime
 		}
 		packet, ok = msg.(*Packet)
 		if !ok {
@@ -3357,12 +3373,23 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 
 		writeStart := time.Now()
 		_, err = writer.Write(packet.Payload)
-		logutil.Infof("write pipe cost %f seconds", time.Since(writeStart).Seconds())
 		if err != nil {
 			return
 		}
+		writeTime := time.Since(writeStart).Seconds()
+		if writeTime > maxWriteTime {
+			maxWriteTime = writeTime
+		}
+		if writeTime < minWriteTime {
+			minWriteTime = writeTime
+		}
+		if epoch%printEvery == 0 {
+			logutil.Infof("load local '%s', epoch: %d, minReadTime: %f seconds, maxReadTime: %f seconds, minWriteTime: %f seconds, maxWriteTime:%f seconds", param.Filepath, epoch, minReadTime, maxReadTime, minWriteTime, maxWriteTime)
+			minReadTime, maxReadTime, minWriteTime, maxWriteTime = math.MaxFloat64, float64(0), math.MaxFloat64, float64(0)
+		}
+		epoch += 1
 	}
-	logutil.Infof("processLocalInfile cost:%f seconds", time.Since(start).Seconds())
+	logutil.Infof("load local '%s', read&write all data from client cost: %f seconds, if stop by main thread: %v", param.Filepath, time.Since(start).Seconds(), earlyStop.Load())
 	return
 }
 
@@ -3447,6 +3474,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	canCache := true
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
+	var loadLocalEarlyStop *atomic.Bool
 
 	singleStatement := len(cws) == 1
 	for i, cw := range cws {
@@ -3748,6 +3776,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Load:
 			if st.Local {
 				proc.LoadLocalReader, loadLocalWriter = io.Pipe()
+				loadLocalEarlyStop = new(atomic.Bool)
 			}
 		}
 
@@ -3932,12 +3961,15 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				if st.Local {
 					loadLocalErrGroup = new(errgroup.Group)
 					loadLocalErrGroup.Go(func() error {
-						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter)
+						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter, loadLocalEarlyStop)
 					})
 				}
 			}
 
 			if err = runner.Run(0); err != nil {
+				if loadLocalEarlyStop != nil {
+					loadLocalEarlyStop.Store(true)
+				}
 				goto handleFailed
 			}
 
