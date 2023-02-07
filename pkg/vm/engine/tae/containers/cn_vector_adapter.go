@@ -535,6 +535,33 @@ func (vec *CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roar
 	return
 }
 
+func (vec *CnTaeVector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int) (err error) {
+	if sels == nil || sels.IsEmpty() {
+		for i := offset; i < offset+length; i++ {
+			elem := vec.Get(i + bias)
+			if err = op(elem, i); err != nil {
+				break
+			}
+		}
+	} else {
+
+		selsArray := sels.ToArray()
+		end := offset + length
+		for _, rowId := range selsArray {
+			if int(rowId) < offset {
+				continue
+			} else if int(rowId) >= end {
+				break
+			}
+			elem := vec.Get(int(rowId) + bias)
+			if err = op(elem, int(rowId)); err != nil {
+				break
+			}
+		}
+	}
+	return
+}
+
 // TODO: --- I am not sure, if the below functions will work as expected
 
 func (vec *CnTaeVector[T]) Allocated() int {

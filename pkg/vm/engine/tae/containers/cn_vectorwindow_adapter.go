@@ -84,14 +84,14 @@ func (win *CnTaeVectorWindow[T]) PPString(num int) string {
 }
 
 func (win *CnTaeVectorWindow[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
-	return win.ref.ForeachWindow(win.offset, win.length, op, sels)
+	return win.ref.forEachWindowWithBias(0, win.length, op, sels, win.offset)
 }
 
 func (win *CnTaeVectorWindow[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error {
 	if offset+length > win.length {
 		panic("bad param")
 	}
-	return win.ref.ForeachWindow(win.offset, win.length, op, sels)
+	return win.ref.forEachWindowWithBias(offset, length, op, sels, win.offset)
 }
 
 func (win *CnTaeVectorWindow[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
