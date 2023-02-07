@@ -45,13 +45,14 @@ type ExParamConst struct {
 	maxBatchSize  uint64
 	CreateSql     string
 	Attrs         []string
+	Cols          []*plan.ColDef
+	OriginCols    []*plan.ColDef
 	FileList      []string
 	FileSize      []int64
 	FileOffset    [][2]int
 	Name2ColIndex map[string]int32
 	Ctx           context.Context
 	Extern        *tree.ExternParam
-	Cols          []*plan.ColDef
 	tableDef      *plan.TableDef
 	ClusterTable  *plan.ClusterTable
 }

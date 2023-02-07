@@ -1231,7 +1231,7 @@ func Test_getSqlType(t *testing.T) {
 		ses.getSqlType(sql)
 		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudUserSql)
 
-		sql = "/* cloud_nouser */ use db"
+		sql = "/* cloud_nonuser */ use db"
 		ses.getSqlType(sql)
 		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudNoUserSql)
 
