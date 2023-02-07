@@ -12,7 +12,7 @@ select * from t1 where b=2;
 a	b
 {"t1": "b"}	2
 insert into t1 values ('{"t1":"c"',3);
-invalid input: Invalid JSON text: '{"t1":"c"' for column 'a' at row '1'
+invalid input: json text {"t1":"c"
 select count(a) from t1;
 count(a)
 2
