@@ -185,6 +185,7 @@ func saveQueryResultMeta(ses *Session) error {
 	}()
 	fs := ses.GetParameterUnit().FileService
 	// write query result meta
+	colMap := buildColumnMap(ses.rs)
 	b, err := ses.rs.Marshal()
 	if err != nil {
 		return err
@@ -220,6 +221,7 @@ func saveQueryResultMeta(ses *Session) error {
 		ExpiredTime: types.UnixToTimestamp(ses.expiredTime.Unix()),
 		Plan:        string(sp),
 		Ast:         string(st),
+		ColumnMap:   colMap,
 	}
 	metaBat, err := buildQueryResultMetaBatch(m, ses.mp)
 	if err != nil {
@@ -243,6 +245,35 @@ func saveQueryResultMeta(ses *Session) error {
 		return err
 	}
 	return nil
+}
+
+func buildColumnMap(rs *plan.ResultColDef) string {
+	m := make(map[string][]int)
+	org := make([]string, len(rs.ResultCols))
+	for i, col := range rs.ResultCols {
+		org[i] = col.Name
+		v := m[col.Name]
+		m[col.Name] = append(v, i)
+	}
+	for _, v := range m {
+		if len(v) > 1 {
+			for i := range v {
+				rs.ResultCols[v[i]].Name = fmt.Sprintf("%s_%d", rs.ResultCols[v[i]].Name, i)
+			}
+		}
+	}
+	buf := new(strings.Builder)
+	for i := range org {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		if len(rs.ResultCols[i].Typ.Table) > 0 {
+			buf.WriteString(fmt.Sprintf("%s.%s -> %s", rs.ResultCols[i].Typ.Table, org[i], rs.ResultCols[i].Name))
+		} else {
+			buf.WriteString(fmt.Sprintf("%s -> %s", org[i], rs.ResultCols[i].Name))
+		}
+	}
+	return buf.String()
 }
 
 func isResultQuery(p *plan.Plan) []string {
@@ -448,6 +479,9 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 		return nil, err
 	}
 	if err = bat.Vecs[catalog.AST_IDX].Append([]byte(m.Ast), false, mp); err != nil {
+		return nil, err
+	}
+	if err = bat.Vecs[catalog.COLUMN_MAP_IDX].Append([]byte(m.ColumnMap), false, mp); err != nil {
 		return nil, err
 	}
 	return bat, nil

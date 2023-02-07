@@ -19,10 +19,8 @@ select count(1) as cnt from statement_info where __mo_filepath like "%/csv/%";
 select count(statement_id) as cnt from statement_info where __mo_filepath like "%/csv/%";
 select count(1) as cnt from statement_info where __mo_filepath like '%csv%' group by __mo_filepath order by cnt;
 
--- @bvt:issue#7709
 select count(1) as cnt from statement_info where __mo_filepath like "%/tae/%";
 select count(*) as cnt from statement_info where __mo_filepath like "%/tae/%";
 select count(1) as cnt from statement_info group by __mo_filepath order by cnt;
--- @bvt:issue
 
 select count(statement_id) as cnt from statement_info where __mo_filepath like "%/tae/%";

@@ -386,6 +386,7 @@ func (tbl *View) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 		}
 	}
 	if tbl.OriginTable.Engine == ExternalTableEngine {
+		sb.WriteString(fmt.Sprintf(", mo_log_date(`%s`) as `log_date`", ExternalFilePath))
 		sb.WriteString(fmt.Sprintf(", `%s`", ExternalFilePath))
 	}
 	sb.WriteString(fmt.Sprintf(" from `%s`.`%s` where ", tbl.OriginTable.Database, tbl.OriginTable.Table))

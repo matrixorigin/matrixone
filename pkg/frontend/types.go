@@ -100,8 +100,10 @@ const (
 	cmdFieldListSql = "__++__internal_cmd_field_list"
 	intereSql       = "internal_sql"
 	cloudUserSql    = "cloud_user_sql"
-	cloudNoUserSql  = "cloud_nouser_sql"
+	cloudNoUserSql  = "cloud_nonuser_sql"
 	externSql       = "external_sql"
+	cloudUserTag    = "cloud_user"
+	cloudNoUserTag  = "cloud_nonuser"
 )
 
 // Cache size of auto_increment_columns cache.
