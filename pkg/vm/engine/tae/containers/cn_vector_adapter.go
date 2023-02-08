@@ -32,15 +32,15 @@ import (
 type CnTaeVector[T any] struct {
 	downstreamVector *cnVector.Vector
 
-	// Mpool is mostly defined within DN vector. So reusing the same approach for simplicity.
-	mpool *mpool.MPool
-
 	// Nullable is mainly used while Marshalling & Unmarshalling
 	isNullable bool
 
+	// Mpool is mostly defined within DN vector. So reusing the same approach for simplicity.
+	mpool *mpool.MPool
+
 	// isAllocatedFromMpool is used with Allocated() & ResetWithData()
 	// When ResetWithData(bytes) is called, we are not allocating using the vector's Mpool.
-	// isAllocatedFromMpool  is used to track that.
+	// isAllocatedFromMpool  is used to track that. So when we call Allocated() after ResetWithData(), we should get Zero.
 	isAllocatedFromMpool bool
 }
 
@@ -310,14 +310,30 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 
 	// Create a new NewCnTaeVector
 	cloned := NewCnTaeVector[T](vec.GetType(), vec.Nullable(), opts)
-	cloned.isAllocatedFromMpool = true
 
-	// Create a duplicate of the downstream CN vector
-	vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
+	// Note: We are using ForeachWindow instead of cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
+	// Reason: Using cnVector.Window(...) is giving "panic: internal error: mp header corruption" in tables_test.go#TestTxn6(...).
+	// Attaching the cnVector.Window(...) code for reference.
 
-	// Attach that downstream duplicate to the window and perform window action.
-	// The result is subset of downstream vector.
-	cloned.downstreamVector = cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
+	/*
+		cloned.isAllocatedFromMpool = true
+
+		// Create a duplicate of the downstream CN vector
+		vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
+
+		// Attach that downstream duplicate to the window and perform window action.
+		// The result is subset of downstream vector.
+		cloned.downstreamVector = cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
+	*/
+
+	op := func(v any, _ int) error {
+		cloned.Append(v)
+		return nil
+	}
+	err := vec.ForeachWindow(offset, length, op, nil)
+	if err != nil {
+		return nil
+	}
 
 	return cloned
 }
@@ -543,6 +559,33 @@ func (vec *CnTaeVector[T]) PPString(num int) string {
 	return w.String()
 }
 
+//TODO: --- Pretty sure the below code works. But need some validation
+
+func (vec *CnTaeVector[T]) Reset() {
+	if vec.Length() == 0 {
+		return
+	}
+
+	if vec.Nullable() {
+		cnNulls.Reset(vec.downstreamVector.Nsp)
+		//NOTE: We are not resetting the isNullable.
+	}
+
+	cnVector.Reset(vec.downstreamVector)
+}
+
+func (vec *CnTaeVector[T]) Close() {
+	vec.releaseDownstream()
+}
+
+func (vec *CnTaeVector[T]) releaseDownstream() {
+	if vec.downstreamVector != nil && vec.isAllocatedFromMpool {
+		vec.downstreamVector.Free(vec.mpool)
+		vec.downstreamVector = nil
+		vec.isAllocatedFromMpool = false
+	}
+}
+
 // TODO: --- I am not sure, if the below functions will work as expected
 
 func (vec *CnTaeVector[T]) Allocated() int {
@@ -585,29 +628,4 @@ func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 		}
 	}
 	// TODO: Doesn't reset the capacity
-}
-
-func (vec *CnTaeVector[T]) Close() {
-	vec.releaseDownstream()
-}
-
-func (vec *CnTaeVector[T]) Reset() {
-	if vec.Length() == 0 {
-		return
-	}
-
-	if vec.Nullable() {
-		cnNulls.Reset(vec.downstreamVector.Nsp)
-		//NOTE: We are not resetting the isNullable.
-	}
-
-	cnVector.Reset(vec.downstreamVector)
-}
-
-func (vec *CnTaeVector[T]) releaseDownstream() {
-	if vec.downstreamVector != nil && vec.isAllocatedFromMpool {
-		vec.downstreamVector.Free(vec.mpool)
-		vec.downstreamVector = nil
-		vec.isAllocatedFromMpool = false
-	}
 }
