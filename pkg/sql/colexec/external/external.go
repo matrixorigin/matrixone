@@ -231,11 +231,14 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 	return bat
 }
 
-func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+func filterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
 	filterList := make([]*plan.Expr, 0)
+	filterList2 := make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
 		if judgeContainColname(node.FilterList[i]) {
 			filterList = append(filterList, node.FilterList[i])
+		} else {
+			filterList2 = append(filterList2, node.FilterList[i])
 		}
 	}
 	if len(filterList) == 0 {
@@ -256,12 +259,13 @@ func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList
 			fileSizeTmp = append(fileSizeTmp, fileSize[i])
 		}
 	}
+	node.FilterList = filterList2
 	return fileListTmp, fileSizeTmp, nil
 }
 
 func FliterFileList(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
 	var err error
-	fileList, fileSize, err = fliterByAccountAndFilename(node, proc, fileList, fileSize)
+	fileList, fileSize, err = filterByAccountAndFilename(node, proc, fileList, fileSize)
 	if err != nil {
 		return fileList, fileSize, err
 	}
