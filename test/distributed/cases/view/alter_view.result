@@ -26,8 +26,9 @@ a
 1
 2
 SHOW CREATE VIEW v0;
-[unknown result because it is related to issue#7817]
-SELECT t00.a FROM t00;
+View    Create View
+v0    CREATE VIEW v0 AS SELECT t00.a FROM t00;
+SELECT * FROM t00;
 a
 1
 2
