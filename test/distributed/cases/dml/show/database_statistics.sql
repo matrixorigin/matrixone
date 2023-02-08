@@ -157,9 +157,7 @@ select * from external_table;
 show table_number from test_db;
 
 
--- @bvt:issue#7568
 show table_values from external_table;
--- @bvt:issue
 
 
 create table t2(
@@ -180,10 +178,9 @@ show table_values from t2;
 
 
 create table t3(
-col1 decimal
+col1 decimal(5,2)
 );
 
--- @bvt:issue#7562
 show table_values from t3;
 
 insert into t3 values();
@@ -194,7 +191,7 @@ show table_values from t3;
 
 insert into t3 values(3.2);
 show table_values from t3;
--- @bvt:issue
+
 drop database test_db;
 
 
@@ -328,9 +325,7 @@ select * from external_table;
 show table_number from test_db;
 
 
--- @bvt:issue#7568
 show table_values from external_table;
--- @bvt:issue
 
 
 create table t2(
