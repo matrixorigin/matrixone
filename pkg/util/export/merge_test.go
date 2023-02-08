@@ -50,9 +50,9 @@ func init() {
 
 var mux sync.Mutex
 
-var dummyStrColumn = table.Column{Name: "str", Type: "varchar(32)", ColType: table.TVarchar, Default: "", Comment: "str column"}
-var dummyInt64Column = table.Column{Name: "int64", Type: "BIGINT", ColType: table.TInt64, Default: "0", Comment: "int64 column"}
-var dummyFloat64Column = table.Column{Name: "float64", Type: "DOUBLE", ColType: table.TFloat64, Default: "0.0", Comment: "float64 column"}
+var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Precision: 32, Default: "", Comment: "str column"}
+var dummyInt64Column = table.Column{Name: "int64", ColType: table.TInt64, Default: "0", Comment: "int64 column"}
+var dummyFloat64Column = table.Column{Name: "float64", ColType: table.TFloat64, Default: "0.0", Comment: "float64 column"}
 
 var dummyTable = &table.Table{
 	Account:          "test",
@@ -68,9 +68,9 @@ var dummyTable = &table.Table{
 
 func dummyFillTable(str string, i int64, f float64) *table.Row {
 	row := dummyTable.GetRow(context.TODO())
-	row.SetVal(dummyStrColumn.Name, str)
-	row.SetInt64(dummyInt64Column.Name, i)
-	row.SetFloat64(dummyFloat64Column.Name, f)
+	row.SetColumnVal(dummyStrColumn, str)
+	row.SetColumnVal(dummyInt64Column, i)
+	row.SetColumnVal(dummyFloat64Column, f)
 	return row
 }
 
@@ -134,7 +134,7 @@ func TestInitCronExpr(t *testing.T) {
 }
 
 var newFilePath = func(tbl *table.Table, ts time.Time) string {
-	filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts)
+	filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts, table.CsvExtension)
 	p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
 	filepath := path.Join(p, filename)
 	return filepath
@@ -147,25 +147,25 @@ func initLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Ta
 	buf := make([]byte, 0, 4096)
 
 	ts1 := ts
-	writer, _ := newETLWriter(ctx, fs, newFilePath(tbl, ts1), buf)
+	writer, _ := newETLWriter(ctx, fs, newFilePath(tbl, ts1), buf, nil, nil)
 	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts2 := ts.Add(time.Minute)
-	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts2), buf)
+	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts2), buf, nil, nil)
 	writer.WriteStrings(dummyFillTable("row3", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row4", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts3 := ts.Add(time.Hour)
-	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts3), buf)
+	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts3), buf, nil, nil)
 	writer.WriteStrings(dummyFillTable("row5", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row6", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts1New := ts.Add(time.Hour + time.Minute)
-	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts1New), buf)
+	writer, _ = newETLWriter(ctx, fs, newFilePath(tbl, ts1New), buf, nil, nil)
 	writer.WriteStrings(dummyFillTable("row1", 1, 11.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 22.0).ToStrings())
 	writer.FlushAndClose()
@@ -183,11 +183,11 @@ func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *tabl
 	ts1 := ts
 	filePath := newFilePath(tbl, ts1)
 	files = append(files, filePath)
-	writer, err := newETLWriter(ctx, fs, filePath, buf)
+	writer, err := newETLWriter(ctx, fs, filePath, buf, nil, nil)
 	if err != nil {
 		return nil, err
 	}
-	err = writer.FlushAndClose()
+	_, err = writer.FlushAndClose()
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +200,7 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *ta
 	defer mux.Unlock()
 
 	var newFilePath = func(ts time.Time) string {
-		filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts)
+		filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts, table.CsvExtension)
 		p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
 		filepath := path.Join(p, filename)
 		return filepath
@@ -209,7 +209,7 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *ta
 	buf := make([]byte, 0, 4096)
 
 	ts1 := ts
-	writer, _ := newETLWriter(ctx, fs, newFilePath(ts1), buf)
+	writer, _ := newETLWriter(ctx, fs, newFilePath(ts1), buf, nil, nil)
 	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
@@ -228,9 +228,15 @@ func TestNewMerge(t *testing.T) {
 
 	ctx := trace.Generate(context.Background())
 
+	defaultOpts := []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
+		WithFileService(fs), WithTable(dummyTable),
+		WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)}
+
 	type args struct {
 		ctx  context.Context
 		opts []MergeOption
+		// extension
+		logsExt, mergedExt string
 	}
 	tests := []struct {
 		name string
@@ -238,12 +244,12 @@ func TestNewMerge(t *testing.T) {
 		want *Merge
 	}{
 		{
-			name: "normal",
+			name: "csv",
 			args: args{
-				ctx: ctx,
-				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
-					WithFileService(fs), WithTable(dummyTable),
-					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
+				ctx:       ctx,
+				opts:      defaultOpts,
+				logsExt:   table.CsvExtension,
+				mergedExt: table.CsvExtension,
 			},
 			want: nil,
 		},
@@ -254,7 +260,8 @@ func TestNewMerge(t *testing.T) {
 			err := initLogsFile(tt.args.ctx, fs, dummyTable, ts)
 			require.Nil(t, err)
 
-			got := NewMerge(tt.args.ctx, tt.args.opts...)
+			got, err := NewMerge(tt.args.ctx, tt.args.opts...)
+			require.Nil(t, err)
 			require.NotNil(t, got)
 
 			err = got.Main(tt.args.ctx, ts)
@@ -277,6 +284,7 @@ func TestNewMerge(t *testing.T) {
 			require.Equal(t, 1, len(files))
 			t.Logf("%v", files)
 
+			//r, err = newETLReader(tt.args.ctx, m.Table, m.FS, path.FilePath, path.FileSize, m.mp)
 			r, err := NewCSVReader(tt.args.ctx, fs, files[0])
 			require.Nil(t, err)
 			lines := 0
@@ -330,10 +338,11 @@ func TestNewMergeWithContextDone(t *testing.T) {
 			files, err := initEmptyLogFile(ctx, fs, dummyTable, ts)
 			require.Nil(t, err)
 
-			got := NewMerge(ctx, tt.args.opts...)
+			got, err := NewMerge(ctx, tt.args.opts...)
+			require.Nil(t, err)
 			require.NotNil(t, got)
 
-			reader, err := newETLReader(got.ctx, got.FS, files[0])
+			reader, err := newETLReader(got.ctx, dummyTable, got.FS, files[0], 0, nil)
 			require.Nil(t, err)
 
 			// trigger context.Done
@@ -382,12 +391,14 @@ func TestNewMergeNOFiles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			filePath := newFilePath(dummyTable, ts)
-			files := []string{filePath}
+			fm := &FileMeta{filePath, 0}
+			files := []*FileMeta{fm}
 
-			got := NewMerge(tt.args.ctx, tt.args.opts...)
+			got, err := NewMerge(tt.args.ctx, tt.args.opts...)
+			require.Nil(t, err)
 			require.NotNil(t, got)
 
-			err := got.doMergeFiles(ctx, dummyTable.Table, files, 0)
+			err = got.doMergeFiles(ctx, dummyTable.Table, files, 0)
 			require.Equal(t, true, strings.Contains(err.Error(), "is not found"))
 
 		})
@@ -530,7 +541,8 @@ func TestNewMergeService(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, got1 := NewMergeService(tt.args.ctx, tt.args.opts...)
+			got, got1, err := NewMergeService(tt.args.ctx, tt.args.opts...)
+			require.Nil(t, err)
 			require.NotNil(t, got)
 			require.Equal(t, tt.want1, got1)
 		})

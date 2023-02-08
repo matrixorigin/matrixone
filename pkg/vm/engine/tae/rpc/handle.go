@@ -354,13 +354,15 @@ func (h *Handle) HandleFlushTable(
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	_ db.FlushTable,
+	req db.Checkpoint,
 	resp *apipb.SyncLogTailResp) (err error) {
+
+	timeout := req.FlushDuration
 
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 
 	err = h.eng.ForceCheckpoint(ctx,
-		currTs)
+		currTs, timeout)
 	return err
 }
 
@@ -525,7 +527,8 @@ func (h *Handle) CacheTxnRequest(
 	h.mu.Unlock()
 	txnCtx.reqs = append(txnCtx.reqs, req)
 	if r, ok := req.(*db.CreateRelationReq); ok {
-		schema, err := moengine.HandleDefsToSchema(r.Name, r.Defs)
+		// Does this place need
+		schema, err := moengine.DefsToSchema(r.Name, r.Defs)
 		if err != nil {
 			return err
 		}

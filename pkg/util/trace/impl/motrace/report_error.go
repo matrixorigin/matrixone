@@ -48,12 +48,12 @@ func (h *MOErrorHolder) Free() {
 	h.Error = nil
 }
 
-func (h *MOErrorHolder) GetRow() *table.Row { return errorView.OriginTable.GetRow(DefaultContext()) }
+func (h *MOErrorHolder) GetTable() *table.Table { return errorView.OriginTable }
 
-func (h *MOErrorHolder) CsvFields(ctx context.Context, row *table.Row) []string {
+func (h *MOErrorHolder) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, errorView.Table)
-	row.SetColumnVal(timestampCol, Time2DatetimeString(h.Timestamp))
+	row.SetColumnVal(timestampCol, h.Timestamp)
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
 	row.SetColumnVal(errorCol, h.Error.Error())
@@ -68,7 +68,6 @@ func (h *MOErrorHolder) CsvFields(ctx context.Context, row *table.Row) []string 
 		row.SetColumnVal(spanIDCol, span.SpanContext().SpanID.String())
 		row.SetColumnVal(spanKindCol, span.SpanContext().Kind.String())
 	}
-	return row.ToStrings()
 }
 
 func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.Error, s, verb) }

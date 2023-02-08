@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package export
+package etl
 
 import (
 	"context"
@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,9 +41,9 @@ func TestLocalFSWriter(t *testing.T) {
 	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), mpool.MB)
 	require.Equal(t, nil, err)
 	ctx := context.Background()
-	// fs_writer_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
-	// fs_writer_test.go:40: write statement file error: size not match
-	// fs_writer_test.go:50: write span file error: file existed
+	// csv_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
+	// csv_test.go:40: write statement file error: size not match
+	// csv_test.go:50: write span file error: file existed
 	// file result: (has checksum)
 	// 9a80 8760 3132 3334 3536 3738 0a         ...`12345678.
 	err = fs.Write(ctx, fileservice.IOVector{ // write-once-read-multi
@@ -142,7 +141,7 @@ func TestFSWriter_Write(t *testing.T) {
 	type fields struct {
 		ctx      context.Context
 		fs       fileservice.FileService
-		prefix   batchpipe.HasName
+		table    string
 		database string
 		nodeUUID string
 		nodeType string
@@ -170,7 +169,7 @@ func TestFSWriter_Write(t *testing.T) {
 			fields: fields{
 				ctx:      context.Background(),
 				fs:       localFs,
-				prefix:   newDummy(1),
+				table:    "dummy",
 				database: "system",
 				nodeUUID: "node_uuid",
 				nodeType: "standalone",
@@ -187,9 +186,7 @@ func TestFSWriter_Write(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := NewFSWriter(tt.fields.ctx, tt.fields.fs,
-				WithName(tt.fields.prefix),
-				WithDatabase(tt.fields.database),
-				WithNode(tt.fields.nodeUUID, tt.fields.nodeType),
+				WithFilePath("filepath"),
 			)
 			gotN, err := w.Write(tt.args.p)
 			if (err != nil) != tt.wantErr {

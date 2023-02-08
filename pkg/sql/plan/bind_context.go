@@ -69,7 +69,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 	return nil
 }
 
-func (bc *BindContext) mergeContexts(left, right *BindContext) error {
+func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindContext) error {
 	left.parent = bc
 	right.parent = bc
 	bc.leftChild = left
@@ -83,7 +83,7 @@ func (bc *BindContext) mergeContexts(left, right *BindContext) error {
 
 	for _, binding := range right.bindings {
 		if _, ok := bc.bindingByTable[binding.table]; ok {
-			return moerr.NewInvalidInput(bc.binder.GetContext(), "table '%s' specified more than once", binding.table)
+			return moerr.NewInvalidInput(ctx, "table '%s' specified more than once", binding.table)
 		}
 
 		bc.bindings = append(bc.bindings, binding)

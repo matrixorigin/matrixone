@@ -40,22 +40,6 @@ func (m *MockStatistics) EXPECT() *MockStatisticsMockRecorder {
 	return m.recorder
 }
 
-// FilteredStats mocks base method.
-func (m *MockStatistics) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FilteredStats", ctx, expr)
-	ret0, _ := ret[0].(int32)
-	ret1, _ := ret[1].(int64)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
-}
-
-// FilteredStats indicates an expected call of FilteredStats.
-func (mr *MockStatisticsMockRecorder) FilteredStats(ctx, expr interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FilteredStats", reflect.TypeOf((*MockStatistics)(nil).FilteredStats), ctx, expr)
-}
-
 // Rows mocks base method.
 func (m *MockStatistics) Rows(ctx context.Context) (int64, error) {
 	m.ctrl.T.Helper()
@@ -87,19 +71,20 @@ func (mr *MockStatisticsMockRecorder) Size(ctx, columnName interface{}) *gomock.
 }
 
 // Stats mocks base method.
-func (m *MockStatistics) Stats(ctx context.Context) (int32, int64, error) {
+func (m *MockStatistics) Stats(ctx context.Context, expr *plan.Expr) (int32, int64, int64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", ctx)
+	ret := m.ctrl.Call(m, "Stats", ctx, expr)
 	ret0, _ := ret[0].(int32)
 	ret1, _ := ret[1].(int64)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
+	ret2, _ := ret[2].(int64)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
 }
 
 // Stats indicates an expected call of Stats.
-func (mr *MockStatisticsMockRecorder) Stats(ctx interface{}) *gomock.Call {
+func (mr *MockStatisticsMockRecorder) Stats(ctx, expr interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockStatistics)(nil).Stats), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockStatistics)(nil).Stats), ctx, expr)
 }
 
 // MockTableDef is a mock of TableDef interface.
@@ -237,22 +222,6 @@ func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockRelation)(nil).Delete), arg0, arg1, arg2)
 }
 
-// FilteredStats mocks base method.
-func (m *MockRelation) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FilteredStats", ctx, expr)
-	ret0, _ := ret[0].(int32)
-	ret1, _ := ret[1].(int64)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
-}
-
-// FilteredStats indicates an expected call of FilteredStats.
-func (mr *MockRelationMockRecorder) FilteredStats(ctx, expr interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FilteredStats", reflect.TypeOf((*MockRelation)(nil).FilteredStats), ctx, expr)
-}
-
 // GetHideKeys mocks base method.
 func (m *MockRelation) GetHideKeys(arg0 context.Context) ([]*engine.Attribute, error) {
 	m.ctrl.T.Helper()
@@ -295,6 +264,22 @@ func (m *MockRelation) GetTableID(arg0 context.Context) uint64 {
 func (mr *MockRelationMockRecorder) GetTableID(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTableID", reflect.TypeOf((*MockRelation)(nil).GetTableID), arg0)
+}
+
+// MaxAndMinValues mocks base method.
+func (m *MockRelation) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MaxAndMinValues", ctx)
+	ret0, _ := ret[0].([][2]any)
+	ret1, _ := ret[1].([]uint8)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// MaxAndMinValues indicates an expected call of MaxAndMinValues.
+func (mr *MockRelationMockRecorder) MaxAndMinValues(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MaxAndMinValues", reflect.TypeOf((*MockRelation)(nil).MaxAndMinValues), ctx)
 }
 
 // NewReader mocks base method.
@@ -342,10 +327,6 @@ func (mr *MockRelationMockRecorder) Rows(ctx interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rows", reflect.TypeOf((*MockRelation)(nil).Rows), ctx)
 }
 
-func (rel *MockRelation) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
-	return nil, nil, nil
-}
-
 // Size mocks base method.
 func (m *MockRelation) Size(ctx context.Context, columnName string) (int64, error) {
 	m.ctrl.T.Helper()
@@ -362,19 +343,20 @@ func (mr *MockRelationMockRecorder) Size(ctx, columnName interface{}) *gomock.Ca
 }
 
 // Stats mocks base method.
-func (m *MockRelation) Stats(ctx context.Context) (int32, int64, error) {
+func (m *MockRelation) Stats(ctx context.Context, expr *plan.Expr) (int32, int64, int64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", ctx)
+	ret := m.ctrl.Call(m, "Stats", ctx, expr)
 	ret0, _ := ret[0].(int32)
 	ret1, _ := ret[1].(int64)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
+	ret2, _ := ret[2].(int64)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
 }
 
 // Stats indicates an expected call of Stats.
-func (mr *MockRelationMockRecorder) Stats(ctx interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) Stats(ctx, expr interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockRelation)(nil).Stats), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockRelation)(nil).Stats), ctx, expr)
 }
 
 // TableColumns mocks base method.

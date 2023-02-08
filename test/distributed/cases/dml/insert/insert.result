@@ -353,7 +353,7 @@ select count(*) from t;
 count(*)
 200000
 insert into t select * from t;
-Duplicate entry '81921' for key 'a'
+Duplicate entry '32769' for key 'a'
 begin;
 insert into t select * from t;
 select count(*) from t;
@@ -383,7 +383,7 @@ select count(*) from t;
 count(*)
 400000
 commit;
-Duplicate entry '3a170200013a17020001' for key '__mo_cpkey_001a001b'
+Duplicate entry '3a170300013a17030001' for key '__mo_cpkey_001a001b'
 select count(*) from t;
 count(*)
 200000
@@ -397,14 +397,14 @@ select count(*) from t;
 count(*)
 200000
 insert into t select * from t;
-Duplicate entry '73729' for key '__mo_index_idx_col'
+Duplicate entry '106497' for key '__mo_index_idx_col'
 begin;
 insert into t select * from t;
 select count(*) from t;
 count(*)
 400000
 commit;
-Duplicate entry '24577' for key '__mo_index_idx_col'
+Duplicate entry '49153' for key '__mo_index_idx_col'
 select count(*) from t;
 count(*)
 200000
@@ -447,3 +447,67 @@ select * from t1;
 col1    col2    col3    col4    col5    col6    col7    col8
 127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615
 drop table t1;
+create database ssb;use ssb;
+create table t2(c1 int) cluster by c1;
+insert into t2 values(3),(5),(1),(4),(2);
+select * from t2;
+c1
+3
+5
+1
+4
+2
+select mo_ctl('dn', 'flush', 'ssb.t2');
+mo_ctl(dn, flush, ssb.t2)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select * from t2;
+c1
+1
+2
+3
+4
+5
+drop table t2;
+create table t2(c1 int) cluster by c1;
+load data infile '$resources/load_data/integer.csv' into table t2;
+select * from t2;
+c1
+1
+2
+3
+4
+5
+select mo_ctl('dn', 'flush', 'ssb.t2');
+mo_ctl(dn, flush, ssb.t2)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select * from t2;
+c1
+1
+2
+3
+4
+5
+drop table t2;
+create table t2(c1 int,c2 int) cluster by (c1,c2);
+load data infile '$resources/load_data/integer2.csv' into table t2;
+select * from t2;
+c1    c2
+1    2
+1    3
+3    1
+3    5
+4    2
+4    5
+select mo_ctl('dn', 'flush', 'ssb.t2');
+mo_ctl(dn, flush, ssb.t2)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select * from t2;
+c1    c2
+1    2
+1    3
+3    1
+3    5
+4    2
+4    5
+drop table t2;
+drop database ssb;

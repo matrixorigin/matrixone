@@ -156,7 +156,31 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 		}
 
 	case *engine.ConstraintDef:
-		// update
+		pkeyDef := def.GetPrimaryKeyDef()
+		if pkeyDef != nil {
+			// set primary index
+			if err := m.iterRelationAttributes(
+				tx, req.TableID,
+				func(_ ID, row *AttributeRow) error {
+					isPrimary := false
+					if pkeyDef.Pkey.PkeyColName == row.Name {
+						isPrimary = true
+					}
+					if isPrimary == row.Primary {
+						return nil
+					}
+					row.Primary = isPrimary
+					if err := m.attributes.Update(tx, row); err != nil {
+						return err
+					}
+					return nil
+				},
+			); err != nil {
+				return err
+			}
+		}
+
+		// update Constraint
 		if table.Constraint, err = def.MarshalBinary(); err != nil {
 			return nil
 		}
@@ -202,31 +226,6 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 			table.Properties[prop.Key] = prop.Value
 		}
 		if err := m.relations.Update(tx, table); err != nil {
-			return err
-		}
-
-	case *engine.PrimaryIndexDef:
-		// set primary index
-		if err := m.iterRelationAttributes(
-			tx, req.TableID,
-			func(_ ID, row *AttributeRow) error {
-				isPrimary := false
-				for _, name := range def.Names {
-					if name == row.Name {
-						isPrimary = true
-						break
-					}
-				}
-				if isPrimary == row.Primary {
-					return nil
-				}
-				row.Primary = isPrimary
-				if err := m.attributes.Update(tx, row); err != nil {
-					return err
-				}
-				return nil
-			},
-		); err != nil {
 			return err
 		}
 
@@ -330,7 +329,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 
 	// handle defs
 	var relAttrs []engine.Attribute
-	var primaryColumnNames []string
+	var primaryColumnName string
 	for _, def := range req.Defs {
 		switch def := def.(type) {
 
@@ -348,6 +347,10 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 			if err != nil {
 				return err
 			}
+			pKeyDef := def.GetPrimaryKeyDef()
+			if pKeyDef != nil {
+				primaryColumnName = pKeyDef.Pkey.PkeyColName
+			}
 		case *engine.AttributeDef:
 			relAttrs = append(relAttrs, def.Attr)
 
@@ -359,8 +362,8 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 				row.Properties[prop.Key] = prop.Value
 			}
 
-		case *engine.PrimaryIndexDef:
-			primaryColumnNames = def.Names
+		//case *engine.PrimaryIndexDef:
+		//	primaryColumnNames = def.Names
 
 		default:
 			panic(fmt.Sprintf("unknown table def: %T", def))
@@ -389,16 +392,14 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 			return moerr.NewConstraintViolationNoCtx(`duplicate column "%s"`, attr.Name)
 		}
 		nameSet[attr.Name] = true
-		if len(primaryColumnNames) > 0 {
+		if primaryColumnName != "" {
 			isPrimary := false
-			for _, name := range primaryColumnNames {
-				if name == attr.Name {
-					isPrimary = true
-					break
-				}
+			if primaryColumnName == attr.Name {
+				isPrimary = true
 			}
 			attr.Primary = isPrimary
 		}
+
 		id, err := m.idGenerator.NewID(ctx)
 		if err != nil {
 			return err
@@ -903,11 +904,6 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 			return err
 		}
 
-		if len(primaryAttrNames) > 0 {
-			resp.Defs = append(resp.Defs, &engine.PrimaryIndexDef{
-				Names: primaryAttrNames,
-			})
-		}
 		sort.Slice(attrRows, func(i, j int) bool {
 			return attrRows[i].Order < attrRows[j].Order
 		})

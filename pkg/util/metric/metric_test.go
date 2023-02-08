@@ -44,10 +44,11 @@ func TestMetric(t *testing.T) {
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = true
 		SV.BatchProcessor = FileService
+		SV.MetricExportInterval = 1
+		SV.MetricMultiTable = true
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true),
-			WithMultiTable(true), WithExportInterval(1))
+		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 
 		const (
@@ -99,10 +100,11 @@ func TestMetricNoProm(t *testing.T) {
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = false
 		SV.BatchProcessor = FileService
+		SV.MetricMultiTable = true
 
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true), WithMultiTable(true))
+		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 
 		client := http.Client{
@@ -155,10 +157,11 @@ func TestMetricSingleTable(t *testing.T) {
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = true
 		SV.BatchProcessor = FileService
+		SV.MetricExportInterval = 1
+		SV.MetricMultiTable = false
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true),
-			WithMultiTable(false), WithExportInterval(1))
+		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 
 		const (
@@ -219,7 +222,7 @@ func TestGetSchemaForAccount(t *testing.T) {
 			args: args{
 				account: "user1",
 			},
-			wantPath: "/user1/*/*/*/*/metric/*.csv",
+			wantPath: "/user1/*/*/*/*/metric/*",
 			wantSche: 7,
 		},
 	}
@@ -237,7 +240,7 @@ func TestGetSchemaForAccount(t *testing.T) {
 			require.Equal(t, tt.wantSche, len(schemas))
 			require.Equal(t, true, found)
 			found = false
-			if strings.Contains(SingleMetricTable.ToCreateSql(ctx, true), "/*/*/*/*/*/metric/*.csv") {
+			if strings.Contains(SingleMetricTable.ToCreateSql(ctx, true), "/*/*/*/*/*/metric/*") {
 				found = true
 			}
 			require.Equal(t, true, found)

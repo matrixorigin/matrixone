@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,7 +39,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
 		types.T_date, types.T_datetime,
@@ -382,7 +383,7 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[uint32](result, length)
 	case types.T_uint64:
 		return appendNulls[uint64](result, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
 		return appendNulls[types.Varlena](result, length)
 	case types.T_float32:
 		return appendNulls[float32](result, length)
@@ -3045,7 +3046,7 @@ func strToStr(
 			}
 			// check the length.
 			s := convertByteSliceToString(v)
-			if len(s) > destLen {
+			if utf8.RuneCountInString(s) > destLen {
 				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}

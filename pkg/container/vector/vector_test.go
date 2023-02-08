@@ -59,6 +59,33 @@ func TestConst(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestWindowWithNulls(t *testing.T) {
+	v0 := New(types.T_int8.ToType())
+	mp := mpool.MustNewZero()
+
+	_ = v0.Append(int8(0), false, mp)
+	_ = v0.Append(int8(1), false, mp)
+	_ = v0.Append(int8(2), false, mp)
+	_ = v0.Append(int8(-1), true, mp) // v0[3] = null
+	_ = v0.Append(int8(6), false, mp)
+	_ = v0.Append(int8(-1), true, mp) // v0[5] = null
+	_ = v0.Append(int8(-1), true, mp) // v0[6] = null
+	_ = v0.Append(int8(6), false, mp)
+	_ = v0.Append(int8(7), false, mp)
+	_ = v0.Append(int8(8), false, mp)
+
+	require.Equal(t, []uint64{3, 5, 6}, v0.Nsp.Np.ToArray())
+
+	start, end := 1, 7
+	v0Window := New(types.T_int8.ToType())
+	v0Window = Window(v0, start, end, v0Window)
+	require.Equal(t, v0.Col.([]int8)[start:end], v0Window.Col)
+	require.Equal(t, []uint64{2, 4, 5}, v0Window.Nsp.Np.ToArray())
+
+	//t.Log(v0.String())
+	//t.Log(v0Window.String())
+}
+
 func TestAppend(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := New(FLAT, types.New(types.T_int8, 0, 0, 0))

@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 
@@ -80,21 +79,21 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 
 	// update child table(which ref on delete cascade)
 	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.OnCascadeIdx, updateCtx.OnCascadeSource,
-		updateCtx.OnCascadeRef, updateCtx.OnCascadeTableDef, updateCtx.OnCascadeUpdateCol, nil)
+		updateCtx.OnCascadeRef, updateCtx.OnCascadeTableDef, updateCtx.OnCascadeUpdateCol, nil, updateCtx.OnCascadeUniqueSource)
 	if err != nil {
 		return false, err
 	}
 
 	// update child table(which ref on delete set null)
 	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.OnSetIdx, updateCtx.OnSetSource,
-		updateCtx.OnSetRef, updateCtx.OnSetTableDef, updateCtx.OnSetUpdateCol, nil)
+		updateCtx.OnSetRef, updateCtx.OnSetTableDef, updateCtx.OnSetUpdateCol, nil, updateCtx.OnSetUniqueSource)
 	if err != nil {
 		return false, err
 	}
 
 	// update origin table
 	affectedRows, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.Idxs, updateCtx.Source,
-		updateCtx.Ref, updateCtx.TableDefs, updateCtx.UpdateCol, updateCtx.ParentIdx)
+		updateCtx.Ref, updateCtx.TableDefs, updateCtx.UpdateCol, updateCtx.ParentIdx, updateCtx.UniqueSource)
 	if err != nil {
 		return false, err
 	}
@@ -103,15 +102,14 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 }
 
 // Get the primary key name of the table
-func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
-	for _, col := range cols {
-		if col.Name != catalog.Row_ID && col.Primary {
-			return col.Name
-		}
+func GetTablePriKeyName(pKeyDef *plan.PrimaryKeyDef, cPkeyCol *plan.ColDef) string {
+	if pKeyDef != nil && len(pKeyDef.Names) == 1 {
+		return pKeyDef.Names[0]
 	}
 
 	if cPkeyCol != nil {
 		return cPkeyCol.Name
 	}
+
 	return ""
 }
