@@ -426,11 +426,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		ds.DataSource = &Source{Bat: bat}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_EXTERNAL_SCAN:
+		node := plan2.DeepCopyNode(n)
 		ss, err := c.compileExternScan(ctx, n)
 		if err != nil {
 			return nil, err
 		}
-		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+		return c.compileSort(node, c.compileProjection(node, c.compileRestrict(n, ss))), nil
 	case plan.Node_TABLE_SCAN:
 		ss, err := c.compileTableScan(n)
 		if err != nil {
