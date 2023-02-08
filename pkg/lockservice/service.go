@@ -43,7 +43,7 @@ func newMapBasedTxnHandler(fsp *fixedSlicePool) activeTxnHolder {
 func (h *mapBasedTxnHolder) getActiveTxn(
 	txnID []byte,
 	create bool) *activeTxn {
-	txnKey := unsafeByteSliceToString(txnID)
+	txnKey := unsafeBytesToString(txnID)
 	h.mu.RLock()
 	if v, ok := h.mu.activeTxns[txnKey]; ok {
 		h.mu.RUnlock()
@@ -62,7 +62,7 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 }
 
 func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
-	txnKey := unsafeByteSliceToString(txnID)
+	txnKey := unsafeBytesToString(txnID)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	v, ok := h.mu.activeTxns[txnKey]
@@ -155,6 +155,10 @@ func (s *service) getLockTable(tableID uint64) *lockTable {
 	return l
 }
 
-func unsafeByteSliceToString(key []byte) string {
-	return *(*string)(unsafe.Pointer(&key))
+func unsafeBytesToString(b []byte) string {
+	// see https://go.dev/src/internal/coverage/slicereader/slicereader.go#L93
+	if len(b) == 0 {
+		return ""
+	}
+	return unsafe.String(&b[0], len(b))
 }

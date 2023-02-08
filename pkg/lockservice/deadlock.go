@@ -68,7 +68,7 @@ func (d *detector) close() {
 }
 
 func (d *detector) txnClosed(txnID []byte) {
-	v := unsafeByteSliceToString(txnID)
+	v := unsafeBytesToString(txnID)
 	d.ignoreTxns.Delete(v)
 }
 
@@ -133,7 +133,7 @@ func (w *waiters) add(txnID []byte) bool {
 	if bytes.Equal(w.waitTxns[0], txnID) {
 		return false
 	}
-	v := unsafeByteSliceToString(txnID)
+	v := unsafeBytesToString(txnID)
 	if _, ok := w.ignoreTxns.Load(v); ok {
 		return true
 	}
