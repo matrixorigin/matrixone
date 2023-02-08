@@ -3331,7 +3331,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	if err != nil {
 		return
 	}
-	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := 0, 100, math.MaxFloat64, float64(0), math.MaxFloat64, float64(0)
+	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(100), math.MaxFloat64, float64(0), math.MaxFloat64, float64(0)
 	for {
 		readStart := time.Now()
 		msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
