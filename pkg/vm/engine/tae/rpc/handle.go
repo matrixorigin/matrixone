@@ -373,8 +373,10 @@ func (h *Handle) HandleInspectDN(
 	req db.InspectDN,
 	resp *ctlpb.DNStringResponse) (err error) {
 	tae := h.eng.GetTAE(context.Background())
+	inspectCtx.Init(tae, &req.AccessInfo)
+	defer inspectCtx.Destroy()
 	b := &bytes.Buffer{}
-	RunInspect(req.Operation, b, tae)
+	RunInspect(req.Operation, b)
 	resp.ReturnStr = b.String()
 	return nil
 }

@@ -17,6 +17,8 @@ package rpc
 import (
 	"fmt"
 	"io"
+	"os"
+	"sync"
 
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -24,17 +26,39 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type inspectContext struct {
+	sync.Mutex
+	db     *db.DB
+	acinfo *db.AccessInfo
+}
+
+func (i *inspectContext) Init(db *db.DB, info *db.AccessInfo) {
+	i.Lock()
+	i.db = db
+	i.acinfo = info
+}
+
+func (i *inspectContext) Destroy() {
+	i.Unlock()
+	i.db = nil
+	i.acinfo = nil
+}
+
+var inspectCtx *inspectContext
+
 var rootCmd = &cobra.Command{
 	Use: "inspect",
 }
 
 type catalogArg struct {
-	verbose int
+	outfile *os.File
+	verbose common.PPLevel
 }
 
-func runCatalog(arg *catalogArg) {
+func (c *catalogArg) fromCommand(cmd *cobra.Command) error {
+	count, _ := cmd.Flags().GetCount("verbose")
 	var lv common.PPLevel
-	switch arg.verbose {
+	switch count {
 	case 0:
 		lv = common.PPL0
 	case 1:
@@ -44,26 +68,55 @@ func runCatalog(arg *catalogArg) {
 	case 3:
 		lv = common.PPL3
 	}
+	c.verbose = lv
+
+	file, _ := cmd.Parent().PersistentFlags().GetString("outfile")
+	if file != "" {
+		if f, err := os.Create(file); err != nil {
+			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("open %s err: %v", file, err)))
+			return err
+		} else {
+			c.outfile = f
+		}
+	}
+	return nil
+}
+
+func runCatalog(arg *catalogArg, respWriter io.Writer) {
+	ret := inspectCtx.db.Catalog.SimplePPString(arg.verbose)
+
+	if arg.outfile != nil {
+		arg.outfile.WriteString(ret)
+		defer arg.outfile.Close()
+		respWriter.Write([]byte("write file done"))
+	} else {
+		respWriter.Write([]byte(ret))
+	}
 }
 
 var catalogCmd = &cobra.Command{
 	Use:   "catalog",
 	Short: "show catalog",
 	Run: func(cmd *cobra.Command, args []string) {
-		count, _ := cmd.Flags().GetCount("verbose")
-		arg := &catalogArg{
-			verbose: count,
+		arg := &catalogArg{}
+		if err := arg.fromCommand(cmd); err != nil {
+			return
 		}
-		cmd.OutOrStderr().Write([]byte(fmt.Sprintf("xxxxxxx %#v  %#v %d\n", cmd, args, count)))
+		runCatalog(arg, cmd.OutOrStdout())
 	},
 }
 
 func init() {
+	inspectCtx = new(inspectContext)
+
+	rootCmd.PersistentFlags().StringP("outfile", "o", "", "write output to a file")
+
 	catalogCmd.Flags().CountP("verbose", "v", "verbose level")
+
 	rootCmd.AddCommand(catalogCmd)
 }
 
-func RunInspect(arg string, out io.Writer, *db.DB) {
+func RunInspect(arg string, out io.Writer) {
 	args, _ := shlex.Split(arg)
 	rootCmd.SetArgs(args)
 	rootCmd.SetErr(out)
