@@ -28,7 +28,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -3286,7 +3285,11 @@ func (ses *Session) getSqlType(sql string) {
 	}
 }
 
-func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter, earlyStop *atomic.Bool) (err error) {
+func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
+	// read err occurs,  return
+	// write err occurs, means mo run into error, but need wait read finish
+	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
+
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	defer func() {
@@ -3327,9 +3330,10 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	if length == 0 {
 		return
 	}
+	quickWrite := false
 	_, err = writer.Write(packet.Payload)
 	if err != nil {
-		return
+		quickWrite = true
 	}
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(100), math.MaxFloat64, float64(0), math.MaxFloat64, float64(0)
 	for {
@@ -3361,10 +3365,10 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		proto.SetSequenceID(seq)
 
 		writeStart := time.Now()
-		if !earlyStop.Load() {
+		if !quickWrite {
 			_, err = writer.Write(packet.Payload)
 			if err != nil {
-				return
+				quickWrite = true
 			}
 			writeTime := time.Since(writeStart).Seconds()
 			if writeTime > maxWriteTime {
@@ -3375,7 +3379,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 			}
 		}
 		if epoch%printEvery == 0 {
-			logutil.Infof("load local '%s', epoch: %d, minReadTime: %f seconds, maxReadTime: %f seconds, minWriteTime: %f seconds, maxWriteTime:%f seconds, quick write:%v", param.Filepath, epoch, minReadTime, maxReadTime, minWriteTime, maxWriteTime, earlyStop.Load())
+			logutil.Infof("load local '%s', epoch: %d, minReadTime: %f seconds, maxReadTime: %f seconds, minWriteTime: %f seconds, maxWriteTime:%f seconds, quick write:%v", param.Filepath, epoch, minReadTime, maxReadTime, minWriteTime, maxWriteTime, quickWrite)
 			minReadTime, maxReadTime, minWriteTime, maxWriteTime = math.MaxFloat64, float64(0), math.MaxFloat64, float64(0)
 		}
 		epoch += 1
@@ -3465,7 +3469,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	canCache := true
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
-	var loadLocalEarlyStop *atomic.Bool
 
 	singleStatement := len(cws) == 1
 	for i, cw := range cws {
@@ -3950,16 +3953,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if st, ok := cw.GetAst().(*tree.Load); ok {
 				if st.Local {
 					loadLocalErrGroup = new(errgroup.Group)
-					loadLocalEarlyStop = new(atomic.Bool)
 					loadLocalErrGroup.Go(func() error {
-						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter, loadLocalEarlyStop)
+						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter)
 					})
 				}
 			}
 
 			if err = runner.Run(0); err != nil {
-				if loadLocalEarlyStop != nil { // release resources
-					loadLocalEarlyStop.Store(true)
+				if loadLocalErrGroup != nil { // release resources
 					err2 := proc.LoadLocalReader.Close()
 					if err2 != nil {
 						logErrorf(ses.GetConciseProfile(), "processLoadLocal reader close failed: %s", err2.Error())
