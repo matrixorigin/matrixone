@@ -218,3 +218,13 @@ insert into f1 values (1,1), (2,2), (3,3);
 insert into c1 values (11,11);
 insert into c1 values (1,1),(11,11);
 insert into c1 values (1,1);
+drop table c1;
+drop table f1;
+
+create table f1(b int, a int primary key);
+create table c1( a int primary key, b int unique key, c int not null, d int,foreign key(d) references f1(a));
+insert into f1 values (1,1), (2,2), (3,3);
+insert into c1 values(1,2,1,1);
+insert into c1 values(2,2,1,1);
+drop table c1;
+drop table f1;
