@@ -374,7 +374,7 @@ func NewMySQLBasedTaskStorageFactory(username, password, database string) TaskSt
 }
 
 func (f *mysqlBasedStorageFactory) Create(address string) (TaskStorage, error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=5s&writeTimeout=5s&timeout=5s",
+	dsn := fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=15s&writeTimeout=15s&timeout=15s",
 		f.username,
 		f.password,
 		address)
