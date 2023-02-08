@@ -320,7 +320,7 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 	}
 
 	// Create a new NewCnTaeVector
-	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
+	cloned := NewCnTaeVector[T](vec.GetType(), vec.Nullable(), opts)
 	cloned.isAllocatedFromMpool = true
 
 	// Create a duplicate of the downstream CN vector
