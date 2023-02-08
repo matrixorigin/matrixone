@@ -228,3 +228,33 @@ insert into c1 values(1,2,1,1);
 insert into c1 values(2,2,1,1);
 drop table c1;
 drop table f1;
+
+drop database if exists db1;
+create database db1;
+use db1;
+create table f1(b int, a int primary key);
+create table t1 (a int, b int);
+create table t2(b int, a int unique);
+truncate table f1;
+drop database db1;
+create database db1;
+use db1;
+show tables;
+drop database db1;
+
+---------Cross-tenant test---------
+create account acc1 ADMIN_NAME 'root' IDENTIFIED BY '123456';
+-- @session:id=1&user=acc1:root&password=123456
+create database db2;
+use db2;
+create table f1(b int, a int primary key);
+create table t1 (a int, b int);
+create table t2(b int, a int unique);
+truncate table f1;
+drop database db2;
+create database db2;
+use db2;
+show tables;
+drop database db2;
+-- @session
+drop account if exists acc1;
