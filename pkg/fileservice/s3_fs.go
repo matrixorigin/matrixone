@@ -477,14 +477,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 		if entry.Size == 0 {
 			return moerr.NewEmptyRangeNoCtx(path.File)
-		} else if entry.Size > 0 {
-			content, err := getContent(ctx)
-			if err != nil {
-				return err
-			}
-			if start >= int64(len(content)) {
-				return moerr.NewEmptyRangeNoCtx(path.File)
-			}
 		}
 
 		// a function to get entry data lazily
@@ -811,11 +803,13 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		if err != nil {
 			return nil, err
 		}
-		if region == "" {
-			return nil, moerr.NewInvalidInput(ctx, "region must not be empty")
-		}
+
 		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
-			options.Region = region
+			if region == "" {
+				options.Region = "ap-east-1" // any region is OK
+			} else {
+				options.Region = region
+			}
 		})
 		credentialProvider = stscreds.NewAssumeRoleProvider(
 			stsSvc,
