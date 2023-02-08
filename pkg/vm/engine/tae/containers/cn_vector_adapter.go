@@ -204,7 +204,9 @@ func (vec *CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
 
 	// 2. DownStream Vector
 	var output []byte
-	output, err = vec.downstreamVector.MarshalBinary()
+	if output, err = vec.downstreamVector.MarshalBinary(); err != nil {
+		return
+	}
 	if nr, err = w.Write(output); err != nil {
 		return
 	}
