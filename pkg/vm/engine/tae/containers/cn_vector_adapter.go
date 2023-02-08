@@ -181,20 +181,6 @@ func (vec *CnTaeVector[T]) Update(i int, v any) {
 	UpdateValue(vec.downstreamVector, uint32(i), v)
 }
 
-func (vec *CnTaeVector[T]) Reset() {
-	if vec.Length() == 0 {
-		return
-	}
-
-	if vec.Nullable() {
-		cnNulls.Reset(vec.downstreamVector.Nsp)
-		//NOTE: We are not resetting the isNullable.
-	}
-
-	cnVector.Reset(vec.downstreamVector)
-	vec.isAllocatedFromMpool = false
-}
-
 func (vec *CnTaeVector[T]) Slice() any {
 	return vec.downstreamVector.Col
 }
@@ -305,6 +291,9 @@ func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	downStreamVectorByteArr = append(downStreamVectorByteArr, area...)
 
 	n = int64(len(downStreamVectorByteArr))
+
+	vec.releaseDownstream()
+	vec.downstreamVector = cnVector.New(vec.GetType())
 
 	err = vec.downstreamVector.UnmarshalBinary(downStreamVectorByteArr)
 
@@ -580,25 +569,45 @@ func (vec *CnTaeVector[T]) Capacity() int {
 }
 
 func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
-	vec.Reset()
 
-	src := NewMoVecFromBytes(vec.GetType(), bs)
-	vec.downstreamVector = src
-	if vec.Nullable() {
-		vec.downstreamVector.Nsp = cnNulls.NewWithSize(0)
+	vec.releaseDownstream()
+	vec.downstreamVector = NewMoVecFromBytes(vec.GetType(), bs)
+
+	// Nulls
+	{
+		if vec.Nullable() {
+			// TODO: Use nulls.GetCardinality()
+			vec.downstreamVector.Nsp = cnNulls.NewWithSize(0)
+		}
+
+		if nulls != nil && !nulls.IsEmpty() {
+			cnNulls.Add(vec.downstreamVector.Nsp, nulls.ToArray()...)
+		}
 	}
-
-	if nulls != nil && !nulls.IsEmpty() {
-		cnNulls.Add(vec.downstreamVector.Nsp, nulls.ToArray()...)
-	}
-
-	vec.isAllocatedFromMpool = false
 	// TODO: Doesn't reset the capacity
 }
 
 func (vec *CnTaeVector[T]) Close() {
-	if vec.downstreamVector != nil {
-		vec.downstreamVector.Free(vec.mpool)
+	vec.releaseDownstream()
+}
+
+func (vec *CnTaeVector[T]) Reset() {
+	if vec.Length() == 0 {
+		return
 	}
-	vec.downstreamVector = nil
+
+	if vec.Nullable() {
+		cnNulls.Reset(vec.downstreamVector.Nsp)
+		//NOTE: We are not resetting the isNullable.
+	}
+
+	cnVector.Reset(vec.downstreamVector)
+}
+
+func (vec *CnTaeVector[T]) releaseDownstream() {
+	if vec.downstreamVector != nil && vec.isAllocatedFromMpool {
+		vec.downstreamVector.Free(vec.mpool)
+		vec.downstreamVector = nil
+		vec.isAllocatedFromMpool = false
+	}
 }
