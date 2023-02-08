@@ -769,6 +769,10 @@ func (r *runner) Stop() {
 	})
 }
 
+func (r *runner) GetDirtyCollector() logtail.Collector {
+	return r.source
+}
+
 func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (locations string, checkpointed types.TS, err error) {
 	if r.IsTSStale(end) {
 		return "", types.TS{}, moerr.NewInternalError(ctx, "ts %v is staled", end.ToString())
