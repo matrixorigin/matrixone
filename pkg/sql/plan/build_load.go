@@ -133,10 +133,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 }
 
 func checkFileExist(param *tree.ExternParam) error {
-	param.Ctx = context.TODO()
 	if param.Local {
 		return nil
 	}
+	param.Ctx = context.TODO()
 	if param.ScanType == tree.S3 {
 		if err := InitS3Param(param); err != nil {
 			return err
