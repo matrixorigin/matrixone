@@ -309,15 +309,14 @@ select statement,query_type,sql_source_type from  statement_info where user="dum
 /* cloud_nonuser */ drop database test_db;
 /* cloud_nonuser */ select sleep(16);
 /* cloud_nonuser */ select statement,query_type,sql_source_type from  statement_info where user="dump" order by request_at desc limit 68;
--- @bvt:issue#7789
-show create view test_view;
-show collation;
-show collation like '%';
--- @bvt:issue
 
 begin;
 use statement_query_type;
 create table test_table(col1 int,col2 varchar);
+create view test_view as select * from test_table;
+show create view test_view;
+show collation;
+show collation like '%';
 load data infile '$resources/load_data/test.csv' into table test_table;
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 -- @bvt:issue#7772
