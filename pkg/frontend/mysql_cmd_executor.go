@@ -3366,16 +3366,16 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 			if err != nil {
 				return
 			}
-		}
-		writeTime := time.Since(writeStart).Seconds()
-		if writeTime > maxWriteTime {
-			maxWriteTime = writeTime
-		}
-		if writeTime < minWriteTime {
-			minWriteTime = writeTime
+			writeTime := time.Since(writeStart).Seconds()
+			if writeTime > maxWriteTime {
+				maxWriteTime = writeTime
+			}
+			if writeTime < minWriteTime {
+				minWriteTime = writeTime
+			}
 		}
 		if epoch%printEvery == 0 {
-			logutil.Infof("load local '%s', epoch: %d, minReadTime: %f seconds, maxReadTime: %f seconds, minWriteTime: %f seconds, maxWriteTime:%f seconds", param.Filepath, epoch, minReadTime, maxReadTime, minWriteTime, maxWriteTime)
+			logutil.Infof("load local '%s', epoch: %d, minReadTime: %f seconds, maxReadTime: %f seconds, minWriteTime: %f seconds, maxWriteTime:%f seconds, quick write:%v", param.Filepath, epoch, minReadTime, maxReadTime, minWriteTime, maxWriteTime, earlyStop.Load())
 			minReadTime, maxReadTime, minWriteTime, maxWriteTime = math.MaxFloat64, float64(0), math.MaxFloat64, float64(0)
 		}
 		epoch += 1
