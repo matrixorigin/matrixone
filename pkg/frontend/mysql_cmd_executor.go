@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -3285,7 +3286,7 @@ func (ses *Session) getSqlType(sql string) {
 	}
 }
 
-func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
+func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter, earlyStop *atomic.Bool) (err error) {
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	defer func() {
@@ -3360,9 +3361,11 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		proto.SetSequenceID(seq)
 
 		writeStart := time.Now()
-		_, err = writer.Write(packet.Payload)
-		if err != nil {
-			return
+		if !earlyStop.Load() {
+			_, err = writer.Write(packet.Payload)
+			if err != nil {
+				return
+			}
 		}
 		writeTime := time.Since(writeStart).Seconds()
 		if writeTime > maxWriteTime {
@@ -3462,6 +3465,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	canCache := true
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
+	var loadLocalEarlyStop *atomic.Bool
 
 	singleStatement := len(cws) == 1
 	for i, cw := range cws {
@@ -3946,15 +3950,21 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if st, ok := cw.GetAst().(*tree.Load); ok {
 				if st.Local {
 					loadLocalErrGroup = new(errgroup.Group)
+					loadLocalEarlyStop = new(atomic.Bool)
 					loadLocalErrGroup.Go(func() error {
-						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter)
+						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter, loadLocalEarlyStop)
 					})
 				}
 			}
 
 			if err = runner.Run(0); err != nil {
-				if loadLocalErrGroup != nil { // executor failed, but processLoadLocal is still running, wait for it
-					err2 := loadLocalErrGroup.Wait()
+				if loadLocalEarlyStop != nil { // release resources
+					loadLocalEarlyStop.Store(true)
+					err2 := proc.LoadLocalReader.Close()
+					if err2 != nil {
+						logErrorf(ses.GetConciseProfile(), "processLoadLocal reader close failed: %s", err2.Error())
+					}
+					err2 = loadLocalErrGroup.Wait() // executor failed, but processLoadLocal is still running, wait for it
 					if err2 != nil {
 						logErrorf(ses.GetConciseProfile(), "processLoadLocal goroutine failed: %s", err2.Error())
 					}
