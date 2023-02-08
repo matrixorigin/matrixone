@@ -313,8 +313,14 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 	cloned := NewCnTaeVector[T](vec.GetType(), vec.Nullable(), opts)
 
 	// Note: We are using ForeachWindow instead of cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
-	// Reason: Using cnVector.Window(...) is giving "panic: internal error: mp header corruption" in tables_test.go#TestTxn6(...).
-	// Attaching the cnVector.Window(...) code for reference.
+	// Reason: Using cnVector.Window(...) is giving "panic: internal error: mp header corruption"
+	//		   in tables_test.go#TestTxn6(...), when vec.Close() is invoked.
+	// 		   Attaching the cnVector.Window(...) code for reference.
+	// My thoughts: 1. I think, the issue was because cnVector.Window(...)
+	//				- is allocated by mpool1 (the allocator... argument)
+	//				- and Free() by mpool2, (the vec.mpool field)
+	//
+	// 			    2. I did try only allocating using mpool2 alone, but that didn't work.
 
 	/*
 		cloned.isAllocatedFromMpool = true
