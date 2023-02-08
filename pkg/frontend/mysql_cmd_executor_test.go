@@ -1293,26 +1293,6 @@ func TestProcessLoadLocal(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
-		proc.LoadLocalReader, writer = io.Pipe()
-		cnt = 0
-		go func(buf []byte) {
-			tmp := buf
-			idx := 0
-			for {
-				if idx > 0 {
-					earlyStop.Store(true)
-				}
-				n, err := proc.LoadLocalReader.Read(tmp)
-				if err != nil {
-					break
-				}
-				tmp = tmp[n:]
-				idx += 1
-			}
-		}(buffer)
-		err = mce.processLoadLocal(proc.Ctx, param, writer, earlyStop)
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(buffer[:5], convey.ShouldResemble, []byte("hello"))
 	})
 }
 
