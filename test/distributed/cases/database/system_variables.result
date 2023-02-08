@@ -257,8 +257,8 @@ trigger_name    action_order
 use mysql;
 desc user;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO        ''        
-user    CHAR(32)    NO        ''        
+host    CHAR(255)    NO    PRI    ''
+user    CHAR(32)    NO    PRI    ''
 select_priv    VARCHAR(10)    NO        'N'        
 insert_priv    VARCHAR(10)    NO        'N'        
 update_priv    VARCHAR(10)    NO        'N'        
@@ -312,9 +312,9 @@ select host, user from user limit 2;
 host    user
 desc db;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO        ''        
-db    CHAR(64)    NO        ''        
-user    CHAR(32)    NO        ''        
+host    CHAR(255)    NO    PRI    ''
+db    CHAR(64)    NO    PRI    ''
+user    CHAR(32)    NO    PRI    ''
 select_priv    VARCHAR(10)    NO        'N'        
 insert_priv    VARCHAR(10)    NO        'N'        
 update_priv    VARCHAR(10)    NO        'N'        
@@ -338,11 +338,11 @@ select db, user from db limit 5;
 db    user
 desc procs_priv;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO        ''        
-db    CHAR(64)    NO        ''        
-user    CHAR(32)    NO        ''        
-routine_name    CHAR(64)    NO        ''        
-routine_type    VARCHAR(10)    NO        NULL        
+host    CHAR(255)    NO    PRI    ''
+db    CHAR(64)    NO    PRI    ''
+user    CHAR(32)    NO    PRI    ''
+routine_name    CHAR(64)    NO    PRI    ''
+routine_type    VARCHAR(10)    NO    PRI    NULL
 grantor    VARCHAR(288)    NO        ''        
 proc_priv    VARCHAR(10)    NO        ''        
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
@@ -350,21 +350,21 @@ select routine_name, routine_type from procs_priv limit 5;
 routine_name    routine_type
 desc columns_priv;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO        ''        
-db    CHAR(64)    NO        ''        
-user    CHAR(32)    NO        ''        
-table_name    CHAR(64)    NO        ''        
-column_name    CHAR(64)    NO        ''        
+host    CHAR(255)    NO    PRI    ''
+db    CHAR(64)    NO    PRI    ''
+user    CHAR(32)    NO    PRI    ''
+table_name    CHAR(64)    NO    PRI    ''
+column_name    CHAR(64)    NO    PRI    ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
 column_priv    VARCHAR(10)    NO        ''        
 select table_name, column_name from columns_priv limit 5;
 table_name    column_name
 desc tables_priv;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO        ''        
-db    CHAR(64)    NO        ''        
-user    CHAR(32)    NO        ''        
-table_name    CHAR(64)    NO        ''        
+host    CHAR(255)    NO    PRI    ''
+db    CHAR(64)    NO    PRI    ''
+user    CHAR(32)    NO    PRI    ''
+table_name    CHAR(64)    NO    PRI    ''
 grantor    VARCHAR(288)    NO        ''        
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
 table_priv    VARCHAR(10)    NO        ''        
