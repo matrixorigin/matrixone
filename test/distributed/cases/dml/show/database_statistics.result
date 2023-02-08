@@ -255,7 +255,8 @@ show table_number from test_db;
 Number of tables in test_db
 3
 show table_values from external_table;
-[unknown result because it is related to issue#7568]
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    10    10.34    1.34    你好        aaa        2011-10-11    2011-10-10    true    false
 create table t2(
 col1 json
 );
@@ -274,22 +275,23 @@ show table_values from t2;
 max(col1)    min(col1)
 null    null
 create table t3(
-col1 decimal
+col1 decimal(5,2)
 );
 show table_values from t3;
-[unknown result because it is related to issue#7562]
+max(col1)    min(col1)
+null    null
 insert into t3 values();
-[unknown result because it is related to issue#7562]
 show table_values from t3;
-[unknown result because it is related to issue#7562]
+max(col1)    min(col1)
+null    null
 insert into t3 values(3.3);
-[unknown result because it is related to issue#7562]
 show table_values from t3;
-[unknown result because it is related to issue#7562]
+max(col1)    min(col1)
+3.30    3.30
 insert into t3 values(3.2);
-[unknown result because it is related to issue#7562]
 show table_values from t3;
-[unknown result because it is related to issue#7562]
+max(col1)    min(col1)
+3.30    3.20
 drop database test_db;
 drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
@@ -473,7 +475,8 @@ show table_number from test_db;
 Number of tables in test_db
 3
 show table_values from external_table;
-[unknown result because it is related to issue#7568]
+max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
+100    10    10.34    1.34    你好        aaa        2011-10-11    2011-10-10    true    false
 create table t2(
 col1 json
 );
