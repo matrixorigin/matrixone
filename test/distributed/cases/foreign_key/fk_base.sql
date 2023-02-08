@@ -229,6 +229,7 @@ insert into c1 values(2,2,1,1);
 drop table c1;
 drop table f1;
 
+drop database if exists db1;
 create database db1;
 use db1;
 create table f1(b int, a int primary key);
