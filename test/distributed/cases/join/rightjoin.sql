@@ -12,7 +12,4 @@ SELECT * FROM t1 RIGHT JOIN t2 on t1.S1=t2.S1;
 SELECT * FROM t2 LEFT JOIN t1 on t1.S1=t2.S1;
 SELECT * FROM t3 LEFT JOIN t1 on t1.S1=t3.S1;
 
--- @bvt:issue#7858
-SELECT * FROM t3 RIGHT JOIN t3 on t3.S1=t3.S1;
--- @bvt:issue
 
