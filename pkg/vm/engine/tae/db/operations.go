@@ -119,6 +119,11 @@ type Checkpoint struct {
 	FlushDuration time.Duration
 }
 
+type InspectDN struct {
+	AccessInfo AccessInfo
+	Operation  string
+}
+
 type CreateDatabaseResp struct {
 	ID uint64
 }

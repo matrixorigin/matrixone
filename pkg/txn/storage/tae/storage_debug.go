@@ -60,6 +60,18 @@ func (s *taeStorage) Debug(ctx context.Context,
 			ReturnStr: "OK",
 		})
 		return resp, err
+
+	case uint32(ctl.CmdMethod_Inspect):
+		resp, err := handleRead(
+			ctx, s, txnMeta, data, s.taeHandler.HandleInspectDN,
+		)
+		if err != nil {
+			resp := protoc.MustMarshal(&ctl.DNStringResponse{
+				ReturnStr: "Failed",
+			})
+			return resp, err
+		}
+		return resp.Read()
 	default:
 		return nil, moerr.NewNotSupportedNoCtx("TAEStorage not support ctl method %d", opCode)
 	}

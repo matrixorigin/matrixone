@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	ctlpb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -364,6 +365,18 @@ func (h *Handle) HandleForceCheckpoint(
 	err = h.eng.ForceCheckpoint(ctx,
 		currTs, timeout)
 	return err
+}
+
+func (h *Handle) HandleInspectDN(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req db.InspectDN,
+	resp *ctlpb.DNStringResponse) (err error) {
+	tae := h.eng.GetTAE(context.Background())
+	b := &bytes.Buffer{}
+	RunInspect(req.Operation, b, tae)
+	resp.ReturnStr = b.String()
+	return nil
 }
 
 func (h *Handle) startLoadJobs(
