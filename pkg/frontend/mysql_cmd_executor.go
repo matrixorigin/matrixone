@@ -28,7 +28,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -3286,19 +3285,13 @@ func (ses *Session) getSqlType(sql string) {
 	}
 }
 
-func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter, earlyStop *atomic.Bool) (err error) {
+func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	defer func() {
 		err2 := writer.Close()
 		if err == nil {
 			err = err2
-		}
-		if earlyStop.Load() { // if true, means mo get inner error, so we need to close the connection to stop data transfer
-			err2 = proto.GetTcpConnection().Close()
-			if err == nil {
-				err = err2
-			}
 		}
 	}()
 	err = plan2.InitInfileParam(param)
@@ -3339,9 +3332,6 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	}
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := 0, 100, math.MaxFloat64, float64(0), math.MaxFloat64, float64(0)
 	for {
-		if earlyStop.Load() {
-			break
-		}
 		readStart := time.Now()
 		msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
 		if err != nil {
@@ -3387,7 +3377,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		}
 		epoch += 1
 	}
-	logutil.Infof("load local '%s', read&write all data from client cost: %f seconds, if stop by main thread: %v", param.Filepath, time.Since(start).Seconds(), earlyStop.Load())
+	logutil.Infof("load local '%s', read&write all data from client cost: %f seconds", param.Filepath, time.Since(start).Seconds())
 	return
 }
 
@@ -3472,7 +3462,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	canCache := true
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
-	var loadLocalEarlyStop *atomic.Bool
 
 	singleStatement := len(cws) == 1
 	for i, cw := range cws {
@@ -3774,7 +3763,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Load:
 			if st.Local {
 				proc.LoadLocalReader, loadLocalWriter = io.Pipe()
-				loadLocalEarlyStop = new(atomic.Bool)
 			}
 		}
 
@@ -3959,20 +3947,23 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				if st.Local {
 					loadLocalErrGroup = new(errgroup.Group)
 					loadLocalErrGroup.Go(func() error {
-						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter, loadLocalEarlyStop)
+						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter)
 					})
 				}
 			}
 
 			if err = runner.Run(0); err != nil {
-				if loadLocalEarlyStop != nil {
-					loadLocalEarlyStop.Store(true)
+				if loadLocalErrGroup != nil { // executor failed, but processLoadLocal is still running, wait for it
+					err2 := loadLocalErrGroup.Wait()
+					if err2 != nil {
+						logErrorf(ses.GetConciseProfile(), "processLoadLocal goroutine failed: %s", err2.Error())
+					}
 				}
 				goto handleFailed
 			}
 
 			if loadLocalErrGroup != nil {
-				if err = loadLocalErrGroup.Wait(); err != nil {
+				if err = loadLocalErrGroup.Wait(); err != nil { //executor success, but processLoadLocal goroutine failed
 					goto handleFailed
 				}
 			}
