@@ -126,6 +126,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 	if c.scope == nil {
 		return nil
 	}
+	defer func() { c.scope = nil }() // free pipeline
 
 	// XXX PrintScope has a none-trivial amount of logging
 	// PrintScope(nil, []*Scope{c.scope})
