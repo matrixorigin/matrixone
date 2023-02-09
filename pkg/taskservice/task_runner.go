@@ -474,6 +474,8 @@ func (r *taskRunner) doTaskDone(ctx context.Context, rt runningTask) bool {
 		select {
 		case <-ctx.Done():
 			return false
+		case <-rt.ctx.Done():
+			return false
 		default:
 			err := r.service.Complete(rt.ctx, r.runnerID, rt.task, *rt.task.ExecuteResult)
 			if err == nil || moerr.IsMoErrCode(err, moerr.ErrInvalidTask) {

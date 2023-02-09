@@ -1926,11 +1926,11 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (con
 		return nil, nil, err
 	}
 
-	tableNames, err := db.Relations(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
+	// tableNames, err := db.Relations(ctx)
+	// if err != nil {
+	// 	return nil, nil, err
+	// }
+	// logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
 	table, err := db.Relation(ctx, tableName)
@@ -2147,6 +2147,10 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		SchemaName: dbName,
 		ObjName:    tableName,
 	}
+	originCols := make([]*plan2.ColDef, len(cols))
+	for i, col := range cols {
+		originCols[i] = plan2.DeepCopyColDef(col)
+	}
 
 	tableDef := &plan2.TableDef{
 		TblId:         tableId,
@@ -2162,6 +2166,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		Fkeys:         foreignKeys,
 		RefChildTbls:  refChildTbls,
 		ClusterBy:     clusterByDef,
+		OriginCols:    originCols,
 	}
 	return obj, tableDef
 }

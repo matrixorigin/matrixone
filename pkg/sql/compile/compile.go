@@ -126,6 +126,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 	if c.scope == nil {
 		return nil
 	}
+	defer func() { c.scope = nil }() // free pipeline
 
 	// XXX PrintScope has a none-trivial amount of logging
 	// PrintScope(nil, []*Scope{c.scope})
@@ -426,11 +427,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		ds.DataSource = &Source{Bat: bat}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_EXTERNAL_SCAN:
+		node := plan2.DeepCopyNode(n)
 		ss, err := c.compileExternScan(ctx, n)
 		if err != nil {
 			return nil, err
 		}
-		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+		return c.compileSort(node, c.compileProjection(node, c.compileRestrict(n, ss))), nil
 	case plan.Node_TABLE_SCAN:
 		ss, err := c.compileTableScan(n)
 		if err != nil {
@@ -609,11 +611,16 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		return nil, err
 	}
 	if param.ScanType == tree.S3 {
-		if err := external.InitS3Param(param); err != nil {
+		if err := plan2.InitS3Param(param); err != nil {
 			return nil, err
 		}
+		if param.Parallel {
+			if mcpu > external.S3_PARALLEL_MAXNUM {
+				mcpu = external.S3_PARALLEL_MAXNUM
+			}
+		}
 	} else {
-		if err := external.InitInfileParam(param); err != nil {
+		if err := plan2.InitInfileParam(param); err != nil {
 			return nil, err
 		}
 	}
@@ -633,7 +640,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 				fileList[i] = strings.TrimSpace(fileList[i])
 			}
 		} else {
-			fileList, fileSize, err = external.ReadDir(param)
+			fileList, fileSize, err = plan2.ReadDir(param)
 			if err != nil {
 				return nil, err
 			}

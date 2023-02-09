@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1231,7 +1232,7 @@ func Test_getSqlType(t *testing.T) {
 		ses.getSqlType(sql)
 		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudUserSql)
 
-		sql = "/* cloud_nouser */ use db"
+		sql = "/* cloud_nonuser */ use db"
 		ses.getSqlType(sql)
 		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudNoUserSql)
 
@@ -1266,6 +1267,7 @@ func TestProcessLoadLocal(t *testing.T) {
 			cnt++
 			return
 		}).AnyTimes()
+		ioses.EXPECT().Close().AnyTimes()
 		proto := &FakeProtocol{
 			ioses: ioses,
 		}
@@ -1286,7 +1288,8 @@ func TestProcessLoadLocal(t *testing.T) {
 				tmp = tmp[n:]
 			}
 		}(buffer)
-		err := mce.processLoadLocal(proc.Ctx, param, writer)
+		e := new(atomic.Bool)
+		err := mce.processLoadLocal(proc.Ctx, param, writer, e)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))

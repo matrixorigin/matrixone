@@ -117,6 +117,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
 			CompositePkey: node.TableDef.CompositePkey,
+			OriginCols:    node.TableDef.OriginCols,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -2397,6 +2398,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			default:
 				cantPushdown = append(cantPushdown, filter)
 			}
+		}
+
+		if node.JoinType == plan.Node_INNER {
+			//only inner join can deduce new predicate
+			builder.pushdownFilters(node.Children[0], predsDeduction(rightPushdown, node.OnList))
+			builder.pushdownFilters(node.Children[1], predsDeduction(leftPushdown, node.OnList))
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], leftPushdown)

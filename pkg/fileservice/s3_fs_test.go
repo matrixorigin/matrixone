@@ -261,7 +261,6 @@ func TestDynamicS3OptsRoleARN(t *testing.T) {
 		err := w.Write([]string{
 			"s3-opts",
 			"endpoint=" + config.Endpoint,
-			"region=" + config.Region,
 			"bucket=" + config.Bucket,
 			"prefix=" + time.Now().Format("2006-01-02.15:04:05.000000"),
 			"name=" + name,

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -657,7 +658,11 @@ func TestCompaction2(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
-	time.Sleep(400 * time.Millisecond)
+
+	testutils.WaitExpect(5000, func() bool {
+		dirty := db.BGCheckpointRunner.GetDirtyCollector().ScanInRangePruned(types.TS{}, types.MaxTs())
+		return dirty.GetTree().Compact()
+	})
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
