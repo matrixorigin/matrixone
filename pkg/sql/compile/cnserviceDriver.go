@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
-	"os"
 	"runtime"
 	"time"
 
@@ -309,11 +308,9 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyz
 			return nil
 		} else {
 			if m.Checksum != crc32.ChecksumIEEE(m.Data) {
-				os.Exit(1)
 				return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 			}
 			if sequence != m.Sequence {
-				os.Exit(1)
 				return moerr.NewInternalErrorNoCtx("Packages passed by morpc are out of order")
 			}
 			sequence++
