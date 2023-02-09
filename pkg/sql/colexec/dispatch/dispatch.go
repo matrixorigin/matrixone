@@ -68,7 +68,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				cs:    csinfo.Cs,
 				uuid:  csinfo.Uid,
 			})
-			// TODO: check the receive info's correctness
+			// TODO: add check the receive info's correctness
 			cnt--
 		}
 		ap.ctr.prepared = true

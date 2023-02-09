@@ -50,7 +50,6 @@ type Argument struct {
 	LocalRegs []*process.WaitRegister
 
 	// RemoteRegs specific the remote reg you need to send to.
-	// RemoteRegs[IBucket].Node.Address == ""
 	RemoteRegs []colexec.ReceiveInfo
 }
 
