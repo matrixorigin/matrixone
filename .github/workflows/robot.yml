@@ -87,7 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Reopen Issue
-        if: github.event.issue.user.login != github.event.sender.login && github.event.action == 'closed' && github.event.sender.login != 'yingfeng' && github.event.sender.login != 'aressu1985'
+        if: github.event.issue.user.login != github.event.sender.login && github.event.action == 'closed' && github.event.sender.login != 'sukki37' && github.event.sender.login != 'aressu1985' && github.event.sender.login != 'fengttt'
         uses: actions-cool/issues-helper@v3
         with:
           actions: 'open-issue'

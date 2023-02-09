@@ -161,9 +161,6 @@ func judgeContainColname(expr *plan.Expr) bool {
 	if !ok {
 		return false
 	}
-	if len(expr_F.F.Args) != 2 {
-		return false
-	}
 	if expr_F.F.Func.ObjName == "or" {
 		flag := true
 		for i := 0; i < len(expr_F.F.Args); i++ {
@@ -172,10 +169,15 @@ func judgeContainColname(expr *plan.Expr) bool {
 		return flag
 	}
 	expr_Col, ok := expr_F.F.Args[0].Expr.(*plan.Expr_Col)
-	if !ok || !containColname(expr_Col.Col.Name) {
-		return false
+	if ok && containColname(expr_Col.Col.Name) {
+		return true
 	}
-	return true
+	for _, arg := range expr_F.F.Args {
+		if judgeContainColname(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 func getAccountCol(filepath string) string {
@@ -229,11 +231,14 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 	return bat
 }
 
-func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+func filterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
 	filterList := make([]*plan.Expr, 0)
+	filterList2 := make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
 		if judgeContainColname(node.FilterList[i]) {
 			filterList = append(filterList, node.FilterList[i])
+		} else {
+			filterList2 = append(filterList2, node.FilterList[i])
 		}
 	}
 	if len(filterList) == 0 {
@@ -254,12 +259,13 @@ func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList
 			fileSizeTmp = append(fileSizeTmp, fileSize[i])
 		}
 	}
+	node.FilterList = filterList2
 	return fileListTmp, fileSizeTmp, nil
 }
 
 func FliterFileList(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
 	var err error
-	fileList, fileSize, err = fliterByAccountAndFilename(node, proc, fileList, fileSize)
+	fileList, fileSize, err = filterByAccountAndFilename(node, proc, fileList, fileSize)
 	if err != nil {
 		return fileList, fileSize, err
 	}
