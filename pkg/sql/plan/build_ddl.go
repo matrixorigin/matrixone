@@ -1309,7 +1309,6 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		ObjName:    indexTableDef.Name,
 	}
 
-	SetPlanLoadTag(selectPlan)
 	sourceColDefs := GetResultColumnsFromPlan(selectPlan)
 	selectPlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
 
