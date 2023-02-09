@@ -4778,13 +4778,20 @@ func getAccountId(ctx context.Context) uint32 {
 }
 
 func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
+	var accountName string
 	var datname string
 	var configuration string
 
+	accountId := ses.GetTxnCompileCtx().GetAccountId()
 	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
+		if accountId == catalog.System_Account {
+			accountName = sysAccountName
+		} else {
+			accountName = ses.GetTenantInfo().GetTenant()
+		}
 		datname = string(createDatabaseStmt.Name)
-		configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+","+"%q"+":"+"0"+"}"+"'", "transaction_ioslation", "SNAPSHOT_ISOLATION", "lower_case_table_names")
-		insertSql := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, datname, configuration)
+		configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
+		insertSql := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountName, datname, configuration)
 
 		bh := ses.GetBackgroundExec(ctx)
 		err := bh.Exec(ctx, insertSql)

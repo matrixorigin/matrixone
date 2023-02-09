@@ -797,6 +797,7 @@ var (
 			);`,
 		`create table mo_mysql_compatbility_mode(
 				configuration_id int auto_increment,
+				account_name varchar(300),
 				dat_name     varchar(5000),
 				configuration  json,
 				primary key(configuration_id)
@@ -814,8 +815,9 @@ var (
 	}
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
+		account_name,
 		dat_name,
-		configuration) values ("%s",%s);`
+		configuration) values ("%s","%s",%s);`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -6054,6 +6056,8 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	var err error
 	var deleteSql string
 	var insertSql string
+	var accountId uint32
+	var accountName string
 	datname := ad.DbName
 	update_config := "'" + ad.UpdateConfig.String() + "'"
 
@@ -6078,7 +6082,14 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	}
 
 	//second insert a new record
-	insertSql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, datname, update_config)
+	accountId = ses.GetTxnCompileCtx().GetAccountId()
+	if accountId == catalog.System_Account {
+		accountName = sysAccountName
+	} else {
+		accountName = ses.GetTenantInfo().GetTenant()
+	}
+
+	insertSql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountName, datname, update_config)
 	err = bh.Exec(ctx, insertSql)
 	if err != nil {
 		goto handleFailed
