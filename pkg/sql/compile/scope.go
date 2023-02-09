@@ -131,6 +131,16 @@ func (s *Scope) MergeRun(c *Compile) error {
 		return err
 	}
 	// check sub-goroutine's error
+	if errReceiveChan == nil {
+		// check sub-goroutine's error
+		for i := 0; i < len(s.PreScopes); i++ {
+			if err := <-errChan; err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	slen := len(s.PreScopes)
 	rlen := len(s.RemoteReceivRegInfos)
 	for {
@@ -140,17 +150,15 @@ func (s *Scope) MergeRun(c *Compile) error {
 				return err
 			}
 			slen--
-			if slen == 0 && rlen == 0 {
-				return nil
-			}
 		case err := <-errReceiveChan:
 			if err != nil {
 				return err
 			}
 			rlen--
-			if slen == 0 && rlen == 0 {
-				return nil
-			}
+		}
+
+		if slen == 0 && rlen == 0 {
+			return nil
 		}
 	}
 }
@@ -592,6 +600,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				return
 			}
 			defer func(streamSender morpc.Stream) {
+				// TODO: should close channel or not?
 				_ = streamSender.Close()
 			}(streamSender)
 

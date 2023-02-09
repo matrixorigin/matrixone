@@ -27,11 +27,11 @@ import (
 )
 
 type WrapperClientSession struct {
-	msgId  uint64
-	ctx    context.Context
-	cs     morpc.ClientSession
-	toAddr string
-	uuid   uuid.UUID
+	msgId uint64
+	ctx   context.Context
+	cs    morpc.ClientSession
+	uuid  uuid.UUID
+	// toAddr string
 }
 type container struct {
 	prepared bool
