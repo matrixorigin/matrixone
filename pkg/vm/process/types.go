@@ -164,7 +164,7 @@ type Process struct {
 
 	LastInsertID *uint64
 
-	LoadLocalReader io.Reader
+	LoadLocalReader *io.PipeReader
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
