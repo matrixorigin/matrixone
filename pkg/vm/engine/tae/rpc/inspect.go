@@ -18,44 +18,32 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sync"
 
-	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/spf13/cobra"
 )
 
 type inspectContext struct {
-	sync.Mutex
 	db     *db.DB
 	acinfo *db.AccessInfo
+	args   []string
+	out    io.Writer
 }
 
-func (i *inspectContext) Init(db *db.DB, info *db.AccessInfo) {
-	i.Lock()
-	i.db = db
-	i.acinfo = info
-}
-
-func (i *inspectContext) Destroy() {
-	i.Unlock()
-	i.db = nil
-	i.acinfo = nil
-}
-
-var inspectCtx *inspectContext
-
-var rootCmd = &cobra.Command{
-	Use: "inspect",
-}
+// impl Pflag.Value interface
+func (i *inspectContext) String() string   { return "" }
+func (i *inspectContext) Set(string) error { return nil }
+func (i *inspectContext) Type() string     { return "ictx" }
 
 type catalogArg struct {
+	ctx     *inspectContext
 	outfile *os.File
 	verbose common.PPLevel
 }
 
 func (c *catalogArg) fromCommand(cmd *cobra.Command) error {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	count, _ := cmd.Flags().GetCount("verbose")
 	var lv common.PPLevel
 	switch count {
@@ -83,7 +71,7 @@ func (c *catalogArg) fromCommand(cmd *cobra.Command) error {
 }
 
 func runCatalog(arg *catalogArg, respWriter io.Writer) {
-	ret := inspectCtx.db.Catalog.SimplePPString(arg.verbose)
+	ret := arg.ctx.db.Catalog.SimplePPString(arg.verbose)
 
 	if arg.outfile != nil {
 		arg.outfile.WriteString(ret)
@@ -94,32 +82,36 @@ func runCatalog(arg *catalogArg, respWriter io.Writer) {
 	}
 }
 
-var catalogCmd = &cobra.Command{
-	Use:   "catalog",
-	Short: "show catalog",
-	Run: func(cmd *cobra.Command, args []string) {
-		arg := &catalogArg{}
-		if err := arg.fromCommand(cmd); err != nil {
-			return
-		}
-		runCatalog(arg, cmd.OutOrStdout())
-	},
-}
+func initCommand(ctx *inspectContext) *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use: "inspect",
+	}
 
-func init() {
-	inspectCtx = new(inspectContext)
+	catalogCmd := &cobra.Command{
+		Use:   "catalog",
+		Short: "show catalog",
+		Run: func(cmd *cobra.Command, args []string) {
+			arg := &catalogArg{}
+			if err := arg.fromCommand(cmd); err != nil {
+				return
+			}
+			runCatalog(arg, cmd.OutOrStdout())
+		},
+	}
 
 	rootCmd.PersistentFlags().StringP("outfile", "o", "", "write output to a file")
+	rootCmd.PersistentFlags().VarPF(ctx, "ictx", "", "").Hidden = true
+
+	rootCmd.SetArgs(ctx.args)
+	rootCmd.SetErr(ctx.out)
+	rootCmd.SetOut(ctx.out)
 
 	catalogCmd.Flags().CountP("verbose", "v", "verbose level")
-
 	rootCmd.AddCommand(catalogCmd)
+	return rootCmd
 }
 
-func RunInspect(arg string, out io.Writer) {
-	args, _ := shlex.Split(arg)
-	rootCmd.SetArgs(args)
-	rootCmd.SetErr(out)
-	rootCmd.SetOut(out)
+func RunInspect(ctx *inspectContext) {
+	rootCmd := initCommand(ctx)
 	rootCmd.Execute()
 }

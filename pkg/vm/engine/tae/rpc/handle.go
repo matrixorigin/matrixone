@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -373,10 +374,16 @@ func (h *Handle) HandleInspectDN(
 	req db.InspectDN,
 	resp *ctlpb.DNStringResponse) (err error) {
 	tae := h.eng.GetTAE(context.Background())
-	inspectCtx.Init(tae, &req.AccessInfo)
-	defer inspectCtx.Destroy()
+	args, _ := shlex.Split(req.Operation)
+	logutil.Info("Inspect", zap.Strings("args", args))
 	b := &bytes.Buffer{}
-	RunInspect(req.Operation, b)
+	inspectCtx := &inspectContext{
+		db:     tae,
+		acinfo: &req.AccessInfo,
+		args:   args,
+		out:    b,
+	}
+	RunInspect(inspectCtx)
 	resp.ReturnStr = b.String()
 	return nil
 }
