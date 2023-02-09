@@ -691,15 +691,19 @@ start transaction    TCL    cloud_nonuser_sql
 commit    TCL    cloud_nonuser_sql
 start transaction    TCL    cloud_nonuser_sql
 use statement_query_type    Other    cloud_nonuser_sql
-show create view test_view;
-[unknown result because it is related to issue#7789]
-show collation;
-[unknown result because it is related to issue#7789]
-show collation like '%';
-[unknown result because it is related to issue#7789]
 begin;
 use statement_query_type;
 create table test_table(col1 int,col2 varchar);
+create view test_view as select * from test_table;
+show create view test_view;
+View    Create View
+test_view    create view test_view as select * from test_table;
+show collation;
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like '%';
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
 load data infile '$resources/load_data/test.csv' into table test_table;
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
