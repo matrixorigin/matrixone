@@ -263,7 +263,7 @@ func filterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList
 	return fileListTmp, fileSizeTmp, nil
 }
 
-func FliterFileList(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+func FilterFileList(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
 	var err error
 	fileList, fileSize, err = filterByAccountAndFilename(node, proc, fileList, fileSize)
 	if err != nil {
