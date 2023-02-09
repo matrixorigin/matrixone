@@ -17,7 +17,6 @@ package dispatch
 import (
 	"bytes"
 	"context"
-	"runtime"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -59,22 +58,18 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if !ap.ctr.prepared {
 		cnt := len(ap.RemoteRegs)
 		for cnt > 0 {
-			select {
-			case csinfo := <-proc.DispatchNotifyCh:
-				timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
-				_ = cancel
+			csinfo := <-proc.DispatchNotifyCh
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			_ = cancel
 
-				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers, &WrapperClientSession{
-					msgId: csinfo.MsgId,
-					ctx:   timeoutCtx,
-					cs:    csinfo.Cs,
-					uuid:  csinfo.Uid,
-				})
-				// TODO: check the receive info's correctness
-				cnt--
-			default:
-				runtime.Gosched()
-			}
+			ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers, &WrapperClientSession{
+				msgId: csinfo.MsgId,
+				ctx:   timeoutCtx,
+				cs:    csinfo.Cs,
+				uuid:  csinfo.Uid,
+			})
+			// TODO: check the receive info's correctness
+			cnt--
 		}
 		ap.ctr.prepared = true
 	}

@@ -70,6 +70,9 @@ func sendToAllFunc(bat *batch.Batch, bid int64, localReceivers []*process.WaitRe
 func sendToAnyFunc(bat *batch.Batch, bid int64, localReceivers []*process.WaitRegister, remoteReceivers []*WrapperClientSession, proc *process.Process) error {
 	// bid is a continuously increasing number
 	// so use it to decide which chan to send.
+	//
+	// Treate all reg like: [localReg0, localReg1, localReg2, remoteReg0, remoteReg1]
+	// And choose one from then by mod Bid with its length
 	localLen := int64(len(localReceivers))
 	remoteLen := int64(len(remoteReceivers))
 	sendId := bid % (localLen + remoteLen)
@@ -99,7 +102,7 @@ func sendToAnyFunc(bat *batch.Batch, bid int64, localReceivers []*process.WaitRe
 			bat.Clean(proc.Mp())
 		}
 		// TODO: how to remove the done-receiver?
-		localReceivers = append(localReceivers[:sendId], localReceivers[sendId+1:]...)
+		// localReceivers = append(localReceivers[:sendId], localReceivers[sendId+1:]...)
 		return nil
 	case reg.Ch <- bat:
 	}
@@ -109,25 +112,30 @@ func sendToAnyFunc(bat *batch.Batch, bid int64, localReceivers []*process.WaitRe
 
 func sendBatchToClientSession(encodeBatData []byte, bid int64, wcs *WrapperClientSession) error {
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
-		m := cnclient.AcquireMessage()
-		// m.Id = messageId
-		m.Data = encodeBatData
-		m.Bid = bid
-		return wcs.cs.Write(wcs.ctx, m)
+		msg := cnclient.AcquireMessage()
+		{
+			msg.Id = wcs.msgId
+			msg.Data = encodeBatData
+			msg.Cmd = pipeline.BatchMessage
+			msg.Sid = pipeline.BatchEnd
+			msg.Bid = bid
+		}
+		return wcs.cs.Write(wcs.ctx, msg)
 	}
 
 	start := 0
 	for start < len(encodeBatData) {
 		end := start + maxMessageSizeToMoRpc
-		sid := pipeline.WaitingNext
+		sid := pipeline.BatchWaitingNext
 		if end > len(encodeBatData) {
 			end = len(encodeBatData)
 			sid = pipeline.BatchEnd
 		}
 		msg := cnclient.AcquireMessage()
 		{
-			//m.Id = messageId
+			msg.Id = wcs.msgId
 			msg.Data = encodeBatData[start:end]
+			msg.Cmd = pipeline.BatchMessage
 			msg.Sid = uint64(sid)
 			msg.Bid = bid
 		}

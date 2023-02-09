@@ -25,13 +25,13 @@ const (
 	// Basic message type
 	PipelineMessage = iota
 	BatchMessage
-	PrepareDoneNotifyMessage
+	PrepareDoneNotifyMessage // for dispatch
 
 	// Status type
 	BatchEnd
-	MessageEnd
+	BatchWaitingNext
 	WaitingNext
-	BatchMessageEnd
+	MessageEnd
 )
 
 func (m *Message) Size() int {
@@ -71,12 +71,12 @@ func (m *Message) IsEndMessage() bool {
 	return m.Sid == MessageEnd
 }
 
-func (m *Message) IsBatchMessageEnd() bool {
-	return m.Sid == BatchMessageEnd
-}
-
 func (m *Message) WaitingNextToMerge() bool {
 	return m.Sid == WaitingNext
+}
+
+func (m *Message) BatcWaitingNextToMerge() bool {
+	return m.Sid == BatchWaitingNext
 }
 
 func EncodedMessageError(ctx context.Context, err error) []byte {

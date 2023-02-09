@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -114,10 +113,7 @@ type Scope struct {
 
 	Reg *process.WaitRegister
 
-	UuidToRegIdx []UuidToRegIdx
-
 	RemoteReceivRegInfos []RemoteReceivRegInfo
-	CsChans              []chan morpc.ClientSession // only dispatch will use it
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.

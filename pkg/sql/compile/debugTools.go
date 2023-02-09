@@ -131,7 +131,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 		str := "["
 		for i := range rs {
 			remote := ""
-			for _, u := range s.UuidToRegIdx {
+			for _, u := range s.RemoteReceivRegInfos {
 				if u.Idx == i {
 					remote = fmt.Sprintf("(%s)", u.Uuid)
 					break

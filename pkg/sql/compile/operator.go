@@ -910,7 +910,7 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentAddr string, pr
 				NodeAddr: s.NodeInfo.Addr,
 			})
 
-			colexec.Srv.PutProgIntoUuidMap(newUuid, proc.DispatchNotifyCh)
+			colexec.Srv.PutNotifyChIntoUuidMap(newUuid, proc.DispatchNotifyCh)
 
 			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
 				Idx:      idx,

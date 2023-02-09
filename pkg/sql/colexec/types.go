@@ -49,27 +49,10 @@ type Server struct {
 	CNSegmentId   [12]byte
 	InitSegmentId bool
 
-	// uuidMap is used to put the message into the uuid-specified
-	// regs when receiving BatchMessage
-	uuidMap UuidMap
-
 	uuidCsChanMap UuidCsChanMap
-
-	// batchCntMap use to handle reoder issue when handeling BatchMessage
-	batchCntMap BatchCntMap
-}
-
-type UuidMap struct {
-	sync.RWMutex
-	mp map[uuid.UUID]*process.WaitRegister
 }
 
 type UuidCsChanMap struct {
-	sync.RWMutex
-	mp map[uuid.UUID]chan process.WrapCs
-}
-
-type BatchCntMap struct {
 	sync.Mutex
-	mp map[uuid.UUID]uint64
+	mp map[uuid.UUID]chan process.WrapCs
 }

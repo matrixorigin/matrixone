@@ -906,7 +906,7 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 
 func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
 	//rs := c.newJoinScopeList(ss, children)
-	rs := c.newShuffleJoinScopeList(ss, children)
+	rs := c.newBroadcastJoinScopeList(ss, children)
 	isEq := isEquiJoin(n.OnList)
 	typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
@@ -1376,7 +1376,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 //	return rs
 //}
 
-func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 	len := len(ss)
 	rs := make([]*Scope, len)
 	idx := 0
@@ -1450,13 +1450,15 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[1]
 
-	for i, u := range s.UuidToRegIdx {
+	for i, u := range s.RemoteReceivRegInfos {
 		if u.Idx == 1 {
-			rs.UuidToRegIdx = append(rs.UuidToRegIdx, UuidToRegIdx{
-				Uuid: u.Uuid,
-				Idx:  0,
+			rs.RemoteReceivRegInfos = append(rs.RemoteReceivRegInfos, RemoteReceivRegInfo{
+				Idx:      0,
+				Uuid:     u.Uuid,
+				FromAddr: u.FromAddr,
 			})
-			s.UuidToRegIdx = append(s.UuidToRegIdx[:i], s.UuidToRegIdx[i+1:]...)
+			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos[:i], s.RemoteReceivRegInfos[i+1:]...)
+			colexec.Srv.PutNotifyChIntoUuidMap(u.Uuid, rs.Proc.DispatchNotifyCh)
 			break
 		}
 	}

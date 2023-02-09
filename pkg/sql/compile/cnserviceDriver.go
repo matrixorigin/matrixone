@@ -158,7 +158,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		var ch chan process.WrapCs
 		ok := false
 		for {
-			if ch, ok = colexec.Srv.GetProcFromUuidMap(opUuid); !ok {
+			if ch, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
 				runtime.Gosched()
 			} else {
 				break
@@ -173,55 +173,6 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		ch <- info
 	}
 
-	// it's a Batch
-	if m.IsBatchMessage() {
-		var wg *process.WaitRegister
-		var ok bool
-		opUuid, err := uuid.FromBytes(m.GetUuid())
-		if err != nil {
-			return nil, err
-		}
-
-		for {
-			if wg, ok = colexec.Srv.GetRegFromUuidMap(opUuid); !ok {
-				runtime.Gosched()
-			} else {
-				break
-			}
-		}
-
-		if m.IsBatchMessageEnd() {
-			requireCnt := m.GetBatchCnt()
-			if requireCnt > 0 {
-				for {
-					// waiting all batch handle done.
-					if colexec.Srv.IsEndStatus(opUuid, requireCnt) {
-						break
-					} else {
-						runtime.Gosched()
-					}
-				}
-			}
-			wg.Ch <- nil
-			close(wg.Ch)
-			colexec.Srv.RemoveUuidFromUuidMap(opUuid)
-
-			return nil, nil
-		} else {
-			// TODO: handle seperate batch
-			mp, err := mpool.NewMPool("cnservice_handle_batch", 0, mpool.NoFixed)
-			if err != nil {
-				return nil, err
-			}
-			bat, err := decodeBatch(mp, m.Data)
-			if err != nil {
-				return nil, err
-			}
-			wg.Ch <- bat
-			colexec.Srv.ReceiveNormalBatch(opUuid)
-			return nil, nil
-		}
-	}
 	// generate Compile-structure to run scope.
 	procHelper, err = generateProcessHelper(m.GetProcInfoData(), cli)
 	if err != nil {
@@ -540,7 +491,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
-	p.UuidsToRegIdx = convertScopeUuids(s)
+	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
 
 	// Plan
 	if ctxId == 1 {
@@ -624,27 +575,29 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	return ctxId, nil
 }
 
-func convertPipelineUuid(p *pipeline.Pipeline) ([]UuidToRegIdx, error) {
-	ret := make([]UuidToRegIdx, len(p.UuidsToRegIdx))
+func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
+	s.RemoteReceivRegInfos = make([]RemoteReceivRegInfo, len(p.UuidsToRegIdx))
 	for i, u := range p.UuidsToRegIdx {
 		uid, err := uuid.FromBytes(u.GetUuid())
 		if err != nil {
-			return nil, moerr.NewInvalidInputNoCtx("decode uuid failed: %s\n", err)
+			return moerr.NewInvalidInputNoCtx("decode uuid failed: %s\n", err)
 		}
-		ret[i] = UuidToRegIdx{
-			Uuid: uid,
-			Idx:  int(u.GetIdx()),
+		s.RemoteReceivRegInfos[i] = RemoteReceivRegInfo{
+			Idx:      int(u.GetIdx()),
+			Uuid:     uid,
+			FromAddr: u.FromAddr,
 		}
 	}
-	return ret, nil
+	return nil
 }
 
-func convertScopeUuids(s *Scope) (ret []*pipeline.UuidToRegIdx) {
-	ret = make([]*pipeline.UuidToRegIdx, len(s.UuidToRegIdx))
-	for i, u := range s.UuidToRegIdx {
+func convertScopeRemoteReceivInfo(s *Scope) (ret []*pipeline.UuidToRegIdx) {
+	ret = make([]*pipeline.UuidToRegIdx, len(s.RemoteReceivRegInfos))
+	for i, u := range s.RemoteReceivRegInfos {
 		ret[i] = &pipeline.UuidToRegIdx{
-			Uuid: u.Uuid[:],
-			Idx:  int32(u.Idx),
+			Idx:      int32(u.Idx),
+			Uuid:     u.Uuid[:],
+			FromAddr: u.FromAddr,
 		}
 	}
 	return ret
@@ -658,17 +611,15 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		ctx.plan = p.Qry
 	}
 
-	uuidToRegIdx, converErr := convertPipelineUuid(p)
-	if converErr != nil {
-		return nil, converErr
-	}
 	s := &Scope{
-		Magic:        int(p.GetPipelineType()),
-		IsEnd:        p.IsEnd,
-		IsJoin:       p.IsJoin,
-		Plan:         ctx.plan,
-		IsRemote:     isRemote,
-		UuidToRegIdx: uuidToRegIdx,
+		Magic:    int(p.GetPipelineType()),
+		IsEnd:    p.IsEnd,
+		IsJoin:   p.IsJoin,
+		Plan:     ctx.plan,
+		IsRemote: isRemote,
+	}
+	if err := convertPipelineUuid(p, s); err != nil {
+		return s, err
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
@@ -700,11 +651,8 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
-	for _, u := range s.UuidToRegIdx {
-		colexec.Srv.PutRegFromUuidMap(u.Uuid, s.Proc.Reg.MergeReceivers[u.Idx])
-	}
 	for _, info := range s.RemoteReceivRegInfos {
-		colexec.Srv.PutProgIntoUuidMap(info.Uuid, s.Proc.DispatchNotifyCh)
+		colexec.Srv.PutNotifyChIntoUuidMap(info.Uuid, s.Proc.DispatchNotifyCh)
 	}
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
@@ -782,7 +730,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{}
-		in.Dispatch.Connector = make([]*pipeline.Connector, len(t.LocalRegs))
+		in.Dispatch.LocalConnector = make([]*pipeline.Connector, len(t.LocalRegs))
 		for i := range t.LocalRegs {
 			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
 			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
@@ -791,7 +739,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 					return ctxId, nil, err
 				}
 			}
-			in.Dispatch.Connector[i] = &pipeline.Connector{
+			in.Dispatch.LocalConnector[i] = &pipeline.Connector{
 				ConnectorIndex: idx,
 				PipelineId:     ctx0.id,
 			}
@@ -1039,12 +987,12 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.Dispatch:
 		t := opr.GetDispatch()
-		regs := make([]*process.WaitRegister, len(t.Connector))
-		for i, cp := range t.Connector {
+		regs := make([]*process.WaitRegister, len(t.LocalConnector))
+		for i, cp := range t.LocalConnector {
 			regs[i] = ctx.root.getRegister(cp.PipelineId, cp.ConnectorIndex)
 		}
 		rrs := make([]colexec.ReceiveInfo, 0)
-		if t.CrossCn {
+		if len(t.RemoteConnector) > 0 {
 			for _, rc := range t.RemoteConnector {
 				uid, err := uuid.FromBytes(rc.Uuid)
 				if err != nil {
@@ -1057,7 +1005,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				rrs = append(rrs, n)
 			}
 		}
-
 		v.Arg = &dispatch.Argument{
 			LocalRegs:  regs,
 			RemoteRegs: rrs,

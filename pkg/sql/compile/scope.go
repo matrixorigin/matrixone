@@ -76,6 +76,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 func (s *Scope) MergeRun(c *Compile) error {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	errChan := make(chan error, len(s.PreScopes))
+
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
 		case Normal:
@@ -120,18 +121,38 @@ func (s *Scope) MergeRun(c *Compile) error {
 			}(s.PreScopes[i])
 		}
 	}
-	s.notifyAndReceiveFromRemote()
+	var errReceiveChan chan error
+	if len(s.RemoteReceivRegInfos) > 0 {
+		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
+		s.notifyAndReceiveFromRemote(errReceiveChan)
+	}
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
 	}
 	// check sub-goroutine's error
-	for i := 0; i < len(s.PreScopes); i++ {
-		if err := <-errChan; err != nil {
-			return err
+	slen := len(s.PreScopes)
+	rlen := len(s.RemoteReceivRegInfos)
+	for {
+		select {
+		case err := <-errChan:
+			if err != nil {
+				return err
+			}
+			slen--
+			if slen == 0 && rlen == 0 {
+				return nil
+			}
+		case err := <-errReceiveChan:
+			if err != nil {
+				return err
+			}
+			rlen--
+			if slen == 0 && rlen == 0 {
+				return nil
+			}
 		}
 	}
-	return nil
 }
 
 // RemoteRun send the scope to a remote node for execution.
@@ -553,29 +574,26 @@ func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
 	return nil
 }
 
-func (s *Scope) notifyAndReceiveFromRemote() error {
-	if len(s.RemoteReceivRegInfos) == 0 {
-		return nil
-	}
-
+func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
 	if err != nil {
 		panic(err)
 	}
 
+	// TODO: how to handle error when return err
 	for _, rr := range s.RemoteReceivRegInfos {
-		go func(info RemoteReceivRegInfo, regCh chan *batch.Batch, mp *mpool.MPool) {
+		go func(info RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
 			c, cancel := context.WithTimeout(context.Background(), time.Second*10000)
 			_ = cancel
 
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
+				errChan <- errStream
 				return
 			}
-			defer func(streamSender morpc.Stream, regCh chan *batch.Batch) {
-				close(regCh)
+			defer func(streamSender morpc.Stream) {
 				_ = streamSender.Close()
-			}(streamSender, regCh)
+			}(streamSender)
 
 			message := cnclient.AcquireMessage()
 			{
@@ -584,11 +602,13 @@ func (s *Scope) notifyAndReceiveFromRemote() error {
 				message.Uuid = info.Uuid[:]
 			}
 			if errSend := streamSender.Send(c, message); errSend != nil {
+				errChan <- errSend
 				return
 			}
 
 			messagesReceive, errReceive := streamSender.Receive()
 			if errReceive != nil {
+				errChan <- errReceive
 				return
 			}
 
@@ -598,6 +618,7 @@ func (s *Scope) notifyAndReceiveFromRemote() error {
 			for {
 				select {
 				case <-c.Done():
+					errChan <- nil
 					return
 				case val = <-messagesReceive:
 				}
@@ -610,7 +631,8 @@ func (s *Scope) notifyAndReceiveFromRemote() error {
 				m := val.(*pbpipeline.Message)
 
 				if m.IsEndMessage() {
-					regCh <- nil
+					reg.Ch <- nil
+					errChan <- nil
 					return
 				}
 
@@ -621,17 +643,18 @@ func (s *Scope) notifyAndReceiveFromRemote() error {
 					dataBuffer = m.Data
 				}
 
-				if m.WaitingNextToMerge() {
+				if m.BatcWaitingNextToMerge() {
 					continue
 				}
 
 				bat, err := decodeBatch(mp, dataBuffer)
 				if err != nil {
+					errChan <- err
 					return
 				}
-				regCh <- bat
+				reg.Ch <- bat
 			}
-		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx].Ch, mp)
+		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], mp)
 	}
 
 	return nil
