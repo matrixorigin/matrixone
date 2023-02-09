@@ -35,8 +35,6 @@
 /cmd/generate-config @daviszhen
 /cmd/mo-service @zhangxu19830126
 
-
-
 # subdirectory of pkg
 # pkg/catalog
 /pkg/catalog @nnsgmsone
@@ -46,12 +44,15 @@
 
 # pkg/common
 /pkg/common @zhangxu19830126
+/pkg/common/mpool @nnsgmsone
 /pkg/common/async @zhangxu19830126
 /pkg/common/bitmap @nnsgmsone
 /pkg/common/hashmap @nnsgmsone
 /pkg/common/moerror @xzxiong
 /pkg/common/morpc @zhangxu19830126
+/pkg/common/moprobe @fengttt
 /pkg/common/stopper @zhangxu19830126
+/pkg/common/runtime @zhangxu19830126
 /pkg/common/log @zhangxu19830126
 
 # pkg/compare
