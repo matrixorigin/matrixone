@@ -33,7 +33,7 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 			rs.Free(proc.Mp())
 		}
 	}()
-	resultType := types.T_uint8.ToType()
+	rtyp := types.T_uint8.ToType()
 	inputs := vs[0]
 	if inputs.GetNulls().Any() {
 		err = moerr.NewInvalidArg(proc.Ctx, "sleep", "input contains null")
@@ -47,24 +47,24 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 	if inputs.IsConst() {
 		sleepSeconds := sleepSlice[0]
 		sleepNano := time.Nanosecond * time.Duration(sleepSeconds*1e9)
-		length := int64(inputs.Length())
+		length := inputs.Length()
 		if length == 1 {
-			rs = proc.AllocScalarVector(resultType)
-			result := vector.MustTCols[uint8](rs)
+			var result uint8
 			select {
 			case <-time.After(sleepNano):
-				result[0] = 0
+				result = 0
 			case <-proc.Ctx.Done(): //query aborted
-				result[0] = 1
+				result = 1
 			}
+			rs = vector.NewConst(rtyp, result, 1, proc.Mp())
 			return
 		}
-		rs, err = proc.AllocVectorOfRows(resultType, length, nil)
+		rs, err = proc.AllocVectorOfRows(rtyp, length, nil)
 		if err != nil {
 			return
 		}
 		result := vector.MustTCols[uint8](rs)
-		for i := int64(0); i < length; i++ {
+		for i := 0; i < length; i++ {
 			select {
 			case <-time.After(sleepNano):
 				result[i] = 0
@@ -77,7 +77,7 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 		}
 		return
 	}
-	rs, err = proc.AllocVectorOfRows(resultType, int64(len(sleepSlice)), inputs.GetNulls())
+	rs, err = proc.AllocVectorOfRows(rtyp, len(sleepSlice), inputs.GetNulls())
 	if err != nil {
 		return
 	}

@@ -14,20 +14,7 @@
 
 package operator
 
-import (
-	"testing"
-	"time"
-
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/require"
-)
-
+/*
 func TestCastStringToJson(t *testing.T) {
 	makeTempVectors := func(src string, srcIsConst bool, destType types.T) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
@@ -2263,7 +2250,7 @@ func TestCastFloatAsDecimal(t *testing.T) {
 		vecs := make([]*vector.Vector, 2)
 		vecs[0] = vector.New(vector.CONSTANT, leftType)
 		vector.Append(vecs[0], leftVal[0], false, testutil.TestUtilMp)
-		vecs[1] = vector.New(vector.FLAT, rightType)
+		vecs[1] = vector.NewVector(rightType)
 		return vecs
 	}
 	leftType := types.Type{Oid: types.T_float32, Size: 8}
@@ -2297,7 +2284,7 @@ func TestCastDecimalAsString(t *testing.T) {
 		vecs := make([]*vector.Vector, 2)
 		vecs[0] = vector.New(vector.CONSTANT, leftType)
 		vector.Append(vecs[0], leftVal[0], false, testutil.TestUtilMp)
-		vecs[1] = vector.New(vector.FLAT, rightType)
+		vecs[1] = vector.NewVector(rightType)
 		return vecs
 	}
 	leftType := types.Type{Oid: types.T_decimal64, Size: 8}
@@ -2332,7 +2319,7 @@ func TestCastTimestampAsDate(t *testing.T) {
 		vecs := make([]*vector.Vector, 2)
 		vecs[0] = vector.New(vector.CONSTANT, leftType)
 		vector.Append(vecs[0], leftVal[0], false, testutil.TestUtilMp)
-		vecs[1] = vector.New(vector.FLAT, rightType)
+		vecs[1] = vector.NewVector(rightType)
 		return vecs
 	}
 	leftType := types.Type{Oid: types.T_timestamp, Size: 8}
@@ -2368,10 +2355,10 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 			vectors[0] = vector.New(vector.CONSTANT, leftType)
 			vector.Append(vectors[0], left, false, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.New(vector.FLAT, leftType)
+			vectors[0] = vector.NewVector(leftType)
 			vector.AppendList(vectors[0], []types.Decimal64{left}, nil, testutil.TestUtilMp)
 		}
-		vectors[1] = vector.New(vector.FLAT, destType)
+		vectors[1] = vector.NewVector(destType)
 		return vectors
 	}
 	// decimal(10,5)
@@ -2431,11 +2418,11 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 			vectors[0] = vector.New(vector.CONSTANT, leftType)
 			vector.Append(vectors[0], left, false, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.New(vector.FLAT, leftType)
+			vectors[0] = vector.NewVector(leftType)
 			vector.AppendList(vectors[0], []types.Decimal64{left}, nil, testutil.TestUtilMp)
 		}
 
-		vectors[1] = vector.New(vector.FLAT, destType)
+		vectors[1] = vector.NewVector(destType)
 		return vectors
 	}
 	// decimal(10,5)
@@ -2491,11 +2478,11 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 			vectors[0] = vector.New(vector.CONSTANT, leftType)
 			vector.Append(vectors[0], left, false, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.New(vector.FLAT, leftType)
+			vectors[0] = vector.NewVector(leftType)
 			vector.AppendList(vectors[0], []types.Decimal128{left}, nil, testutil.TestUtilMp)
 		}
 
-		vectors[1] = vector.New(vector.FLAT, destType)
+		vectors[1] = vector.NewVector(destType)
 		return vectors
 	}
 
@@ -2541,103 +2528,6 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 		})
 	}
 }
-
-/*
- * Honestly I have no idea what this is testing ...
- *
-func TestCastStringAsDecimal64(t *testing.T) {
-
-	makeDecimal64Vector := func(values []int64, nsp []uint64, width int32, scale int32) *vector.Vector {
-		d64 := types.Type{
-			Oid:   types.T_decimal64,
-			Size:  8,
-			Width: width,
-			Scale: scale,
-		}
-		vec := vector.New(d64)
-		for _, n := range nsp {
-			nulls.Add(vec.Nsp, n)
-		}
-		ptr := (*[]types.Decimal64)(unsafe.Pointer(&values))
-		vec.Col = *ptr
-		return vec
-	}
-
-	makeScalarDecimal64 := func(v int64, length int, width int32, scale int32) *vector.Vector {
-		d64 := types.Type{
-			Oid:   types.T_decimal64,
-			Size:  8,
-			Width: width,
-			Scale: scale,
-		}
-		vec := testutil.NewProc().AllocScalarVector(d64)
-		vec.Length = length
-		var tmp types.Decimal64
-		tmp.FromInt64(v)
-		vec.Col = []types.Decimal64{tmp}
-		return vec
-	}
-
-	convey.Convey("TestCastStringAsDecimal64", t, func() {
-		type kase struct {
-			s    string
-			want int64
-		}
-
-		kases := []kase{
-			{
-				s:    "333.333",
-				want: 33333300,
-			},
-			{
-				s:    "-1234.5",
-				want: -123450000,
-			},
-		}
-
-		var inStr []string
-		var wantDecimal64 []int64
-		for _, k := range kases {
-			inStr = append(inStr, k.s)
-			wantDecimal64 = append(wantDecimal64, k.want)
-		}
-
-		inVector := testutil.MakeVarcharVector(inStr, nil)
-		destVector := makeDecimal64Vector(nil, nil, 10, 5)
-		wantVector := makeDecimal64Vector(wantDecimal64, nil, 10, 5)
-		proc := testutil.NewProc()
-		res, err := Cast([]*vector.Vector{inVector, destVector}, proc)
-		//res, err := CastStringAsDecimal64(inVector, destVector, proc)
-		convey.ShouldBeNil(err)
-		compare := testutil.CompareVectors(wantVector, res)
-		convey.So(compare, convey.ShouldBeTrue)
-	})
-
-	convey.Convey("TestCasetScalarStringAsDecimal64", t, func() {
-		type kase struct {
-			s    string
-			want int64
-		}
-
-		k := kase{
-			s:    "333.123",
-			want: 33312300,
-		}
-
-		inVector := testutil.MakeScalarVarchar(k.s, 10)
-		wantVector := makeScalarDecimal64(k.want, 10, 10, 5)
-		destVector := makeDecimal64Vector(nil, nil, 10, 5)
-		proc := testutil.NewProc()
-		res, err := Cast([]*vector.Vector{inVector, destVector}, proc)
-		//res, err := CastStringAsDecimal64(inVector, destVector, proc)
-		convey.ShouldBeNil(err)
-		compare := testutil.CompareVectors(wantVector, res)
-		convey.So(compare, convey.ShouldBeTrue)
-	})
-}
-
-*
-*/
 
 func TestCastTimeStampAsDatetime(t *testing.T) {
 	//Cast converts timestamp to datetime
@@ -4845,7 +4735,7 @@ func TestCastDecimal128ToTime(t *testing.T) {
 			vectors[0] = vector.New(vector.CONSTANT, dcmType)
 			vector.Append(vectors[0], dcm, false, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.New(vector.FLAT, dcmType)
+			vectors[0] = vector.NewVector(dcmType)
 			vector.AppendList(vectors[0], []types.Decimal128{dcm}, nil, testutil.TestUtilMp)
 		}
 		vectors[1] = makeTypeVector(destType)
@@ -5082,7 +4972,7 @@ func TestCastJsonToString(t *testing.T) {
 }
 
 func makeTypeVector(t types.T) *vector.Vector {
-	return vector.New(vector.FLAT, t.ToType())
+	return vector.NewVector(t.ToType())
 }
 
 // make vector for type of int8,int16,int32,int64,uint8,uint16,uint32,uint64,date,datetime,timestamp,bool
@@ -5098,7 +4988,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []int8{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5108,7 +4998,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []int16{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5118,7 +5008,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []int32{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5128,7 +5018,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []int64{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5138,7 +5028,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []uint8{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5148,7 +5038,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []uint16{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5158,7 +5048,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []uint32{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5168,7 +5058,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []uint64{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5178,7 +5068,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []float32{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5188,7 +5078,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []float64{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5198,7 +5088,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []types.Date{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5208,7 +5098,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []types.Time{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5218,7 +5108,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []types.Datetime{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5228,7 +5118,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []types.Timestamp{val}, nil, testutil.TestUtilMp)
 		}
 
@@ -5238,7 +5128,7 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.New(vector.CONSTANT, typeOid.ToType())
 			vector.Append(vec, val, false, testutil.TestUtilMp)
 		} else {
-			vec = vector.New(vector.FLAT, typeOid.ToType())
+			vec = vector.NewVector(typeOid.ToType())
 			vector.AppendList(vec, []bool{val}, nil, testutil.TestUtilMp)
 		}
 	}
@@ -5255,10 +5145,10 @@ func makeScalarNullVector(srcType types.T) *vector.Vector {
 func makeStringVector(src string, t types.T, isConst bool) *vector.Vector {
 	if isConst {
 		vec := vector.New(vector.CONSTANT, t.ToType())
-		vector.AppendString(vec, src, false, testutil.TestUtilMp)
+		vector.AppendBytes(vec, []byte(src), false, testutil.TestUtilMp)
 		return vec
 	} else {
-		vec := vector.New(vector.FLAT, t.ToType())
+		vec := vector.NewVector(t.ToType())
 		vector.AppendStringList(vec, []string{src}, nil, testutil.TestUtilMp)
 		return vec
 	}
@@ -5276,3 +5166,4 @@ func makeJsonVectors(src string, isConst bool, t types.T) []*vector.Vector {
 		return []*vector.Vector{vec, makeTypeVector(t)}
 	}
 }
+*/

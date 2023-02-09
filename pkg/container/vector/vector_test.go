@@ -24,7 +24,7 @@ import (
 
 func TestIsBin(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := New(FLAT, types.New(types.T_int8, 0, 0, 0))
+	vec := NewVector(types.New(types.T_int8, 0, 0, 0))
 	vec.SetIsBin(true)
 	require.Equal(t, true, vec.GetIsBin())
 	vec.Free(mp)
@@ -33,7 +33,7 @@ func TestIsBin(t *testing.T) {
 
 func TestLength(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := New(FLAT, types.New(types.T_int8, 0, 0, 0))
+	vec := NewVector(types.New(types.T_int8, 0, 0, 0))
 	err := AppendList(vec, []int8{0, 1, 2}, nil, mp)
 	require.NoError(t, err)
 	require.Equal(t, 3, vec.Length())
@@ -45,7 +45,7 @@ func TestLength(t *testing.T) {
 
 func TestSize(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := New(FLAT, types.New(types.T_int8, 0, 0, 0))
+	vec := NewVector(types.New(types.T_int8, 0, 0, 0))
 	require.Equal(t, 0, vec.Size())
 	vec.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
@@ -53,34 +53,34 @@ func TestSize(t *testing.T) {
 
 func TestConst(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := New(CONSTANT, types.New(types.T_int8, 0, 0, 0))
+	vec := NewConstNull(types.New(types.T_int8, 0, 0, 0), 1, mp)
 	require.Equal(t, true, vec.IsConst())
 	vec.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestWindowWithNulls(t *testing.T) {
-	v0 := New(types.T_int8.ToType())
+	v0 := NewVector(types.T_int8.ToType())
 	mp := mpool.MustNewZero()
 
-	_ = v0.Append(int8(0), false, mp)
-	_ = v0.Append(int8(1), false, mp)
-	_ = v0.Append(int8(2), false, mp)
-	_ = v0.Append(int8(-1), true, mp) // v0[3] = null
-	_ = v0.Append(int8(6), false, mp)
-	_ = v0.Append(int8(-1), true, mp) // v0[5] = null
-	_ = v0.Append(int8(-1), true, mp) // v0[6] = null
-	_ = v0.Append(int8(6), false, mp)
-	_ = v0.Append(int8(7), false, mp)
-	_ = v0.Append(int8(8), false, mp)
+	_ = Append(v0, int8(0), false, mp)
+	_ = Append(v0, int8(1), false, mp)
+	_ = Append(v0, int8(2), false, mp)
+	_ = Append(v0, int8(-1), true, mp) // v0[3] = null
+	_ = Append(v0, int8(6), false, mp)
+	_ = Append(v0, int8(-1), true, mp) // v0[5] = null
+	_ = Append(v0, int8(-1), true, mp) // v0[6] = null
+	_ = Append(v0, int8(6), false, mp)
+	_ = Append(v0, int8(7), false, mp)
+	_ = Append(v0, int8(8), false, mp)
 
-	require.Equal(t, []uint64{3, 5, 6}, v0.Nsp.Np.ToArray())
+	require.Equal(t, []uint64{3, 5, 6}, v0.GetNulls().Np.ToArray())
 
 	start, end := 1, 7
-	v0Window := New(types.T_int8.ToType())
-	v0Window = Window(v0, start, end, v0Window)
-	require.Equal(t, v0.Col.([]int8)[start:end], v0Window.Col)
-	require.Equal(t, []uint64{2, 4, 5}, v0Window.Nsp.Np.ToArray())
+	v0Window := NewVector(types.T_int8.ToType())
+	//v0Window = Window(v0, start, end, v0Window)
+	require.Equal(t, MustTCols[int8](v0)[start:end], MustTCols[int8](v0Window))
+	require.Equal(t, []uint64{2, 4, 5}, v0Window.GetNulls().Np.ToArray())
 
 	//t.Log(v0.String())
 	//t.Log(v0Window.String())
@@ -88,7 +88,7 @@ func TestWindowWithNulls(t *testing.T) {
 
 func TestAppend(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := New(FLAT, types.New(types.T_int8, 0, 0, 0))
+	vec := NewVector(types.New(types.T_int8, 0, 0, 0))
 	err := Append(vec, int(0), false, mp)
 	require.NoError(t, err)
 	err = Append(vec, int(0), true, mp)
@@ -101,7 +101,7 @@ func TestAppend(t *testing.T) {
 
 func TestAppendBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := New(FLAT, types.New(types.T_varchar, 0, 0, 0))
+	vec := NewVector(types.New(types.T_varchar, 0, 0, 0))
 	err := AppendBytes(vec, []byte("x"), false, mp)
 	require.NoError(t, err)
 	err = AppendBytes(vec, nil, true, mp)
@@ -118,7 +118,7 @@ func TestAppendBytes(t *testing.T) {
 
 func TestDup(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v := New(FLAT, types.New(types.T_int8, 0, 0, 0))
+	v := NewVector(types.New(types.T_int8, 0, 0, 0))
 	err := AppendList(v, []int8{0, 1, 2}, nil, mp)
 	require.NoError(t, err)
 	w, err := v.Dup(mp)
@@ -134,7 +134,7 @@ func TestDup(t *testing.T) {
 func TestShrink(t *testing.T) {
 	mp := mpool.MustNewZero()
 	{ // bool
-		v := New(FLAT, types.New(types.T_bool, 0, 0, 0))
+		v := NewVector(types.New(types.T_bool, 0, 0, 0))
 		err := AppendList(v, []bool{true, false, true, false}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -144,7 +144,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int8
-		v := New(FLAT, types.New(types.T_int8, 0, 0, 0))
+		v := NewVector(types.New(types.T_int8, 0, 0, 0))
 		err := AppendList(v, []int8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -154,7 +154,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int16
-		v := New(FLAT, types.New(types.T_int16, 0, 0, 0))
+		v := NewVector(types.New(types.T_int16, 0, 0, 0))
 		err := AppendList(v, []int16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{0, 3})
@@ -164,7 +164,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int32
-		v := New(FLAT, types.New(types.T_int32, 0, 0, 0))
+		v := NewVector(types.New(types.T_int32, 0, 0, 0))
 		err := AppendList(v, []int32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -174,7 +174,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int64
-		v := New(FLAT, types.New(types.T_int64, 0, 0, 0))
+		v := NewVector(types.New(types.T_int64, 0, 0, 0))
 		err := AppendList(v, []int64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -184,7 +184,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint8
-		v := New(FLAT, types.New(types.T_uint8, 0, 0, 0))
+		v := NewVector(types.New(types.T_uint8, 0, 0, 0))
 		err := AppendList(v, []uint8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -194,7 +194,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint16
-		v := New(FLAT, types.New(types.T_uint16, 0, 0, 0))
+		v := NewVector(types.New(types.T_uint16, 0, 0, 0))
 		err := AppendList(v, []uint16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{0, 3})
@@ -204,7 +204,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint32
-		v := New(FLAT, types.New(types.T_uint32, 0, 0, 0))
+		v := NewVector(types.New(types.T_uint32, 0, 0, 0))
 		err := AppendList(v, []uint32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -214,7 +214,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint64
-		v := New(FLAT, types.New(types.T_uint64, 0, 0, 0))
+		v := NewVector(types.New(types.T_uint64, 0, 0, 0))
 		err := AppendList(v, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -224,7 +224,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // float32
-		v := New(FLAT, types.New(types.T_float32, 0, 0, 0))
+		v := NewVector(types.New(types.T_float32, 0, 0, 0))
 		err := AppendList(v, []float32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -234,7 +234,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // float64
-		v := New(FLAT, types.New(types.T_float64, 0, 0, 0))
+		v := NewVector(types.New(types.T_float64, 0, 0, 0))
 		err := AppendList(v, []float64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -244,7 +244,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // text
-		v := New(FLAT, types.New(types.T_text, 0, 0, 0))
+		v := NewVector(types.New(types.T_text, 0, 0, 0))
 		err := AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -255,7 +255,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // date
-		v := New(FLAT, types.New(types.T_date, 0, 0, 0))
+		v := NewVector(types.New(types.T_date, 0, 0, 0))
 		err := AppendList(v, []types.Date{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -265,7 +265,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // datetime
-		v := New(FLAT, types.New(types.T_datetime, 0, 0, 0))
+		v := NewVector(types.New(types.T_datetime, 0, 0, 0))
 		err := AppendList(v, []types.Datetime{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -275,7 +275,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // time
-		v := New(FLAT, types.New(types.T_time, 0, 0, 0))
+		v := NewVector(types.New(types.T_time, 0, 0, 0))
 		err := AppendList(v, []types.Time{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -285,7 +285,7 @@ func TestShrink(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // timestamp
-		v := New(FLAT, types.New(types.T_timestamp, 0, 0, 0))
+		v := NewVector(types.New(types.T_timestamp, 0, 0, 0))
 		err := AppendList(v, []types.Timestamp{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -296,7 +296,7 @@ func TestShrink(t *testing.T) {
 	}
 	{ // decimal64
 		vs := make([]types.Decimal64, 4)
-		v := New(FLAT, types.New(types.T_decimal64, 0, 0, 0))
+		v := NewVector(types.New(types.T_decimal64, 0, 0, 0))
 		err := AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -306,7 +306,7 @@ func TestShrink(t *testing.T) {
 	}
 	{ // decimal128
 		vs := make([]types.Decimal128, 4)
-		v := New(FLAT, types.New(types.T_decimal128, 0, 0, 0))
+		v := NewVector(types.New(types.T_decimal128, 0, 0, 0))
 		err := AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -316,7 +316,7 @@ func TestShrink(t *testing.T) {
 	}
 	{ // uuid
 		vs := make([]types.Uuid, 4)
-		v := New(FLAT, types.New(types.T_uuid, 0, 0, 0))
+		v := NewVector(types.New(types.T_uuid, 0, 0, 0))
 		err := AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -326,7 +326,7 @@ func TestShrink(t *testing.T) {
 	}
 	{ // ts
 		vs := make([]types.TS, 4)
-		v := New(FLAT, types.New(types.T_TS, 0, 0, 0))
+		v := NewVector(types.New(types.T_TS, 0, 0, 0))
 		err := AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -336,7 +336,7 @@ func TestShrink(t *testing.T) {
 	}
 	{ // rowid
 		vs := make([]types.Rowid, 4)
-		v := New(FLAT, types.New(types.T_Rowid, 0, 0, 0))
+		v := NewVector(types.New(types.T_Rowid, 0, 0, 0))
 		err := AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2})
@@ -349,7 +349,7 @@ func TestShrink(t *testing.T) {
 func TestShuffle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	{ // bool
-		v := New(FLAT, types.New(types.T_bool, 0, 0, 0))
+		v := NewVector(types.New(types.T_bool, 0, 0, 0))
 		err := AppendList(v, []bool{true, false, true, false}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{2, 1}, mp)
@@ -360,7 +360,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int8
-		v := New(FLAT, types.New(types.T_int8, 0, 0, 0))
+		v := NewVector(types.New(types.T_int8, 0, 0, 0))
 		err := AppendList(v, []int8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -371,7 +371,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int16
-		v := New(FLAT, types.New(types.T_int16, 0, 0, 0))
+		v := NewVector(types.New(types.T_int16, 0, 0, 0))
 		err := AppendList(v, []int16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{0, 3}, mp)
@@ -382,7 +382,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int32
-		v := New(FLAT, types.New(types.T_int32, 0, 0, 0))
+		v := NewVector(types.New(types.T_int32, 0, 0, 0))
 		err := AppendList(v, []int32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -393,7 +393,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int64
-		v := New(FLAT, types.New(types.T_int64, 0, 0, 0))
+		v := NewVector(types.New(types.T_int64, 0, 0, 0))
 		err := AppendList(v, []int64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -404,7 +404,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint8
-		v := New(FLAT, types.New(types.T_uint8, 0, 0, 0))
+		v := NewVector(types.New(types.T_uint8, 0, 0, 0))
 		err := AppendList(v, []uint8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -415,7 +415,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint16
-		v := New(FLAT, types.New(types.T_uint16, 0, 0, 0))
+		v := NewVector(types.New(types.T_uint16, 0, 0, 0))
 		err := AppendList(v, []uint16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{0, 3}, mp)
@@ -426,7 +426,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint32
-		v := New(FLAT, types.New(types.T_uint32, 0, 0, 0))
+		v := NewVector(types.New(types.T_uint32, 0, 0, 0))
 		err := AppendList(v, []uint32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -437,7 +437,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint64
-		v := New(FLAT, types.New(types.T_uint64, 0, 0, 0))
+		v := NewVector(types.New(types.T_uint64, 0, 0, 0))
 		err := AppendList(v, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -448,7 +448,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // float32
-		v := New(FLAT, types.New(types.T_float32, 0, 0, 0))
+		v := NewVector(types.New(types.T_float32, 0, 0, 0))
 		err := AppendList(v, []float32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -459,7 +459,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // float64
-		v := New(FLAT, types.New(types.T_float64, 0, 0, 0))
+		v := NewVector(types.New(types.T_float64, 0, 0, 0))
 		err := AppendList(v, []float64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -470,7 +470,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // text
-		v := New(FLAT, types.New(types.T_text, 0, 0, 0))
+		v := NewVector(types.New(types.T_text, 0, 0, 0))
 		err := AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -482,7 +482,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // date
-		v := New(FLAT, types.New(types.T_date, 0, 0, 0))
+		v := NewVector(types.New(types.T_date, 0, 0, 0))
 		err := AppendList(v, []types.Date{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -493,7 +493,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // datetime
-		v := New(FLAT, types.New(types.T_datetime, 0, 0, 0))
+		v := NewVector(types.New(types.T_datetime, 0, 0, 0))
 		err := AppendList(v, []types.Datetime{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -504,7 +504,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // time
-		v := New(FLAT, types.New(types.T_time, 0, 0, 0))
+		v := NewVector(types.New(types.T_time, 0, 0, 0))
 		err := AppendList(v, []types.Time{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -515,7 +515,7 @@ func TestShuffle(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // timestamp
-		v := New(FLAT, types.New(types.T_timestamp, 0, 0, 0))
+		v := NewVector(types.New(types.T_timestamp, 0, 0, 0))
 		err := AppendList(v, []types.Timestamp{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -527,7 +527,7 @@ func TestShuffle(t *testing.T) {
 	}
 	{ // decimal64
 		vs := make([]types.Decimal64, 4)
-		v := New(FLAT, types.New(types.T_decimal64, 0, 0, 0))
+		v := NewVector(types.New(types.T_decimal64, 0, 0, 0))
 		err := AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -538,7 +538,7 @@ func TestShuffle(t *testing.T) {
 	}
 	{ // decimal128
 		vs := make([]types.Decimal128, 4)
-		v := New(FLAT, types.New(types.T_decimal128, 0, 0, 0))
+		v := NewVector(types.New(types.T_decimal128, 0, 0, 0))
 		err := AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -549,7 +549,7 @@ func TestShuffle(t *testing.T) {
 	}
 	{ // uuid
 		vs := make([]types.Uuid, 4)
-		v := New(FLAT, types.New(types.T_uuid, 0, 0, 0))
+		v := NewVector(types.New(types.T_uuid, 0, 0, 0))
 		err := AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -560,7 +560,7 @@ func TestShuffle(t *testing.T) {
 	}
 	{ // ts
 		vs := make([]types.TS, 4)
-		v := New(FLAT, types.New(types.T_TS, 0, 0, 0))
+		v := NewVector(types.New(types.T_TS, 0, 0, 0))
 		err := AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -571,7 +571,7 @@ func TestShuffle(t *testing.T) {
 	}
 	{ // rowid
 		vs := make([]types.Rowid, 4)
-		v := New(FLAT, types.New(types.T_Rowid, 0, 0, 0))
+		v := NewVector(types.New(types.T_Rowid, 0, 0, 0))
 		err := AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
@@ -585,9 +585,9 @@ func TestShuffle(t *testing.T) {
 func TestCopy(t *testing.T) {
 	mp := mpool.MustNewZero()
 	{ // fixed
-		v := New(FLAT, types.New(types.T_int8, 0, 0, 0))
+		v := NewVector(types.New(types.T_int8, 0, 0, 0))
 		AppendList(v, []int8{0, 0, 1, 0}, nil, mp)
-		w := New(FLAT, types.New(types.T_int8, 0, 0, 0))
+		w := NewVector(types.New(types.T_int8, 0, 0, 0))
 		AppendList(w, []int8{0, 0, 0, 0}, nil, mp)
 		err := v.Copy(w, 2, 0, mp)
 		require.NoError(t, err)
@@ -597,14 +597,14 @@ func TestCopy(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // string
-		v := New(FLAT, types.New(types.T_char, 10, 0, 0))
+		v := NewVector(types.New(types.T_char, 10, 0, 0))
 		AppendBytesList(v, [][]byte{
 			[]byte("hello"),
 			[]byte("hello"),
 			[]byte("nihao"),
 			[]byte("hello"),
 		}, nil, mp)
-		w := New(FLAT, types.New(types.T_char, 10, 0, 0))
+		w := NewVector(types.New(types.T_char, 10, 0, 0))
 		AppendBytesList(w, [][]byte{
 			[]byte("hello"),
 			[]byte("hello"),
@@ -624,12 +624,12 @@ func TestCopy(t *testing.T) {
 func TestUnionOne(t *testing.T) {
 	mp := mpool.MustNewZero()
 	{ // bool
-		v := New(FLAT, types.New(types.T_bool, 0, 0, 0))
+		v := NewVector(types.New(types.T_bool, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []bool{true, false, true, false}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_bool, 0, 0, 0))
+		w := NewVector(types.New(types.T_bool, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[bool](v)[:1], MustTCols[bool](w))
 		w.UnionOne(v, 0, true, mp)
@@ -638,12 +638,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int8
-		v := New(FLAT, types.New(types.T_int8, 0, 0, 0))
+		v := NewVector(types.New(types.T_int8, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []int8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_int8, 0, 0, 0))
+		w := NewVector(types.New(types.T_int8, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[int8](v)[:1], MustTCols[int8](w))
 		w.UnionOne(v, 0, true, mp)
@@ -652,12 +652,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int16
-		v := New(FLAT, types.New(types.T_int16, 0, 0, 0))
+		v := NewVector(types.New(types.T_int16, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []int16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_int16, 0, 0, 0))
+		w := NewVector(types.New(types.T_int16, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[int16](v)[:1], MustTCols[int16](w))
 		w.UnionOne(v, 0, true, mp)
@@ -666,12 +666,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int32
-		v := New(FLAT, types.New(types.T_int32, 0, 0, 0))
+		v := NewVector(types.New(types.T_int32, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []int32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_int32, 0, 0, 0))
+		w := NewVector(types.New(types.T_int32, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[int32](v)[:1], MustTCols[int32](w))
 		w.UnionOne(v, 0, true, mp)
@@ -680,12 +680,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int64
-		v := New(FLAT, types.New(types.T_int64, 0, 0, 0))
+		v := NewVector(types.New(types.T_int64, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []int64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_int64, 0, 0, 0))
+		w := NewVector(types.New(types.T_int64, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[int64](v)[:1], MustTCols[int64](w))
 		w.UnionOne(v, 0, true, mp)
@@ -694,12 +694,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint8
-		v := New(FLAT, types.New(types.T_uint8, 0, 0, 0))
+		v := NewVector(types.New(types.T_uint8, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []uint8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_uint8, 0, 0, 0))
+		w := NewVector(types.New(types.T_uint8, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[uint8](v)[:1], MustTCols[uint8](w))
 		w.UnionOne(v, 0, true, mp)
@@ -708,12 +708,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint16
-		v := New(FLAT, types.New(types.T_uint16, 0, 0, 0))
+		v := NewVector(types.New(types.T_uint16, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []uint16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_uint16, 0, 0, 0))
+		w := NewVector(types.New(types.T_uint16, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[uint16](v)[:1], MustTCols[uint16](w))
 		w.UnionOne(v, 0, true, mp)
@@ -722,12 +722,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint32
-		v := New(FLAT, types.New(types.T_uint32, 0, 0, 0))
+		v := NewVector(types.New(types.T_uint32, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []uint32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_uint32, 0, 0, 0))
+		w := NewVector(types.New(types.T_uint32, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[uint32](v)[:1], MustTCols[uint32](w))
 		w.UnionOne(v, 0, true, mp)
@@ -736,12 +736,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint64
-		v := New(FLAT, types.New(types.T_uint64, 0, 0, 0))
+		v := NewVector(types.New(types.T_uint64, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_uint64, 0, 0, 0))
+		w := NewVector(types.New(types.T_uint64, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[uint64](v)[:1], MustTCols[uint64](w))
 		w.UnionOne(v, 0, true, mp)
@@ -750,12 +750,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // float32
-		v := New(FLAT, types.New(types.T_float32, 0, 0, 0))
+		v := NewVector(types.New(types.T_float32, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []float32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_float32, 0, 0, 0))
+		w := NewVector(types.New(types.T_float32, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[float32](v)[:1], MustTCols[float32](w))
 		w.UnionOne(v, 0, true, mp)
@@ -764,12 +764,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // float64
-		v := New(FLAT, types.New(types.T_float64, 0, 0, 0))
+		v := NewVector(types.New(types.T_float64, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []float64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_float64, 0, 0, 0))
+		w := NewVector(types.New(types.T_float64, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[float64](v)[:1], MustTCols[float64](w))
 		w.UnionOne(v, 0, true, mp)
@@ -778,12 +778,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // text
-		v := New(FLAT, types.New(types.T_text, 0, 0, 0))
+		v := NewVector(types.New(types.T_text, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_text, 0, 0, 0))
+		w := NewVector(types.New(types.T_text, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustStrCols(v)[:1], MustStrCols(w))
 		w.UnionOne(v, 0, true, mp)
@@ -792,12 +792,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // date
-		v := New(FLAT, types.New(types.T_date, 0, 0, 0))
+		v := NewVector(types.New(types.T_date, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []types.Date{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_date, 0, 0, 0))
+		w := NewVector(types.New(types.T_date, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[types.Date](v)[:1], MustTCols[types.Date](w))
 		w.UnionOne(v, 0, true, mp)
@@ -806,12 +806,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // datetime
-		v := New(FLAT, types.New(types.T_datetime, 0, 0, 0))
+		v := NewVector(types.New(types.T_datetime, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []types.Datetime{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_datetime, 0, 0, 0))
+		w := NewVector(types.New(types.T_datetime, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[types.Datetime](v)[:1], MustTCols[types.Datetime](w))
 		w.UnionOne(v, 0, true, mp)
@@ -820,12 +820,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // time
-		v := New(FLAT, types.New(types.T_time, 0, 0, 0))
+		v := NewVector(types.New(types.T_time, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []types.Time{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_time, 0, 0, 0))
+		w := NewVector(types.New(types.T_time, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[types.Time](v)[:1], MustTCols[types.Time](w))
 		w.UnionOne(v, 0, true, mp)
@@ -834,12 +834,12 @@ func TestUnionOne(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // timestamp
-		v := New(FLAT, types.New(types.T_timestamp, 0, 0, 0))
+		v := NewVector(types.New(types.T_timestamp, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, []types.Timestamp{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_timestamp, 0, 0, 0))
+		w := NewVector(types.New(types.T_timestamp, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[types.Timestamp](v)[:1], MustTCols[types.Timestamp](w))
 		w.UnionOne(v, 0, true, mp)
@@ -849,12 +849,12 @@ func TestUnionOne(t *testing.T) {
 	}
 	{ // decimal64
 		vs := make([]types.Decimal64, 4)
-		v := New(FLAT, types.New(types.T_decimal64, 0, 0, 0))
+		v := NewVector(types.New(types.T_decimal64, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_decimal64, 0, 0, 0))
+		w := NewVector(types.New(types.T_decimal64, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[types.Decimal64](v)[:1], MustTCols[types.Decimal64](w))
 		w.UnionOne(v, 0, true, mp)
@@ -864,12 +864,12 @@ func TestUnionOne(t *testing.T) {
 	}
 	{ // decimal128
 		vs := make([]types.Decimal128, 4)
-		v := New(FLAT, types.New(types.T_decimal128, 0, 0, 0))
+		v := NewVector(types.New(types.T_decimal128, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_decimal128, 0, 0, 0))
+		w := NewVector(types.New(types.T_decimal128, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[types.Decimal128](v)[:1], MustTCols[types.Decimal128](w))
 		w.UnionOne(v, 0, true, mp)
@@ -879,12 +879,12 @@ func TestUnionOne(t *testing.T) {
 	}
 	{ // uuid
 		vs := make([]types.Uuid, 4)
-		v := New(FLAT, types.New(types.T_uuid, 0, 0, 0))
+		v := NewVector(types.New(types.T_uuid, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_uuid, 0, 0, 0))
+		w := NewVector(types.New(types.T_uuid, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[types.Uuid](v)[:1], MustTCols[types.Uuid](w))
 		w.UnionOne(v, 0, true, mp)
@@ -894,12 +894,12 @@ func TestUnionOne(t *testing.T) {
 	}
 	{ // ts
 		vs := make([]types.TS, 4)
-		v := New(FLAT, types.New(types.T_TS, 0, 0, 0))
+		v := NewVector(types.New(types.T_TS, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_TS, 0, 0, 0))
+		w := NewVector(types.New(types.T_TS, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[types.TS](v)[:1], MustTCols[types.TS](w))
 		w.UnionOne(v, 0, true, mp)
@@ -909,12 +909,12 @@ func TestUnionOne(t *testing.T) {
 	}
 	{ // rowid
 		vs := make([]types.Rowid, 4)
-		v := New(FLAT, types.New(types.T_Rowid, 0, 0, 0))
+		v := NewVector(types.New(types.T_Rowid, 0, 0, 0))
 		err := v.PreExtend(10, mp)
 		require.NoError(t, err)
 		err = AppendList(v, vs, nil, mp)
 		require.NoError(t, err)
-		w := New(FLAT, types.New(types.T_Rowid, 0, 0, 0))
+		w := NewVector(types.New(types.T_Rowid, 0, 0, 0))
 		w.UnionOne(v, 0, false, mp)
 		require.Equal(t, MustTCols[types.Rowid](v)[:1], MustTCols[types.Rowid](w))
 		w.UnionOne(v, 0, true, mp)
@@ -927,7 +927,7 @@ func TestUnionOne(t *testing.T) {
 
 func TestMarshalAndUnMarshal(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v := New(FLAT, types.New(types.T_int8, 0, 0, 0))
+	v := NewVector(types.New(types.T_int8, 0, 0, 0))
 	err := AppendList(v, []int8{0, 1, 2}, nil, mp)
 	require.NoError(t, err)
 	data, err := v.MarshalBinary()
@@ -948,7 +948,7 @@ func TestMarshalAndUnMarshal(t *testing.T) {
 
 func TestStrMarshalAndUnMarshal(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v := New(FLAT, types.New(types.T_text, 0, 0, 0))
+	v := NewVector(types.New(types.T_text, 0, 0, 0))
 	err := AppendBytesList(v, [][]byte{[]byte("x"), []byte("y")}, nil, mp)
 	require.NoError(t, err)
 	data, err := v.MarshalBinary()

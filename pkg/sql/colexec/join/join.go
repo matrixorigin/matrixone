@@ -104,9 +104,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(vector.FLAT, *bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.NewVector(*bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = vector.New(vector.FLAT, *ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.NewVector(*ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 
@@ -274,7 +274,7 @@ func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
 	}
 
 	vec := ctr.vecs[0]
-	encoded := vector.New(vector.FLAT, types.Type{Oid: types.T_uint16})
+	encoded := vector.NewVector(types.Type{Oid: types.T_uint16})
 	// case 1
 	// 1. the join columns of both left table and right table are indexed
 	// 2. left condition is not an expression

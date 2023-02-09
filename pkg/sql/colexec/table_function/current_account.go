@@ -30,38 +30,32 @@ func currentAccountPrepare(proc *process.Process, arg *Argument) error {
 }
 
 func getAccountName(proc *process.Process) *vector.Vector {
-	vec := vector.New(vector.CONSTANT, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
-	vector.AppendString(vec, proc.SessionInfo.Account, false, proc.Mp())
+	vec := vector.NewConstBytes(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}, []byte(proc.SessionInfo.Account), 1, proc.Mp())
 	return vec
 }
 
 func getRoleName(proc *process.Process) *vector.Vector {
-	vec := vector.New(vector.CONSTANT, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
-	vector.AppendString(vec, proc.SessionInfo.Role, false, proc.Mp())
+	vec := vector.NewConstBytes(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}, []byte(proc.SessionInfo.Role), 1, proc.Mp())
 	return vec
 }
 
 func getUserName(proc *process.Process) *vector.Vector {
-	vec := vector.New(vector.CONSTANT, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
-	vector.AppendString(vec, proc.SessionInfo.User, false, proc.Mp())
+	vec := vector.NewConstBytes(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}, []byte(proc.SessionInfo.User), 1, proc.Mp())
 	return vec
 }
 
 func getAccountId(proc *process.Process) *vector.Vector {
-	vec := vector.New(vector.CONSTANT, types.Type{Oid: types.T_uint32})
-	vector.SetConst(vec, proc.SessionInfo.AccountId, false, 1, proc.Mp())
+	vec := vector.NewConst(types.Type{Oid: types.T_uint32}, proc.SessionInfo.AccountId, 1, proc.Mp())
 	return vec
 }
 
 func getRoleId(proc *process.Process) *vector.Vector {
-	vec := vector.New(vector.CONSTANT, types.Type{Oid: types.T_uint32})
-	vector.SetConst(vec, proc.SessionInfo.RoleId, false, 1, proc.Mp())
+	vec := vector.NewConst(types.Type{Oid: types.T_uint32}, proc.SessionInfo.RoleId, 1, proc.Mp())
 	return vec
 }
 
 func getUserId(proc *process.Process) *vector.Vector {
-	vec := vector.New(vector.CONSTANT, types.Type{Oid: types.T_uint32})
-	vector.SetConst(vec, proc.SessionInfo.UserId, false, 1, proc.Mp())
+	vec := vector.NewConst(types.Type{Oid: types.T_uint32}, proc.SessionInfo.UserId, 1, proc.Mp())
 	return vec
 }
 

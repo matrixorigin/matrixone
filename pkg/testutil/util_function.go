@@ -575,98 +575,78 @@ func (fc *FunctionTestCase) BenchMarkRun() error {
 	return nil
 }
 
-func newVectorByType(
-	mp *mpool.MPool,
-	typ types.Type, val any, nsp *nulls.Nulls) *vector.Vector {
+func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls) *vector.Vector {
+	vec := vector.NewVector(typ)
 	switch typ.Oid {
 	case types.T_bool:
 		values := val.([]bool)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_int8:
 		values := val.([]int8)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_int16:
 		values := val.([]int16)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_int32:
 		values := val.([]int32)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_int64:
 		values := val.([]int64)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_uint8:
 		values := val.([]uint8)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_uint16:
 		values := val.([]uint16)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_uint32:
 		values := val.([]uint32)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_uint64:
 		values := val.([]uint64)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_float32:
 		values := val.([]float32)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_float64:
 		values := val.([]float64)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_decimal64:
 		values := val.([]types.Decimal64)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_decimal128:
 		values := val.([]types.Decimal128)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_date:
 		values := val.([]types.Date)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_datetime:
 		values := val.([]types.Datetime)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_time:
 		values := val.([]types.Time)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_timestamp:
 		values := val.([]types.Timestamp)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		values := val.([]string)
-		vec := vector.New(vector.FLAT, typ)
 		vector.AppendStringList(vec, values, nil, mp)
 	case types.T_uuid:
 		values := val.([]types.Uuid)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_TS:
 		values := val.([]types.TS)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_Rowid:
 		values := val.([]types.Rowid)
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, values, true, mp)
+		vector.AppendList(vec, values, nil, mp)
 	case types.T_json:
 		values := val.([]string)
-		vec := vector.New(vector.FLAT, typ)
 		vector.AppendStringList(vec, values, nil, mp)
+	default:
+		panic(fmt.Sprintf("function test framework do not support typ %s", typ))
 	}
-	panic(fmt.Sprintf("function test framework do not support typ %s", typ))
+	vec.SetNulls(nsp)
+	return vec
 }

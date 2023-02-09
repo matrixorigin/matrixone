@@ -78,7 +78,7 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 		case types.T_datetime:
 			typ.Precision = 6
 		}
-		vec := vector.New(vector.FLAT, typ)
+		vec := vector.NewVector(typ)
 		vec.PreExtend(batchSize, pool)
 		//vec.SetOriginal(false)
 		batch.Vecs[i] = vec
@@ -448,7 +448,7 @@ func Time2DatetimeString(t time.Time) string {
 }
 
 func newVector(tye types.Type, buf []byte) *vector.Vector {
-	vector := vector.New(vector.FLAT, tye)
+	vector := vector.NewVector(tye)
 	vector.UnmarshalBinary(buf)
 	return vector
 }

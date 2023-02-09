@@ -141,8 +141,8 @@ func (container *WriteS3Container) resetMetaLocBat() {
 	// vecs[1] store relative block metadata
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
 	metaLocBat := batch.New(true, attrs)
-	metaLocBat.Vecs[0] = vector.New(types.Type{Oid: types.T(types.T_uint16)})
-	metaLocBat.Vecs[1] = vector.New(types.New(types.T_varchar,
+	metaLocBat.Vecs[0] = vector.NewVector(types.Type{Oid: types.T(types.T_uint16)})
+	metaLocBat.Vecs[1] = vector.NewVector(types.New(types.T_varchar,
 		types.MaxVarcharLen, 0, 0))
 
 	container.metaLocBat = metaLocBat
@@ -237,7 +237,7 @@ func reSizeBatch(container *WriteS3Container, bat *batch.Batch, proc *process.Pr
 
 		for cnt >= options.DefaultBlockMaxRows {
 			for i := range newBat.Vecs {
-				vector.UnionOne(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
+				newBat.Vecs[i].UnionOne(bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
 			}
 			idx++
 			if idx%int(options.DefaultBlockMaxRows) == 0 {
@@ -255,7 +255,7 @@ func reSizeBatch(container *WriteS3Container, bat *batch.Batch, proc *process.Pr
 		}
 		for i := 0; i < bat.Length(); i++ {
 			for j := range container.cacheBat[batIdx].Vecs {
-				vector.UnionOne(container.cacheBat[batIdx].Vecs[j], bat.Vecs[j], int64(i), proc.GetMPool())
+				container.cacheBat[batIdx].Vecs[j].UnionOne(bat.Vecs[j], int64(i), proc.GetMPool())
 			}
 		}
 		container.cacheBat[batIdx].SetZs(container.cacheBat[batIdx].Vecs[0].Length(), proc.GetMPool())
@@ -266,7 +266,7 @@ func reSizeBatch(container *WriteS3Container, bat *batch.Batch, proc *process.Pr
 			}
 			for cnt > 0 {
 				for i := range newBat.Vecs {
-					vector.UnionOne(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
+					newBat.Vecs[i].UnionOne(bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
 				}
 				idx++
 				cnt--
@@ -283,7 +283,7 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 	copy(attrs, bat.Attrs)
 	newBat := batch.New(true, attrs)
 	for i := range bat.Vecs {
-		newBat.Vecs[i] = vector.New(bat.Vecs[i].GetType())
+		newBat.Vecs[i] = vector.NewVector(*bat.Vecs[i].GetType())
 	}
 	return newBat
 }
@@ -310,7 +310,7 @@ func GenerateWriter(container *WriteS3Container, proc *process.Process) error {
 func SortByPrimaryKey(proc *process.Process, bat *batch.Batch, pkIdx []int, m *mpool.MPool) error {
 	// Not-Null Check
 	for i := 0; i < len(pkIdx); i++ {
-		if nulls.Any(bat.Vecs[i].Nsp) {
+		if nulls.Any(bat.Vecs[i].GetNulls()) {
 			// return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.InsertCtx.TableDef.Cols[i].GetName()))
 			return moerr.NewConstraintViolation(proc.Ctx, "Primary key can not be null")
 		}
@@ -322,8 +322,8 @@ func SortByPrimaryKey(proc *process.Process, bat *batch.Batch, pkIdx []int, m *m
 		sels[i] = int64(i)
 	}
 	ovec := bat.GetVector(int32(pkIdx[0]))
-	if ovec.Typ.IsString() {
-		strCol = vector.GetStrVectorValues(ovec)
+	if ovec.GetType().IsString() {
+		strCol = vector.MustStrCols(ovec)
 	} else {
 		strCol = nil
 	}
@@ -336,8 +336,8 @@ func SortByPrimaryKey(proc *process.Process, bat *batch.Batch, pkIdx []int, m *m
 	for i, j := 1, len(pkIdx); i < j; i++ {
 		ps = partition.Partition(sels, ds, ps, ovec)
 		vec := bat.Vecs[pkIdx[i]]
-		if vec.Typ.IsString() {
-			strCol = vector.GetStrVectorValues(vec)
+		if vec.GetType().IsString() {
+			strCol = vector.MustStrCols(vec)
 		} else {
 			strCol = nil
 		}
@@ -434,8 +434,8 @@ func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int)
 		if err != nil {
 			return err
 		}
-		container.metaLocBat.Vecs[0].Append(uint16(idx), false, proc.GetMPool())
-		container.metaLocBat.Vecs[1].Append([]byte(metaLoc), false, proc.GetMPool())
+		vector.Append(container.metaLocBat.Vecs[0], uint16(idx), false, proc.GetMPool())
+		vector.AppendBytes(container.metaLocBat.Vecs[1], []byte(metaLoc), false, proc.GetMPool())
 	}
 	// for i := range container.unique_writer {
 	// 	if blocks, err = container.unique_writer[i].WriteEnd(proc.Ctx); err != nil {

@@ -63,7 +63,7 @@ func TestLpadVarchar(t *testing.T) {
 		{
 			name:      "Tx",
 			vecs:      makeLpadVectors("hello", 1, "", []int{1, 1, 1}),
-			wantBytes: []byte(""),
+			wantBytes: []byte("h"),
 		},
 		{
 			name:      "Tx2",
@@ -168,15 +168,12 @@ func TestLpadVarchar(t *testing.T) {
 
 func makeLpadVectors(src string, length int64, pad string, nils []int) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
-	vec[0] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
-	vector.AppendString(vec[0], src, src == "", testutil.TestUtilMp)
-	vec[1] = vector.New(vector.CONSTANT, types.T_int64.ToType())
-	vector.Append(vec[1], length, false, testutil.TestUtilMp)
-	vec[2] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
-	vector.AppendString(vec[2], pad, pad == "", testutil.TestUtilMp)
+	vec[0] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(src), 1, testutil.TestUtilMp)
+	vec[1] = vector.NewConst(types.T_int64.ToType(), length, 1, testutil.TestUtilMp)
+	vec[2] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(pad), 1, testutil.TestUtilMp)
 	for i, n := range nils {
 		if n == 0 {
-			nulls.Add(vec[i].GetNulls(), uint64(i))
+			nulls.Add(vec[i].GetNulls(), uint64(0))
 		}
 	}
 	return vec

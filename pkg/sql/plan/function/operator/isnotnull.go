@@ -21,23 +21,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func IsNotNull(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	input := vectors[0]
+func IsNotNull(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	input := ivecs[0]
 	retType := types.T_bool.ToType()
 	if input.IsConst() {
 		if input.IsConstNull() {
-			vec := vector.New(vector.CONSTANT, retType)
-			vector.Append(vec, false, false, proc.Mp())
-			return vec, nil
+			return vector.NewConst(retType, false, input.Length(), proc.Mp()), nil
 		} else {
-			vec := vector.New(vector.CONSTANT, retType)
-			vector.Append(vec, true, false, proc.Mp())
-			return vec, nil
+			return vector.NewConst(retType, true, input.Length(), proc.Mp()), nil
 		}
 	} else {
 		vlen := input.Length()
-		vec := vector.New(vector.FLAT, retType)
-		vec.PreExtend(vlen, proc.Mp())
+		vec, err := proc.AllocVectorOfRows(retType, vlen, nil)
+		if err != nil {
+			return nil, err
+		}
 		vals := vector.MustTCols[bool](vec)
 		for i := range vals {
 			if nulls.Contains(input.GetNulls(), uint64(i)) {

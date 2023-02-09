@@ -21,17 +21,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func RegularSubstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vectors[0]
-	secondVector := vectors[1]
+func RegularSubstr(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	firstVector := ivecs[0]
+	secondVector := ivecs[1]
 	firstValues := vector.MustStrCols(firstVector)
 	secondValues := vector.MustStrCols(secondVector)
-	resultType := types.T_varchar.ToType()
+	rtyp := types.T_varchar.ToType()
 
 	//maxLen
-	maxLen := vectors[0].Length()
-	for i := range vectors {
-		val := vectors[i].Length()
+	maxLen := ivecs[0].Length()
+	for i := range ivecs {
+		val := ivecs[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
@@ -43,33 +43,33 @@ func RegularSubstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	var match_type []string
 
 	//different parameter length conditions
-	switch len(vectors) {
+	switch len(ivecs) {
 	case 2:
 		pos = []int64{1}
 		occ = []int64{1}
 		match_type = []string{"c"}
 
 	case 3:
-		pos = vector.MustTCols[int64](vectors[2])
+		pos = vector.MustTCols[int64](ivecs[2])
 		occ = []int64{1}
 		match_type = []string{"c"}
 	case 4:
-		pos = vector.MustTCols[int64](vectors[2])
-		occ = vector.MustTCols[int64](vectors[3])
+		pos = vector.MustTCols[int64](ivecs[2])
+		occ = vector.MustTCols[int64](ivecs[3])
 		match_type = []string{"c"}
 	}
 
 	if firstVector.IsConstNull() || secondVector.IsConstNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+		return vector.NewConstNull(rtyp, maxLen, proc.Mp()), nil
 	}
 
-	resultVector, err := proc.AllocVectorOfRows(resultType, 0, nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, 0, nil)
 	if err != nil {
 		return nil, err
 	}
-	err = regular.RegularSubstrWithArrays(firstValues, secondValues, pos, occ, match_type, firstVector.GetNulls(), secondVector.GetNulls(), resultVector, proc, maxLen)
+	err = regular.RegularSubstrWithArrays(firstValues, secondValues, pos, occ, match_type, firstVector.GetNulls(), secondVector.GetNulls(), rvec, proc, maxLen)
 	if err != nil {
 		return nil, err
 	}
-	return resultVector, nil
+	return rvec, nil
 }

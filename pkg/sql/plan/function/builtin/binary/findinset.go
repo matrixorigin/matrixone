@@ -24,45 +24,41 @@ import (
 
 func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	resultType := types.Type{Oid: types.T_uint64, Size: 8}
+	rtyp := types.Type{Oid: types.T_uint64, Size: 8}
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
 	switch {
+	case left.IsConstNull() || right.IsConstNull():
+		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
 	case left.IsConst() && right.IsConst():
-		if left.IsConstNull() || right.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := vector.MustTCols[uint64](resultVector)
-		findinset.FindInSetWithAllConst(leftValues[0], rightValues[0], resultValues)
-		return resultVector, nil
+		var rvals [1]uint64
+		findinset.FindInSetWithAllConst(leftValues[0], rightValues[0], rvals[:])
+		return vector.NewConst(rtyp, rvals[0], left.Length(), proc.Mp()), nil
 	case left.IsConst() && !right.IsConst():
-		if left.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
 		rlen := len(rightValues)
-		resultVector := vector.New(vector.FLAT, resultType)
-		resultVector.PreExtend(rlen, proc.Mp())
-		resultValues := vector.MustTCols[uint64](resultVector)
-		nulls.Set(resultVector.GetNulls(), right.GetNulls())
-		findinset.FindInSetWithLeftConst(leftValues[0], rightValues, resultValues)
-		return resultVector, nil
-	case !left.IsConst() && right.IsConst():
-		if right.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+		rvec, err := proc.AllocVectorOfRows(rtyp, rlen, right.GetNulls())
+		if err != nil {
+			return nil, err
 		}
-		resLen := len(leftValues)
-		resultVector := vector.New(vector.FLAT, resultType)
-		resultVector.PreExtend(resLen, proc.Mp())
-		resultValues := vector.MustTCols[uint64](resultVector)
-		nulls.Set(resultVector.GetNulls(), left.GetNulls())
-		findinset.FindInSetWithRightConst(leftValues, rightValues[0], resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[uint64](rvec)
+		findinset.FindInSetWithLeftConst(leftValues[0], rightValues, rvals)
+		return rvec, nil
+	case !left.IsConst() && right.IsConst():
+		rlen := len(leftValues)
+		rvec, err := proc.AllocVectorOfRows(rtyp, rlen, left.GetNulls())
+		if err != nil {
+			return nil, err
+		}
+		rvals := vector.MustTCols[uint64](rvec)
+		findinset.FindInSetWithRightConst(leftValues, rightValues[0], rvals)
+		return rvec, nil
 	}
 	resLen := len(leftValues)
-	resultVector := vector.New(vector.FLAT, resultType)
-	resultVector.PreExtend(resLen, proc.Mp())
-	resultValues := vector.MustTCols[uint64](resultVector)
-	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.GetNulls())
-	findinset.FindInSet(leftValues, rightValues, resultValues)
-	return resultVector, nil
+	rvec, err := proc.AllocVectorOfRows(rtyp, resLen, nil)
+	if err != nil {
+		return nil, err
+	}
+	rvals := vector.MustTCols[uint64](rvec)
+	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
+	findinset.FindInSet(leftValues, rightValues, rvals)
+	return rvec, nil
 }

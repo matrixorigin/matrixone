@@ -41,23 +41,22 @@ func JsonUnquote(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vect
 		fSingle = json_unquote.JsonSingle
 		fBacth = json_unquote.JsonBatch
 	}
-	resultType := types.T_varchar.ToType()
+	rtyp := types.T_varchar.ToType()
 	if vec.IsConstNull() {
-		ret = proc.AllocScalarNullVector(resultType)
+		ret = vector.NewConstNull(rtyp, vec.Length(), proc.Mp())
 		return
 	}
 	if vec.IsConst() {
-		ret = proc.AllocScalarVector(resultType)
 		v := vector.MustBytesCols(vec)[0]
 		var r string
 		r, err = fSingle(v)
 		if err != nil {
 			return nil, err
 		}
-		err = vector.SetStringAt(ret, 0, r, proc.Mp())
+		ret = vector.NewConstBytes(rtyp, []byte(r), vec.Length(), proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.GetNulls())
+	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())
 	if err != nil {
 		return nil, err
 	}

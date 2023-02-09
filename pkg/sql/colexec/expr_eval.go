@@ -58,7 +58,7 @@ var (
 
 func getConstVecInList(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	lenList := len(exprs)
-	vec, err := proc.AllocVectorOfRows(types.T(exprs[0].Typ.Id).ToType(), int64(lenList), nil)
+	vec, err := proc.AllocVectorOfRows(types.T(exprs[0].Typ.Id).ToType(), lenList, nil)
 	if err != nil {
 		panic(moerr.NewOOM(proc.Ctx))
 	}
@@ -148,81 +148,57 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 	var vec *vector.Vector
 	t := expr.Expr.(*plan.Expr_C)
 	if t.C.GetIsnull() {
-		if types.T(expr.Typ.GetId()) == types.T_any {
-			vec = vector.New(vector.CONSTANT, types.Type{Oid: types.T(expr.Typ.GetId())})
-		} else {
-			vec = vector.New(vector.CONSTANT, types.Type{Oid: types.T(expr.Typ.GetId())})
-			vector.Append(vec, vector.GetInitConstVal(types.Type{Oid: types.T(expr.Typ.GetId())}), false, proc.Mp())
-		}
+		vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
 	} else {
 		switch t.C.GetValue().(type) {
 		case *plan.Const_Bval:
-			vec = vector.New(vector.CONSTANT, constBType)
-			vector.Append(vec, t.C.GetBval(), false, proc.Mp())
+			vec = vector.NewConst(constBType, t.C.GetBval(), length, proc.Mp())
 		case *plan.Const_I8Val:
-			vec = vector.New(vector.CONSTANT, constI8Type)
-			vector.Append(vec, int8(t.C.GetI8Val()), false, proc.Mp())
+			vec = vector.NewConst(constI8Type, int8(t.C.GetI8Val()), length, proc.Mp())
 		case *plan.Const_I16Val:
-			vec = vector.New(vector.CONSTANT, constI16Type)
-			vector.Append(vec, int16(t.C.GetI16Val()), false, proc.Mp())
+			vec = vector.NewConst(constI16Type, int16(t.C.GetI16Val()), length, proc.Mp())
 		case *plan.Const_I32Val:
-			vec = vector.New(vector.CONSTANT, constI32Type)
-			vector.Append(vec, int32(t.C.GetI32Val()), false, proc.Mp())
+			vec = vector.NewConst(constI32Type, int32(t.C.GetI32Val()), length, proc.Mp())
 		case *plan.Const_I64Val:
-			vec = vector.New(vector.CONSTANT, constI64Type)
-			vector.Append(vec, int64(t.C.GetI64Val()), false, proc.Mp())
+			vec = vector.NewConst(constI64Type, int64(t.C.GetI64Val()), length, proc.Mp())
 		case *plan.Const_U8Val:
-			vec = vector.New(vector.CONSTANT, constU8Type)
-			vector.Append(vec, uint8(t.C.GetU8Val()), false, proc.Mp())
+			vec = vector.NewConst(constU8Type, uint8(t.C.GetU8Val()), length, proc.Mp())
 		case *plan.Const_U16Val:
-			vec = vector.New(vector.CONSTANT, constU16Type)
-			vector.Append(vec, uint16(t.C.GetU16Val()), false, proc.Mp())
+			vec = vector.NewConst(constU16Type, uint16(t.C.GetU16Val()), length, proc.Mp())
 		case *plan.Const_U32Val:
-			vec = vector.New(vector.CONSTANT, constU32Type)
-			vector.Append(vec, uint32(t.C.GetU32Val()), false, proc.Mp())
+			vec = vector.NewConst(constU32Type, uint32(t.C.GetU32Val()), length, proc.Mp())
 		case *plan.Const_U64Val:
-			vec = vector.New(vector.CONSTANT, constU64Type)
-			vector.Append(vec, uint64(t.C.GetU64Val()), false, proc.Mp())
+			vec = vector.NewConst(constU64Type, uint64(t.C.GetU64Val()), length, proc.Mp())
 		case *plan.Const_Fval:
-			vec = vector.New(vector.CONSTANT, constFType)
-			vector.Append(vec, t.C.GetFval(), false, proc.Mp())
+			vec = vector.NewConst(constFType, t.C.GetFval(), length, proc.Mp())
 		case *plan.Const_Dval:
-			vec = vector.New(vector.CONSTANT, constDType)
-			vector.Append(vec, t.C.GetDval(), false, proc.Mp())
+			vec = vector.NewConst(constDType, t.C.GetDval(), length, proc.Mp())
 		case *plan.Const_Dateval:
-			vec = vector.New(vector.CONSTANT, constDateType)
-			vector.Append(vec, types.Date(t.C.GetDateval()), false, proc.Mp())
+			vec = vector.NewConst(constDateType, types.Date(t.C.GetDateval()), length, proc.Mp())
 		case *plan.Const_Timeval:
-			vec = vector.New(vector.CONSTANT, constTimeType)
-			vector.Append(vec, types.Time(t.C.GetTimeval()), false, proc.Mp())
+			vec = vector.NewConst(constTimeType, types.Time(t.C.GetTimeval()), length, proc.Mp())
 		case *plan.Const_Datetimeval:
-			vec = vector.New(vector.CONSTANT, constDatetimeType)
-			vector.Append(vec, types.Datetime(t.C.GetDatetimeval()), false, proc.Mp())
+			vec = vector.NewConst(constDatetimeType, types.Datetime(t.C.GetDatetimeval()), length, proc.Mp())
 		case *plan.Const_Decimal64Val:
 			cd64 := t.C.GetDecimal64Val()
 			d64 := types.Decimal64FromInt64Raw(cd64.A)
-			vec = vector.New(vector.CONSTANT, constDecimal64Type)
-			vector.Append(vec, d64, false, proc.Mp())
+			vec = vector.NewConst(constDecimal64Type, d64, length, proc.Mp())
 		case *plan.Const_Decimal128Val:
 			cd128 := t.C.GetDecimal128Val()
 			d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
-			vec = vector.New(vector.CONSTANT, constDecimal128Type)
-			vector.Append(vec, d128, false, proc.Mp())
+			vec = vector.NewConst(constDecimal128Type, d128, length, proc.Mp())
 		case *plan.Const_Timestampval:
 			pre := expr.Typ.Precision
 			if pre < 0 || pre > 6 {
 				return nil, moerr.NewInternalError(proc.Ctx, "invalid timestamp precision")
 			}
-			vec = vector.New(vector.CONSTANT, constTimestampTypes[pre])
-			vector.Append(vec, types.Timestamp(t.C.GetTimestampval()), false, proc.Mp())
+			vec = vector.NewConst(constTimestampTypes[pre], types.Timestamp(t.C.GetTimestampval()), length, proc.Mp())
 		case *plan.Const_Sval:
 			sval := t.C.GetSval()
-			vec = vector.New(vector.CONSTANT, constSType)
-			vector.AppendString(vec, sval, false, proc.Mp())
+			vec = vector.NewConstBytes(constSType, []byte(sval), length, proc.Mp())
 		case *plan.Const_Defaultval:
 			defaultVal := t.C.GetDefaultval()
-			vec = vector.New(vector.CONSTANT, constBType)
-			vector.Append(vec, defaultVal, false, proc.Mp())
+			vec = vector.NewConst(constBType, defaultVal, length, proc.Mp())
 		default:
 			return nil, moerr.NewNYI(ctx, fmt.Sprintf("const expression %v", t.C.GetValue()))
 		}
@@ -233,7 +209,7 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	if len(bat.Zs) == 0 {
-		return vector.New(vector.CONSTANT, types.Type{Oid: types.T(expr.Typ.GetId())}), nil
+		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, 0, proc.Mp()), nil
 	}
 
 	var length = len(bat.Zs)
@@ -243,12 +219,12 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		return getConstVec(proc.Ctx, proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.New(vector.CONSTANT, types.Type{
+		return vector.NewConstNull(types.Type{
 			Oid:       types.T(t.T.Typ.GetId()),
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
-		}), nil
+		}, 0, proc.Mp()), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsConstNull() {
@@ -297,12 +273,12 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		return getConstVec(proc.Ctx, proc, expr, 1)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.New(vector.CONSTANT, types.Type{
+		return vector.NewConstNull(types.Type{
 			Oid:       types.T(t.T.Typ.GetId()),
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
-		}), nil
+		}, 0, proc.Mp()), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
 			return r.Vecs[t.Col.ColPos].ToConst(rRow, proc.Mp()), nil
@@ -345,7 +321,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 
 func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	if len(bat.Zs) == 0 {
-		return vector.New(vector.CONSTANT, types.Type{Oid: types.T(expr.Typ.GetId())}), nil
+		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, 0, proc.Mp()), nil
 	}
 
 	var length = len(bat.Zs)
@@ -355,12 +331,12 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 		return getConstVec(ctx, proc, expr, length)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.New(vector.CONSTANT, types.Type{
+		return vector.NewConstNull(types.Type{
 			Oid:       types.T(t.T.Typ.GetId()),
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
-		}), nil
+		}, 0, proc.Mp()), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsConstNull() {
@@ -392,13 +368,9 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 			if err != nil {
 				// if it can't compare, just return true.
 				// that means we don't know this filter expr's return, so you must readBlock
-				vec := vector.New(vector.CONSTANT, types.T_bool.ToType())
-				vector.Append(vec, true, false, proc.Mp())
-				return vec, nil
+				return vector.NewConst(types.T_bool.ToType(), true, 1, proc.Mp()), nil
 			}
-			vec := vector.New(vector.CONSTANT, types.T_bool.ToType())
-			vector.Append(vec, isTrue, false, proc.Mp())
-			return vec, nil
+			return vector.NewConst(types.T_bool.ToType(), isTrue, 1, proc.Mp()), nil
 		}
 
 		switch t.F.Func.ObjName {
@@ -426,38 +398,28 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 				if leftHasTrue {
 					for _, rightHasTrue := range cols2 {
 						if rightHasTrue {
-							vec := vector.New(vector.CONSTANT, types.T_bool.ToType())
-							vector.Append(vec, true, false, proc.Mp())
-							return vec, nil
+							return vector.NewConst(types.T_bool.ToType(), true, 1, proc.Mp()), nil
 						}
 					}
 					break
 				}
 			}
-			vec := vector.New(vector.CONSTANT, types.T_bool.ToType())
-			vector.Append(vec, false, false, proc.Mp())
-			return vec, nil
+			return vector.NewConst(types.T_bool.ToType(), false, 1, proc.Mp()), nil
 		case "or":
 			// if someone is true in left/right, that will be true
 			cols1 := vector.MustTCols[bool](functionParameters[0])
 			cols2 := vector.MustTCols[bool](functionParameters[1])
 			for _, flag := range cols1 {
 				if flag {
-					vec := vector.New(vector.CONSTANT, types.T_bool.ToType())
-					vector.Append(vec, true, false, proc.Mp())
-					return vec, nil
+					return vector.NewConst(types.T_bool.ToType(), true, 1, proc.Mp()), nil
 				}
 			}
 			for _, flag := range cols2 {
 				if flag {
-					vec := vector.New(vector.CONSTANT, types.T_bool.ToType())
-					vector.Append(vec, true, false, proc.Mp())
-					return vec, nil
+					return vector.NewConst(types.T_bool.ToType(), true, 1, proc.Mp()), nil
 				}
 			}
-			vec := vector.New(vector.CONSTANT, types.T_bool.ToType())
-			vector.Append(vec, false, false, proc.Mp())
-			return vec, nil
+			return vector.NewConst(types.T_bool.ToType(), false, 1, proc.Mp()), nil
 		}
 
 		result, err = evalFunction(proc, f, functionParameters, len(bat.Zs))
@@ -479,12 +441,12 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 		return getConstVec(proc.Ctx, proc, expr, 1)
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
-		return vector.New(vector.CONSTANT, types.Type{
+		return vector.NewConstNull(types.Type{
 			Oid:       types.T(t.T.Typ.GetId()),
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
-		}), nil
+		}, 0, proc.Mp()), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
 			return r.Vecs[t.Col.ColPos].ToConst(rRow, proc.Mp()), nil

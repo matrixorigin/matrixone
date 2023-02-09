@@ -21,55 +21,53 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Concat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
+func Concat(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtyp := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	isAllConst := true
 
-	for i := range vectors {
-		if vectors[i].IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	for i := range ivecs {
+		if ivecs[i].IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		if !vectors[i].IsConst() {
+		if !ivecs[i].IsConst() {
 			isAllConst = false
 		}
 	}
 	if isAllConst {
-		return concatWithAllConst(vectors, proc)
+		return concatWithAllConst(ivecs, proc)
 	}
-	return concatWithSomeCols(vectors, proc)
+	return concatWithSomeCols(ivecs, proc)
 }
 
-func concatWithAllConst(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func concatWithAllConst(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	//length := vectors[0].Length()
 	vct := types.T_varchar.ToType()
 	res := ""
-	for i := range vectors {
-		res += vectors[i].GetString(0)
+	for i := range ivecs {
+		res += ivecs[i].GetString(0)
 	}
-	vec := vector.New(vector.FLAT, vct)
-	vector.AppendString(vec, res, res == "", proc.Mp())
-	return vec, nil
+	return vector.NewConstBytes(vct, []byte(res), ivecs[0].Length(), proc.Mp()), nil
 }
 
-func concatWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	length := vectors[0].Length()
+func concatWithSomeCols(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	length := ivecs[0].Length()
 	vct := types.T_varchar.ToType()
 	nsp := new(nulls.Nulls)
 	val := make([]string, length)
 	for i := 0; i < length; i++ {
-		for j := range vectors {
-			if nulls.Contains(vectors[j].GetNulls(), uint64(i)) {
+		for j := range ivecs {
+			if nulls.Contains(ivecs[j].GetNulls(), uint64(i)) {
 				nulls.Add(nsp, uint64(i))
 				break
 			}
-			if vectors[j].IsConst() {
-				val[i] += vectors[j].GetString(int64(0))
+			if ivecs[j].IsConst() {
+				val[i] += ivecs[j].GetString(0)
 			} else {
-				val[i] += vectors[j].GetString(int64(i))
+				val[i] += ivecs[j].GetString(i)
 			}
 		}
 	}
-	vec := vector.New(vector.FLAT, vct)
+	vec := vector.NewVector(vct)
 	vector.AppendStringList(vec, val, nil, proc.Mp())
 	return vec, nil
 }

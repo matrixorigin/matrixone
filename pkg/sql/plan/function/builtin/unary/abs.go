@@ -22,96 +22,92 @@ import (
 )
 
 // abs function's evaluation for arguments: [uint64]
-func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint64, Size: 8}
-	inputValues := vector.MustTCols[uint64](inputVector)
+func AbsUInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint64.ToType()
+	ivals := vector.MustTCols[uint64](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[uint64](resultVector)
-		abs.AbsUint64(inputValues, resultValues)
-		return resultVector, nil
+		var rvals [1]uint64
+		abs.AbsUint64(ivals, rvals[:])
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint64](resultVector)
-		abs.AbsUint64(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[uint64](rvec)
+		abs.AbsUint64(ivals, rvals)
+		return rvec, nil
 	}
 }
 
 // abs function's evaluation for arguments: [int64]
-func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	inputValues := vector.MustTCols[int64](inputVector)
+func AbsInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_int64.ToType()
+	ivals := vector.MustTCols[int64](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[int64](resultVector)
-		abs.AbsInt64(inputValues, resultValues)
-		return resultVector, nil
+		var rvals [1]int64
+		abs.AbsInt64(ivals, rvals[:])
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[int64](resultVector)
-		abs.AbsInt64(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[int64](rvec)
+		abs.AbsInt64(ivals, rvals)
+		return rvec, nil
 	}
 }
 
 // abs function's evaluation for arguments: [float64]
-func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_float64, Size: 8}
-	inputValues := vector.MustTCols[float64](inputVector)
+func AbsFloat64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_float64.ToType()
+	ivals := vector.MustTCols[float64](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[float64](resultVector)
-		abs.AbsFloat64(inputValues, resultValues)
-		return resultVector, nil
+		var rvals [1]float64
+		abs.AbsFloat64(ivals, rvals[:])
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[float64](resultVector)
-		abs.AbsFloat64(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[float64](rvec)
+		abs.AbsFloat64(ivals, rvals)
+		return rvec, nil
 	}
 }
 
-func AbsDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_decimal128, Size: 16, Scale: inputVector.GetType().Scale}
-	inputValues := vector.MustTCols[types.Decimal128](inputVector)
+func AbsDecimal128(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := *inputVector.GetType()
+	ivals := vector.MustTCols[types.Decimal128](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Decimal128](resultVector)
-		abs.AbsDecimal128(inputValues, resultValues)
-		return resultVector, nil
+		var rvals [1]types.Decimal128
+		abs.AbsDecimal128(ivals, rvals[:])
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Decimal128](resultVector)
-		abs.AbsDecimal128(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[types.Decimal128](rvec)
+		abs.AbsDecimal128(ivals, rvals)
+		return rvec, nil
 	}
 }

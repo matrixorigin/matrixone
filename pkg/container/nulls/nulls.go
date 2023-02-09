@@ -278,9 +278,7 @@ func (n *Nulls) Or(m *Nulls) *Nulls {
 	switch {
 	case m == nil:
 		return n
-	case n.Np == nil && m.Np == nil:
-		return n
-	case n.Np != nil && m.Np == nil:
+	case m.Np == nil:
 		return n
 	case n.Np == nil && m.Np != nil:
 		return m

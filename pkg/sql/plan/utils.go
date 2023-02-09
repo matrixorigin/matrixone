@@ -1019,7 +1019,7 @@ func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vect
 func BuildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*vector.Vector {
 	vectors := make([]*vector.Vector, len(dataTypes))
 	for i, typ := range dataTypes {
-		vectors[i] = vector.New(vector.FLAT, types.T(typ).ToType())
+		vectors[i] = vector.NewVector(types.T(typ).ToType())
 	}
 
 	tmpResult := make([]any, len(datas))

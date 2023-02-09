@@ -208,7 +208,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.GetBytes(int64(i)),
+			Value:  vec.GetBytes(i),
 		}
 		return
 

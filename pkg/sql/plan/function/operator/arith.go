@@ -40,20 +40,21 @@ type arithT interface {
 type arithFn func(v1, v2, r *vector.Vector) error
 
 // Generic T1 is the operand type and generic T2 is the return value type
-func Arith[T1 arithT, T2 arithT](vectors []*vector.Vector, proc *process.Process, typ types.Type, afn arithFn) (*vector.Vector, error) {
-	left, right := vectors[0], vectors[1]
-	leftValues, rightValues := vector.MustTCols[T1](left), vector.MustTCols[T1](right)
-
+func Arith[T1 arithT, T2 arithT](ivecs []*vector.Vector, proc *process.Process, typ types.Type, afn arithFn) (*vector.Vector, error) {
+	left, right := ivecs[0], ivecs[1]
 	if left.IsConstNull() || right.IsConstNull() {
-		return proc.AllocScalarNullVector(typ), nil
+		return vector.NewConstNull(typ, left.Length(), proc.Mp()), nil
 	}
 
+	leftValues, rightValues := vector.MustTCols[T1](left), vector.MustTCols[T1](right)
+
 	if left.IsConst() && right.IsConst() {
-		resultVector := proc.AllocScalarVector(typ)
-		if err := afn(left, right, resultVector); err != nil {
+		var dval T2
+		rvec := vector.NewConst(typ, dval, left.Length(), proc.Mp())
+		if err := afn(left, right, rvec); err != nil {
 			return nil, err
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
 
 	nEle := len(leftValues)
@@ -61,15 +62,15 @@ func Arith[T1 arithT, T2 arithT](vectors []*vector.Vector, proc *process.Process
 		nEle = len(rightValues)
 	}
 
-	resultVector, err := proc.AllocVectorOfRows(typ, int64(nEle), nil)
+	rvec, err := proc.AllocVectorOfRows(typ, nEle, nil)
 	if err != nil {
 		return nil, err
 	}
-	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.GetNulls())
-	if err = afn(left, right, resultVector); err != nil {
+	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
+	if err = afn(left, right, rvec); err != nil {
 		return nil, err
 	}
-	return resultVector, nil
+	return rvec, nil
 }
 
 // Addition operation
@@ -136,8 +137,8 @@ func MinusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vect
 }
 
 func MinusDatetime(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultType := types.T_int64.ToType()
-	return Arith[types.Datetime, types.Datetime](args, proc, resultType, sub.DatetimeSub)
+	rtyp := types.T_int64.ToType()
+	return Arith[types.Datetime, types.Datetime](args, proc, rtyp, sub.DatetimeSub)
 }
 
 // Multiplication operation
@@ -168,22 +169,12 @@ func DivFloat[T constraints.Float](args []*vector.Vector, proc *process.Process)
 	return Arith[T, T](args, proc, *args[0].GetType(), div.NumericDivFloat[T])
 }
 func DivDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var scale int32
-	if args[0].GetType().Scale == 0 {
-		scale = types.MYSQL_DEFAULT_SCALE
-	} else {
-		scale = types.MYSQL_DEFAULT_SCALE + args[0].GetType().Scale
-	}
+	scale := types.MYSQL_DEFAULT_SCALE + args[0].GetType().Scale
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: scale}
 	return Arith[types.Decimal64, types.Decimal128](args, proc, resultTyp, div.Decimal64VecDiv)
 }
 func DivDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var scale int32
-	if args[0].GetType().Scale == 0 {
-		scale = types.MYSQL_DEFAULT_SCALE
-	} else {
-		scale = types.MYSQL_DEFAULT_SCALE + args[0].GetType().Scale
-	}
+	scale := types.MYSQL_DEFAULT_SCALE + args[0].GetType().Scale
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: scale}
 	return Arith[types.Decimal128, types.Decimal128](args, proc, resultTyp, div.Decimal128VecDiv)
 }

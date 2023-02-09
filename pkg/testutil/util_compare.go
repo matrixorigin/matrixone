@@ -15,6 +15,7 @@
 package testutil
 
 import (
+	"bytes"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -34,7 +35,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 				v2 := vector.MustStrCols(got)
 				return reflect.DeepEqual(v1[0], v2[0])
 			} else {
-				return reflect.DeepEqual(expected.Col, got.Col)
+				return bytes.Equal(expected.UnsafeGetRawData(), got.UnsafeGetRawData())
 			}
 		}
 	} else {
@@ -83,7 +84,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 			}
 			return true
 		} else {
-			return reflect.DeepEqual(expected.Col, got.Col)
+			return bytes.Equal(expected.UnsafeGetRawData(), got.UnsafeGetRawData())
 		}
 	}
 }

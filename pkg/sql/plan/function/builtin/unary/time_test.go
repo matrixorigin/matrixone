@@ -226,33 +226,28 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.New(vector.CONSTANT, types.T_int64.ToType())
-			vector.Append(vec[0], data, false, testutil.TestUtilMp)
+			vec[0] = vector.NewConst(types.T_int64.ToType(), data, 1, testutil.TestUtilMp)
 		case types.T_decimal128:
 			data, err := types.ParseStringToDecimal128(str, 34, precision, false)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.New(vector.CONSTANT, types.T_int128.ToType())
-			vector.Append(vec[0], data, false, testutil.TestUtilMp)
+			vec[0] = vector.NewConst(types.T_int128.ToType(), data, 1, testutil.TestUtilMp)
 		case types.T_date:
 			data, err := types.ParseDateCast(str)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.New(vector.CONSTANT, types.T_date.ToType())
-			vector.Append(vec[0], data, false, testutil.TestUtilMp)
+			vec[0] = vector.NewConst(types.T_date.ToType(), data, 1, testutil.TestUtilMp)
 		case types.T_datetime:
 			data, err := types.ParseDatetime(str, precision)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.New(vector.CONSTANT, types.T_date.ToType())
-			vector.Append(vec[0], data, false, testutil.TestUtilMp)
+			vec[0] = vector.NewConst(types.T_date.ToType(), data, 1, testutil.TestUtilMp)
 			vec[0].GetType().Precision = precision
 		case types.T_char, types.T_varchar:
-			vec[0] = vector.New(vector.CONSTANT, types.Type{Oid: types.T_varchar, Size: 26})
-			vector.Append(vec[0], str, false, testutil.TestUtilMp)
+			vec[0] = vector.NewConstBytes(types.Type{Oid: types.T_varchar, Size: 26}, []byte(str), 1, testutil.TestUtilMp)
 		}
 	} else {
 		input := make([]string, 0)
@@ -273,7 +268,7 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 				return nil, moerr.ErrInvalidInput
 			}
 			input = append(input, tmp)
-			vec[0] = vector.New(vector.FLAT, typ)
+			vec[0] = vector.NewVector(typ)
 			vector.AppendList(vec[0], input, nil, testutil.TestUtilMp)
 
 		case types.T_date:

@@ -33,17 +33,17 @@ var fnMap = []func(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []strin
 	split_part.SplitPart7,
 }
 
-func SplitPart(vectors []*vector.Vector, proc *process.Process) (vec *vector.Vector, err error) {
+func SplitPart(ivecs []*vector.Vector, proc *process.Process) (vec *vector.Vector, err error) {
 	defer func() {
 		if err != nil && vec != nil {
 			vec.Free(proc.Mp())
 		}
 	}()
-	v1, v2, v3 := vectors[0], vectors[1], vectors[2]
-	resultType := types.T_varchar.ToType()
-	maxLen := findMaxLen(vectors)
+	v1, v2, v3 := ivecs[0], ivecs[1], ivecs[2]
+	rtyp := types.T_varchar.ToType()
+	maxLen := findMaxLen(ivecs)
 	if v1.IsConstNull() || v2.IsConstNull() || v3.IsConstNull() {
-		vec = proc.AllocConstNullVector(resultType)
+		vec = vector.NewConstNull(rtyp, v1.Length(), proc.Mp())
 		return
 	}
 	if !validCount(v3) {
@@ -52,20 +52,19 @@ func SplitPart(vectors []*vector.Vector, proc *process.Process) (vec *vector.Vec
 	}
 	s1, s2, s3 := vector.MustStrCols(v1), vector.MustStrCols(v2), vector.MustTCols[uint32](v3)
 	if v1.IsConst() && v2.IsConst() && v3.IsConst() {
-		vec = proc.AllocScalarVector(resultType)
 		ret, isNull := split_part.SplitSingle(s1[0], s2[0], s3[0])
 		if isNull {
-			vec.GetNulls().Set(0)
+			vec = vector.NewConstNull(rtyp, v1.Length(), proc.Mp())
 			return
 		}
-		err = vector.Append(vec, []byte(ret), false, proc.Mp())
+		vec = vector.NewConstBytes(rtyp, []byte(ret), v1.Length(), proc.Mp())
 		return
 	}
-	vec, err = proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+	vec, err = proc.AllocVectorOfRows(rtyp, maxLen, nil)
 	if err != nil {
 		return
 	}
-	fnIdx := determineFn(vectors)
+	fnIdx := determineFn(ivecs)
 
 	rs := make([]string, maxLen)
 	fnMap[fnIdx](s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, vec.GetNulls())

@@ -571,7 +571,7 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 	rbat := batch.NewWithSize(bat.VectorCount())
 	rbat.InitZsOne(bat.Length())
 	for i := 0; i < rbat.VectorCount(); i++ {
-		rbat.Vecs[i] = vector.New(vector.FLAT, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}) //TODO: check size
+		rbat.Vecs[i] = vector.NewVector(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}) //TODO: check size
 		rs := make([]string, bat.Length())
 		switch bat.Vecs[i].GetType().Oid {
 		case types.T_bool:

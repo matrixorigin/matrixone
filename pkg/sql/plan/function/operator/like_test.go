@@ -194,11 +194,10 @@ func TestLikeVarchar2(t *testing.T) {
 
 func makeStrVec(s string, isConst bool, n int) *vector.Vector {
 	if isConst {
-		vec := vector.New(vector.CONSTANT, types.T_varchar.ToType())
-		vector.AppendString(vec, s, false, testutil.TestUtilMp)
+		vec := vector.NewConstBytes(types.T_varchar.ToType(), []byte(s), 1, testutil.TestUtilMp)
 		return vec
 	} else {
-		vec := vector.New(vector.FLAT, types.T_varchar.ToType())
+		vec := vector.NewVector(types.T_varchar.ToType())
 		vector.AppendStringList(vec, []string{s}, nil, testutil.TestUtilMp)
 		return vec
 	}

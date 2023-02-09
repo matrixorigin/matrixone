@@ -23,46 +23,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
-	inputValues := vector.MustStrCols(inputVector)
+func HexString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
+	ivals := vector.MustStrCols(inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultValues := make([]string, 1)
-		HexEncodeString(inputValues, resultValues)
-		vec := vector.New(vector.CONSTANT, resultType)
-		vector.AppendString(vec, resultValues[0], resultValues[0] == "", proc.Mp())
-		return vec, nil
+		var rvals [1]string
+		HexEncodeString(ivals, rvals[:])
+		return vector.NewConstBytes(rtyp, []byte(rvals[0]), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultValues := make([]string, len(inputValues))
-		HexEncodeString(inputValues, resultValues)
-		vec := vector.New(vector.CONSTANT, resultType)
-		vector.AppendStringList(vec, resultValues, nil, proc.Mp())
+		rvals := make([]string, len(ivals))
+		HexEncodeString(ivals, rvals)
+		vec := vector.NewVector(rtyp)
+		vector.AppendStringList(vec, rvals, nil, proc.Mp())
 		return vec, nil
 	}
 }
 
-func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
-	inputValues := vector.MustTCols[int64](inputVector)
+func HexInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_varchar.ToType()
+	ivals := vector.MustTCols[int64](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultValues := make([]string, 1)
-		HexEncodeInt64(inputValues, resultValues)
-		vec := vector.New(vector.CONSTANT, resultType)
-		vector.AppendString(vec, resultValues[0], resultValues[0] == "", proc.Mp())
-		return vec, nil
+		var rvals [1]string
+		HexEncodeInt64(ivals, rvals[:])
+		return vector.NewConstBytes(rtyp, []byte(rvals[0]), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultValues := make([]string, len(inputValues))
-		HexEncodeInt64(inputValues, resultValues)
-		vec := vector.New(vector.CONSTANT, resultType)
-		vector.AppendStringList(vec, resultValues, nil, proc.Mp())
+		rvals := make([]string, len(ivals))
+		HexEncodeInt64(ivals, rvals)
+		vec := vector.NewVector(rtyp)
+		vector.AppendStringList(vec, rvals, nil, proc.Mp())
 		return vec, nil
 	}
 }

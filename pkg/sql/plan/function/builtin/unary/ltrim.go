@@ -15,31 +15,32 @@
 package unary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/ltrim"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Ltrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_varchar.ToType()
+func Ltrim(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_varchar.ToType()
 	// totalCount - spaceCount is the total bytes need for the ltrim-ed string
-	inputValues := vector.MustStrCols(inputVector)
+	ivals := vector.MustStrCols(inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultValues := make([]string, 1)
-		ltrim.Ltrim(inputValues, resultValues)
-		vec := vector.New(vector.CONSTANT, resultType)
-		vector.AppendString(vec, resultValues[0], resultValues[0] == "", proc.Mp())
+		rvals := make([]string, 1)
+		ltrim.Ltrim(ivals, rvals)
+		vec := vector.NewConstBytes(rtyp, []byte(rvals[0]), ivecs[0].Length(), proc.Mp())
 		return vec, nil
 	} else {
-		resultValues := make([]string, len(inputValues))
-		ltrim.Ltrim(inputValues, resultValues)
-		vec := vector.New(vector.CONSTANT, resultType)
-		vector.AppendStringList(vec, resultValues, nil, proc.Mp())
-		return vec, nil
+		rvals := make([]string, len(ivals))
+		ltrim.Ltrim(ivals, rvals)
+		rvec := vector.NewVector(rtyp)
+		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
+		nulls.Set(rvec.GetNulls(), inputVector.GetNulls())
+		return rvec, nil
 	}
 }

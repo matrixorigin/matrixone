@@ -327,7 +327,7 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 		}
 		bat := batch.NewWithSize(len(idxs))
 		for i, e := range iov.Entries {
-			bat.Vecs[i] = vector.New(vector.FLAT, catalog.MetaColTypes[idxs[i]])
+			bat.Vecs[i] = vector.NewVector(catalog.MetaColTypes[idxs[i]])
 			if err = bat.Vecs[i].UnmarshalBinary(e.Object.([]byte)); err != nil {
 				return err
 			}
@@ -439,12 +439,12 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	bat := batch.NewWithSize(len(catalog.MetaColTypes))
 	bat.SetAttributes(catalog.MetaColNames)
 	for i, t := range catalog.MetaColTypes {
-		bat.Vecs[i] = vector.New(vector.FLAT, t)
+		bat.Vecs[i] = vector.NewVector(t)
 	}
 	if err = vector.Append(bat.Vecs[catalog.QUERY_ID_IDX], types.Uuid(m.QueryId), false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.AppendString(bat.Vecs[catalog.STATEMENT_IDX], m.Statement, false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.STATEMENT_IDX], []byte(m.Statement), false, mp); err != nil {
 		return nil, err
 	}
 	if err = vector.Append(bat.Vecs[catalog.ACCOUNT_ID_IDX], m.AccountId, false, mp); err != nil {
@@ -453,7 +453,7 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	if err = vector.Append(bat.Vecs[catalog.ROLE_ID_IDX], m.RoleId, false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.AppendString(bat.Vecs[catalog.RESULT_PATH_IDX], m.ResultPath, false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.RESULT_PATH_IDX], []byte(m.ResultPath), false, mp); err != nil {
 		return nil, err
 	}
 	if err = vector.Append(bat.Vecs[catalog.CREATE_TIME_IDX], m.CreateTime, false, mp); err != nil {
@@ -462,10 +462,10 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	if err = vector.Append(bat.Vecs[catalog.RESULT_SIZE_IDX], m.ResultSize, false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.AppendString(bat.Vecs[catalog.COLUMNS_IDX], m.Columns, false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.COLUMNS_IDX], []byte(m.Columns), false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.AppendString(bat.Vecs[catalog.TABLES_IDX], m.Tables, false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.TABLES_IDX], []byte(m.Tables), false, mp); err != nil {
 		return nil, err
 	}
 	if err = vector.Append(bat.Vecs[catalog.USER_ID_IDX], m.UserId, false, mp); err != nil {
@@ -474,13 +474,13 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	if err = vector.Append(bat.Vecs[catalog.EXPIRED_TIME_IDX], m.ExpiredTime, false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.AppendString(bat.Vecs[catalog.PLAN_IDX], m.Plan, false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.PLAN_IDX], []byte(m.Plan), false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.AppendString(bat.Vecs[catalog.AST_IDX], m.Ast, false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.AST_IDX], []byte(m.Ast), false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.COLUMN_MAP_IDX].Append([]byte(m.ColumnMap), false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.COLUMN_MAP_IDX], []byte(m.ColumnMap), false, mp); err != nil {
 		return nil, err
 	}
 	return bat, nil
@@ -597,7 +597,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 			}
 			//read every column
 			for colIndex, entry := range ioVector.Entries {
-				tmpBatch.Vecs[colIndex] = vector.New(vector.FLAT, typs[colIndex])
+				tmpBatch.Vecs[colIndex] = vector.NewVector(typs[colIndex])
 				err = tmpBatch.Vecs[colIndex].UnmarshalBinary(entry.Object.([]byte))
 				if err != nil {
 					return err
@@ -622,7 +622,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				if tmpBatch.Zs[j] <= 0 {
 					continue
 				}
-				_, err = extractRowFromEveryVector(ses, tmpBatch, int64(j), oq)
+				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq)
 				if err != nil {
 					return err
 				}
@@ -676,7 +676,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	if err != nil {
 		return nil, err
 	}
-	vec := vector.New(vector.FLAT, catalog.MetaColTypes[catalog.COLUMNS_IDX])
+	vec := vector.NewVector(catalog.MetaColTypes[catalog.COLUMNS_IDX])
 	defer vec.Free(ses.GetMemPool())
 	if err = vec.UnmarshalBinary(iov.Entries[0].Object.([]byte)); err != nil {
 		return nil, err

@@ -48,8 +48,8 @@ func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
 	if nulls.Contains(c.vs[veci].GetNulls(), uint64(vi)) && nulls.Contains(c.vs[veci].GetNulls(), uint64(vj)) {
 		return 0
 	}
-	x := c.vs[veci].GetBytes(vi)
-	y := c.vs[vecj].GetBytes(vj)
+	x := c.vs[veci].GetBytes(int(vi))
+	y := c.vs[vecj].GetBytes(int(vj))
 	if c.desc {
 		return bytes.Compare(y, x)
 	}

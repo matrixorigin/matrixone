@@ -40,22 +40,19 @@ func IsNotFalse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 func funcIs(vectors []*vector.Vector, proc *process.Process, nullValue bool, eqBool bool) (*vector.Vector, error) {
 	input := vectors[0]
 	retType := types.T_bool.ToType()
+	if input.IsConstNull() {
+		return vector.NewConst(retType, nullValue, input.Length(), proc.Mp()), nil
+	}
 	if input.IsConst() {
-		if input.IsConstNull() {
-			vec := vector.New(vector.CONSTANT, retType)
-			vector.Append(vec, nullValue, false, proc.Mp())
-			return vec, nil
-		} else {
-			col := vector.MustTCols[bool](input)
-			vec := vector.New(vector.CONSTANT, retType)
-			vector.Append(vec, col[0] == eqBool, false, proc.Mp())
-			return vec, nil
-		}
+		col := vector.MustTCols[bool](input)
+		return vector.NewConst(retType, col[0] == eqBool, input.Length(), proc.Mp()), nil
 	} else {
 		vlen := input.Length()
-		vec := vector.New(vector.FLAT, retType)
-		vec.PreExtend(vlen, proc.Mp())
-		vals := vector.MustTCols[bool](vec)
+		rvec, err := proc.AllocVectorOfRows(retType, vlen, nil)
+		if err != nil {
+			return nil, err
+		}
+		vals := vector.MustTCols[bool](rvec)
 		olds := vector.MustTCols[bool](input)
 		for i := range vals {
 			if nulls.Contains(input.GetNulls(), uint64(i)) {
@@ -64,6 +61,6 @@ func funcIs(vectors []*vector.Vector, proc *process.Process, nullValue bool, eqB
 				vals[i] = olds[i] == eqBool
 			}
 		}
-		return vec, nil
+		return rvec, nil
 	}
 }

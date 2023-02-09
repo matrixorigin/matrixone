@@ -2397,7 +2397,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 		return nil, "", err
 	}
 	// cols
-	vec := vector.New(vector.FLAT, catalog.MetaColTypes[catalog.COLUMNS_IDX])
+	vec := vector.NewVector(catalog.MetaColTypes[catalog.COLUMNS_IDX])
 	if err = vec.UnmarshalBinary(iov.Entries[0].Object.([]byte)); err != nil {
 		return nil, "", err
 	}
@@ -2407,7 +2407,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 		return nil, "", err
 	}
 	// paths
-	vec = vector.New(vector.FLAT, catalog.MetaColTypes[catalog.RESULT_PATH_IDX])
+	vec = vector.NewVector(catalog.MetaColTypes[catalog.RESULT_PATH_IDX])
 	if err = vec.UnmarshalBinary(iov.Entries[1].Object.([]byte)); err != nil {
 		return nil, "", err
 	}
@@ -2435,7 +2435,7 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 		if dataSet.Zs[j] <= 0 {
 			continue
 		}
-		_, err := extractRowFromEveryVector(ses, dataSet, int64(j), oq)
+		_, err := extractRowFromEveryVector(ses, dataSet, j, oq)
 		if err != nil {
 			return err
 		}

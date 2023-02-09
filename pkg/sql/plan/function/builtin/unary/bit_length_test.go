@@ -58,7 +58,6 @@ func TestBitLength(t *testing.T) {
 		{
 			name:     "Null",
 			proc:     procs,
-			expected: []int64{0},
 			isScalar: true,
 		},
 	}
@@ -81,8 +80,7 @@ func makeBitLenTestVectors(data []string, nsp []uint64, isScalar bool) []*vector
 	vec := make([]*vector.Vector, 1)
 	if data != nil {
 		if isScalar {
-			vec[0] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
-			vector.AppendString(vec[0], data[0], data[0] == "", testutil.TestUtilMp)
+			vec[0] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(data[0]), 1, testutil.TestUtilMp)
 		} else {
 			vec[0] = testutil.MakeCharVector(data, nsp)
 		}

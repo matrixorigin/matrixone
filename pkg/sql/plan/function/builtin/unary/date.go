@@ -21,120 +21,104 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func DateToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	// XXX Why do we ever need this one?  Isn't this a noop?
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_date, Size: 4}
-	inputValues := vector.MustTCols[types.Date](inputVector)
+func DateToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return ivecs[0].Dup(proc.Mp())
+}
+
+func DatetimeToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_date, Size: 4}
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	}
+
+	ivals := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsConst() {
-		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		copy(resultValues, inputValues)
-		return resultVector, nil
+		var rvals [1]types.Date
+		date.DatetimeToDate(ivals, rvals[:])
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		copy(resultValues, inputValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[types.Date](rvec)
+		date.DatetimeToDate(ivals, rvals)
+		return rvec, nil
 	}
 }
 
-func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_date, Size: 4}
-	inputValues := vector.MustTCols[types.Datetime](inputVector)
+func TimeToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_date, Size: 4}
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	}
+
+	ivals := vector.MustTCols[types.Time](inputVector)
 	if inputVector.IsConst() {
-		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		date.DatetimeToDate(inputValues, resultValues)
-		return resultVector, nil
+		var rvals [1]types.Date
+		date.TimeToDate(ivals, rvals[:])
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		date.DatetimeToDate(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[types.Date](rvec)
+		date.TimeToDate(ivals, rvals)
+		return rvec, nil
 	}
 }
 
-func TimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_date, Size: 4}
-	inputValues := vector.MustTCols[types.Time](inputVector)
+func DateStringToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_date, Size: 4}
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	}
+
+	ivals := vector.MustStrCols(inputVector)
 	if inputVector.IsConst() {
-		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		date.TimeToDate(inputValues, resultValues)
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		var rvals [1]types.Date
+		_, err := date.DateStringToDate(ivals, rvals[:])
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		date.TimeToDate(inputValues, resultValues)
-		return resultVector, nil
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+	} else {
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
+		if err != nil {
+			return nil, err
+		}
+		rvals := vector.MustTCols[types.Date](rvec)
+		_, err = date.DateStringToDate(ivals, rvals)
+		return rvec, err
 	}
 }
 
-func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_date, Size: 4}
-	inputValues := vector.MustStrCols(inputVector)
+func TimesToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_date, Size: 4}
+	ivals := vector.MustStrCols(inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		_, err := date.DateStringToDate(inputValues, resultValues)
-		return resultVector, err
-	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		var rvals [1]types.Date
+		_, err := date.DateStringToDate(ivals, rvals[:])
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		_, err = date.DateStringToDate(inputValues, resultValues)
-		return resultVector, err
-	}
-}
-
-func TimesToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_date, Size: 4}
-	inputValues := vector.MustStrCols(inputVector)
-
-	if inputVector.IsConst() {
-		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		_, err := date.DateStringToDate(inputValues, resultValues)
-		return resultVector, err
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		_, err = date.DateStringToDate(inputValues, resultValues)
-		return resultVector, err
+		rvals := vector.MustTCols[types.Date](rvec)
+		_, err = date.DateStringToDate(ivals, rvals)
+		return rvec, err
 	}
 }

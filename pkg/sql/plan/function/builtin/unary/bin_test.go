@@ -30,14 +30,13 @@ func TestBinUint8(t *testing.T) {
 	vecs[0] = testutil.MakeUint8Vector(as, nil)
 
 	resultV, err := Bin[uint8](vecs, procs)
-	vecLen := int64(resultV.Length())
+	vecLen := resultV.Length()
 	if err != nil {
 		panic(err)
 	}
 	tempC := make([]string, 8)
 
-	i := int64(0)
-	for ; i < vecLen; i++ {
+	for i := 0; i < vecLen; i++ {
 		tempC[i] = resultV.GetString(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
@@ -51,14 +50,13 @@ func TestBinUint16(t *testing.T) {
 	vecs[0] = testutil.MakeUint16Vector(as, nil)
 
 	resultV, err := Bin[uint16](vecs, procs)
-	vecLen := int64(resultV.Length())
+	vecLen := resultV.Length()
 	if err != nil {
 		panic(err)
 	}
 	tempC := make([]string, 8)
 
-	i := int64(0)
-	for ; i < vecLen; i++ {
+	for i := 0; i < vecLen; i++ {
 		tempC[i] = resultV.GetString(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
@@ -72,14 +70,13 @@ func TestBinUint32(t *testing.T) {
 	vecs[0] = testutil.MakeUint32Vector(as, nil)
 
 	resultV, err := Bin[uint32](vecs, procs)
-	vecLen := int64(resultV.Length())
+	vecLen := resultV.Length()
 	if err != nil {
 		panic(err)
 	}
 	tempC := make([]string, 8)
 
-	i := int64(0)
-	for ; i < vecLen; i++ {
+	for i := 0; i < vecLen; i++ {
 		tempC[i] = resultV.GetString(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
@@ -92,14 +89,13 @@ func TestBinUint64(t *testing.T) {
 	vecs[0] = testutil.MakeUint64Vector(as, nil)
 
 	resultV, err := Bin[uint64](vecs, procs)
-	vecLen := int64(resultV.Length())
+	vecLen := resultV.Length()
 	if err != nil {
 		panic(err)
 	}
 	tempC := make([]string, 8)
 
-	i := int64(0)
-	for ; i < vecLen; i++ {
+	for i := 0; i < vecLen; i++ {
 		tempC[i] = resultV.GetString(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
@@ -113,14 +109,13 @@ func TestBinInt8(t *testing.T) {
 	vecs[0] = testutil.MakeInt8Vector(as, nil)
 
 	resultV, err := Bin[int8](vecs, procs)
-	vecLen := int64(resultV.Length())
+	vecLen := resultV.Length()
 	if err != nil {
 		panic(err)
 	}
 	tempC := make([]string, 7)
 
-	i := int64(0)
-	for ; i < vecLen; i++ {
+	for i := 0; i < vecLen; i++ {
 		tempC[i] = resultV.GetString(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000"}, tempC)
@@ -134,14 +129,13 @@ func TestBinInt16(t *testing.T) {
 	vecs[0] = testutil.MakeInt16Vector(as, nil)
 
 	resultV, err := Bin[int16](vecs, procs)
-	vecLen := int64(resultV.Length())
+	vecLen := resultV.Length()
 	if err != nil {
 		panic(err)
 	}
 	tempC := make([]string, 8)
 
-	i := int64(0)
-	for ; i < vecLen; i++ {
+	for i := 0; i < vecLen; i++ {
 		tempC[i] = resultV.GetString(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
@@ -155,14 +149,13 @@ func TestBinInt32(t *testing.T) {
 	vecs[0] = testutil.MakeInt32Vector(as, nil)
 
 	resultV, err := Bin[int32](vecs, procs)
-	vecLen := int64(resultV.Length())
+	vecLen := resultV.Length()
 	if err != nil {
 		panic(err)
 	}
 	tempC := make([]string, 8)
 
-	i := int64(0)
-	for ; i < vecLen; i++ {
+	for i := 0; i < vecLen; i++ {
 		tempC[i] = resultV.GetString(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
@@ -176,14 +169,13 @@ func TestBinInt64(t *testing.T) {
 	vecs[0] = testutil.MakeInt64Vector(as, nil)
 
 	resultV, err := Bin[int64](vecs, procs)
-	vecLen := int64(resultV.Length())
+	vecLen := resultV.Length()
 	if err != nil {
 		panic(err)
 	}
 	tempC := make([]string, 8)
 
-	i := int64(0)
-	for ; i < vecLen; i++ {
+	for i := 0; i < vecLen; i++ {
 		tempC[i] = resultV.GetString(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
@@ -197,14 +189,13 @@ func TestBinFloat32(t *testing.T) {
 	vecs[0] = testutil.MakeFloat32Vector(as, nil)
 
 	resultV, err := BinFloat[float32](vecs, procs)
-	vecLen := int64(resultV.Length())
+	vecLen := resultV.Length()
 	if err != nil {
 		panic(err)
 	}
 	tempC := make([]string, 8)
 
-	i := int64(0)
-	for ; i < vecLen; i++ {
+	for i := 0; i < vecLen; i++ {
 		tempC[i] = resultV.GetString(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
@@ -217,14 +208,13 @@ func TestBinFloat64(t *testing.T) {
 	vecs[0] = testutil.MakeFloat64Vector(as, nil)
 
 	resultV, err := BinFloat[float64](vecs, procs)
-	vecLen := int64(resultV.Length())
+	vecLen := resultV.Length()
 	if err != nil {
 		panic(err)
 	}
 	tempC := make([]string, 8)
 
-	i := int64(0)
-	for ; i < vecLen; i++ {
+	for i := 0; i < vecLen; i++ {
 		tempC[i] = resultV.GetString(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
@@ -238,14 +228,13 @@ func TestBinNegativeInt(t *testing.T) {
 	vecs[0] = testutil.MakeInt64Vector(as, nil)
 
 	resultV, err := Bin[int64](vecs, procs)
-	vecLen := int64(resultV.Length())
+	vecLen := resultV.Length()
 	if err != nil {
 		panic(err)
 	}
 	tempC := make([]string, 8)
 
-	i := int64(0)
-	for ; i < vecLen; i++ {
+	for i := 0; i < vecLen; i++ {
 		tempC[i] = resultV.GetString(i)
 	}
 	require.Equal(t, []string{"1111111111111111111111111111111111111111111111111111111111111110",

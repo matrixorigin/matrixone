@@ -16,7 +16,6 @@ package vector
 
 import (
 	"context"
-	"reflect"
 	"strings"
 	"unsafe"
 
@@ -32,48 +31,45 @@ import (
 func MustTCols[T any](v *Vector) []T {
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
-	if v.GetType().Oid == types.T_any {
+	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
 	if v.class == CONSTANT {
-		vs := (*(*[]T)(unsafe.Pointer(v.col)))[:1]
-		rs := make([]T, v.length)
-		for i := range rs {
-			rs[i] = vs[0]
-		}
-		return rs
+		return v.col.([]T)[:1]
 	}
-	return (*(*[]T)(unsafe.Pointer(v.col)))[:v.length]
+	return v.col.([]T)[:v.length]
 }
 
 func MustBytesCols(v *Vector) [][]byte {
-	ret := make([][]byte, v.length)
+	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
+		return nil
+	}
 	varcol := MustTCols[types.Varlena](v)
 	if v.class == CONSTANT {
-		for i := range varcol {
-			ret[i] = (&varcol[0]).GetByteSlice(v.area)
-		}
+		return [][]byte{(&varcol[0]).GetByteSlice(v.area)}
 	} else {
+		ret := make([][]byte, v.length)
 		for i := range varcol {
 			ret[i] = (&varcol[i]).GetByteSlice(v.area)
 		}
+		return ret
 	}
-	return ret
 }
 
 func MustStrCols(v *Vector) []string {
-	ret := make([]string, v.length)
+	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
+		return nil
+	}
 	varcol := MustTCols[types.Varlena](v)
 	if v.class == CONSTANT {
-		for i := range varcol {
-			ret[i] = (&varcol[0]).GetString(v.area)
-		}
+		return []string{(&varcol[0]).GetString(v.area)}
 	} else {
+		ret := make([]string, v.length)
 		for i := range varcol {
 			ret[i] = (&varcol[i]).GetString(v.area)
 		}
+		return ret
 	}
-	return ret
 }
 
 func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
@@ -83,17 +79,72 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 }
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
-func extend[T any](v *Vector, rows int, m *mpool.MPool) error {
-	sz := v.typ.TypeSize()
-	if length := v.length + rows; length >= v.col.Cap/sz {
-		data := (*(*[]byte)(unsafe.Pointer(v.col)))[:v.length*sz]
-		ndata, err := m.Grow(data, length*sz)
+func extend(v *Vector, rows int, m *mpool.MPool) error {
+	if tgtCap := v.length + rows; tgtCap > v.capacity {
+		sz := v.typ.TypeSize()
+		ndata, err := m.Grow(v.data, tgtCap*sz)
 		if err != nil {
 			return err
 		}
-		*(*[]byte)(unsafe.Pointer(v.col)) = ndata
+		v.data = ndata[:cap(ndata)]
+		v.setupColFromData()
 	}
 	return nil
+}
+
+func (v *Vector) setupColFromData() {
+	if v.GetType().IsVarlen() {
+		v.col = DecodeFixedCol[types.Varlena](v)
+	} else {
+		// The followng switch attach the correct type to v.col
+		// even though v.col is only an interface.
+		switch v.typ.Oid {
+		case types.T_bool:
+			v.col = DecodeFixedCol[bool](v)
+		case types.T_int8:
+			v.col = DecodeFixedCol[int8](v)
+		case types.T_int16:
+			v.col = DecodeFixedCol[int16](v)
+		case types.T_int32:
+			v.col = DecodeFixedCol[int32](v)
+		case types.T_int64:
+			v.col = DecodeFixedCol[int64](v)
+		case types.T_uint8:
+			v.col = DecodeFixedCol[uint8](v)
+		case types.T_uint16:
+			v.col = DecodeFixedCol[uint16](v)
+		case types.T_uint32:
+			v.col = DecodeFixedCol[uint32](v)
+		case types.T_uint64:
+			v.col = DecodeFixedCol[uint64](v)
+		case types.T_float32:
+			v.col = DecodeFixedCol[float32](v)
+		case types.T_float64:
+			v.col = DecodeFixedCol[float64](v)
+		case types.T_decimal64:
+			v.col = DecodeFixedCol[types.Decimal64](v)
+		case types.T_decimal128:
+			v.col = DecodeFixedCol[types.Decimal128](v)
+		case types.T_uuid:
+			v.col = DecodeFixedCol[types.Uuid](v)
+		case types.T_date:
+			v.col = DecodeFixedCol[types.Date](v)
+		case types.T_time:
+			v.col = DecodeFixedCol[types.Time](v)
+		case types.T_datetime:
+			v.col = DecodeFixedCol[types.Datetime](v)
+		case types.T_timestamp:
+			v.col = DecodeFixedCol[types.Timestamp](v)
+		case types.T_TS:
+			v.col = DecodeFixedCol[types.TS](v)
+		case types.T_Rowid:
+			v.col = DecodeFixedCol[types.Rowid](v)
+		default:
+			panic("unknown type")
+		}
+	}
+	tlen := v.GetType().TypeSize()
+	v.capacity = cap(v.data) / tlen
 }
 
 func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
@@ -109,13 +160,12 @@ func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
 		IsConst:  vec.IsConst(),
 		Len:      uint32(vec.length),
 		Type:     TypeToProtoType(vec.typ),
-		Data:     (*(*[]byte)(unsafe.Pointer(vec.col)))[:vec.length*sz],
+		Data:     (*(*[]byte)(unsafe.Pointer(&vec.col)))[:vec.length*sz],
 	}, nil
 }
 
 func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	rvec := &Vector{
-		col:    new(reflect.SliceHeader),
 		area:   vec.Area,
 		length: int(vec.Len),
 		typ:    ProtoTypeToType(vec.Type),
@@ -129,7 +179,7 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	if err := rvec.nsp.Read(vec.Nsp); err != nil {
 		return nil, err
 	}
-	*(*[]byte)(unsafe.Pointer(rvec.col)) = vec.Data
+	*(*[]byte)(unsafe.Pointer(&rvec.col)) = vec.Data
 	return rvec, nil
 }
 

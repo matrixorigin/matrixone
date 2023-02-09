@@ -15,6 +15,7 @@
 package multi
 
 import (
+	rand2 "crypto/rand"
 	"math"
 	"math/rand"
 	"testing"
@@ -49,7 +50,7 @@ func MakeVectors(columnSi int, rowCount int, mp *mpool.MPool) ([]*vector.Vector,
 	valueCount := make(map[int]interface{})
 	vs := make([]*vector.Vector, columnSi)
 	for i := 0; i < columnSi; i++ {
-		vs[i] = vector.New(vector.FLAT, types.Type{Oid: randType()})
+		vs[i] = vector.NewVector(types.Type{Oid: randType()})
 		randInsertValues(vs[i], vs[i].GetType().Oid, rowCount, valueCount, i*rowCount, mp)
 	}
 	return vs, valueCount
@@ -319,6 +320,6 @@ func randDecimal128() types.Decimal128 {
 
 func randStringType() []byte {
 	b := make([]byte, 1024)
-	rand.Read(b)
+	rand2.Read(b)
 	return b
 }

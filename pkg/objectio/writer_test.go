@@ -190,7 +190,7 @@ func newBatch(mp *mpool.MPool) *batch.Batch {
 }
 
 func newVector(tye types.Type, buf []byte) *vector.Vector {
-	vector := vector.New(vector.FLAT, tye)
+	vector := vector.NewVector(tye)
 	vector.UnmarshalBinary(buf)
 	return vector
 }

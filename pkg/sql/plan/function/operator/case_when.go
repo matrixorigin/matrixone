@@ -154,7 +154,7 @@ func CwTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 }
 
 type OrderedValue interface {
-	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Decimal64 | types.Timestamp
+	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Decimal64 | types.Decimal128 | types.Timestamp
 }
 
 type NormalType interface {
@@ -167,7 +167,7 @@ type NormalType interface {
 func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
 	l := vs[0].Length()
 
-	rs, err := proc.AllocVectorOfRows(t, int64(l), nil)
+	rs, err := proc.AllocVectorOfRows(t, l, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -184,14 +184,12 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 		case whenv.IsConst() && thenv.IsConst():
 			if !whenv.IsConstNull() && whencols[0] {
 				if thenv.IsConstNull() {
-					return proc.AllocScalarNullVector(t), nil
+					return vector.NewConstNull(t, l, proc.Mp()), nil
 				} else {
-					r := proc.AllocScalarVector(t)
+					r := vector.NewConst(t, thencols[0], l, proc.Mp())
 					r.GetType().Precision = thenv.GetType().Precision
 					r.GetType().Width = thenv.GetType().Width
 					r.GetType().Scale = thenv.GetType().Scale
-					r.SetLength(1)
-					vector.MustTCols[T](r)[0] = thencols[0]
 					return r, nil
 				}
 			}
@@ -425,7 +423,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 			}
 		}
 	}
-	vec := vector.New(vector.FLAT, typ)
+	vec := vector.NewVector(typ)
 	vector.AppendStringList(vec, results, nil, proc.Mp())
 	return vec, nil
 }

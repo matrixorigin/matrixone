@@ -21,16 +21,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func JsonQuote(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
-	vec := vecs[0]
+func JsonQuote(ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
+	vec := ivecs[0]
 	defer func() {
 		if err != nil && ret != nil {
 			ret.Free(proc.Mp())
 		}
 	}()
-	resultType := types.T_json.ToType()
+	rtyp := types.T_json.ToType()
 	if vec.IsConstNull() {
-		ret = proc.AllocScalarNullVector(resultType)
+		ret = vector.NewConstNull(rtyp, vec.Length(), proc.Mp())
 		return
 	}
 	vs := vector.MustStrCols(vec)
@@ -40,11 +40,10 @@ func JsonQuote(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector
 		if err != nil {
 			return
 		}
-		ret = proc.AllocScalarVector(resultType)
-		err = vector.SetBytesAt(ret, 0, dt, proc.Mp())
+		ret = vector.NewConstBytes(rtyp, dt, vec.Length(), proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.GetNulls())
+	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())
 	if err != nil {
 		return
 	}

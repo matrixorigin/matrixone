@@ -15,35 +15,36 @@
 package unary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/space"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func SpaceNumber[T types.BuiltinNumber](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_varchar.ToType()
-	inputValues := vector.MustTCols[T](inputVector)
+func SpaceNumber[T types.BuiltinNumber](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_varchar.ToType()
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	}
+	ivals := vector.MustTCols[T](inputVector)
 	if inputVector.IsConst() {
-		if inputVector.IsConstNull() {
-			return proc.AllocConstNullVector(resultType), nil
-		}
-		results := make([]string, 1)
-		_, err := space.FillSpacesNumber(inputValues, results)
+		var results [1]string
+		_, err := space.FillSpacesNumber(ivals, results[:])
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.New(vector.CONSTANT, resultType)
-		vector.AppendString(vec, results[0], false, proc.Mp())
+		vec := vector.NewConstBytes(rtyp, []byte(results[0]), ivecs[0].Length(), proc.Mp())
 		return vec, nil
 	}
 
-	results := make([]string, len(inputValues))
-	if _, err := space.FillSpacesNumber(inputValues, results); err != nil {
+	results := make([]string, len(ivals))
+	if _, err := space.FillSpacesNumber(ivals, results); err != nil {
 		return nil, err
 	}
-	vec := vector.New(vector.FLAT, resultType)
-	vector.AppendStringList(vec, results, nil, proc.Mp())
-	return vec, nil
+	rvec := vector.NewVector(rtyp)
+	vector.AppendStringList(rvec, results, nil, proc.Mp())
+	nulls.Set(rvec.GetNulls(), inputVector.GetNulls())
+	return rvec, nil
 }

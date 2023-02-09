@@ -76,7 +76,7 @@ func CreateR(db engine.Database) {
 		bat := batch.New(true, []string{"orderid", "uid", "price"})
 		{
 			{
-				vec := vector.New(vector.FLAT, types.Type{
+				vec := vector.NewVector(types.Type{
 					Size: 24,
 					Oid:  types.T(types.T_varchar),
 				})
@@ -91,7 +91,7 @@ func CreateR(db engine.Database) {
 				bat.Vecs[0] = vec
 			}
 			{
-				vec := vector.New(vector.FLAT, types.Type{
+				vec := vector.NewVector(types.Type{
 					Size: 4,
 					Oid:  types.T(types.T_uint32),
 				})
@@ -105,7 +105,7 @@ func CreateR(db engine.Database) {
 				bat.Vecs[1] = vec
 			}
 			{
-				vec := vector.New(vector.FLAT, types.Type{
+				vec := vector.NewVector(types.Type{
 					Size: 8,
 					Oid:  types.T(types.T_float64),
 				})
@@ -126,7 +126,7 @@ func CreateR(db engine.Database) {
 	{
 		bat := batch.New(true, []string{"orderid", "uid", "price"})
 		{
-			vec := vector.New(vector.FLAT, types.Type{
+			vec := vector.NewVector(types.Type{
 				Size: 24,
 				Oid:  types.T(types.T_varchar),
 			})
@@ -140,7 +140,7 @@ func CreateR(db engine.Database) {
 			bat.Vecs[0] = vec
 		}
 		{
-			vec := vector.New(vector.FLAT, types.Type{
+			vec := vector.NewVector(types.Type{
 				Size: 4,
 				Oid:  types.T(types.T_uint32),
 			})
@@ -154,7 +154,7 @@ func CreateR(db engine.Database) {
 			bat.Vecs[1] = vec
 		}
 		{
-			vec := vector.New(vector.FLAT, types.Type{
+			vec := vector.NewVector(types.Type{
 				Size: 8,
 				Oid:  types.T(types.T_float64),
 			})
@@ -220,7 +220,7 @@ func CreateS(db engine.Database) {
 		bat := batch.New(true, []string{"orderid", "uid", "price"})
 		{
 			{
-				vec := vector.New(vector.FLAT, types.Type{
+				vec := vector.NewVector(types.Type{
 					Size: 24,
 					Oid:  types.T(types.T_varchar),
 				})
@@ -234,7 +234,7 @@ func CreateS(db engine.Database) {
 				bat.Vecs[0] = vec
 			}
 			{
-				vec := vector.New(vector.FLAT, types.Type{
+				vec := vector.NewVector(types.Type{
 					Size: 4,
 					Oid:  types.T(types.T_uint32),
 				})
@@ -248,7 +248,7 @@ func CreateS(db engine.Database) {
 				bat.Vecs[1] = vec
 			}
 			{
-				vec := vector.New(vector.FLAT, types.Type{
+				vec := vector.NewVector(types.Type{
 					Size: 8,
 					Oid:  types.T(types.T_float64),
 				})
@@ -269,7 +269,7 @@ func CreateS(db engine.Database) {
 	{
 		bat := batch.New(true, []string{"orderid", "uid", "price"})
 		{
-			vec := vector.New(vector.FLAT, types.Type{
+			vec := vector.NewVector(types.Type{
 				Size: 24,
 				Oid:  types.T(types.T_varchar),
 			})
@@ -283,7 +283,7 @@ func CreateS(db engine.Database) {
 			bat.Vecs[0] = vec
 		}
 		{
-			vec := vector.New(vector.FLAT, types.Type{
+			vec := vector.NewVector(types.Type{
 				Size: 4,
 				Oid:  types.T(types.T_uint32),
 			})
@@ -297,7 +297,7 @@ func CreateS(db engine.Database) {
 			bat.Vecs[1] = vec
 		}
 		{
-			vec := vector.New(vector.FLAT, types.Type{
+			vec := vector.NewVector(types.Type{
 				Size: 8,
 				Oid:  types.T(types.T_float64),
 			})
@@ -378,7 +378,7 @@ func CreateT1(db engine.Database) {
 	{
 		bat := batch.New(true, []string{"spid", "userid", "score"})
 		{
-			vec := vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
+			vec := vector.NewVector(types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
 			vs := make([]int32, 5)
 			vs[0] = 1
 			vs[1] = 2
@@ -391,7 +391,7 @@ func CreateT1(db engine.Database) {
 			bat.Vecs[0] = vec
 		}
 		{
-			vec := vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
+			vec := vector.NewVector(types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
 			vs := make([]int32, 5)
 			vs[0] = 1
 			vs[1] = 2
@@ -404,7 +404,7 @@ func CreateT1(db engine.Database) {
 			bat.Vecs[1] = vec
 		}
 		{
-			vec := vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_int8), Size: 1, Width: 1, Precision: 0})
+			vec := vector.NewVector(types.Type{Oid: types.T(types.T_int8), Size: 1, Width: 1, Precision: 0})
 			vs := make([]int8, 5)
 			vs[0] = 1
 			vs[1] = 2
@@ -423,7 +423,7 @@ func CreateT1(db engine.Database) {
 	{
 		bat := batch.New(true, []string{"spid", "userid", "score"})
 		{
-			vec := vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
+			vec := vector.NewVector(types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
 			vs := make([]int32, 2)
 			vs[0] = 4
 			vs[1] = 5
@@ -433,7 +433,7 @@ func CreateT1(db engine.Database) {
 			bat.Vecs[0] = vec
 		}
 		{
-			vec := vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
+			vec := vector.NewVector(types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
 			vs := make([]int32, 2)
 			vs[0] = 6
 			vs[1] = 11
@@ -443,7 +443,7 @@ func CreateT1(db engine.Database) {
 			bat.Vecs[1] = vec
 		}
 		{
-			vec := vector.New(vector.FLAT, types.Type{Oid: types.T(types.T_int8), Size: 1, Width: 1, Precision: 0})
+			vec := vector.NewVector(types.Type{Oid: types.T(types.T_int8), Size: 1, Width: 1, Precision: 0})
 			vs := make([]int8, 2)
 			vs[0] = 10
 			vs[1] = 99

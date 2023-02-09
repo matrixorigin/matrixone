@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -171,7 +172,7 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 }
 
 func (*CompilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
-	panic("unimplemented")
+	return nil, errors.New("not implemented")
 }
 
 func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs []*engine.Attribute, err error) {

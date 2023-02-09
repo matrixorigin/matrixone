@@ -190,7 +190,7 @@ func readColumnBatchByMetaloc(
 		if typ.Oid == types.T_Rowid {
 			bat.AddVector(colNames[i], rowidData)
 		} else {
-			vec := vector.New(vector.FLAT, colTyps[i])
+			vec := vector.NewVector(colTyps[i])
 			data := make([]byte, len(entry[0].Object.([]byte)))
 			copy(data, entry[0].Object.([]byte))
 			err := vec.UnmarshalBinary(data)
@@ -205,14 +205,14 @@ func readColumnBatchByMetaloc(
 	// generate filter map
 	if info.EntryState {
 		t0 := time.Now()
-		v1 := vector.New(vector.FLAT, types.T_TS.ToType())
+		v1 := vector.NewVector(types.T_TS.ToType())
 		err := v1.UnmarshalBinary(entry[0].Object.([]byte))
 		if err != nil {
 			return nil, err
 		}
 		commits := containers.NewVectorWithSharedMemory(v1, false)
 		defer commits.Close()
-		v2 := vector.New(vector.FLAT, types.T_bool.ToType())
+		v2 := vector.NewVector(types.T_bool.ToType())
 		err = v2.UnmarshalBinary(entry[1].Object.([]byte))
 		if err != nil {
 			return nil, err
@@ -250,7 +250,7 @@ func readDeleteBatchByDeltaloc(ctx context.Context, deltaloc string, fs fileserv
 		return nil, err
 	}
 	for i, entry := range ioResult.Entries {
-		vec := vector.New(vector.FLAT, colTypes[i])
+		vec := vector.NewVector(colTypes[i])
 		data := make([]byte, len(entry.Object.([]byte)))
 		copy(data, entry.Object.([]byte))
 		err := vec.UnmarshalBinary(data)

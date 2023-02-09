@@ -21,25 +21,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_varchar.ToType()
-	inputValues := vector.MustStrCols(inputVector)
+func Rtrim(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_varchar.ToType()
+	ivals := vector.MustStrCols(inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultValues := make([]string, 1)
-		rtrim.Rtrim(inputValues, resultValues)
-		vec := vector.New(vector.CONSTANT, resultType)
-		vector.AppendString(vec, resultValues[0], resultValues[0] == "", proc.Mp())
-		return vec, nil
+		var rvals [1]string
+		rtrim.Rtrim(ivals, rvals[:])
+		return vector.NewConstBytes(rtyp, []byte(rvals[0]), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultValues := make([]string, len(inputValues))
-		rtrim.Rtrim(inputValues, resultValues)
-		vec := vector.New(vector.FLAT, resultType)
-		vector.AppendStringList(vec, resultValues, nil, proc.Mp())
+		rvals := make([]string, len(ivals))
+		rtrim.Rtrim(ivals, rvals)
+		vec := vector.NewVector(rtyp)
+		vector.AppendStringList(vec, rvals, nil, proc.Mp())
 		return vec, nil
 	}
 }

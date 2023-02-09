@@ -207,11 +207,11 @@ func (gc *GroupConcat) Grows(n int, m *mpool.MPool) error {
 
 // Eval method calculates and returns the final result of the aggregate function.
 func (gc *GroupConcat) Eval(m *mpool.MPool) (*vector.Vector, error) {
-	vec := vector.New(vector.FLAT, gc.OutputType())
+	vec := vector.NewVector(gc.OutputType())
 	nsp := nulls.NewWithSize(gc.groups)
 	vec.SetNulls(nsp)
 	for _, v := range gc.res {
-		if err := vector.Append(vec, []byte(v), false, m); err != nil {
+		if err := vector.AppendBytes(vec, []byte(v), false, m); err != nil {
 			vec.Free(m)
 			return nil, err
 		}
@@ -435,7 +435,7 @@ func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 		val := vector.MustTCols[types.Decimal128](vec)[int64(rowIndex)]
 		return val.String(), nil
 	case types.T_json:
-		val := vec.GetBytes(int64(rowIndex))
+		val := vec.GetBytes(rowIndex)
 		byteJson := types.DecodeJson(val)
 		return byteJson.String(), nil
 	case types.T_uuid:

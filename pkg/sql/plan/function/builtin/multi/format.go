@@ -22,48 +22,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Format(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var paramNum = len(vecs)
-	if vecs[0].IsConstNull() || vecs[1].IsConstNull() {
-		return proc.AllocScalarNullVector(*vecs[0].GetType()), nil
+func Format(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	var paramNum = len(ivecs)
+	if ivecs[0].IsConstNull() || ivecs[1].IsConstNull() {
+		return vector.NewConstNull(*ivecs[0].GetType(), ivecs[0].Length(), proc.Mp()), nil
 	}
 
 	//get the first arg number
-	numberCols := vector.MustStrCols(vecs[0])
+	numberCols := vector.MustStrCols(ivecs[0])
 	//get the second arg precision
-	precisionCols := vector.MustStrCols(vecs[1])
+	precisionCols := vector.MustStrCols(ivecs[1])
 	//get the third arg locale
 	var localeCols []string
-	if paramNum == 2 || vecs[2].IsConstNull() {
+	if paramNum == 2 || ivecs[2].IsConstNull() {
 		localeCols = []string{"en_US"}
 	} else {
-		localeCols = vector.MustStrCols(vecs[2])
+		localeCols = vector.MustStrCols(ivecs[2])
 	}
 
 	//calcute rows
-	rowCount := vecs[0].Length()
+	rowCount := ivecs[0].Length()
 
 	var resultVec *vector.Vector = nil
-	resultValues := make([]string, rowCount)
+	rvals := make([]string, rowCount)
 	resultNsp := nulls.NewWithSize(rowCount)
 
 	// set null row
-	nulls.Or(vecs[0].GetNulls(), vecs[1].GetNulls(), resultNsp)
+	nulls.Or(ivecs[0].GetNulls(), ivecs[1].GetNulls(), resultNsp)
 
 	var constVectors []bool
-	if paramNum == 2 || vecs[2].IsConstNull() {
-		constVectors = []bool{vecs[0].IsConst(), vecs[1].IsConst(), true}
+	if paramNum == 2 || ivecs[2].IsConstNull() {
+		constVectors = []bool{ivecs[0].IsConst(), ivecs[1].IsConst(), true}
 	} else {
-		constVectors = []bool{vecs[0].IsConst(), vecs[1].IsConst(), vecs[2].IsConst()}
+		constVectors = []bool{ivecs[0].IsConst(), ivecs[1].IsConst(), ivecs[2].IsConst()}
 	}
 
 	//get result values
-	err := format.Format(numberCols, precisionCols, localeCols, rowCount, constVectors, resultValues)
+	err := format.Format(numberCols, precisionCols, localeCols, rowCount, constVectors, rvals)
 	if err != nil {
 		return nil, err
 	}
-	resultVec = vector.New(vector.FLAT, types.T_varchar.ToType())
-	vector.AppendStringList(resultVec, resultValues, nil, proc.Mp())
+	resultVec = vector.NewVector(types.T_varchar.ToType())
+	vector.AppendStringList(resultVec, rvals, nil, proc.Mp())
 
 	return resultVec, nil
 }

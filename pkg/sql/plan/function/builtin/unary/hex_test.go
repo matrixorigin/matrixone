@@ -64,7 +64,6 @@ func TestHex(t *testing.T) {
 		{
 			name:     "Null",
 			proc:     procs,
-			expected: []string{""},
 			isScalar: true,
 		},
 	}
@@ -73,8 +72,7 @@ func TestHex(t *testing.T) {
 			var inVector *vector.Vector
 			if c.inputstr != nil {
 				if c.isScalar {
-					inVector = vector.New(vector.CONSTANT, types.T_varchar.ToType())
-					vector.AppendString(inVector, c.inputstr[0], c.inputstr[0] == "", testutil.TestUtilMp)
+					inVector = vector.NewConstBytes(types.T_varchar.ToType(), []byte(c.inputstr[0]), 1, testutil.TestUtilMp)
 				} else {
 					inVector = testutil.MakeCharVector(c.inputstr, nil)
 				}
@@ -123,7 +121,6 @@ func TestHex(t *testing.T) {
 		}, {
 			name:     "Null",
 			proc:     procs,
-			expected: []string{""},
 			isScalar: true,
 		},
 	}
@@ -132,8 +129,7 @@ func TestHex(t *testing.T) {
 			var inVector *vector.Vector
 			if c.inputnum != nil {
 				if c.isScalar {
-					inVector = vector.New(vector.CONSTANT, types.T_int64.ToType())
-					vector.Append(inVector, c.inputnum[0], false, testutil.TestUtilMp)
+					inVector = vector.NewConst(types.T_int64.ToType(), c.inputnum[0], 1, testutil.TestUtilMp)
 				} else {
 					inVector = testutil.MakeInt64Vector(c.inputnum, nil)
 				}

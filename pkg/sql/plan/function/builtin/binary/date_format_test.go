@@ -547,10 +547,8 @@ func TestDateFormatWithScalar(t *testing.T) {
 			panic(err)
 		}
 
-		vec[0] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
-		vector.Append(vec[0], datetime, false, mp)
-		vec[1] = vector.New(vector.CONSTANT, types.T_varchar.ToType())
-		vector.AppendString(vec[1], format, format == "", mp)
+		vec[0] = vector.NewConst(types.T_datetime.ToType(), datetime, 1, mp)
+		vec[1] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(format), 1, mp)
 		return vec
 	}
 

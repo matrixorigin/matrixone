@@ -17,6 +17,11 @@ package etl
 import (
 	"context"
 	"fmt"
+	"path"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -25,10 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/stretchr/testify/require"
-	"path"
-	"strings"
-	"testing"
-	"time"
 )
 
 var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Precision: 32, Default: "", Comment: "str column"}
@@ -120,7 +121,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 		for _, vec := range bat.Vecs {
 			rows, err := GetVectorArrayLen(context.TODO(), vec)
 			require.Nil(t, err)
-			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.Typ.String())
+			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.GetType().String())
 		}
 		rows := bat.Vecs[0].Length()
 		ctn := strings.Builder{}
@@ -353,7 +354,7 @@ func TestTaeReadFile(t *testing.T) {
 		for _, vec := range bat.Vecs {
 			rows, err := GetVectorArrayLen(context.TODO(), vec)
 			require.Nil(t, err)
-			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.Typ.String())
+			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.GetType().String())
 		}
 		rows := bat.Vecs[0].Length()
 		ctn := strings.Builder{}

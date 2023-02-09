@@ -69,7 +69,7 @@ func newBatch(ts []types.Type, rows int) *Batch {
 	for i, typ := range ts {
 		switch typ.Oid {
 		case types.T_int8:
-			vec := vector.New(vector.FLAT, typ)
+			vec := vector.NewVector(typ)
 			vec.PreExtend(rows, nil)
 			vs := vector.MustTCols[int8](vec)
 			for j := range vs {

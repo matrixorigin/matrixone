@@ -79,11 +79,8 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool
 func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	bs := vec.Bytes()
 
-	if vec.GetType().IsVarlen() {
-		mov, _ = movec.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
-	} else {
-		mov = movec.NewOriginalWithData(vec.GetType(), bs.StorageBuf(), &nulls.Nulls{})
-	}
+	mov = movec.NewVector(vec.GetType())
+	mov.UnmarshalBinary(bs.StorageBuf())
 	if vec.HasNull() {
 		mov.GetNulls().Np = bitmap.New(vec.Length())
 		mov.GetNulls().Np.AddMany(vec.NullMask().ToArray())
@@ -110,21 +107,18 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 		if len(storage) > 0 {
 			copy(storage, bs.Storage)
 		}
-		mov, _ = movec.BuildVarlenaVector(typ, header, storage)
+		//mov, _ = movec.BuildVarlenaVector(typ, header, storage)
 	} else if vec.GetType().IsTuple() {
-		mov = movec.New(movec.FLAT, vec.GetType())
+		mov = movec.NewVector(typ)
 		cnt := types.DecodeInt32(bs.Storage)
 		if cnt != 0 {
-			if err := types.Decode(bs.Storage, &mov.Col); err != nil {
+			if err := mov.UnmarshalBinary(bs.Storage); err != nil {
 				panic(any(err))
 			}
 		}
 	} else {
-		data := make([]byte, len(bs.Storage))
-		if len(data) > 0 {
-			copy(data, bs.Storage)
-		}
-		mov = movec.NewOriginalWithData(vec.GetType(), data, new(nulls.Nulls))
+		mov = movec.NewVector(typ)
+		mov.UnmarshalBinary(bs.Storage)
 	}
 
 	if vec.HasNull() {
@@ -164,7 +158,7 @@ func CopyToMoBatch(bat *Batch) *batch.Batch {
 
 func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
 	bs := stl.NewFixedTypeBytes[T]()
-	if v.Col == nil || len(movec.MustTCols[T](v)) == 0 {
+	if len(movec.MustTCols[T](v)) == 0 {
 		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
 	} else {
 		bs.Storage = types.EncodeSlice(movec.MustTCols[T](v))
@@ -228,9 +222,7 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 		bs = movecToBytes[types.Rowid](v)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		bs = stl.NewBytesWithTypeSize(-types.VarlenaSize)
-		if v.Col != nil {
-			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
-		}
+		bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
 	default:
 		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.GetType().String())))
 	}
@@ -254,8 +246,8 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 		for i := 0; i < cnt; i++ {
 			newBat := batch.New(true, bat.Attrs)
 			for j := 0; j < len(bat.Vecs); j++ {
-				window := movec.New(movec.FLAT, *bat.Vecs[j].GetType())
-				movec.Window(bat.Vecs[j], i*rows, (i+1)*rows, window)
+				window := movec.NewVector(*bat.Vecs[j].GetType())
+				//movec.Window(bat.Vecs[j], i*rows, (i+1)*rows, window)
 				newBat.Vecs[j] = window
 			}
 			bats = append(bats, newBat)
@@ -283,8 +275,8 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	for _, row := range rowArray {
 		newBat := batch.New(true, bat.Attrs)
 		for j := 0; j < len(bat.Vecs); j++ {
-			window := movec.New(movec.FLAT, *bat.Vecs[j].GetType())
-			movec.Window(bat.Vecs[j], start, start+row, window)
+			window := movec.NewVector(*bat.Vecs[j].GetType())
+			//movec.Window(bat.Vecs[j], start, start+row, window)
 			newBat.Vecs[j] = window
 		}
 		start += row
@@ -295,8 +287,8 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 
 var mockMp = common.DefaultAllocator
 
-func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
-	vec := movec.New(movec.FLAT, typ)
+func mockVec(typ types.Type, rows int, offset int) *movec.Vector {
+	vec := movec.NewVector(typ)
 	switch typ.Oid {
 	case types.T_bool:
 		data := make([]bool, 0)
@@ -438,7 +430,7 @@ func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, 
 		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
 		movec.SetTAt(vec, int(row), v.(T))
-		if vec.GetNulls().Np != nil && vec.GetNulls().Np.Contains(uint64(row)) {
+		if vec.GetNulls().Contains(uint64(row)) {
 			vec.GetNulls().Np.Remove(uint64(row))
 		}
 	}
@@ -450,7 +442,7 @@ func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
 		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
 		movec.SetBytesAt(vec, int(row), v.([]byte), mockMp)
-		if vec.GetNulls().Np != nil && vec.GetNulls().Np.Contains(uint64(row)) {
+		if vec.GetNulls().Contains(uint64(row)) {
 			vec.GetNulls().Np.Remove(uint64(row))
 		}
 	}
@@ -459,8 +451,7 @@ func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
 func AppendFixedValue[T types.FixedSizeT](vec *movec.Vector, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
-		zt := types.DefaultVal[T]()
-		movec.Append(vec, zt, isNull, mockMp)
+		movec.Append(vec, 0, isNull, mockMp)
 	} else {
 		movec.Append(vec, v.(T), false, mockMp)
 	}
@@ -570,7 +561,7 @@ func GetValue(col *movec.Vector, row uint32) any {
 	case types.T_Rowid:
 		return movec.MustTCols[types.Rowid](col)[int64(row)]
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
-		return col.GetBytes(int64(row))
+		return col.GetBytes(int(row))
 	default:
 		//return vector.ErrVecTypeNotSupport
 		panic(any("No Support"))
@@ -644,17 +635,6 @@ func ForEachValue(col *movec.Vector, reversed bool, op func(v any, row uint32) e
 		}
 	}
 	return
-}
-
-func BatchWindow(bat *batch.Batch, start, end int) *batch.Batch {
-	window := batch.New(true, bat.Attrs)
-	window.Vecs = make([]*movec.Vector, len(bat.Vecs))
-	for i := range window.Vecs {
-		vec := movec.New(movec.FLAT, *bat.Vecs[i].GetType())
-		movec.Window(bat.Vecs[i], start, end, vec)
-		window.Vecs[i] = vec
-	}
-	return window
 }
 
 /*func ApplyDeleteToVector(vec *movec.Vector, deletes *roaring.Bitmap) *movec.Vector {

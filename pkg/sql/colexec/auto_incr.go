@@ -436,7 +436,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 			}
 		}
 		if rowIndex < int64(bat.Length()) {
-			vec := vector.New(vector.FLAT, *bat.GetVector(0).GetType())
+			vec := vector.NewVector(*bat.GetVector(0).GetType())
 			rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIndex]
 			if err := vector.Append(vec, rowid, false, mp); err != nil {
 				panic(err)
@@ -472,11 +472,11 @@ func updateAutoIncrTable(param *AutoIncrParam, delBat *batch.Batch, curNum uint6
 }
 
 func makeAutoIncrBatch(name string, num, step uint64, mp *mpool.MPool) *batch.Batch {
-	vec := vector.New(vector.FLAT, types.T_varchar.ToType())
-	vector.AppendString(vec, name, false, mp)
-	vec2 := vector.New(vector.FLAT, types.T_uint64.ToType())
+	vec := vector.NewVector(types.T_varchar.ToType())
+	vector.AppendBytes(vec, []byte(name), false, mp)
+	vec2 := vector.NewVector(types.T_uint64.ToType())
 	vector.Append(vec2, num, false, mp)
-	vec3 := vector.New(vector.FLAT, types.T_uint64.ToType())
+	vec3 := vector.NewVector(types.T_uint64.ToType())
 	vector.Append(vec3, step, false, mp)
 	bat := batch.NewWithSize(3)
 	bat.SetAttributes(AUTO_INCR_TABLE_COLNAME[1:])
@@ -532,7 +532,7 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 				retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
 				retbat.Vecs[0].Col = vector.MustTCols[types.Rowid](retbat.Vecs[0])[rowIndex : rowIndex+1]
 				*/
-				vec := vector.New(vector.FLAT, *bat.GetVector(0).GetType())
+				vec := vector.NewVector(*bat.GetVector(0).GetType())
 				rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIndex]
 				if err := vector.Append(vec, rowid, false, mp); err != nil {
 					panic(err)

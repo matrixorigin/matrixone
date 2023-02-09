@@ -123,8 +123,9 @@ var (
 			}
 			ds[i] = d
 		}
-		vec := vector.New(vector.FLAT, types.T_date.ToType())
+		vec := vector.NewVector(types.T_date.ToType())
 		vector.AppendList(vec, ds, nil, TestUtilMp)
+		vec.SetNulls(ns)
 		return vec
 	}
 
@@ -141,8 +142,9 @@ var (
 			}
 			ds[i] = d
 		}
-		vec := vector.New(vector.FLAT, types.T_time.ToType())
+		vec := vector.NewVector(types.T_time.ToType())
 		vector.AppendList(vec, ds, nil, TestUtilMp)
+		vec.SetNulls(ns)
 		return vec
 	}
 
@@ -159,8 +161,9 @@ var (
 			}
 			ds[i] = d
 		}
-		vec := vector.New(vector.FLAT, types.T_datetime.ToType())
+		vec := vector.NewVector(types.T_datetime.ToType())
 		vector.AppendList(vec, ds, nil, TestUtilMp)
+		vec.SetNulls(ns)
 		return vec
 	}
 
@@ -177,15 +180,17 @@ var (
 			}
 			ds[i] = d
 		}
-		vec := vector.New(vector.FLAT, types.T_timestamp.ToType())
+		vec := vector.NewVector(types.T_timestamp.ToType())
 		vector.AppendList(vec, ds, nil, TestUtilMp)
+		vec.SetNulls(ns)
 		return vec
 	}
 
 	MakeUuidVector = func(values []types.Uuid, nsp []uint64) *vector.Vector {
-		//ns := nulls.Build(len(values), nsp...)
-		vec := vector.New(vector.FLAT, uuidType)
+		ns := nulls.Build(len(values), nsp...)
+		vec := vector.NewVector(uuidType)
 		vector.AppendList(vec, values, nil, TestUtilMp)
+		vec.SetNulls(ns)
 		return vec
 	}
 
@@ -202,8 +207,9 @@ var (
 			}
 			ds[i] = d
 		}
-		vec := vector.New(vector.FLAT, types.T_uuid.ToType())
+		vec := vector.NewVector(types.T_uuid.ToType())
 		vector.AppendList(vec, ds, nil, TestUtilMp)
+		vec.SetNulls(ns)
 		return vec
 	}
 )
@@ -211,8 +217,7 @@ var (
 // functions to make a scalar vector for test.
 var (
 	MakeScalarNull = func(typ types.T, length int) *vector.Vector {
-		vec := NewProc().AllocConstNullVector(typ.ToType())
-		return vec
+		return vector.NewConstNull(typ.ToType(), length, NewProc().Mp())
 	}
 
 	MakeScalarBool = func(v bool, length int) *vector.Vector {
@@ -276,9 +281,7 @@ var (
 		if err != nil {
 			panic(err)
 		}
-		vec := vector.New(vector.CONSTANT, dateType)
-		vector.Append(vec, d, false, TestUtilMp)
-		return vec
+		return makeScalar(d, length, dateType)
 	}
 
 	MakeScalarTime = func(value string, length int) *vector.Vector {
@@ -286,9 +289,7 @@ var (
 		if err != nil {
 			panic(err)
 		}
-		vec := vector.New(vector.CONSTANT, timeType)
-		vector.Append(vec, d, false, TestUtilMp)
-		return vec
+		return makeScalar(d, length, timeType)
 	}
 
 	MakeScalarDateTime = func(value string, length int) *vector.Vector {
@@ -296,9 +297,7 @@ var (
 		if err != nil {
 			panic(err)
 		}
-		vec := vector.New(vector.CONSTANT, datetimeType)
-		vector.Append(vec, d, false, TestUtilMp)
-		return vec
+		return makeScalar(d, length, datetimeType)
 	}
 
 	MakeScalarTimeStamp = func(value string, length int) *vector.Vector {
@@ -306,23 +305,17 @@ var (
 		if err != nil {
 			panic(err)
 		}
-		vec := vector.New(vector.CONSTANT, timestampType)
-		vector.Append(vec, d, false, TestUtilMp)
-		return vec
+		return makeScalar(d, length, timestampType)
 	}
 
 	MakeScalarDecimal64 = func(v int64, length int, _ types.Type) *vector.Vector {
 		d, _ := types.InitDecimal64(v, 64, 0)
-		vec := vector.New(vector.CONSTANT, decimal64Type)
-		vector.Append(vec, d, false, TestUtilMp)
-		return vec
+		return makeScalar(d, length, decimal64Type)
 	}
 
 	MakeScalarDecimal128 = func(v uint64, length int, _ types.Type) *vector.Vector {
 		d, _ := types.InitDecimal128UsingUint(v, 64, 0)
-		vec := vector.New(vector.CONSTANT, decimal128Type)
-		vector.Append(vec, d, false, TestUtilMp)
-		return vec
+		return makeScalar(d, length, decimal128Type)
 	}
 
 	MakeScalarDecimal128ByFloat64 = func(v float64, length int, _ types.Type) *vector.Vector {
@@ -335,42 +328,36 @@ var (
 		if err != nil {
 			panic(err)
 		}
-		vec := vector.New(vector.CONSTANT, decimal128Type)
-		vector.Append(vec, dec128Val, false, TestUtilMp)
-		return vec
+		return makeScalar(dec128Val, length, decimal64Type)
 	}
 )
 
 func makeVector[T types.FixedSizeT](values []T, nsp []uint64, typ types.Type) *vector.Vector {
-	//ns := nulls.Build(len(values), nsp...)
-	vec := vector.New(vector.FLAT, typ)
+	vec := vector.NewVector(typ)
 	vector.AppendList(vec, values, nil, TestUtilMp)
+	vec.SetNulls(nulls.Build(len(values), nsp...))
 	return vec
 }
 
 func makeStringVector(values []string, nsp []uint64, typ types.Type) *vector.Vector {
 	if nsp == nil {
-		vec := vector.New(vector.FLAT, typ)
+		vec := vector.NewVector(typ)
 		vector.AppendStringList(vec, values, nil, TestUtilMp)
 		return vec
 	} else {
-		//vnsp := nulls.Build(len(values), nsp...)
-		vec := vector.New(vector.FLAT, typ)
+		vec := vector.NewVector(typ)
 		vector.AppendStringList(vec, values, nil, TestUtilMp)
+		vec.SetNulls(nulls.Build(len(values), nsp...))
 		return vec
 	}
 }
 
 func makeScalar[T types.FixedSizeT](value T, length int, typ types.Type) *vector.Vector {
-	vec := vector.New(vector.CONSTANT, typ)
-	vector.Append(vec, value, false, TestUtilMp)
-	return vec
+	return vector.NewConst(typ, value, length, TestUtilMp)
 }
 
 func makeScalarString(value string, length int, typ types.Type) *vector.Vector {
-	vec := vector.New(vector.CONSTANT, typ)
-	vector.AppendString(vec, value, false, TestUtilMp)
-	return vec
+	return vector.NewConstBytes(typ, []byte(value), length, TestUtilMp)
 }
 
 func MakeDecimal64ArrByInt64Arr(input []int64) []types.Decimal64 {

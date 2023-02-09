@@ -92,11 +92,11 @@ func MakeBatch(columnSi int, rowCount int, mp *mpool.MPool) (*batch.Batch, *plan
 	valueCount := make(map[int]interface{})
 
 	for i := 0; i < idx; i++ {
-		bat.Vecs[i] = vector.New(vector.FLAT, types.Type{Oid: randType()})
+		bat.Vecs[i] = vector.NewVector(types.Type{Oid: randType()})
 		randInsertValues(bat.Vecs[i], bat.Vecs[i].GetType().Oid, rowCount, valueCount, i*rowCount, mp)
 	}
 
-	bat.Vecs[idx] = vector.New(vector.FLAT, types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+	bat.Vecs[idx] = vector.NewVector(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 
 	colDef := &plan.ColDef{
 		Name: cPkeyName,

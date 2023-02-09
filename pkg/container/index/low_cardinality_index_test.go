@@ -28,7 +28,7 @@ func TestInsertWithNulls(t *testing.T) {
 	require.NoError(t, err)
 
 	// test data = ["a", "b", NULL, "a", "c", NULL, "c", "b", "a", NULL]
-	v := vector.New(vector.FLAT, types.T_varchar.ToType())
+	v := vector.NewVector(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(v, []byte("a"), false, idx.m))
 	require.NoError(t, vector.AppendBytes(v, []byte("b"), false, idx.m))
 	require.NoError(t, vector.AppendBytes(v, []byte(""), true, idx.m))
@@ -51,7 +51,7 @@ func TestEncode(t *testing.T) {
 	idx, err := newTestIndex(types.T_varchar.ToType())
 	require.NoError(t, err)
 
-	v0 := vector.New(vector.FLAT, types.T_varchar.ToType())
+	v0 := vector.NewVector(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytesList(v0, [][]byte{
 		[]byte("hello"),
 		[]byte("My"),
@@ -63,7 +63,7 @@ func TestEncode(t *testing.T) {
 	err = idx.InsertBatch(v0)
 	require.NoError(t, err)
 
-	v1 := vector.New(vector.FLAT, types.T_varchar.ToType())
+	v1 := vector.NewVector(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytesList(v1, [][]byte{
 		[]byte("Jack"),
 		[]byte("is"),
@@ -73,7 +73,7 @@ func TestEncode(t *testing.T) {
 		[]byte("Tom"),
 	}, nil, idx.m))
 
-	enc := vector.New(vector.FLAT, types.T_uint16.ToType())
+	enc := vector.NewVector(types.T_uint16.ToType())
 	err = idx.Encode(enc, v1)
 	require.NoError(t, err)
 	col := vector.MustTCols[uint16](enc)

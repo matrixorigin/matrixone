@@ -392,8 +392,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 func constructValueScanBatch(ctx context.Context, proc *process.Process, node *plan.Node) (*batch.Batch, error) {
 	if node == nil || node.TableDef == nil { // like : select 1, 2
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.New(vector.CONSTANT, types.Type{Oid: types.T_int64})
-		bat.Vecs[0].SetLength(1)
+		bat.Vecs[0] = vector.NewConstNull(types.Type{Oid: types.T_int64}, 1, proc.Mp())
 		bat.InitZsOne(1)
 		return bat, nil
 	}
@@ -590,8 +589,7 @@ func (c *Compile) ConstructScope() *Scope {
 	ds.Proc.LoadTag = true
 	bat := batch.NewWithSize(1)
 	{
-		bat.Vecs[0] = vector.New(vector.CONSTANT, types.Type{Oid: types.T_int64})
-		bat.Vecs[0].SetLength(1)
+		bat.Vecs[0] = vector.NewConstNull(types.Type{Oid: types.T_int64}, 1, c.proc.Mp())
 		bat.InitZsOne(1)
 	}
 	ds.DataSource = &Source{Bat: bat}
@@ -1698,13 +1696,13 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 	for _, e := range exprs {
 		if e.Typ.Id != int32(types.T_any) {
 			typ = plan2.MakeTypeByPlan2Type(e.Typ)
-			vec = vector.New(vector.FLAT, typ)
+			vec = vector.NewVector(typ)
 			break
 		}
 	}
 	if vec == nil {
 		typ = types.T_int32.ToType()
-		vec = vector.New(vector.FLAT, typ)
+		vec = vector.NewVector(typ)
 	}
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}

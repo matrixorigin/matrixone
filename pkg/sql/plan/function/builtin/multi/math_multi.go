@@ -31,38 +31,34 @@ type mathMultiT interface {
 
 type mathMultiFun[T mathMultiT] func([]T, []T, int64) []T
 
-func generalMathMulti[T mathMultiT](funName string, vecs []*vector.Vector, proc *process.Process, cb mathMultiFun[T]) (*vector.Vector, error) {
-	typ := vecs[0].GetType().Oid.ToType()
+func generalMathMulti[T mathMultiT](funName string, ivecs []*vector.Vector, proc *process.Process, cb mathMultiFun[T]) (*vector.Vector, error) {
+	typ := ivecs[0].GetType().Oid.ToType()
 	digits := int64(0)
-	if len(vecs) > 1 {
+	if len(ivecs) > 1 {
 		// if vecs[1].IsConstNull() {
 		// 	return proc.AllocScalarNullVector(typ), nil
 		// }
-		if !vecs[1].IsConst() || vecs[1].GetType().Oid != types.T_int64 {
+		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
 			return nil, moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funName), "not const")
 		}
-		digits = vector.MustTCols[int64](vecs[1])[0]
+		digits = vector.MustTCols[int64](ivecs[1])[0]
 	}
-	vs := vector.MustTCols[T](vecs[0])
-	if vecs[0].IsConstNull() {
-		return proc.AllocScalarNullVector(typ), nil
+	vs := vector.MustTCols[T](ivecs[0])
+	if ivecs[0].IsConstNull() {
+		return vector.NewConstNull(typ, ivecs[0].Length(), proc.Mp()), nil
 	}
 
-	if vecs[0].IsConst() {
+	if ivecs[0].IsConst() {
 		rs := make([]T, 1)
 		ret_rs := cb(vs, rs, digits)
-
-		vec := vector.New(vector.FLAT, typ)
-		vector.Append(vec, ret_rs[0], false, proc.Mp())
-		nulls.Set(vec.GetNulls(), vecs[0].GetNulls())
-		return vec, nil
+		return vector.NewConst(typ, ret_rs[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rs := make([]T, len(vs))
 		ret_rs := cb(vs, rs, digits)
 
-		vec := vector.New(vector.FLAT, typ)
+		vec := vector.NewVector(typ)
 		vector.AppendList(vec, ret_rs, nil, proc.Mp())
-		nulls.Set(vec.GetNulls(), vecs[0].GetNulls())
+		nulls.Set(vec.GetNulls(), ivecs[0].GetNulls())
 
 		return vec, nil
 	}

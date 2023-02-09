@@ -27,7 +27,7 @@ import (
 
 func TestPartition(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v0 := vector.New(vector.FLAT, types.T_int8.ToType())
+	v0 := vector.NewVector(types.T_int8.ToType())
 	vector.AppendList(v0, []int8{3, 4, 5, 6, 7, 8}, nil, mp)
 	partitions := make([]int64, 2)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v0)
@@ -36,7 +36,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v0)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v1 := vector.New(vector.FLAT, types.T_int16.ToType())
+	v1 := vector.NewVector(types.T_int16.ToType())
 	vector.AppendList(v1, []int16{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v1)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -44,7 +44,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v1)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v2 := vector.New(vector.FLAT, types.T_int32.ToType())
+	v2 := vector.NewVector(types.T_int32.ToType())
 	vector.AppendList(v2, []int32{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v2)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -52,7 +52,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v2)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v3 := vector.New(vector.FLAT, types.T_int64.ToType())
+	v3 := vector.NewVector(types.T_int64.ToType())
 	vector.AppendList(v3, []int64{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v3)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -60,7 +60,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v3)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v4 := vector.New(vector.FLAT, types.T_uint8.ToType())
+	v4 := vector.NewVector(types.T_uint8.ToType())
 	vector.AppendList(v4, []uint8{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v4)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -68,7 +68,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v4)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v5 := vector.New(vector.FLAT, types.T_uint16.ToType())
+	v5 := vector.NewVector(types.T_uint16.ToType())
 	vector.AppendList(v5, []uint16{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v5)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -76,7 +76,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v5)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v6 := vector.New(vector.FLAT, types.T_uint32.ToType())
+	v6 := vector.NewVector(types.T_uint32.ToType())
 	vector.AppendList(v6, []uint32{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v6)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -84,7 +84,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v6)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v7 := vector.New(vector.FLAT, types.T_uint64.ToType())
+	v7 := vector.NewVector(types.T_uint64.ToType())
 	vector.AppendList(v7, []uint64{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v7)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -92,7 +92,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v7)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v8 := vector.New(vector.FLAT, types.T_date.ToType())
+	v8 := vector.NewVector(types.T_date.ToType())
 	vector.AppendList(v8, []types.Date{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v8)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -100,7 +100,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v8)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v9 := vector.New(vector.FLAT, types.T_float32.ToType())
+	v9 := vector.NewVector(types.T_float32.ToType())
 	vector.AppendList(v9, []float32{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v9)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -108,7 +108,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v9)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v10 := vector.New(vector.FLAT, types.T_float64.ToType())
+	v10 := vector.NewVector(types.T_float64.ToType())
 	vector.AppendList(v10, []float64{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -116,7 +116,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v11 := vector.New(vector.FLAT, types.T_char.ToType())
+	v11 := vector.NewVector(types.T_char.ToType())
 	vector.AppendStringList(v11, []string{"hello", "Gut", "konichiwa", "nihao", "nihao", "nihao", "nihao"}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)

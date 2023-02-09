@@ -21,37 +21,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func TimestampDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func TimestampDiff(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	//input vectors
-	firstVector := vectors[0]
-	secondVector := vectors[1]
-	thirdVector := vectors[2]
+	firstVector := ivecs[0]
+	secondVector := ivecs[1]
+	thirdVector := ivecs[2]
 	firstValues := vector.MustStrCols(firstVector)
 	secondValues := vector.MustTCols[types.Datetime](secondVector)
 	thirdValues := vector.MustTCols[types.Datetime](thirdVector)
-	resultType := types.T_int64.ToType()
+	rtyp := types.T_int64.ToType()
 
 	//the max Length of all vectors
-	maxLen := vectors[0].Length()
-	for i := range vectors {
-		val := vectors[i].Length()
+	maxLen := ivecs[0].Length()
+	for i := range ivecs {
+		val := ivecs[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
 	}
 
 	if firstVector.IsConstNull() || secondVector.IsConstNull() || thirdVector.IsConstNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
 
-	resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, maxLen, nil)
 	if err != nil {
 		return nil, err
 	}
-	resultValues := vector.MustTCols[int64](resultVector)
-	err = datediff.TimestampDiffWithCols(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), thirdVector.GetNulls(), resultVector.GetNulls(), resultValues, maxLen)
+	rvals := vector.MustTCols[int64](rvec)
+	err = datediff.TimestampDiffWithCols(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), thirdVector.GetNulls(), rvec.GetNulls(), rvals, maxLen)
 	if err != nil {
 		return nil, err
 	}
-	return resultVector, nil
+	return rvec, nil
 }

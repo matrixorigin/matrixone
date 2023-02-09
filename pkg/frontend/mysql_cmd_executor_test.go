@@ -606,7 +606,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		err = getDataFromPipeline(ses, batchCase2)
 		convey.So(err, convey.ShouldBeNil)
 
-		batchCase2.Vecs = append(batchCase2.Vecs, vector.New(vector.FLAT, types.Type{Oid: 88}))
+		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVector(types.Type{Oid: 88}))
 		err = getDataFromPipeline(ses, batchCase2)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -676,7 +676,7 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
-		vec := vector.New(vector.FLAT, tt[i])
+		vec := vector.NewVector(tt[i])
 		vec.PreExtend(batchSize, testutil.TestUtilMp)
 		batchData.Vecs[i] = vec
 	}
@@ -1129,7 +1129,7 @@ func TestDump2File(t *testing.T) {
 			cnt += 1
 			if cnt == 1 {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.New(vector.FLAT, types.T_int64.ToType())
+				bat.Vecs[0] = vector.NewVector(types.T_int64.ToType())
 				err := vector.Append(bat.Vecs[0], int64(1), false, testutil.TestUtilMp)
 				convey.So(err, convey.ShouldBeNil)
 			}

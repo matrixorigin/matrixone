@@ -25,23 +25,23 @@ import (
 )
 
 func makeInt64Vector(values []int64, nsp []uint64) *vector.Vector {
-	//ns := nulls.Build(len(values), nsp...)
-	vec := vector.New(vector.FLAT, types.T_int64.ToType())
+	vec := vector.NewVector(types.T_int64.ToType())
 	vector.AppendList(vec, values, nil, testutil.TestUtilMp)
+	vec.SetNulls(nulls.Build(len(values), nsp...))
 	return vec
 }
 
 func makeUint64Vector(values []uint64, nsp []uint64) *vector.Vector {
-	//ns := nulls.Build(len(values), nsp...)
-	vec := vector.New(vector.FLAT, types.T_uint64.ToType())
+	vec := vector.NewVector(types.T_uint64.ToType())
 	vector.AppendList(vec, values, nil, testutil.TestUtilMp)
+	vec.SetNulls(nulls.Build(len(values), nsp...))
 	return vec
 }
 
 func makeFloat64Vector(values []float64, nsp []uint64) *vector.Vector {
-	//ns := nulls.Build(len(values), nsp...)
-	vec := vector.New(vector.FLAT, types.T_float64.ToType())
+	vec := vector.NewVector(types.T_float64.ToType())
 	vector.AppendList(vec, values, nil, testutil.TestUtilMp)
+	vec.SetNulls(nulls.Build(len(values), nsp...))
 	return vec
 }
 

@@ -81,9 +81,7 @@ func powerFloat64[T constraints.Integer | constraints.Float](t *testing.T, typ t
 func makePowerVectors[T constraints.Integer | constraints.Float](src T, src2 T, srcScalar bool, t types.T) []*vector.Vector {
 	mp := mpool.MustNewZero()
 	vectors := make([]*vector.Vector, 2)
-	vectors[0] = vector.New(vector.FLAT, t.ToType())
-	vector.Append(vectors[0], src, false, mp)
-	vectors[1] = vector.New(vector.FLAT, t.ToType())
-	vector.Append(vectors[1], src2, false, mp)
+	vectors[0] = vector.NewConst(t.ToType(), src, 1, mp)
+	vectors[1] = vector.NewConst(t.ToType(), src2, 1, mp)
 	return vectors
 }

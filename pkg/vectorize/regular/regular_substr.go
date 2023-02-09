@@ -52,7 +52,7 @@ func RegularSubstrWithReg(expr string, pat *regexp.Regexp, pos, occurrence int64
 	return matchRes, nil
 }
 
-func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []string, exprN, patN *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, maxLen int) error {
+func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []string, exprN, patN *nulls.Nulls, ovec *vector.Vector, proc *process.Process, maxLen int) error {
 	rs := make([]string, maxLen)
 	var posValue int64
 	var occValue int64
@@ -63,7 +63,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 		}
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(0)) || pat[0] == "" {
-				nulls.Add(resultVector.GetNulls(), uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			posValue, occValue = determineValuesWithTwo(pos, occ, i)
@@ -72,16 +72,16 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 				return err
 			}
 			if res == nil {
-				nulls.Add(resultVector.GetNulls(), uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			rs[i] = res[occValue-1]
 		}
-		vector.AppendStringList(resultVector, rs, nil, proc.Mp())
+		vector.AppendStringList(ovec, rs, nil, proc.Mp())
 	} else if len(expr) == 1 {
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(i)) || pat[i] == "" {
-				nulls.Add(resultVector.GetNulls(), uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			posValue, occValue = determineValuesWithTwo(pos, occ, i)
@@ -90,12 +90,12 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 				return err
 			}
 			if res == nil {
-				nulls.Add(resultVector.GetNulls(), uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			rs[i] = res[occValue-1]
 		}
-		vector.AppendStringList(resultVector, rs, nil, proc.Mp())
+		vector.AppendStringList(ovec, rs, nil, proc.Mp())
 	} else if len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
@@ -103,7 +103,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 		}
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) || pat[0] == "" {
-				nulls.Add(resultVector.GetNulls(), uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			posValue, occValue = determineValuesWithTwo(pos, occ, i)
@@ -112,16 +112,16 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 				return err
 			}
 			if res == nil {
-				nulls.Add(resultVector.GetNulls(), uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			rs[i] = res[occValue-1]
 		}
-		vector.AppendStringList(resultVector, rs, nil, proc.Mp())
+		vector.AppendStringList(ovec, rs, nil, proc.Mp())
 	} else {
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(i)) || pat[i] == "" {
-				nulls.Add(resultVector.GetNulls(), uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			posValue, occValue = determineValuesWithTwo(pos, occ, i)
@@ -130,12 +130,12 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 				return err
 			}
 			if res == nil {
-				nulls.Add(resultVector.GetNulls(), uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			rs[i] = res[occValue-1]
 		}
-		vector.AppendStringList(resultVector, rs, nil, proc.Mp())
+		vector.AppendStringList(ovec, rs, nil, proc.Mp())
 	}
 	return nil
 }

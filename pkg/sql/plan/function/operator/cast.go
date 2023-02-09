@@ -14,54 +14,10 @@
 
 package operator
 
-import (
-	"context"
-	"fmt"
-	"math"
-	"strings"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/timestamp"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/constraints"
-)
-
+/*
 func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec, err := doCast(vs, proc)
 	return vec, err
-}
-
-// shorten the string to the one with no more than 101 characters.
-func shortenValueString(valueStr string) string {
-	utf8Str := []rune(valueStr)
-	l := len(utf8Str)
-	if l > 100 {
-		return string(utf8Str[:100]) + "..."
-	}
-	return valueStr
-}
-
-func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, extraInfo string) error {
-	var errStr string
-	if vec.IsConst() {
-		if vec.IsConstNull() {
-			errStr = fmt.Sprintf("Can't cast 'NULL' as %v type.", typ)
-		} else {
-			valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec), "["), "]")
-			shortenValueStr := shortenValueString(valueStr)
-			errStr = fmt.Sprintf("Can't cast '%s' from %v type to %v type.", shortenValueStr, vec.GetType(), typ)
-		}
-	} else {
-		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.GetType(), typ)
-	}
-	return moerr.NewInternalError(ctx, errStr+" "+extraInfo)
 }
 
 func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -814,7 +770,7 @@ func CastDecimal64ToString(lv, rv *vector.Vector, proc *process.Process) (*vecto
 				return nil, err
 			}
 			vec := vector.New(vector.CONSTANT, *rv.GetType())
-			vector.AppendString(vec, col[0], false, proc.Mp())
+			vector.AppendBytes(vec, []byte(col[0]), false, proc.Mp())
 			return vec, nil
 		}
 	} else {
@@ -823,7 +779,7 @@ func CastDecimal64ToString(lv, rv *vector.Vector, proc *process.Process) (*vecto
 		if col, err = binary.Decimal64ToBytes(lvs, col, lv.GetType().Scale); err != nil {
 			return nil, err
 		}
-		vec := vector.New(vector.FLAT, *rv.GetType())
+		vec := vector.NewVector(*rv.GetType())
 		vector.AppendStringList(vec, col, nil, proc.Mp())
 		return vec, nil
 	}
@@ -841,7 +797,7 @@ func CastDecimal128ToString(lv, rv *vector.Vector, proc *process.Process) (*vect
 				return nil, err
 			}
 			vec := vector.New(vector.CONSTANT, *rv.GetType())
-			vector.AppendString(vec, col[0], false, proc.Mp())
+			vector.AppendBytes(vec, []byte(col[0]), false, proc.Mp())
 			return vec, nil
 		}
 	} else {
@@ -850,7 +806,7 @@ func CastDecimal128ToString(lv, rv *vector.Vector, proc *process.Process) (*vect
 		if col, err = binary.Decimal128ToBytes(lvs, col, lv.GetType().Scale); err != nil {
 			return nil, err
 		}
-		vec := vector.New(vector.FLAT, *rv.GetType())
+		vec := vector.NewVector(*rv.GetType())
 		vector.AppendStringList(vec, col, nil, proc.Mp())
 		return vec, nil
 	}
@@ -1047,7 +1003,7 @@ func CastSpecials1Int[T constraints.Signed](lv, rv *vector.Vector, proc *process
 		if _, err = binary.BytesToInt(proc.Ctx, col, rs); err != nil {
 			return nil, err
 		}
-		vec = vector.New(vector.FLAT, *rv.GetType())
+		vec = vector.NewVector(*rv.GetType())
 		vector.AppendList(vec, rs, nil, proc.Mp())
 		return vec, nil
 	}
@@ -1075,7 +1031,7 @@ func CastSpecials1Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *proc
 		if _, err = binary.BytesToUint(proc.Ctx, col, rs); err != nil {
 			return nil, err
 		}
-		vec = vector.New(vector.FLAT, *rv.GetType())
+		vec = vector.NewVector(*rv.GetType())
 		vector.AppendList(vec, rs, nil, proc.Mp())
 		return vec, nil
 	}
@@ -1093,7 +1049,7 @@ func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 		if _, err = binary.BytesToFloat(proc.Ctx, col, rs, lv.GetIsBin()); err != nil {
 			return nil, err
 		}
-		vec := vector.New(vector.FLAT, *rv.GetType())
+		vec := vector.NewVector(*rv.GetType())
 		vector.Append(vec, rs[0], false, proc.Mp())
 		return vec, nil
 	} else {
@@ -1105,7 +1061,7 @@ func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 		if _, err = binary.BytesToFloat(proc.Ctx, col, rs, lv.GetIsBin()); err != nil {
 			return nil, err
 		}
-		vec = vector.New(vector.FLAT, *rv.GetType())
+		vec = vector.NewVector(*rv.GetType())
 		vector.AppendList(vec, rs, nil, proc.Mp())
 		return vec, nil
 	}
@@ -1126,10 +1082,10 @@ func CastSpecials2Int[T constraints.Signed](lv, rv *vector.Vector, proc *process
 
 	if lv.IsConst() {
 		vec := vector.New(vector.CONSTANT, *rv.GetType())
-		vector.AppendString(vec, col[0], false, proc.Mp())
+		vector.AppendBytes(vec, []byte(col[0]), false, proc.Mp())
 		return vec, nil
 	}
-	vec := vector.New(vector.FLAT, *rv.GetType())
+	vec := vector.NewVector(*rv.GetType())
 	vector.AppendStringList(vec, col, nil, proc.Mp())
 	return vec, nil
 }
@@ -1147,10 +1103,10 @@ func CastSpecials2Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *proc
 
 	if lv.IsConst() {
 		vec := vector.New(vector.CONSTANT, *rv.GetType())
-		vector.AppendString(vec, col[0], false, proc.Mp())
+		vector.AppendBytes(vec, []byte(col[0]), false, proc.Mp())
 		return vec, nil
 	}
-	vec := vector.New(vector.FLAT, *rv.GetType())
+	vec := vector.NewVector(*rv.GetType())
 	vector.AppendStringList(vec, col, nil, proc.Mp())
 	return vec, nil
 }
@@ -1170,10 +1126,10 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 
 	if lv.IsConst() {
 		vec := vector.New(vector.CONSTANT, *rv.GetType())
-		vector.AppendString(vec, col[0], false, proc.Mp())
+		vector.AppendBytes(vec, []byte(col[0]), false, proc.Mp())
 		return vec, nil
 	}
-	vec := vector.New(vector.FLAT, *rv.GetType())
+	vec := vector.NewVector(*rv.GetType())
 	vector.AppendStringList(vec, col, nil, proc.Mp())
 	return vec, nil
 }
@@ -1230,7 +1186,7 @@ func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector
 			return nil, formatCastError(proc.Ctx, lv, *rv.GetType(), errInfo)
 		}
 		vec := vector.New(vector.CONSTANT, *rv.GetType())
-		vector.AppendString(vec, source[0], false, proc.Mp())
+		vector.AppendBytes(vec, []byte(source[0]), false, proc.Mp())
 		return vec, nil
 	}
 	destLen := int(rv.GetType().Width)
@@ -1245,7 +1201,7 @@ func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector
 			}
 		}
 	}
-	vec := vector.New(vector.FLAT, *rv.GetType())
+	vec := vector.NewVector(*rv.GetType())
 	vector.AppendStringList(vec, source, nil, proc.Mp())
 	return vec, nil
 }
@@ -1333,13 +1289,13 @@ func CastSpecialu4[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.
 
 // XXX This is a super slow function that we need to vectorwise.
 func CastFloatAsDecimal128[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultType := rv.GetType()
+	rtyp := rv.GetType()
 	vs := vector.MustTCols[T](lv)
 	if lv.IsConst() {
 		srcStr := fmt.Sprintf("%f", vs[0])
-		vec := proc.AllocScalarVector(*resultType)
+		vec := proc.AllocScalarVector(*rtyp)
 		rs := vector.MustTCols[types.Decimal128](vec)
-		decimal128, err := types.ParseStringToDecimal128(srcStr, resultType.Width, resultType.Scale, lv.GetIsBin())
+		decimal128, err := types.ParseStringToDecimal128(srcStr, rtyp.Width, rtyp.Scale, lv.GetIsBin())
 		if err != nil {
 			return nil, err
 		}
@@ -1347,7 +1303,7 @@ func CastFloatAsDecimal128[T constraints.Float](lv, rv *vector.Vector, proc *pro
 		nulls.Reset(vec.GetNulls())
 		return vec, nil
 	}
-	vec, err := proc.AllocVectorOfRows(*resultType, int64(len(vs)), lv.GetNulls())
+	vec, err := proc.AllocVectorOfRows(*rtyp, int64(len(vs)), lv.GetNulls())
 	if err != nil {
 		return nil, err
 	}
@@ -1357,7 +1313,7 @@ func CastFloatAsDecimal128[T constraints.Float](lv, rv *vector.Vector, proc *pro
 			continue
 		}
 		strValue := fmt.Sprintf("%f", vs[i])
-		decimal128, err2 := types.ParseStringToDecimal128(strValue, resultType.Width, resultType.Scale, lv.GetIsBin())
+		decimal128, err2 := types.ParseStringToDecimal128(strValue, rtyp.Width, rtyp.Scale, lv.GetIsBin())
 		if err2 != nil {
 			return nil, err2
 		}
@@ -1368,13 +1324,13 @@ func CastFloatAsDecimal128[T constraints.Float](lv, rv *vector.Vector, proc *pro
 
 // XXX Super slow.
 func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultType := rv.GetType()
+	rtyp := rv.GetType()
 	vs := vector.MustTCols[T](lv)
 	var err error
 	if lv.IsConst() {
-		vec := proc.AllocScalarVector(*resultType)
+		vec := proc.AllocScalarVector(*rtyp)
 		rs := vector.MustTCols[types.Decimal64](vec)
-		rs[0], err = types.Decimal64_FromFloat64(float64(vs[0]), resultType.Width, resultType.Scale)
+		rs[0], err = types.Decimal64_FromFloat64(float64(vs[0]), rtyp.Width, rtyp.Scale)
 		if err != nil {
 			return nil, err
 		}
@@ -1382,7 +1338,7 @@ func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *proc
 		return vec, nil
 	}
 
-	vec, err := proc.AllocVectorOfRows(*resultType, int64(len(vs)), lv.GetNulls())
+	vec, err := proc.AllocVectorOfRows(*rtyp, int64(len(vs)), lv.GetNulls())
 	if err != nil {
 		return nil, err
 	}
@@ -1391,7 +1347,7 @@ func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *proc
 		if nulls.Contains(lv.GetNulls(), uint64(i)) {
 			continue
 		}
-		rs[i], err = types.Decimal64_FromFloat64(float64(vs[i]), resultType.Width, resultType.Scale)
+		rs[i], err = types.Decimal64_FromFloat64(float64(vs[i]), rtyp.Width, rtyp.Scale)
 		if err != nil {
 			return nil, err
 		}
@@ -1778,18 +1734,18 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 		t = proc.SessionInfo.TimeZone
 	}
 	lvs := vector.MustTCols[types.Timestamp](lv)
-	resultType := rv.GetType()
+	rtyp := rv.GetType()
 	precision := lv.GetType().Precision
 	if lv.IsConst() {
 		if lv.IsConstNull() {
-			return proc.AllocConstNullVector(*resultType), nil
+			return proc.AllocConstNullVector(*rtyp), nil
 		}
 		rs := make([]string, 1)
 		if _, err := binary.TimestampToVarchar(proc.Ctx, t, lvs, rs, precision); err != nil {
 			return nil, err
 		}
-		vec := vector.New(vector.CONSTANT, *resultType)
-		vector.AppendString(vec, rs[0], false, proc.Mp())
+		vec := vector.New(vector.CONSTANT, *rtyp)
+		vector.AppendBytes(vec, []byte(rs[0]), false, proc.Mp())
 		return vec, nil
 	}
 
@@ -1797,7 +1753,7 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 	if _, err := binary.TimestampToVarchar(proc.Ctx, t, lvs, rs, precision); err != nil {
 		return nil, err
 	}
-	vec := vector.New(vector.FLAT, *resultType)
+	vec := vector.NewVector(*rtyp)
 	vector.AppendStringList(vec, rs, nil, proc.Mp())
 	return vec, nil
 }
@@ -1847,14 +1803,14 @@ func CastBoolToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 	if lv.IsConst() {
 		binary.BoolToBytes(proc.Ctx, lvs, col)
 		vec := vector.New(vector.CONSTANT, *rv.GetType())
-		vector.AppendString(vec, col[0], false, proc.Mp())
+		vector.AppendBytes(vec, []byte(col[0]), false, proc.Mp())
 		return vec, nil
 	}
 
 	if _, err = binary.BoolToBytes(proc.Ctx, lvs, col); err != nil {
 		return nil, err
 	}
-	vec := vector.New(vector.FLAT, *rv.GetType())
+	vec := vector.NewVector(*rv.GetType())
 	vector.AppendStringList(vec, col, nil, proc.Mp())
 	return vec, nil
 }
@@ -1871,7 +1827,7 @@ func CastDateAsString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 	if lv.IsConst() {
 		binary.DateToBytes(proc.Ctx, lvs, col)
 		vec := vector.New(vector.CONSTANT, *rv.GetType())
-		vector.AppendString(vec, col[0], false, proc.Mp())
+		vector.AppendBytes(vec, []byte(col[0]), false, proc.Mp())
 		return vec, nil
 	}
 
@@ -2016,14 +1972,14 @@ func CastDatetimeAsString(lv, rv *vector.Vector, proc *process.Process) (*vector
 			return nil, err
 		}
 		vec := vector.New(vector.CONSTANT, *rv.GetType())
-		vector.AppendString(vec, col[0], false, proc.Mp())
+		vector.AppendBytes(vec, []byte(col[0]), false, proc.Mp())
 		return vec, nil
 	}
 
 	if col, err = binary.DatetimeToBytes(proc.Ctx, lvs, col, lv.GetType().Precision); err != nil {
 		return nil, err
 	}
-	vec := vector.New(vector.FLAT, *rv.GetType())
+	vec := vector.NewVector(*rv.GetType())
 	vector.AppendStringList(vec, col, nil, proc.Mp())
 	return vec, nil
 }
@@ -2171,14 +2127,14 @@ func CastTimeAsString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 			return nil, err
 		}
 		vec := vector.New(vector.CONSTANT, *rv.GetType())
-		vector.AppendString(vec, col[0], false, proc.Mp())
+		vector.AppendBytes(vec, []byte(col[0]), false, proc.Mp())
 		return vec, nil
 	}
 
 	if col, err = binary.TimeToBytes(proc.Ctx, lvs, col, lv.GetType().Precision); err != nil {
 		return nil, err
 	}
-	vec := vector.New(vector.FLAT, *rv.GetType())
+	vec := vector.NewVector(*rv.GetType())
 	vector.AppendStringList(vec, col, nil, proc.Mp())
 	return vec, nil
 }
@@ -2762,7 +2718,7 @@ func CastStringToJson(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		col[i] = val
 	}
-	vec := vector.New(vector.FLAT, *rv.GetType())
+	vec := vector.NewVector(*rv.GetType())
 	vector.AppendBytesList(vec, col, nil, proc.Mp())
 	return vec, nil
 }
@@ -2797,7 +2753,7 @@ func CastJsonToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		col[i] = val
 	}
-	vec := vector.New(vector.FLAT, *rv.GetType())
+	vec := vector.NewVector(*rv.GetType())
 	vector.AppendBytesList(vec, col, nil, proc.Mp())
 	return vec, nil
 }
@@ -2881,7 +2837,7 @@ func CastUuidToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 				return nil, err
 			}
 			vec := vector.New(vector.CONSTANT, *rv.GetType())
-			vector.AppendString(vec, col[0], false, proc.Mp())
+			vector.AppendBytes(vec, []byte(col[0]), false, proc.Mp())
 			return vec, nil
 		}
 	} else {
@@ -2890,66 +2846,9 @@ func CastUuidToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 		if col, err = binary.UuidToBytes(lvs, col); err != nil {
 			return nil, err
 		}
-		vec := vector.New(vector.FLAT, *rv.GetType())
+		vec := vector.NewVector(*rv.GetType())
 		vector.AppendStringList(vec, col, nil, proc.Mp())
 		return vec, nil
 	}
 }
-
-// ----------------------------------------------------------------------------------------------------------------------
-// IsInteger return true if the types.T is integer type
-func IsInteger(t types.T) bool {
-	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 ||
-		t == types.T_uint8 || t == types.T_uint16 || t == types.T_uint32 || t == types.T_uint64 {
-		return true
-	}
-	return false
-}
-
-// isSignedInteger: return true if the types.T is Signed integer type
-func isSignedInteger(t types.T) bool {
-	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 {
-		return true
-	}
-	return false
-}
-
-// isUnsignedInteger: return true if the types.T is UnSigned integer type
-func isUnsignedInteger(t types.T) bool {
-	if t == types.T_uint8 || t == types.T_uint16 || t == types.T_uint32 || t == types.T_uint64 {
-		return true
-	}
-	return false
-}
-
-// IsFloat: return true if the types.T is floating Point Types
-func IsFloat(t types.T) bool {
-	if t == types.T_float32 || t == types.T_float64 {
-		return true
-	}
-	return false
-}
-
-// IsNumeric: return true if the types.T is numbric type
-func IsNumeric(t types.T) bool {
-	if IsInteger(t) || IsFloat(t) {
-		return true
-	}
-	return false
-}
-
-// isString: return true if the types.T is string type
-func isString(t types.T) bool {
-	if t == types.T_char || t == types.T_varchar || t == types.T_blob || t == types.T_text {
-		return true
-	}
-	return false
-}
-
-// IsDecimal: return true if the types.T is decimal64 or decimal128
-func IsDecimal(t types.T) bool {
-	if t == types.T_decimal64 || t == types.T_decimal128 {
-		return true
-	}
-	return false
-}
+*/

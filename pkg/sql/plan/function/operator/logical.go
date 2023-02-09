@@ -31,28 +31,14 @@ const (
 	XOR logicType = 2
 )
 
-func Logic(vectors []*vector.Vector, proc *process.Process, cfn logicFn, op logicType) (*vector.Vector, error) {
-	left, right := vectors[0], vectors[1]
+func Logic(ivecs []*vector.Vector, proc *process.Process, cfn logicFn, op logicType) (*vector.Vector, error) {
+	left, right := ivecs[0], ivecs[1]
 	if left.IsConstNull() || right.IsConstNull() {
-		if op == AND {
-			return HandleAndNullCol(vectors, proc)
-		}
-
-		if op == OR {
-			return HandleOrNullCol(vectors, proc)
-		}
-
-		if op == XOR {
-			if left.IsConstNull() {
-				return proc.AllocConstNullVector(boolType), nil
-			} else {
-				return proc.AllocConstNullVector(boolType), nil
-			}
-		}
+		return vector.NewConstNull(boolType, ivecs[0].Length(), proc.Mp()), nil
 	}
 
 	if left.IsConst() && right.IsConst() {
-		vec := proc.AllocScalarVector(boolType)
+		vec := vector.NewConst(boolType, false, ivecs[0].Length(), proc.Mp())
 		if err := cfn(left, right, vec); err != nil {
 			return nil, err
 		}
@@ -63,13 +49,13 @@ func Logic(vectors []*vector.Vector, proc *process.Process, cfn logicFn, op logi
 	if left.IsConst() {
 		length = right.Length()
 	}
-	resultVector := allocateBoolVector(length, proc)
-	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.GetNulls())
+	rvec := allocateBoolVector(length, proc)
+	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
 
-	if err := cfn(left, right, resultVector); err != nil {
+	if err := cfn(left, right, rvec); err != nil {
 		return nil, err
 	}
-	return resultVector, nil
+	return rvec, nil
 }
 
 func LogicAnd(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -84,13 +70,13 @@ func LogicXor(args []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	return Logic(args, proc, logical.Xor, XOR)
 }
 
-func LogicNot(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	v1 := vs[0]
+func LogicNot(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1 := ivecs[0]
 	if v1.IsConstNull() {
-		return proc.AllocScalarNullVector(boolType), nil
+		return vector.NewConstNull(boolType, ivecs[0].Length(), proc.Mp()), nil
 	}
 	if v1.IsConst() {
-		vec := proc.AllocScalarVector(boolType)
+		vec := vector.NewConst(boolType, false, ivecs[0].Length(), proc.Mp())
 		if err := logical.Not(v1, vec); err != nil {
 			return nil, err
 		}

@@ -203,8 +203,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 				Width: node.TableDef.Cols[i].Typ.Width,
 				Scale: node.TableDef.Cols[i].Typ.Scale,
 			}
-			vec := vector.New(vector.FLAT, typ)
-			vec.PreExtend(len(fileList), proc.Mp())
+			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
 				vector.SetStringAt(vec, j, getAccountCol(fileList[j]), proc.Mp())
@@ -216,8 +215,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 				Width: types.MaxVarcharLen,
 				Scale: 0,
 			}
-			vec := vector.New(vector.FLAT, typ)
-			vec.PreExtend(len(fileList), proc.Mp())
+			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
 				vector.SetStringAt(vec, j, fileList[j], proc.Mp())
@@ -425,13 +423,12 @@ func makeType(Cols []*plan.ColDef, index int) types.Type {
 	return types.New(types.T(Cols[index].Typ.Id), Cols[index].Typ.Width, Cols[index].Typ.Scale, Cols[index].Typ.Precision)
 }
 
-func makeBatch(param *ExternalParam, batchSize int, mp *mpool.MPool) *batch.Batch {
+func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) *batch.Batch {
 	batchData := batch.New(true, param.Attrs)
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := makeType(param.Cols, i)
-		vec := vector.New(vector.FLAT, typ)
-		vec.PreExtend(batchSize, mp)
+		vec, _ := proc.AllocVectorOfRows(typ, batchSize, nil)
 		//vec.SetOriginal(false)
 		batchData.Vecs[i] = vec
 	}
@@ -468,7 +465,7 @@ func getRealAttrCnt(attrs []string) int {
 }
 
 func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
-	bat := makeBatch(param, plh.batchSize, proc.Mp())
+	bat := makeBatch(param, plh.batchSize, proc)
 	var (
 		Line []string
 		err  error
@@ -509,9 +506,11 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	if unexpectEOF && n > 0 {
 		n--
 		for i := 0; i < len(bat.Vecs); i++ {
-			newVec := vector.New(vector.FLAT, *bat.Vecs[i].GetType())
-			newVec.PreExtend(n, proc.Mp())
-			newVec.SetNulls(bat.Vecs[i].GetNulls())
+			newVec, err := proc.AllocVectorOfRows(*bat.Vecs[i].GetType(), n, nil)
+			if err != nil {
+				return nil, err
+			}
+			nulls.Set(newVec.GetNulls(), bat.Vecs[i].GetNulls())
 			for j := int64(0); j < int64(n); j++ {
 				if newVec.GetNulls().Contains(uint64(j)) {
 					continue
@@ -621,7 +620,7 @@ func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, err
 }
 
 func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) (*batch.Batch, error) {
-	bat := makeBatch(param, 0, proc.Mp())
+	bat := makeBatch(param, 0, proc)
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		return bat, nil
 	}
@@ -646,22 +645,26 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 	for i := 0; i < len(param.Attrs); i++ {
 		var vecTmp *vector.Vector
 		if param.Extern.SysTable && uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
-			vecTmp = vector.New(vector.FLAT, makeType(param.Cols, i))
-			vecTmp.PreExtend(rows, proc.GetMPool())
+			vecTmp, err = proc.AllocVectorOfRows(makeType(param.Cols, i), rows, nil)
+			if err != nil {
+				return nil, err
+			}
 			for j := 0; j < rows; j++ {
 				nulls.Add(vecTmp.GetNulls(), uint64(j))
 			}
 		} else if catalog.ContainExternalHidenCol(param.Attrs[i]) {
 			if rows == 0 {
-				vecTmp = vector.New(vector.FLAT, makeType(param.OriginCols, 0))
+				vecTmp = vector.NewVector(makeType(param.OriginCols, 0))
 				err = vecTmp.UnmarshalBinary(vec.Entries[i].Object.([]byte))
 				if err != nil {
 					return nil, err
 				}
 				rows = vecTmp.Length()
 			}
-			vecTmp = vector.New(vector.FLAT, makeType(param.Cols, i))
-			vecTmp.PreExtend(rows, proc.GetMPool())
+			vecTmp, err = proc.AllocVectorOfRows(makeType(param.Cols, i), rows, nil)
+			if err != nil {
+				return nil, err
+			}
 			for j := 0; j < rows; j++ {
 				err := vector.SetStringAt(vecTmp, j, param.Fileparam.Filepath, proc.GetMPool())
 				if err != nil {
@@ -669,7 +672,7 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 				}
 			}
 		} else {
-			vecTmp = vector.New(vector.FLAT, *bat.Vecs[i].GetType())
+			vecTmp = vector.NewVector(*bat.Vecs[i].GetType())
 			err = vecTmp.UnmarshalBinary(vec.Entries[i].Object.([]byte))
 			if err != nil {
 				return nil, err
@@ -778,7 +781,7 @@ func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, ob
 		}
 	}
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
-		bat := makeBatch(param, 0, proc.Mp())
+		bat := makeBatch(param, 0, proc)
 		return bat, nil
 	}
 

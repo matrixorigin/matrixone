@@ -28,16 +28,16 @@ func TimeDiff[T timediff.DiffT](vectors []*vector.Vector, proc *process.Process)
 	secondVector := vectors[1]
 	firstValues := vector.MustTCols[T](firstVector)
 	secondValues := vector.MustTCols[T](secondVector)
-	resultType := types.T_time.ToType()
+	rtyp := types.T_time.ToType()
 
 	resultPrecision := firstVector.GetType().Precision
 	if firstVector.GetType().Precision < secondVector.GetType().Precision {
 		resultPrecision = secondVector.GetType().Precision
 	}
-	resultType.Precision = resultPrecision
+	rtyp.Precision = resultPrecision
 
 	if firstVector.IsConstNull() || secondVector.IsConstNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+		return vector.NewConstNull(rtyp, firstVector.Length(), proc.Mp()), nil
 	}
 
 	vectorLen := len(firstValues)
@@ -45,15 +45,15 @@ func TimeDiff[T timediff.DiffT](vectors []*vector.Vector, proc *process.Process)
 		vectorLen = len(secondValues)
 	}
 
-	resultVector, err := proc.AllocVectorOfRows(resultType, int64(vectorLen), nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, vectorLen, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	rs := vector.MustTCols[types.Time](resultVector)
-	nulls.Or(firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls())
+	rs := vector.MustTCols[types.Time](rvec)
+	nulls.Or(firstVector.GetNulls(), secondVector.GetNulls(), rvec.GetNulls())
 	if err = timediff.TimeDiffWithTimeFn(firstValues, secondValues, rs); err != nil {
 		return nil, err
 	}
-	return resultVector, nil
+	return rvec, nil
 }

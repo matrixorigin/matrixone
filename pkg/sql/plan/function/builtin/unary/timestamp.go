@@ -17,100 +17,83 @@ package unary
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
-	inputValues := vector.MustTCols[types.Date](inputVector)
+func DateToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
+	ivals := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.GetNulls(), resultValues)
-		return resultVector, nil
+		return vector.NewConst(rtyp, ivals[0].ToTimestamp(proc.SessionInfo.TimeZone), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.GetNulls(), resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[types.Timestamp](rvec)
+		for i := range ivals {
+			rvals[i] = ivals[i].ToTimestamp(proc.SessionInfo.TimeZone)
+		}
+		return rvec, nil
 	}
 }
 
-func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Precision: inputVector.GetType().Precision, Size: 8}
-	inputValues := vector.MustTCols[types.Datetime](inputVector)
+func DatetimeToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_timestamp, Precision: inputVector.GetType().Precision, Size: 8}
+	ivals := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.GetNulls(), resultValues)
-		return resultVector, nil
+		return vector.NewConst(rtyp, ivals[0].ToTimestamp(proc.SessionInfo.TimeZone), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.GetNulls(), resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[types.Timestamp](rvec)
+		for i := range ivals {
+			rvals[i] = ivals[i].ToTimestamp(proc.SessionInfo.TimeZone)
+		}
+		return rvec, nil
 	}
 }
 
-func TimestampToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	// XXX should this be an Noop?
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Precision: inputVector.GetType().Precision, Size: 8}
-	inputValues := vector.MustTCols[types.Timestamp](inputVector)
-	if inputVector.IsConst() {
-		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		copy(resultValues, inputValues)
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
-		if err != nil {
-			return nil, err
-		}
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		copy(resultValues, inputValues)
-		return resultVector, nil
-	}
+func TimestampToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return ivecs[0].Dup(proc.Mp())
 }
 
-func DateStringToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
-	inputValues := vector.MustStrCols(inputVector)
+func DateStringToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
+	ivals := vector.MustStrCols(inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		timestamp.DateStringToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.GetNulls(), resultValues)
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		ts, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, ivals[0], 6)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		timestamp.DateStringToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.GetNulls(), resultValues)
-		return resultVector, nil
+		return vector.NewConst(rtyp, ts, ivecs[0].Length(), proc.Mp()), nil
+	} else {
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
+		if err != nil {
+			return nil, err
+		}
+		rvals := vector.MustTCols[types.Timestamp](rvec)
+		for i := range ivals {
+			rvals[i], err = types.ParseTimestamp(proc.SessionInfo.TimeZone, ivals[i], 6)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return rvec, nil
 	}
 }

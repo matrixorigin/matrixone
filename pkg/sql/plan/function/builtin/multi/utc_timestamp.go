@@ -22,9 +22,7 @@ import (
 )
 
 func UTCTimestamp(_ []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultType := types.Type{Oid: types.T_datetime, Size: 8}
-	resultVector := proc.AllocScalarVector(resultType)
-	resultValues := vector.MustTCols[types.Datetime](resultVector)
-	resultValues[0] = get_timestamp.GetUTCTimestamp()
-	return resultVector, nil
+	rtyp := types.T_datetime.ToType()
+	rvec := vector.NewConst(rtyp, get_timestamp.GetUTCTimestamp(), 1, proc.Mp())
+	return rvec, nil
 }

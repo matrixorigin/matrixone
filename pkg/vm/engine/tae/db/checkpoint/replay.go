@@ -89,7 +89,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		if err2 != nil {
 			return types.TS{}, err2
 		}
-		pkgVec := vector.New(vector.FLAT, colTypes[i])
+		pkgVec := vector.NewVector(colTypes[i])
 		v := make([]byte, len(data.Entries[0].Object.([]byte)))
 		copy(v, data.Entries[0].Object.([]byte))
 		if err = pkgVec.UnmarshalBinary(v); err != nil {

@@ -24,46 +24,38 @@ import (
 
 func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	resultType := types.Type{Oid: types.T_uint8, Size: 1}
+	rtyp := types.Type{Oid: types.T_uint8, Size: 1}
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
 	switch {
+	case left.IsConstNull() || right.IsConstNull():
+		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
 	case left.IsConst() && right.IsConst():
-		if left.IsConstNull() || right.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.New(vector.CONSTANT, resultType)
-		resultValues := vector.MustTCols[uint8](resultVector)
-		startswith.StartsWithAllConst(leftValues[0], rightValues[0], resultValues)
-		return resultVector, nil
+		var rvals [1]uint8
+		startswith.StartsWithAllConst(leftValues[0], rightValues[0], rvals[:])
+		return vector.NewConst(rtyp, rvals[0], left.Length(), proc.Mp()), nil
 	case left.IsConst() && !right.IsConst():
-		if left.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(rightValues), right.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint8](resultVector)
-		startswith.StartsWithLeftConst(leftValues[0], rightValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[uint8](rvec)
+		startswith.StartsWithLeftConst(leftValues[0], rightValues, rvals)
+		return rvec, nil
 	case !left.IsConst() && right.IsConst():
-		if right.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(leftValues), left.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint8](resultVector)
-		startswith.StartsWithRightConst(leftValues, rightValues[0], resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[uint8](rvec)
+		startswith.StartsWithRightConst(leftValues, rightValues[0], rvals)
+		return rvec, nil
 	}
-	resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, len(leftValues), nil)
 	if err != nil {
 		return nil, err
 	}
-	resultValues := vector.MustTCols[uint8](resultVector)
-	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.GetNulls())
-	startswith.StartsWith(leftValues, rightValues, resultValues)
-	return resultVector, nil
+	rvals := vector.MustTCols[uint8](rvec)
+	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
+	startswith.StartsWith(leftValues, rightValues, rvals)
+	return rvec, nil
 }

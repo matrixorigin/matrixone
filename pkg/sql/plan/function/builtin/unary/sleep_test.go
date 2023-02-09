@@ -32,7 +32,7 @@ func TestSleep(t *testing.T) {
 	vs[0].SetLength(1)
 	_, err = Sleep[uint64](vs, proc)
 	require.NoError(t, err)
-	vs[0].MakeScalar(2)
+	vs[0] = vs[0].ToConst(2, proc.Mp())
 	_, err = Sleep[uint64](vs, proc)
 	require.NoError(t, err)
 	vs = []*vector.Vector{testutil.NewFloat64Vector(1, types.T_float64.ToType(), proc.Mp(), false, []float64{-1})}

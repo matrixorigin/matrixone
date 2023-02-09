@@ -33,19 +33,18 @@ func Instr(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, er
 	if v2.Length() > v1.Length() {
 		maxLen = v2.Length()
 	}
-	resultType := types.T_int64.ToType()
+	rtyp := types.T_int64.ToType()
 	if v1.IsConstNull() || v2.IsConstNull() {
-		ret = proc.AllocConstNullVector(resultType)
+		ret = vector.NewConstNull(rtyp, v1.Length(), proc.Mp())
 		return
 	}
 	s1, s2 := vector.MustStrCols(v1), vector.MustStrCols(v2)
 	if v1.IsConst() && v2.IsConst() {
-		ret = proc.AllocScalarVector(resultType)
 		str, substr := s1[0], s2[0]
-		err = vector.Append(ret, instr.Single(str, substr), false, proc.Mp())
+		ret = vector.NewConst(rtyp, instr.Single(str, substr), v1.Length(), proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+	ret, err = proc.AllocVectorOfRows(rtyp, maxLen, nil)
 	if err != nil {
 		return
 	}

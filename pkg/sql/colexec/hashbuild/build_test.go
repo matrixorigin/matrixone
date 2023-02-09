@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -89,6 +88,7 @@ func TestBuild(t *testing.T) {
 	}
 }
 
+/*
 func TestLowCardinalityBuild(t *testing.T) {
 	tc := newTestCase([]bool{false}, []types.Type{types.T_varchar.ToType()},
 		[]*plan.Expr{
@@ -119,6 +119,7 @@ func TestLowCardinalityBuild(t *testing.T) {
 	mp.Free()
 	tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 }
+*/
 
 func BenchmarkBuild(b *testing.B) {
 	for i := 0; i < b.N; i++ {

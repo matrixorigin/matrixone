@@ -149,12 +149,12 @@ func TestAtanWithTwoArg(t *testing.T) {
 	resultCol := make([]float64, 6)
 	firstVec := testutil.MakeFloat64Vector(firstCol, nil)
 	secondVec := testutil.MakeFloat64Vector(secondCol, nil)
-	resultVector := testutil.MakeFloat64Vector(resultCol, nil)
-	err := AtanWithTwoArg(firstVec, secondVec, resultVector)
+	ovec := testutil.MakeFloat64Vector(resultCol, nil)
+	err := AtanWithTwoArg(firstVec, secondVec, ovec)
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[float64](resultVector)
+	cols := vector.MustTCols[float64](ovec)
 	require.Equal(t, []float64{-0.7853981633974483, 0, -0.7853981633974483, 0.7853981633974483, -0.7853981633974483, 0.7853981633974483}, cols)
 
 }

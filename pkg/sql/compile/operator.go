@@ -968,16 +968,16 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 
 		// send bat to localChans
 		{
-			for i, vec := range bat.Vecs {
-				if vec.IsOriginal() {
-					cloneVec, err := vector.Dup(vec, proc.Mp())
-					if err != nil {
-						bat.Clean(proc.Mp())
-						return err
-					}
-					bat.Vecs[i] = cloneVec
-				}
-			}
+			//for i, vec := range bat.Vecs {
+			//	if vec.IsOriginal() {
+			//		cloneVec, err := vector.Dup(vec, proc.Mp())
+			//		if err != nil {
+			//			bat.Clean(proc.Mp())
+			//			return err
+			//		}
+			//		bat.Vecs[i] = cloneVec
+			//	}
+			//}
 
 			refCountAdd := int64(len(localChans) - 1)
 			atomic.AddInt64(&bat.Cnt, refCountAdd)

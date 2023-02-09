@@ -79,13 +79,14 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	dateVector := vectors[0]
 	formatVector := vectors[1]
 
-	resultType := types.T_varchar.ToType()
+	rtyp := types.T_varchar.ToType()
 	if !formatVector.IsConst() {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "date format format", "not constant")
 	}
 
 	if dateVector.IsConstNull() || formatVector.IsConstNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+		rvec := vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp())
+		return rvec, nil
 	}
 
 	// get the format string.
@@ -98,19 +99,17 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.New(vector.CONSTANT, resultType)
-		vector.AppendString(vec, resCol[0], resCol[0] == "", proc.Mp())
-		return vec, nil
+		return vector.NewConstBytes(rtyp, []byte(resCol[0]), dateVector.Length(), proc.Mp()), nil
 	} else {
 		datetimes := vector.MustTCols[types.Datetime](dateVector)
 		resCol, err := CalcDateFromat(proc.Ctx, datetimes, formatMask, dateVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.New(vector.FLAT, resultType)
-		resultVector.SetNulls(dateVector.GetNulls())
-		vector.AppendStringList(resultVector, resCol, nil, proc.Mp())
-		return resultVector, nil
+		rvec := vector.NewVector(rtyp)
+		nulls.Set(rvec.GetNulls(), dateVector.GetNulls())
+		vector.AppendStringList(rvec, resCol, nil, proc.Mp())
+		return rvec, nil
 	}
 }
 

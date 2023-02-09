@@ -43,12 +43,12 @@ func New(typ types.Type, m *mpool.MPool) (*Dict, error) {
 		if idx, err = newFixedReverseIndex(m); err != nil {
 			return nil, err
 		}
-		d.unique = vector.New(vector.FLAT, types.T_uint64.ToType())
+		d.unique = vector.NewVector(types.T_uint64.ToType())
 	} else {
 		if idx, err = newVarReverseIndex(m); err != nil {
 			return nil, err
 		}
-		d.unique = vector.New(vector.FLAT, types.T_varchar.ToType())
+		d.unique = vector.NewVector(types.T_varchar.ToType())
 	}
 
 	d.idx = idx
@@ -207,7 +207,6 @@ func (d *Dict) encodeVarData(data *vector.Vector) [][]byte {
 }
 
 func (d *Dict) findFixedData(pos int) *vector.Vector {
-	v := vector.New(vector.CONSTANT, d.typ)
 	data := d.getFixedData(pos)
 	switch d.typ.Oid {
 	case types.T_bool:
@@ -215,36 +214,34 @@ func (d *Dict) findFixedData(pos int) *vector.Vector {
 		if data == 1 {
 			val = true
 		}
-		vector.Append(v, val, false, d.m)
+		return vector.NewConst(d.typ, val, 1, d.m)
 	case types.T_int32:
-		vector.Append(v, int32(data), false, d.m)
+		return vector.NewConst(d.typ, int32(data), 1, d.m)
 	case types.T_int64:
-		vector.Append(v, int64(data), false, d.m)
+		return vector.NewConst(d.typ, int64(data), 1, d.m)
 	case types.T_uint32:
-		vector.Append(v, uint32(data), false, d.m)
+		return vector.NewConst(d.typ, uint32(data), 1, d.m)
 	case types.T_uint64:
-		vector.Append(v, uint64(data), false, d.m)
+		return vector.NewConst(d.typ, uint64(data), 1, d.m)
 	case types.T_float32:
-		vector.Append(v, float32(data), false, d.m)
+		return vector.NewConst(d.typ, float32(data), 1, d.m)
 	case types.T_float64:
-		vector.Append(v, float64(data), false, d.m)
+		return vector.NewConst(d.typ, float64(data), 1, d.m)
 	case types.T_decimal64:
 		val := types.DecodeDecimal64(types.EncodeUint64(&data))
-		vector.Append(v, val, false, d.m)
+		return vector.NewConst(d.typ, val, 1, d.m)
 	case types.T_date:
-		vector.Append(v, types.Date(data), false, d.m)
+		return vector.NewConst(d.typ, types.Date(data), 1, d.m)
 	case types.T_datetime:
-		vector.Append(v, types.Datetime(data), false, d.m)
+		return vector.NewConst(d.typ, types.Datetime(data), 1, d.m)
 	case types.T_timestamp:
-		vector.Append(v, types.Timestamp(data), false, d.m)
+		return vector.NewConst(d.typ, types.Timestamp(data), 1, d.m)
 	}
-	return v
+	panic("unreachable")
 }
 
 func (d *Dict) findVarData(pos int) *vector.Vector {
-	vec := vector.New(vector.CONSTANT, d.typ)
-	vector.AppendBytes(vec, d.getVarData(pos), false, d.m)
-	return vec
+	return vector.NewConstBytes(d.typ, d.getVarData(pos), 1, d.m)
 }
 
 func (d *Dict) getFixedData(n int) uint64 {
@@ -252,5 +249,5 @@ func (d *Dict) getFixedData(n int) uint64 {
 }
 
 func (d *Dict) getVarData(n int) []byte {
-	return d.unique.GetBytes(int64(n - 1))
+	return d.unique.GetBytes(n - 1)
 }

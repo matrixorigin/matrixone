@@ -219,7 +219,7 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 }
 
 func filterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.Batch {
-	retVec := vector.New(vector.FLAT, types.T_Rowid.ToType())
+	retVec := vector.NewVector(types.T_Rowid.ToType())
 	rowIdMap := make(map[types.Rowid]struct{})
 	for i, r := range vector.MustTCols[types.Rowid](bat.Vecs[idx]) {
 		if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
@@ -269,7 +269,7 @@ func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int
 	}
 
 	// get delete batch
-	delVec := vector.New(vector.FLAT, types.T_Rowid.ToType())
+	delVec := vector.NewVector(types.T_Rowid.ToType())
 	rowIdList := make([]types.Rowid, len(rowIdMap))
 	i := 0
 	for rowId := range rowIdMap {
@@ -340,11 +340,10 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 		}
 
 		if fromVec.IsConst() {
-			toVec = vector.New(vector.FLAT, *bat.Vecs[idx].GetType())
+			toVec = vector.NewVector(*bat.Vecs[idx].GetType())
 			if fromVec.IsConstNull() {
-				defVal := vector.GetInitConstVal(*bat.Vecs[idx].GetType())
 				for j := 0; j < batLen; j++ {
-					err := vector.Append(toVec, defVal, true, proc.Mp())
+					err := vector.Append(toVec, 0, true, proc.Mp())
 					if err != nil {
 						updateBatch.Clean(proc.Mp())
 						return nil, err
@@ -358,12 +357,13 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 				}
 			}
 		} else {
-			toVec = vector.New(vector.FLAT, *bat.Vecs[idx].GetType())
 			if rowSkip == nil {
-				for j := 0; j < fromVec.Length(); j++ {
-					toVec.UnionOne(fromVec, int64(j), proc.Mp())
+				toVec, err = fromVec.Dup(proc.Mp())
+				if err != nil {
+					return nil, err
 				}
 			} else {
+				toVec = vector.NewVector(*fromVec.GetType())
 				for j := 0; j < fromVec.Length(); j++ {
 					if !rowSkip[j] {
 						toVec.UnionOne(fromVec, int64(j), proc.Mp())
@@ -508,10 +508,8 @@ func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx con
 
 	for j := range tmpBat.Vecs {
 		nsp := tmpBat.Vecs[j].GetNulls()
-		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility {
-			if nulls.Any(nsp) {
-				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
-			}
+		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility && nulls.Any(nsp) {
+			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
 		}
 		if _, ok := compNameMap[tmpBat.Attrs[j]]; ok {
 			if nulls.Any(nsp) {

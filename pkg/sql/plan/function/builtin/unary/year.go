@@ -15,106 +15,94 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func DateToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	inputValues := vector.MustTCols[types.Date](inputVector)
+func DateToYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint16.ToType()
+	ivals := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[int64](resultVector)
-		DateToYearPlan2(inputValues, resultValues)
-		return resultVector, nil
+		return vector.NewConst(rtyp, ivals[0].Year(), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[int64](resultVector)
-		DateToYearPlan2(inputValues, resultValues)
-		// resultValues2 := make([]int64, len(resultValues))
-		// for i, x := range resultValues {
-		// 	resultValues2[i] = int64(x)
-		// }
-		return resultVector, nil
+		rvals := vector.MustTCols[uint16](rvec)
+		doDateToYear(ivals, rvals)
+		return rvec, nil
 	}
 }
 
-func DatetimeToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	inputValues := vector.MustTCols[types.Datetime](inputVector)
+func DatetimeToYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint16.ToType()
+	ivals := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[int64](resultVector)
-		DatetimeToYearPlan2(inputValues, resultValues)
-		return resultVector, nil
+		return vector.NewConst(rtyp, ivals[0].Year(), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[int64](resultVector)
-		DatetimeToYearPlan2(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[uint16](rvec)
+		doDatetimeToYear(ivals, rvals)
+		return rvec, nil
 	}
 }
 
-func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	inputValues := vector.MustStrCols(inputVector)
+func DateStringToYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint16.ToType()
+	ivals := vector.MustStrCols(inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[int64](resultVector)
-		DateStringToYearPlan2(inputValues, nil, resultValues)
-		return resultVector, nil
+		var rvals [1]uint16
+		doDateStringToYear(ivals, rvals[:])
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[int64](resultVector)
-		DateStringToYearPlan2(inputValues, resultVector.GetNulls(), resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[uint16](rvec)
+		doDateStringToYear(ivals, rvals)
+		return rvec, nil
 	}
 }
 
-func DateToYearPlan2(xs []types.Date, rs []int64) []int64 {
+func doDateToYear(xs []types.Date, rs []uint16) []uint16 {
 	for i, x := range xs {
-		rs[i] = int64(x.Year())
+		rs[i] = x.Year()
 	}
 	return rs
 }
 
-func DatetimeToYearPlan2(xs []types.Datetime, rs []int64) []int64 {
+func doDatetimeToYear(xs []types.Datetime, rs []uint16) []uint16 {
 	for i, x := range xs {
-		rs[i] = int64(x.Year())
+		rs[i] = x.Year()
 	}
 	return rs
 }
 
-func DateStringToYearPlan2(xs []string, ns *nulls.Nulls, rs []int64) []int64 {
+func doDateStringToYear(xs []string, rs []uint16) []uint16 {
 	for i, str := range xs {
 		d, e := types.ParseDateCast(str)
 		if e != nil {
 			panic(e)
 		}
-		rs[i] = int64(d.Year())
+		rs[i] = d.Year()
 	}
 	return rs
 }

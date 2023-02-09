@@ -60,7 +60,7 @@ func New(typ types.Type, m *mpool.MPool) (*LowCardinalityIndex, error) {
 		typ:   typ,
 		m:     m,
 		dict:  d,
-		poses: vector.New(vector.FLAT, types.T_uint16.ToType()),
+		poses: vector.NewVector(types.T_uint16.ToType()),
 		ref:   1,
 	}, nil
 }
@@ -83,7 +83,7 @@ func (idx *LowCardinalityIndex) DupEmpty() *LowCardinalityIndex {
 		typ:   idx.typ,
 		m:     idx.m,
 		dict:  idx.dict.Dup(),
-		poses: vector.New(vector.FLAT, types.T_uint16.ToType()),
+		poses: vector.NewVector(types.T_uint16.ToType()),
 		ref:   1,
 	}
 }

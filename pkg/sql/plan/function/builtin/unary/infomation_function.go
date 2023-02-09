@@ -16,7 +16,6 @@ package unary
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -26,9 +25,9 @@ import (
 These functions get information from the session and system status.
 */
 
-func adapter(vectors []*vector.Vector,
+func adapter(ivecs []*vector.Vector,
 	proc *process.Process,
-	resultType types.Type,
+	rtyp types.Type,
 	parameterCount int,
 	evaluateMemoryCapacityForJobFunc func(proc *process.Process, params ...interface{}) (int, error),
 	jobFunc func(proc *process.Process, params ...interface{}) (interface{}, error),
@@ -41,7 +40,7 @@ func adapter(vectors []*vector.Vector,
 		var svals []string
 		var uvals []uint64
 		var resultSpace interface{}
-		if resultType.IsString() {
+		if rtyp.IsString() {
 			svals = make([]string, 1)
 			resultSpace = svals
 		} else {
@@ -55,17 +54,11 @@ func adapter(vectors []*vector.Vector,
 		}
 		//step 4: fill the result vector
 		if result == nil {
-			vec := vector.New(vector.CONSTANT, resultType)
-			nulls.Add(vec.GetNulls(), 0)
-			return vec, nil
-		} else if resultType.IsString() {
-			vec := vector.New(vector.CONSTANT, resultType)
-			vector.AppendString(vec, svals[0], false, proc.Mp())
-			return vec, nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+		} else if rtyp.IsString() {
+			return vector.NewConstBytes(rtyp, []byte(svals[0]), ivecs[0].Length(), proc.Mp()), nil
 		} else {
-			vec := vector.New(vector.CONSTANT, resultType)
-			vector.Append(vec, uvals[0], false, proc.Mp())
-			return vec, nil
+			return vector.NewConst(rtyp, uvals[0], ivecs[0].Length(), proc.Mp()), nil
 		}
 	}
 	return nil, moerr.NewInternalError(proc.Ctx, "the parameter is invalid")

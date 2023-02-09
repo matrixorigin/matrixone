@@ -15,152 +15,392 @@
 package multi
 
 import (
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/date_sub"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func DateSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vectors[0]
-	secondVector := vectors[1]
-	firstValues := vector.MustTCols[types.Date](vectors[0])
-	secondValues := vector.MustTCols[int64](vectors[1])
-	thirdValues := vector.MustTCols[int64](vectors[2])
+func DateSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	startVec := ivecs[0]
+	diffVec := ivecs[1]
+	starts := vector.MustTCols[types.Date](ivecs[0])
+	diffs := vector.MustTCols[int64](ivecs[1])
+	unit := vector.MustTCols[int64](ivecs[2])[0]
 
-	resultType := types.Type{Oid: types.T_date, Size: 4}
-	if firstVector.IsConst() && secondVector.IsConst() {
-		if firstVector.IsConstNull() || secondVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := proc.AllocScalarVector(resultType)
-		rs := vector.MustTCols[types.Date](resultVector)
-		_, err := date_sub.DateSub(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
-		return resultVector, err
-	} else {
-		var maxLen int
-		if len(firstValues) > len(secondValues) {
-			maxLen = len(firstValues)
-		} else {
-			maxLen = len(secondValues)
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+	rtyp := types.T_date.ToType()
+	if startVec.IsConstNull() || diffVec.IsConstNull() {
+		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
+	} else if startVec.IsConst() && diffVec.IsConst() {
+		rval, err := doDateSub(starts[0], diffs[0], unit)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		_, err = date_sub.DateSub(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), resultValues)
-		return resultVector, err
+		return vector.NewConst(rtyp, rval, startVec.Length(), proc.Mp()), nil
+	} else {
+		rvec, err := proc.AllocVectorOfRows(rtyp, startVec.Length(), nil)
+		if err != nil {
+			return nil, err
+		}
+		nulls.Or(startVec.GetNulls(), diffVec.GetNulls(), rvec.GetNulls())
+		rvals := vector.MustTCols[types.Date](rvec)
+		if startVec.IsConst() && !diffVec.IsConst() {
+			for i := range diffs {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doDateSub(starts[0], diffs[i], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else if !startVec.IsConst() && diffVec.IsConst() {
+			for i := range starts {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doDateSub(starts[i], diffs[0], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			for i := range starts {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doDateSub(starts[i], diffs[i], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		return rvec, nil
 	}
 }
 
-func DatetimeSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vectors[0]
-	secondVector := vectors[1]
-	firstValues := vector.MustTCols[types.Datetime](vectors[0])
-	secondValues := vector.MustTCols[int64](vectors[1])
-	thirdValues := vector.MustTCols[int64](vectors[2])
+func TimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	startVec := ivecs[0]
+	diffVec := ivecs[1]
+	starts := vector.MustTCols[types.Time](ivecs[0])
+	diffs := vector.MustTCols[int64](ivecs[1])
+	unit := vector.MustTCols[int64](ivecs[2])[0]
 
-	precision := firstVector.GetType().Precision
-	switch types.IntervalType(thirdValues[0]) {
+	precision := startVec.GetType().Precision
+	switch types.IntervalType(unit) {
 	case types.MicroSecond:
 		precision = 6
 	}
 
-	resultType := types.Type{Oid: types.T_datetime, Precision: precision, Size: 8}
-	if firstVector.IsConst() && secondVector.IsConst() {
-		if firstVector.IsConstNull() || secondVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := proc.AllocScalarVector(resultType)
-		rs := vector.MustTCols[types.Datetime](resultVector)
-		_, err := date_sub.DatetimeSub(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
-		return resultVector, err
-	} else {
-		var maxLen int
-		if len(firstValues) > len(secondValues) {
-			maxLen = len(firstValues)
-		} else {
-			maxLen = len(secondValues)
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+	rtyp := types.New(types.T_datetime, 0, 0, precision)
+
+	if startVec.IsConstNull() || diffVec.IsConstNull() {
+		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
+	} else if startVec.IsConst() && diffVec.IsConst() {
+		rval, err := doTimeSub(starts[0], diffs[0], unit)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Datetime](resultVector)
-		_, err = date_sub.DatetimeSub(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), resultValues)
-		return resultVector, err
-	}
-}
-
-func DateStringSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vectors[0]
-	secondVector := vectors[1]
-	firstValues := vector.MustStrCols(vectors[0])
-	secondValues := vector.MustTCols[int64](vectors[1])
-	thirdValues := vector.MustTCols[int64](vectors[2])
-	resultType := types.Type{Oid: types.T_datetime, Precision: 6, Size: 8}
-
-	if firstVector.IsConst() && secondVector.IsConst() {
-		if firstVector.IsConstNull() || secondVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := proc.AllocScalarVector(resultType)
-		rs := vector.MustTCols[types.Datetime](resultVector)
-		_, err := date_sub.DateStringSub(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
-		return resultVector, err
+		return vector.NewConst(rtyp, rval, startVec.Length(), proc.Mp()), nil
 	} else {
-		var maxLen int
-		if len(firstValues) > len(secondValues) {
-			maxLen = len(firstValues)
-		} else {
-			maxLen = len(secondValues)
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+		rvec, err := proc.AllocVectorOfRows(rtyp, startVec.Length(), nil)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Datetime](resultVector)
-		_, err = date_sub.DateStringSub(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), resultValues)
-		return resultVector, err
+		nulls.Or(startVec.GetNulls(), diffVec.GetNulls(), rvec.GetNulls())
+		rvals := vector.MustTCols[types.Time](rvec)
+		if startVec.IsConst() && !diffVec.IsConst() {
+			for i := range diffs {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doTimeSub(starts[0], diffs[i], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else if !startVec.IsConst() && diffVec.IsConst() {
+			for i := range starts {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doTimeSub(starts[i], diffs[0], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			for i := range starts {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doTimeSub(starts[i], diffs[i], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		return rvec, nil
 	}
 }
 
-func TimestampSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vectors[0]
-	secondVector := vectors[1]
-	firstValues := vector.MustTCols[types.Timestamp](vectors[0])
-	secondValues := vector.MustTCols[int64](vectors[1])
-	thirdValues := vector.MustTCols[int64](vectors[2])
+func DatetimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	startVec := ivecs[0]
+	diffVec := ivecs[1]
+	starts := vector.MustTCols[types.Datetime](ivecs[0])
+	diffs := vector.MustTCols[int64](ivecs[1])
+	unit := vector.MustTCols[int64](ivecs[2])[0]
 
-	precision := firstVector.GetType().Precision
-	switch types.IntervalType(thirdValues[0]) {
+	precision := startVec.GetType().Precision
+	switch types.IntervalType(unit) {
 	case types.MicroSecond:
 		precision = 6
 	}
 
-	resultType := types.Type{Oid: types.T_timestamp, Precision: precision, Size: 8}
-	if firstVector.IsConst() && secondVector.IsConst() {
-		if firstVector.IsConstNull() || secondVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := proc.AllocScalarVector(resultType)
-		rs := vector.MustTCols[types.Timestamp](resultVector)
-		_, err := date_sub.TimestampSub(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), rs)
-		return resultVector, err
-	} else {
-		var maxLen int
-		if len(firstValues) > len(secondValues) {
-			maxLen = len(firstValues)
-		} else {
-			maxLen = len(secondValues)
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), firstVector.GetNulls())
+	rtyp := types.New(types.T_datetime, 0, 0, precision)
+
+	if startVec.IsConstNull() || diffVec.IsConstNull() {
+		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
+	} else if startVec.IsConst() && diffVec.IsConst() {
+		rval, err := doDatetimeSub(starts[0], diffs[0], unit)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		_, err = date_sub.TimestampSub(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.GetNulls(), resultValues)
-		return resultVector, err
+		return vector.NewConst(rtyp, rval, startVec.Length(), proc.Mp()), nil
+	} else {
+		rvec, err := proc.AllocVectorOfRows(rtyp, startVec.Length(), nil)
+		if err != nil {
+			return nil, err
+		}
+		nulls.Or(startVec.GetNulls(), diffVec.GetNulls(), rvec.GetNulls())
+		rvals := vector.MustTCols[types.Datetime](rvec)
+		if startVec.IsConst() && !diffVec.IsConst() {
+			for i := range diffs {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doDatetimeSub(starts[0], diffs[i], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else if !startVec.IsConst() && diffVec.IsConst() {
+			for i := range starts {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doDatetimeSub(starts[i], diffs[0], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			for i := range starts {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doDatetimeSub(starts[i], diffs[i], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		return rvec, nil
+	}
+}
+
+func DateStringSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	startVec := ivecs[0]
+	diffVec := ivecs[1]
+	starts := vector.MustStrCols(ivecs[0])
+	diffs := vector.MustTCols[int64](ivecs[1])
+	unit := vector.MustTCols[int64](ivecs[2])[0]
+
+	rtyp := types.New(types.T_datetime, 0, 0, 6)
+
+	if startVec.IsConstNull() || diffVec.IsConstNull() {
+		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
+	} else if startVec.IsConst() && diffVec.IsConst() {
+		rval, err := doDateStringSub(starts[0], diffs[0], unit)
+		if err != nil {
+			return nil, err
+		}
+		return vector.NewConst(rtyp, rval, startVec.Length(), proc.Mp()), nil
+	} else {
+		rvec, err := proc.AllocVectorOfRows(rtyp, startVec.Length(), nil)
+		if err != nil {
+			return nil, err
+		}
+		nulls.Or(startVec.GetNulls(), diffVec.GetNulls(), rvec.GetNulls())
+		rvals := vector.MustTCols[types.Datetime](rvec)
+		if startVec.IsConst() && !diffVec.IsConst() {
+			for i := range diffs {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doDateStringSub(starts[0], diffs[i], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else if !startVec.IsConst() && diffVec.IsConst() {
+			for i := range starts {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doDateStringSub(starts[i], diffs[0], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			for i := range starts {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doDateStringSub(starts[i], diffs[i], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		return rvec, nil
+	}
+}
+
+func TimestampSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	startVec := ivecs[0]
+	diffVec := ivecs[1]
+	starts := vector.MustTCols[types.Timestamp](ivecs[0])
+	diffs := vector.MustTCols[int64](ivecs[1])
+	unit := vector.MustTCols[int64](ivecs[2])[0]
+
+	precision := startVec.GetType().Precision
+	switch types.IntervalType(unit) {
+	case types.MicroSecond:
+		precision = 6
+	}
+
+	rtyp := types.New(types.T_datetime, 0, 0, precision)
+
+	if startVec.IsConstNull() || diffVec.IsConstNull() {
+		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
+	} else if startVec.IsConst() && diffVec.IsConst() {
+		rval, err := doTimestampSub(proc.SessionInfo.TimeZone, starts[0], diffs[0], unit)
+		if err != nil {
+			return nil, err
+		}
+		return vector.NewConst(rtyp, rval, startVec.Length(), proc.Mp()), nil
+	} else {
+		rvec, err := proc.AllocVectorOfRows(rtyp, startVec.Length(), nil)
+		if err != nil {
+			return nil, err
+		}
+		nulls.Or(startVec.GetNulls(), diffVec.GetNulls(), rvec.GetNulls())
+		rvals := vector.MustTCols[types.Timestamp](rvec)
+		if startVec.IsConst() && !diffVec.IsConst() {
+			for i := range diffs {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doTimestampSub(proc.SessionInfo.TimeZone, starts[0], diffs[i], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else if !startVec.IsConst() && diffVec.IsConst() {
+			for i := range starts {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doTimestampSub(proc.SessionInfo.TimeZone, starts[i], diffs[0], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			for i := range starts {
+				if rvec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				rvals[i], err = doTimestampSub(proc.SessionInfo.TimeZone, starts[i], diffs[i], unit)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		return rvec, nil
+	}
+}
+
+func doDateSub(start types.Date, diff int64, unit int64) (types.Date, error) {
+	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+	if err != nil {
+		return 0, err
+	}
+	dt, success := start.ToDatetime().AddInterval(-diff, types.IntervalType(unit), types.DateType)
+	if success {
+		return dt.ToDate(), nil
+	} else {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+}
+
+func doTimeSub(start types.Time, diff int64, unit int64) (types.Time, error) {
+	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+	if err != nil {
+		return 0, err
+	}
+	t, success := start.AddInterval(-diff, types.IntervalType(unit))
+	if success {
+		return t, nil
+	} else {
+		return 0, moerr.NewOutOfRangeNoCtx("time", "")
+	}
+}
+
+func doDatetimeSub(start types.Datetime, diff int64, unit int64) (types.Datetime, error) {
+	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+	if err != nil {
+		return 0, err
+	}
+	dt, success := start.AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
+	if success {
+		return dt, nil
+	} else {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+}
+
+func doDateStringSub(startStr string, diff int64, unit int64) (types.Datetime, error) {
+	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+	if err != nil {
+		return 0, err
+	}
+	start, err := types.ParseDatetime(startStr, 6)
+	if err != nil {
+		return 0, err
+	}
+	dt, success := start.AddInterval(-diff, types.IntervalType(unit), types.DateType)
+	if success {
+		return dt, nil
+	} else {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+}
+
+func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit int64) (types.Timestamp, error) {
+	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+	if err != nil {
+		return 0, err
+	}
+	dt, success := start.ToDatetime(loc).AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
+	if success {
+		return dt.ToTimestamp(loc), nil
+	} else {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 	}
 }

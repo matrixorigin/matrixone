@@ -39,11 +39,11 @@ func CeilStr(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		return nil, err
 	}
 	for _, v := range values {
-		float, err := strconv.ParseFloat(v, 64)
+		floatVal, err := strconv.ParseFloat(v, 64)
 		if err != nil {
 			return nil, err
 		}
-		if err := floatvector.Append(float, false, proc.Mp()); err != nil {
+		if err := vector.Append(floatvector, floatVal, false, proc.Mp()); err != nil {
 			floatvector.Free(proc.Mp())
 			return nil, err
 		}

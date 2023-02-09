@@ -16,7 +16,6 @@ package unary
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
@@ -26,8 +25,8 @@ import (
 
 type mathFn func(*vector.Vector, *vector.Vector) error
 
-func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vector, error) {
-	origVec := vs[0]
+func math1(ivecs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vector, error) {
+	origVec := ivecs[0]
 	//Here we need to classify it into three scenes
 	//1. if it is a constant
 	//	1.1 if it's not a null value
@@ -35,24 +34,24 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 	//2 common scene
 	if origVec.IsConst() {
 		if origVec.IsConstNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
+			return vector.NewConstNull(types.T_float64.ToType(), origVec.Length(), proc.Mp()), nil
 		} else {
-			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
-			if err := fn(origVec, resultVector); err != nil {
+			rvec := vector.NewConst(types.T_float64.ToType(), float64(0), origVec.Length(), proc.Mp())
+			if err := fn(origVec, rvec); err != nil {
 				return nil, err
 			}
-			return resultVector, nil
+			return rvec, nil
 		}
 	} else {
-		vecLen := int64(origVec.Length())
-		resultVector, err := proc.AllocVectorOfRows(types.T_float64.ToType(), vecLen, origVec.GetNulls())
+		vecLen := origVec.Length()
+		rvec, err := proc.AllocVectorOfRows(types.T_float64.ToType(), vecLen, origVec.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		if err = fn(origVec, resultVector); err != nil {
+		if err = fn(origVec, rvec); err != nil {
 			return nil, err
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
 }
 
@@ -91,9 +90,7 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return math1(vs, proc, momath.Ln)
 	}
 	if vs[0].IsConstNull() {
-		vec := vector.New(vector.CONSTANT, *vs[0].GetType())
-		nulls.Add(vec.GetNulls(), 0)
-		return vec, nil
+		return vector.NewConstNull(*vs[0].GetType(), vs[0].Length(), proc.Mp()), nil
 	}
 	vals := vector.MustTCols[float64](vs[0])
 	for i := range vals {

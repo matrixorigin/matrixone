@@ -36,12 +36,12 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	dateVector := vectors[0]
 	formatVector := vectors[1]
 
-	resultType := types.T_date.ToType()
+	rtyp := types.T_date.ToType()
 	if !formatVector.IsConst() {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
 	}
 	if dateVector.IsConstNull() || formatVector.IsConstNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+		return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 	}
 	// get the format string.
 	formatMask := formatVector.String()
@@ -53,29 +53,29 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		success := strToDate(proc.Ctx, time, datestr, formatMask, ctx)
 		if !success {
 			// should be null
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 		} else {
 			if types.ValidDate(int32(time.year), time.month, time.day) {
 				resCol := types.DateFromCalendar(int32(time.year), time.month, time.day)
-				vec := vector.New(vector.FLAT, resultType)
+				vec := vector.NewVector(rtyp)
 				vector.Append(vec, resCol, false, proc.Mp())
 				return vec, nil
 			} else {
 				// should be null
-				return proc.AllocScalarNullVector(resultType), nil
+				return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 			}
 		}
 	} else {
 		datestrs := vector.MustStrCols(dateVector)
-		rNsp := nulls.NewWithSize(len(datestrs))
-		resCol, err := CalcStrToDate(proc.Ctx, datestrs, formatMask, dateVector.GetNulls(), rNsp)
+		rNsp := dateVector.GetNulls().Clone()
+		resCol, err := calcStrToDate(proc.Ctx, datestrs, formatMask, dateVector.GetNulls(), rNsp)
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.New(vector.FLAT, resultType)
-		vector.AppendList(resultVector, resCol, nil, proc.Mp())
-		nulls.Set(resultVector.GetNulls(), dateVector.GetNulls())
-		return resultVector, nil
+		rvec := vector.NewVector(rtyp)
+		vector.AppendList(rvec, resCol, nil, proc.Mp())
+		rvec.SetNulls(rNsp)
+		return rvec, nil
 	}
 }
 
@@ -84,12 +84,12 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	dateVector := vectors[0]
 	formatVector := vectors[1]
 
-	resultType := types.T_datetime.ToType()
+	rtyp := types.T_datetime.ToType()
 	if !formatVector.IsConst() {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
 	}
 	if dateVector.IsConstNull() || formatVector.IsConstNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+		return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 	}
 	// get the format string.
 	formatMask := formatVector.String()
@@ -101,29 +101,29 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		success := strToDate(proc.Ctx, time, datetimestr, formatMask, ctx)
 		if !success {
 			// should be null
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 		} else {
 			if types.ValidDatetime(int32(time.year), time.month, time.day) && types.ValidTimeInDay(time.hour, time.minute, time.second) {
 				resCol := types.DatetimeFromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
-				vec := vector.New(vector.FLAT, resultType)
+				vec := vector.NewVector(rtyp)
 				vector.Append(vec, resCol, false, proc.Mp())
 				return vec, nil
 			} else {
 				// should be null
-				return proc.AllocScalarNullVector(resultType), nil
+				return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 			}
 		}
 	} else {
 		datetimestrs := vector.MustStrCols(dateVector)
-		rNsp := nulls.NewWithSize(len(datetimestrs))
-		resCol, err := CalcStrToDatetime(proc.Ctx, datetimestrs, formatMask, dateVector.GetNulls(), rNsp)
+		rNsp := dateVector.GetNulls().Clone()
+		resCol, err := calcStrToDatetime(proc.Ctx, datetimestrs, formatMask, dateVector.GetNulls(), rNsp)
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.New(vector.FLAT, resultType)
-		vector.AppendList(resultVector, resCol, nil, proc.Mp())
-		nulls.Set(resultVector.GetNulls(), dateVector.GetNulls())
-		return resultVector, nil
+		rvec := vector.NewVector(rtyp)
+		vector.AppendList(rvec, resCol, nil, proc.Mp())
+		rvec.SetNulls(rNsp)
+		return rvec, nil
 	}
 }
 
@@ -132,12 +132,12 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	dateVector := vectors[0]
 	formatVector := vectors[1]
 
-	resultType := types.T_time.ToType()
+	rtyp := types.T_time.ToType()
 	if !formatVector.IsConst() {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
 	}
 	if dateVector.IsConstNull() || formatVector.IsConstNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+		return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 	}
 	// get the format string.
 	formatMask := formatVector.String()
@@ -150,40 +150,40 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		success := strToDate(proc.Ctx, time, timestr, formatMask, ctx)
 		if !success {
 			// should be null
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 		} else {
 			if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
 				resCol := types.TimeFromClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
-				vec := vector.New(vector.FLAT, resultType)
+				vec := vector.NewVector(rtyp)
 				vector.Append(vec, resCol, false, proc.Mp())
 				return vec, nil
 			} else {
 				// should be null
-				return proc.AllocScalarNullVector(resultType), nil
+				return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 			}
 		}
 	} else {
 		timestrs := vector.MustStrCols(dateVector)
-		rNsp := nulls.NewWithSize(len(timestrs))
-		resCol, err := CalcStrToTime(proc.Ctx, timestrs, formatMask, dateVector.GetNulls(), rNsp)
+		rNsp := dateVector.GetNulls().Clone()
+		resCol, err := calcStrToTime(proc.Ctx, timestrs, formatMask, dateVector.GetNulls(), rNsp)
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.New(vector.FLAT, resultType)
-		vector.AppendList(resultVector, resCol, nil, proc.Mp())
-		nulls.Set(resultVector.GetNulls(), dateVector.GetNulls())
-		return resultVector, nil
+		rvec := vector.NewVector(rtyp)
+		vector.AppendList(rvec, resCol, nil, proc.Mp())
+		rvec.SetNulls(rNsp)
+		return rvec, nil
 	}
 }
 
-func CalcStrToDatetime(ctx context.Context, timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Datetime, error) {
+func calcStrToDatetime(ctx context.Context, timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Datetime, error) {
 	res := make([]types.Datetime, len(timestrs))
 	time := NewGeneralTime()
 	for idx, timestr := range timestrs {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		success := CoreStrToDate(ctx, time, timestr, format)
+		success := coreStrToDate(ctx, time, timestr, format)
 		if !success {
 			// should be null
 			nulls.Add(rNsp, uint64(idx))
@@ -200,14 +200,14 @@ func CalcStrToDatetime(ctx context.Context, timestrs []string, format string, ns
 	return res, nil
 }
 
-func CalcStrToDate(ctx context.Context, timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Date, error) {
+func calcStrToDate(ctx context.Context, timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Date, error) {
 	res := make([]types.Date, len(timestrs))
 	time := NewGeneralTime()
 	for idx, timestr := range timestrs {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		success := CoreStrToDate(ctx, time, timestr, format)
+		success := coreStrToDate(ctx, time, timestr, format)
 		if !success {
 			// should be null
 			nulls.Add(rNsp, uint64(idx))
@@ -224,14 +224,14 @@ func CalcStrToDate(ctx context.Context, timestrs []string, format string, ns *nu
 	return res, nil
 }
 
-func CalcStrToTime(ctx context.Context, timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Time, error) {
+func calcStrToTime(ctx context.Context, timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Time, error) {
 	res := make([]types.Time, len(timestrs))
 	time := NewGeneralTime()
 	for idx, timestr := range timestrs {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		success := CoreStrToDate(ctx, time, timestr, format)
+		success := coreStrToDate(ctx, time, timestr, format)
 		if !success {
 			// should be null
 			nulls.Add(rNsp, uint64(idx))
@@ -248,7 +248,7 @@ func CalcStrToTime(ctx context.Context, timestrs []string, format string, ns *nu
 	return res, nil
 }
 
-func CoreStrToDate(cctx context.Context, t *GeneralTime, date string, format string) bool {
+func coreStrToDate(cctx context.Context, t *GeneralTime, date string, format string) bool {
 	ctx := make(map[string]int)
 	success := strToDate(cctx, t, date, format, ctx)
 	if !success {
@@ -323,9 +323,9 @@ func checkMysqlTime(cctx context.Context, t *GeneralTime, ctx map[string]int) er
 	return nil
 }
 
-// Judge the return value type of the str_to_date function according to the value of the fromat parameter
-func JudgmentToDateReturnType(format string) (tp types.T, fsp int) {
-	isTime, isDate := GetTimeFormatType(format)
+// Extract the return value type of the str_to_date function according to the value of the fromat parameter
+func ExtractToDateReturnType(format string) (tp types.T, fsp int) {
+	isTime, isDate := getTimeFormatType(format)
 	if isTime && !isDate {
 		tp = types.T_time
 	} else if !isTime && isDate {
@@ -339,8 +339,8 @@ func JudgmentToDateReturnType(format string) (tp types.T, fsp int) {
 	return tp, MaxFsp
 }
 
-// GetTimeFormatType checks the type(Time, Date or Datetime) of a format string.
-func GetTimeFormatType(format string) (isTime, isDate bool) {
+// getTimeFormatType checks the type(Time, Date or Datetime) of a format string.
+func getTimeFormatType(format string) (isTime, isDate bool) {
 	format = trimWhiteSpace(format)
 	var token string
 	var succ bool

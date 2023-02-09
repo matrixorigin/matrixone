@@ -29,7 +29,7 @@ import (
 
 // MoTableRows returns an estimated row number of a table.
 func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vec := vector.New(vector.FLAT, types.New(types.T_int64, 0, 0, 0))
+	vec := vector.NewVector(types.New(types.T_int64, 0, 0, 0))
 	count := vecs[0].Length()
 	dbs := vector.MustStrCols(vecs[0])
 	tbls := vector.MustStrCols(vecs[1])
@@ -67,7 +67,7 @@ func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 // MoTableSize returns an estimated size of a table.
 func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vec := vector.New(vector.FLAT, types.New(types.T_int64, 0, 0, 0))
+	vec := vector.NewVector(types.New(types.T_int64, 0, 0, 0))
 	count := vecs[0].Length()
 	dbs := vector.MustStrCols(vecs[0])
 	tbls := vector.MustStrCols(vecs[1])
@@ -119,13 +119,13 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	tbls := vector.MustStrCols(vecs[1])
 	cols := vector.MustStrCols(vecs[2])
 
-	returnType := types.T_varchar.ToType()
+	rtyp := types.T_varchar.ToType()
 	var resultVec *vector.Vector = nil
-	resultValues := make([]string, count)
+	rvals := make([]string, count)
 	resultNsp := nulls.NewWithSize(count)
 
 	if vecs[0].IsConstNull() || vecs[1].IsConstNull() || vecs[2].IsConstNull() {
-		return proc.AllocScalarNullVector(returnType), nil
+		return vector.NewConstNull(rtyp, vecs[0].Length(), proc.Mp()), nil
 	}
 
 	// set null row
@@ -175,12 +175,14 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 
 		for j := 0; j < len(tableColumns); j++ {
 			if tableColumns[j].Name == col {
-				resultValues[i] = getVlaueInStr(tableVal[j][1])
+				rvals[i] = getValueInStr(tableVal[j][1])
 				break
 			}
 		}
 	}
-	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNsp, proc.Mp())
+	resultVec = vector.NewVector(types.T_varchar.ToType())
+	vector.AppendStringList(resultVec, rvals, nil, proc.Mp())
+	resultVec.SetNulls(resultNsp)
 	return resultVec, nil
 }
 
@@ -191,13 +193,13 @@ func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	tbls := vector.MustStrCols(vecs[1])
 	cols := vector.MustStrCols(vecs[2])
 
-	returnType := types.T_varchar.ToType()
+	rtyp := types.T_varchar.ToType()
 	var resultVec *vector.Vector = nil
-	resultValues := make([]string, count)
+	rvals := make([]string, count)
 	resultNsp := nulls.NewWithSize(count)
 
 	if vecs[0].IsConstNull() || vecs[1].IsConstNull() || vecs[2].IsConstNull() {
-		return proc.AllocScalarNullVector(returnType), nil
+		return vector.NewConstNull(rtyp, vecs[0].Length(), proc.Mp()), nil
 	}
 
 	// set null row
@@ -247,16 +249,18 @@ func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 
 		for j := 0; j < len(tableColumns); j++ {
 			if tableColumns[j].Name == col {
-				resultValues[i] = getVlaueInStr(tableVal[j][0])
+				rvals[i] = getValueInStr(tableVal[j][0])
 				break
 			}
 		}
 	}
-	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNsp, proc.Mp())
+	resultVec = vector.NewVector(types.T_varchar.ToType())
+	vector.AppendStringList(resultVec, rvals, nil, proc.Mp())
+	resultVec.SetNulls(resultNsp)
 	return resultVec, nil
 }
 
-func getVlaueInStr(value any) string {
+func getValueInStr(value any) string {
 	switch v := value.(type) {
 	case bool:
 		if v {

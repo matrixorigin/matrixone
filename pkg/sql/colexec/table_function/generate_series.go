@@ -22,7 +22,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -80,7 +79,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
 	for i := range arg.Attrs {
-		rbat.Vecs[i] = vector.New(vector.FLAT, dupType(plan.MakePlan2Type(startVec.GetType())))
+		rbat.Vecs[i] = vector.NewVector(dupType(plan.MakePlan2Type(startVec.GetType())))
 	}
 	if len(arg.Args) == 3 {
 		stepVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
@@ -138,14 +137,9 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if err != nil {
 			return false, err
 		}
-		startVecTmp, err = makeVector(types.T_datetime.ToType(), start, proc.Mp())
-		if err != nil {
-			return false, err
-		}
-		endVecTmp, err = makeVector(types.T_datetime.ToType(), end, proc.Mp())
-		if err != nil {
-			return false, err
-		}
+		startVecTmp = vector.NewConst(types.T_datetime.ToType(), start, 1, proc.Mp())
+		endVecTmp = vector.NewConst(types.T_datetime.ToType(), end, 1, proc.Mp())
+
 		err = handleDatetime(startVecTmp, endVecTmp, stepVec, true, proc, rbat)
 		if err != nil {
 			return false, err
@@ -308,7 +302,7 @@ func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn 
 	}
 	for i := range res {
 		if toString {
-			err = vector.Append(rbat.Vecs[0], []byte(strconv.FormatInt(int64(res[i]), 10)), false, proc.Mp())
+			err = vector.AppendBytes(rbat.Vecs[0], []byte(strconv.FormatInt(int64(res[i]), 10)), false, proc.Mp())
 		} else {
 			err = vector.Append(rbat.Vecs[0], res[i], false, proc.Mp())
 		}
@@ -340,7 +334,7 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, toString bool, pro
 	}
 	for i := range res {
 		if toString {
-			err = vector.Append(rbat.Vecs[0], []byte(res[i].String2(rbat.Vecs[0].GetType().Precision)), false, proc.Mp())
+			err = vector.AppendBytes(rbat.Vecs[0], []byte(res[i].String2(rbat.Vecs[0].GetType().Precision)), false, proc.Mp())
 		} else {
 			err = vector.Append(rbat.Vecs[0], res[i], false, proc.Mp())
 		}
@@ -368,15 +362,6 @@ func findPrecision(s1, s2 string) int {
 		p1 = 6
 	}
 	return p1
-}
-func makeVector(p types.Type, v interface{}, mp *mpool.MPool) (*vector.Vector, error) {
-	vec := vector.New(vector.CONSTANT, p)
-	err := vector.Append(vec, v, false, mp)
-	if err != nil {
-		vec.Free(mp)
-		return nil, err
-	}
-	return vec, nil
 }
 
 func tryInt(startStr, endStr, stepStr string, proc *process.Process, rbat *batch.Batch) error {
@@ -408,18 +393,10 @@ func tryInt(startStr, endStr, stepStr string, proc *process.Process, rbat *batch
 		return err
 	}
 
-	startVec, err = makeVector(types.T_int64.ToType(), startInt, proc.Mp())
-	if err != nil {
-		return err
-	}
-	endVec, err = makeVector(types.T_int64.ToType(), endInt, proc.Mp())
-	if err != nil {
-		return err
-	}
-	stepVec, err = makeVector(types.T_int64.ToType(), stepInt, proc.Mp())
-	if err != nil {
-		return err
-	}
+	startVec = vector.NewConst(types.T_int64.ToType(), startInt, 1, proc.Mp())
+	endVec = vector.NewConst(types.T_int64.ToType(), endInt, 1, proc.Mp())
+	stepVec = vector.NewConst(types.T_int64.ToType(), stepInt, 1, proc.Mp())
+
 	err = handleInt(startVec, endVec, stepVec, generateInt64, true, proc, rbat)
 	if err != nil {
 		return err

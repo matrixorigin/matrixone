@@ -171,7 +171,7 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
 	for i := range arg.Rets {
-		rbat.Vecs[i] = vector.New(vector.FLAT, dupType(arg.Rets[i].Typ))
+		rbat.Vecs[i] = vector.NewVector(dupType(arg.Rets[i].Typ))
 	}
 
 	if jsonVec.IsConst() {
@@ -218,7 +218,7 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestPara
 			var err error
 			switch arg.Attrs[j] {
 			case "col":
-				err = vector.Append(vec, []byte(param.ColName), false, proc.Mp())
+				err = vector.AppendBytes(vec, []byte(param.ColName), false, proc.Mp())
 			case "seq":
 				err = vector.Append(vec, int32(i), false, proc.Mp())
 			case "index":
@@ -231,7 +231,7 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestPara
 				}
 			case "key", "path", "value", "this":
 				val, ok := ures[i][arg.Attrs[j]]
-				err = vector.Append(vec, val, !ok || val == nil, proc.Mp())
+				err = vector.AppendBytes(vec, val, !ok || val == nil, proc.Mp())
 			default:
 				err = moerr.NewInvalidArg(proc.Ctx, "unnest: invalid column name:%s", arg.Attrs[j])
 			}

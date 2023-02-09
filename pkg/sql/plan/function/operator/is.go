@@ -22,30 +22,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Is(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lv := vectors[0]
-	rv := vectors[1]
-	retType := types.T_bool.ToType()
+func Is(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lv := ivecs[0]
+	rv := ivecs[1]
+	rtyp := types.T_bool.ToType()
 
-	lefts := vector.MustTCols[bool](lv)
 	if !rv.IsConst() || rv.IsConstNull() {
 		return nil, moerr.NewInternalError(proc.Ctx, "second parameter of IS must be TRUE or FALSE")
 	}
 	right := vector.MustTCols[bool](rv)[0]
 
 	if lv.IsConst() {
-		vec := proc.AllocScalarVector(retType)
-		col := vector.MustTCols[bool](vec)
 		if lv.IsConstNull() {
-			col[0] = false
+			return vector.NewConst(rtyp, false, ivecs[0].Length(), proc.Mp()), nil
 		} else {
 			lefts := vector.MustTCols[bool](lv)
-			col[0] = lefts[0] == right
+			return vector.NewConst(rtyp, lefts[0] == right, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vec, nil
 	} else {
-		l := int64(len(lefts))
-		vec, err := proc.AllocVectorOfRows(*lv.GetType(), l*1, lv.GetNulls())
+		lefts := vector.MustTCols[bool](lv)
+		l := len(lefts)
+		vec, err := proc.AllocVectorOfRows(*lv.GetType(), l, lv.GetNulls())
 		if err != nil {
 			return nil, err
 		}

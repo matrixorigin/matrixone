@@ -106,53 +106,53 @@ func castTVecAsInt64(vec *vector.Vector) []int64 {
 //				return vector.NewWithStrings(srcVector.Typ, results, resultNsp, proc.Mp), nil
 // What are we doing here?
 
-func Substring(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func Substring(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// get the number of substr function parameters
-	var paramNum = len(inputVecs)
-	srcVector := inputVecs[0]
-	startVector := inputVecs[1]
+	var paramNum = len(ivecs)
+	srcVector := ivecs[0]
+	startVector := ivecs[1]
 	// Substr function has no length parameter
 	if paramNum == 2 {
 		if srcVector.IsConstNull() || startVector.IsConstNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_char, Size: 24}), nil
+			return vector.NewConstNull(types.T_char.ToType(), srcVector.Length(), proc.Mp()), nil
 		}
 	} else { //Substring column with length parameter
-		lengthVector := inputVecs[2]
+		lengthVector := ivecs[2]
 		if srcVector.IsConstNull() || startVector.IsConstNull() || lengthVector.IsConstNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_char, Size: 24}), nil
+			return vector.NewConstNull(types.T_char.ToType(), srcVector.Length(), proc.Mp()), nil
 		}
 	}
 	if srcVector.IsConst() {
-		return substrSrcConst(inputVecs, proc)
+		return substrSrcConst(ivecs, proc)
 	} else {
-		return substrSrcCol(inputVecs, proc)
+		return substrSrcCol(ivecs, proc)
 	}
 }
 
 // substring first parameter is constant
-func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var paramNum = len(inputVecs)
-	srcVector := inputVecs[0]
-	startVector := inputVecs[1]
+func substrSrcConst(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	var paramNum = len(ivecs)
+	srcVector := ivecs[0]
+	startVector := ivecs[1]
 
 	if startVector.IsConstNull() {
-		return proc.AllocConstNullVector(*srcVector.GetType()), nil
+		return vector.NewConstNull(*srcVector.GetType(), srcVector.Length(), proc.Mp()), nil
 	}
 
 	// XXX if this vector is const, then it is not expanded.  Really?
 	columnSrcCol := vector.MustStrCols(srcVector)
 
 	// request new memory space for result column
-	rows := calcResultVectorRows(inputVecs)
+	rows := calcResultVectorRows(ivecs)
 	results := make([]string, rows)
 	resultNsp := nulls.NewWithSize(rows)
 
 	// set null row
 	if paramNum == 2 {
-		nulls.Or(inputVecs[0].GetNulls(), inputVecs[1].GetNulls(), resultNsp)
+		nulls.Or(ivecs[0].GetNulls(), ivecs[1].GetNulls(), resultNsp)
 	} else {
-		nulls.Or(inputVecs[0].GetNulls(), inputVecs[1].GetNulls(), resultNsp)
-		nulls.Or(inputVecs[2].GetNulls(), resultNsp, resultNsp)
+		nulls.Or(ivecs[0].GetNulls(), ivecs[1].GetNulls(), resultNsp)
+		nulls.Or(ivecs[2].GetNulls(), resultNsp, resultNsp)
 	}
 
 	if startVector.IsConst() {
@@ -169,11 +169,9 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 			} else {
 				substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results)
 			}
-			vec := vector.New(vector.CONSTANT, *srcVector.GetType())
-			vector.AppendString(vec, results[0], results[0] == "", proc.Mp())
-			return vec, nil
+			return vector.NewConstBytes(*srcVector.GetType(), []byte(results[0]), srcVector.Length(), proc.Mp()), nil
 		} else { //has third parameter
-			lengthVector := inputVecs[2]
+			lengthVector := ivecs[2]
 			if lengthVector.IsConst() {
 				// get start constant value
 				startValue, err := castConstAsInt64(proc.Ctx, startVector, 0)
@@ -193,15 +191,13 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 				} else {
 					substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, results)
 				}
-				vec := vector.New(vector.CONSTANT, *srcVector.GetType())
-				vector.AppendString(vec, results[0], results[0] == "", proc.Mp())
-				return vec, nil
+				return vector.NewConstBytes(*srcVector.GetType(), []byte(results[0]), srcVector.Length(), proc.Mp()), nil
 			} else {
 				columnStartCol := castTVecAsInt64(startVector)
 				columnLengthCol := castTVecAsInt64(lengthVector)
-				cs := []bool{inputVecs[0].IsConst(), inputVecs[1].IsConst(), inputVecs[2].IsConst()}
+				cs := []bool{ivecs[0].IsConst(), ivecs[1].IsConst(), ivecs[2].IsConst()}
 				substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
-				vec := vector.New(vector.FLAT, *srcVector.GetType())
+				vec := vector.NewVector(*srcVector.GetType())
 				vector.AppendStringList(vec, results, nil, proc.Mp())
 				return vec, nil
 			}
@@ -209,19 +205,19 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 	} else {
 		if paramNum == 2 {
 			//The pos column is a variable or an expression
-			columnStartCol := castTVecAsInt64(inputVecs[1])
-			cs := []bool{inputVecs[0].IsConst(), inputVecs[1].IsConst()}
+			columnStartCol := castTVecAsInt64(ivecs[1])
+			cs := []bool{ivecs[0].IsConst(), ivecs[1].IsConst()}
 			substring.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, cs)
-			vec := vector.New(vector.FLAT, *srcVector.GetType())
+			vec := vector.NewVector(*srcVector.GetType())
 			vector.AppendStringList(vec, results, nil, proc.Mp())
 			return vec, nil
 		} else {
 			//Substring column with length parameter
-			columnStartCol := castTVecAsInt64(inputVecs[1])
-			columnLengthCol := castTVecAsInt64(inputVecs[2])
-			cs := []bool{inputVecs[0].IsConst(), inputVecs[1].IsConst(), inputVecs[2].IsConst()}
+			columnStartCol := castTVecAsInt64(ivecs[1])
+			columnLengthCol := castTVecAsInt64(ivecs[2])
+			cs := []bool{ivecs[0].IsConst(), ivecs[1].IsConst(), ivecs[2].IsConst()}
 			substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
-			vec := vector.New(vector.FLAT, *srcVector.GetType())
+			vec := vector.NewVector(*srcVector.GetType())
 			vector.AppendStringList(vec, results, nil, proc.Mp())
 			return vec, nil
 		}
@@ -262,7 +258,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 				//startValue == 0
 				substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results)
 			}
-			vec := vector.New(vector.FLAT, *srcVector.GetType())
+			vec := vector.NewVector(*srcVector.GetType())
 			vector.AppendStringList(vec, results, nil, proc.Mp())
 			return vec, nil
 		} else { //has third parameter
@@ -287,7 +283,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 					//startValue == 0
 					substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, results)
 				}
-				vec := vector.New(vector.FLAT, *srcVector.GetType())
+				vec := vector.NewVector(*srcVector.GetType())
 				vector.AppendStringList(vec, results, nil, proc.Mp())
 				return vec, nil
 			} else {
@@ -295,7 +291,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 				columnLengthCol := castTVecAsInt64(inputVecs[2])
 				cs := []bool{inputVecs[0].IsConst(), inputVecs[1].IsConst(), inputVecs[2].IsConst()}
 				substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
-				vec := vector.New(vector.FLAT, *srcVector.GetType())
+				vec := vector.NewVector(*srcVector.GetType())
 				vector.AppendStringList(vec, results, nil, proc.Mp())
 				return vec, nil
 			}
@@ -306,7 +302,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			columnStartCol := castTVecAsInt64(inputVecs[1])
 			cs := []bool{inputVecs[0].IsConst(), inputVecs[1].IsConst()}
 			substring.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, cs)
-			vec := vector.New(vector.FLAT, *srcVector.GetType())
+			vec := vector.NewVector(*srcVector.GetType())
 			vector.AppendStringList(vec, results, nil, proc.Mp())
 			return vec, nil
 		} else {
@@ -314,7 +310,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			columnLengthCol := castTVecAsInt64(inputVecs[2])
 			cs := []bool{inputVecs[0].IsConst(), inputVecs[1].IsConst(), inputVecs[2].IsConst()}
 			substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
-			vec := vector.New(vector.FLAT, *srcVector.GetType())
+			vec := vector.NewVector(*srcVector.GetType())
 			vector.AppendStringList(vec, results, nil, proc.Mp())
 			return vec, nil
 		}

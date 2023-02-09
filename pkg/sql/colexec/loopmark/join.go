@@ -36,7 +36,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.New(vector.FLAT, typ)
+		ap.ctr.bat.Vecs[i] = vector.NewVector(typ)
 	}
 	return nil
 }
@@ -103,8 +103,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp]
 			bat.Vecs[rp] = nil
 		} else {
-			rbat.Vecs[i] = vector.New(vector.CONSTANT, types.T_bool.ToType())
-			vector.SetConst(rbat.Vecs[i], false, false, count, proc.Mp())
+			rbat.Vecs[i] = vector.NewConst(types.T_bool.ToType(), false, count, proc.Mp())
 		}
 	}
 	rbat.Zs = bat.Zs
@@ -120,7 +119,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	markPos := -1
 	for i, pos := range ap.Result {
 		if pos == -1 {
-			rbat.Vecs[i] = vector.New(vector.FLAT, types.T_bool.ToType())
+			rbat.Vecs[i] = vector.NewVector(types.T_bool.ToType())
 			markPos = i
 			break
 		}

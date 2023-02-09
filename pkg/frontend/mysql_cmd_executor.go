@@ -670,7 +670,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if bat.Zs[j] <= 0 {
 			continue
 		}
-		row, err := extractRowFromEveryVector(ses, bat, int64(j), oq)
+		row, err := extractRowFromEveryVector(ses, bat, j, oq)
 		if err != nil {
 			return err
 		}
@@ -713,12 +713,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 }
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
-func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int64, oq outputPool) ([]interface{}, error) {
+func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq outputPool) ([]interface{}, error) {
 	row, err := oq.getEmptyRow()
 	if err != nil {
 		return nil, err
 	}
-	var rowIndex = int64(j)
+	var rowIndex = j
 	for i, vec := range dataSet.Vecs { //col index
 		rowIndexBackup := rowIndex
 		if vec.IsConstNull() {
@@ -772,7 +772,7 @@ func formatFloatNum[T types.Floats](num T, Typ types.Type) T {
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector
-func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int64) error {
+func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int) error {
 	timeZone := ses.GetTimeZone()
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
@@ -1829,9 +1829,9 @@ func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error)
 		v0[i] = row[0].(string)
 		v1[i] = fmt.Sprintf("%v", row[1])
 	}
-	bat.Vecs[0] = vector.New(vector.FLAT, typ)
+	bat.Vecs[0] = vector.NewVector(typ)
 	vector.AppendStringList(bat.Vecs[0], v0, nil, ses.GetMemPool())
-	bat.Vecs[1] = vector.New(vector.FLAT, typ)
+	bat.Vecs[1] = vector.NewVector(typ)
 	vector.AppendStringList(bat.Vecs[1], v1, nil, ses.GetMemPool())
 	return bat, nil
 }
@@ -2226,7 +2226,7 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 		count++
 	}
 	vs = vs[:count]
-	vec := vector.New(vector.FLAT, types.T_varchar.ToType())
+	vec := vector.NewVector(types.T_varchar.ToType())
 	vector.AppendBytesList(vec, vs, nil, session.GetMemPool())
 	bat.Vecs[0] = vec
 	bat.InitZsOne(count)

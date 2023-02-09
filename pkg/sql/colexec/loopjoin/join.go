@@ -93,9 +93,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(vector.FLAT, *bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.NewVector(*bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = vector.New(vector.FLAT, *ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.NewVector(*ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 	count := bat.Length()

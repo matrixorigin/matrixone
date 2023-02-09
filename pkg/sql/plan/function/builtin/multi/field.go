@@ -26,43 +26,39 @@ type number interface {
 	constraints.Unsigned | constraints.Signed | constraints.Float
 }
 
-func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vs[0]
+func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	firstVector := ivecs[0]
 	firstValues := vector.MustStrCols(firstVector)
 
 	vecLen := firstVector.Length()
 
 	//return vector
-	returnType := types.T_uint64.ToType()
-	resultVector, err := proc.AllocVector(returnType, int64(vecLen*returnType.Oid.TypeLen()))
+	rtyp := types.T_uint64.ToType()
+	rvec, err := proc.AllocVectorOfRows(rtyp, vecLen, nil)
 	if err != nil {
 		return nil, err
 	}
-	rs := vector.MustTCols[uint64](resultVector)
+	rs := vector.MustTCols[uint64](rvec)
 
 	//if first vector is scalar
 	if firstVector.IsConst() {
 
 		//if first vector is null, the return value is 0
 		if firstVector.IsConstNull() {
-			vec := vector.New(vector.CONSTANT, returnType)
-			vector.Append(vec, uint64(0), false, proc.Mp())
-			return vec, err
+			return vector.NewConst(rtyp, uint64(0), ivecs[0].Length(), proc.Mp()), err
 		}
 
 		//detect index
 		startIdx := 1
 
 		//detect in pre scalar vector
-		for i := 1; i < len(vs); i++ {
-			input := vs[i]
+		for i := 1; i < len(ivecs); i++ {
+			input := ivecs[i]
 			if input.IsConst() {
 				if !input.IsConstNull() {
 					cols := vector.MustStrCols(input)
 					if firstValues[0] == cols[0] {
-						vec := vector.New(vector.CONSTANT, returnType)
-						vector.Append(vec, uint64(i), false, proc.Mp())
-						return vec, err
+						return vector.NewConst(rtyp, uint64(i), ivecs[0].Length(), proc.Mp()), err
 					}
 				}
 			} else {
@@ -74,8 +70,8 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		//shouldReturn represents the non-null counts
 		shouldReturn := vecLen
 
-		for i := startIdx; i < len(vs); i++ {
-			input := vs[i]
+		for i := startIdx; i < len(ivecs); i++ {
+			input := ivecs[i]
 			cols := vector.MustStrCols(input)
 
 			if input.IsConst() {
@@ -101,20 +97,20 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 				}
 			}
 		}
-		return resultVector, nil
+		return rvec, nil
 	} else {
 
 		//if the first vector is null
 		nullsLength := nulls.Length(firstVector.GetNulls())
 		if nullsLength == vecLen {
-			return resultVector, nil
+			return rvec, nil
 		}
 
 		//shouldReturn represents the non-null counts
 		shouldReturn := vecLen - nullsLength
 
-		for i := 1; i < len(vs); i++ {
-			input := vs[i]
+		for i := 1; i < len(ivecs); i++ {
+			input := ivecs[i]
 			cols := vector.MustStrCols(input)
 
 			if input.IsConst() {
@@ -141,47 +137,43 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 
 		}
 
-		return resultVector, nil
+		return rvec, nil
 	}
 }
 
-func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vs[0]
+func FieldNumber[T number](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	firstVector := ivecs[0]
 	firstValues := vector.MustTCols[T](firstVector)
 
 	vecLen := firstVector.Length()
 
 	//return vector
 	returnType := types.T_uint64.ToType()
-	resultVector, err := proc.AllocVector(returnType, int64(vecLen*returnType.Oid.TypeLen()))
+	rvec, err := proc.AllocVectorOfRows(returnType, vecLen, nil)
 	if err != nil {
 		return nil, err
 	}
-	rs := vector.MustTCols[uint64](resultVector)
+	rs := vector.MustTCols[uint64](rvec)
 
 	//if first vector is scalar
 	if firstVector.IsConst() {
 
 		//if first vector is null, the return value is 0
 		if firstVector.IsConstNull() {
-			vec := vector.New(vector.CONSTANT, returnType)
-			vector.Append(vec, uint64(0), false, proc.Mp())
-			return vec, err
+			return vector.NewConst(returnType, uint64(0), ivecs[0].Length(), proc.Mp()), err
 		}
 
 		//detect index
 		startIdx := 1
 
 		//detect in pre scalar vector
-		for i := 1; i < len(vs); i++ {
-			input := vs[i]
+		for i := 1; i < len(ivecs); i++ {
+			input := ivecs[i]
 			if input.IsConst() {
 				if !input.IsConstNull() {
 					cols := vector.MustTCols[T](input)
 					if firstValues[0] == cols[0] {
-						vec := vector.New(vector.CONSTANT, returnType)
-						vector.Append(vec, uint64(i), false, proc.Mp())
-						return vec, err
+						return vector.NewConst(returnType, uint64(i), ivecs[i].Length(), proc.Mp()), err
 					}
 				}
 			} else {
@@ -193,8 +185,8 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 		//shouldReturn represents the non-null counts
 		shouldReturn := vecLen
 
-		for i := startIdx; i < len(vs); i++ {
-			input := vs[i]
+		for i := startIdx; i < len(ivecs); i++ {
+			input := ivecs[i]
 			cols := vector.MustTCols[T](input)
 
 			if input.IsConst() {
@@ -220,20 +212,20 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 				}
 			}
 		}
-		return resultVector, nil
+		return rvec, nil
 	} else {
 
 		//if the first vector is null
 		nullsLength := nulls.Length(firstVector.GetNulls())
 		if nullsLength == vecLen {
-			return resultVector, nil
+			return rvec, nil
 		}
 
 		//shouldReturn represents the non-null counts
 		shouldReturn := vecLen - nullsLength
 
-		for i := 1; i < len(vs); i++ {
-			input := vs[i]
+		for i := 1; i < len(ivecs); i++ {
+			input := ivecs[i]
 			cols := vector.MustTCols[T](input)
 
 			if input.IsConst() {
@@ -259,6 +251,6 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 			}
 
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
 }

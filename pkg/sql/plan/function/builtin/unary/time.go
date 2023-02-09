@@ -21,144 +21,120 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func TimeToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_time, Size: 8, Precision: inputVector.GetType().Precision}
-	inputValues := vector.MustTCols[types.Time](inputVector)
-	if inputVector.IsConst() {
-		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Time](resultVector)
-		copy(resultValues, inputValues)
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
-		if err != nil {
-			return nil, err
-		}
-		resultValues := vector.MustTCols[types.Time](resultVector)
-		copy(resultValues, inputValues)
-		return resultVector, nil
-	}
+func TimeToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return ivecs[0].Dup(proc.Mp())
 }
 
-func DatetimeToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
+func DatetimeToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
 	inputPrecision := inputVector.GetType().Precision
-	resultType := types.Type{Oid: types.T_time, Size: 8, Precision: inputPrecision}
-	inputValues := vector.MustTCols[types.Datetime](inputVector)
+	rtyp := types.Type{Oid: types.T_time, Size: 8, Precision: inputPrecision}
+	ivals := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Time](resultVector)
-		time.DatetimeToTime(inputValues, resultValues, inputPrecision)
-		return resultVector, nil
+		var rvals [1]types.Time
+		time.DatetimeToTime(ivals, rvals[:], inputPrecision)
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Time](resultVector)
-		time.DatetimeToTime(inputValues, resultValues, inputPrecision)
-		return resultVector, nil
+		rvals := vector.MustTCols[types.Time](rvec)
+		time.DatetimeToTime(ivals, rvals, inputPrecision)
+		return rvec, nil
 	}
 }
 
-func DateToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_time, Size: 8}
-	inputValues := vector.MustTCols[types.Date](inputVector)
+func DateToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_time, Size: 8}
+	ivals := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Time](resultVector)
-		time.DateToTime(inputValues, resultValues)
-		return resultVector, nil
+		var rvals [1]types.Time
+		time.DateToTime(ivals, rvals[:])
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Time](resultVector)
-		time.DateToTime(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[types.Time](rvec)
+		time.DateToTime(ivals, rvals)
+		return rvec, nil
 	}
 }
 
-func DateStringToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_time, Size: 8}
-	inputValues := vector.MustStrCols(inputVector)
+func DateStringToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_time, Size: 8}
+	ivals := vector.MustStrCols(inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Time](resultVector)
-		_, err := time.DateStringToTime(inputValues, resultValues)
-		return resultVector, err
+		var rvals [1]types.Time
+		_, err := time.DateStringToTime(ivals, rvals[:])
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), err
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Time](resultVector)
-		_, err = time.DateStringToTime(inputValues, resultValues)
-		return resultVector, err
+		rvals := vector.MustTCols[types.Time](rvec)
+		_, err = time.DateStringToTime(ivals, rvals)
+		return rvec, err
 	}
 }
 
-func Int64ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_time, Size: 8}
-	inputValues := vector.MustTCols[int64](inputVector)
+func Int64ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_time, Size: 8}
+	ivals := vector.MustTCols[int64](inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Time](resultVector)
-		_, err := time.Int64ToTime(inputValues, resultValues)
-		return resultVector, err
+		var rvals [1]types.Time
+		_, err := time.Int64ToTime(ivals, rvals[:])
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), err
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Time](resultVector)
-		_, err = time.Int64ToTime(inputValues, resultValues)
-		return resultVector, err
+		rvals := vector.MustTCols[types.Time](rvec)
+		_, err = time.Int64ToTime(ivals, rvals)
+		return rvec, err
 	}
 }
 
-func Decimal128ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_time, Size: 8, Precision: inputVector.GetType().Scale}
-	inputValues := vector.MustTCols[types.Decimal128](inputVector)
+func Decimal128ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_time, Size: 8, Precision: inputVector.GetType().Scale}
+	ivals := vector.MustTCols[types.Decimal128](inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[types.Time](resultVector)
-		_, err := time.Decimal128ToTime(inputValues, resultValues)
-		return resultVector, err
+		var rvals [1]types.Time
+		_, err := time.Decimal128ToTime(ivals, rvals[:])
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), err
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Time](resultVector)
-		_, err = time.Decimal128ToTime(inputValues, resultValues)
-		return resultVector, err
+		rvals := vector.MustTCols[types.Time](rvec)
+		_, err = time.Decimal128ToTime(ivals, rvals)
+		return rvec, err
 	}
 }

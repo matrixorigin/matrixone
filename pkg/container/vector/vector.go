@@ -43,17 +43,28 @@ type Vector struct {
 	typ types.Type
 	nsp *nulls.Nulls // nulls list
 
+	// data of fixed length element, in case of varlen, the Varlena
+	col  any
+	data []byte
+
 	// area for holding large strings.
 	area []byte
 
-	length int
+	capacity int
+	length   int
 
 	// tag for distinguish '0x00..' and 0x... and 0x... is binary
 	// TODO: check whether isBin should be changed into array/bitmap
 	// now we assumpt that it can only be true in the case of only one data in vector
 	isBin bool
-	// data of fixed length element, in case of varlen, the Varlena
-	col *reflect.SliceHeader
+}
+
+func (v *Vector) UnsafeGetRawData() []byte {
+	length := 1
+	if !v.IsConst() {
+		length = v.length
+	}
+	return v.data[:length*v.typ.TypeSize()]
 }
 
 func (v *Vector) SetIsBin(isBin bool) {
@@ -66,6 +77,10 @@ func (v *Vector) GetIsBin() bool {
 
 func (v *Vector) Length() int {
 	return v.length
+}
+
+func (v *Vector) Capacity() int {
+	return v.capacity
 }
 
 func (v *Vector) SetLength(n int) {
@@ -94,18 +109,23 @@ func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 	v.nsp = nsp
 }
 
-func (v *Vector) GetBytes(i int64) []byte {
-	bs := MustTCols[types.Varlena](v)
+func (v *Vector) GetBytes(i int) []byte {
+	if v.IsConst() {
+		i = 0
+	}
+	bs := v.col.([]types.Varlena)
 	return bs[i].GetByteSlice(v.area)
 }
 
-func (v *Vector) GetRawData() []byte {
-	return (*(*[]byte)(unsafe.Pointer(v.col)))[:v.length*v.typ.TypeSize()]
-}
+//func (v *Vector) GetRawData() []byte {
+//	return (*(*[]byte)(unsafe.Pointer(&v.col)))[:v.length*v.typ.TypeSize()]
+//}
 
-func (v *Vector) GetString(i int64) string {
-
-	bs := MustTCols[types.Varlena](v)
+func (v *Vector) GetString(i int) string {
+	if v.IsConst() {
+		i = 0
+	}
+	bs := v.col.([]types.Varlena)
 	return bs[i].GetString(v.area)
 }
 
@@ -116,13 +136,56 @@ func (v *Vector) TryExpandNulls(n int) {
 	nulls.TryExpand(v.nsp, n)
 }
 
-func New(class int, typ types.Type) *Vector {
-	return &Vector{
+func NewVector(typ types.Type) *Vector {
+	vec := &Vector{
 		typ:   typ,
-		class: class,
+		class: FLAT,
 		nsp:   &nulls.Nulls{},
-		col:   new(reflect.SliceHeader),
 	}
+
+	return vec
+}
+
+func NewConstNull(typ types.Type, len int, m *mpool.MPool) *Vector {
+	vec := &Vector{
+		typ:   typ,
+		class: CONSTANT,
+		nsp:   &nulls.Nulls{},
+	}
+
+	if len > 0 {
+		SetConstNull(vec, len, m)
+	}
+
+	return vec
+}
+
+func NewConst[T any](typ types.Type, val T, len int, m *mpool.MPool) *Vector {
+	vec := &Vector{
+		typ:   typ,
+		class: CONSTANT,
+		nsp:   &nulls.Nulls{},
+	}
+
+	if len > 0 {
+		SetConst(vec, val, len, m)
+	}
+
+	return vec
+}
+
+func NewConstBytes(typ types.Type, val []byte, len int, m *mpool.MPool) *Vector {
+	vec := &Vector{
+		typ:   typ,
+		class: CONSTANT,
+		nsp:   &nulls.Nulls{},
+	}
+
+	if len > 0 {
+		SetConstBytes(vec, val, len, m)
+	}
+
+	return vec
 }
 
 func (v *Vector) IsConst() bool {
@@ -133,8 +196,17 @@ func (v *Vector) SetClass(class int) {
 	v.class = class
 }
 
-func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
-	return types.DecodeSlice[T](v.area)
+func DecodeFixedCol[T types.FixedSizeT](v *Vector) []T {
+	sz := int(v.typ.TypeSize())
+
+	//if cap(v.data)%sz != 0 {
+	//	panic(moerr.NewInternalErrorNoCtx("decode slice that is not a multiple of element size"))
+	//}
+
+	if cap(v.data) >= sz {
+		return unsafe.Slice((*T)(unsafe.Pointer(&v.data[0])), cap(v.data)/sz)
+	}
+	return nil
 }
 
 func SetTAt[T types.FixedSizeT](v *Vector, idx int, t T) error {
@@ -178,19 +250,16 @@ func (v *Vector) GetArea() []byte {
 }
 
 func GetPtrAt(v *Vector, idx int64) unsafe.Pointer {
-	return unsafe.Pointer(&v.area[idx*int64(v.GetType().TypeSize())])
+	return unsafe.Pointer(&v.data[idx*int64(v.GetType().TypeSize())])
 }
 
 func (v *Vector) Free(m *mpool.MPool) {
 	// const vector's data & area allocate with nil,
 	// so we can't free it by using mpool.
-	if v.col != nil {
-		m.Free((*(*[]byte)(unsafe.Pointer(v.col))))
-	}
-	if v.area != nil {
-		m.Free(v.area)
-	}
+	m.Free(v.data)
+	m.Free(v.area)
 	v.col = nil
+	v.data = nil
 	v.area = nil
 }
 
@@ -218,7 +287,7 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 		}
 	}
 	{ // write colLen, col
-		data := (*(*[]byte)(unsafe.Pointer(v.col)))
+		data := v.data
 		length := uint32(v.length * v.typ.TypeSize())
 		if len(data[:length]) > 0 {
 			buf.Write(data[:length])
@@ -264,9 +333,9 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	{ // read col
 		length := v.length * v.typ.TypeSize()
 		if length > 0 {
-			ndata := make([]byte, length)
-			copy(ndata, data[:length])
-			*(*[]byte)(unsafe.Pointer(v.col)) = ndata
+			v.data = make([]byte, length)
+			copy(v.data, data[:length])
+			v.setupColFromData()
 			data = data[length:]
 		}
 	}
@@ -284,6 +353,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 }
 
 func (v *Vector) UnmarshalBinaryWithMpool(data []byte, mp *mpool.MPool) error {
+	var err error
 	if v.col == nil {
 		v.col = new(reflect.SliceHeader)
 	}
@@ -313,12 +383,12 @@ func (v *Vector) UnmarshalBinaryWithMpool(data []byte, mp *mpool.MPool) error {
 	{ // read col
 		length := v.length * v.typ.TypeSize()
 		if length > 0 {
-			ndata, err := mp.Alloc(length)
+			v.data, err = mp.Alloc(length)
 			if err != nil {
 				return err
 			}
-			copy(ndata, data[:length])
-			*(*[]byte)(unsafe.Pointer(v.col)) = ndata
+			copy(v.data, data[:length])
+			v.setupColFromData()
 			data = data[length:]
 		}
 	}
@@ -385,11 +455,10 @@ func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 		return toConstVector[types.Rowid](v, row, mp)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		if nulls.Contains(v.nsp, uint64(row)) {
-			return New(CONSTANT, v.typ)
+			return NewConstNull(v.typ, 1, mp)
 		}
-		bs := v.GetBytes(int64(row))
-		vec := New(CONSTANT, v.typ)
-		AppendBytes(vec, bs, false, mp)
+		bs := v.GetBytes(row)
+		vec := NewConstBytes(v.typ, bs, 1, mp)
 		return vec
 	}
 	return nil
@@ -397,12 +466,10 @@ func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 
 func toConstVector[T types.FixedSizeT](v *Vector, row int, m *mpool.MPool) *Vector {
 	if nulls.Contains(v.nsp, uint64(row)) {
-		return New(CONSTANT, v.typ)
+		return NewConstNull(v.typ, 1, m)
 	} else {
-		val := MustTCols[T](v)[row]
-		vec := New(CONSTANT, v.typ)
-		Append(vec, val, false, m)
-		return vec
+		val := v.col.([]T)[row]
+		return NewConst(v.typ, val, 1, m)
 	}
 }
 
@@ -411,83 +478,39 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 	if v.class == CONSTANT {
 		return nil
 	}
-	switch v.typ.Oid {
-	case types.T_bool:
-		return extend[bool](v, rows, mp)
-	case types.T_int8:
-		return extend[int8](v, rows, mp)
-	case types.T_int16:
-		return extend[int16](v, rows, mp)
-	case types.T_int32:
-		return extend[int32](v, rows, mp)
-	case types.T_int64:
-		return extend[int64](v, rows, mp)
-	case types.T_uint8:
-		return extend[uint8](v, rows, mp)
-	case types.T_uint16:
-		return extend[uint16](v, rows, mp)
-	case types.T_uint32:
-		return extend[uint32](v, rows, mp)
-	case types.T_uint64:
-		return extend[uint64](v, rows, mp)
-	case types.T_float32:
-		return extend[float32](v, rows, mp)
-	case types.T_float64:
-		return extend[float64](v, rows, mp)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
-		return extend[types.Varlena](v, rows, mp)
-	case types.T_date:
-		return extend[types.Date](v, rows, mp)
-	case types.T_datetime:
-		return extend[types.Datetime](v, rows, mp)
-	case types.T_time:
-		return extend[types.Time](v, rows, mp)
-	case types.T_timestamp:
-		return extend[types.Timestamp](v, rows, mp)
-	case types.T_decimal64:
-		return extend[types.Decimal64](v, rows, mp)
-	case types.T_decimal128:
-		return extend[types.Decimal128](v, rows, mp)
-	case types.T_uuid:
-		return extend[types.Uuid](v, rows, mp)
-	case types.T_TS:
-		return extend[types.TS](v, rows, mp)
-	case types.T_Rowid:
-		return extend[types.Rowid](v, rows, mp)
-	default:
-		panic(fmt.Sprintf("unexpect type %s for function vector.PreExtend", v.typ))
-	}
+
+	return extend(v, rows, mp)
 }
 
 // Dup use to copy an identical vector
 func (v *Vector) Dup(m *mpool.MPool) (*Vector, error) {
+	if v.IsConstNull() {
+		return NewConstNull(v.typ, v.Length(), m), nil
+	}
+
 	var err error
 
 	w := &Vector{
-		typ:    v.typ,
-		isBin:  v.isBin,
 		class:  v.class,
-		length: v.length,
+		typ:    v.typ,
 		nsp:    v.nsp.Clone(),
-		col:    new(reflect.SliceHeader),
+		length: v.length,
+		isBin:  v.isBin,
 	}
 
-	sz := v.typ.TypeSize()
-	data := (*(*[]byte)(unsafe.Pointer(v.col)))[:v.length/sz]
-	// Copy v.data, note that this should work for Varlena type
-	// as because we will copy area next and offset len will stay
-	// valid for long varlena.
-	if len(data) > 0 {
-		var ndata []byte
-
-		if ndata, err = m.Alloc(int(len(data))); err != nil {
+	if v.IsConst() {
+		if err := extend(w, 1, m); err != nil {
 			return nil, err
 		}
-		copy(ndata, data)
-		*(*[]byte)(unsafe.Pointer(w.col)) = ndata
+	} else {
+		if err := extend(w, v.length, m); err != nil {
+			return nil, err
+		}
 	}
+	copy(w.data, v.data)
+
 	if len(v.area) > 0 {
-		if w.area, err = m.Alloc(int(len(v.area))); err != nil {
+		if w.area, err = m.Alloc(len(v.area)); err != nil {
 			return nil, err
 		}
 		copy(w.area, v.area)
@@ -611,8 +634,8 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, m *mpool.MPool) error {
 	}
 	if v.typ.IsFixedLen() {
 		sz := v.typ.TypeSize()
-		vdata := (*(*[]byte)(unsafe.Pointer(v.col)))[:v.length*sz]
-		wdata := (*(*[]byte)(unsafe.Pointer(w.col)))[:v.length*sz]
+		vdata := (*(*[]byte)(unsafe.Pointer(&v.col)))[:v.length*sz]
+		wdata := (*(*[]byte)(unsafe.Pointer(&w.col)))[:v.length*sz]
 		copy(vdata[vi*int64(sz):(vi+1)*int64(sz)], wdata[wi*int64(sz):(wi+1)*int64(sz)])
 	} else {
 		var err error
@@ -637,52 +660,54 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		sel = 0
 	}
 
-	isNull := v.nsp.Contains((uint64(sel)))
+	if w.nsp.Contains((uint64(sel))) {
+		return Append(v, 0, true, mp)
+	}
 
 	switch v.typ.Oid {
 	case types.T_bool:
-		return Append(v, MustTCols[bool](w)[sel], isNull, mp)
+		return Append(v, MustTCols[bool](w)[sel], false, mp)
 	case types.T_int8:
-		return Append(v, MustTCols[int8](w)[sel], isNull, mp)
+		return Append(v, MustTCols[int8](w)[sel], false, mp)
 	case types.T_int16:
-		return Append(v, MustTCols[int16](w)[sel], isNull, mp)
+		return Append(v, MustTCols[int16](w)[sel], false, mp)
 	case types.T_int32:
-		return Append(v, MustTCols[int32](w)[sel], isNull, mp)
+		return Append(v, MustTCols[int32](w)[sel], false, mp)
 	case types.T_int64:
-		return Append(v, MustTCols[int64](w)[sel], isNull, mp)
+		return Append(v, MustTCols[int64](w)[sel], false, mp)
 	case types.T_uint8:
-		return Append(v, MustTCols[uint8](w)[sel], isNull, mp)
+		return Append(v, MustTCols[uint8](w)[sel], false, mp)
 	case types.T_uint16:
-		return Append(v, MustTCols[uint16](w)[sel], isNull, mp)
+		return Append(v, MustTCols[uint16](w)[sel], false, mp)
 	case types.T_uint32:
-		return Append(v, MustTCols[uint32](w)[sel], isNull, mp)
+		return Append(v, MustTCols[uint32](w)[sel], false, mp)
 	case types.T_uint64:
-		return Append(v, MustTCols[uint64](w)[sel], isNull, mp)
+		return Append(v, MustTCols[uint64](w)[sel], false, mp)
 	case types.T_float32:
-		return Append(v, MustTCols[float32](w)[sel], isNull, mp)
+		return Append(v, MustTCols[float32](w)[sel], false, mp)
 	case types.T_float64:
-		return Append(v, MustTCols[float64](w)[sel], isNull, mp)
+		return Append(v, MustTCols[float64](w)[sel], false, mp)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		ws := MustTCols[types.Varlena](w)
-		return AppendBytes(v, ws[sel].GetByteSlice(v.area), isNull, mp)
+		return AppendBytes(v, ws[sel].GetByteSlice(v.area), false, mp)
 	case types.T_date:
-		return Append(v, MustTCols[types.Date](w)[sel], isNull, mp)
+		return Append(v, MustTCols[types.Date](w)[sel], false, mp)
 	case types.T_datetime:
-		return Append(v, MustTCols[types.Datetime](w)[sel], isNull, mp)
+		return Append(v, MustTCols[types.Datetime](w)[sel], false, mp)
 	case types.T_time:
-		return Append(v, MustTCols[types.Time](w)[sel], isNull, mp)
+		return Append(v, MustTCols[types.Time](w)[sel], false, mp)
 	case types.T_timestamp:
-		return Append(v, MustTCols[types.Timestamp](w)[sel], isNull, mp)
+		return Append(v, MustTCols[types.Timestamp](w)[sel], false, mp)
 	case types.T_decimal64:
-		return Append(v, MustTCols[types.Decimal64](w)[sel], isNull, mp)
+		return Append(v, MustTCols[types.Decimal64](w)[sel], false, mp)
 	case types.T_decimal128:
-		return Append(v, MustTCols[types.Decimal128](w)[sel], isNull, mp)
+		return Append(v, MustTCols[types.Decimal128](w)[sel], false, mp)
 	case types.T_uuid:
-		return Append(v, MustTCols[types.Uuid](w)[sel], isNull, mp)
+		return Append(v, MustTCols[types.Uuid](w)[sel], false, mp)
 	case types.T_TS:
-		return Append(v, MustTCols[types.TS](w)[sel], isNull, mp)
+		return Append(v, MustTCols[types.TS](w)[sel], false, mp)
 	case types.T_Rowid:
-		return Append(v, MustTCols[types.Rowid](w)[sel], isNull, mp)
+		return Append(v, MustTCols[types.Rowid](w)[sel], false, mp)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
 	}
@@ -694,52 +719,54 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 		sel = 0
 	}
 
-	isNull := v.nsp.Contains((uint64(sel)))
+	if w.nsp.Contains((uint64(sel))) {
+		return AppendMulti(v, 0, true, cnt, mp)
+	}
 
 	switch v.typ.Oid {
 	case types.T_bool:
-		return AppendMulti(v, MustTCols[bool](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[bool](w)[sel], false, cnt, mp)
 	case types.T_int8:
-		return AppendMulti(v, MustTCols[int8](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[int8](w)[sel], false, cnt, mp)
 	case types.T_int16:
-		return AppendMulti(v, MustTCols[int16](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[int16](w)[sel], false, cnt, mp)
 	case types.T_int32:
-		return AppendMulti(v, MustTCols[int32](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[int32](w)[sel], false, cnt, mp)
 	case types.T_int64:
-		return AppendMulti(v, MustTCols[int64](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[int64](w)[sel], false, cnt, mp)
 	case types.T_uint8:
-		return AppendMulti(v, MustTCols[uint8](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[uint8](w)[sel], false, cnt, mp)
 	case types.T_uint16:
-		return AppendMulti(v, MustTCols[uint16](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[uint16](w)[sel], false, cnt, mp)
 	case types.T_uint32:
-		return AppendMulti(v, MustTCols[uint32](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[uint32](w)[sel], false, cnt, mp)
 	case types.T_uint64:
-		return AppendMulti(v, MustTCols[uint64](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[uint64](w)[sel], false, cnt, mp)
 	case types.T_float32:
-		return AppendMulti(v, MustTCols[float32](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[float32](w)[sel], false, cnt, mp)
 	case types.T_float64:
-		return AppendMulti(v, MustTCols[float64](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[float64](w)[sel], false, cnt, mp)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		ws := MustTCols[types.Varlena](w)
-		return AppendMultiBytes(v, ws[sel].GetByteSlice(v.area), isNull, cnt, mp)
+		return AppendMultiBytes(v, ws[sel].GetByteSlice(v.area), false, cnt, mp)
 	case types.T_date:
-		return AppendMulti(v, MustTCols[types.Date](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[types.Date](w)[sel], false, cnt, mp)
 	case types.T_datetime:
-		return AppendMulti(v, MustTCols[types.Datetime](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[types.Datetime](w)[sel], false, cnt, mp)
 	case types.T_time:
-		return AppendMulti(v, MustTCols[types.Time](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[types.Time](w)[sel], false, cnt, mp)
 	case types.T_timestamp:
-		return AppendMulti(v, MustTCols[types.Timestamp](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[types.Timestamp](w)[sel], false, cnt, mp)
 	case types.T_decimal64:
-		return AppendMulti(v, MustTCols[types.Decimal64](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[types.Decimal64](w)[sel], false, cnt, mp)
 	case types.T_decimal128:
-		return AppendMulti(v, MustTCols[types.Decimal128](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[types.Decimal128](w)[sel], false, cnt, mp)
 	case types.T_uuid:
-		return AppendMulti(v, MustTCols[types.Uuid](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[types.Uuid](w)[sel], false, cnt, mp)
 	case types.T_TS:
-		return AppendMulti(v, MustTCols[types.TS](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[types.TS](w)[sel], false, cnt, mp)
 	case types.T_Rowid:
-		return AppendMulti(v, MustTCols[types.Rowid](w)[sel], isNull, cnt, mp)
+		return AppendMulti(v, MustTCols[types.Rowid](w)[sel], false, cnt, mp)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
 	}
@@ -758,7 +785,6 @@ func (v *Vector) Union(w *Vector, sel []int64, mp *mpool.MPool) error {
 }
 
 func UnionNull(v, _ *Vector, m *mpool.MPool) error {
-
 	if v.GetType().IsTuple() {
 		panic(moerr.NewInternalErrorNoCtx("unionnull of tuple vector"))
 	}
@@ -769,7 +795,6 @@ func UnionNull(v, _ *Vector, m *mpool.MPool) error {
 }
 
 func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPool) (err error) {
-
 	if err = v.PreExtend(cnt, m); err != nil {
 		return err
 	}
@@ -844,75 +869,78 @@ func (v *Vector) String() string {
 	}
 }
 
-func SetConst[T any](v *Vector, w T, isNull bool, len int, m *mpool.MPool) error {
-	if err := Append(v, w, isNull, m); err != nil {
-		return err
-	}
-	v.SetLength(len)
+func SetConstNull(vec *Vector, len int, m *mpool.MPool) error {
+	nulls.Add(vec.nsp, uint64(0))
+	vec.SetLength(len)
 	return nil
 }
 
-func SetConstBytes(v *Vector, w []byte, isNull bool, len int, m *mpool.MPool) error {
-	if err := AppendBytes(v, w, isNull, m); err != nil {
-		return err
+func SetConst[T any](vec *Vector, val T, length int, m *mpool.MPool) error {
+	if vec.capacity == 0 {
+		if err := extend(vec, 1, m); err != nil {
+			return err
+		}
 	}
-	v.SetLength(len)
+	col := vec.col.([]T)
+	col[0] = val
+	vec.SetLength(length)
 	return nil
 }
 
-func SetConstString(v *Vector, w string, isNull bool, len int, m *mpool.MPool) error {
-	if err := AppendString(v, w, isNull, m); err != nil {
+func SetConstBytes(vec *Vector, val []byte, length int, m *mpool.MPool) error {
+	var err error
+	var va types.Varlena
+
+	if vec.capacity == 0 {
+		if err := extend(vec, 1, m); err != nil {
+			return err
+		}
+	}
+
+	col := vec.col.([]types.Varlena)
+	va, vec.area, err = types.BuildVarlena(val, vec.area, m)
+	if err != nil {
 		return err
 	}
-	v.SetLength(len)
+	col[0] = va
+	vec.SetLength(length)
 	return nil
 }
 
-func Append[T any](v *Vector, w T, isNull bool, m *mpool.MPool) error {
+func Append[T any](vec *Vector, val T, isNull bool, m *mpool.MPool) error {
 	if m == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
-	return appendOne(v, w, isNull, m)
+	return appendOne(vec, val, isNull, m)
 }
 
-func AppendBytes(v *Vector, w []byte, isNull bool, m *mpool.MPool) error {
+func AppendBytes(vec *Vector, val []byte, isNull bool, m *mpool.MPool) error {
 	if m == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
-	return appendOneBytes(v, w, isNull, m)
+	return appendOneBytes(vec, val, isNull, m)
 }
 
-func AppendString(v *Vector, w string, isNull bool, m *mpool.MPool) error {
+func AppendMulti[T any](vec *Vector, vals T, isNull bool, cnt int, m *mpool.MPool) error {
 	if m == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
-	return appendOneString(v, w, isNull, m)
+	return appendMulti(vec, vals, isNull, cnt, m)
 }
 
-func AppendMulti[T any](v *Vector, w T, isNull bool, cnt int, m *mpool.MPool) error {
+func AppendMultiBytes(vec *Vector, vals []byte, isNull bool, cnt int, m *mpool.MPool) error {
 	if m == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
-	return appendMulti(v, w, isNull, cnt, m)
-}
-
-func AppendMultiBytes(v *Vector, w []byte, isNull bool, cnt int, m *mpool.MPool) error {
-	if m == nil {
-		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
-	}
-	return appendMultiBytes(v, w, isNull, cnt, m)
-}
-
-func AppendMultiString(v *Vector, w string, isNull bool, cnt int, m *mpool.MPool) error {
-	if m == nil {
-		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
-	}
-	return appendMultiString(v, w, isNull, cnt, m)
+	return appendMultiBytes(vec, vals, isNull, cnt, m)
 }
 
 func AppendList[T any](v *Vector, ws []T, isNulls []bool, m *mpool.MPool) error {
 	if m == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
+	}
+	if len(ws) == 0 {
+		return nil
 	}
 	return appendList(v, ws, isNulls, m)
 }
@@ -921,6 +949,9 @@ func AppendBytesList(v *Vector, ws [][]byte, isNulls []bool, m *mpool.MPool) err
 	if m == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
+	if len(ws) == 0 {
+		return nil
+	}
 	return appendBytesList(v, ws, isNulls, m)
 }
 
@@ -928,111 +959,92 @@ func AppendStringList(v *Vector, ws []string, isNulls []bool, m *mpool.MPool) er
 	if m == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
+	if len(ws) == 0 {
+		return nil
+	}
 	return appendStringList(v, ws, isNulls, m)
 }
 
-func appendOne[T any](v *Vector, w T, isNull bool, m *mpool.MPool) error {
-	if err := extend[T](v, 1, m); err != nil {
+func appendOne[T any](vec *Vector, val T, isNull bool, m *mpool.MPool) error {
+	if err := extend(vec, 1, m); err != nil {
 		return err
 	}
-	length := v.length
-	v.length++
-	col := MustTCols[T](v)
+	length := vec.length
+	vec.length++
 	if isNull {
-		nulls.Add(v.nsp, uint64(length))
+		nulls.Add(vec.nsp, uint64(length))
 	} else {
-		col[length] = w
+		col := vec.col.([]T)
+		col[length] = val
 	}
 	return nil
 }
 
-func appendOneBytes(v *Vector, bs []byte, isNull bool, m *mpool.MPool) error {
+func appendOneBytes(vec *Vector, val []byte, isNull bool, m *mpool.MPool) error {
 	var err error
 	var va types.Varlena
 
 	if isNull {
-		return appendOne(v, va, true, m)
+		return appendOne(vec, va, true, m)
 	} else {
-		va, v.area, err = types.BuildVarlena(bs, v.area, m)
+		va, vec.area, err = types.BuildVarlena(val, vec.area, m)
 		if err != nil {
 			return err
 		}
-		return appendOne(v, va, false, m)
+		return appendOne(vec, va, false, m)
 	}
 }
 
-func appendOneString(v *Vector, bs string, isNull bool, m *mpool.MPool) error {
-	var err error
-	var va types.Varlena
-
-	if isNull {
-		return appendOne(v, va, true, m)
-	} else {
-		va, v.area, err = types.BuildVarlena([]byte(bs), v.area, m)
-		if err != nil {
-			return err
-		}
-		return appendOne(v, va, false, m)
-	}
-}
-
-func appendMulti[T any](v *Vector, w T, isNull bool, cnt int, m *mpool.MPool) error {
-	if err := extend[T](v, 1, m); err != nil {
+func appendMulti[T any](vec *Vector, val T, isNull bool, cnt int, m *mpool.MPool) error {
+	if err := extend(vec, 1, m); err != nil {
 		return err
 	}
-	length := v.length
-	v.length += cnt
-	col := MustTCols[T](v)
+	length := vec.length
+	vec.length += cnt
+	col := vec.col.([]T)
 	if isNull {
-		nulls.AddRange(v.nsp, uint64(length), uint64(length+cnt))
+		nulls.AddRange(vec.nsp, uint64(length), uint64(length+cnt))
 	} else {
 		for i := 0; i < cnt; i++ {
-			col[length+i] = w
+			col[length+i] = val
 		}
 	}
 	return nil
 }
 
-func appendMultiBytes(v *Vector, bs []byte, isNull bool, cnt int, m *mpool.MPool) error {
+func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, m *mpool.MPool) error {
 	var err error
 	var va types.Varlena
-
-	if isNull {
-		return appendOne(v, va, true, m)
-	} else {
-		va, v.area, err = types.BuildVarlena(bs, v.area, m)
-		if err != nil {
-			return err
-		}
-		return appendOne(v, va, false, m)
-	}
-}
-
-func appendMultiString(v *Vector, bs string, isNull bool, cnt int, m *mpool.MPool) error {
-	var err error
-	var va types.Varlena
-
-	if isNull {
-		return appendOne(v, va, true, m)
-	} else {
-		va, v.area, err = types.BuildVarlena([]byte(bs), v.area, m)
-		if err != nil {
-			return err
-		}
-		return appendOne(v, va, false, m)
-	}
-}
-
-func appendList[T any](v *Vector, ws []T, isNulls []bool, m *mpool.MPool) error {
-	if err := extend[T](v, len(ws), m); err != nil {
+	if err = extend(vec, 1, m); err != nil {
 		return err
 	}
-	length := v.length
-	v.length += len(ws)
-	col := MustTCols[T](v)
-	for i, w := range ws {
+	length := vec.length
+	vec.length += cnt
+	col := vec.col.([]types.Varlena)
+	if isNull {
+		nulls.AddRange(vec.nsp, uint64(length), uint64(length+cnt))
+	} else {
+		va, vec.area, err = types.BuildVarlena(val, vec.area, m)
+		if err != nil {
+			return err
+		}
+		for i := 0; i < cnt; i++ {
+			col[length+i] = va
+		}
+	}
+	return nil
+}
+
+func appendList[T any](vec *Vector, vals []T, isNulls []bool, m *mpool.MPool) error {
+	if err := extend(vec, len(vals), m); err != nil {
+		return err
+	}
+	length := vec.length
+	vec.length += len(vals)
+	col := MustTCols[T](vec)
+	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
-			nulls.Add(v.nsp, uint64(length+i))
+			nulls.Add(vec.nsp, uint64(length+i))
 		} else {
 			col[length+i] = w
 		}
@@ -1040,21 +1052,21 @@ func appendList[T any](v *Vector, ws []T, isNulls []bool, m *mpool.MPool) error 
 	return nil
 }
 
-func appendBytesList(v *Vector, ws [][]byte, isNulls []bool, m *mpool.MPool) error {
+func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, m *mpool.MPool) error {
 	var err error
 	var va types.Varlena
 
-	if err = extend[types.Varlena](v, len(ws), m); err != nil {
+	if err = extend(vec, len(vals), m); err != nil {
 		return err
 	}
-	length := v.length
-	v.length += len(ws)
-	col := MustTCols[types.Varlena](v)
-	for i, w := range ws {
+	length := vec.length
+	vec.length += len(vals)
+	col := MustTCols[types.Varlena](vec)
+	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
-			nulls.Add(v.nsp, uint64(length+i))
+			nulls.Add(vec.nsp, uint64(length+i))
 		} else {
-			va, v.area, err = types.BuildVarlena(w, v.area, m)
+			va, vec.area, err = types.BuildVarlena(w, vec.area, m)
 			if err != nil {
 				return err
 			}
@@ -1064,21 +1076,21 @@ func appendBytesList(v *Vector, ws [][]byte, isNulls []bool, m *mpool.MPool) err
 	return nil
 }
 
-func appendStringList(v *Vector, ws []string, isNulls []bool, m *mpool.MPool) error {
+func appendStringList(vec *Vector, vals []string, isNulls []bool, m *mpool.MPool) error {
 	var err error
 	var va types.Varlena
 
-	if err = extend[types.Varlena](v, len(ws), m); err != nil {
+	if err = extend(vec, len(vals), m); err != nil {
 		return err
 	}
-	length := v.length
-	v.length += len(ws)
-	col := MustTCols[types.Varlena](v)
-	for i, w := range ws {
+	length := vec.length
+	vec.length += len(vals)
+	col := MustTCols[types.Varlena](vec)
+	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
-			nulls.Add(v.nsp, uint64(length+i))
+			nulls.Add(vec.nsp, uint64(length+i))
 		} else {
-			va, v.area, err = types.BuildVarlena([]byte(w), v.area, m)
+			va, vec.area, err = types.BuildVarlena([]byte(w), vec.area, m)
 			if err != nil {
 				return err
 			}
@@ -1098,15 +1110,16 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64) {
 
 func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, m *mpool.MPool) error {
 	sz := v.typ.TypeSize()
-	olddata := (*(*[]byte)(unsafe.Pointer(v.col)))[:v.length*sz]
+	olddata := v.data[:v.length*sz]
 	ns := len(sels)
 	vs := MustTCols[T](v)
 	data, err := m.Alloc(int(ns * v.GetType().TypeSize()))
 	if err != nil {
 		return err
 	}
-	*(*[]byte)(unsafe.Pointer(v.col)) = data
-	ws := (*(*[]T)(unsafe.Pointer(v.col)))[:ns]
+	v.data = data
+	v.setupColFromData()
+	ws := v.col.([]T)[:ns]
 	shuffle.FixedLengthShuffle(vs, ws, sels)
 	v.nsp = nulls.Filter(v.nsp, sels)
 	m.Free(olddata)
@@ -1182,52 +1195,123 @@ func GetInitConstVal(typ types.Type) any {
 
 func CopyConst(toVec, fromVec *Vector, length int, m *mpool.MPool) error {
 	typ := fromVec.GetType()
-	var item any
 	switch typ.Oid {
 	case types.T_bool:
-		item = MustTCols[bool](fromVec)[0]
+		item := MustTCols[bool](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_int8:
-		item = MustTCols[int8](fromVec)[0]
+		item := MustTCols[int8](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_int16:
-		item = MustTCols[int16](fromVec)[0]
+		item := MustTCols[int16](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_int32:
-		item = MustTCols[int32](fromVec)[0]
+		item := MustTCols[int32](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_int64:
-		item = MustTCols[int64](fromVec)[0]
+		item := MustTCols[int64](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_uint8:
-		item = MustTCols[uint8](fromVec)[0]
+		item := MustTCols[uint8](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_uint16:
-		item = MustTCols[uint16](fromVec)[0]
+		item := MustTCols[uint16](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_uint32:
-		item = MustTCols[uint32](fromVec)[0]
+		item := MustTCols[uint32](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_uint64:
-		item = MustTCols[uint64](fromVec)[0]
+		item := MustTCols[uint64](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_float32:
-		item = MustTCols[float32](fromVec)[0]
+		item := MustTCols[float32](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_float64:
-		item = MustTCols[float64](fromVec)[0]
+		item := MustTCols[float64](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
-		item = MustBytesCols(fromVec)[0]
+		item := MustBytesCols(fromVec)[0]
+		for i := 0; i < length; i++ {
+			AppendBytes(toVec, item, false, m)
+		}
+
 	case types.T_date:
-		item = MustTCols[types.Date](fromVec)[0]
+		item := MustTCols[types.Date](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_datetime:
-		item = MustTCols[types.Datetime](fromVec)[0]
+		item := MustTCols[types.Datetime](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_time:
-		item = MustTCols[types.Time](fromVec)[0]
+		item := MustTCols[types.Time](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_timestamp:
-		item = MustTCols[types.Timestamp](fromVec)[0]
+		item := MustTCols[types.Timestamp](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_decimal64:
-		item = MustTCols[types.Decimal64](fromVec)[0]
+		item := MustTCols[types.Decimal64](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_decimal128:
-		item = MustTCols[types.Decimal128](fromVec)[0]
+		item := MustTCols[types.Decimal128](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	case types.T_uuid:
-		item = MustTCols[types.Uuid](fromVec)[0]
+		item := MustTCols[types.Uuid](fromVec)[0]
+		for i := 0; i < length; i++ {
+			Append(toVec, item, false, m)
+		}
+
 	default:
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("vec %v can not copy", fromVec))
-	}
-
-	for i := 0; i < length; i++ {
-		Append(toVec, item, false, m)
 	}
 
 	return nil

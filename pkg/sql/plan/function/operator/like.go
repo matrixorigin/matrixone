@@ -25,13 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lv, rv := vectors[0], vectors[1]
+func Like(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lv, rv := ivecs[0], ivecs[1]
 	lvs, rvs := vector.MustStrCols(lv), vector.MustBytesCols(rv)
 	rtyp := types.T_bool.ToType()
 
 	if lv.IsConstNull() || rv.IsConstNull() {
-		return proc.AllocConstNullVector(rtyp), nil
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
 
 	var err error
@@ -50,7 +50,7 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 				return nil, err
 			}
 		}
-		vec := vector.New(vector.FLAT, rtyp)
+		vec := vector.NewVector(rtyp)
 		vector.AppendList(vec, rs, nil, proc.Mp())
 		return vec, nil
 	case lv.IsConst() && rv.IsConst(): // in our design, this case should deal while pruning extends.
@@ -58,15 +58,13 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.New(vector.CONSTANT, rtyp)
-		vector.Append(vec, ok, false, proc.Mp())
-		return vec, nil
+		return vector.NewConst(rtyp, ok, ivecs[0].Length(), proc.Mp()), nil
 	case lv.IsConst() && !rv.IsConst():
 		rs, err = like.BtConstAndSliceNull(lvs[0], rvs, rv.GetNulls(), rs)
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.New(vector.FLAT, rtyp)
+		vec := vector.NewVector(rtyp)
 		vector.AppendList(vec, rs, nil, proc.Mp())
 		return vec, nil
 	case !lv.IsConst() && !rv.IsConst():
@@ -95,15 +93,15 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 				return nil, err
 			}
 		}
-		vec := vector.New(vector.FLAT, rtyp)
+		vec := vector.NewVector(rtyp)
 		vector.AppendList(vec, rs, nil, proc.Mp())
 		return vec, nil
 	}
 	return nil, moerr.NewInternalError(proc.Ctx, "unexpected case for LIKE operator")
 }
 
-func ILike(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lv, rv := vectors[0], vectors[1]
+func ILike(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lv, rv := ivecs[0], ivecs[1]
 	lvs, rvs := vector.MustStrCols(lv), vector.MustBytesCols(rv)
 	for i := range lvs {
 		lvs[i] = strings.ToLower(lvs[i])
@@ -114,7 +112,7 @@ func ILike(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	rtyp := types.T_bool.ToType()
 
 	if lv.IsConstNull() || rv.IsConstNull() {
-		return proc.AllocConstNullVector(rtyp, lv.Length()), nil
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
 
 	var err error
@@ -133,19 +131,26 @@ func ILike(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 				return nil, err
 			}
 		}
-		return vector.NewWithFixed(rtyp, rs, lv.GetNulls(), proc.Mp()), nil
+		rv := vector.NewVector(rtyp)
+		vector.AppendList(rv, rs, nil, proc.Mp())
+		nulls.Set(rv.GetNulls(), lv.GetNulls())
+		return rv, nil
 	case lv.IsConst() && rv.IsConst(): // in our design, this case should deal while pruning extends.
 		ok, err := like.BtConstAndConst(lvs[0], rvs[0])
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConstFixed(rtyp, lv.Length(), ok, proc.Mp()), nil
+		rv := vector.NewConst(rtyp, ok, lv.Length(), proc.Mp())
+		return rv, nil
 	case lv.IsConst() && !rv.IsConst():
 		rs, err = like.BtConstAndSliceNull(lvs[0], rvs, rv.GetNulls(), rs)
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewWithFixed(rtyp, rs, lv.GetNulls(), proc.Mp()), nil
+		rv := vector.NewVector(rtyp)
+		vector.AppendList(rv, rs, nil, proc.Mp())
+		nulls.Set(rv.GetNulls(), lv.GetNulls())
+		return rv, nil
 	case !lv.IsConst() && !rv.IsConst():
 		var nsp *nulls.Nulls
 		if nulls.Any(rv.GetNulls()) && nulls.Any(lv.GetNulls()) {
@@ -172,7 +177,10 @@ func ILike(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 				return nil, err
 			}
 		}
-		return vector.NewWithFixed(rtyp, rs, nsp, proc.Mp()), nil
+		rv := vector.NewVector(rtyp)
+		vector.AppendList(rv, rs, nil, proc.Mp())
+		rv.SetNulls(nsp)
+		return rv, nil
 	}
 	return nil, moerr.NewInternalError(proc.Ctx, "unexpected case for LIKE operator")
 }

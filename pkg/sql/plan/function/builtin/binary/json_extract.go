@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/json_extract"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -37,21 +36,15 @@ func computeString(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error)
 	return bj.Query(path), nil
 }
 
-func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
-	defer func() {
-		if err != nil && ret != nil {
-			ret.Free(proc.Mp())
-		}
-	}()
+func JsonExtract(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	jsonBytes, pathBytes := vectors[0], vectors[1]
 	maxLen := jsonBytes.Length()
 	if maxLen < pathBytes.Length() {
 		maxLen = pathBytes.Length()
 	}
-	resultType := types.T_json.ToType()
+	rtyp := types.T_json.ToType()
 	if jsonBytes.IsConstNull() || pathBytes.IsConstNull() {
-		ret = proc.AllocConstNullVector(resultType)
-		return
+		return vector.NewConstNull(rtyp, jsonBytes.Length(), proc.Mp()), nil
 	}
 
 	var fn computeFn
@@ -62,39 +55,40 @@ func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.V
 		fn = computeString
 	}
 
-	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
 	if jsonBytes.IsConst() && pathBytes.IsConst() {
-		ret = proc.AllocScalarVector(resultType)
-		resultValues := make([]*bytejson.ByteJson, 1)
-		resultValues, err = json_extract.JsonExtract(json, path, []*nulls.Nulls{jsonBytes.GetNulls(), pathBytes.GetNulls()}, resultValues, ret.GetNulls(), fn)
+		rval, err := jsonExtract(jsonBytes.GetBytes(0), pathBytes.GetBytes(0), fn)
 		if err != nil {
-			return
+			return nil, err
 		}
-		if ret.GetNulls().Contains(0) {
-			return
-		}
-		dt, _ := resultValues[0].Marshal()
-		err = vector.SetBytesAt(ret, 0, dt, proc.Mp())
-		return
+		dt, _ := rval.Marshal()
+		return vector.NewConstBytes(rtyp, dt, jsonBytes.Length(), proc.Mp()), err
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, maxLen, nil)
+	nulls.Or(jsonBytes.GetNulls(), pathBytes.GetNulls(), rvec.GetNulls())
 	if err != nil {
-		return
+		return nil, err
 	}
-	resultValues := make([]*bytejson.ByteJson, maxLen)
-	resultValues, err = json_extract.JsonExtract(json, path, []*nulls.Nulls{jsonBytes.GetNulls(), pathBytes.GetNulls()}, resultValues, ret.GetNulls(), fn)
-	if err != nil {
-		return
-	}
-	for idx, v := range resultValues {
-		if ret.GetNulls().Contains(uint64(idx)) {
+	for i := 0; i < jsonBytes.Length(); i++ {
+		if rvec.GetNulls().Contains(uint64(i)) {
 			continue
 		}
-		dt, _ := v.Marshal()
-		err = vector.SetBytesAt(ret, idx, dt, proc.Mp())
+		rval, err := jsonExtract(jsonBytes.GetBytes(i), pathBytes.GetBytes(i), fn)
 		if err != nil {
-			return
+			return nil, err
+		}
+		dt, _ := rval.Marshal()
+		err = vector.SetBytesAt(rvec, i, dt, proc.Mp())
+		if err != nil {
+			return nil, err
 		}
 	}
-	return
+	return rvec, nil
+}
+
+func jsonExtract(json, path []byte, compute func([]byte, *bytejson.Path) (*bytejson.ByteJson, error)) (*bytejson.ByteJson, error) {
+	pStar, err := types.ParseStringToPath(string(path))
+	if err != nil {
+		return nil, err
+	}
+	return compute(json, &pStar)
 }

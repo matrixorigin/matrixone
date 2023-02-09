@@ -91,10 +91,10 @@ func makeIsAndIsNotTestVectors(left []bool, right bool, isScalar bool) []*vector
 			vec[0].SetLength(1)
 		}
 	} else {
-		vec[0] = testutil.MakeScalarNull(types.T_bool, 0)
+		vec[0] = testutil.MakeScalarNull(types.T_bool, 1)
 	}
 
-	vec[1] = testutil.MakeScalarBool(right, len(left))
+	vec[1] = testutil.MakeScalarBool(right, 1)
 
 	return vec
 }

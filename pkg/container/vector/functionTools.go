@@ -88,7 +88,7 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 			sourceVector: v,
 		}
 	}
-	cols := MustTCols[types.Varlena](v)
+	cols := v.col.([]types.Varlena)
 	if v.IsConst() {
 		return &FunctionParameterScalar[types.Varlena]{
 			typ:          *t,
@@ -265,8 +265,8 @@ func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
 	return Append(fr.vec, val, isnull, fr.mp)
 }
 
-func (fr *FunctionResult[T]) AppendStr(val []byte, isnull bool) error {
-	return Append(fr.vec, val, isnull, fr.mp)
+func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
+	return AppendBytes(fr.vec, val, isnull, fr.mp)
 }
 
 func (fr *FunctionResult[T]) GetType() types.Type {
@@ -300,9 +300,9 @@ func (fr *FunctionResult[T]) Free() {
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, length int) FunctionResultWrapper {
 	var v *Vector
 	if isConst {
-		v = New(CONSTANT, typ)
+		v = NewConstNull(typ, 0, mp)
 	} else {
-		v = New(FLAT, typ)
+		v = NewVector(typ)
 	}
 
 	switch typ.Oid {

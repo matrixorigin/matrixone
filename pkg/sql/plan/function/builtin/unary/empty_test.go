@@ -31,42 +31,42 @@ func TestEmpty(t *testing.T) {
 		proc     *process.Process
 		inputstr []string
 		inputNsp []uint64
-		expected []uint8
+		expected []bool
 		isScalar bool
 	}{
 		{
 			name:     "Empty string",
 			proc:     procs,
 			inputstr: []string{""},
-			expected: []uint8{1},
+			expected: []bool{true},
 			isScalar: false,
 		},
 		{
 			name:     "Empty scalar string",
 			proc:     procs,
 			inputstr: []string{""},
-			expected: []uint8{1},
+			expected: []bool{true},
 			isScalar: true,
 		},
 		{
 			name:     "Non-empty scalar string",
 			proc:     procs,
 			inputstr: []string{"ab"},
-			expected: []uint8{0},
+			expected: []bool{false},
 			isScalar: true,
 		},
 		{
 			name:     "String with empty element",
 			proc:     procs,
 			inputstr: []string{"ab", "cd", "", "ef", " ", "\n"},
-			expected: []uint8{0, 0, 1, 0, 0, 0},
+			expected: []bool{false, false, true, false, false, false},
 			isScalar: false,
 		},
 		{
 			name:     "Non-empty string",
 			proc:     procs,
 			inputstr: []string{"ab", "cd", " ", "\t", "\n", "\r"},
-			expected: []uint8{0, 0, 0, 0, 0, 0},
+			expected: []bool{false, false, false, false, false, false},
 			isScalar: false,
 		},
 		{
@@ -74,13 +74,12 @@ func TestEmpty(t *testing.T) {
 			proc:     procs,
 			inputstr: []string{"ab", "", " ", "\t", "\n", "\r", ""},
 			inputNsp: []uint64{1, 4},
-			expected: []uint8{0, 1, 0, 0, 0, 0, 1},
+			expected: []bool{false, true, false, false, false, false, true},
 			isScalar: false,
 		},
 		{
 			name:     "Null",
 			proc:     procs,
-			expected: []uint8{0},
 			isScalar: true,
 		},
 	}
@@ -92,7 +91,7 @@ func TestEmpty(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := vector.MustTCols[uint8](result)
+			col := vector.MustTCols[bool](result)
 			require.Equal(t, c.expected, col)
 			require.Equal(t, c.isScalar, result.IsConst())
 		})
@@ -108,7 +107,7 @@ func makeEmptyTestVectors(data []string, nsp []uint64, isScalar bool) []*vector.
 			vec[0].SetLength(1)
 		}
 	} else {
-		vec[0] = testutil.MakeScalarNull(types.T_char, 0)
+		vec[0] = testutil.MakeScalarNull(types.T_char, 1)
 	}
 
 	return vec

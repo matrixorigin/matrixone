@@ -24,33 +24,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func SubStrIndex(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if vecs[0].IsConstNull() || vecs[1].IsConstNull() || vecs[2].IsConstNull() {
-		return proc.AllocScalarNullVector(*vecs[0].GetType()), nil
+func SubStrIndex(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if ivecs[0].IsConstNull() || ivecs[1].IsConstNull() || ivecs[2].IsConstNull() {
+		return vector.NewConstNull(*ivecs[0].GetType(), ivecs[0].Length(), proc.Mp()), nil
 	}
 	//get the first arg str
-	sourceCols := vector.MustStrCols(vecs[0])
+	sourceCols := vector.MustStrCols(ivecs[0])
 	//get the second arg delim
-	delimCols := vector.MustStrCols(vecs[1])
+	delimCols := vector.MustStrCols(ivecs[1])
 	//get the third arg count
-	countCols := getCount(vecs[2])
+	countCols := getCount(ivecs[2])
 
 	//calcute rows
-	rowCount := vecs[0].Length()
+	rowCount := ivecs[0].Length()
 
 	var resultVec *vector.Vector = nil
-	resultValues := make([]string, rowCount)
+	rvals := make([]string, rowCount)
 	resultNsp := nulls.NewWithSize(rowCount)
 
 	// set null row
-	nulls.Or(vecs[0].GetNulls(), vecs[1].GetNulls(), resultNsp)
-	nulls.Or(vecs[2].GetNulls(), resultNsp, resultNsp)
+	nulls.Or(ivecs[0].GetNulls(), ivecs[1].GetNulls(), resultNsp)
+	nulls.Or(ivecs[2].GetNulls(), resultNsp, resultNsp)
 
-	constVectors := []bool{vecs[0].IsConst(), vecs[1].IsConst(), vecs[2].IsConst()}
+	constVectors := []bool{ivecs[0].IsConst(), ivecs[1].IsConst(), ivecs[2].IsConst()}
 	//get result values
-	substrindex.SubStrIndex(sourceCols, delimCols, countCols, rowCount, constVectors, resultValues)
-	resultVec = vector.New(vector.FLAT, types.T_varchar.ToType())
-	vector.AppendStringList(resultVec, resultValues, nil, proc.Mp())
+	substrindex.SubStrIndex(sourceCols, delimCols, countCols, rowCount, constVectors, rvals)
+	resultVec = vector.NewVector(types.T_varchar.ToType())
+	vector.AppendStringList(resultVec, rvals, nil, proc.Mp())
 
 	return resultVec, nil
 }

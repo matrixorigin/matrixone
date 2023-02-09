@@ -37,7 +37,8 @@ const (
 )
 
 func NumericMultSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt := vector.MustTCols[T](xs), vector.MustTCols[T](ys)
+	rt := vector.MustTCols[T](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR

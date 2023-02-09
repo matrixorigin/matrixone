@@ -151,22 +151,19 @@ func (proc *Process) GetAnalyze(idx int) Analyze {
 	return &analyze{analInfo: proc.AnalInfos[idx], wait: 0}
 }
 
-func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, error) {
-	return proc.AllocVectorOfRows(typ, size/int64(typ.TypeSize()), nil)
-}
-
-func (proc *Process) AllocVectorOfRows(typ types.Type, nele int64, nsp *nulls.Nulls) (*vector.Vector, error) {
-	vec := vector.New(vector.FLAT, typ)
-	vec.PreExtend(int(nele), proc.Mp())
+func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
+	vec := vector.NewVector(typ)
+	vec.PreExtend(nele, proc.Mp())
+	vec.SetLength(nele)
 	if nsp != nil {
 		nulls.Set(vec.GetNulls(), nsp)
 	}
 	return vec, nil
 }
 
+/*
 func (proc *Process) AllocScalarVector(typ types.Type) *vector.Vector {
 	vec := vector.New(vector.CONSTANT, typ)
-	vec.PreExtend(1, proc.Mp())
 	return vec
 }
 
@@ -199,6 +196,7 @@ func (proc *Process) AllocInt64ScalarVector(v int64) *vector.Vector {
 	vec.SetLength(1)
 	return vec
 }
+*/
 
 func (proc *Process) WithSpanContext(sc trace.SpanContext) {
 	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)

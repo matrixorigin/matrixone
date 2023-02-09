@@ -84,9 +84,9 @@ func TestEndswith(t *testing.T) {
 		wantvec := testutil.MakeScalarUint8(1, 5)
 
 		proc := testutil.NewProc()
-		ovec, err := Endswith([]*vector.Vector{firVec, secVec}, proc)
+		rvec, err := Endswith([]*vector.Vector{firVec, secVec}, proc)
 		convey.So(err, convey.ShouldBeNil)
-		ret := testutil.CompareVectors(wantvec, ovec)
+		ret := testutil.CompareVectors(wantvec, rvec)
 		convey.So(ret, convey.ShouldBeTrue)
 	})
 }

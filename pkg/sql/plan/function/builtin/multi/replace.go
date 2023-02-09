@@ -21,36 +21,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Replace(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vectors[0]
-	secondVector := vectors[1]
-	thirdVector := vectors[2]
+func Replace(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	firstVector := ivecs[0]
+	secondVector := ivecs[1]
+	thirdVector := ivecs[2]
 	firstValues := vector.MustStrCols(firstVector)
 	secondValues := vector.MustStrCols(secondVector)
 	thirdValues := vector.MustStrCols(thirdVector)
-	resultType := types.T_varchar.ToType()
+	rtyp := types.T_varchar.ToType()
 
 	//maxLen
-	maxLen := vectors[0].Length()
-	for i := range vectors {
-		val := vectors[i].Length()
+	maxLen := ivecs[0].Length()
+	for i := range ivecs {
+		val := ivecs[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
 	}
 
 	if firstVector.IsConstNull() || secondVector.IsConstNull() || thirdVector.IsConstNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+		return vector.NewConstNull(rtyp, maxLen, proc.Mp()), nil
 	}
 
-	resultVector, err := proc.AllocVectorOfRows(resultType, 0, nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, 0, nil)
 	if err != nil {
 		return nil, err
 	}
-	err = regular.ReplaceWithArrays(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), thirdVector.GetNulls(), resultVector, proc, maxLen)
+	err = regular.ReplaceWithArrays(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), thirdVector.GetNulls(), rvec, proc, maxLen)
 	if err != nil {
 		return nil, err
 	}
 
-	return resultVector, nil
+	return rvec, nil
 }

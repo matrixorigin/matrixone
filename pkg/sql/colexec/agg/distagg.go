@@ -161,7 +161,7 @@ func (a *UnaryDistAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector
 		return nil
 	}
 	if vec.GetType().IsString() {
-		v = (any)(vec.GetBytes(sel)).(T1)
+		v = (any)(vec.GetBytes(int(sel))).(T1)
 	} else {
 		v = vector.MustTCols[T1](vec)[sel]
 	}
@@ -189,7 +189,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 				if hasNull {
 					continue
 				}
-				v := (any)(vec.GetBytes(int64(i) + start)).(T1)
+				v := (any)(vec.GetBytes(i + int(start))).(T1)
 				a.srcs[j] = append(a.srcs[j], v)
 				a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 			}
@@ -234,7 +234,7 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 				if hasNull {
 					continue
 				}
-				v := (any)(vec.GetBytes(int64(j))).(T1)
+				v := (any)(vec.GetBytes(j)).(T1)
 				a.srcs[i] = append(a.srcs[i], v)
 				a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
 			}
@@ -332,7 +332,7 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		}
 	}
 	if a.otyp.IsString() {
-		vec := vector.New(vector.FLAT, a.otyp)
+		vec := vector.NewVector(a.otyp)
 		vec.SetNulls(nsp)
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
@@ -344,7 +344,7 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		}
 		return vec, nil
 	}
-	vec := vector.New(vector.FLAT, a.otyp)
+	vec := vector.NewVector(a.otyp)
 	vector.AppendList(vec, a.eval(a.vs), nil, m)
 	vec.SetNulls(nsp)
 	return vec, nil

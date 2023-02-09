@@ -228,7 +228,7 @@ func (h *HashShard) Vector(
 		shard := shards[n%len(shards)]
 		shardVec, ok := m[shard]
 		if !ok {
-			shardVec = vector.New(vector.FLAT, shardAttr.Type)
+			shardVec = vector.NewVector(shardAttr.Type)
 			m[shard] = shardVec
 		}
 		v := getNullableValueFromVector(vec, i)
@@ -470,7 +470,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.GetBytes(int64(i)),
+			Value:  vec.GetBytes(i),
 		}
 		return
 

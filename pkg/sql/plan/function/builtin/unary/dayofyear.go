@@ -21,25 +21,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func DayOfYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint16, Size: 2}
-	inputValues := vector.MustTCols[types.Date](inputVector)
+func DayOfYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint16.ToType()
+	ivals := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := vector.MustTCols[uint16](resultVector)
-		dayofyear.GetDayOfYear(inputValues, resultValues)
-		return resultVector, nil
+		var rvals [1]uint16
+		dayofyear.GetDayOfYear(ivals, rvals[:])
+		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint16](resultVector)
-		dayofyear.GetDayOfYear(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustTCols[uint16](rvec)
+		dayofyear.GetDayOfYear(ivals, rvals)
+		return rvec, nil
 	}
 }

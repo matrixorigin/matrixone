@@ -36,27 +36,25 @@ var (
 	}
 )
 
-func AsciiInt[T types.Ints](vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
-	vec := vecs[0]
-	resultType := types.T_uint8.ToType()
+func AsciiInt[T types.Ints](ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
+	vec := ivecs[0]
+	rtyp := types.T_uint8.ToType()
 	defer func() {
 		if err != nil && ret != nil {
 			ret.Free(proc.Mp())
 		}
 	}()
 	if vec.IsConstNull() {
-		ret = proc.AllocScalarNullVector(resultType)
+		ret = vector.NewConstNull(rtyp, vec.Length(), proc.Mp())
 		return
 	}
 	start := intStartMap[vec.GetType().Oid]
 	if vec.IsConst() {
-		ret = proc.AllocScalarVector(resultType)
-		rs := vector.MustTCols[uint8](ret)
 		v := vector.MustTCols[T](vec)[0]
-		rs[0] = ascii.IntSingle(int64(v), start)
+		ret = vector.NewConst(rtyp, ascii.IntSingle(int64(v), start), vec.Length(), proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.GetNulls())
+	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())
 	if err != nil {
 		return
 	}
@@ -66,27 +64,25 @@ func AsciiInt[T types.Ints](vecs []*vector.Vector, proc *process.Process) (ret *
 	return
 }
 
-func AsciiUint[T types.UInts](vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
-	vec := vecs[0]
-	resultType := types.T_uint8.ToType()
+func AsciiUint[T types.UInts](ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
+	vec := ivecs[0]
+	rtyp := types.T_uint8.ToType()
 	defer func() {
 		if err != nil && ret != nil {
 			ret.Free(proc.Mp())
 		}
 	}()
 	if vec.IsConstNull() {
-		ret = proc.AllocScalarNullVector(resultType)
+		ret = vector.NewConstNull(rtyp, vec.Length(), proc.Mp())
 		return
 	}
 	start := uintStartMap[vec.GetType().Oid]
 	if vec.IsConst() {
-		ret = proc.AllocScalarVector(resultType)
-		rs := vector.MustTCols[uint8](ret)
 		v := vector.MustTCols[T](vec)[0]
-		rs[0] = ascii.UintSingle(uint64(v), start)
+		ret = vector.NewConst(rtyp, ascii.UintSingle(uint64(v), start), vec.Length(), proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.GetNulls())
+	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())
 	if err != nil {
 		return
 	}
@@ -96,26 +92,24 @@ func AsciiUint[T types.UInts](vecs []*vector.Vector, proc *process.Process) (ret
 	return
 }
 
-func AsciiString(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
-	vec := vecs[0]
-	resultType := types.T_uint8.ToType()
+func AsciiString(ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
+	vec := ivecs[0]
+	rtyp := types.T_uint8.ToType()
 	defer func() {
 		if err != nil && ret != nil {
 			ret.Free(proc.Mp())
 		}
 	}()
 	if vec.IsConstNull() {
-		ret = proc.AllocScalarNullVector(resultType)
+		ret = vector.NewConstNull(rtyp, vec.Length(), proc.Mp())
 		return
 	}
 	if vec.IsConst() {
-		ret = proc.AllocScalarVector(resultType)
-		rs := vector.MustTCols[uint8](ret)
 		v := vector.MustBytesCols(vec)[0]
-		rs[0] = ascii.StringSingle(v)
+		ret = vector.NewConst(rtyp, ascii.StringSingle(v), vec.Length(), proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.GetNulls())
+	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())
 	if err != nil {
 		return
 	}

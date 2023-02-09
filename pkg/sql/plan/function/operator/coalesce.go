@@ -136,12 +136,11 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 		if input.IsConst() {
 			if !input.IsConstNull() {
 				cols := vector.MustTCols[T](input)
-				r := proc.AllocScalarVector(t)
+				r := vector.NewConst(t, cols[0], vecLen, proc.Mp())
 				r.GetType().Precision = input.GetType().Precision
 				r.GetType().Width = input.GetType().Width
 				r.GetType().Scale = input.GetType().Scale
 				r.SetLength(1)
-				vector.MustTCols[T](r)[0] = cols[0]
 				return r, nil
 			}
 		} else {
@@ -150,7 +149,7 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 		}
 	}
 
-	rs, err := proc.AllocVectorOfRows(t, int64(vecLen), nil)
+	rs, err := proc.AllocVectorOfRows(t, vecLen, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -164,12 +163,11 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 		if input.GetType().Oid != types.T_any {
 			rs.SetType(*input.GetType())
 		}
+		if input.IsConstNull() {
+			continue
+		}
 		cols := vector.MustTCols[T](input)
 		if input.IsConst() {
-			if input.IsConstNull() {
-				continue
-			}
-
 			for j := 0; j < vecLen; j++ {
 				if rs.GetNulls().Contains(uint64(j)) {
 					rsCols[j] = cols[0]
@@ -224,8 +222,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 		if input.IsConst() {
 			if !input.IsConstNull() {
 				cols := vector.MustStrCols(input)
-				vec := vector.New(vector.CONSTANT, typ)
-				vector.AppendString(vec, cols[0], false, proc.Mp())
+				vec := vector.NewConstBytes(typ, []byte(cols[0]), vecLen, proc.Mp())
 				return vec, nil
 			}
 		} else {
@@ -240,11 +237,11 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 
 	for i := startIdx; i < len(vs); i++ {
 		input := vs[i]
+		if input.IsConstNull() {
+			continue
+		}
 		cols := vector.MustStrCols(input)
 		if input.IsConst() {
-			if input.IsConstNull() {
-				continue
-			}
 			for j := 0; j < vecLen; j++ {
 				if nsp.Contains(uint64(j)) {
 					rs[j] = cols[0]
@@ -283,7 +280,8 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			}
 		}
 	}
-	vec := vector.New(vector.FLAT, typ)
+	vec := vector.NewVector(typ)
 	vector.AppendStringList(vec, rs, nil, proc.Mp())
+	vec.SetNulls(nsp)
 	return vec, nil
 }

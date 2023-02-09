@@ -35,15 +35,15 @@ var boolType = types.T_bool.ToType()
 
 func handleScalarNull(v1, v2 *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if v1.IsConstNull() {
-		return proc.AllocConstNullVector(boolType), nil
+		return vector.NewConstNull(boolType, v1.Length(), proc.Mp()), nil
 	} else if v2.IsConstNull() {
-		return proc.AllocConstNullVector(boolType), nil
+		return vector.NewConstNull(boolType, v1.Length(), proc.Mp()), nil
 	}
 	panic(moerr.NewInternalError(proc.Ctx, "handleScalarNull failed."))
 }
 
 func allocateBoolVector(length int, proc *process.Process) *vector.Vector {
-	vec, err := proc.AllocVectorOfRows(boolType, int64(length), nil)
+	vec, err := proc.AllocVectorOfRows(boolType, length, nil)
 	if err != nil {
 		panic(moerr.NewOOM(proc.Ctx))
 	}
@@ -52,32 +52,32 @@ func allocateBoolVector(length int, proc *process.Process) *vector.Vector {
 
 type compareFn func(v1, v2, r *vector.Vector) error
 
-func CompareOrdered(vs []*vector.Vector, proc *process.Process, cfn compareFn) (*vector.Vector, error) {
-	left, right := vs[0], vs[1]
+func CompareOrdered(ivecs []*vector.Vector, proc *process.Process, cfn compareFn) (*vector.Vector, error) {
+	left, right := ivecs[0], ivecs[1]
 
 	if left.IsConstNull() || right.IsConstNull() {
 		return handleScalarNull(left, right, proc)
 	}
 
 	if left.IsConst() && right.IsConst() {
-		resultVector := proc.AllocScalarVector(boolType)
-		if err := cfn(left, right, resultVector); err != nil {
+		rvec := vector.NewConst(boolType, false, left.Length(), proc.Mp())
+		if err := cfn(left, right, rvec); err != nil {
 			return nil, err
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
 
 	length := left.Length()
 	if left.IsConst() {
 		length = right.Length()
 	}
-	resultVector := allocateBoolVector(length, proc)
-	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.GetNulls())
+	rvec := allocateBoolVector(length, proc)
+	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
 
-	if err := cfn(left, right, resultVector); err != nil {
+	if err := cfn(left, right, rvec); err != nil {
 		return nil, err
 	}
-	return resultVector, nil
+	return rvec, nil
 }
 
 // Equal compare operator
@@ -160,8 +160,8 @@ func INString(args []*vector.Vector, proc *process.Process) (*vector.Vector, err
 }
 
 // NOT IN operator
-func NotINGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	leftVec, rightVec := args[0], args[1]
+func NotINGeneral[T compareT](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := ivecs[0], ivecs[1]
 	left, right := vector.MustTCols[T](leftVec), vector.MustTCols[T](rightVec)
 	lenLeft := len(left)
 	lenRight := len(right)
@@ -174,9 +174,7 @@ func NotINGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*ve
 			notInMap[right[i]] = true
 		} else {
 			//not in null, return false
-			vec := vector.New(vector.CONSTANT, boolType)
-			vector.Append(vec, false, false, proc.Mp())
-			return vec, nil
+			return vector.NewConst(boolType, false, ivecs[0].Length(), proc.Mp()), nil
 		}
 	}
 	retVec := allocateBoolVector(lenLeft, proc)
@@ -190,8 +188,8 @@ func NotINGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*ve
 	return retVec, nil
 }
 
-func NotINString(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	leftVec, rightVec := args[0], args[1]
+func NotINString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	leftVec, rightVec := ivecs[0], ivecs[1]
 	left, area1 := vector.MustVarlenaRawData(leftVec)
 	right, area2 := vector.MustVarlenaRawData(rightVec)
 
@@ -206,9 +204,7 @@ func NotINString(args []*vector.Vector, proc *process.Process) (*vector.Vector, 
 			inMap[right[i].GetString(area2)] = true
 		} else {
 			//not in null, return false
-			vec := vector.New(vector.CONSTANT, boolType)
-			vector.Append(vec, false, false, proc.Mp())
-			return vec, nil
+			return vector.NewConst(boolType, false, ivecs[0].Length(), proc.Mp()), nil
 		}
 	}
 	retVec := allocateBoolVector(lenLeft, proc)
@@ -296,8 +292,8 @@ func CompareBytesNe(v1, v2 []byte, s1, s2 int32) bool {
 	return !bytes.Equal(v1, v2)
 }
 
-func CompareValenaInline(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	v1, v2 := vs[0], vs[1]
+func CompareValenaInline(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := ivecs[0], ivecs[1]
 	if v1.IsConstNull() || v2.IsConstNull() {
 		return handleScalarNull(v1, v2, proc)
 	}
@@ -308,9 +304,7 @@ func CompareValenaInline(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		p1 := col1[0].UnsafePtr()
 		p2 := col2[0].UnsafePtr()
 		ret := *(*[3]int64)(p1) == *(*[3]int64)(p2)
-		vec := vector.New(vector.CONSTANT, boolType)
-		vector.Append(vec, ret, false, proc.Mp())
-		return vec, nil
+		return vector.NewConst(boolType, ret, v1.Length(), proc.Mp()), nil
 	}
 
 	length := v1.Length()
@@ -345,8 +339,8 @@ func CompareValenaInline(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	return vec, nil
 }
 
-func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) (*vector.Vector, error) {
-	v1, v2 := vs[0], vs[1]
+func CompareString(ivecs []*vector.Vector, fn compStringFn, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := ivecs[0], ivecs[1]
 
 	if v1.IsConstNull() || v2.IsConstNull() {
 		return handleScalarNull(v1, v2, proc)
@@ -354,9 +348,7 @@ func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) 
 
 	if v1.IsConst() && v2.IsConst() {
 		col1, col2 := vector.MustBytesCols(v1), vector.MustBytesCols(v2)
-		vec := vector.New(vector.CONSTANT, boolType)
-		vector.Append(vec, fn(col1[0], col2[0], v1.GetType().Width, v2.GetType().Width), false, proc.Mp())
-		return vec, nil
+		return vector.NewConst(boolType, fn(col1[0], col2[0], v1.GetType().Width, v2.GetType().Width), v1.Length(), proc.Mp()), nil
 	}
 
 	if v1.IsConst() {
@@ -424,31 +416,31 @@ func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) 
 	return vec, nil
 }
 
-func EqString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if vs[0].GetArea() == nil && vs[1].GetArea() == nil {
-		return CompareValenaInline(vs, proc)
+func EqString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if ivecs[0].GetArea() == nil && ivecs[1].GetArea() == nil {
+		return CompareValenaInline(ivecs, proc)
 	}
-	return CompareString(vs, CompareBytesEq, proc)
+	return CompareString(ivecs, CompareBytesEq, proc)
 }
 
-func LeString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareString(vs, CompareBytesLe, proc)
+func LeString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareString(ivecs, CompareBytesLe, proc)
 }
 
-func LtString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareString(vs, CompareBytesLt, proc)
+func LtString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareString(ivecs, CompareBytesLt, proc)
 }
 
-func GeString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareString(vs, CompareBytesGe, proc)
+func GeString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareString(ivecs, CompareBytesGe, proc)
 }
 
-func GtString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareString(vs, CompareBytesGt, proc)
+func GtString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareString(ivecs, CompareBytesGt, proc)
 }
 
-func NeString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareString(vs, CompareBytesNe, proc)
+func NeString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareString(ivecs, CompareBytesNe, proc)
 }
 
 // uuid compare
@@ -473,8 +465,8 @@ func CompareUuidNe(v1, v2 [16]byte) bool {
 	return !types.EqualUuid(v1, v2)
 }
 
-func CompareUuid(vs []*vector.Vector, fn compUuidFn, proc *process.Process) (*vector.Vector, error) {
-	v1, v2 := vs[0], vs[1]
+func CompareUuid(ivecs []*vector.Vector, fn compUuidFn, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := ivecs[0], ivecs[1]
 	//col1, col2 := vector.MustBytesCols(v1), vector.MustBytesCols(v2)
 	col1, col2 := vector.MustTCols[types.Uuid](v1), vector.MustTCols[types.Uuid](v2)
 	if v1.IsConstNull() || v2.IsConstNull() {
@@ -482,8 +474,7 @@ func CompareUuid(vs []*vector.Vector, fn compUuidFn, proc *process.Process) (*ve
 	}
 
 	if v1.IsConst() && v2.IsConst() {
-		vec := vector.New(vector.CONSTANT, boolType)
-		vector.Append(vec, fn(col1[0], col2[0]), false, proc.Mp())
+		vec := vector.NewConst(boolType, fn(col1[0], col2[0]), v1.Length(), proc.Mp())
 		return vec, nil
 	}
 
@@ -520,26 +511,26 @@ func CompareUuid(vs []*vector.Vector, fn compUuidFn, proc *process.Process) (*ve
 	return vec, nil
 }
 
-func EqUuid(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareUuid(vs, CompareUuidEq, proc)
+func EqUuid(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareUuid(ivecs, CompareUuidEq, proc)
 }
 
-func LeUuid(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareUuid(vs, CompareUuidLe, proc)
+func LeUuid(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareUuid(ivecs, CompareUuidLe, proc)
 }
 
-func LtUuid(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareUuid(vs, CompareUuidLt, proc)
+func LtUuid(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareUuid(ivecs, CompareUuidLt, proc)
 }
 
-func GeUuid(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareUuid(vs, CompareUuidGe, proc)
+func GeUuid(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareUuid(ivecs, CompareUuidGe, proc)
 }
 
-func GtUuid(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareUuid(vs, CompareUuidGt, proc)
+func GtUuid(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareUuid(ivecs, CompareUuidGt, proc)
 }
 
-func NeUuid(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CompareUuid(vs, CompareUuidNe, proc)
+func NeUuid(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareUuid(ivecs, CompareUuidNe, proc)
 }

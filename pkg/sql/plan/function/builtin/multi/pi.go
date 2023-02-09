@@ -21,10 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Pi(_ []*vector.Vector, _ *process.Process) (*vector.Vector, error) {
-	resultType := types.Type{Oid: types.T_float64, Size: 8}
-	resultVector := vector.New(vector.CONSTANT, resultType)
-	result := vector.MustTCols[float64](resultVector)
-	result[0] = pi.GetPi()
-	return resultVector, nil
+func Pi(_ []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtyp := types.Type{Oid: types.T_float64, Size: 8}
+	return vector.NewConst(rtyp, pi.GetPi(), 1, proc.Mp()), nil
 }

@@ -72,7 +72,7 @@ func TestInsertOperator(t *testing.T) {
 	proc.Ctx = ctx
 	batch1 := &batch.Batch{
 		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
+			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
 			testutil.MakeScalarInt64(3, 3),
 			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
 			testutil.MakeScalarVarchar("d", 3),
@@ -137,11 +137,7 @@ func TestInsertOperator(t *testing.T) {
 			},
 			TableDef: &plan.TableDef{
 				Cols: []*plan.ColDef{
-					{Name: "int64_column_primary", Primary: true, Typ: i64typ,
-						Default: &plan.Default{
-							NullAbility: false,
-						},
-					},
+					{Name: "int64_column_primary", Primary: true, Typ: i64typ, Default: &plan.Default{}},
 				},
 			},
 		},

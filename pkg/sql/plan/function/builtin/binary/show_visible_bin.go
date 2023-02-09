@@ -39,7 +39,7 @@ func ShowVisibleBin(vec []*vector.Vector, proc *process.Process) (*vector.Vector
 	tpSlice := vector.MustTCols[uint8](vec[1])
 	srcSlice := vector.MustBytesCols(vec[0])
 	tp := tpSlice[0]
-	resultVec := vector.New(vector.FLAT, types.T_varchar.ToType())
+	resultVec := vector.NewVector(types.T_varchar.ToType())
 	defer func() {
 		if err != nil {
 			resultVec.Free(proc.Mp())
@@ -62,7 +62,7 @@ func ShowVisibleBin(vec []*vector.Vector, proc *process.Process) (*vector.Vector
 		return nil, err
 	}
 	for i := range ret {
-		err = vector.Append(resultVec, []byte(ret[i]), len(ret[i]) == 0, proc.Mp())
+		err = vector.AppendBytes(resultVec, []byte(ret[i]), len(ret[i]) == 0, proc.Mp())
 		if err != nil {
 			return nil, err
 		}

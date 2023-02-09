@@ -15,11 +15,12 @@
 package multi
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 )
 
 func trimBoth(src, cuts string) string {
@@ -71,12 +72,12 @@ func trim(parameters []*vector.Vector, result vector.FunctionResultWrapper, leng
 		cutset, cIsNull := cutsets.GetStrValue(i)
 		orig, oIsNull := origin.GetStrValue(i)
 		if cIsNull || oIsNull {
-			if err := rs.AppendStr(nil, true); err != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := rs.AppendStr([]byte(trimFn(string(orig), string(cutset))), false); err != nil {
+		if err := rs.AppendBytes([]byte(trimFn(string(orig), string(cutset))), false); err != nil {
 			return err
 		}
 	}

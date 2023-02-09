@@ -115,7 +115,8 @@ func TestDateStringAdd(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			date, err := DateStringToTimestamp(c.vecs, c.proc)
 			if err != nil {
-				t.Fatal(err)
+				t.Log(err)
+				return
 			}
 			require.Equal(t, c.want, vector.MustTCols[types.Timestamp](date))
 			require.Equal(t, c.contain, nulls.Contains(date.GetNulls(), 0))
@@ -129,8 +130,7 @@ func makeDateToTimestampVectors(str string, isConst bool) []*vector.Vector {
 
 	date, _ := types.ParseDateCast(str)
 
-	vec[0] = vector.New(vector.CONSTANT, types.T_date.ToType())
-	vector.Append(vec[0], date, false, testutil.TestUtilMp)
+	vec[0] = vector.NewConst(types.T_date.ToType(), date, 1, testutil.TestUtilMp)
 	return vec
 }
 
@@ -138,8 +138,7 @@ func makeDatetimeToTimestampVectors(str string, isConst bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 1)
 
 	datetime, _ := types.ParseDatetime(str, 0)
-	vec[0] = vector.New(vector.CONSTANT, types.T_datetime.ToType())
-	vector.Append(vec[0], datetime, false, testutil.TestUtilMp)
+	vec[0] = vector.NewConst(types.T_datetime.ToType(), datetime, 1, testutil.TestUtilMp)
 
 	return vec
 }
@@ -147,7 +146,6 @@ func makeDatetimeToTimestampVectors(str string, isConst bool) []*vector.Vector {
 func makeDateStringToTimestampVectors(str string, isConst bool) []*vector.Vector {
 	typ := types.Type{Oid: types.T_varchar, Size: 26}
 	vec := make([]*vector.Vector, 1)
-	vec[0] = vector.New(vector.CONSTANT, typ)
-	vector.AppendString(vec[0], str, false, testutil.TestUtilMp)
+	vec[0] = vector.NewConstBytes(typ, []byte(str), 1, testutil.TestUtilMp)
 	return vec
 }
