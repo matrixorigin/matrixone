@@ -32,15 +32,18 @@ import (
 type CnTaeVector[T any] struct {
 	downstreamVector *cnVector.Vector
 
-	// Nullable is mainly used while Marshalling & Unmarshalling
+	// Below 2 attributes are specific to "Previous DN TAE Vector" implementation
+
+	// Used in Equals(). Note: We can't use cnVector.Nsp.Np to replace this flag, as this information
+	// will be lost in Marshalling/UnMarshalling
 	isNullable bool
 
-	// Mpool is mostly defined within DN vector. So reusing the same approach for simplicity.
+	// Used in Append()
 	mpool *mpool.MPool
 
-	// isAllocatedFromMpool is used with Allocated() & ResetWithData()
-	// When ResetWithData(bytes) is called, we are not allocating using the vector's Mpool.
-	// isAllocatedFromMpool  is used to track that. So when we call Allocated() after ResetWithData(), we should get Zero.
+	// isAllocatedFromMpool is used for ResetWithData() & Allocated()
+	// When ResetWithData(bytes) is called, we are not allocating using the vector's Mpool. isAllocatedFromMpool  is used to track that.
+	// So when we call Allocated() after ResetWithData(), we should get Zero.
 	isAllocatedFromMpool bool
 }
 
@@ -171,7 +174,7 @@ func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	// The downstream vector, ie CN vector needs isNull as argument.
 	// So, we can't directly call cn_vector.Append() without parsing the data.
 	// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
-	// it into the current CnVectorAdapter via ExtendWithOffset().
+	// it into the current CnVectorAdapter via this function.
 	for i := srcOff; i < srcOff+srcLen; i++ {
 		vec.Append(src.Get(i))
 	}
@@ -568,7 +571,7 @@ func (vec *CnTaeVector[T]) PPString(num int) string {
 	return w.String()
 }
 
-//TODO: --- Pretty sure the below code works. But need some validation
+//TODO: --- Pretty sure the below functions works. But need some validation
 
 func (vec *CnTaeVector[T]) Reset() {
 	if vec.Length() == 0 {
@@ -602,6 +605,7 @@ func (vec *CnTaeVector[T]) Allocated() int {
 	if !vec.isAllocatedFromMpool {
 		return 0
 	}
+
 	// Only VarLen is allocated using mpool.
 	if vec.GetType().IsVarlen() {
 		return vec.downstreamVector.Size()
