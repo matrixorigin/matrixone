@@ -53,10 +53,16 @@ func Prepare(proc *process.Process, arg any) error {
 		}
 	}
 	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
+	ap.ctr.compare0Index = make([]int32, len(ap.Fs))
+	ap.ctr.compare1Index = make([]int32, len(ap.Fs))
 	return nil
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+	var bat *batch.Batch
+	var end bool
+	var err error
+
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
@@ -64,13 +70,36 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	defer anal.Stop()
 
 	// get batch from merge receivers and do merge sort.
-	// save the sort result in ctr.bat.
-	if err := ctr.build(ap, proc, anal, isFirst); err != nil {
+	// save the unordered result in ctr.bat.
+	// save the ordered index list in ctr.finalSelectList
+	for {
+		start := time.Now()
+		bat, end, err = receiveBatch(proc, ctr)
+		if err != nil {
+			break
+		}
+		anal.WaitStop(start)
+		if end {
+			break
+		}
+
+		if bat == nil || bat.Length() == 0 {
+			continue
+		}
+		anal.Input(bat, isFirst)
+		bat.ExpandNulls()
+
+		if err = mergeSort(proc, bat, ap, ctr, anal); err != nil {
+			break
+		}
+	}
+	if err != nil {
 		ap.Free(proc, true)
 		return false, err
 	}
 
-	// output the sort result.
+	// remove and clean unnecessary vector
+	// shuffle the ctr.bat
 	if ctr.bat != nil {
 		for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
 			vector.Clean(ctr.bat.Vecs[i], proc.Mp())
@@ -78,6 +107,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 		ctr.bat.ExpandNulls()
 	}
+	if err = ctr.bat.Shuffle(ctr.finalSelectList, proc.Mp()); err != nil {
+		ap.Free(proc, true)
+		return false, err
+	}
+
+	// output the sort result.
 	anal.Output(ctr.bat, isLast)
 	proc.SetInputBatch(ctr.bat)
 	ctr.bat = nil
@@ -87,110 +122,95 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	return true, nil
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	for {
-		if ctr.aliveMergeReceiver == 0 {
-			return nil
-		}
-
-		start := time.Now()
-		chosen, value, ok := reflect.Select(ctr.receiverListener)
-		if !ok {
-			return moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
-		}
-		anal.WaitStop(start)
-
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
-		if bat == nil {
-			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-			ctr.aliveMergeReceiver--
-			continue
-		}
-
-		if bat.Length() == 0 {
-			continue
-		}
-
-		anal.Input(bat, isFirst)
-		anal.Alloc(int64(bat.Size()))
-
-		bat.ExpandNulls()
-		ctr.n = len(bat.Vecs)
-		ctr.poses = ctr.poses[:0]
-		for _, f := range ap.Fs {
-			vec, err := colexec.EvalExpr(bat, proc, f.Expr)
-			if err != nil {
-				return err
-			}
-			flg := true
-			for i := range bat.Vecs {
-				if bat.Vecs[i] == vec {
-					flg = false
-					ctr.poses = append(ctr.poses, int32(i))
-					break
-				}
-			}
-			if flg {
-				ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
-				bat.Vecs = append(bat.Vecs, vec)
-			} else {
-				if vec != nil {
-					anal.Alloc(int64(vec.Size()))
-				}
-			}
-		}
-		if ctr.bat == nil {
-			mp := make(map[int]int)
-			for i, pos := range ctr.poses {
-				mp[int(pos)] = i
-			}
-			ctr.bat = bat
-			ctr.cmps = make([]compare.Compare, len(bat.Vecs))
-			var desc, nullsLast bool
-			for i := range ctr.cmps {
-				if pos, ok := mp[i]; ok {
-					desc = ap.Fs[pos].Flag&plan.OrderBySpec_DESC != 0
-					if ap.Fs[pos].Flag&plan.OrderBySpec_NULLS_FIRST != 0 {
-						nullsLast = false
-					} else if ap.Fs[pos].Flag&plan.OrderBySpec_NULLS_LAST != 0 {
-						nullsLast = true
-					} else {
-						nullsLast = desc
-					}
-					ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, desc, nullsLast)
-				}
-			}
-		} else {
-			if err := ctr.processBatch(bat, proc); err != nil {
-				bat.Clean(proc.Mp())
-				return err
-			}
-			bat.Clean(proc.Mp())
-		}
+// receiveBatch get a batch from receiver, return true if all batches have been got.
+func receiveBatch(proc *process.Process, ctr *container) (*batch.Batch, bool, error) {
+	if ctr.aliveMergeReceiver == 0 {
+		return nil, true, nil
 	}
+	chosen, value, ok := reflect.Select(ctr.receiverListener)
+	if !ok {
+		return nil, false, moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
+	}
+	pointer := value.UnsafePointer()
+	bat := (*batch.Batch)(pointer)
+	if bat == nil {
+		ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
+		ctr.aliveMergeReceiver--
+	}
+	return bat, false, nil
 }
 
-func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) error {
-	bat1 := ctr.bat
-	if bat1 == nil {
-		bat1 = batch.NewWithSize(len(bat1.Vecs))
-		for i, vec := range bat2.Vecs {
-			bat1.Vecs[i] = vector.New(vec.Typ)
+func mergeSort(proc *process.Process, bat2 *batch.Batch,
+	ap *Argument, ctr *container, anal process.Analyze) error {
+	ctr.n = len(bat2.Vecs)
+	ctr.poses = ctr.poses[:0]
+
+	// evaluate the order column.
+	for _, f := range ap.Fs {
+		vec, err := colexec.EvalExpr(bat2, proc, f.Expr)
+		if err != nil {
+			return err
+		}
+		newColumn := true
+		for i := range bat2.Vecs {
+			if bat2.Vecs[i] == vec {
+				newColumn = false
+				ctr.poses = append(ctr.poses, int32(i))
+				break
+			}
+		}
+		if newColumn {
+			ctr.poses = append(ctr.poses, int32(len(bat2.Vecs)))
+			bat2.Vecs = append(bat2.Vecs, vec)
+			anal.Alloc(int64(vec.Size()))
 		}
 	}
-	// union bat1 and bat2
-	// do merge sort, get final order number and shuffle the result batch.
-	for i, cmp := range ctr.cmps {
-		if cmp != nil {
-			cmp.Set(0, bat1.GetVector(int32(i)))
-			cmp.Set(1, bat2.GetVector(int32(i)))
+	copy(ctr.compare1Index, ctr.poses)
+
+	// init the compare structure if first time.
+	if len(ctr.cmps) == 0 {
+		var desc, nullsLast bool
+		ctr.cmps = make([]compare.Compare, len(ap.Fs))
+		for i := range ctr.cmps {
+			desc = ap.Fs[i].Flag&plan.OrderBySpec_DESC != 0
+			if ap.Fs[i].Flag&plan.OrderBySpec_NULLS_FIRST != 0 {
+				nullsLast = false
+			} else if ap.Fs[i].Flag&plan.OrderBySpec_NULLS_LAST != 0 {
+				nullsLast = true
+			} else {
+				nullsLast = desc
+			}
+			ctr.cmps[i] = compare.New(bat2.Vecs[ctr.poses[i]].Typ, desc, nullsLast)
 		}
+	}
+
+	return ctr.mergeSort2(bat2, proc)
+}
+
+func (ctr *container) mergeSort2(bat2 *batch.Batch, proc *process.Process) error {
+	if ctr.bat == nil {
+		ctr.bat = bat2
+		ctr.finalSelectList = generateSelectList(int64(ctr.bat.Length()))
+		copy(ctr.compare0Index, ctr.poses)
+		return nil
+	}
+	bat1 := ctr.bat
+	// union bat1 and bat2
+	// do merge sort, get order index list.
+	for i, cmp := range ctr.cmps {
+		cmp.Set(0, bat1.GetVector(ctr.compare0Index[i]))
+		cmp.Set(1, bat2.GetVector(ctr.compare1Index[i]))
 	}
 	s1, s2 := int64(0), int64(bat1.Vecs[0].Length()) // startIndexOfBat1, startIndexOfBat2
+
 	for i := range bat1.Vecs {
 		n := bat2.Vecs[i].Length()
-		err := vector.UnionBatch(bat1.Vecs[i], bat2.Vecs[i], 0, n, makeFlagsOne(n), proc.Mp())
+		if cap(ctr.unionFlag) >= n {
+			ctr.unionFlag = ctr.unionFlag[:n:cap(ctr.unionFlag)]
+		} else {
+			ctr.unionFlag = makeFlagsOne(n)
+		}
+		err := vector.UnionBatch(bat1.Vecs[i], bat2.Vecs[i], 0, n, ctr.unionFlag, proc.Mp())
 		if err != nil {
 			return err
 		}
@@ -199,19 +219,20 @@ func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 
 	end1, end2 := s2, int64(bat1.Vecs[0].Length())
 	sels := make([]int64, 0, end2)
+
 	for s1 < end1 && s2 < end2 {
 		i := s1
 		j := s2 - end1
 		compareResult := 0
-		for _, pos := range ctr.poses {
-			compareResult = ctr.cmps[pos].Compare(0, 1, i, j)
+		for k := range ctr.cmps {
+			compareResult = ctr.cmps[k].Compare(0, 1, ctr.finalSelectList[i], j)
 			if compareResult != 0 {
 				break
 			}
 		}
 		if compareResult <= 0 {
 			// weight of item1 is less or equal to item2
-			sels = append(sels, s1)
+			sels = append(sels, ctr.finalSelectList[s1])
 			s1++
 		} else {
 			sels = append(sels, s2)
@@ -219,21 +240,26 @@ func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 		}
 	}
 	for s1 < end1 {
-		sels = append(sels, s1)
+		sels = append(sels, ctr.finalSelectList[s1])
 		s1++
 	}
 	for s2 < end2 {
 		sels = append(sels, s2)
 		s2++
 	}
-
-	err := bat1.Shuffle(sels, proc.Mp())
-	if err != nil {
-		return err
-	}
-
+	ctr.finalSelectList = sels
 	ctr.bat = bat1
+	bat2.Clean(proc.Mp())
 	return nil
+}
+
+func generateSelectList(j int64) []int64 {
+	list := make([]int64, j)
+	var i int64
+	for i = 0; i < j; i++ {
+		list[i] = i
+	}
+	return list
 }
 
 func makeFlagsOne(n int) []uint8 {
