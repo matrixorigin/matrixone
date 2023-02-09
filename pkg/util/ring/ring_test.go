@@ -216,11 +216,7 @@ func TestRingPoll(t *testing.T) {
 
 	assert.Equal(t, `2`, result)
 
-	before := time.Now()
 	_, _, err = rb.Poll(5 * time.Millisecond)
-	// This delta is normally 1-3 ms but running tests in CI with -race causes
-	// this to run much slower. For now, just bump up the threshold.
-	assert.InDelta(t, 5, time.Since(before).Seconds()*1000, 10)
 	assert.Equal(t, ErrTimeout, err)
 }
 
