@@ -2584,7 +2584,8 @@ Reference to :mysql 8.0.23 mysys/crypt_genhash_impl.cc generate_user_salt(char*,
 */
 func generate_salt(n int) []byte {
 	buf := make([]byte, n)
-	rand.Read(buf)
+	r := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
+	r.Read(buf)
 	for i := 0; i < n; i++ {
 		buf[i] &= 0x7f
 		if buf[i] == 0 || buf[i] == '$' {
@@ -2595,7 +2596,6 @@ func generate_salt(n int) []byte {
 }
 
 func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
-	rand.Seed(time.Now().UTC().UnixNano())
 	salt := generate_salt(20)
 	mysql := &MysqlProtocolImpl{
 		ProtocolImpl: ProtocolImpl{

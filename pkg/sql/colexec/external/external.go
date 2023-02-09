@@ -118,6 +118,12 @@ func Prepare(proc *process.Process, arg any) error {
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+	select {
+	case <-proc.Ctx.Done():
+		proc.SetInputBatch(nil)
+		return true, nil
+	default:
+	}
 	t1 := time.Now()
 	anal := proc.GetAnalyze(idx)
 	anal.Start()

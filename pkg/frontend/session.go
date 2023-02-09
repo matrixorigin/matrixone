@@ -1926,11 +1926,11 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (con
 		return nil, nil, err
 	}
 
-	tableNames, err := db.Relations(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
+	// tableNames, err := db.Relations(ctx)
+	// if err != nil {
+	// 	return nil, nil, err
+	// }
+	// logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
 	table, err := db.Relation(ctx, tableName)
