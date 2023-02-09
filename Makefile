@@ -150,7 +150,7 @@ endif
 UT_PARALLEL ?= 1
 ENABLE_UT ?= "false"
 GOPROXY ?= "https://proxy.golang.com.cn,direct"
-LAUNCH ?= "launch-tae-multi-CN-tae-DN"
+LAUNCH ?= "launch-tae-CN-tae-DN"
 
 .PHONY: ci
 ci:
