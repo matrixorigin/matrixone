@@ -235,10 +235,9 @@ func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 
 func (c *MOCollector) Collect(ctx context.Context, i batchpipe.HasName) error {
 	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		c.awakeCollect <- i
+	case <-c.stopCh:
+		return moerr.NewInternalError(ctx, "stopped")
+	case c.awakeCollect <- i:
 		return nil
 	}
 }
