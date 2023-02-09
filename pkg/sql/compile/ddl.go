@@ -158,16 +158,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		tblId := newRelation.GetTableID(c.ctx)
 
-		// for now ColumnId is equal ColumnIndex, and we have a bug to UpdateConstraint after created immediately
-		// so i comment these codes. if you want to remove these code, let @ouyuanning known.
 		newTableDef, err := newRelation.TableDefs(c.ctx)
 		if err != nil {
 			return err
 		}
 		var colNameToId = make(map[string]uint64)
+		var oldCt *engine.ConstraintDef
 		for _, def := range newTableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
 				colNameToId[attr.Attr.Name] = attr.Attr.ID
+			}
+			if ct, ok := def.(*engine.ConstraintDef); ok {
+				oldCt = ct
 			}
 		}
 		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
@@ -186,7 +188,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			newFkeys[i] = newDef
 		}
-		newCt, err := makeNewCreateConstraint(nil, &engine.ForeignKeyDef{
+		// remove old fk settings
+		newCt, err := makeNewCreateConstraint(oldCt, &engine.ForeignKeyDef{
 			Fkeys: newFkeys,
 		})
 		if err != nil {
@@ -213,16 +216,23 @@ func (s *Scope) CreateTable(c *Compile) error {
 				return err
 			}
 			var oldCt *engine.ConstraintDef
+			var oldRefChildDef *engine.RefChildTableDef
 			for _, def := range fkTableDef {
 				if ct, ok := def.(*engine.ConstraintDef); ok {
 					oldCt = ct
+					for _, ct := range oldCt.Cts {
+						if old, ok := ct.(*engine.RefChildTableDef); ok {
+							oldRefChildDef = old
+						}
+					}
 					break
 				}
 			}
-			newRefChildDef := &engine.RefChildTableDef{
-				Tables: []uint64{tblId},
+			if oldRefChildDef == nil {
+				oldRefChildDef = &engine.RefChildTableDef{}
 			}
-			newCt, err := makeNewCreateConstraint(oldCt, newRefChildDef)
+			oldRefChildDef.Tables = append(oldRefChildDef.Tables, tblId)
+			newCt, err := makeNewCreateConstraint(oldCt, oldRefChildDef)
 			if err != nil {
 				return err
 			}
@@ -553,11 +563,10 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 	switch t := c.(type) {
 	case *engine.ForeignKeyDef:
 		ok := false
-		var def *engine.ForeignKeyDef
-		for _, ct := range oldCt.Cts {
-			if def, ok = ct.(*engine.ForeignKeyDef); ok {
-				// i don't see any clause to change FK. only add or drop. so
-				def.Fkeys = append(def.Fkeys, t.Fkeys...)
+		for i, ct := range oldCt.Cts {
+			if _, ok = ct.(*engine.ForeignKeyDef); ok {
+				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
+				oldCt.Cts = append(oldCt.Cts, t)
 				break
 			}
 		}
@@ -567,10 +576,10 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 
 	case *engine.RefChildTableDef:
 		ok := false
-		var def *engine.RefChildTableDef
-		for _, ct := range oldCt.Cts {
-			if def, ok = ct.(*engine.RefChildTableDef); ok {
-				def.Tables = append(def.Tables, t.Tables...)
+		for i, ct := range oldCt.Cts {
+			if _, ok = ct.(*engine.RefChildTableDef); ok {
+				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
+				oldCt.Cts = append(oldCt.Cts, t)
 				break
 			}
 		}
@@ -880,14 +889,6 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 			exeDefs = append(exeDefs, &engine.PropertiesDef{
 				Properties: properties,
 			})
-		case *plan.TableDef_DefType_Partition:
-			bytes, err := defVal.Partition.MarshalPartitionInfo()
-			if err != nil {
-				return nil, err
-			}
-			exeDefs = append(exeDefs, &engine.PartitionDef{
-				Partition: string(bytes),
-			})
 		case *plan.TableDef_DefType_UIdx:
 			bytes, err := defVal.UIdx.MarshalUniqueIndexDef()
 			if err != nil {
@@ -905,6 +906,16 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 				SecondaryIndex: string(bytes),
 			})
 		}
+	}
+
+	if tableDef.Partition != nil {
+		bytes, err := tableDef.Partition.MarshalPartitionInfo()
+		if err != nil {
+			return nil, err
+		}
+		exeDefs = append(exeDefs, &engine.PartitionDef{
+			Partition: string(bytes),
+		})
 	}
 
 	if tableDef.ViewSql != nil {

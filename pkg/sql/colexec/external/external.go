@@ -21,16 +21,13 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
-	"container/list"
 	"context"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -82,16 +79,6 @@ func Prepare(proc *process.Process, arg any) error {
 		param.maxBatchSize = proc.Lim.MaxMsgSize
 	}
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
-
-	if param.Extern.ScanType == tree.S3 {
-		if err := InitS3Param(param.Extern); err != nil {
-			return err
-		}
-	} else {
-		if err := InitInfileParam(param.Extern); err != nil {
-			return err
-		}
-	}
 	if param.Extern.Format == tree.JSONLINE {
 		if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
 			param.Fileparam.End = true
@@ -132,6 +119,12 @@ func Prepare(proc *process.Process, arg any) error {
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+	select {
+	case <-proc.Ctx.Done():
+		proc.SetInputBatch(nil)
+		return true, nil
+	default:
+	}
 	t1 := time.Now()
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -166,93 +159,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	return false, nil
 }
 
-func InitInfileParam(param *tree.ExternParam) error {
-	for i := 0; i < len(param.Option); i += 2 {
-		switch strings.ToLower(param.Option[i]) {
-		case "filepath":
-			param.Filepath = param.Option[i+1]
-		case "compression":
-			param.CompressType = param.Option[i+1]
-		case "format":
-			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE {
-				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
-			}
-			param.Format = format
-		case "jsondata":
-			jsondata := strings.ToLower(param.Option[i+1])
-			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
-				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
-			}
-			param.JsonData = jsondata
-			param.Format = tree.JSONLINE
-		default:
-			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
-		}
-	}
-	if len(param.Filepath) == 0 {
-		return moerr.NewBadConfig(param.Ctx, "the filepath must be specified")
-	}
-	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
-		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
-	}
-	if len(param.Format) == 0 {
-		param.Format = tree.CSV
-	}
-	return nil
-}
-
-func InitS3Param(param *tree.ExternParam) error {
-	param.S3Param = &tree.S3Parameter{}
-	for i := 0; i < len(param.Option); i += 2 {
-		switch strings.ToLower(param.Option[i]) {
-		case "endpoint":
-			param.S3Param.Endpoint = param.Option[i+1]
-		case "region":
-			param.S3Param.Region = param.Option[i+1]
-		case "access_key_id":
-			param.S3Param.APIKey = param.Option[i+1]
-		case "secret_access_key":
-			param.S3Param.APISecret = param.Option[i+1]
-		case "bucket":
-			param.S3Param.Bucket = param.Option[i+1]
-		case "filepath":
-			param.Filepath = param.Option[i+1]
-		case "compression":
-			param.CompressType = param.Option[i+1]
-		case "provider":
-			param.S3Param.Provider = param.Option[i+1]
-		case "role_arn":
-			param.S3Param.RoleArn = param.Option[i+1]
-		case "external_id":
-			param.S3Param.ExternalId = param.Option[i+1]
-		case "format":
-			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE {
-				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
-			}
-			param.Format = format
-		case "jsondata":
-			jsondata := strings.ToLower(param.Option[i+1])
-			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
-				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
-			}
-			param.JsonData = jsondata
-			param.Format = tree.JSONLINE
-
-		default:
-			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
-		}
-	}
-	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
-		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
-	}
-	if len(param.Format) == 0 {
-		param.Format = tree.CSV
-	}
-	return nil
-}
-
 func containColname(col string) bool {
 	return strings.Contains(col, STATEMENT_ACCOUNT) || strings.Contains(col, catalog.ExternalFilePath)
 }
@@ -260,9 +166,6 @@ func containColname(col string) bool {
 func judgeContainColname(expr *plan.Expr) bool {
 	expr_F, ok := expr.Expr.(*plan.Expr_F)
 	if !ok {
-		return false
-	}
-	if len(expr_F.F.Args) != 2 {
 		return false
 	}
 	if expr_F.F.Func.ObjName == "or" {
@@ -273,10 +176,15 @@ func judgeContainColname(expr *plan.Expr) bool {
 		return flag
 	}
 	expr_Col, ok := expr_F.F.Args[0].Expr.(*plan.Expr_Col)
-	if !ok || !containColname(expr_Col.Col.Name) {
-		return false
+	if ok && containColname(expr_Col.Col.Name) {
+		return true
 	}
-	return true
+	for _, arg := range expr_F.F.Args {
+		if judgeContainColname(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 func getAccountCol(filepath string) string {
@@ -330,11 +238,14 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 	return bat
 }
 
-func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+func filterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
 	filterList := make([]*plan.Expr, 0)
+	filterList2 := make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
 		if judgeContainColname(node.FilterList[i]) {
 			filterList = append(filterList, node.FilterList[i])
+		} else {
+			filterList2 = append(filterList2, node.FilterList[i])
 		}
 	}
 	if len(filterList) == 0 {
@@ -355,34 +266,17 @@ func fliterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList
 			fileSizeTmp = append(fileSizeTmp, fileSize[i])
 		}
 	}
+	node.FilterList = filterList2
 	return fileListTmp, fileSizeTmp, nil
 }
 
 func FliterFileList(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
 	var err error
-	fileList, fileSize, err = fliterByAccountAndFilename(node, proc, fileList, fileSize)
+	fileList, fileSize, err = filterByAccountAndFilename(node, proc, fileList, fileSize)
 	if err != nil {
 		return fileList, fileSize, err
 	}
 	return fileList, fileSize, nil
-}
-
-func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
-	if param.ScanType == tree.S3 {
-		buf := new(strings.Builder)
-		w := csv.NewWriter(buf)
-		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
-			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
-		if param.S3Param.Provider == "minio" {
-			opts = append(opts, "is-minio=true")
-		}
-		if err = w.Write(opts); err != nil {
-			return nil, "", err
-		}
-		w.Flush()
-		return fileservice.GetForETL(nil, fileservice.JoinPath(buf.String(), prefix))
-	}
-	return fileservice.GetForETL(param.FileService, prefix)
 }
 
 func IsSysTable(dbName string, tableName string) bool {
@@ -394,74 +288,11 @@ func IsSysTable(dbName string, tableName string) bool {
 	return false
 }
 
-// ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
-func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
-	filePath := strings.TrimSpace(param.Filepath)
-	if strings.HasPrefix(filePath, "etl:") {
-		filePath = path.Clean(filePath)
-	} else {
-		filePath = path.Clean("/" + filePath)
-	}
-
-	sep := "/"
-	pathDir := strings.Split(filePath, sep)
-	l := list.New()
-	l2 := list.New()
-	if pathDir[0] == "" {
-		l.PushBack(sep)
-	} else {
-		l.PushBack(pathDir[0])
-	}
-
-	for i := 1; i < len(pathDir); i++ {
-		length := l.Len()
-		for j := 0; j < length; j++ {
-			prefix := l.Front().Value.(string)
-			fs, readPath, err := GetForETLWithType(param, prefix)
-			if err != nil {
-				return nil, nil, err
-			}
-			entries, err := fs.List(param.Ctx, readPath)
-			if err != nil {
-				return nil, nil, err
-			}
-			for _, entry := range entries {
-				if !entry.IsDir && i+1 != len(pathDir) {
-					continue
-				}
-				if entry.IsDir && i+1 == len(pathDir) {
-					continue
-				}
-				matched, err := path.Match(pathDir[i], entry.Name)
-				if err != nil {
-					return nil, nil, err
-				}
-				if !matched {
-					continue
-				}
-				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
-				if !entry.IsDir {
-					l2.PushBack(entry.Size)
-				}
-			}
-			l.Remove(l.Front())
-		}
-	}
-	len := l.Len()
-	for j := 0; j < len; j++ {
-		fileList = append(fileList, l.Front().Value.(string))
-		l.Remove(l.Front())
-		fileSize = append(fileSize, l2.Front().Value.(int64))
-		l2.Remove(l2.Front())
-	}
-	return fileList, fileSize, err
-}
-
-func ReadFile(param *tree.ExternParam, fileParam *ExFileparam, offset [][2]int, proc *process.Process) (io.ReadCloser, error) {
-	if param.Local {
+func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error) {
+	if param.Extern.Local {
 		return io.NopCloser(proc.LoadLocalReader), nil
 	}
-	fs, readPath, err := GetForETLWithType(param, fileParam.Filepath)
+	fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 	if err != nil {
 		return nil, err
 	}
@@ -476,11 +307,11 @@ func ReadFile(param *tree.ExternParam, fileParam *ExFileparam, offset [][2]int, 
 			},
 		},
 	}
-	if param.Parallel {
-		vec.Entries[0].Offset = int64(offset[fileParam.FileIndex-1][0])
-		vec.Entries[0].Size = int64(offset[fileParam.FileIndex-1][1] - offset[fileParam.FileIndex-1][0])
+	if param.Extern.Parallel {
+		vec.Entries[0].Offset = int64(param.FileOffset[param.Fileparam.FileIndex-1][0])
+		vec.Entries[0].Size = int64(param.FileOffset[param.Fileparam.FileIndex-1][1] - param.FileOffset[param.Fileparam.FileIndex-1][0])
 	}
-	if vec.Entries[0].Size == 0 {
+	if vec.Entries[0].Size == 0 || vec.Entries[0].Offset >= param.FileSize[param.Fileparam.FileIndex-1] {
 		return nil, nil
 	}
 	err = fs.Read(param.Ctx, &vec)
@@ -493,7 +324,7 @@ func ReadFile(param *tree.ExternParam, fileParam *ExFileparam, offset [][2]int, 
 func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fileSize int64) ([][2]int, error) {
 	arr := make([][2]int, 0)
 
-	fs, readPath, err := GetForETLWithType(param, param.Filepath)
+	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return nil, err
 	}
@@ -703,7 +534,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 // GetSimdcsvReader get file reader from external file
 func GetSimdcsvReader(param *ExternalParam, proc *process.Process) (*ParseLineHandler, error) {
 	var err error
-	param.reader, err = ReadFile(param.Extern, param.Fileparam, param.FileOffset, proc)
+	param.reader, err = ReadFile(param, proc)
 	if err != nil || param.reader == nil {
 		return nil, err
 	}
@@ -815,6 +646,14 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 				nulls.Add(vecTmp.Nsp, uint64(j))
 			}
 		} else if catalog.ContainExternalHidenCol(param.Attrs[i]) {
+			if rows == 0 {
+				vecTmp = vector.New(makeType(param.OriginCols, 0))
+				err = vecTmp.Read(vec.Entries[i].Object.([]byte))
+				if err != nil {
+					return nil, err
+				}
+				rows = vecTmp.Length()
+			}
 			vecTmp = vector.New(makeType(param.Cols, i))
 			vector.PreAlloc(vecTmp, rows, rows, proc.GetMPool())
 			for j := 0; j < rows; j++ {
@@ -973,7 +812,7 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 				}
 			}
 
-			service, _, err = GetForETLWithType(param.Extern, fp)
+			service, _, err = plan2.GetForETLWithType(param.Extern, fp)
 			if err != nil {
 				return nil, err
 			}

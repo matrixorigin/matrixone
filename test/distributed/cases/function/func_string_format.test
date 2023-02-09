@@ -128,14 +128,12 @@ SELECT MAX(format(d1, id)), MIN(format(d3, 0)) from format_01;
 
 
 -- Mathematical function
--- @bvt:issue#7464
 SELECT ABS(format(d3,0)) FROM format_01;
 SELECT SUM(format(id,2)) FROM format_01;
 SELECT CEIL(format(d3, 4))FROM format_01;
 SELECT ROUND(format(d4, 0)) FROM format_01;
 SELECT power(format(2,1), 2);
 SELECT COUNT(format(d3,2)) FROM format_01;
--- @bvt:issue
 
 
 -- @suite
@@ -173,13 +171,11 @@ SELECT format(FLOOR(d2),4) FROM format_02;
 SELECT format(CEIL(d2),6) FROM format_02;
 
 
--- @bvt:issue#7464
 SELECT * from format_02 WHERE format(d2, 2) >= 0;
 SELECT * FROM format_02 WHERE format(d2, 0) NOT BETWEEN 0 AND 100;
 SELECT * FROM format_02 WHERE format(d2,0) IN (73, 32789);
 SELECT * FROM format_02 WHERE format(d2,0) NOT IN (73, 32789);
 SELECT * FROM format_02 WHERE format(d2, 2) MOD 2 = 0;
--- @bvt:issue
 
 
 -- @suite
@@ -196,10 +192,8 @@ SELECT format(a, 4) from format_04;
 SELECT format(a, 2),format(b, 3) FROM format_04 WHERE b > 0;
 SELECT a,b,c FROM format_04 WHERE format(b,0) = 4;
 
--- @bvt:issue#7464
 SELECT ABS(format(b,5)) FROM format_04;
 SELECT FLOOR(format(c,3)) FROM format_04;
--- @bvt:issue
 
 
 -- @suite
