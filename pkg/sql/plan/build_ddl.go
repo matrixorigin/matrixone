@@ -1345,7 +1345,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			ColumnIndexOfAccountId: -1,
 		},
 	}
-	appendQueryNode(qry, insertNode)
+	nodeID := int32(len(qry.Nodes))
+	insertNode.NodeId = nodeID
+	qry.Nodes = append(qry.Nodes, insertNode)
 	qry.Steps[len(qry.Steps)-1] = insertNode.NodeId
 
 	createIndex.DataInsertion = selectPlan
