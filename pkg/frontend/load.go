@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -155,10 +154,6 @@ type PoolElement struct {
 type ThreadInfo struct {
 	threadCnt int32
 	startTime atomic.Value
-}
-
-type GetRm interface {
-	GetAutoIncrCaches() defines.AutoIncrCaches
 }
 
 func (t *ThreadInfo) SetTime(tmp time.Time) {
@@ -1708,8 +1703,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 		tableHandler := handler.tableHandler
 		initSes := handler.ses
 		// XXX run backgroup session using initSes.Mp, is this correct thing?
-		ses := proc.SessionInfo.Session.(GetRm)
-		tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), GSysVariables, ses.GetAutoIncrCaches())
+		tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), GSysVariables, proc.SessionInfo.AutoIncrCaches)
 		if e, ok := initSes.storage.(*engine.EntireEngine); ok {
 			tmpSes.storage = e
 			tmpSes.txnHandler = initSes.txnHandler
@@ -1865,8 +1859,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 				// dbHandler := handler.dbHandler
 				initSes := handler.ses
 				// XXX: Using initSes.Mp
-				ses := proc.SessionInfo.Session.(GetRm)
-				tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), GSysVariables, ses.GetAutoIncrCaches())
+				tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), GSysVariables, proc.SessionInfo.AutoIncrCaches)
 				if e, ok := initSes.storage.(*engine.EntireEngine); ok {
 					tmpSes.storage = e
 					tmpSes.txnHandler = initSes.txnHandler
