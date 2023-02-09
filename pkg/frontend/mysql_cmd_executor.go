@@ -2505,7 +2505,12 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
-	return cwft.compile.Run(ts)
+	logDebugf(cwft.ses.GetConciseProfile(), "compile.Run begin")
+	defer func() {
+		logDebugf(cwft.ses.GetConciseProfile(), "compile.Run end")
+	}()
+	err := cwft.compile.Run(ts)
+	return err
 }
 
 func (cwft *TxnComputationWrapper) GetLoadTag() bool {
