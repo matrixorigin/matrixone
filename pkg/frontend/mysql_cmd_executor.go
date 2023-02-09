@@ -4267,6 +4267,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		TimeZone:       ses.GetTimeZone(),
 		StorageEngine:  pu.StorageEngine,
 		AutoIncrCaches: ses.GetAutoIncrCaches(),
+		AutoIncrCacheSize:	ses.pu.SV.AutoIncrCacheSize,
 	}
 
 	if ses.GetTenantInfo() != nil {
