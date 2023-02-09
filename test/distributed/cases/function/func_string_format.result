@@ -300,13 +300,13 @@ SELECT MAX(format(d1, id)), MIN(format(d3, 0)) from format_01;
 max(format(d1, id))    min(format(d3, 0))
 21.000    0
 SELECT ABS(format(d3,0)) FROM format_01;
-ERROR 20203 (HY000): invalid argument cast to int, bad value 46,787,698
+invalid argument cast to int, bad value 46,787,698
 SELECT SUM(format(id,2)) FROM format_01;
-ERROR 20203 (HY000): invalid argument aggregate function sum, bad value [VARCHAR]
+invalid argument aggregate function sum, bad value [VARCHAR]
 SELECT CEIL(format(d3, 4))FROM format_01;
-ERROR 1105 (HY000): strconv.ParseFloat: parsing "46,787,698.0000": invalid syntax
+strconv.ParseFloat: parsing "46,787,698.0000": invalid syntax
 SELECT ROUND(format(d4, 0)) FROM format_01;
-ERROR 20203 (HY000): invalid argument cast to int, bad value 454,987,456,415
+invalid argument cast to int, bad value 454,987,456,415
 SELECT power(format(2,1), 2);
 power(format(2, 1), 2)
 4
@@ -423,12 +423,12 @@ format(ceil(d2), 6)
 37,827,330.000000
 3,923,405.000000
 SELECT * from format_02 WHERE format(d2, 2) >= 0;
-ERROR 20203 (HY000): invalid argument cast to int, bad value 47,832.43
+invalid argument cast to int, bad value 47,832.43
 SELECT * FROM format_02 WHERE format(d2, 0) NOT BETWEEN 0 AND 100;
-ERROR 20203 (HY000): invalid argument cast to int, bad value 47,832
+invalid argument cast to int, bad value 47,832
 SELECT * FROM format_02 WHERE format(d2,0) IN (73, 32789);
 id    d1    d2
-2    -3283.33    79.32
+2    -3283.33    73.32
 SELECT * FROM format_02 WHERE format(d2,0) NOT IN (73, 32789);
 id  d1  d2
 1    1.2    47832.434
@@ -438,7 +438,7 @@ id  d1  d2
 6    323    3782329.43432
 8    7382    3923404.2132421
 SELECT * FROM format_02 WHERE format(d2, 2) MOD 2 = 0;
-ERROR 20203 (HY000): invalid argument cast to int, bad value 47,832.43
+invalid argument cast to int, bad value 47,832.43
 DROP TABLE IF EXISTS format_04;
 CREATE TABLE format_04(a varchar(100), b varchar(100), c varchar(20));
 INSERT INTO format_04 VALUES("-.12334.2","2", "en_US");
@@ -461,7 +461,7 @@ a    b    c
 12332.123456    4    en_US
 12332.1    4    en_US
 SELECT ABS(format(b,5)) FROM format_04;
-ERROR 20203 (HY000): invalid argument cast to int, bad value 2.00000
+invalid argument cast to int, bad value 2.00000
 SELECT FLOOR(format(c,3)) FROM format_04;
 floor(format(c, 3))
 0
