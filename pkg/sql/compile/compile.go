@@ -614,6 +614,11 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		if err := plan2.InitS3Param(param); err != nil {
 			return nil, err
 		}
+		if param.Parallel {
+			if mcpu > external.S3_PARALLEL_MAXNUM {
+				mcpu = external.S3_PARALLEL_MAXNUM
+			}
+		}
 	} else {
 		if err := plan2.InitInfileParam(param); err != nil {
 			return nil, err
