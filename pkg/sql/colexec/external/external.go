@@ -59,7 +59,8 @@ import (
 )
 
 var (
-	ONE_BATCH_MAX_ROW = 40000
+	ONE_BATCH_MAX_ROW  = 40000
+	S3_PARALLEL_MAXNUM = 10
 )
 
 var (
@@ -349,23 +350,6 @@ func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fi
 		line, _ := r2.ReadString('\n')
 		tailSize = append(tailSize, int64(len(line)))
 		offset = append(offset, vec.Entries[0].Offset)
-	}
-
-	vec.Entries[0].Offset = 0
-	err = fs.Read(param.Ctx, &vec)
-	if err != nil {
-		return nil, err
-	}
-
-	r2 := bufio.NewReader(r)
-	for {
-		_, err := r2.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return nil, err
-		}
-		if err == io.EOF {
-			break
-		}
 	}
 
 	start := 0
