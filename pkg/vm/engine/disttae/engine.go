@@ -560,15 +560,19 @@ func (e *Engine) gc(ctx context.Context) {
 			ts = (*e.txnHeap)[0].meta.SnapshotTS
 			e.RUnlock()
 			e.db.Lock()
-			for k := range e.db.tables {
-				ps = append(ps, e.db.tables[k])
+			for k := range e.db.partitions {
+				ps = append(ps, e.db.partitions[k])
 			}
 			e.db.Unlock()
 			for i := range ps {
 				for j := range ps[i] {
-					ps[i][j].Lock()
+					select {
+					case <-ps[i][j].lock:
+					case <-ctx.Done():
+						return
+					}
 					ps[i][j].GC(ts)
-					ps[i][j].Unlock()
+					ps[i][j].lock <- struct{}{}
 				}
 			}
 		}
