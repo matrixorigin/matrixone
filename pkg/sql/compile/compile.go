@@ -1405,7 +1405,7 @@ func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Sco
 	mergeChildren := c.newMergeScope(children)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructShuffleJoinDispatch(1, rs, c.addr),
+		Arg: constructBroadcastJoinDispatch(1, rs, c.addr, mergeChildren.Proc),
 	})
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 

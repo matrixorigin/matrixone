@@ -17,12 +17,16 @@ package compile
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -116,6 +120,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			}(s.PreScopes[i])
 		}
 	}
+	s.notifyAndReceiveFromRemote()
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
@@ -545,5 +550,89 @@ func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
 	for i := range srcScope.Instructions {
 		targetScope.Instructions[i] = dupInstruction(&srcScope.Instructions[i], regMap)
 	}
+	return nil
+}
+
+func (s *Scope) notifyAndReceiveFromRemote() error {
+	if len(s.RemoteReceivRegInfos) == 0 {
+		return nil
+	}
+
+	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, rr := range s.RemoteReceivRegInfos {
+		go func(info RemoteReceivRegInfo, regCh chan *batch.Batch, mp *mpool.MPool) {
+			c, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			_ = cancel
+
+			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
+			if errStream != nil {
+				return
+			}
+			defer func(streamSender morpc.Stream, regCh chan *batch.Batch) {
+				close(regCh)
+				_ = streamSender.Close()
+			}(streamSender, regCh)
+
+			message := cnclient.AcquireMessage()
+			{
+				message.Id = streamSender.ID()
+				message.Cmd = pbpipeline.PrepareDoneNotifyMessage
+				message.Uuid = info.Uuid[:]
+			}
+			if errSend := streamSender.Send(c, message); errSend != nil {
+				return
+			}
+
+			messagesReceive, errReceive := streamSender.Receive()
+			if errReceive != nil {
+				return
+			}
+
+			var val morpc.Message
+			var dataBuffer []byte
+			currentBid := int64(-1)
+			for {
+				select {
+				case <-c.Done():
+					return
+				case val = <-messagesReceive:
+				}
+
+				// TODO: what val = nil means?
+				if val == nil {
+					return
+				}
+
+				m := val.(*pbpipeline.Message)
+
+				if m.IsEndMessage() {
+					regCh <- nil
+					return
+				}
+
+				if m.GetBid() == currentBid {
+					dataBuffer = append(dataBuffer, m.Data...)
+				} else {
+					currentBid = m.GetBid()
+					dataBuffer = m.Data
+				}
+
+				if m.WaitingNextToMerge() {
+					continue
+				}
+
+				bat, err := decodeBatch(mp, dataBuffer)
+				if err != nil {
+					return
+				}
+				regCh <- bat
+			}
+		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx].Ch, mp)
+	}
+
 	return nil
 }

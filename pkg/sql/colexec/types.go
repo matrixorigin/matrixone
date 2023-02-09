@@ -31,11 +31,11 @@ func NewResultPos(rel int32, pos int32) ResultPos {
 	return ResultPos{Rel: rel, Pos: pos}
 }
 
-// WrapperNode used to spec which node,
+// ReceiveInfo used to spec which node,
 // and which registers you need
-type WrapperNode struct {
+type ReceiveInfo struct {
 	NodeAddr string
-	Uuids    []uuid.UUID
+	Uuid     uuid.UUID
 }
 
 // TODO: remove batchCntMap when dispatch executor using the stream correctly
@@ -53,6 +53,8 @@ type Server struct {
 	// regs when receiving BatchMessage
 	uuidMap UuidMap
 
+	uuidCsChanMap UuidCsChanMap
+
 	// batchCntMap use to handle reoder issue when handeling BatchMessage
 	batchCntMap BatchCntMap
 }
@@ -60,6 +62,11 @@ type Server struct {
 type UuidMap struct {
 	sync.RWMutex
 	mp map[uuid.UUID]*process.WaitRegister
+}
+
+type UuidCsChanMap struct {
+	sync.RWMutex
+	mp map[uuid.UUID]chan process.WrapCs
 }
 
 type BatchCntMap struct {

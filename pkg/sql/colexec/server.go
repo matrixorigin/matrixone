@@ -83,6 +83,23 @@ func (srv *Server) PutRegFromUuidMap(u uuid.UUID, reg *process.WaitRegister) err
 	return nil
 }
 
+func (srv *Server) GetProcFromUuidMap(u uuid.UUID) (chan process.WrapCs, bool) {
+	srv.uuidCsChanMap.Lock()
+	defer srv.uuidCsChanMap.Unlock()
+	p, ok := srv.uuidCsChanMap.mp[u]
+	if !ok {
+		return nil, false
+	}
+	return p, true
+}
+
+func (srv *Server) PutProgIntoUuidMap(u uuid.UUID, ch chan process.WrapCs) error {
+	srv.uuidCsChanMap.Lock()
+	defer srv.uuidCsChanMap.Unlock()
+	srv.uuidCsChanMap.mp[u] = ch
+	return nil
+}
+
 func (srv *Server) RemoveUuidFromUuidMap(u uuid.UUID) error {
 	srv.uuidMap.Lock()
 	defer srv.uuidMap.Unlock()

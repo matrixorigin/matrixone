@@ -195,28 +195,21 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 						chs += "unknown"
 					}
 				}
-				if arg.All {
+				if arg.FuncId == dispatch.SendToAllFunc {
 					str += fmt.Sprintf(" to all of MergeReceiver [%s].", chs)
 				} else {
 					str += fmt.Sprintf(" to any of MergeReceiver [%s].", chs)
 				}
 
-				if arg.CrossCN {
+				if len(arg.RemoteRegs) != 0 {
 					remoteChs := ""
 					for i, reg := range arg.RemoteRegs {
 						if i != 0 {
 							remoteChs += ", "
 						}
-						uuids := ""
-						for j, u := range reg.Uuids {
-							if j != 0 {
-								uuids += " ,"
-							}
-							uuids += u.String()
-						}
-						remoteChs += fmt.Sprintf("addr: %s, uuids[%s]", reg.NodeAddr, uuids)
+						remoteChs += fmt.Sprintf("[addr: %s, uuid %s]", reg.NodeAddr, reg.Uuid)
 					}
-					str += fmt.Sprintf(" cross-cn receiver info: [%s]", remoteChs)
+					str += fmt.Sprintf(" cross-cn receiver info: %s", remoteChs)
 				}
 			}
 			return str

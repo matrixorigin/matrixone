@@ -25,6 +25,7 @@ const (
 	// Basic message type
 	PipelineMessage = iota
 	BatchMessage
+	PrepareDoneNotifyMessage
 
 	// Status type
 	BatchEnd
@@ -56,6 +57,10 @@ func (m *Message) DebugString() string {
 
 func (m *Message) IsBatchMessage() bool {
 	return m.GetCmd() == BatchMessage
+}
+
+func (m *Message) IsNotifyMessage() bool {
+	return m.GetCmd() == PrepareDoneNotifyMessage
 }
 
 func (m *Message) IsPipelineMessage() bool {
