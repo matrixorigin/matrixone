@@ -4261,7 +4261,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 	proc.SessionInfo = process.SessionInfo{
 		User:              ses.GetUserName(),
 		Host:              pu.SV.Host,
-		ConnectionID:      kuint64(proto.ConnectionID()),
+		ConnectionID:      uint64(proto.ConnectionID()),
 		Database:          ses.GetDatabaseName(),
 		Version:           pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
 		TimeZone:          ses.GetTimeZone(),
