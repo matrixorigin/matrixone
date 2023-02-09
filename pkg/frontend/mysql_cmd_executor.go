@@ -4259,15 +4259,15 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:           ses.GetUserName(),
-		Host:           pu.SV.Host,
-		ConnectionID:   uint64(proto.ConnectionID()),
-		Database:       ses.GetDatabaseName(),
-		Version:        pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
-		TimeZone:       ses.GetTimeZone(),
-		StorageEngine:  pu.StorageEngine,
-		AutoIncrCaches: ses.GetAutoIncrCaches(),
-		AutoIncrCacheSize:	ses.pu.SV.AutoIncrCacheSize,
+		User:              ses.GetUserName(),
+		Host:              pu.SV.Host,
+		ConnectionID:      kuint64(proto.ConnectionID()),
+		Database:          ses.GetDatabaseName(),
+		Version:           pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
+		TimeZone:          ses.GetTimeZone(),
+		StorageEngine:     pu.StorageEngine,
+		AutoIncrCaches:	   ses.GetAutoIncrCaches(),
+		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
 	}
 
 	if ses.GetTenantInfo() != nil {
