@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
+	"os"
 	"runtime"
 	"time"
 
@@ -81,6 +83,7 @@ type messageHandleHelper struct {
 	fileService       fileservice.FileService
 	getClusterDetails engine.GetClusterDetailsFunc
 	acquirer          func() morpc.Message
+	sequence          uint64
 }
 
 // processHelper a structure records information about source process. and to help
@@ -243,6 +246,9 @@ func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint
 		m := mHelper.acquirer().(*pipeline.Message)
 		m.Id = messageId
 		m.Data = encodeData
+		m.Checksum = crc32.ChecksumIEEE(m.Data)
+		m.Sequence = mHelper.sequence
+		mHelper.sequence++
 		return cs.Write(ctx, m)
 	}
 	// if data is too large, it should be split into small blocks.
@@ -258,6 +264,9 @@ func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint
 		m.Id = messageId
 		m.Data = encodeData[start:end]
 		m.Sid = uint64(sid)
+		m.Checksum = crc32.ChecksumIEEE(m.Data)
+		m.Sequence = mHelper.sequence
+		mHelper.sequence++
 		if err := cs.Write(ctx, m); err != nil {
 			return err
 		}
@@ -270,6 +279,7 @@ func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint
 func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
 	var dataBuffer []byte
+	var sequence uint64
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -298,11 +308,16 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyz
 			}
 			return nil
 		} else {
-			if len(dataBuffer) == 0 {
-				dataBuffer = m.Data
-			} else {
-				dataBuffer = append(dataBuffer, m.Data...)
+			if m.Checksum != crc32.ChecksumIEEE(m.Data) {
+				os.Exit(1)
+				return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 			}
+			if sequence != m.Sequence {
+				os.Exit(1)
+				return moerr.NewInternalErrorNoCtx("Packages passed by morpc are out of order")
+			}
+			sequence++
+			dataBuffer = append(dataBuffer, m.Data...)
 			if m.WaitingNextToMerge() {
 				continue
 			}
