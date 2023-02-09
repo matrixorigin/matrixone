@@ -85,12 +85,6 @@ func (rt *Routine) setInProcessRequest(b bool) {
 	rt.inProcessRequest = b
 }
 
-func (rt *Routine) isInProcessRequest() bool {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	return rt.inProcessRequest
-}
-
 // execCallbackInProcessRequestOnly denotes if inProcessRequest is true,
 // then the callback will be called.
 // It has used the mutex.
