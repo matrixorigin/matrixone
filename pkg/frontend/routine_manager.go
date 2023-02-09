@@ -133,6 +133,10 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 When the io is closed, the Closed will be called.
 */
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
+	logutil.Debugf("clean resource of the connection %d:%s", rs.ID(), rs.RemoteAddress())
+	defer func() {
+		logutil.Debugf("resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
+	}()
 	var rt *Routine
 	var ok bool
 
@@ -200,6 +204,10 @@ func getConnectionInfo(rs goetty.IOSession) string {
 }
 
 func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {
+	logutil.Debugf("get request from %d:%s", rs.ID(), rs.RemoteAddress())
+	defer func() {
+		logutil.Debugf("request from %d:%s has been processed", rs.ID(), rs.RemoteAddress())
+	}()
 	var err error
 	var isTlsHeader bool
 	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler")
