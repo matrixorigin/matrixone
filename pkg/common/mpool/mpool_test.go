@@ -164,7 +164,7 @@ func TestReportMemUsage(t *testing.T) {
 }
 
 func TestMP(t *testing.T) {
-	pool, err := NewMPool("default", 0, Large)
+	pool, err := NewMPool("default", 0, Small)
 	if err != nil {
 		panic(err)
 	}
@@ -179,7 +179,7 @@ func TestMP(t *testing.T) {
 			pool.Free(buf)
 		}
 	}
-	for i := 0; i < 800; i++ {
+	for i := 0; i < 1000; i++ {
 		wg.Add(1)
 		go run()
 	}

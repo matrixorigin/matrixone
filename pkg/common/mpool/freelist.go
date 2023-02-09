@@ -19,6 +19,15 @@ import (
 	"unsafe"
 )
 
+type slot struct {
+	// a triple value is used here to protect
+	// 0: means avaliable
+	// 1: means free
+	// 2: means critical
+	set atomic.Int32
+	ptr unsafe.Pointer
+}
+
 // Poor man's sync.Pool.  golang's sync.Pool is not good for our usage
 // because it has no guanrantees, it may silently drop entries.
 //
@@ -26,14 +35,14 @@ import (
 type freelist struct {
 	cap        int32
 	head, tail atomic.Int32
-	ptrs       []unsafe.Pointer
+	slots      []slot
 }
 
 func make_freelist(cap int32) *freelist {
 	var fl freelist
 	fl.cap = cap
 	// +1 so that we can tell empty from full.
-	fl.ptrs = make([]unsafe.Pointer, cap+1)
+	fl.slots = make([]slot, cap+1)
 	return &fl
 }
 
@@ -45,15 +54,18 @@ func (fl *freelist) next(i int32) int32 {
 	return i + 1
 }
 
-// put always succeeds.  It is caller's job to make sure
-// we never overflow the freelist
 func (fl *freelist) put(ptr unsafe.Pointer) {
 	for {
+		head := fl.head.Load()
 		curr := fl.tail.Load()
 		next := fl.next(curr)
+		if next == head { // full
+			return
+		}
 		ok := fl.tail.CompareAndSwap(curr, next)
-		if ok {
-			atomic.StorePointer(&fl.ptrs[curr], ptr)
+		if ok && fl.slots[curr].set.CompareAndSwap(0, 2) { // switch to the critical state
+			fl.slots[curr].ptr = ptr
+			fl.slots[curr].set.CompareAndSwap(2, 1) // switch to avaliable state
 			return
 		}
 	}
@@ -63,14 +75,14 @@ func (fl *freelist) put(ptr unsafe.Pointer) {
 func (fl *freelist) get() unsafe.Pointer {
 	for {
 		pos := fl.head.Load()
-		if pos == fl.tail.Load() {
-			// empty
+		if pos == fl.tail.Load() { // empty
 			return nil
 		}
 		next := fl.next(pos)
-		ptr := atomic.LoadPointer(&fl.ptrs[pos])
 		ok := fl.head.CompareAndSwap(pos, next)
-		if ok {
+		if ok && fl.slots[pos].set.CompareAndSwap(1, 2) { // switch to the critical state
+			ptr := fl.slots[pos].ptr
+			fl.slots[pos].set.CompareAndSwap(2, 0) // switch to the free state
 			return ptr
 		}
 	}
