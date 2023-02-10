@@ -163,7 +163,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr += pkStr
 	}
 
-	uIndexDef, sIndexDef := buildIndexDefs(tableDef.Defs)
+	uIndexDef, sIndexDef := BuildIndexDefs(tableDef.Defs)
 	if uIndexDef != nil {
 		for i, name := range uIndexDef.IndexNames {
 			uIStr := "UNIQUE KEY "
