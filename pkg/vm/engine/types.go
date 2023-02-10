@@ -128,14 +128,6 @@ type ViewDef struct {
 	View string
 }
 
-//type UniqueIndexDef struct {
-//	UniqueIndex string
-//}
-//
-//type SecondaryIndexDef struct {
-//	SecondaryIndex string
-//}
-
 type IndexDef struct {
 	Indexes []*plan.NewIndexDef
 }
@@ -182,23 +174,6 @@ func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	for _, ct := range c.Cts {
 		switch def := ct.(type) {
-		//case *UniqueIndexDef:
-		//	if err := binary.Write(buf, binary.BigEndian, UniqueIndex); err != nil {
-		//		return nil, err
-		//	}
-		//	if err := binary.Write(buf, binary.BigEndian, uint64(len([]byte(def.UniqueIndex)))); err != nil {
-		//		return nil, err
-		//	}
-		//	buf.Write([]byte(def.UniqueIndex))
-		//
-		//case *SecondaryIndexDef:
-		//	if err := binary.Write(buf, binary.BigEndian, SecondaryIndex); err != nil {
-		//		return nil, err
-		//	}
-		//	if err := binary.Write(buf, binary.BigEndian, uint64(len([]byte(def.SecondaryIndex)))); err != nil {
-		//		return nil, err
-		//	}
-		//	buf.Write([]byte(def.SecondaryIndex))
 		case *IndexDef:
 			if err := binary.Write(buf, binary.BigEndian, Index); err != nil {
 				return nil, err
@@ -272,17 +247,6 @@ func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
 		typ := ConstraintType(data[l])
 		l += 1
 		switch typ {
-		//case UniqueIndex:
-		//	length = binary.BigEndian.Uint64(data[l : l+8])
-		//	l += 8
-		//	c.Cts = append(c.Cts, &UniqueIndexDef{UniqueIndex: string(data[l : l+int(length)])})
-		//	l += int(length)
-		//
-		//case SecondaryIndex:
-		//	length = binary.BigEndian.Uint64(data[l : l+8])
-		//	l += 8
-		//	c.Cts = append(c.Cts, &SecondaryIndexDef{SecondaryIndex: string(data[l : l+int(length)])})
-		//	l += int(length)
 		case Index:
 			length = binary.BigEndian.Uint64(data[l : l+8])
 			l += 8
@@ -359,8 +323,6 @@ type Constraint interface {
 }
 
 // TODO: UniqueIndexDef, SecondaryIndexDef will not be tabledef and need to be moved in Constraint to be able modified
-// func (*UniqueIndexDef) constraint()    {}
-// func (*SecondaryIndexDef) constraint() {}
 func (*ForeignKeyDef) constraint()    {}
 func (*PrimaryKeyDef) constraint()    {}
 func (*RefChildTableDef) constraint() {}
