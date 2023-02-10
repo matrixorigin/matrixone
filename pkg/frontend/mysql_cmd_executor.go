@@ -2510,7 +2510,12 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
-	return cwft.compile.Run(ts)
+	logDebugf(cwft.ses.GetConciseProfile(), "compile.Run begin")
+	defer func() {
+		logDebugf(cwft.ses.GetConciseProfile(), "compile.Run end")
+	}()
+	err := cwft.compile.Run(ts)
+	return err
 }
 
 func (cwft *TxnComputationWrapper) GetLoadTag() bool {
@@ -3413,15 +3418,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proc.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:          ses.GetUserName(),
-		Host:          pu.SV.Host,
-		ConnectionID:  uint64(proto.ConnectionID()),
-		Database:      ses.GetDatabaseName(),
-		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
-		TimeZone:      ses.GetTimeZone(),
-		StorageEngine: pu.StorageEngine,
-		LastInsertID:  ses.GetLastInsertID(),
-		Session:       ses,
+		User:              ses.GetUserName(),
+		Host:              pu.SV.Host,
+		ConnectionID:      uint64(proto.ConnectionID()),
+		Database:          ses.GetDatabaseName(),
+		Version:           pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
+		TimeZone:          ses.GetTimeZone(),
+		StorageEngine:     pu.StorageEngine,
+		LastInsertID:      ses.GetLastInsertID(),
+		AutoIncrCaches:    ses.GetAutoIncrCaches(),
+		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
 	}
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
@@ -4264,14 +4270,15 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:          ses.GetUserName(),
-		Host:          pu.SV.Host,
-		ConnectionID:  uint64(proto.ConnectionID()),
-		Database:      ses.GetDatabaseName(),
-		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
-		TimeZone:      ses.GetTimeZone(),
-		StorageEngine: pu.StorageEngine,
-		Session:       ses,
+		User:              ses.GetUserName(),
+		Host:              pu.SV.Host,
+		ConnectionID:      uint64(proto.ConnectionID()),
+		Database:          ses.GetDatabaseName(),
+		Version:           pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
+		TimeZone:          ses.GetTimeZone(),
+		StorageEngine:     pu.StorageEngine,
+		AutoIncrCaches:    ses.GetAutoIncrCaches(),
+		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
 	}
 
 	if ses.GetTenantInfo() != nil {
