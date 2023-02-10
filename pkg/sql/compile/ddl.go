@@ -608,10 +608,10 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 			for idx, index := range def.Indexes {
 				if index.IndexName == dropName {
 					def.Indexes = append(def.Indexes[:idx], def.Indexes[idx+1:]...)
+					oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
+					oldCt.Cts = append(oldCt.Cts, def)
+					break
 				}
-				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-				oldCt.Cts = append(oldCt.Cts, def)
-				break
 			}
 		}
 	}
