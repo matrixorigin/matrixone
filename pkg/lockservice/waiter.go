@@ -45,14 +45,13 @@ func newWaiter() *waiter {
 		waiters: newWaiterQueue(),
 	}
 	w.setFinalizer()
-	w.status.Store(waitNotifyStatus)
+	w.status.Store(waiting)
 	return w
 }
 
 const (
-	waitNotifyStatus int32 = iota
-	notifyAddedStatus
-	waitCompletedStatus
+	waiting int32 = iota
+	completed
 )
 
 // waiter is used to allow locking operations to wait for the previous
@@ -112,18 +111,18 @@ func (w *waiter) add(waiter ...*waiter) {
 	if len(waiter) == 0 {
 		return
 	}
-	w.waiters.Put(waiter...)
+	w.waiters.put(waiter...)
 	for i := range waiter {
 		waiter[i].ref()
 	}
 }
 
-func (w *waiter) getStatus() int32 {
-	return w.status.Load()
+func (w *waiter) setCompleted() {
+	w.status.Store(completed)
 }
 
-func (w *waiter) setCompleted() {
-	w.status.Store(waitCompletedStatus)
+func (w *waiter) setWaiting() {
+	w.status.Store(waiting)
 }
 
 func (w *waiter) mustGetNotifiedValue() error {
@@ -131,34 +130,30 @@ func (w *waiter) mustGetNotifiedValue() error {
 	case err := <-w.c:
 		return err
 	default:
-		panic("BUG: must can get result from channel")
 	}
+	panic("BUG: cannot get result from channel")
 }
 
-func (w *waiter) resetWait() {
-	if !w.status.CompareAndSwap(waitCompletedStatus, waitNotifyStatus) {
-		panic("invalid reset wait")
+func (w *waiter) resetState() {
+	if !w.status.CompareAndSwap(completed, waiting) {
+		panic(fmt.Sprintf("BUG: waiter's status cannot be %d", w.status.Load()))
 	}
 }
 
 func (w *waiter) wait(ctx context.Context) error {
-	status := w.getStatus()
-	switch status {
-	case notifyAddedStatus:
-		w.setCompleted()
+	status := w.status.Load()
+	if status == completed {
 		return w.mustGetNotifiedValue()
-	case waitNotifyStatus:
-	default:
-		panic(fmt.Sprintf("BUG: invalid status to call wait, %d", status))
+	}
+	if status != waiting {
+		panic(fmt.Sprintf("BUG: waiter's status cannot be %d", status))
 	}
 
-	var err error
 	select {
-	case <-ctx.Done():
-		err = ctx.Err()
-	case err = <-w.c:
+	case err := <-w.c:
 		w.setCompleted()
 		return err
+	case <-ctx.Done():
 	}
 
 	if w.beforeSwapStatusAdjustFunc != nil {
@@ -166,8 +161,8 @@ func (w *waiter) wait(ctx context.Context) error {
 	}
 
 	// context is timeout, and status not changed, no concurrent happen
-	if w.status.CompareAndSwap(status, waitCompletedStatus) {
-		return err
+	if w.status.CompareAndSwap(status, completed) {
+		return ctx.Err()
 	}
 
 	// notify and timeout are concurrently issued, we use real result to replace
@@ -178,74 +173,65 @@ func (w *waiter) wait(ctx context.Context) error {
 
 // notify return false means this waiter is completed, cannot be used to notify
 func (w *waiter) notify(value error) bool {
-	for {
-		status := w.getStatus()
-		switch status {
-		case waitNotifyStatus:
-		case notifyAddedStatus:
-			panic("already notified")
-		case waitCompletedStatus:
-			// wait already completed, wait timeout or wait a result.
-			return false
-		}
-
-		if w.beforeSwapStatusAdjustFunc != nil {
-			w.beforeSwapStatusAdjustFunc()
-		}
-
-		// if status changed, notify and timeout are concurrently issued, need
-		// try.
-		if w.status.CompareAndSwap(status, notifyAddedStatus) {
-			select {
-			case w.c <- value:
-			default:
-				panic("bug")
-			}
-			return true
-		}
+	status := w.status.Load()
+	if status == completed {
+		return false
 	}
+
+	if w.beforeSwapStatusAdjustFunc != nil {
+		w.beforeSwapStatusAdjustFunc()
+	}
+
+	// if status changed, notify and timeout are concurrently issued, need
+	// try.
+	if w.status.CompareAndSwap(status, completed) {
+		w.c <- value
+		return true
+	}
+	return false
 }
 
 // close returns the next waiter to hold the lock, and others waiters will move
 // into the next waiter.
 func (w *waiter) close() *waiter {
-	var nextWaiter *waiter
 	// no new waiters can be added during close.
-	if w.waiters.Len() > 0 {
-		nextWaiter = w.mustNotifyFirstWaiter()
-		if nextWaiter != nil {
-			nextWaiter.unref()
-		}
+	nextHolder := w.fetchNextHolder()
+	if nextHolder != nil {
+		nextHolder.unref()
 	}
 	w.unref()
-	return nextWaiter
+	return nextHolder
 }
 
-func (w *waiter) mustNotifyFirstWaiter() *waiter {
-	prevWaiter := w
+func (w *waiter) fetchNextHolder() *waiter {
+	if w.waiters.len() == 0 {
+		return nil
+	}
+	next := w.awakeNextWaiter()
 	for {
-		nextWaiter, remainWaiters := prevWaiter.waiters.MustGetHeadAndTail()
-		nextWaiter.add(remainWaiters...)
-		prevWaiter.waiters.Reset()
-		if nextWaiter.notify(nil) {
-			return nextWaiter
+		if next.notify(nil) {
+			return next
 		}
-		if nextWaiter.waiters.Len() == 0 {
+		if next.waiters.len() == 0 {
 			return nil
 		}
-		prevWaiter = nextWaiter
+		next = next.awakeNextWaiter()
 	}
+}
+
+func (w *waiter) awakeNextWaiter() *waiter {
+	next, remains := w.waiters.mustGetHeadAndTail()
+	next.add(remains...)
+	w.waiters.reset()
+	return next
 }
 
 func (w *waiter) reset() {
-	if w.waiters.Len() > 0 {
-		panic("invalid waiters")
-	}
-	if len(w.c) > 0 {
-		panic("invalid notify channel")
+	if w.waiters.len() > 0 || len(w.c) > 0 {
+		panic("BUG: waiter should be empty.")
 	}
 	w.beforeSwapStatusAdjustFunc = nil
-	w.status.Store(waitNotifyStatus)
-	w.waiters.Reset()
+	w.setWaiting()
+	w.waiters.reset()
 	waiterPool.Put(w)
 }

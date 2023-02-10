@@ -107,19 +107,15 @@ func runDeadlock(t *testing.T, row1, row2 rowToLock) {
 		policy:      Wait,
 	}
 
-	ok, err := l.Lock(context.Background(), row1.tableID, [][]byte{row1.row}, txnA, option)
+	err := l.Lock(context.Background(), row1.tableID, [][]byte{row1.row}, txnA, option)
 	assert.NoError(t, err)
-	assert.Equal(t, true, ok)
 	go func() {
-		ok, err := l.Lock(ctx, row2.tableID, [][]byte{row2.row}, txnB, option)
+		err := l.Lock(ctx, row2.tableID, [][]byte{row2.row}, txnB, option)
 		assert.NoError(t, err)
-		assert.Equal(t, true, ok)
-		ok, err = l.Lock(ctx, row1.tableID, [][]byte{row1.row}, txnB, option)
+		err = l.Lock(ctx, row1.tableID, [][]byte{row1.row}, txnB, option)
 		assert.NoError(t, err)
-		assert.Equal(t, true, ok)
 	}()
 	time.Sleep(time.Second / 2)
-	ok, err = l.Lock(context.Background(), row2.tableID, [][]byte{row2.row}, txnA, option)
+	err = l.Lock(context.Background(), row2.tableID, [][]byte{row2.row}, txnA, option)
 	assert.Error(t, err)
-	assert.False(t, ok)
 }

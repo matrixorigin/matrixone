@@ -38,13 +38,11 @@ func TestRowLock(t *testing.T) {
 	}
 	acquired := false
 
-	ok, err := l.Lock(context.Background(), 0, [][]byte{{1}}, []byte{1}, option)
+	err := l.Lock(context.Background(), 0, [][]byte{{1}}, []byte{1}, option)
 	assert.NoError(t, err)
-	assert.True(t, ok)
 	go func() {
-		ok, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte{2}, option)
+		err := l.Lock(ctx, 0, [][]byte{{1}}, []byte{2}, option)
 		assert.NoError(t, err)
-		assert.True(t, ok)
 		acquired = true
 		err = l.Unlock([]byte{2})
 		assert.NoError(t, err)
@@ -53,10 +51,8 @@ func TestRowLock(t *testing.T) {
 	err = l.Unlock([]byte{1})
 	assert.NoError(t, err)
 	time.Sleep(time.Second / 2)
-	ok, err = l.Lock(context.Background(), 0, [][]byte{{1}}, []byte{3}, option)
+	err = l.Lock(context.Background(), 0, [][]byte{{1}}, []byte{3}, option)
 	assert.NoError(t, err)
-	assert.True(t, ok)
-
 	assert.True(t, acquired)
 
 	err = l.Unlock([]byte{3})
@@ -78,9 +74,8 @@ func TestMultipleRowLocks(t *testing.T) {
 	for i := 0; i < sum; i++ {
 		wg.Add(1)
 		go func(i int) {
-			ok, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte(strconv.Itoa(i)), option)
+			err := l.Lock(ctx, 0, [][]byte{{1}}, []byte(strconv.Itoa(i)), option)
 			assert.NoError(t, err)
-			assert.True(t, ok)
 			iter++
 			err = l.Unlock([]byte(strconv.Itoa(i)))
 			assert.NoError(t, err)
@@ -192,7 +187,7 @@ func maybeAddTestLockWithDeadlock(t *testing.T,
 	deadLockCount *atomic.Uint32,
 	maxDeadLockCount uint32) {
 	t.Logf("%s try lock %+v", string(txnID), lock)
-	ok, err := l.Lock(ctx, 1, lock, txnID, LockOptions{
+	err := l.Lock(ctx, 1, lock, txnID, LockOptions{
 		granularity: Row,
 		mode:        Exclusive,
 		policy:      Wait,
@@ -200,12 +195,10 @@ func maybeAddTestLockWithDeadlock(t *testing.T,
 	if err == ErrDeadlockDetectorClosed {
 		t.Logf("%s lock %+v, found dead lock", string(txnID), lock)
 		require.True(t, maxDeadLockCount >= deadLockCount.Add(1))
-		require.False(t, ok)
 		return
 	}
 	t.Logf("%s lock %+v, ok", string(txnID), lock)
 	require.NoError(t, err)
-	require.True(t, ok)
 }
 
 func TestRangeLock(t *testing.T) {
@@ -218,13 +211,11 @@ func TestRangeLock(t *testing.T) {
 	}
 	acquired := false
 
-	ok, err := l.Lock(context.Background(), 0, [][]byte{{1}, {2}}, []byte{1}, option)
+	err := l.Lock(context.Background(), 0, [][]byte{{1}, {2}}, []byte{1}, option)
 	assert.NoError(t, err)
-	assert.True(t, ok)
 	go func() {
-		ok, err := l.Lock(ctx, 0, [][]byte{{1}, {2}}, []byte{2}, option)
+		err := l.Lock(ctx, 0, [][]byte{{1}, {2}}, []byte{2}, option)
 		assert.NoError(t, err)
-		assert.True(t, ok)
 		acquired = true
 		err = l.Unlock([]byte{2})
 		assert.NoError(t, err)
@@ -233,10 +224,8 @@ func TestRangeLock(t *testing.T) {
 	err = l.Unlock([]byte{1})
 	assert.NoError(t, err)
 	time.Sleep(time.Second / 2)
-	ok, err = l.Lock(context.Background(), 0, [][]byte{{1}, {2}}, []byte{3}, option)
+	err = l.Lock(context.Background(), 0, [][]byte{{1}, {2}}, []byte{3}, option)
 	assert.NoError(t, err)
-	assert.True(t, ok)
-
 	assert.True(t, acquired)
 
 	err = l.Unlock([]byte{3})
@@ -264,9 +253,8 @@ func TestMultipleRangeLocks(t *testing.T) {
 				return
 			}
 			end := (i + 1) % 10
-			ok, err := l.Lock(ctx, 0, [][]byte{{byte(start)}, {byte(end)}}, []byte(strconv.Itoa(i)), option)
+			err := l.Lock(ctx, 0, [][]byte{{byte(start)}, {byte(end)}}, []byte(strconv.Itoa(i)), option)
 			assert.NoError(t, err)
-			assert.True(t, ok)
 			err = l.Unlock([]byte(strconv.Itoa(i)))
 			assert.NoError(t, err)
 		}(i)
@@ -289,9 +277,8 @@ func BenchmarkMultipleRowLock(b *testing.B) {
 			go func(i int) {
 				bs := make([]byte, 4)
 				binary.LittleEndian.PutUint32(bs, uint32(i))
-				ok, err := l.Lock(ctx, 0, [][]byte{{1}}, bs, option)
+				err := l.Lock(ctx, 0, [][]byte{{1}}, bs, option)
 				assert.NoError(b, err)
-				assert.True(b, ok)
 				iter++
 				err = l.Unlock(bs)
 				assert.NoError(b, err)
@@ -332,7 +319,7 @@ func runBenchmark(b *testing.B, name string, t uint64) {
 			table := getTableID()
 			// fmt.Printf("on table %d\n", table)
 			for p.Next() {
-				if _, err := l.Lock(ctx, table, row, txn, LockOptions{}); err != nil {
+				if err := l.Lock(ctx, table, row, txn, LockOptions{}); err != nil {
 					panic(err)
 				}
 				if err := l.Unlock(txn); err != nil {

@@ -19,12 +19,12 @@ import (
 )
 
 type waiterQueue interface {
-	Len() uint64
-	Reset()
-	MustGet() *waiter
-	MustGetHeadAndTail() (*waiter, []*waiter)
-	Put(...*waiter)
-	IterTxns(func([]byte) bool)
+	len() int
+	reset()
+	mustGet() *waiter
+	mustGetHeadAndTail() (*waiter, []*waiter)
+	put(...*waiter)
+	iter(func([]byte) bool)
 }
 
 func newWaiterQueue() *sliceBasedWaiterQueue {
@@ -33,18 +33,18 @@ func newWaiterQueue() *sliceBasedWaiterQueue {
 
 type sliceBasedWaiterQueue struct {
 	sync.RWMutex
-	offset  uint64
+	offset  int
 	waiters []*waiter
 }
 
-func (q *sliceBasedWaiterQueue) Len() uint64 {
+func (q *sliceBasedWaiterQueue) len() int {
 	q.RLock()
 	defer q.RUnlock()
-	return uint64(len(q.waiters)) - q.offset
+	return len(q.waiters) - q.offset
 }
 
-func (q *sliceBasedWaiterQueue) MustGet() *waiter {
-	if q.Len() == 0 {
+func (q *sliceBasedWaiterQueue) mustGet() *waiter {
+	if q.len() == 0 {
 		panic("BUG: no waiter in queue")
 	}
 
@@ -56,8 +56,8 @@ func (q *sliceBasedWaiterQueue) MustGet() *waiter {
 	return v
 }
 
-func (q *sliceBasedWaiterQueue) MustGetHeadAndTail() (*waiter, []*waiter) {
-	if q.Len() == 0 {
+func (q *sliceBasedWaiterQueue) mustGetHeadAndTail() (*waiter, []*waiter) {
+	if q.len() == 0 {
 		panic("BUG: no waiter in queue")
 	}
 
@@ -69,16 +69,16 @@ func (q *sliceBasedWaiterQueue) MustGetHeadAndTail() (*waiter, []*waiter) {
 	return v, q.waiters[q.offset:]
 }
 
-func (q *sliceBasedWaiterQueue) Put(w ...*waiter) {
+func (q *sliceBasedWaiterQueue) put(w ...*waiter) {
 	q.Lock()
 	defer q.Unlock()
 	q.waiters = append(q.waiters, w...)
 }
 
-func (q *sliceBasedWaiterQueue) IterTxns(fn func([]byte) bool) {
+func (q *sliceBasedWaiterQueue) iter(fn func([]byte) bool) {
 	q.RLock()
 	defer q.RUnlock()
-	n := uint64(len(q.waiters))
+	n := len(q.waiters)
 	for i := q.offset; i < n; i++ {
 		if !fn(q.waiters[i].txnID) {
 			return
@@ -86,7 +86,7 @@ func (q *sliceBasedWaiterQueue) IterTxns(fn func([]byte) bool) {
 	}
 }
 
-func (q *sliceBasedWaiterQueue) Reset() {
+func (q *sliceBasedWaiterQueue) reset() {
 	q.Lock()
 	defer q.Unlock()
 	q.waiters = q.waiters[:0]
