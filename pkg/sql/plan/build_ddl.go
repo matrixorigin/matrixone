@@ -738,10 +738,6 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 }
 
 func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
-	//def := &plan.UniqueIndexDef{
-	//	Fields: make([]*plan.Field, 0),
-	//}
-
 	nameCount := make(map[string]int)
 
 	for _, indexInfo := range indexInfos {
@@ -845,41 +841,26 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if count > 1 {
 				indexName = firstPart + "_" + strconv.Itoa(count)
 			}
-			//def.IndexNames = append(def.IndexNames, indexName)
 			indexDef.IndexName = indexName
 		} else {
-			//def.IndexNames = append(def.IndexNames, indexInfo.Name)
 			indexDef.IndexName = indexInfo.Name
 		}
-		//def.TableNames = append(def.TableNames, indexTableName)
 		indexDef.IndexTableName = indexTableName
-		//def.Fields = append(def.Fields, field)
 		indexDef.Field = field
-		//def.TableExists = append(def.TableExists, true)
 		indexDef.TableExist = true
 		if indexInfo.IndexOption != nil {
-			//def.Comments = append(def.Comments, indexInfo.IndexOption.Comment)
 			indexDef.Comment = indexInfo.IndexOption.Comment
 		} else {
-			//def.Comments = append(def.Comments, "")
 			indexDef.Comment = ""
 		}
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 	}
-	//createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-	//	Def: &plan.TableDef_DefType_UIdx{
-	//		UIdx: def,
-	//	},
-	//})
 	return nil
 }
 
 func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, ctx CompilerContext) error {
-	//def := &plan.SecondaryIndexDef{
-	//	Fields: make([]*plan.Field, 0),
-	//}
 	nameCount := make(map[string]int)
 
 	for _, indexInfo := range indexInfos {
@@ -915,32 +896,20 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			if count > 1 {
 				indexName = firstPart + "_" + strconv.Itoa(count)
 			}
-			//def.IndexNames = append(def.IndexNames, indexName)
 			indexDef.IndexName = indexName
 		} else {
-			//def.IndexNames = append(def.IndexNames, indexInfo.Name)
 			indexDef.IndexName = indexInfo.Name
 		}
-		//def.TableNames = append(def.TableNames, "")
 		indexDef.IndexTableName = ""
-		//def.Fields = append(def.Fields, field)
 		indexDef.Field = field
-		//def.TableExists = append(def.TableExists, false)
 		indexDef.TableExist = false
 		if indexInfo.IndexOption != nil {
-			//def.Comments = append(def.Comments, indexInfo.IndexOption.Comment)
 			indexDef.Comment = indexInfo.IndexOption.Comment
 		} else {
-			//def.Comments = append(def.Comments, "")
 			indexDef.Comment = ""
 		}
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 	}
-	//createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-	//	Def: &plan.TableDef_DefType_SIdx{
-	//		SIdx: def,
-	//	},
-	//})
 	return nil
 }
 
@@ -980,24 +949,6 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
 		}
 
-		//uDef, sDef := buildIndexDefs(tableDef.Defs)
-		//truncateTable.IndexTableNames = make([]string, 0)
-		//if uDef != nil {
-		//	for i := 0; i < len(uDef.TableNames); i++ {
-		//		if uDef.TableExists[i] {
-		//			truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, uDef.TableNames[i])
-		//		}
-		//	}
-		//}
-		//if sDef != nil {
-		//	for i := 0; i < len(sDef.TableNames); i++ {
-		//		if sDef.TableExists[i] {
-		//			truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, sDef.TableNames[i])
-		//		}
-		//	}
-		//}
-
-		//-------------------------------------------------------------------------------------------
 		truncateTable.IndexTableNames = make([]string, 0)
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
@@ -1006,9 +957,6 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 				}
 			}
 		}
-
-		//--------------------------------------------------------------------------------------------
-
 	}
 
 	return &Plan{
@@ -1072,23 +1020,6 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			}
 		}
 
-		//uDef, sDef := buildIndexDefs(tableDef.Defs)
-		//dropTable.IndexTableNames = make([]string, 0)
-		//if uDef != nil {
-		//	for i := 0; i < len(uDef.TableNames); i++ {
-		//		if uDef.TableExists[i] {
-		//			dropTable.IndexTableNames = append(dropTable.IndexTableNames, uDef.TableNames[i])
-		//		}
-		//	}
-		//}
-		//if sDef != nil {
-		//	for i := 0; i < len(sDef.TableNames); i++ {
-		//		if sDef.TableExists[i] {
-		//			dropTable.IndexTableNames = append(dropTable.IndexTableNames, sDef.TableNames[i])
-		//		}
-		//	}
-		//}
-		//--------------------------------------------------------------------------------------------
 		dropTable.IndexTableNames = make([]string, 0)
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
@@ -1097,7 +1028,6 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 				}
 			}
 		}
-		//--------------------------------------------------------------------------------------------
 	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -1201,29 +1131,11 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// check index
 	indexName := string(stmt.Name)
-	//for _, def := range tableDef.Defs {
-	//	switch idx := def.Def.(type) {
-	//	case *plan.TableDef_DefType_UIdx:
-	//		for _, name := range idx.UIdx.IndexNames {
-	//			if indexName == name {
-	//				return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
-	//			}
-	//		}
-	//	case *plan.TableDef_DefType_SIdx:
-	//		for _, name := range idx.SIdx.IndexNames {
-	//			if indexName == name {
-	//				return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
-	//			}
-	//		}
-	//	}
-	//}
-	//-------------------------------------------------------------
 	for _, def := range tableDef.Indexes {
 		if def.IndexName == indexName {
 			return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
 		}
 	}
-	//-------------------------------------------------------------
 	// build index
 	var uIdx *tree.UniqueIndex
 	var sIdx *tree.Index
@@ -1298,27 +1210,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	// check index
 	dropIndex.IndexName = string(stmt.Name)
 	found := false
-	//for _, def := range tableDef.Defs {
-	//	switch idx := def.Def.(type) {
-	//	case *plan.TableDef_DefType_UIdx:
-	//		for i, name := range idx.UIdx.IndexNames {
-	//			if dropIndex.IndexName == name {
-	//				dropIndex.IndexTableName = idx.UIdx.TableNames[i]
-	//				found = true
-	//				break
-	//			}
-	//		}
-	//	case *plan.TableDef_DefType_SIdx:
-	//		for i, name := range idx.SIdx.IndexNames {
-	//			if dropIndex.IndexName == name {
-	//				dropIndex.IndexTableName = idx.SIdx.TableNames[i]
-	//				found = true
-	//				break
-	//			}
-	//		}
-	//	}
-	//}
-	//---------------------------------------------------------------------
+
 	for _, indexdef := range tableDef.Indexes {
 		if dropIndex.IndexName == indexdef.IndexName {
 			dropIndex.IndexTableName = indexdef.IndexTableName
@@ -1326,7 +1218,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 			break
 		}
 	}
-	//---------------------------------------------------------------------
+	
 	if !found {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
 	}

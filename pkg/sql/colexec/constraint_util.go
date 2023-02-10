@@ -152,71 +152,6 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 		}
 	}()
 
-	//uIdx := 0
-	//for _, def := range tableDef.Defs {
-	//	if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-	//		// how to get relation?
-	//		for idx := range idxDef.UIdx.TableNames {
-	//			partsLength := len(idxDef.UIdx.Fields[idx].Parts)
-	//			uniqueColumnPos := make([]int, partsLength)
-	//			for p, column := range idxDef.UIdx.Fields[idx].Parts {
-	//				uniqueColumnPos[p] = updateNameToPos[column]
-	//			}
-	//
-	//			colCount := len(uniqueColumnPos)
-	//			if pkPos == -1 {
-	//				//have no pk
-	//				ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName})
-	//			} else {
-	//				ukBatch = batch.New(true, []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName})
-	//			}
-	//
-	//			var vec *vector.Vector
-	//			var bitMap *nulls.Nulls
-	//			if colCount == 1 {
-	//				idx := uniqueColumnPos[0]
-	//				vec, bitMap = util.CompactSingleIndexCol(updateBatch.Vecs[idx], proc)
-	//			} else {
-	//				vs := make([]*vector.Vector, colCount)
-	//				for vIdx, pIdx := range uniqueColumnPos {
-	//					vs[vIdx] = updateBatch.Vecs[pIdx]
-	//				}
-	//				vec, bitMap = util.SerialWithCompacted(vs, proc)
-	//			}
-	//			ukBatch.SetVector(0, vec)
-	//			ukBatch.SetZs(vec.Length(), proc.Mp())
-	//
-	//			if pkPos != -1 {
-	//				// have pk, append pk vector
-	//				vec = util.CompactPrimaryCol(updateBatch.Vecs[pkPos], bitMap, proc)
-	//				ukBatch.SetVector(1, vec)
-	//			}
-	//
-	//			// db, err := eg.Database(proc.Ctx, dbName, proc.TxnOperator)
-	//			// if err != nil {
-	//			// 	return err
-	//			// }
-	//			// rel, err := db.Relation(proc.Ctx, tblName)
-	//			// if err != nil {
-	//			// 	return err
-	//			// }
-	//
-	//			if s3Container == nil {
-	//				rel := rels[uIdx]
-	//				err := rel.Write(proc.Ctx, ukBatch)
-	//				if err != nil {
-	//					return err
-	//				}
-	//				uIdx++
-	//			} else {
-	//				uIdx++
-	//				s3Container.WriteS3Batch(ukBatch, proc, uIdx)
-	//			}
-	//		}
-	//	}
-	//}
-
-	//------------------------------------------refactor code------------------------------------------------
 	uIdx := 0
 	if tableDef.Indexes != nil {
 		for _, indexdef := range tableDef.Indexes {
@@ -281,7 +216,6 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 			}
 		}
 	}
-	//-------------------------------------------------------------------------------------------------------
 	return nil
 }
 

@@ -171,20 +171,12 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 			} else if len(tblDef.Fkeys) > 0 {
 				newTblInfo.haveConstraint = true
 			} else {
-				//for _, def := range tblDef.Defs {
-				//	if _, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-				//		newTblInfo.haveConstraint = true
-				//		break
-				//	}
-				//}
-				//------------------------------new code--------------------------------------
 				for _, indexdef := range tblDef.Indexes {
 					if indexdef.Unique {
 						newTblInfo.haveConstraint = true
 						break
 					}
 				}
-				//---------------------------------------------------------------------------
 			}
 		}
 	}
@@ -263,20 +255,12 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		} else if len(tableDef.Fkeys) > 0 {
 			tblInfo.haveConstraint = true
 		} else {
-			//for _, def := range tableDef.Defs {
-			//	if _, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-			//		tblInfo.haveConstraint = true
-			//		break
-			//	}
-			//}
-			//------------------------------new code--------------------------------------
 			for _, indexdef := range tableDef.Indexes {
 				if indexdef.Unique {
 					tblInfo.haveConstraint = true
 					break
 				}
 			}
-			//---------------------------------------------------------------------------
 		}
 	}
 
@@ -1007,113 +991,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 	// rewrite index, to get rows of unique table to delete
 	if info.typ != "insert" {
-		//for _, def := range tableDef.Defs {
-		//	if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-		//		for idx, tblName := range idxDef.UIdx.TableNames {
-		//			idxRef := &plan.ObjectRef{
-		//				SchemaName: builder.compCtx.DefaultDatabase(),
-		//				ObjName:    tblName,
-		//			}
-		//
-		//			// append table_scan node
-		//			joinCtx := NewBindContext(builder, bindCtx)
-		//
-		//			rightCtx := NewBindContext(builder, joinCtx)
-		//			astTblName := tree.NewTableName(tree.Identifier(tblName), tree.ObjectNamePrefix{})
-		//			rightId, err := builder.buildTable(astTblName, rightCtx)
-		//			if err != nil {
-		//				return err
-		//			}
-		//			rightTag := builder.qry.Nodes[rightId].BindingTags[0]
-		//			baseTag := builder.qry.Nodes[baseNodeId].BindingTags[0]
-		//			rightTableDef := builder.qry.Nodes[rightId].TableDef
-		//			rightRowIdPos := int32(len(rightTableDef.Cols)) - 1
-		//			rightIdxPos := int32(0)
-		//
-		//			// append projection
-		//			info.projectList = append(info.projectList, &plan.Expr{
-		//				Typ: rightTableDef.Cols[rightRowIdPos].Typ,
-		//				Expr: &plan.Expr_Col{
-		//					Col: &plan.ColRef{
-		//						RelPos: rightTag,
-		//						ColPos: rightRowIdPos,
-		//					},
-		//				},
-		//			})
-		//
-		//			rightExpr := &plan.Expr{
-		//				Typ: rightTableDef.Cols[rightIdxPos].Typ,
-		//				Expr: &plan.Expr_Col{
-		//					Col: &plan.ColRef{
-		//						RelPos: rightTag,
-		//						ColPos: rightIdxPos,
-		//					},
-		//				},
-		//			}
-		//
-		//			// append join node
-		//			var joinConds []*Expr
-		//			var leftExpr *Expr
-		//			partsLength := len(idxDef.UIdx.Fields[idx].Parts)
-		//			if partsLength == 1 {
-		//				orginIndexColumnName := idxDef.UIdx.Fields[idx].Parts[0]
-		//				typ := typMap[orginIndexColumnName]
-		//				leftExpr = &Expr{
-		//					Typ: typ,
-		//					Expr: &plan.Expr_Col{
-		//						Col: &plan.ColRef{
-		//							RelPos: baseTag,
-		//							ColPos: int32(oldColPosMap[orginIndexColumnName]),
-		//						},
-		//					},
-		//				}
-		//			} else {
-		//				args := make([]*Expr, partsLength)
-		//				for i, column := range idxDef.UIdx.Fields[idx].Parts {
-		//					typ := typMap[column]
-		//					args[i] = &plan.Expr{
-		//						Typ: typ,
-		//						Expr: &plan.Expr_Col{
-		//							Col: &plan.ColRef{
-		//								RelPos: baseTag,
-		//								ColPos: int32(oldColPosMap[column]),
-		//							},
-		//						},
-		//					}
-		//				}
-		//				leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
-		//				if err != nil {
-		//					return err
-		//				}
-		//			}
-		//
-		//			condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
-		//			if err != nil {
-		//				return err
-		//			}
-		//			joinConds = []*Expr{condExpr}
-		//
-		//			leftCtx := builder.ctxByNode[info.rootId]
-		//			err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
-		//			if err != nil {
-		//				return err
-		//			}
-		//			newRootId := builder.appendNode(&plan.Node{
-		//				NodeType: plan.Node_JOIN,
-		//				Children: []int32{info.rootId, rightId},
-		//				JoinType: plan.Node_LEFT,
-		//				OnList:   joinConds,
-		//			}, joinCtx)
-		//			bindCtx.binder = NewTableBinder(builder, bindCtx)
-		//			info.rootId = newRootId
-		//			info.onIdxTbl = append(info.onIdxTbl, idxRef)
-		//			info.onIdx = append(info.onIdx, info.idx)
-		//			info.idx = info.idx + 1
-		//		}
-		//	}
-		//}
-
-		//------------------------------------------------refactor code-------------------------------------------------
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
 				if indexdef.Unique {
@@ -1219,7 +1096,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 				}
 			}
 		}
-		//--------------------------------------------------------------------------------------------------------------
 	}
 
 	// check child table
