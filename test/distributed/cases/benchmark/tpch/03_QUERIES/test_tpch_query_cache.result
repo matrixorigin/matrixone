@@ -23,16 +23,16 @@ l_returnflag,
 l_linestatus
 ;
 l_returnflag    l_linestatus    sum_qty    sum_base_price    sum_disc_price    sum_charge    avg_qty    avg_price    avg_disc    count_order
-A    F    37474.00    37569624.64    35676192.097000000000    37101416.2224240000000000000000    25.35    25419.23    0.05    1478
-N    F    1041.00    1041301.07    999060.898000000000    1036450.8022800000000000000000    27.39    27402.66    0.04    38
-N    O    73962.00    74177309.20    70512214.052700000000    73308018.6382250000000000000000    25.52    25596.03    0.05    2898
-R    F    36511.00    36570841.24    34738472.875800000000    36169060.1121930000000000000000    25.06    25100.10    0.05    1457
+A    F    37474.00    37569624.64    35676192.0970    37101416.222424    25.35    25419.23    0.05    1478
+N    F    1041.00    1041301.07    999060.8980    1036450.802280    27.39    27402.66    0.04    38
+N    O    73962.00    74177309.20    70512214.0527    73308018.638225    25.52    25596.03    0.05    2898
+R    F    36511.00    36570841.24    34738472.8758    36169060.112193    25.06    25100.10    0.05    1457
 select * from result_scan(last_query_id()) as u;
 l_returnflag    l_linestatus    sum_qty    sum_base_price    sum_disc_price    sum_charge    avg_qty    avg_price    avg_disc    count_order
-A    F    37474.00    37569624.64    35676192.0970000000    37101416.2224240000    25.35    25419.23    0.05    1478
-N    F    1041.00    1041301.07    999060.8980000000    1036450.8022800000    27.39    27402.66    0.04    38
-N    O    73962.00    74177309.20    70512214.0527000000    73308018.6382250000    25.52    25596.03    0.05    2898
-R    F    36511.00    36570841.24    34738472.8758000000    36169060.1121930000    25.06    25100.10    0.05    1457
+A    F    37474.00    37569624.64    35676192.0970    37101416.222424    25.35    25419.23    0.05    1478
+N    F    1041.00    1041301.07    999060.8980    1036450.802280    27.39    27402.66    0.04    38
+N    O    73962.00    74177309.20    70512214.0527    73308018.638225    25.52    25596.03    0.05    2898
+R    F    36511.00    36570841.24    34738472.8758    36169060.112193    25.06    25100.10    0.05    1457
 select
 s_acctbal,
 s_name,
@@ -108,28 +108,28 @@ o_orderdate
 limit 10
 ;
 l_orderkey    revenue    o_orderdate    o_shippriority
-643    174011.294200000000    1995-03-25    0
-5444    166691.717500000000    1995-03-18    0
-4642    113368.506600000000    1995-02-27    0
-3749    83734.868600000000    1995-02-24    0
-5955    65943.299200000000    1995-03-27    0
-5765    65713.443600000000    1994-12-15    0
-5636    64688.178000000000    1995-02-16    0
-930    51611.760000000000    1994-12-17    0
-1445    44384.891400000000    1995-01-10    0
-3399    36727.773000000000    1995-02-28    0
+643    174011.2942    1995-03-25    0
+5444    166691.7175    1995-03-18    0
+4642    113368.5066    1995-02-27    0
+3749    83734.8686    1995-02-24    0
+5955    65943.2992    1995-03-27    0
+5765    65713.4436    1994-12-15    0
+5636    64688.1780    1995-02-16    0
+930    51611.7600    1994-12-17    0
+1445    44384.8914    1995-01-10    0
+3399    36727.7730    1995-02-28    0
 select * from result_scan(last_query_id()) as u;
 l_orderkey    revenue    o_orderdate    o_shippriority
-643    174011.2942000000    1995-03-25    0
-5444    166691.7175000000    1995-03-18    0
-4642    113368.5066000000    1995-02-27    0
-3749    83734.8686000000    1995-02-24    0
-5955    65943.2992000000    1995-03-27    0
-5765    65713.4436000000    1994-12-15    0
-5636    64688.1780000000    1995-02-16    0
-930    51611.7600000000    1994-12-17    0
-1445    44384.8914000000    1995-01-10    0
-3399    36727.7730000000    1995-02-28    0
+643    174011.2942    1995-03-25    0
+5444    166691.7175    1995-03-18    0
+4642    113368.5066    1995-02-27    0
+3749    83734.8686    1995-02-24    0
+5955    65943.2992    1995-03-27    0
+5765    65713.4436    1994-12-15    0
+5636    64688.1780    1995-02-16    0
+930    51611.7600    1994-12-17    0
+1445    44384.8914    1995-01-10    0
+3399    36727.7730    1995-02-28    0
 select
 o_orderpriority,
 count(*) as order_count
@@ -191,10 +191,10 @@ order by
 revenue desc
 ;
 n_name    revenue
-PERU    272671.522000000000
+PERU    272671.5220
 select * from result_scan(last_query_id()) as u;
 n_name    revenue
-PERU    272671.5220000000
+PERU    272671.5220
 select
 sum(l_extendedprice * l_discount) as revenue
 from
@@ -261,12 +261,12 @@ cust_nation,
 l_year
 ;
 supp_nation    cust_nation    l_year    revenue
-ARGENTINA    FRANCE    1995    36554.001000000000
-ARGENTINA    FRANCE    1996    64102.966400000000
+ARGENTINA    FRANCE    1995    36554.0010
+ARGENTINA    FRANCE    1996    64102.9664
 select * from result_scan(last_query_id()) as u;
 supp_nation    cust_nation    l_year    revenue
-ARGENTINA    FRANCE    1995    36554.0010000000
-ARGENTINA    FRANCE    1996    64102.9664000000
+ARGENTINA    FRANCE    1995    36554.0010
+ARGENTINA    FRANCE    1996    64102.9664
 select
 o_year,
 (sum(case
@@ -346,128 +346,128 @@ nation,
 o_year desc
 ;
 nation    o_year    sum_profit
-ARGENTINA    1997    6575.493400000000
-ARGENTINA    1996    12913.147600000000
-ARGENTINA    1995    109908.399700000000
-ARGENTINA    1994    39271.140400000000
-ARGENTINA    1993    39770.697300000000
-ARGENTINA    1992    35740.000000000000
-ETHIOPIA    1998    24489.149600000000
-ETHIOPIA    1997    39665.264400000000
-ETHIOPIA    1996    113173.095600000000
-ETHIOPIA    1995    25732.745200000000
-ETHIOPIA    1994    93731.100800000000
-ETHIOPIA    1993    147385.872000000000
-ETHIOPIA    1992    66636.961600000000
-IRAN    1998    116681.181300000000
-IRAN    1997    50964.258400000000
-IRAN    1996    185552.563400000000
-IRAN    1995    103479.651200000000
-IRAN    1994    164106.868000000000
-IRAN    1993    100245.659000000000
-IRAN    1992    73757.954000000000
-IRAQ    1998    21292.037700000000
-IRAQ    1997    128533.349600000000
-IRAQ    1996    141170.627200000000
-IRAQ    1995    16607.162400000000
-IRAQ    1994    16515.200800000000
-IRAQ    1993    138752.829700000000
-IRAQ    1992    71365.988600000000
-KENYA    1997    47549.359400000000
-KENYA    1996    1866.602400000000
-KENYA    1995    13480.573400000000
-KENYA    1994    54826.001200000000
-KENYA    1993    111983.003500000000
-KENYA    1992    7651.586600000000
-MOROCCO    1998    225961.305800000000
-MOROCCO    1997    288732.125700000000
-MOROCCO    1996    295243.101900000000
-MOROCCO    1995    255208.958100000000
-MOROCCO    1994    158194.081400000000
-MOROCCO    1993    159196.252800000000
-MOROCCO    1992    256151.425400000000
-PERU    1998    35151.868200000000
-PERU    1997    99779.319800000000
-PERU    1996    53735.256600000000
-PERU    1995    71954.316400000000
-PERU    1994    73084.555200000000
-PERU    1993    95623.498900000000
-PERU    1992    38212.418700000000
-UNITED KINGDOM    1998    176649.906500000000
-UNITED KINGDOM    1997    74705.259800000000
-UNITED KINGDOM    1996    62768.512900000000
-UNITED KINGDOM    1995    93466.755200000000
-UNITED KINGDOM    1994    89094.259900000000
-UNITED KINGDOM    1993    112886.574200000000
-UNITED KINGDOM    1992    142060.969000000000
-UNITED STATES    1997    111352.355900000000
-UNITED STATES    1996    78268.863800000000
-UNITED STATES    1995    251.227400000000
-UNITED STATES    1994    57303.150000000000
-UNITED STATES    1993    70350.592300000000
-UNITED STATES    1992    65369.761200000000
+ARGENTINA    1997    6575.4934
+ARGENTINA    1996    12913.1476
+ARGENTINA    1995    109908.3997
+ARGENTINA    1994    39271.1404
+ARGENTINA    1993    39770.6973
+ARGENTINA    1992    35740.0000
+ETHIOPIA    1998    24489.1496
+ETHIOPIA    1997    39665.2644
+ETHIOPIA    1996    113173.0956
+ETHIOPIA    1995    25732.7452
+ETHIOPIA    1994    93731.1008
+ETHIOPIA    1993    147385.8720
+ETHIOPIA    1992    66636.9616
+IRAN    1998    116681.1813
+IRAN    1997    50964.2584
+IRAN    1996    185552.5634
+IRAN    1995    103479.6512
+IRAN    1994    164106.8680
+IRAN    1993    100245.6590
+IRAN    1992    73757.9540
+IRAQ    1998    21292.0377
+IRAQ    1997    128533.3496
+IRAQ    1996    141170.6272
+IRAQ    1995    16607.1624
+IRAQ    1994    16515.2008
+IRAQ    1993    138752.8297
+IRAQ    1992    71365.9886
+KENYA    1997    47549.3594
+KENYA    1996    1866.6024
+KENYA    1995    13480.5734
+KENYA    1994    54826.0012
+KENYA    1993    111983.0035
+KENYA    1992    7651.5866
+MOROCCO    1998    225961.3058
+MOROCCO    1997    288732.1257
+MOROCCO    1996    295243.1019
+MOROCCO    1995    255208.9581
+MOROCCO    1994    158194.0814
+MOROCCO    1993    159196.2528
+MOROCCO    1992    256151.4254
+PERU    1998    35151.8682
+PERU    1997    99779.3198
+PERU    1996    53735.2566
+PERU    1995    71954.3164
+PERU    1994    73084.5552
+PERU    1993    95623.4989
+PERU    1992    38212.4187
+UNITED KINGDOM    1998    176649.9065
+UNITED KINGDOM    1997    74705.2598
+UNITED KINGDOM    1996    62768.5129
+UNITED KINGDOM    1995    93466.7552
+UNITED KINGDOM    1994    89094.2599
+UNITED KINGDOM    1993    112886.5742
+UNITED KINGDOM    1992    142060.9690
+UNITED STATES    1997    111352.3559
+UNITED STATES    1996    78268.8638
+UNITED STATES    1995    251.2274
+UNITED STATES    1994    57303.1500
+UNITED STATES    1993    70350.5923
+UNITED STATES    1992    65369.7612
 select * from result_scan(last_query_id()) as u;
 nation    o_year    sum_profit
-ARGENTINA    1997    6575.4934000000
-ARGENTINA    1996    12913.1476000000
-ARGENTINA    1995    109908.3997000000
-ARGENTINA    1994    39271.1404000000
-ARGENTINA    1993    39770.6973000000
-ARGENTINA    1992    35740.0000000000
-ETHIOPIA    1998    24489.1496000000
-ETHIOPIA    1997    39665.2644000000
-ETHIOPIA    1996    113173.0956000000
-ETHIOPIA    1995    25732.7452000000
-ETHIOPIA    1994    93731.1008000000
-ETHIOPIA    1993    147385.8720000000
-ETHIOPIA    1992    66636.9616000000
-IRAN    1998    116681.1813000000
-IRAN    1997    50964.2584000000
-IRAN    1996    185552.5634000000
-IRAN    1995    103479.6512000000
-IRAN    1994    164106.8680000000
-IRAN    1993    100245.6590000000
-IRAN    1992    73757.9540000000
-IRAQ    1998    21292.0377000000
-IRAQ    1997    128533.3496000000
-IRAQ    1996    141170.6272000000
-IRAQ    1995    16607.1624000000
-IRAQ    1994    16515.2008000000
-IRAQ    1993    138752.8297000000
-IRAQ    1992    71365.9886000000
-KENYA    1997    47549.3594000000
-KENYA    1996    1866.6024000000
-KENYA    1995    13480.5734000000
-KENYA    1994    54826.0012000000
-KENYA    1993    111983.0035000000
-KENYA    1992    7651.5866000000
-MOROCCO    1998    225961.3058000000
-MOROCCO    1997    288732.1257000000
-MOROCCO    1996    295243.1019000000
-MOROCCO    1995    255208.9581000000
-MOROCCO    1994    158194.0814000000
-MOROCCO    1993    159196.2528000000
-MOROCCO    1992    256151.4254000000
-PERU    1998    35151.8682000000
-PERU    1997    99779.3198000000
-PERU    1996    53735.2566000000
-PERU    1995    71954.3164000000
-PERU    1994    73084.5552000000
-PERU    1993    95623.4989000000
-PERU    1992    38212.4187000000
-UNITED KINGDOM    1998    176649.9065000000
-UNITED KINGDOM    1997    74705.2598000000
-UNITED KINGDOM    1996    62768.5129000000
-UNITED KINGDOM    1995    93466.7552000000
-UNITED KINGDOM    1994    89094.2599000000
-UNITED KINGDOM    1993    112886.5742000000
-UNITED KINGDOM    1992    142060.9690000000
-UNITED STATES    1997    111352.3559000000
-UNITED STATES    1996    78268.8638000000
-UNITED STATES    1995    251.2274000000
-UNITED STATES    1994    57303.1500000000
-UNITED STATES    1993    70350.5923000000
-UNITED STATES    1992    65369.7612000000
+ARGENTINA    1997    6575.4934
+ARGENTINA    1996    12913.1476
+ARGENTINA    1995    109908.3997
+ARGENTINA    1994    39271.1404
+ARGENTINA    1993    39770.6973
+ARGENTINA    1992    35740.0000
+ETHIOPIA    1998    24489.1496
+ETHIOPIA    1997    39665.2644
+ETHIOPIA    1996    113173.0956
+ETHIOPIA    1995    25732.7452
+ETHIOPIA    1994    93731.1008
+ETHIOPIA    1993    147385.8720
+ETHIOPIA    1992    66636.9616
+IRAN    1998    116681.1813
+IRAN    1997    50964.2584
+IRAN    1996    185552.5634
+IRAN    1995    103479.6512
+IRAN    1994    164106.8680
+IRAN    1993    100245.6590
+IRAN    1992    73757.9540
+IRAQ    1998    21292.0377
+IRAQ    1997    128533.3496
+IRAQ    1996    141170.6272
+IRAQ    1995    16607.1624
+IRAQ    1994    16515.2008
+IRAQ    1993    138752.8297
+IRAQ    1992    71365.9886
+KENYA    1997    47549.3594
+KENYA    1996    1866.6024
+KENYA    1995    13480.5734
+KENYA    1994    54826.0012
+KENYA    1993    111983.0035
+KENYA    1992    7651.5866
+MOROCCO    1998    225961.3058
+MOROCCO    1997    288732.1257
+MOROCCO    1996    295243.1019
+MOROCCO    1995    255208.9581
+MOROCCO    1994    158194.0814
+MOROCCO    1993    159196.2528
+MOROCCO    1992    256151.4254
+PERU    1998    35151.8682
+PERU    1997    99779.3198
+PERU    1996    53735.2566
+PERU    1995    71954.3164
+PERU    1994    73084.5552
+PERU    1993    95623.4989
+PERU    1992    38212.4187
+UNITED KINGDOM    1998    176649.9065
+UNITED KINGDOM    1997    74705.2598
+UNITED KINGDOM    1996    62768.5129
+UNITED KINGDOM    1995    93466.7552
+UNITED KINGDOM    1994    89094.2599
+UNITED KINGDOM    1993    112886.5742
+UNITED KINGDOM    1992    142060.9690
+UNITED STATES    1997    111352.3559
+UNITED STATES    1996    78268.8638
+UNITED STATES    1995    251.2274
+UNITED STATES    1994    57303.1500
+UNITED STATES    1993    70350.5923
+UNITED STATES    1992    65369.7612
 select
 c_custkey,
 c_name,
@@ -502,48 +502,48 @@ revenue desc
 limit 20
 ;
 c_custkey    c_name    revenue    c_acctbal    n_name    c_address    c_phone    c_comment
-70    Customer#000000070    316759.420800000000    4867.52    RUSSIA    mFowIuhnHjp2GjCiYYavkW kUwOjIaTCQ    32-828-107-2832    fter the special asymptotes. ideas after the unusual frets cajole quickly regular pinto be
-109    Customer#000000109    272732.469800000000    -716.10    MOZAMBIQUE    OOOkYBgCMzgMQXUmkocoLb56rfrdWp2NE2c    26-992-422-8153    es. fluffily final dependencies sleep along the blithely even pinto beans. final deposits haggle furiously furiou
-106    Customer#000000106    175284.398300000000    3288.42    ARGENTINA    xGCOEAUjUNG    11-751-989-4627    lose slyly. ironic accounts along the evenly regular theodolites wake about the special, final gifts. 
-2    Customer#000000002    121173.008100000000    121.65    JORDAN    XSTf4,NCwDVaWNe6tEgvwfmRchLXak    23-768-687-3665    l accounts. blithely ironic theodolites integrate boldly: caref
-100    Customer#000000100    113840.429400000000    9889.89    SAUDI ARABIA    fptUABXcmkC5Wx    30-749-445-4907    was furiously fluffily quiet deposits. silent, pending requests boost against 
-58    Customer#000000058    103790.593200000000    6478.46    JORDAN    g9ap7Dk1Sv9fcXEWjpMYpBZIRUohi T    23-244-493-2508    ideas. ironic ideas affix furiously express, final instructions. regular excuses use quickly e
-94    Customer#000000094    100840.002000000000    5500.11    INDONESIA    IfVNIN9KtkScJ9dUjK3Pg5gY1aFeaXewwf    19-953-499-8833    latelets across the bold, final requests sleep according to the fluffily bold accounts. unusual deposits amon
-97    Customer#000000097    99194.231700000000    2164.48    PERU    OApyejbhJG,0Iw3j rd1M    27-588-919-5638    haggle slyly. bold, special ideas are blithely above the thinly bold theo
-101    Customer#000000101    90564.647800000000    7470.96    BRAZIL    sMmL2rNeHDltovSm Y    12-514-298-3699     sleep. pending packages detect slyly ironic pack
-52    Customer#000000052    85250.331000000000    5630.28    IRAQ    7 QOqGqqSy9jfV51BC71jcHJSD0    21-186-284-5998    ic platelets use evenly even accounts. stealthy theodolites cajole furiou
-142    Customer#000000142    74220.110700000000    2209.81    INDONESIA    AnJ5lxtLjioClr2khl9pb8NLxG2,    19-407-425-2584    . even, express theodolites upo
-59    Customer#000000059    71312.358600000000    3458.60    ARGENTINA    zLOCP0wh92OtBihgspOGl4    11-355-584-3112    ously final packages haggle blithely after the express deposits. furiou
-40    Customer#000000040    69690.697200000000    1335.30    CANADA    gOnGWAyhSV1ofv    13-652-915-8939    rges impress after the slyly ironic courts. foxes are. blithely 
-8    Customer#000000008    67088.813400000000    6819.74    PERU    I0B10bB0AymmC, 0PrRYBCP1yGJ8xcBPmWhl5    27-147-574-9335    among the slyly regular theodolites kindle blithely courts. carefully even theodolites haggle slyly along the ide
-49    Customer#000000049    66789.796000000000    4573.94    IRAN    cNgAeX7Fqrdf7HQN9EwjUa4nxT,68L FKAxzl    20-908-631-4424    nusual foxes! fluffily pending packages maintain to the regular 
-26    Customer#000000026    66653.829600000000    5182.05    RUSSIA    8ljrc5ZeMl7UciP    32-363-455-4837    c requests use furiously ironic requests. slyly ironic dependencies us
-77    Customer#000000077    65603.604000000000    1738.87    PERU    4tAE5KdMFGD4byHtXF92vx    27-269-357-4674    uffily silent requests. carefully ironic asymptotes among the ironic hockey players are carefully bli
-136    Customer#000000136    64024.453200000000    -842.39    GERMANY    QoLsJ0v5C1IQbh,DS1    17-501-210-4726    ackages sleep ironic, final courts. even requests above the blithely bold requests g
-112    Customer#000000112    62915.441600000000    2953.35    ROMANIA    RcfgG3bO7QeCnfjqJT1    29-233-262-8382    rmanently unusual multipliers. blithely ruthless deposits are furiously along the
-80    Customer#000000080    57993.839400000000    7383.53    ALGERIA    K,vtXp8qYB     10-267-172-7101    tect among the dependencies. bold accounts engage closely even pinto beans. ca
+70    Customer#000000070    316759.4208    4867.52    RUSSIA    mFowIuhnHjp2GjCiYYavkW kUwOjIaTCQ    32-828-107-2832    fter the special asymptotes. ideas after the unusual frets cajole quickly regular pinto be
+109    Customer#000000109    272732.4698    -716.10    MOZAMBIQUE    OOOkYBgCMzgMQXUmkocoLb56rfrdWp2NE2c    26-992-422-8153    es. fluffily final dependencies sleep along the blithely even pinto beans. final deposits haggle furiously furiou
+106    Customer#000000106    175284.3983    3288.42    ARGENTINA    xGCOEAUjUNG    11-751-989-4627    lose slyly. ironic accounts along the evenly regular theodolites wake about the special, final gifts. 
+2    Customer#000000002    121173.0081    121.65    JORDAN    XSTf4,NCwDVaWNe6tEgvwfmRchLXak    23-768-687-3665    l accounts. blithely ironic theodolites integrate boldly: caref
+100    Customer#000000100    113840.4294    9889.89    SAUDI ARABIA    fptUABXcmkC5Wx    30-749-445-4907    was furiously fluffily quiet deposits. silent, pending requests boost against 
+58    Customer#000000058    103790.5932    6478.46    JORDAN    g9ap7Dk1Sv9fcXEWjpMYpBZIRUohi T    23-244-493-2508    ideas. ironic ideas affix furiously express, final instructions. regular excuses use quickly e
+94    Customer#000000094    100840.0020    5500.11    INDONESIA    IfVNIN9KtkScJ9dUjK3Pg5gY1aFeaXewwf    19-953-499-8833    latelets across the bold, final requests sleep according to the fluffily bold accounts. unusual deposits amon
+97    Customer#000000097    99194.2317    2164.48    PERU    OApyejbhJG,0Iw3j rd1M    27-588-919-5638    haggle slyly. bold, special ideas are blithely above the thinly bold theo
+101    Customer#000000101    90564.6478    7470.96    BRAZIL    sMmL2rNeHDltovSm Y    12-514-298-3699     sleep. pending packages detect slyly ironic pack
+52    Customer#000000052    85250.3310    5630.28    IRAQ    7 QOqGqqSy9jfV51BC71jcHJSD0    21-186-284-5998    ic platelets use evenly even accounts. stealthy theodolites cajole furiou
+142    Customer#000000142    74220.1107    2209.81    INDONESIA    AnJ5lxtLjioClr2khl9pb8NLxG2,    19-407-425-2584    . even, express theodolites upo
+59    Customer#000000059    71312.3586    3458.60    ARGENTINA    zLOCP0wh92OtBihgspOGl4    11-355-584-3112    ously final packages haggle blithely after the express deposits. furiou
+40    Customer#000000040    69690.6972    1335.30    CANADA    gOnGWAyhSV1ofv    13-652-915-8939    rges impress after the slyly ironic courts. foxes are. blithely 
+8    Customer#000000008    67088.8134    6819.74    PERU    I0B10bB0AymmC, 0PrRYBCP1yGJ8xcBPmWhl5    27-147-574-9335    among the slyly regular theodolites kindle blithely courts. carefully even theodolites haggle slyly along the ide
+49    Customer#000000049    66789.7960    4573.94    IRAN    cNgAeX7Fqrdf7HQN9EwjUa4nxT,68L FKAxzl    20-908-631-4424    nusual foxes! fluffily pending packages maintain to the regular 
+26    Customer#000000026    66653.8296    5182.05    RUSSIA    8ljrc5ZeMl7UciP    32-363-455-4837    c requests use furiously ironic requests. slyly ironic dependencies us
+77    Customer#000000077    65603.6040    1738.87    PERU    4tAE5KdMFGD4byHtXF92vx    27-269-357-4674    uffily silent requests. carefully ironic asymptotes among the ironic hockey players are carefully bli
+136    Customer#000000136    64024.4532    -842.39    GERMANY    QoLsJ0v5C1IQbh,DS1    17-501-210-4726    ackages sleep ironic, final courts. even requests above the blithely bold requests g
+112    Customer#000000112    62915.4416    2953.35    ROMANIA    RcfgG3bO7QeCnfjqJT1    29-233-262-8382    rmanently unusual multipliers. blithely ruthless deposits are furiously along the
+80    Customer#000000080    57993.8394    7383.53    ALGERIA    K,vtXp8qYB     10-267-172-7101    tect among the dependencies. bold accounts engage closely even pinto beans. ca
 select * from result_scan(last_query_id()) as u;
 c_custkey    c_name    revenue    c_acctbal    n_name    c_address    c_phone    c_comment
-70    Customer#000000070    316759.4208000000    4867.52    RUSSIA    mFowIuhnHjp2GjCiYYavkW kUwOjIaTCQ    32-828-107-2832    fter the special asymptotes. ideas after the unusual frets cajole quickly regular pinto be
-109    Customer#000000109    272732.4698000000    -716.10    MOZAMBIQUE    OOOkYBgCMzgMQXUmkocoLb56rfrdWp2NE2c    26-992-422-8153    es. fluffily final dependencies sleep along the blithely even pinto beans. final deposits haggle furiously furiou
-106    Customer#000000106    175284.3983000000    3288.42    ARGENTINA    xGCOEAUjUNG    11-751-989-4627    lose slyly. ironic accounts along the evenly regular theodolites wake about the special, final gifts. 
-2    Customer#000000002    121173.0081000000    121.65    JORDAN    XSTf4,NCwDVaWNe6tEgvwfmRchLXak    23-768-687-3665    l accounts. blithely ironic theodolites integrate boldly: caref
-100    Customer#000000100    113840.4294000000    9889.89    SAUDI ARABIA    fptUABXcmkC5Wx    30-749-445-4907    was furiously fluffily quiet deposits. silent, pending requests boost against 
-58    Customer#000000058    103790.5932000000    6478.46    JORDAN    g9ap7Dk1Sv9fcXEWjpMYpBZIRUohi T    23-244-493-2508    ideas. ironic ideas affix furiously express, final instructions. regular excuses use quickly e
-94    Customer#000000094    100840.0020000000    5500.11    INDONESIA    IfVNIN9KtkScJ9dUjK3Pg5gY1aFeaXewwf    19-953-499-8833    latelets across the bold, final requests sleep according to the fluffily bold accounts. unusual deposits amon
-97    Customer#000000097    99194.2317000000    2164.48    PERU    OApyejbhJG,0Iw3j rd1M    27-588-919-5638    haggle slyly. bold, special ideas are blithely above the thinly bold theo
-101    Customer#000000101    90564.6478000000    7470.96    BRAZIL    sMmL2rNeHDltovSm Y    12-514-298-3699     sleep. pending packages detect slyly ironic pack
-52    Customer#000000052    85250.3310000000    5630.28    IRAQ    7 QOqGqqSy9jfV51BC71jcHJSD0    21-186-284-5998    ic platelets use evenly even accounts. stealthy theodolites cajole furiou
-142    Customer#000000142    74220.1107000000    2209.81    INDONESIA    AnJ5lxtLjioClr2khl9pb8NLxG2,    19-407-425-2584    . even, express theodolites upo
-59    Customer#000000059    71312.3586000000    3458.60    ARGENTINA    zLOCP0wh92OtBihgspOGl4    11-355-584-3112    ously final packages haggle blithely after the express deposits. furiou
-40    Customer#000000040    69690.6972000000    1335.30    CANADA    gOnGWAyhSV1ofv    13-652-915-8939    rges impress after the slyly ironic courts. foxes are. blithely 
-8    Customer#000000008    67088.8134000000    6819.74    PERU    I0B10bB0AymmC, 0PrRYBCP1yGJ8xcBPmWhl5    27-147-574-9335    among the slyly regular theodolites kindle blithely courts. carefully even theodolites haggle slyly along the ide
-49    Customer#000000049    66789.7960000000    4573.94    IRAN    cNgAeX7Fqrdf7HQN9EwjUa4nxT,68L FKAxzl    20-908-631-4424    nusual foxes! fluffily pending packages maintain to the regular 
-26    Customer#000000026    66653.8296000000    5182.05    RUSSIA    8ljrc5ZeMl7UciP    32-363-455-4837    c requests use furiously ironic requests. slyly ironic dependencies us
-77    Customer#000000077    65603.6040000000    1738.87    PERU    4tAE5KdMFGD4byHtXF92vx    27-269-357-4674    uffily silent requests. carefully ironic asymptotes among the ironic hockey players are carefully bli
-136    Customer#000000136    64024.4532000000    -842.39    GERMANY    QoLsJ0v5C1IQbh,DS1    17-501-210-4726    ackages sleep ironic, final courts. even requests above the blithely bold requests g
-112    Customer#000000112    62915.4416000000    2953.35    ROMANIA    RcfgG3bO7QeCnfjqJT1    29-233-262-8382    rmanently unusual multipliers. blithely ruthless deposits are furiously along the
-80    Customer#000000080    57993.8394000000    7383.53    ALGERIA    K,vtXp8qYB     10-267-172-7101    tect among the dependencies. bold accounts engage closely even pinto beans. ca
+70    Customer#000000070    316759.4208    4867.52    RUSSIA    mFowIuhnHjp2GjCiYYavkW kUwOjIaTCQ    32-828-107-2832    fter the special asymptotes. ideas after the unusual frets cajole quickly regular pinto be
+109    Customer#000000109    272732.4698    -716.10    MOZAMBIQUE    OOOkYBgCMzgMQXUmkocoLb56rfrdWp2NE2c    26-992-422-8153    es. fluffily final dependencies sleep along the blithely even pinto beans. final deposits haggle furiously furiou
+106    Customer#000000106    175284.3983    3288.42    ARGENTINA    xGCOEAUjUNG    11-751-989-4627    lose slyly. ironic accounts along the evenly regular theodolites wake about the special, final gifts. 
+2    Customer#000000002    121173.0081    121.65    JORDAN    XSTf4,NCwDVaWNe6tEgvwfmRchLXak    23-768-687-3665    l accounts. blithely ironic theodolites integrate boldly: caref
+100    Customer#000000100    113840.4294    9889.89    SAUDI ARABIA    fptUABXcmkC5Wx    30-749-445-4907    was furiously fluffily quiet deposits. silent, pending requests boost against 
+58    Customer#000000058    103790.5932    6478.46    JORDAN    g9ap7Dk1Sv9fcXEWjpMYpBZIRUohi T    23-244-493-2508    ideas. ironic ideas affix furiously express, final instructions. regular excuses use quickly e
+94    Customer#000000094    100840.0020    5500.11    INDONESIA    IfVNIN9KtkScJ9dUjK3Pg5gY1aFeaXewwf    19-953-499-8833    latelets across the bold, final requests sleep according to the fluffily bold accounts. unusual deposits amon
+97    Customer#000000097    99194.2317    2164.48    PERU    OApyejbhJG,0Iw3j rd1M    27-588-919-5638    haggle slyly. bold, special ideas are blithely above the thinly bold theo
+101    Customer#000000101    90564.6478    7470.96    BRAZIL    sMmL2rNeHDltovSm Y    12-514-298-3699     sleep. pending packages detect slyly ironic pack
+52    Customer#000000052    85250.3310    5630.28    IRAQ    7 QOqGqqSy9jfV51BC71jcHJSD0    21-186-284-5998    ic platelets use evenly even accounts. stealthy theodolites cajole furiou
+142    Customer#000000142    74220.1107    2209.81    INDONESIA    AnJ5lxtLjioClr2khl9pb8NLxG2,    19-407-425-2584    . even, express theodolites upo
+59    Customer#000000059    71312.3586    3458.60    ARGENTINA    zLOCP0wh92OtBihgspOGl4    11-355-584-3112    ously final packages haggle blithely after the express deposits. furiou
+40    Customer#000000040    69690.6972    1335.30    CANADA    gOnGWAyhSV1ofv    13-652-915-8939    rges impress after the slyly ironic courts. foxes are. blithely 
+8    Customer#000000008    67088.8134    6819.74    PERU    I0B10bB0AymmC, 0PrRYBCP1yGJ8xcBPmWhl5    27-147-574-9335    among the slyly regular theodolites kindle blithely courts. carefully even theodolites haggle slyly along the ide
+49    Customer#000000049    66789.7960    4573.94    IRAN    cNgAeX7Fqrdf7HQN9EwjUa4nxT,68L FKAxzl    20-908-631-4424    nusual foxes! fluffily pending packages maintain to the regular 
+26    Customer#000000026    66653.8296    5182.05    RUSSIA    8ljrc5ZeMl7UciP    32-363-455-4837    c requests use furiously ironic requests. slyly ironic dependencies us
+77    Customer#000000077    65603.6040    1738.87    PERU    4tAE5KdMFGD4byHtXF92vx    27-269-357-4674    uffily silent requests. carefully ironic asymptotes among the ironic hockey players are carefully bli
+136    Customer#000000136    64024.4532    -842.39    GERMANY    QoLsJ0v5C1IQbh,DS1    17-501-210-4726    ackages sleep ironic, final courts. even requests above the blithely bold requests g
+112    Customer#000000112    62915.4416    2953.35    ROMANIA    RcfgG3bO7QeCnfjqJT1    29-233-262-8382    rmanently unusual multipliers. blithely ruthless deposits are furiously along the
+80    Customer#000000080    57993.8394    7383.53    ALGERIA    K,vtXp8qYB     10-267-172-7101    tect among the dependencies. bold accounts engage closely even pinto beans. ca
 select
 ps_partkey,
 sum(ps_supplycost * ps_availqty) as value
@@ -741,10 +741,10 @@ order by
 s_suppkey
 ;
 s_suppkey    s_name    s_address    s_phone    total_revenue
-1    Supplier#000000001     N kD4on9OM Ipw3,gf0JBoQDd7tgrzrddZ    27-918-335-1736    863528.216200000000
+1    Supplier#000000001     N kD4on9OM Ipw3,gf0JBoQDd7tgrzrddZ    27-918-335-1736    863528.2162
 select * from result_scan(last_query_id()) as u;
 s_suppkey    s_name    s_address    s_phone    total_revenue
-1    Supplier#000000001     N kD4on9OM Ipw3,gf0JBoQDd7tgrzrddZ    27-918-335-1736    863528.2162000000
+1    Supplier#000000001     N kD4on9OM Ipw3,gf0JBoQDd7tgrzrddZ    27-918-335-1736    863528.2162
 select
 p_brand,
 p_type,
