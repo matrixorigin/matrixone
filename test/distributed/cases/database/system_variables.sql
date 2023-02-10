@@ -81,6 +81,7 @@ create table t(
 show indexes from t;
 drop database db1;
 -- @session
+drop account acc_idx;
 
 
 -- Support More System Views
