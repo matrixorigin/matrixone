@@ -57,6 +57,9 @@ type PartitionReader struct {
 	currentFileName string
 }
 
+// BlockBatch is used to record the metaLoc info
+// for the s3 block written by current txn, it's
+// stored in the txn writes
 type BlockBatch struct {
 	metas  []string
 	idx    int

@@ -1273,9 +1273,32 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 	return c.newMergeScope(ss2)
 }
 
+// DeleteMergeScope need to assure this:
+// one block can only delete by one and the same
+// CN, so we need to transfer the rows from the
+// the same block to one and the same CN to perform
+// the deletion operators.
 func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scope {
 	//Todo: implemet delete merge
-	return c.newMergeScope(ss)
+	ss2 := make([]*Scope, 0, len(ss))
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
+		ss2 = append(ss2, s)
+	}
+	delete := &vm.Instruction{
+		Op:  vm.Deletion,
+		Arg: arg,
+	}
+	//Todo: need to build dispatch operator
+	for i := range ss2 {
+		arg.IsRemote = true
+		arg.IBucket = uint64(i)
+		arg.NBucket = uint64(len(ss2))
+		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(delete, nil))
+	}
+	return c.newMergeScope(ss2)
 }
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {

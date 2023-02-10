@@ -384,6 +384,17 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			InsertCtx: t.InsertCtx,
 			// HasAutoCol:           t.HasAutoCol,
 		}
+	case vm.Deletion:
+		t := sourceIns.Arg.(*deletion.Argument)
+		res.Arg = &deletion.Argument{
+			Ts:           t.Ts,
+			DeleteCtx:    t.DeleteCtx,
+			AffectedRows: t.AffectedRows,
+			Engine:       t.Engine,
+			IsRemote:     t.IsRemote,
+			IBucket:      t.IBucket,
+			NBucket:      t.NBucket,
+		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}

@@ -15,8 +15,11 @@
 package colexec
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,6 +43,12 @@ type tableInfo struct {
 	idxList         []int32
 }
 
+var prefix []byte
+
+func init() {
+	prefix = make([]byte, 8, 8)
+	binary.BigEndian.PutUint64(prefix, math.MaxUint64)
+}
 func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int32, rels []engine.Relation) (uint64, error) {
 	var affectedRows uint64
 	for i, idx := range idxList {
@@ -520,4 +529,26 @@ func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx con
 		}
 	}
 	return nil
+}
+
+// remember that for one row data,it have a
+// rowId, if it's from the DN snapshot blocks,so the
+// highest bit is always 0, and if it's from
+// the CN blocks, it will be always 1, and at last,
+// if it's from the CN txn' writes, the highest pre-egiht
+// bytes are 0xFFFF....F, so use these info to distinct them
+// the return can be 1,0,-1
+// 0 stands for the DN block data
+// 1 stands for the CN block data
+// -1 stands for the txn's writes data
+func WhichData(rowId types.Rowid) int8 {
+	if bytes.Compare(rowId[:8], prefix) == 0 {
+		return -1
+	} else if (rowId[:][0]>>7)&1 == 1 {
+		// for Cn data, the prefix-eight won't be
+		// all bit 1
+		return 1
+	} else {
+		return 0
+	}
 }
