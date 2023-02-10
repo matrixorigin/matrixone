@@ -4787,4 +4787,3 @@ func getAccountId(ctx context.Context) uint32 {
 	}
 	return accountId
 }
-
