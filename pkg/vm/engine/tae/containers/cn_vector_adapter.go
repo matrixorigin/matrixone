@@ -32,7 +32,7 @@ import (
 type CnTaeVector[T any] struct {
 	downstreamVector *cnVector.Vector
 
-	// Below 2 attributes are specific to "Previous DN TAE Vector" implementation
+	// Below 2 attributes,ie isNullable & mpool, are specific to "Previous DN TAE Vector" implementation
 
 	// Used in Equals(). Note: We can't use cnVector.Nsp.Np to replace this flag, as this information
 	// will be lost in Marshalling/UnMarshalling
