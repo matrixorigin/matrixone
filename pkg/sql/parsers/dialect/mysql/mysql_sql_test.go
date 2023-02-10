@@ -616,6 +616,12 @@ var (
 	}, {
 		input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
+		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+	}, {
+		input:  "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+	}, {
 		input: "create table t (a int, b char, unique key idx (a, b))",
 	}, {
 		input: "create table t (a int, b char, index if not exists idx (a, b))",

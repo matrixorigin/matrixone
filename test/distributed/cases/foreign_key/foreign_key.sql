@@ -1,9 +1,7 @@
 --foreign key is varchar,default ON DELETE/update option
 create table fk_01(col1 varchar(30) not null primary key,col2 int);
 create table fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col2) REFERENCES fk_01(col1));
--- @bvt:issue#7934
 show create table fk_02;
--- @bvt:issue
 insert into fk_01 values ('90',5983),('100',734),('190',50);
 insert into fk_02(col2,col3) values ('90',5),('90',4),('100',0),(NULL,80);
 select * from fk_01;

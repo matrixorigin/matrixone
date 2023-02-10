@@ -5469,6 +5469,8 @@ constaint_def:
             switch v := $2.(type) {
             case *tree.PrimaryKeyIndex:
                 v.Name = $1
+            case *tree.ForeignKey:
+                v.Name = $1
             }
         }
         $$ = $2
