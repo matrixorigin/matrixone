@@ -6176,3 +6176,80 @@ handleFailed:
 	return err
 
 }
+
+func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
+	var err error
+	var sql string
+	var accountName string
+	var datname string
+	var erArray []ExecResult
+	var configuration string
+
+	accountId := ses.GetTxnCompileCtx().GetAccountId()
+	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
+		bh := ses.GetBackgroundExec(ctx)
+		defer bh.Close()
+
+		err = bh.Exec(ctx, "begin")
+		if err != nil {
+			goto handleFailed
+		}
+
+		//step 1: check account exists or not
+		sql = `select account_name from mo_catalog.mo_account where account_id = %d;`
+		sql = fmt.Sprintf(sql, accountId)
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			goto handleFailed
+		}
+
+		if execResultArrayHasData(erArray) {
+			accountName, err = erArray[0].GetString(ctx, 0, 0)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+
+		//step 2: insert the record
+		datname = string(createDatabaseStmt.Name)
+		configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
+		sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountName, datname, configuration)
+
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+
+	handleFailed:
+		//ROLLBACK the transaction
+		rbErr := bh.Exec(ctx, "rollback;")
+		if rbErr != nil {
+			return rbErr
+		}
+		return err
+	}
+	return nil
+
+}
+
+func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
+	var datname string
+
+	if deleteDatabaseStmt, ok := stmt.(*tree.DropDatabase); ok {
+		datname = string(deleteDatabaseStmt.Name)
+		deletesql := getSqlForDeleteMysqlCompatbilityMode(datname)
+
+		bh := ses.GetBackgroundExec(ctx)
+		err := bh.Exec(ctx, deletesql)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
