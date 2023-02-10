@@ -45,12 +45,14 @@ func newWaiter() *waiter {
 		waiters: newWaiterQueue(),
 	}
 	w.setFinalizer()
-	w.status.Store(waiting)
+	w.status = waiting
 	return w
 }
 
+type waiterStatus int32
+
 const (
-	waiting int32 = iota
+	waiting waiterStatus = iota
 	completed
 )
 
@@ -77,10 +79,10 @@ const (
 // 17. waiter-k1-B.wait() returned and get the lock
 type waiter struct {
 	txnID    []byte
-	status   atomic.Int32
+	status   waiterStatus
 	c        chan error
 	waiters  waiterQueue
-	refCount atomic.Int32
+	refCount int32
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -94,11 +96,12 @@ func (w *waiter) setFinalizer() {
 }
 
 func (w *waiter) ref() int32 {
-	return w.refCount.Add(1)
+	w.refCount++
+	return w.refCount
 }
 
 func (w *waiter) unref() {
-	n := w.refCount.Add(-1)
+	n := atomic.AddInt32(&w.refCount, -1)
 	if n < 0 {
 		panic("BUG: invalid ref count")
 	}
@@ -118,11 +121,7 @@ func (w *waiter) add(waiter ...*waiter) {
 }
 
 func (w *waiter) setCompleted() {
-	w.status.Store(completed)
-}
-
-func (w *waiter) setWaiting() {
-	w.status.Store(waiting)
+	w.status = completed
 }
 
 func (w *waiter) mustGetNotifiedValue() error {
@@ -135,13 +134,14 @@ func (w *waiter) mustGetNotifiedValue() error {
 }
 
 func (w *waiter) resetState() {
-	if !w.status.CompareAndSwap(completed, waiting) {
-		panic(fmt.Sprintf("BUG: waiter's status cannot be %d", w.status.Load()))
+	if w.status != completed {
+		panic(fmt.Sprintf("BUG: waiter's status cannot be %d", w.status))
 	}
+	w.status = waiting
 }
 
 func (w *waiter) wait(ctx context.Context) error {
-	status := w.status.Load()
+	status := w.status
 	if status == completed {
 		return w.mustGetNotifiedValue()
 	}
@@ -149,31 +149,31 @@ func (w *waiter) wait(ctx context.Context) error {
 		panic(fmt.Sprintf("BUG: waiter's status cannot be %d", status))
 	}
 
+	if w.beforeSwapStatusAdjustFunc != nil {
+		w.beforeSwapStatusAdjustFunc()
+	}
+
 	select {
 	case err := <-w.c:
 		w.setCompleted()
 		return err
 	case <-ctx.Done():
-	}
-
-	if w.beforeSwapStatusAdjustFunc != nil {
-		w.beforeSwapStatusAdjustFunc()
+		select {
+		case err := <-w.c:
+			w.setCompleted()
+			return err
+		default:
+		}
 	}
 
 	// context is timeout, and status not changed, no concurrent happen
-	if w.status.CompareAndSwap(status, completed) {
-		return ctx.Err()
-	}
-
-	// notify and timeout are concurrently issued, we use real result to replace
-	// timeout error
-	w.setCompleted()
-	return w.mustGetNotifiedValue()
+	w.status = completed
+	return ctx.Err()
 }
 
 // notify return false means this waiter is completed, cannot be used to notify
 func (w *waiter) notify(value error) bool {
-	status := w.status.Load()
+	status := w.status
 	if status == completed {
 		return false
 	}
@@ -184,11 +184,8 @@ func (w *waiter) notify(value error) bool {
 
 	// if status changed, notify and timeout are concurrently issued, need
 	// try.
-	if w.status.CompareAndSwap(status, completed) {
-		w.c <- value
-		return true
-	}
-	return false
+	w.c <- value
+	return true
 }
 
 // close returns the next waiter to hold the lock, and others waiters will move
@@ -196,9 +193,6 @@ func (w *waiter) notify(value error) bool {
 func (w *waiter) close() *waiter {
 	// no new waiters can be added during close.
 	nextHolder := w.fetchNextHolder()
-	if nextHolder != nil {
-		nextHolder.unref()
-	}
 	w.unref()
 	return nextHolder
 }
@@ -210,6 +204,7 @@ func (w *waiter) fetchNextHolder() *waiter {
 	next := w.awakeNextWaiter()
 	for {
 		if next.notify(nil) {
+			next.unref()
 			return next
 		}
 		if next.waiters.len() == 0 {
@@ -220,7 +215,7 @@ func (w *waiter) fetchNextHolder() *waiter {
 }
 
 func (w *waiter) awakeNextWaiter() *waiter {
-	next, remains := w.waiters.mustGetHeadAndTail()
+	next, remains := w.waiters.pop()
 	next.add(remains...)
 	w.waiters.reset()
 	return next
@@ -231,7 +226,7 @@ func (w *waiter) reset() {
 		panic("BUG: waiter should be empty.")
 	}
 	w.beforeSwapStatusAdjustFunc = nil
-	w.setWaiting()
+	w.status = waiting
 	w.waiters.reset()
 	waiterPool.Put(w)
 }

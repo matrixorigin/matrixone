@@ -21,8 +21,7 @@ import (
 type waiterQueue interface {
 	len() int
 	reset()
-	mustGet() *waiter
-	mustGetHeadAndTail() (*waiter, []*waiter)
+	pop() (*waiter, []*waiter)
 	put(...*waiter)
 	iter(func([]byte) bool)
 }
@@ -43,20 +42,7 @@ func (q *sliceBasedWaiterQueue) len() int {
 	return len(q.waiters) - q.offset
 }
 
-func (q *sliceBasedWaiterQueue) mustGet() *waiter {
-	if q.len() == 0 {
-		panic("BUG: no waiter in queue")
-	}
-
-	q.Lock()
-	defer q.Unlock()
-	v := q.waiters[q.offset]
-	q.waiters[q.offset] = nil
-	q.offset++
-	return v
-}
-
-func (q *sliceBasedWaiterQueue) mustGetHeadAndTail() (*waiter, []*waiter) {
+func (q *sliceBasedWaiterQueue) pop() (*waiter, []*waiter) {
 	if q.len() == 0 {
 		panic("BUG: no waiter in queue")
 	}
@@ -72,7 +58,11 @@ func (q *sliceBasedWaiterQueue) mustGetHeadAndTail() (*waiter, []*waiter) {
 func (q *sliceBasedWaiterQueue) put(w ...*waiter) {
 	q.Lock()
 	defer q.Unlock()
-	q.waiters = append(q.waiters, w...)
+	if len(q.waiters) == 0 {
+		q.waiters = w
+	} else {
+		q.waiters = append(q.waiters, w...)
+	}
 }
 
 func (q *sliceBasedWaiterQueue) iter(fn func([]byte) bool) {

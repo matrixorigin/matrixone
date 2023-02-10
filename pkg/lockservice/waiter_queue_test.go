@@ -25,7 +25,6 @@ func TestPut(t *testing.T) {
 	w := acquireWaiter([]byte("w"))
 	q.put(w)
 	assert.Equal(t, 1, len(q.waiters))
-	assert.Equal(t, 0, q.offset)
 }
 
 func TestLen(t *testing.T) {
@@ -35,17 +34,9 @@ func TestLen(t *testing.T) {
 	q.put(acquireWaiter([]byte("w2")))
 	assert.Equal(t, 3, q.len())
 
-	q.mustGet()
-	assert.Equal(t, 2, q.len())
-	assert.Nil(t, q.waiters[0])
-
-	q.mustGet()
-	assert.Equal(t, 1, q.len())
-	assert.Nil(t, q.waiters[1])
-
-	q.mustGet()
-	assert.Equal(t, 0, q.len())
-	assert.Nil(t, q.waiters[2])
+	v, remain := q.pop()
+	assert.Equal(t, q.waiters[1:], remain)
+	assert.Equal(t, []byte("w"), v.txnID)
 
 	defer func() {
 		if err := recover(); err != nil {
@@ -53,7 +44,8 @@ func TestLen(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	q.mustGet()
+	q = newWaiterQueue()
+	q.pop()
 }
 
 func TestReset(t *testing.T) {
@@ -61,10 +53,9 @@ func TestReset(t *testing.T) {
 	q.put(acquireWaiter([]byte("w")))
 	q.put(acquireWaiter([]byte("w1")))
 	q.put(acquireWaiter([]byte("w2")))
-	q.mustGet()
+	q.pop()
 
 	q.reset()
-	assert.Equal(t, 0, q.offset)
 	assert.Empty(t, q.waiters)
 }
 

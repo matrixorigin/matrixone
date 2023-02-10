@@ -28,7 +28,7 @@ func TestAcquireWaiter(t *testing.T) {
 	defer w.close()
 
 	assert.Equal(t, 0, len(w.c))
-	assert.Equal(t, int32(1), w.refCount.Load())
+	assert.Equal(t, int32(1), w.refCount)
 	assert.Equal(t, 0, w.waiters.len())
 }
 
@@ -44,7 +44,7 @@ func TestAddNewWaiter(t *testing.T) {
 
 	w.add(w1)
 	assert.Equal(t, 1, w.waiters.len())
-	assert.Equal(t, int32(2), w1.refCount.Load())
+	assert.Equal(t, int32(2), w1.refCount)
 	w.close()
 }
 
@@ -85,9 +85,7 @@ func TestWait(t *testing.T) {
 		w.close()
 	}()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	assert.NoError(t, w1.wait(ctx))
+	assert.NoError(t, w1.wait(context.Background()))
 }
 
 func TestWaitWithTimeout(t *testing.T) {
@@ -108,7 +106,7 @@ func TestWaitAndNotifyConcurrent(t *testing.T) {
 	defer w.close()
 
 	w.beforeSwapStatusAdjustFunc = func() {
-		w.status.Store(completed)
+		w.status = completed
 		w.c <- nil
 	}
 
@@ -171,7 +169,7 @@ func TestNotifyAfterAlreadyNotified(t *testing.T) {
 	w := acquireWaiter(nil)
 	defer w.close()
 	assert.True(t, w.notify(nil))
-	<-w.c
+	assert.NoError(t, w.wait(context.Background()))
 	assert.False(t, w.notify(nil))
 }
 
@@ -180,7 +178,8 @@ func TestNotifyWithStatusChanged(t *testing.T) {
 	defer w.close()
 
 	w.beforeSwapStatusAdjustFunc = func() {
-		w.status.Store(completed)
+		w.status = completed
 	}
-	assert.False(t, w.notify(nil))
+	assert.True(t, w.notify(nil))
+	assert.NoError(t, w.wait(context.Background()))
 }
