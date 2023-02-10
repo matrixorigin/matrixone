@@ -3286,10 +3286,6 @@ func (ses *Session) getSqlType(sql string) {
 }
 
 func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
-	// read err occurs,  return
-	// write err occurs, means mo run into error, but need wait read finish
-	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
-
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	defer func() {
@@ -3330,12 +3326,18 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	if length == 0 {
 		return
 	}
-	quickWrite := false
+
+	skipWrite := false
+	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
+	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
+	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
+	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
+
 	_, err = writer.Write(packet.Payload)
 	if err != nil {
-		quickWrite = true
+		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
 	}
-	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(8192), math.MaxFloat64, float64(0), math.MaxFloat64, float64(0)
+	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
 		readStart := time.Now()
 		msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
@@ -3347,7 +3349,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 			}
 			break
 		}
-		readTime := time.Since(readStart).Seconds()
+		readTime := time.Since(readStart)
 		if readTime > maxReadTime {
 			maxReadTime = readTime
 		}
@@ -3365,12 +3367,12 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		proto.SetSequenceID(seq)
 
 		writeStart := time.Now()
-		if !quickWrite {
+		if !skipWrite {
 			_, err = writer.Write(packet.Payload)
 			if err != nil {
-				quickWrite = true
+				skipWrite = true
 			}
-			writeTime := time.Since(writeStart).Seconds()
+			writeTime := time.Since(writeStart)
 			if writeTime > maxWriteTime {
 				maxWriteTime = writeTime
 			}
@@ -3379,12 +3381,12 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 			}
 		}
 		if epoch%printEvery == 0 {
-			logutil.Infof("load local '%s', epoch: %d, minReadTime: %f seconds, maxReadTime: %f seconds, minWriteTime: %f seconds, maxWriteTime:%f seconds, quick write:%v", param.Filepath, epoch, minReadTime, maxReadTime, minWriteTime, maxWriteTime, quickWrite)
-			minReadTime, maxReadTime, minWriteTime, maxWriteTime = math.MaxFloat64, float64(0), math.MaxFloat64, float64(0)
+			logutil.Infof("load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
+			minReadTime, maxReadTime, minWriteTime, maxWriteTime = 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 		}
 		epoch += 1
 	}
-	logutil.Infof("load local '%s', read&write all data from client cost: %f seconds", param.Filepath, time.Since(start).Seconds())
+	logutil.Infof("load local '%s', read&write all data from client cost: %s", param.Filepath, time.Since(start))
 	return
 }
 
