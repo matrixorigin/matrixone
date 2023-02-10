@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select * from t1 where a not ilike '%a'",
-		output: "select * from t1 where a not ilike %a",
+		input:  "select * from t1",
+		output: "select * from t1",
 	}
 )
 
