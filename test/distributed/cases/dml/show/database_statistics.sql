@@ -349,7 +349,6 @@ create table t3(
 col1 decimal
 );
 
--- @bvt:issue#7562
 show table_values from t3;
 
 insert into t3 values();
@@ -360,7 +359,7 @@ show table_values from t3;
 
 insert into t3 values(3.2);
 show table_values from t3;
--- @bvt:issue
+
 drop database test_db;
 -- @session
 

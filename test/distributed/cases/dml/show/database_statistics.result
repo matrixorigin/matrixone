@@ -498,18 +498,19 @@ create table t3(
 col1 decimal
 );
 show table_values from t3;
-[unknown result because it is related to issue#7562]
+max(col1)    min(col1)
+null    null
 insert into t3 values();
-[unknown result because it is related to issue#7562]
 show table_values from t3;
-[unknown result because it is related to issue#7562]
+max(col1)    min(col1)
+null    null
 insert into t3 values(3.3);
-[unknown result because it is related to issue#7562]
 show table_values from t3;
-[unknown result because it is related to issue#7562]
+max(col1)    min(col1)
+3.30    3.30
 insert into t3 values(3.2);
-[unknown result because it is related to issue#7562]
 show table_values from t3;
-[unknown result because it is related to issue#7562]
+max(col1)    min(col1)
+3.30    3.20
 drop database test_db;
 drop account if exists test_account;
