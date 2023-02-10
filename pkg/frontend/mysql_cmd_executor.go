@@ -2043,6 +2043,11 @@ func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ad *
 	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
 }
 
+// handleAlterAccountConfig alter a account's mysql_compatbility_mode
+func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, st *tree.AlterDataBaseConfig) error {
+	return doAlterAccountConfig(ctx, mce.GetSession(), st)
+}
+
 // handleCreateUser creates the user for the tenant
 func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
 	ses := mce.GetSession()
@@ -3692,8 +3697,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.AlterDataBaseConfig:
 			ses.InvalidatePrivilegeCache()
 			selfHandle = true
-			if err = mce.handleAlterDataBaseConfig(requestCtx, st); err != nil {
-				goto handleFailed
+			if st.IsAccountLevel {
+				if err = mce.handleAlterAccountConfig(requestCtx, st); err != nil {
+					goto handleFailed
+				}
+			} else {
+				if err = mce.handleAlterDataBaseConfig(requestCtx, st); err != nil {
+					goto handleFailed
+				}
 			}
 		case *tree.CreateUser:
 			selfHandle = true
@@ -4782,38 +4793,4 @@ func getAccountId(ctx context.Context) uint32 {
 		accountId = v.(uint32)
 	}
 	return accountId
-}
-
-func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
-	var datname string
-	var configuration string
-
-	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
-		datname = string(createDatabaseStmt.Name)
-		configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+","+"%q"+":"+"0"+"}"+"'", "transaction_ioslation", "SNAPSHOT_ISOLATION", "lower_case_table_names")
-		insertSql := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, datname, configuration)
-
-		bh := ses.GetBackgroundExec(ctx)
-		err := bh.Exec(ctx, insertSql)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
-	var datname string
-
-	if deleteDatabaseStmt, ok := stmt.(*tree.DropDatabase); ok {
-		datname = string(deleteDatabaseStmt.Name)
-		deletesql := getSqlForDeleteMysqlCompatbilityMode(datname)
-
-		bh := ses.GetBackgroundExec(ctx)
-		err := bh.Exec(ctx, deletesql)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
