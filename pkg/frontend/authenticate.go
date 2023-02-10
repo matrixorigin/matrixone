@@ -1150,6 +1150,8 @@ const (
 
 	// delete a tuple from mo_mysql_compatbility_mode when drop a database
 	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
+
+	deleteMysqlCompatbilityModeForAccountFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where account_name = "%s";`
 )
 
 var (
@@ -1378,6 +1380,10 @@ func getSqlForDeleteUser(userId int64) []string {
 
 func getSqlForDeleteMysqlCompatbilityMode(dtname string) string {
 	return fmt.Sprintf(deleteMysqlCompatbilityModeFormat, dtname)
+}
+
+func getSqlForDeleteMysqlCompatbilityModeForAccount(account_name string) string {
+	return fmt.Sprintf(deleteMysqlCompatbilityModeForAccountFormat, account_name)
 }
 
 // isClusterTable decides a table is the index table or not
@@ -2380,6 +2386,13 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		if err != nil {
 			goto handleFailed
 		}
+	}
+
+	//step4: delete data of mo_mysql_comaptbility_mode table
+	sql = getSqlForDeleteMysqlCompatbilityModeForAccount(da.Name)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
 	}
 
 	err = bh.Exec(ctx, "commit;")
