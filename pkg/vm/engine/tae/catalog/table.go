@@ -357,7 +357,7 @@ func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (delete
 func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(segment.String()))
-	segment.Close()
+	// segment.Close()
 	entry.Lock()
 	defer entry.Unlock()
 	return entry.deleteEntryLocked(segment)
