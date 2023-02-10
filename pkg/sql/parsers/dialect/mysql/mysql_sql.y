@@ -5251,7 +5251,8 @@ table_option:
     }
 |   COMMENT_KEYWORD equal_opt STRING
     {
-        $$ = tree.NewTableOptionComment($3)
+    	str := util.DealCommentString($3)
+        $$ = tree.NewTableOptionComment(str)
     }
 |   COMPRESSION equal_opt STRING
     {
@@ -5679,7 +5680,8 @@ column_attribute_elem:
     }
 |   COMMENT_KEYWORD STRING
     {
-        $$ = tree.NewAttributeComment(tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char))
+    	str := util.DealCommentString($2)
+        $$ = tree.NewAttributeComment(tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char))
     }
 |   COLLATE collate_name
     {
