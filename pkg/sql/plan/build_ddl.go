@@ -498,15 +498,27 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 
 			/// now tableRef.Indices is empty, you can not test it
-			for _, index := range tableRef.Indices {
+			//for _, index := range tableRef.Indices {
+			//	if index.Unique {
+			//		if len(index.Parts) == 1 {
+			//			if colId, ok := getColIdFromExpr(index.Parts[0]); ok {
+			//				uniqueColumn[tableRef.Cols[columnIdPos[colId]].Name] = colId
+			//			}
+			//		}
+			//	}
+			//}
+
+			//----------------------------------------------------------------------------------------
+			// now tableRef.Indices is empty, you can not test it
+			for _, index := range tableRef.Indexes {
 				if index.Unique {
-					if len(index.Parts) == 1 {
-						if colId, ok := getColIdFromExpr(index.Parts[0]); ok {
-							uniqueColumn[tableRef.Cols[columnIdPos[colId]].Name] = colId
-						}
+					if len(index.Field.Parts) == 1 {
+						uniqueColName := index.Field.Parts[0]
+						uniqueColumn[uniqueColName] = uint64(columnNamePos[uniqueColName])
 					}
 				}
 			}
+			//----------------------------------------------------------------------------------------
 
 			for i, keyPart := range refer.KeyParts {
 				colName := keyPart.ColName.Parts[0]
