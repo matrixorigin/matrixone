@@ -958,7 +958,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
 		}
 
-		uDef, sDef := buildIndexDefs(tableDef.Defs)
+		uDef, sDef := BuildIndexDefs(tableDef.Defs)
 		truncateTable.IndexTableNames = make([]string, 0)
 		if uDef != nil {
 			for i := 0; i < len(uDef.TableNames); i++ {
@@ -1037,7 +1037,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			}
 		}
 
-		uDef, sDef := buildIndexDefs(tableDef.Defs)
+		uDef, sDef := BuildIndexDefs(tableDef.Defs)
 		dropTable.IndexTableNames = make([]string, 0)
 		if uDef != nil {
 			for i := 0; i < len(uDef.TableNames); i++ {

@@ -15,12 +15,8 @@
 package plan
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -114,36 +110,4 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 			Query: query,
 		},
 	}, err
-}
-
-func MakeInsertError(ctx context.Context, id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx int, err error) error {
-	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-		return err
-	}
-	var str string
-	if rows[rowIdx] == nil || len(rows[rowIdx]) < colIdx {
-		str = col.Default.OriginString
-	} else if _, ok := rows[rowIdx][colIdx].(*tree.DefaultVal); ok {
-		str = col.Default.OriginString
-	} else {
-		str = tree.String(rows[rowIdx][colIdx], dialect.MYSQL)
-	}
-	if id == types.T_json {
-		return moerr.NewInvalidInput(ctx, "Invalid %s text: '%s' for column '%s' at row '%d'", id.String(), str, col.Name, rowIdx+1)
-	}
-	return moerr.NewTruncatedValueForField(ctx, id.String(), str, col.Name, rowIdx+1)
-}
-
-func buildIndexDefs(defs []*plan.TableDef_DefType) (*UniqueIndexDef, *SecondaryIndexDef) {
-	var uIdxDef *UniqueIndexDef = nil
-	var sIdxDef *SecondaryIndexDef = nil
-	for _, def := range defs {
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-			uIdxDef = idxDef.UIdx
-		}
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
-			sIdxDef = idxDef.SIdx
-		}
-	}
-	return uIdxDef, sIdxDef
 }
