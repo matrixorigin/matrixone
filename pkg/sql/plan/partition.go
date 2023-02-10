@@ -939,7 +939,6 @@ func checkPartitionDefinitionConstraints(partitionBinder *PartitionBinder, parti
 	case plan.PartitionType_LIST:
 		err = checkPartitionByList(partitionBinder, partitionInfo, tableDef)
 	}
-
 	return err
 }
 
@@ -1011,7 +1010,6 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 	hasPrimaryKey := false
 	hasUniqueKey := false
 	var primaryKey *plan.PrimaryKeyDef
-	//var uniqueKey *plan.UniqueIndexDef
 
 	if tableDef.Pkey != nil {
 		hasPrimaryKey = true
