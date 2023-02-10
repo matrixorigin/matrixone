@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func NewPartition(
@@ -499,6 +500,7 @@ func (p *Partition) Rows(
 
 func (p *Partition) NewReader(
 	ctx context.Context,
+	proc *process.Process,
 	readerNumber int,
 	index memtable.Tuple,
 	defs []engine.TableDef,
@@ -566,9 +568,7 @@ func (p *Partition) NewReader(
 		colIdxMp:        colIdxMp,
 		extendId2s3File: make(map[string]int),
 		s3FileService:   fs,
-	}
-	if p.txn != nil {
-		partReader.proc = p.txn.proc
+		proc:            proc,
 	}
 	readers[0] = partReader
 	if readerNumber == 1 {

@@ -550,8 +550,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		if tbl.meta != nil {
 			blks = tbl.meta.modifedBlocks[i]
 		}
-		tbl.parts[i].txn = tbl.db.txn
-		rds0, err := tbl.parts[i].NewReader(ctx, num, index, tbl.defs, tbl.tableDef,
+		rds0, err := tbl.parts[i].NewReader(ctx, tbl.db.txn.proc, num, index, tbl.defs, tbl.tableDef,
 			tbl.skipBlocks, blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
 		if err != nil {
 			return nil, err

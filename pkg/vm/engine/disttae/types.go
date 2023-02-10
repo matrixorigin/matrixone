@@ -74,7 +74,7 @@ type MVCC interface {
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
 		blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int)
 	// If blocks is empty, it means no merge operation with the files on s3 is required.
-	NewReader(ctx context.Context, readerNumber int, index memtable.Tuple, defs []engine.TableDef,
+	NewReader(ctx context.Context, proc *process.Process, readerNumber int, index memtable.Tuple, defs []engine.TableDef,
 		tableDef *plan.TableDef, skipBlocks map[uint64]uint8, blks []ModifyBlockMeta,
 		ts timestamp.Timestamp, fs fileservice.FileService, entries []Entry) ([]engine.Reader, error)
 }
@@ -111,8 +111,6 @@ type Partition struct {
 	columnsIndexDefs []ColumnsIndexDef
 	// last updated timestamp
 	ts timestamp.Timestamp
-	// used for block read in PartitionReader
-	txn *Transaction
 }
 
 // Transaction represents a transaction
