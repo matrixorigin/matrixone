@@ -230,7 +230,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if rowCount != 0 {
 			createStr += ",\n"
 		}
-		createStr += fmt.Sprintf("CONSTRAINT `%s` FOREIGN KEY(`%s`) REFERENCES `%s`(`%s`) ON DELETE %s ON UPDATE %s",
+		createStr += fmt.Sprintf("CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
 			fk.Name, strings.Join(colNames, "`,`"), fkTableDef.Name, strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
 	}
 
