@@ -48,6 +48,7 @@ func TaskMetadata(jobName string, id task.TaskCode, args ...string) task.TaskMet
 		ID:       path.Join(jobName, path.Join(args...)),
 		Executor: id,
 		Context:  []byte(strings.Join(args, ParamSeparator)),
+		Options:  task.TaskOptions{Concurrency: 1},
 	}
 }
 

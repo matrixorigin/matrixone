@@ -332,7 +332,9 @@ order by
 	revenue desc
 limit 20
 ;
+-- @bvt:issue#7906
 select * from result_scan(last_query_id()) as u;
+-- @bvt:issue
 
 -- test sql11
 select
