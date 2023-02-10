@@ -72,8 +72,9 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MO
 	}
 	// TODO asyncFlushBatch
 	addresses := []string{addr}
-	if pu.SV.UAddr != "" {
-		addresses = append(addresses, "unix://"+pu.SV.UAddr)
+	unixAddr := pu.SV.GetUnixSocketAddress()
+	if unixAddr != "" {
+		addresses = append(addresses, "unix://"+unixAddr)
 	}
 	app, err := goetty.NewApplicationWithListenAddress(
 		addresses,
@@ -92,7 +93,7 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MO
 	return &MOServer{
 		addr:  addr,
 		app:   app,
-		uaddr: pu.SV.UAddr,
+		uaddr: pu.SV.UnixSocketAddress,
 		rm:    rm,
 	}
 }
