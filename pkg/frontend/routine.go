@@ -85,10 +85,17 @@ func (rt *Routine) setInProcessRequest(b bool) {
 	rt.inProcessRequest = b
 }
 
-func (rt *Routine) isInProcessRequest() bool {
+// execCallbackInProcessRequestOnly denotes if inProcessRequest is true,
+// then the callback will be called.
+// It has used the mutex.
+func (rt *Routine) execCallbackBasedOnRequest(want bool, callback func()) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	return rt.inProcessRequest
+	if rt.inProcessRequest == want {
+		if callback != nil {
+			callback()
+		}
+	}
 }
 
 func (rt *Routine) getCancelRoutineFunc() context.CancelFunc {
@@ -192,7 +199,6 @@ func (rt *Routine) handleRequest(req *Request) error {
 		rt.decreaseCount(func() {
 			metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Dec()
 		})
-		defer ses.Dispose()
 
 		//ensure cleaning the transaction
 		logErrorf(ses.GetConciseProfile(), "rollback the txn.")
@@ -237,23 +243,27 @@ func (rt *Routine) killConnection(killMyself bool) {
 	//    if the connection is processing the request, the response may be dropped.
 	//    if the connection is not processing the request, it has no effect.
 	if !killMyself {
-		if !rt.isInProcessRequest() {
+		//If it is in processing the request, cancel the root context of the connection.
+		//At the same time, it cancels all the contexts
+		//(includes the request context) derived from the root context.
+		//After the context is cancelled. In handleRequest, the network
+		//will be closed finally.
+		cancel := rt.getCancelRoutineFunc()
+		if cancel != nil {
+			cancel()
+		}
+
+		//If it is in processing the request, it responds to the client normally
+		//before closing the network to avoid the mysql client to be hung.
+		closeConn := func() {
 			//If it is not in processing the request, just close the network
-			proto := rt.getProtocol()
+			proto := rt.protocol
 			if proto != nil {
 				proto.Quit()
 			}
-		} else {
-			//If it is in processing the request, cancel the root context of the connection.
-			//At the same time, it cancels all the contexts
-			//(includes the request context) derived from the root context.
-			//After the context is cancelled. In handleRequest, the network
-			//will be closed finally.
-			cancel := rt.getCancelRoutineFunc()
-			if cancel != nil {
-				cancel()
-			}
 		}
+
+		rt.execCallbackBasedOnRequest(false, closeConn)
 	}
 }
 

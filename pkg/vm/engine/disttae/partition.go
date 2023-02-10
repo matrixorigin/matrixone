@@ -37,7 +37,10 @@ import (
 func NewPartition(
 	columnsIndexDefs []ColumnsIndexDef,
 ) *Partition {
+	lock := make(chan struct{}, 1)
+	lock <- struct{}{}
 	return &Partition{
+		lock:             lock,
 		data:             memtable.NewTable[RowID, DataValue, *DataRow](),
 		columnsIndexDefs: columnsIndexDefs,
 	}

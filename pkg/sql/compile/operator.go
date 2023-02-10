@@ -72,6 +72,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1367,20 +1368,6 @@ func exprRelPos(expr *plan.Expr) int32 {
 	return -1
 }
 
-func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.SecondaryIndexDef) {
-	var uIdxDef *plan.UniqueIndexDef = nil
-	var sIdxDef *plan.SecondaryIndexDef = nil
-	for _, def := range defs {
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-			uIdxDef = idxDef.UIdx
-		}
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
-			sIdxDef = idxDef.SIdx
-		}
-	}
-	return uIdxDef, sIdxDef
-}
-
 // Get the 'engine.Relation' of the table by using 'ObjectRef' and 'TableDef', if 'TableDef' is nil, the relations of its index table will not be obtained
 // the first return value is Relation of the original table
 // the second return value is Relations of index tables
@@ -1423,7 +1410,7 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 	var uniqueIndexTables []engine.Relation
 	if tableDef != nil {
 		uniqueIndexTables = make([]engine.Relation, 0)
-		uDef, _ := buildIndexDefs(tableDef.Defs)
+		uDef, _ := plan2.BuildIndexDefs(tableDef.Defs)
 		if uDef != nil {
 			for i := range uDef.TableNames {
 				var indexTable engine.Relation
