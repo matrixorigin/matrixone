@@ -64,7 +64,6 @@ drop table fk_02;
 drop table fk_01;
 
 --foreign key are two column int varchar,on delete/update RESTRICT
--- @bvt:issue#7909
 create table fk_01(col1 int,col2 varchar(20),col3 tinyint,primary key(col1,col2));
 create table fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col1,col2) REFERENCES fk_01(col1,col2) on delete RESTRICT on update RESTRICT);
 insert into fk_01 values (2,'yellow',20),(2,'apple',50),(1,'opppo',51);
@@ -84,7 +83,6 @@ select * from fk_01;
 select * from fk_02;
 drop table fk_02;
 drop table fk_01;
--- @bvt:issue
 
 --foreign key is bigint,on delete/update cascade
 create table fk_01(col1 bigint primary key,col2 varchar(25),col3 tinyint);
@@ -109,7 +107,6 @@ drop table fk_02;
 drop table fk_01;
 
 --foreign key are more column int,decimal,date,on delete /update SET NULL
--- @bvt:issue#7909
 create table fk_01(col1 decimal(38,18),col2 char(25),col3 int,col4 date,primary key(col1,col3,col4));
 create table fk_02(col1 decimal(38,18),col2 char(25),col3 int,col4 date,constraint ck foreign key(col1,col3,col4) REFERENCES fk_01(col1,col3,col4) on delete SET NULL on update SET NULL);
 insert into fk_01 values(23.10,'a',20,'2022-10-01'),(23.10,'a',21,'2022-10-01'),(23.10,'a',20,'2022-10-02');
@@ -127,7 +124,6 @@ select * from fk_01;
 select * from fk_02;
 drop table fk_02;
 drop table fk_01;
--- @bvt:issue
 
 --foreign key int,on delete/update NO ACTION
 create table fk_01(col1 int primary key auto_increment,col2 varchar(25),col3 varchar(50));
@@ -230,7 +226,6 @@ drop table fk_01;
 drop table fk_02;
 
 --foreign key is datetime,timestamp
--- @bvt:issue#7909
 create table fk_01(col1 int,col2 datetime,col3 timestamp,primary key(col1,col2,col3));
 create table fk_02(col1 int,col2 datetime,col3 char(25),col4 timestamp ,constraint ck foreign key(col1,col2,col4) REFERENCES fk_01(col1,col2,col3));
 insert into fk_01 values (9,'2001-10-19','2001-10-09 01:00:09'),(10,'2011-12-09','2001-10-09 01:00:09'),(11,'2011-12-09','2001-10-09 01:00:09');
@@ -241,7 +236,6 @@ select * from fk_01;
 select * from fk_02;
 drop table fk_02;
 drop table fk_01;
--- @bvt:issue
 
 --Abnormal test
 --foreign key is not a related data type
