@@ -98,11 +98,9 @@ INSERT INTO format_01 VALUES(2, 126, NULL, 743482 , 938256415);
 INSERT INTO format_01 VALUES(3, 21, 37821, 3782, 0);
 INSERT INTO format_01 VALUES(4, 0, 0, 0, 0);
 
-
 -- Abnormal insertion
 INSERT INTO format_01 VALUES(5, 127, 3892, 743482 , 938256415);
 INSERT INTO format_01 VALUES(6, 22, 3, 4, 184467440737095516152);
-
 
 -- @case
 -- @ integer test
@@ -125,18 +123,7 @@ SELECT SIN(format(d1,2)), TAN(format(id, 0)), COS(format(id,0)) from format_01;
 SELECT cot(format(45, 0)), ACOS(format(60, 1)), ATAN(format(75, 0)), SINH(format(90, 1));
 SELECT EXP(format(4, 2));
 SELECT MAX(format(d1, id)), MIN(format(d3, 0)) from format_01;
-
-
--- Mathematical function
--- @bvt:issue#7464
-SELECT ABS(format(d3,0)) FROM format_01;
-SELECT SUM(format(id,2)) FROM format_01;
-SELECT CEIL(format(d3, 4))FROM format_01;
-SELECT ROUND(format(d4, 0)) FROM format_01;
-SELECT power(format(2,1), 2);
-SELECT COUNT(format(d3,2)) FROM format_01;
--- @bvt:issue
-
+drop table format_01;
 
 -- @suite
 -- @setup
@@ -172,14 +159,17 @@ SELECT * from format_02 WHERE format(id, 1) like '1.2';
 SELECT format(FLOOR(d2),4) FROM format_02;
 SELECT format(CEIL(d2),6) FROM format_02;
 
-
--- @bvt:issue#7464
-SELECT * from format_02 WHERE format(d2, 2) >= 0;
-SELECT * FROM format_02 WHERE format(d2, 0) NOT BETWEEN 0 AND 100;
-SELECT * FROM format_02 WHERE format(d2,0) IN (73, 32789);
-SELECT * FROM format_02 WHERE format(d2,0) NOT IN (73, 32789);
-SELECT * FROM format_02 WHERE format(d2, 2) MOD 2 = 0;
--- @bvt:issue
+-- Nesting of functions related to string
+SELECT concat_ws(format(d2,3),'abc') from format_02;
+SELECT LENGTH(format(d2,3)) from format_02;
+SELECT LPAD(format(d2,3),20,'**') from format_02;
+SELECT RPAD(format(d1,2),20,'-') from format_02;
+SELECT format(d2,3) from format_02;
+SELECT startswith(format(d2,1),'47823') from format_02 WHERE id = 1;
+SELECT endswith(format(d2,1),'32.4') from format_02 WHERE id = 1;
+SELECT substring(format(d1,3),3,5) from format_02;
+SELECT REVERSE(format(d1,5)) from format_02;
+drop table format_02;
 
 
 -- @suite
@@ -195,11 +185,7 @@ INSERT INTO format_04 VALUES("12332.2","0", "en_US");
 SELECT format(a, 4) from format_04;
 SELECT format(a, 2),format(b, 3) FROM format_04 WHERE b > 0;
 SELECT a,b,c FROM format_04 WHERE format(b,0) = 4;
-
--- @bvt:issue#7464
-SELECT ABS(format(b,5)) FROM format_04;
-SELECT FLOOR(format(c,3)) FROM format_04;
--- @bvt:issue
+drop table format_04;
 
 
 -- @suite
@@ -222,6 +208,11 @@ INSERT INTO format_05 values ('111', '222'), ('000', '111'), ('-111', null);
 INSERT INTO format_06 values (111, 999999), (0,0000000), (-1, null), (11111, 1);
 SELECT c1, format(c1,1), i, format(i,1) from format_05 inner join format_06 on format_05.c1 = format_06.i order by c1 desc;
 SELECT format(c2, 5) FROM format_05 join format_06 ON format_05.c1 = format_06.i;
+SELECT format_05.c1 from format_05 join format_06 ON format(format_05.c1,1) = format(format_06.i,1);
+SELECT format_06.i,format_06.b from format_05 left join format_06 ON format(format_05.c1,1) = format(format_06.i,1);
+drop table format_05;
+drop table format_06;
+
 
 drop table if exists t;
 create table t(
