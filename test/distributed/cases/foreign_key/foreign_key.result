@@ -375,9 +375,9 @@ create table fk_01(col1 bigint unique key,col2 varchar(25),col3 tinyint);
 create table fk_02(col1 bigint,col2 varchar(25),col3 tinyint,constraint ck foreign key(col1) REFERENCES fk_01(col1) on delete CASCADE on update CASCADE);
 insert into fk_01 values (1,'yellow',20),(2,'apple',50);
 insert into fk_02 values(1,'score',1),(2,'student',NULL),(3,'goods',2);
-Cannot add or update a child row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`) REFERENCES `fk_01` (`col1`) ON DELETE CASCADE ON UPDATE CASCADE)
+internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into fk_02 values(4,'age',3);
-Cannot add or update a child row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`) REFERENCES `fk_01` (`col1`) ON DELETE CASCADE ON UPDATE CASCADE)
+internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into fk_02 values(1,'score',1),(2,'student',NULL);
 select * from fk_01;
 col1    col2    col3

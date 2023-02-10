@@ -245,8 +245,11 @@ message IndexOption {
 }
 
 message PrimaryKeyDef {
+	// currently not used
 	repeated uint64 cols	= 1;
+	// currently not used
 	uint64 pkey_col_id		= 2;
+	// currently not used
 	IndexOption option		= 3;
 
 	// Composed primary key column name: __mo_cpkey
@@ -255,23 +258,8 @@ message PrimaryKeyDef {
 	repeated string names = 5;
 }
 
-message IndexDef {
-	// Generate UUID for each index
-	string idx_id			= 1;
-	string name				= 2;
-	// Name for anonymous indices, __mo_idx_[INDEX_ID]
-	bool unique				= 3;
-	repeated Expr parts		= 4;
-	IndexOption option		= 5;
-
-	// Index table name: __mo_idx_[TABLE_ID]_[INDEX_ID]
-	// Column name for indexed column(s): __mo_idx_key
-	// Column name for original primary key: __mo_orig_pkey
-}
-
-
 message NewIndexDef {
-	// Generate UUID for each index
+	// Generate UUID for each index, currently not used
 	string idx_id			       = 1;
 	string index_name        = 2;
 	Field  field             = 3;
@@ -279,6 +267,7 @@ message NewIndexDef {
 	string index_table_name  = 5;
 	bool table_exist        = 6;
 	string comment          = 7;
+	// currently not used
 	IndexOption option		  = 8;
 }
 
@@ -399,7 +388,7 @@ message TableDef {
 	TableFunction tbl_func	= 7;
 
 	PrimaryKeyDef pkey				= 11;
-	repeated IndexDef indices		= 12;
+	repeated NewIndexDef indexes = 12;
 	repeated ForeignKeyDef fkeys	= 13;
 	repeated uint64 ref_child_tbls	= 14;
 	repeated CheckDef checks		= 15;
@@ -414,7 +403,6 @@ message TableDef {
 	repeated DefType defs	= 31;
 	map<string, int32> name2col_index = 32;
 	ColDef composite_pkey = 33;
-	repeated NewIndexDef indexes = 34;
 }
 
 message TableFunction{
