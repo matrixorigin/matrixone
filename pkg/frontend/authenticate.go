@@ -6236,8 +6236,14 @@ func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 
 		err = bh.Exec(ctx, sql)
 		if err != nil {
-			return err
+			goto handleFailed
 		}
+
+		err = bh.Exec(ctx, "commit;")
+		if err != nil {
+			goto handleFailed
+		}
+		return err
 
 	handleFailed:
 		//ROLLBACK the transaction
