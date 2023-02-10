@@ -473,7 +473,7 @@ drop database if exists test;
 create database test;
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
 configuration
-{"lower_case_table_names": 0, "transaction_ioslation": "SNAPSHOT_ISOLATION"}
+{"version_compatibility": "0.7"}
 drop database test;
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
 null
@@ -481,13 +481,9 @@ drop database if exists test;
 create database test;
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
 configuration
-{"lower_case_table_names": 0, "transaction_ioslation": "SNAPSHOT_ISOLATION"}
-alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 0}';
+{"version_compatibility": "0.7"}
+alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
 configuration
-{"lower_case_table_names": 0, "transaction_isolation": "REPEATABLE-READ"}
-alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 1}';
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
-configuration
-{"lower_case_table_names": 1, "transaction_isolation": "REPEATABLE-READ"}
+{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}
 drop database test;

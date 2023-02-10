@@ -175,8 +175,6 @@ select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name
 drop database if exists test;
 create database test;
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
-alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 0}';
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
-alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 1}';
+alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
 drop database test;
