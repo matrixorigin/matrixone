@@ -6054,12 +6054,11 @@ handleFailed:
 
 func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
 	var err error
-	var deleteSql string
-	var insertSql string
-	var accountId uint32
-	var accountName string
+	var sql string
+	var erArray []ExecResult
+
 	datname := ad.DbName
-	update_config := "'" + ad.UpdateConfig.String() + "'"
+	update_config := "'" + ad.UpdateConfig + "'"
 
 	//verify the update_config
 	if !isInvalidConfigInput(update_config) {
@@ -6074,23 +6073,28 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		goto handleFailed
 	}
 
-	//first delete the record
-	deleteSql = getSqlForDeleteMysqlCompatbilityMode(datname)
-	err = bh.Exec(ctx, deleteSql)
+	//step1:check database exists or not
+	sql = `select datname from mo_catalog.mo_database where datname = "%s";`
+	sql = fmt.Sprintf(sql, datname)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
 	}
 
-	//second insert a new record
-	accountId = ses.GetTxnCompileCtx().GetAccountId()
-	if accountId == catalog.System_Account {
-		accountName = sysAccountName
-	} else {
-		accountName = ses.GetTenantInfo().GetTenant()
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
 	}
 
-	insertSql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountName, datname, update_config)
-	err = bh.Exec(ctx, insertSql)
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(ctx, "there is no database %s", datname)
+		goto handleFailed
+	}
+
+	sql = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where dat_name = "%s";`
+	sql = fmt.Sprintf(sql, update_config, datname)
+	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
 	}
@@ -6108,4 +6112,67 @@ handleFailed:
 		return rbErr
 	}
 	return err
+}
+
+func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDataBaseConfig) error {
+	var err error
+	var sql string
+	var erArray []ExecResult
+
+	accountName := stmt.AccountName
+	update_config := "'" + stmt.UpdateConfig + "'"
+
+	//verify the update_config
+	if !isInvalidConfigInput(update_config) {
+		return moerr.NewInvalidInput(ctx, "invalid input %s for alter database config", update_config)
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step 1: check account exists or not
+	sql = getSqlForCheckTenant(accountName)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(ctx, "there is no account %s", accountName)
+		goto handleFailed
+	}
+
+	//step2: update the config table
+	sql = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s";`
+	sql = fmt.Sprintf(sql, update_config, accountName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+
 }

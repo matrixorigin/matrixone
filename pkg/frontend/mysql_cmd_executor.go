@@ -2043,6 +2043,11 @@ func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ad *
 	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
 }
 
+// handleAlterAccountConfig alter a account's mysql_compatbility_mode
+func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, st *tree.AlterDataBaseConfig) error {
+	return doAlterAccountConfig(ctx, mce.GetSession(), st)
+}
+
 // handleCreateUser creates the user for the tenant
 func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
 	ses := mce.GetSession()
@@ -3686,8 +3691,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.AlterDataBaseConfig:
 			ses.InvalidatePrivilegeCache()
 			selfHandle = true
-			if err = mce.handleAlterDataBaseConfig(requestCtx, st); err != nil {
-				goto handleFailed
+			if st.IsAccountLevel {
+				if err = mce.handleAlterAccountConfig(requestCtx, st); err != nil {
+					goto handleFailed
+				}
+			} else {
+				if err = mce.handleAlterDataBaseConfig(requestCtx, st); err != nil {
+					goto handleFailed
+				}
 			}
 		case *tree.CreateUser:
 			selfHandle = true
