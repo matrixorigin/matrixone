@@ -75,8 +75,8 @@ type col struct {
 	Name      string
 	Id        types.T
 	Nullable  bool
-	Width     int32
 	Precision int32
+	Scale     int32
 }
 
 type index struct {
@@ -541,8 +541,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					Typ: &plan.Type{
 						Id:          int32(col.Id),
 						NotNullable: !col.Nullable,
-						Width:       col.Width,
 						Precision:   col.Precision,
+						Scale:       col.Scale,
 					},
 					Name:  col.Name,
 					Pkidx: 1,
@@ -590,8 +590,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 							Typ: &plan.Type{
 								Id:          int32(col.Id),
 								NotNullable: !col.Nullable,
-								Width:       col.Width,
 								Precision:   col.Precision,
+								Scale:       col.Scale,
 							},
 							Name:  col.Name,
 							Pkidx: 1,

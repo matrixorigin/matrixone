@@ -19,10 +19,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,13 +40,13 @@ type RoutineManager struct {
 	pu             *config.ParameterUnit
 	skipCheckUser  bool
 	tlsConfig      *tls.Config
-	autoIncrCaches map[string]defines.AutoIncrCache
+	autoIncrCaches defines.AutoIncrCaches
 }
 
 func (rm *RoutineManager) GetAutoIncrCache() defines.AutoIncrCaches {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	return defines.AutoIncrCaches{Mu: &rm.mu, AutoIncrCaches: rm.autoIncrCaches}
+	return rm.autoIncrCaches
 }
 
 func (rm *RoutineManager) SetSkipCheckUser(b bool) {
@@ -110,7 +111,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
 
 	// Add  autoIncrCaches in session structure.
-	ses.SetAutoIncrCaches(defines.AutoIncrCaches{Mu: &rm.mu, AutoIncrCaches: rm.autoIncrCaches})
+	ses.SetAutoIncrCaches(rm.autoIncrCaches)
 
 	routine.setSession(ses)
 	pro.SetSession(ses)
@@ -342,7 +343,8 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineM
 	}
 
 	// Initialize auto incre cache.
-	rm.autoIncrCaches = make(map[string]defines.AutoIncrCache)
+	rm.autoIncrCaches.AutoIncrCaches = make(map[string]defines.AutoIncrCache)
+	rm.autoIncrCaches.Mu = &rm.mu
 
 	if pu.SV.EnableTls {
 		err := initTlsConfig(rm, pu.SV)

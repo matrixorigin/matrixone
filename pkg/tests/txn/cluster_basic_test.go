@@ -15,6 +15,8 @@
 package txn
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/lni/goutils/leaktest"
@@ -178,6 +180,87 @@ func TestSingleShardWithCreateTable(t *testing.T) {
 	require.NoError(t, sqlTxn.Commit())
 }
 
+// # issue for #7748
+// SQL statement here refers to func_aggr_avg.test
+func TestAggTable(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
+	c, err := NewCluster(t,
+		getBasicClusterOptions(useTAEStorage, useDistributedTAEEngine))
+	require.NoError(t, err)
+	defer c.Stop()
+	c.Start()
+
+	cli1 := c.NewClient()
+	cli2 := c.NewClient()
+
+	txn1, err := cli1.NewTxn()
+	require.NoError(t, err)
+	txn2, err := cli2.NewTxn()
+	require.NoError(t, err)
+
+	sqlTxn1 := txn1.(SQLBasedTxn)
+	sqlTxn2 := txn2.(SQLBasedTxn)
+	var txnList []SQLBasedTxn = []SQLBasedTxn{sqlTxn1, sqlTxn2}
+	var tblList []string = []string{"t1", "t2"}
+	type avgline struct {
+		a int
+		b float64
+	}
+
+	_, err = sqlTxn1.ExecSQL("create database test_avg;")
+	require.NoError(t, err)
+	_, err = sqlTxn1.ExecSQL("use test_avg;")
+	require.NoError(t, err)
+	_, err = sqlTxn1.ExecSQL("CREATE TABLE t1 (a INT, b INT);")
+	require.NoError(t, err)
+	_, err = sqlTxn1.ExecSQL("INSERT INTO t1 VALUES (1,1),(1,2),(1,3),(1,4),(1,5),(1,6),(1,7),(1,8);")
+	require.NoError(t, err)
+	_, err = sqlTxn2.ExecSQL("CREATE TABLE t2 (a INT, b INT);")
+	require.NoError(t, err)
+	_, err = sqlTxn2.ExecSQL("INSERT INTO t2 VALUES (1,1),(1,2),(1,3),(1,4),(1,5),(1,6),(1,7);")
+	require.NoError(t, err)
+
+	wg := sync.WaitGroup{}
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			insertTable(txnList[i], t, tblList[i])
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int, t *testing.T) {
+			defer wg.Done()
+			rows, err := txnList[i].ExecSQLQuery(fmt.Sprintf("SELECT DISTINCT a, AVG( b) FROM %s GROUP BY a HAVING AVG( b) > 50;", tblList[i]))
+			defer mustCloseRows(t, rows)
+			require.NoError(t, err)
+			var l avgline
+			if !rows.Next() {
+				rows.Close()
+			}
+			err = rows.Scan(&l.a, &l.b)
+			require.NoError(t, err)
+			if tblList[i] == "t1" {
+				require.Equal(t, 32768.5, l.b)
+			} else {
+				require.Equal(t, 32774.5, l.b)
+			}
+		}(i, t)
+	}
+	wg.Wait()
+
+	require.NoError(t, sqlTxn1.Commit())
+	require.NoError(t, sqlTxn2.Commit())
+}
+
 func checkRead(t *testing.T, txn Txn, key string, expectValue string, expectError error, commit bool) {
 	v, err := txn.Read(key)
 	defer func() {
@@ -225,3 +308,19 @@ func mustNewTxn(t *testing.T, cli Client, options ...client.TxnOption) Txn {
 	require.NoError(t, err)
 	return txn
 }
+
+// helper function for TestAggTable
+func insertTable(s SQLBasedTxn, t *testing.T, tbl string) {
+	var arr []int = []int{8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768}
+	for _, v := range arr {
+		if tbl == "t1" {
+			_, err := s.ExecSQL(fmt.Sprintf("INSERT INTO %s SELECT a, b+%d       FROM %s;", tbl, v, tbl))
+			require.NoError(t, err)
+		} else {
+			_, err := s.ExecSQL(fmt.Sprintf("INSERT INTO %s SELECT a, b+%d       FROM %s;", tbl, v+1, tbl))
+			require.NoError(t, err)
+		}
+	}
+}
+
+// helper function for TestAggTable
