@@ -481,12 +481,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 
 			fkDef.ForeignTbl = tableRef.TblId
-			columnNames := make(map[string]uint64)
-			uniqueColumn := make(map[uint64]bool)
-			for _, col := range tableRef.Cols {
-				columnNames[col.Name] = col.ColId
+			columnIdPos := make(map[uint64]int)
+			columnNamePos := make(map[string]int)
+			uniqueColumn := make(map[string]uint64)
+			for i, col := range tableRef.Cols {
+				columnIdPos[col.ColId] = i
+				columnNamePos[col.Name] = i
 				if col.Primary {
-					uniqueColumn[col.ColId] = true
+					uniqueColumn[col.Name] = col.ColId
+				}
+			}
+			if tableRef.Pkey != nil {
+				for _, colName := range tableRef.Pkey.Names {
+					uniqueColumn[colName] = tableRef.Cols[columnNamePos[colName]].ColId
 				}
 			}
 
@@ -495,30 +502,25 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if index.Unique {
 					if len(index.Parts) == 1 {
 						if colId, ok := getColIdFromExpr(index.Parts[0]); ok {
-							uniqueColumn[colId] = true
+							uniqueColumn[tableRef.Cols[columnIdPos[colId]].Name] = colId
 						}
 					}
 				}
 			}
+
 			for i, keyPart := range refer.KeyParts {
-				getCol := false
 				colName := keyPart.ColName.Parts[0]
-				for _, col := range tableRef.Cols {
-					if col.Name == colName {
-						if _, ok := uniqueColumn[col.ColId]; ok {
-							// check column type
-							if col.Typ.Id != fkColTyp[i].Id {
-								return moerr.NewInternalError(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkColName[i])
-							}
-							fkDef.ForeignCols[i] = col.ColId
-							getCol = true
-						} else {
-							return moerr.NewInternalError(ctx.GetContext(), "reference column '%v' is not unique constraint(Unique index or Primary Key)", colName)
+				if _, exists := columnNamePos[colName]; exists {
+					if colId, ok := uniqueColumn[colName]; ok {
+						// check column type
+						if tableRef.Cols[columnIdPos[colId]].Typ.Id != fkColTyp[i].Id {
+							return moerr.NewInternalError(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkColName[i])
 						}
-						break
+						fkDef.ForeignCols[i] = colId
+					} else {
+						return moerr.NewInternalError(ctx.GetContext(), "reference column '%v' is not unique constraint(Unique index or Primary Key)", colName)
 					}
-				}
-				if !getCol {
+				} else {
 					return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkTableName)
 				}
 			}

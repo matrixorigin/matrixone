@@ -106,11 +106,6 @@ const (
 	cloudNoUserTag  = "cloud_nonuser"
 )
 
-// Cache size of auto_increment_columns cache.
-const (
-	cacheSize = 3000
-)
-
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
 func isCmdFieldListSql(sql string) bool {
 	return strings.HasPrefix(strings.ToLower(sql), cmdFieldListSql)
