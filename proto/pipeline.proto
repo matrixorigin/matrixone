@@ -44,7 +44,7 @@ message Connector {
 }
 
 message Dispatch {
-  bool all = 1;
+  int32 func_id = 1;
   repeated Connector local_connector = 2;
   repeated WrapNode remote_connector = 3;
 }

@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,9 +33,11 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr = new(container)
 	ap.ctr.prepared = false
 	if len(ap.RemoteRegs) == 0 {
+		fmt.Printf("[dispatch] prepared dispatch with 0 remote receivers. proc = %p\n", proc)
 		ap.ctr.prepared = true
 		ap.ctr.remoteReceivers = nil
 	} else {
+		fmt.Printf("[dispatch] prepared dispatch with %d remote receivers fid = %d. proc = %p\n", len(ap.RemoteRegs), ap.FuncId, proc)
 		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, len(ap.RemoteRegs))
 	}
 
@@ -56,9 +59,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	// waiting all remote receive prepared
 	// put it in Call() for better parallel
 	if !ap.ctr.prepared {
+		fmt.Printf("[dispatch] begin to wait remote receive ... ch = %p, proc = %p\n", proc.DispatchNotifyCh, proc)
 		cnt := len(ap.RemoteRegs)
 		for cnt > 0 {
 			csinfo := <-proc.DispatchNotifyCh
+			fmt.Printf("[dispatch] receive notify msg(%s) form ch = %p, proc = %p\n", csinfo.Uid, proc.DispatchNotifyCh, proc)
 			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
 			_ = cancel
 
@@ -71,6 +76,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			// TODO: add check the receive info's correctness
 			cnt--
 		}
+		fmt.Printf("[dispatch] remote receive prepared done . proc = %p\n", proc)
 		ap.ctr.prepared = true
 	}
 

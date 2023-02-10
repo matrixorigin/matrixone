@@ -195,10 +195,13 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 						chs += "unknown"
 					}
 				}
-				if arg.FuncId == dispatch.SendToAllFunc {
+				switch arg.FuncId {
+				case dispatch.SendToAllFunc:
 					str += fmt.Sprintf(" to all of MergeReceiver [%s].", chs)
-				} else {
+				case dispatch.SendToAnyFunc:
 					str += fmt.Sprintf(" to any of MergeReceiver [%s].", chs)
+				default:
+					str += fmt.Sprintf(" unknow type dispatch [%s].", chs)
 				}
 
 				if len(arg.RemoteRegs) != 0 {

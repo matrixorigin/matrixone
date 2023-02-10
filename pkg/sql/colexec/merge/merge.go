@@ -16,6 +16,7 @@ package merge
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"time"
 
@@ -37,6 +38,7 @@ func Prepare(proc *process.Process, arg any) error {
 			Dir:  reflect.SelectRecv,
 			Chan: reflect.ValueOf(mr.Ch),
 		}
+		ap.ctr.debug = append(ap.ctr.debug, i)
 	}
 
 	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
@@ -56,6 +58,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			return true, nil
 		}
 
+		fmt.Printf("[mergemerge] current receiver %s. proc = %p\n", ctr.getCurrentString(), proc)
 		start := time.Now()
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
 		if !ok {
@@ -68,6 +71,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if bat == nil {
 			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
 			ctr.aliveMergeReceiver--
+
+			ctr.debug = append(ctr.debug[:chosen], ctr.debug[chosen+1:]...)
+			fmt.Printf("[mergemerge] %d closed. current receiver %s. proc = %p\n", chosen, ctr.getCurrentString(), proc)
 			continue
 		}
 		if bat.Length() == 0 {
@@ -78,4 +84,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		proc.SetInputBatch(bat)
 		return false, nil
 	}
+}
+
+func (ctr *container) getCurrentString() string {
+	s := "["
+	for i, n := range ctr.debug {
+		if i != 0 {
+			s += " ,"
+		}
+		s += fmt.Sprintf("%d", n)
+	}
+	s += "]"
+	return s
 }

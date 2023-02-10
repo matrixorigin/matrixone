@@ -71,6 +71,7 @@ func (srv *Server) GetNotifyChByUuid(u uuid.UUID) (chan process.WrapCs, bool) {
 func (srv *Server) PutNotifyChIntoUuidMap(u uuid.UUID, ch chan process.WrapCs) error {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
+	fmt.Printf("[srv] PutNotifyChIntoUuidMap. uuid = %s, ch = %p\n", u, ch)
 	srv.uuidCsChanMap.mp[u] = ch
 	return nil
 }

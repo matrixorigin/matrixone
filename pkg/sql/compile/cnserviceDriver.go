@@ -151,6 +151,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	// notify the dispatch excutor
 	if m.IsNotifyMessage() {
 		opUuid, err := uuid.FromBytes(m.GetUuid())
+		fmt.Printf("[msghandler] receive %s notify msg\n", opUuid)
 		if err != nil {
 			return nil, err
 		}
@@ -164,6 +165,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 				break
 			}
 		}
+		fmt.Printf("[msghandler] get %s notify ch %p done\n", opUuid, ch)
 		info := process.WrapCs{
 			MsgId: m.GetId(),
 			Uid:   opUuid,
@@ -171,6 +173,8 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		}
 
 		ch <- info
+		fmt.Printf("[msghandler] put %s notify msg to ch %p done\n", opUuid, ch)
+		return nil, nil
 	}
 
 	// generate Compile-structure to run scope.
@@ -651,9 +655,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
-	for _, info := range s.RemoteReceivRegInfos {
-		colexec.Srv.PutNotifyChIntoUuidMap(info.Uuid, s.Proc.DispatchNotifyCh)
-	}
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
@@ -729,7 +730,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Result:    t.Result,
 		}
 	case *dispatch.Argument:
-		in.Dispatch = &pipeline.Dispatch{}
+		in.Dispatch = &pipeline.Dispatch{FuncId: int32(t.FuncId)}
 		in.Dispatch.LocalConnector = make([]*pipeline.Connector, len(t.LocalRegs))
 		for i := range t.LocalRegs {
 			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
@@ -1006,6 +1007,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			}
 		}
 		v.Arg = &dispatch.Argument{
+			FuncId:     int(t.FuncId),
 			LocalRegs:  regs,
 			RemoteRegs: rrs,
 		}

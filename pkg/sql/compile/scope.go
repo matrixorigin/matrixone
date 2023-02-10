@@ -16,7 +16,7 @@ package compile
 
 import (
 	"context"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -167,8 +167,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
+	// strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		len(c.addr) == 0 || strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+		len(c.addr) == 0 || c.addr == s.NodeInfo.Addr {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
@@ -599,6 +600,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				errChan <- errStream
 				return
 			}
+			fmt.Printf("[scopemergerun] get stream for %s uuid %s success\n", info.FromAddr, info.Uuid)
 			defer func(streamSender morpc.Stream) {
 				// TODO: should close channel or not?
 				_ = streamSender.Close()
@@ -614,12 +616,14 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				errChan <- errSend
 				return
 			}
+			fmt.Printf("[scopemergerun] send notify msg to %s uuid %s success\n", info.FromAddr, info.Uuid)
 
 			messagesReceive, errReceive := streamSender.Receive()
 			if errReceive != nil {
 				errChan <- errReceive
 				return
 			}
+			fmt.Printf("[scopemergerun] begin to receive message from %s uuid %s ...\n", info.FromAddr, info.Uuid)
 
 			var val morpc.Message
 			var dataBuffer []byte
@@ -634,12 +638,16 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 
 				// TODO: what val = nil means?
 				if val == nil {
+					fmt.Printf("[scopemergerun] receive nil nil from %s uuid %s\n", info.FromAddr, info.Uuid)
+					reg.Ch <- nil
+					errChan <- nil
 					return
 				}
 
 				m := val.(*pbpipeline.Message)
 
 				if m.IsEndMessage() {
+					fmt.Printf("[scopemergerun] receive nil message from %s uuid %s\n", info.FromAddr, info.Uuid)
 					reg.Ch <- nil
 					errChan <- nil
 					return
@@ -651,6 +659,8 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 					currentBid = m.GetBid()
 					dataBuffer = m.Data
 				}
+
+				fmt.Printf("[scopemergerun] receive message from %s uuid %s, bid = %d\n", info.FromAddr, info.Uuid, m.GetBid())
 
 				if m.BatcWaitingNextToMerge() {
 					continue

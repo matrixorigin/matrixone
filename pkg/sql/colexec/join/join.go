@@ -16,6 +16,7 @@ package join
 
 import (
 	"bytes"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -48,13 +49,15 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	for {
 		switch ctr.state {
 		case Build:
+			fmt.Printf("[joinjoin] build wait ... proc = %p\n", proc)
 			if err := ctr.build(ap, proc, anal); err != nil {
 				ap.Free(proc, true)
 				return false, err
 			}
 			ctr.state = Probe
-
+			fmt.Printf("[joinjoin] build done. proc = %p\n", proc)
 		case Probe:
+			fmt.Printf("[joinjoin] probe wait ... proc = %p\n", proc)
 			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			anal.WaitStop(start)
@@ -77,6 +80,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			return false, nil
 
 		default:
+			fmt.Printf("[joinjoin] end. proc = %p\n", proc)
 			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil

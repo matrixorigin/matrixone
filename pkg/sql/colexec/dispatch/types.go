@@ -65,7 +65,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			}
 			r.cs.Write(r.ctx, message)
 			// TODO: close here?
-			r.cs.Close()
+			//r.cs.Close()
 		}
 
 	}

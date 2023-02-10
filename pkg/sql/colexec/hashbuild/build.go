@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -61,10 +62,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 	for {
 		switch ctr.state {
 		case Build:
+			fmt.Printf("[hashbuild] wait ... proc = %p\n", proc)
 			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
 				ap.Free(proc, true)
 				return false, err
 			}
+			fmt.Printf("[hashbuild] done. proc = %p\n", proc)
 			if ap.ctr.mp != nil {
 				anal.Alloc(ap.ctr.mp.Size())
 			}
