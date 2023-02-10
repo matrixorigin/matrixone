@@ -117,18 +117,7 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 		container.nameToNullablity[def.Name] = def.Default.NullAbility
 		container.pk[def.Name] = true
 	}
-	//for _, def := range tableDef.Defs {
-	//	if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-	//		for i := range idxDef.UIdx.Fields {
-	//			for j := range idxDef.UIdx.Fields[i].Cols {
-	//				def := idxDef.UIdx.Fields[i].Cols[j]
-	//				container.nameToNullablity[def.Name] = def.Default.NullAbility
-	//			}
-	//		}
-	//	}
-	//}
 
-	//------------------------------------refactor code---------------------------------------
 	if tableDef.Indexes != nil {
 		for _, indexdef := range tableDef.Indexes {
 			if indexdef.Unique {
@@ -142,7 +131,6 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 		}
 	}
 
-	//----------------------------------------------------------------------------------------
 	if tableDef.ClusterBy != nil {
 		container.nameToNullablity[tableDef.ClusterBy.Name] = true
 	}
