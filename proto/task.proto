@@ -65,6 +65,8 @@
      // DelayDuration delay duration. Controls how long a task is delayed before it is scheduled for 
      // execution.
      int64  DelayDuration = 3;
+     // Concurrency is the max number of a task running at the same time. 0 means no limits.
+     uint32 Concurrency   = 4;
  }
  
  // ResultCode result code
