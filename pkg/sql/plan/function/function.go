@@ -379,7 +379,7 @@ func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 			oid1, oid2 := sources[i].Oid, targets[i].Oid
 			// ensure that we will not lose the original precision.
 			if oid2 == types.T_decimal64 || oid2 == types.T_decimal128 || oid2 == types.T_timestamp || oid2 == types.T_time {
-				if oid1 == oid2 {
+				if oid1 != types.T_char && oid1 != types.T_varchar && oid1 != types.T_blob && oid1 != types.T_text {
 					copyType(&targets[i], &sources[i])
 					hasSet[i] = true
 				}
@@ -397,10 +397,10 @@ func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 // set default precision / scalar / width for a type
 func setDefaultPrecision(typ *types.Type) {
 	if typ.Oid == types.T_decimal64 {
-		typ.Scale = 2
-		typ.Width = 6
+		typ.Scale = 0
+		typ.Width = 18
 	} else if typ.Oid == types.T_decimal128 {
-		typ.Scale = 10
+		typ.Scale = 0
 		typ.Width = 38
 	} else if typ.Oid == types.T_timestamp {
 		typ.Precision = 6

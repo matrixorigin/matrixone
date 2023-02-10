@@ -32,4 +32,4 @@ order by
 s_suppkey
 ;
 s_suppkey	s_name	s_address	s_phone	total_revenue
-1	Supplier#000000001	 N kD4on9OM Ipw3,gf0JBoQDd7tgrzrddZ	27-918-335-1736	863528.2162000001
+1	Supplier#000000001	 N kD4on9OM Ipw3,gf0JBoQDd7tgrzrddZ	27-918-335-1736	863528.2162

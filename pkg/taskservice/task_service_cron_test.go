@@ -75,6 +75,28 @@ func TestScheduleCronTaskImmediately(t *testing.T) {
 	}, time.Millisecond, time.Millisecond)
 }
 
+func TestScheduleCronTaskLimitConcurrency(t *testing.T) {
+	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
+		cronTask := newTestCronTask("t1", "* * * * ? *")
+		cronTask.CreateAt = time.Now().UnixMilli()
+		cronTask.NextTime = cronTask.CreateAt
+		cronTask.TriggerTimes = 0
+		cronTask.UpdateAt = time.Now().UnixMilli()
+		cronTask.Metadata.Options.Concurrency = 1
+
+		mustAddTestCronTask(t, store, 1, cronTask)
+
+		s.StartScheduleCronTask()
+		defer s.StopScheduleCronTask()
+
+		waitHasTasks(t, store, time.Second*20,
+			WithTaskParentTaskIDCond(EQ, "t1"))
+		assertTaskCountEqual(t, store, time.Second*5, 1,
+			WithTaskParentTaskIDCond(EQ, "t1"),
+			WithTaskStatusCond(EQ, task.TaskStatus_Running))
+	}, time.Millisecond, time.Millisecond)
+}
+
 func TestRemovedCronTask(t *testing.T) {
 	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
 		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
@@ -150,5 +172,22 @@ func waitHasTasks(t *testing.T, store *memTaskStorage, timeout time.Duration, co
 			}
 		}
 		time.Sleep(time.Millisecond * 10)
+	}
+}
+
+func assertTaskCountEqual(t *testing.T, store *memTaskStorage, timeout time.Duration, count int, conds ...Condition) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			tasks, err := store.Query(ctx, conds...)
+			require.NoError(t, err)
+			require.LessOrEqual(t, len(tasks), count, "err")
+		}
+		time.Sleep(time.Second)
 	}
 }
