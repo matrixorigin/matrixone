@@ -127,7 +127,7 @@ create table fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign 
 insert into fk_01 values (2,'yellow',20),(2,'apple',50),(1,'opppo',51);
 insert into fk_02 values(2,'apple',1),(2,'apple',4),(1,'opppo',2);
 insert into fk_02 values(20,'score',1),(12,'apple',4),(1,'yellow',2);
-Cannot add or update a child row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`, `col2`) REFERENCES `fk_01` (`col1`, `col2`) ON DELETE RESTRICT ON UPDATE RESTRICT)
+internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3
 1    opppo    51
@@ -139,13 +139,13 @@ col1    col2    col3
 2    apple    4
 1    opppo    2
 update fk_02 set col1=3 where col1=2;
-Cannot add or update a child row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`, `col2`) REFERENCES `fk_01` (`col1`, `col2`) ON DELETE RESTRICT ON UPDATE RESTRICT)
+internal error: Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01 where col1=2 and col2='apple';
-Cannot delete or update a parent row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`, `col2`) REFERENCES `fk_01` (`col1`, `col2`) ON DELETE RESTRICT ON UPDATE RESTRICT)
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
 update fk_01 set col1=3 where col1=2;
-Cannot delete or update a parent row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`, `col2`) REFERENCES `fk_01` (`col1`, `col2`) ON DELETE RESTRICT ON UPDATE RESTRICT)
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
 update fk_01 set col1=1 where col1=2;
-Cannot delete or update a parent row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`, `col2`) REFERENCES `fk_01` (`col1`, `col2`) ON DELETE RESTRICT ON UPDATE RESTRICT)
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3
 1    opppo    51
@@ -157,7 +157,7 @@ col1    col2    col3
 2    apple    4
 1    opppo    2
 delete from fk_01 where col1=1;
-Cannot delete or update a parent row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`, `col2`) REFERENCES `fk_01` (`col1`, `col2`) ON DELETE RESTRICT ON UPDATE RESTRICT)
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
 delete from fk_02;
 select * from fk_01;
 col1    col2    col3
@@ -213,9 +213,9 @@ create table fk_02(col1 decimal(38,18),col2 char(25),col3 int,col4 date,constrai
 insert into fk_01 values(23.10,'a',20,'2022-10-01'),(23.10,'a',21,'2022-10-01'),(23.10,'a',20,'2022-10-02');
 insert into fk_02 values(23.10,'a',20,'2022-10-01'),(23.10,'a',21,'2022-10-01'),(23.10,'a',20,'2022-10-02');
 insert into fk_02 values(23.10,'a',20,'2022-10-01'),(0.1,'b',22,'2022-10-01'),(23.10,'c',30,'2022-10-02');
-Cannot add or update a child row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`, `col3`, `col4`) REFERENCES `fk_01` (`col1`, `col3`, `col4`) ON DELETE SET NULL ON UPDATE SET NULL)
+internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into fk_02 values(0.001,'b',20,'2022-10-01'),(4.5,'a',21,'2022-10-01'),(56,'a',20,'2022-10-02');
-Cannot add or update a child row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`, `col3`, `col4`) REFERENCES `fk_01` (`col1`, `col3`, `col4`) ON DELETE SET NULL ON UPDATE SET NULL)
+internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3    col4
 23.100000000000000000    a    20    2022-10-01
@@ -227,7 +227,7 @@ col1    col2    col3    col4
 23.100000000000000000    a    21    2022-10-01
 23.100000000000000000    a    20    2022-10-02
 update fk_02 set col3=19 where col3=20;
-Cannot add or update a child row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`, `col3`, `col4`) REFERENCES `fk_01` (`col1`, `col3`, `col4`) ON DELETE SET NULL ON UPDATE SET NULL)
+internal error: Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01  where col3=20;
 select * from fk_01;
 col1    col2    col3    col4
@@ -461,9 +461,9 @@ create table fk_02(col1 int,col2 datetime,col3 char(25),col4 timestamp ,constrai
 insert into fk_01 values (9,'2001-10-19','2001-10-09 01:00:09'),(10,'2011-12-09','2001-10-09 01:00:09'),(11,'2011-12-09','2001-10-09 01:00:09');
 insert into fk_02 values (9,'2001-10-19','left','2001-10-09 01:00:09'),(11,'2011-12-09','right','2001-10-09 01:00:09');
 insert into fk_02 values (5,'2001-10-19','left','2001-10-09 01:00:09');
-Cannot add or update a child row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`, `col2`, `col4`) REFERENCES `fk_01` (`col1`, `col2`, `col3`))
+internal error: Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01 where col3='2001-10-09 01:00:09';
-Cannot delete or update a parent row: a foreign key constraint fails (`foreign_key`.`fk_02`, CONSTRAINT `ck` FOREIGN KEY (`col1`, `col2`, `col4`) REFERENCES `fk_01` (`col1`, `col2`, `col3`))
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3
 9    2001-10-19 00:00:00    2001-10-09 01:00:09
