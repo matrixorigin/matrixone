@@ -126,6 +126,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 	if c.scope == nil {
 		return nil
 	}
+	defer func() { c.scope = nil }() // free pipeline
 
 	// XXX PrintScope has a none-trivial amount of logging
 	// PrintScope(nil, []*Scope{c.scope})
@@ -612,6 +613,11 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	if param.ScanType == tree.S3 {
 		if err := plan2.InitS3Param(param); err != nil {
 			return nil, err
+		}
+		if param.Parallel {
+			if mcpu > external.S3_PARALLEL_MAXNUM {
+				mcpu = external.S3_PARALLEL_MAXNUM
+			}
 		}
 	} else {
 		if err := plan2.InitInfileParam(param); err != nil {

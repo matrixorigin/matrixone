@@ -59,7 +59,8 @@ import (
 )
 
 var (
-	ONE_BATCH_MAX_ROW = 40000
+	ONE_BATCH_MAX_ROW  = 40000
+	S3_PARALLEL_MAXNUM = 10
 )
 
 var (
@@ -118,6 +119,12 @@ func Prepare(proc *process.Process, arg any) error {
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+	select {
+	case <-proc.Ctx.Done():
+		proc.SetInputBatch(nil)
+		return true, nil
+	default:
+	}
 	t1 := time.Now()
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -343,23 +350,6 @@ func ReadFileOffset(param *tree.ExternParam, proc *process.Process, mcpu int, fi
 		line, _ := r2.ReadString('\n')
 		tailSize = append(tailSize, int64(len(line)))
 		offset = append(offset, vec.Entries[0].Offset)
-	}
-
-	vec.Entries[0].Offset = 0
-	err = fs.Read(param.Ctx, &vec)
-	if err != nil {
-		return nil, err
-	}
-
-	r2 := bufio.NewReader(r)
-	for {
-		_, err := r2.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return nil, err
-		}
-		if err == io.EOF {
-			break
-		}
 	}
 
 	start := 0

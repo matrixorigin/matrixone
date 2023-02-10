@@ -819,7 +819,8 @@ create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT N
 drop index secondary_key on create_secondary_01;
 truncate table create_secondary_01;
 show create table create_secondary_01;
-
+Table    Create Table
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\n`col5` INT DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`)\n)
 drop table create_secondary_01;
 create table create_secondary_01 (col1 bigint primary key,col2 varchar(25) unique key,col3 float,col4 varchar(50),col5 int);
 create index secondary_key1 on create_secondary_01(col1);
