@@ -16,6 +16,8 @@ package config
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -51,7 +53,7 @@ var (
 	defaultHost = "0.0.0.0"
 
 	//listening unix domain socket
-	defaultUnixAddr = "/var/lib/mysql/mysql.sock"
+	defaultUnixAddr = "/tmp/mysql.sock"
 
 	//guest mmu limitation.  1 << 40 = 1099511627776
 	defaultGuestMmuLimitation = 1099511627776
@@ -162,8 +164,8 @@ type FrontendParameters struct {
 	//listening ip
 	Host string `toml:"host"`
 
-	//listening unix domain socket
-	UAddr string `toml:"UAddr"`
+	// UnixSocketAddress listening unix domain socket
+	UnixSocketAddress string `toml:"unix-socket"`
 
 	//guest mmu limitation. default: 1 << 40 = 1099511627776
 	GuestMmuLimitation int64 `toml:"guestMmuLimitation"`
@@ -300,8 +302,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.Host = defaultHost
 	}
 
-	if fp.UAddr == "" {
-		fp.UAddr = defaultUnixAddr
+	if fp.UnixSocketAddress == "" {
+		fp.UnixSocketAddress = defaultUnixAddr
 	}
 
 	if fp.GuestMmuLimitation == 0 {
@@ -405,6 +407,57 @@ func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version s
 	fp.LogMaxDays = int64(log.MaxDays)
 	fp.LogMaxBackups = int64(log.MaxBackups)
 	fp.MoVersion = version
+}
+
+func (fp *FrontendParameters) GetUnixSocketAddress() string {
+	if fp.UnixSocketAddress == "" {
+		return ""
+	}
+	ok, err := isFileExist(fp.UnixSocketAddress)
+	if err != nil || ok {
+		return ""
+	}
+
+	canCreate := func() string {
+		f, err := os.Create(fp.UnixSocketAddress)
+		if err != nil {
+			return ""
+		}
+		if err := f.Close(); err != nil {
+			panic(err)
+		}
+		if err := os.Remove(fp.UnixSocketAddress); err != nil {
+			panic(err)
+		}
+		return fp.UnixSocketAddress
+	}
+
+	rootPath := filepath.Dir(fp.UnixSocketAddress)
+	f, err := os.Open(rootPath)
+	if os.IsNotExist(err) {
+		err := os.MkdirAll(rootPath, 0755)
+		if err != nil {
+			return ""
+		}
+		return canCreate()
+	} else if err != nil {
+		return ""
+	}
+	if err := f.Close(); err != nil {
+		panic(err)
+	}
+	return canCreate()
+}
+
+func isFileExist(file string) (bool, error) {
+	f, err := os.Open(file)
+	if err == nil {
+		return true, f.Close()
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 // ObservabilityParameters hold metric/trace switch
