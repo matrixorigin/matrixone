@@ -134,16 +134,16 @@ func MakeInsertError(ctx context.Context, id types.T, col *ColDef, rows []tree.E
 	return moerr.NewTruncatedValueForField(ctx, id.String(), str, col.Name, rowIdx+1)
 }
 
-func buildIndexDefs(defs []*plan.TableDef_DefType) (*UniqueIndexDef, *SecondaryIndexDef) {
-	var uIdxDef *UniqueIndexDef = nil
-	var sIdxDef *SecondaryIndexDef = nil
-	for _, def := range defs {
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-			uIdxDef = idxDef.UIdx
-		}
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
-			sIdxDef = idxDef.SIdx
-		}
-	}
-	return uIdxDef, sIdxDef
-}
+//func buildIndexDefs(defs []*plan.TableDef_DefType) (*UniqueIndexDef, *SecondaryIndexDef) {
+//	var uIdxDef *UniqueIndexDef = nil
+//	var sIdxDef *SecondaryIndexDef = nil
+//	for _, def := range defs {
+//		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+//			uIdxDef = idxDef.UIdx
+//		}
+//		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
+//			sIdxDef = idxDef.SIdx
+//		}
+//	}
+//	return uIdxDef, sIdxDef
+//}

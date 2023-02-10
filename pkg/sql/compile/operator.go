@@ -1367,19 +1367,19 @@ func exprRelPos(expr *plan.Expr) int32 {
 	return -1
 }
 
-func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.SecondaryIndexDef) {
-	var uIdxDef *plan.UniqueIndexDef = nil
-	var sIdxDef *plan.SecondaryIndexDef = nil
-	for _, def := range defs {
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-			uIdxDef = idxDef.UIdx
-		}
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
-			sIdxDef = idxDef.SIdx
-		}
-	}
-	return uIdxDef, sIdxDef
-}
+//func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.SecondaryIndexDef) {
+//	var uIdxDef *plan.UniqueIndexDef = nil
+//	var sIdxDef *plan.SecondaryIndexDef = nil
+//	for _, def := range defs {
+//		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+//			uIdxDef = idxDef.UIdx
+//		}
+//		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
+//			sIdxDef = idxDef.SIdx
+//		}
+//	}
+//	return uIdxDef, sIdxDef
+//}
 
 // Get the 'engine.Relation' of the table by using 'ObjectRef' and 'TableDef', if 'TableDef' is nil, the relations of its index table will not be obtained
 // the first return value is Relation of the original table
@@ -1423,23 +1423,45 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 	var uniqueIndexTables []engine.Relation
 	if tableDef != nil {
 		uniqueIndexTables = make([]engine.Relation, 0)
-		uDef, _ := buildIndexDefs(tableDef.Defs)
-		if uDef != nil {
-			for i := range uDef.TableNames {
-				var indexTable engine.Relation
-				if uDef.TableExists[i] {
-					if isTemp {
-						indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, uDef.TableNames[i]))
-					} else {
-						indexTable, err = dbSource.Relation(ctx, uDef.TableNames[i])
+		//uDef, _ := buildIndexDefs(tableDef.Defs)
+		//if uDef != nil {
+		//	for i := range uDef.TableNames {
+		//		var indexTable engine.Relation
+		//		if uDef.TableExists[i] {
+		//			if isTemp {
+		//				indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, uDef.TableNames[i]))
+		//			} else {
+		//				indexTable, err = dbSource.Relation(ctx, uDef.TableNames[i])
+		//			}
+		//			if err != nil {
+		//				return nil, nil, err
+		//			}
+		//			uniqueIndexTables = append(uniqueIndexTables, indexTable)
+		//		}
+		//	}
+		//}
+		//------------------------------------------new code----------------------------------------------
+		if tableDef.Indexes != nil {
+			for _, indexdef := range tableDef.Indexes {
+				if indexdef.Unique {
+					var indexTable engine.Relation
+					if indexdef.TableExist {
+						if isTemp {
+							indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, indexdef.IndexTableName))
+						} else {
+							indexTable, err = dbSource.Relation(ctx, indexdef.IndexTableName)
+						}
+						if err != nil {
+							return nil, nil, err
+						}
+						uniqueIndexTables = append(uniqueIndexTables, indexTable)
 					}
-					if err != nil {
-						return nil, nil, err
-					}
-					uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				} else {
+					continue
 				}
 			}
 		}
+		//------------------------------------------------------------------------------------------------
 	}
 	return relation, uniqueIndexTables, err
 }

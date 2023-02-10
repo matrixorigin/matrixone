@@ -568,17 +568,18 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				TblId:     uint64(tableIdx),
 				Name:      tableName,
 				Cols:      colDefs,
+				Indexes:   make([]*NewIndexDef, len(table.idxs)),
 			}
 
 			if table.idxs != nil {
-				unidef := &plan.UniqueIndexDef{
-					IndexNames:  make([]string, 0),
-					TableNames:  make([]string, 0),
-					Fields:      make([]*plan.Field, 0),
-					TableExists: make([]bool, 0),
-				}
+				//unidef := &plan.UniqueIndexDef{
+				//	IndexNames:  make([]string, 0),
+				//	TableNames:  make([]string, 0),
+				//	Fields:      make([]*plan.Field, 0),
+				//	TableExists: make([]bool, 0),
+				//}
 
-				for _, idx := range table.idxs {
+				for i, idx := range table.idxs {
 					field := &plan.Field{
 						Parts: idx.parts,
 						Cols:  make([]*ColDef, 0),
@@ -602,17 +603,29 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 							},
 						})
 					}
-					unidef.IndexNames = append(unidef.IndexNames, idx.indexName)
-					unidef.TableNames = append(unidef.TableNames, idx.tableName)
-					unidef.Fields = append(unidef.Fields, field)
-					unidef.TableExists = append(unidef.TableExists, true)
+					//unidef.IndexNames = append(unidef.IndexNames, idx.indexName)
+					//unidef.TableNames = append(unidef.TableNames, idx.tableName)
+					//unidef.Fields = append(unidef.Fields, field)
+					//unidef.TableExists = append(unidef.TableExists, true)
+
+					//-----------------------------------------------------------
+					indexdef := &plan.NewIndexDef{
+						IndexName:      idx.indexName,
+						Field:          field,
+						Unique:         true,
+						IndexTableName: idx.tableName,
+						TableExist:     true,
+					}
+					tableDef.Indexes[i] = indexdef
+					//-----------------------------------------------------------
+
 				}
 
-				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-					Def: &plan.TableDef_DefType_UIdx{
-						UIdx: unidef,
-					},
-				})
+				//tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+				//	Def: &plan.TableDef_DefType_UIdx{
+				//		UIdx: unidef,
+				//	},
+				//})
 			}
 
 			if table.fks != nil {
@@ -649,16 +662,28 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				testField := &plan.Field{
 					Parts: []string{"n_nationkey"},
 				}
-				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-					Def: &plan.TableDef_DefType_UIdx{
-						UIdx: &plan.UniqueIndexDef{
-							IndexNames:  []string{"idx1"},
-							TableNames:  []string{"nation"},
-							Fields:      []*plan.Field{testField},
-							TableExists: []bool{false},
-						},
-					},
-				})
+				//tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+				//	Def: &plan.TableDef_DefType_UIdx{
+				//		UIdx: &plan.UniqueIndexDef{
+				//			IndexNames:  []string{"idx1"},
+				//			TableNames:  []string{"nation"},
+				//			Fields:      []*plan.Field{testField},
+				//			TableExists: []bool{false},
+				//		},
+				//	},
+				//})
+
+				//-----------------------------------new code--------------------------------
+				p := &plan.NewIndexDef{
+					IndexName:      "idx1",
+					Field:          testField,
+					Unique:         true,
+					IndexTableName: "nation",
+					TableExist:     true,
+				}
+				tableDef.Indexes = []*plan.NewIndexDef{p}
+				//---------------------------------------------------------------------------
+
 			}
 
 			if tableName == "v1" {

@@ -415,74 +415,99 @@ func DeepCopyPrimaryKeyDef(pkeyDef *plan.PrimaryKeyDef) *plan.PrimaryKeyDef {
 	return def
 }
 
-func DeepCopyUniqueIndexDef(indexDef *plan.UniqueIndexDef) *plan.UniqueIndexDef {
+func DeepCopyIndexDef(indexDef *plan.NewIndexDef) *plan.NewIndexDef {
 	if indexDef == nil {
 		return nil
 	}
-	indexNames := make([]string, len(indexDef.IndexNames))
-	tableNames := make([]string, len(indexDef.TableNames))
-	fields := make([]*plan.Field, len(indexDef.Fields))
-	tableExists := make([]bool, len(indexDef.TableExists))
-	comments := make([]string, len(indexDef.Comments))
-
-	copy(indexNames, indexDef.IndexNames)
-	copy(tableNames, indexDef.TableNames)
-	copy(tableExists, indexDef.TableExists)
-	copy(comments, indexDef.Comments)
-
-	for i := range indexDef.Fields {
-		fields[i] = &plan.Field{
-			Parts: make([]string, len(indexDef.Fields[i].Parts)),
-			Cols:  make([]*plan.ColDef, len(indexDef.Fields[i].Cols)),
-		}
-		copy(fields[i].Parts, indexDef.Fields[i].Parts)
-		for num := range indexDef.Fields[i].Cols {
-			fields[i].Cols[num] = DeepCopyColDef(indexDef.Fields[i].Cols[num])
-		}
+	newindexDef := &plan.NewIndexDef{
+		IdxId:          indexDef.IdxId,
+		IndexName:      indexDef.IndexName,
+		Unique:         indexDef.Unique,
+		TableExist:     indexDef.TableExist,
+		IndexTableName: indexDef.IndexTableName,
+		Comment:        indexDef.Comment,
 	}
 
-	newUniqueIndexDef := &plan.UniqueIndexDef{
-		IndexNames:  indexNames,
-		TableNames:  tableNames,
-		Fields:      fields,
-		TableExists: tableExists,
+	field := &plan.Field{
+		Parts: make([]string, len(indexDef.Field.Parts)),
+		Cols:  make([]*plan.ColDef, len(indexDef.Field.Cols)),
 	}
-
-	return newUniqueIndexDef
+	copy(field.Parts, indexDef.Field.Parts)
+	for num := range indexDef.Field.Cols {
+		field.Cols[num] = DeepCopyColDef(indexDef.Field.Cols[num])
+	}
+	newindexDef.Field = field
+	return newindexDef
 }
 
-func DeepCopySecondaryIndexDef(indexDef *plan.SecondaryIndexDef) *plan.SecondaryIndexDef {
-	if indexDef == nil {
-		return nil
-	}
-	indexNames := make([]string, len(indexDef.IndexNames))
-	tableNames := make([]string, len(indexDef.TableNames))
-	fields := make([]*plan.Field, len(indexDef.Fields))
-	tableExists := make([]bool, len(indexDef.TableExists))
-	comments := make([]string, len(indexDef.Comments))
-
-	copy(indexNames, indexDef.IndexNames)
-	copy(tableNames, indexDef.TableNames)
-	copy(tableExists, indexDef.TableExists)
-	copy(comments, indexDef.Comments)
-
-	for i := range indexDef.Fields {
-		fields[i] = &plan.Field{
-			Parts: make([]string, len(indexDef.Fields[i].Parts)),
-			Cols:  make([]*plan.ColDef, len(indexDef.Fields[i].Cols)),
-		}
-		copy(fields[i].Parts, indexDef.Fields[i].Parts)
-	}
-
-	newSecondaryIndexDef := &plan.SecondaryIndexDef{
-		IndexNames:  indexNames,
-		TableNames:  tableNames,
-		Fields:      fields,
-		TableExists: tableExists,
-	}
-
-	return newSecondaryIndexDef
-}
+//func DeepCopyUniqueIndexDef(indexDef *plan.UniqueIndexDef) *plan.UniqueIndexDef {
+//	if indexDef == nil {
+//		return nil
+//	}
+//	indexNames := make([]string, len(indexDef.IndexNames))
+//	tableNames := make([]string, len(indexDef.TableNames))
+//	fields := make([]*plan.Field, len(indexDef.Fields))
+//	tableExists := make([]bool, len(indexDef.TableExists))
+//	comments := make([]string, len(indexDef.Comments))
+//
+//	copy(indexNames, indexDef.IndexNames)
+//	copy(tableNames, indexDef.TableNames)
+//	copy(tableExists, indexDef.TableExists)
+//	copy(comments, indexDef.Comments)
+//
+//	for i := range indexDef.Fields {
+//		fields[i] = &plan.Field{
+//			Parts: make([]string, len(indexDef.Fields[i].Parts)),
+//			Cols:  make([]*plan.ColDef, len(indexDef.Fields[i].Cols)),
+//		}
+//		copy(fields[i].Parts, indexDef.Fields[i].Parts)
+//		for num := range indexDef.Fields[i].Cols {
+//			fields[i].Cols[num] = DeepCopyColDef(indexDef.Fields[i].Cols[num])
+//		}
+//	}
+//
+//	newUniqueIndexDef := &plan.UniqueIndexDef{
+//		IndexNames:  indexNames,
+//		TableNames:  tableNames,
+//		Fields:      fields,
+//		TableExists: tableExists,
+//	}
+//
+//	return newUniqueIndexDef
+//}
+//
+//func DeepCopySecondaryIndexDef(indexDef *plan.SecondaryIndexDef) *plan.SecondaryIndexDef {
+//	if indexDef == nil {
+//		return nil
+//	}
+//	indexNames := make([]string, len(indexDef.IndexNames))
+//	tableNames := make([]string, len(indexDef.TableNames))
+//	fields := make([]*plan.Field, len(indexDef.Fields))
+//	tableExists := make([]bool, len(indexDef.TableExists))
+//	comments := make([]string, len(indexDef.Comments))
+//
+//	copy(indexNames, indexDef.IndexNames)
+//	copy(tableNames, indexDef.TableNames)
+//	copy(tableExists, indexDef.TableExists)
+//	copy(comments, indexDef.Comments)
+//
+//	for i := range indexDef.Fields {
+//		fields[i] = &plan.Field{
+//			Parts: make([]string, len(indexDef.Fields[i].Parts)),
+//			Cols:  make([]*plan.ColDef, len(indexDef.Fields[i].Cols)),
+//		}
+//		copy(fields[i].Parts, indexDef.Fields[i].Parts)
+//	}
+//
+//	newSecondaryIndexDef := &plan.SecondaryIndexDef{
+//		IndexNames:  indexNames,
+//		TableNames:  tableNames,
+//		Fields:      fields,
+//		TableExists: tableExists,
+//	}
+//
+//	return newSecondaryIndexDef
+//}
 
 func DeepCopyOnUpdate(old *plan.OnUpdate) *plan.OnUpdate {
 	if old == nil {
@@ -507,6 +532,7 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		Name2ColIndex: table.Name2ColIndex,
 		CompositePkey: nil,
 		OriginCols:    make([]*plan.ColDef, len(table.OriginCols)),
+		Indexes:       make([]*NewIndexDef, len(table.Indexes)),
 	}
 
 	for idx, col := range table.Cols {
@@ -598,20 +624,28 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		newTable.Partition = partitionDef
 	}
 
+	//--------------------------------------------new code---------------------------------------------------------
+	if table.Indexes != nil {
+		for i, indexdef := range table.Indexes {
+			newTable.Indexes[i] = DeepCopyIndexDef(indexdef)
+		}
+	}
+
+	//-------------------------------------------------------------------------------------------------------------
 	for idx, def := range table.Defs {
 		switch defImpl := def.Def.(type) {
-		case *plan.TableDef_DefType_UIdx:
-			newTable.Defs[idx] = &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_UIdx{
-					UIdx: DeepCopyUniqueIndexDef(defImpl.UIdx),
-				},
-			}
-		case *plan.TableDef_DefType_SIdx:
-			newTable.Defs[idx] = &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_SIdx{
-					SIdx: DeepCopySecondaryIndexDef(defImpl.SIdx),
-				},
-			}
+		//case *plan.TableDef_DefType_UIdx:
+		//	newTable.Defs[idx] = &plan.TableDef_DefType{
+		//		Def: &plan.TableDef_DefType_UIdx{
+		//			UIdx: DeepCopyUniqueIndexDef(defImpl.UIdx),
+		//		},
+		//	}
+		//case *plan.TableDef_DefType_SIdx:
+		//	newTable.Defs[idx] = &plan.TableDef_DefType{
+		//		Def: &plan.TableDef_DefType_SIdx{
+		//			SIdx: DeepCopySecondaryIndexDef(defImpl.SIdx),
+		//		},
+		//	}
 		case *plan.TableDef_DefType_Properties:
 			propDef := &plan.PropertiesDef{
 				Properties: make([]*plan.Property, len(defImpl.Properties.Properties)),
