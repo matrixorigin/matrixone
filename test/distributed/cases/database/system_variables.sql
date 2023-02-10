@@ -67,6 +67,21 @@ create table t(
 );
 show indexes from t;
 
+create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
+-- @session:id=1&user=acc_idx:root&password=123456
+create database db1;
+use db1;
+drop table if exists t;
+create table t(
+                  a int,
+                  b int,
+                  c int,
+                  primary key(a)
+);
+show indexes from t;
+drop database db1;
+-- @session
+
 
 -- Support More System Views
 use information_schema;

@@ -2590,7 +2590,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 		*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
-		*tree.ShowCreateDatabase, *tree.ShowCreateTable,
+		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt)
@@ -2621,14 +2621,14 @@ GetComputationWrapper gets the execs from the computation engine
 */
 var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(sql); cached != nil {
-		for i, stmt := range cached.stmts {
-			tcw := InitTxnComputationWrapper(ses, stmt, proc)
-			tcw.plan = cached.plans[i]
-			cw = append(cw, tcw)
-		}
-		return cw, nil
-	}
+	// if cached := ses.getCachedPlan(sql); cached != nil {
+	// 	for i, stmt := range cached.stmts {
+	// 		tcw := InitTxnComputationWrapper(ses, stmt, proc)
+	// 		tcw.plan = cached.plans[i]
+	// 		cw = append(cw, tcw)
+	// 	}
+	// 	return cw, nil
+	// }
 
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
