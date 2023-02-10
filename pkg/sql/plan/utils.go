@@ -903,6 +903,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil {
 			node.Stats = builder.compCtx.Stats(node.ObjRef, HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess()))
+			node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
 		}
 
 	default:

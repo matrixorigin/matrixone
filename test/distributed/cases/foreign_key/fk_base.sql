@@ -229,6 +229,15 @@ insert into c1 values(2,2,1,1);
 drop table c1;
 drop table f1;
 
+create table fk_01(a int,b varchar(20),c tinyint,primary key(a,b));
+create table fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col1,col2) REFERENCES fk_01(a,b) on delete RESTRICT on update RESTRICT);
+create table fk_03(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col1) REFERENCES fk_01(a) on delete RESTRICT on update RESTRICT);
+create table fk_04(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col2) REFERENCES fk_01(b) on delete RESTRICT on update RESTRICT);
+drop table fk_04;
+drop table fk_03;
+drop table fk_02;
+drop table fk_01;
+
 drop database if exists db1;
 create database db1;
 use db1;
