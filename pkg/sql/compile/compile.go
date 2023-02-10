@@ -428,11 +428,11 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_EXTERNAL_SCAN:
 		node := plan2.DeepCopyNode(n)
-		ss, err := c.compileExternScan(ctx, n)
+		ss, err := c.compileExternScan(ctx, node)
 		if err != nil {
 			return nil, err
 		}
-		return c.compileSort(node, c.compileProjection(node, c.compileRestrict(n, ss))), nil
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss))), nil
 	case plan.Node_TABLE_SCAN:
 		ss, err := c.compileTableScan(n)
 		if err != nil {
@@ -645,7 +645,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 				return nil, err
 			}
 		}
-		fileList, fileSize, err = external.FliterFileList(n, c.proc, fileList, fileSize)
+		fileList, fileSize, err = external.FilterFileList(n, c.proc, fileList, fileSize)
 		if err != nil {
 			return nil, err
 		}
