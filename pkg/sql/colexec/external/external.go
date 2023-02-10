@@ -59,7 +59,7 @@ import (
 )
 
 var (
-	ONE_BATCH_MAX_ROW  = 40000
+	ONE_BATCH_MAX_ROW  = 1000000
 	S3_PARALLEL_MAXNUM = 10
 )
 
@@ -78,7 +78,8 @@ func Prepare(proc *process.Process, arg any) error {
 	} else {
 		param.maxBatchSize = proc.Lim.MaxMsgSize
 	}
-	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
+	//param.maxBatchSize = uint64(float64(param.maxBatchSize))
+	param.maxBatchSize = math.MaxInt32
 	if param.Extern.Format == tree.JSONLINE {
 		if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
 			param.Fileparam.End = true
@@ -156,6 +157,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		anal.Output(bat, isLast)
 		anal.Alloc(int64(bat.Size()))
 	}
+	fmt.Println("wangjian sql4 is", bat.Size())
 	return false, nil
 }
 
@@ -572,6 +574,7 @@ func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, err
 	plh.simdCsvLineArray = make([][]string, ONE_BATCH_MAX_ROW)
 	finish := false
 	plh.simdCsvLineArray, cnt, finish, err = plh.simdCsvReader.ReadLimitSize(ONE_BATCH_MAX_ROW, proc.Ctx, param.maxBatchSize, plh.simdCsvLineArray)
+	fmt.Println("wangjian sql2 is", cnt)
 	if err != nil {
 		return nil, err
 	}

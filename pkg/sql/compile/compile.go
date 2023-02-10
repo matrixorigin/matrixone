@@ -341,7 +341,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			return nil, err
 		}
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
-		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
+		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) {//|| qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
 			rs = c.newInsertMergeScope(arg, ss)

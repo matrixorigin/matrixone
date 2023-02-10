@@ -15,6 +15,7 @@
 package morpc
 
 import (
+	"fmt"
 	"io"
 	"sync"
 
@@ -39,7 +40,7 @@ const (
 )
 
 var (
-	defaultMaxMessageSize = 1024 * 1024 * 100
+	defaultMaxMessageSize = 1024 * 1024 * 10
 	checksumFieldBytes    = 8
 	totalSizeFieldBytes   = 4
 	payloadSizeFieldBytes = 4
@@ -402,6 +403,9 @@ func (c *baseCodec) writeBody(
 		return nil, nil
 	}
 
+	if writtenSize > 10000 {
+		fmt.Println("wangjian sql3 is", writtenSize, size, c.maxBodySize, msg)
+	}
 	if size > maxCanWrite {
 		return nil,
 			moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
