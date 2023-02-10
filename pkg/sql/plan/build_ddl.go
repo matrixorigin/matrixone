@@ -514,7 +514,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if index.Unique {
 					if len(index.Field.Parts) == 1 {
 						uniqueColName := index.Field.Parts[0]
-						uniqueColumn[uniqueColName] = uint64(columnNamePos[uniqueColName])
+						colId := tableRef.Cols[columnNamePos[uniqueColName]].ColId
+						uniqueColumn[uniqueColName] = colId
 					}
 				}
 			}
