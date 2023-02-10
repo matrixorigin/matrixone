@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select * from t1",
-		output: "select * from t1",
+		input:  "select * from t2",
+		output: "select * from t2",
 	}
 )
 
