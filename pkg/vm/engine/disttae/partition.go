@@ -86,8 +86,6 @@ func (d *DataRow) UniqueIndexes() []memtable.Tuple {
 	return d.uniqueIndexes
 }
 
-var _ MVCC = new(Partition)
-
 func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 	blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int) {
 	blks := make([]BlockMeta, 0, len(blocks))

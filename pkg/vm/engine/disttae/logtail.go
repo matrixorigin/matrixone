@@ -34,7 +34,7 @@ import (
 
 func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	ctx context.Context, op client.TxnOperator, db *DB,
-	mvcc MVCC, dn DNStore, req api.SyncLogTailReq) error {
+	partition *Partition, dn DNStore, req api.SyncLogTailReq) error {
 	reqs, err := genLogTailReq(dn, req)
 	if err != nil {
 		return err
@@ -44,7 +44,7 @@ func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 		return err
 	}
 	for i := range logTails {
-		if err := consumeLogTail(idx, primaryIdx, tbl, ts, ctx, db, mvcc, logTails[i]); err != nil {
+		if err := consumeLogTail(idx, primaryIdx, tbl, ts, ctx, db, partition, logTails[i]); err != nil {
 			logutil.Errorf("consume %d-%s logtail error: %v\n", tbl.tableId, tbl.tableName, err)
 			return err
 		}
@@ -70,7 +70,7 @@ func getLogTail(ctx context.Context, op client.TxnOperator, reqs []txn.TxnReques
 }
 
 func consumeLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
-	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) (err error) {
+	ctx context.Context, db *DB, partition *Partition, logTail *api.SyncLogTailResp) (err error) {
 	var entries []*api.Entry
 
 	if entries, err = logtail.LoadCheckpointEntries(
@@ -85,14 +85,14 @@ func consumeLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	}
 	for _, e := range entries {
 		if err = consumeEntry(idx, primaryIdx, tbl, ts, ctx,
-			db, mvcc, e); err != nil {
+			db, partition, e); err != nil {
 			return
 		}
 	}
 
 	for i := 0; i < len(logTail.Commands); i++ {
 		if err = consumeEntry(idx, primaryIdx, tbl, ts, ctx,
-			db, mvcc, logTail.Commands[i]); err != nil {
+			db, partition, logTail.Commands[i]); err != nil {
 			return
 		}
 	}
@@ -100,7 +100,7 @@ func consumeLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 }
 
 func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
-	ctx context.Context, db *DB, mvcc MVCC, e *api.Entry) error {
+	ctx context.Context, db *DB, partition *Partition, e *api.Entry) error {
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {
 			vec, err := vector.ProtoVectorToVector(e.Bat.Vecs[catalog.BLOCKMETA_ID_IDX+MO_PRIMARY_OFF])
@@ -134,9 +134,9 @@ func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 			tbl.db.txn.catalog.InsertColumns(bat)
 		}
 		if primaryIdx >= 0 {
-			return mvcc.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
+			return partition.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
 		}
-		return mvcc.Insert(ctx, primaryIdx, e.Bat, false)
+		return partition.Insert(ctx, primaryIdx, e.Bat, false)
 	}
 	if isMetaTable(e.TableName) {
 		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
@@ -149,7 +149,7 @@ func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
 		tbl.db.txn.catalog.DeleteDatabase(bat)
 	}
-	return mvcc.Delete(ctx, e.Bat)
+	return partition.Delete(ctx, e.Bat)
 }
 
 func genSyncLogTailReq(have, want timestamp.Timestamp, databaseId,
