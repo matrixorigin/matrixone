@@ -121,6 +121,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			}(s.PreScopes[i])
 		}
 	}
+	fmt.Printf("[scopemergerun] have %d remote regs, proc = %p\n", len(s.RemoteReceivRegInfos), s.Proc)
 	var errReceiveChan chan error
 	if len(s.RemoteReceivRegInfos) > 0 {
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
@@ -133,31 +134,40 @@ func (s *Scope) MergeRun(c *Compile) error {
 	// check sub-goroutine's error
 	if errReceiveChan == nil {
 		// check sub-goroutine's error
+		fmt.Printf("[scopemergerun] all local , proc = %p\n", s.Proc)
 		for i := 0; i < len(s.PreScopes); i++ {
 			if err := <-errChan; err != nil {
+				fmt.Printf("[scopemergerun] all local. scope[%d] err, proc = %p\n", i, s.Proc)
 				return err
 			}
+			fmt.Printf("[scopemergerun] all local. scope[%d] success, proc = %p\n", i, s.Proc)
 		}
 		return nil
 	}
 
 	slen := len(s.PreScopes)
 	rlen := len(s.RemoteReceivRegInfos)
+	fmt.Printf("[scopemergerun] multi local scope %d + remote reg %d, proc = %p\n", slen, rlen, s.Proc)
 	for {
 		select {
 		case err := <-errChan:
 			if err != nil {
+				fmt.Printf("[scopemergerun] multi. scope failed, proc = %p\n", s.Proc)
 				return err
 			}
+			fmt.Printf("[scopemergerun] multi. scope success, proc = %p\n", s.Proc)
 			slen--
 		case err := <-errReceiveChan:
 			if err != nil {
+				fmt.Printf("[scopemergerun] multi. reg failed, proc = %p\n", s.Proc)
 				return err
 			}
+			fmt.Printf("[scopemergerun] multi. reg success, proc = %p\n", s.Proc)
 			rlen--
 		}
 
 		if slen == 0 && rlen == 0 {
+			fmt.Printf("[scopemergerun] multi. all done, proc = %p\n", s.Proc)
 			return nil
 		}
 	}
@@ -602,7 +612,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 			}
 			fmt.Printf("[scopemergerun] get stream for %s uuid %s success\n", info.FromAddr, info.Uuid)
 			defer func(streamSender morpc.Stream) {
-				// TODO: should close channel or not?
+				// TODO: should close the channel or not?
 				_ = streamSender.Close()
 			}(streamSender)
 

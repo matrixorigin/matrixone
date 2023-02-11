@@ -15,10 +15,12 @@
 package pipeline
 
 import (
+	"fmt"
+	"reflect"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"reflect"
 )
 
 // Pipeline contains the information associated with a pipeline in a query execution plan.
@@ -91,6 +93,7 @@ type Pipeline struct {
 // cleanup do memory release work for whole pipeline.
 func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 	// clean all the coming batches.
+	fmt.Printf("[cleanupcleanup] begin to clean up (%t). proc = %p\n", pipelineFailed, proc)
 	if pipelineFailed {
 		bat := proc.InputBatch()
 		if bat != nil {
@@ -102,6 +105,7 @@ func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 	for i := range p.instructions {
 		p.instructions[i].Arg.Free(proc, pipelineFailed)
 	}
+	fmt.Printf("[cleanupcleanup] all free called. proc = %p\n", proc)
 
 	// select all merge receivers
 	listeners, alive := newSelectListener(proc.Reg.MergeReceivers)
@@ -119,6 +123,8 @@ func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 		}
 		bat.Clean(proc.Mp())
 	}
+
+	fmt.Printf("[cleanupcleanup] all merge receive. proc = %p\n", proc)
 }
 
 func newSelectListener(wrs []*process.WaitRegister) ([]reflect.SelectCase, int) {

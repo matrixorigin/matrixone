@@ -19,9 +19,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type debug struct {
+	bid int
+}
 type Argument struct {
 	Data interface{}
 	Func func(interface{}, *batch.Batch) error
+
+	IsRemote bool
+
+	dd debug
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

@@ -16,6 +16,7 @@ package output
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -24,7 +25,9 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("sql output")
 }
 
-func Prepare(_ *process.Process, _ any) error {
+func Prepare(_ *process.Process, arg any) error {
+	ap := arg.(*Argument)
+	ap.dd.bid = 0
 	return nil
 }
 
@@ -40,5 +43,10 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		}
 		bat.Clean(proc.Mp())
 	}
+	if ap.IsRemote {
+		ap.dd.bid++
+		fmt.Printf("[outputoutput] send %d batch already. proc = %p\n", ap.dd.bid, proc)
+	}
+
 	return false, nil
 }

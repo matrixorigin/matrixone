@@ -461,7 +461,7 @@ func refactorScope(c *Compile, _ context.Context, s *Scope) *Scope {
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,
 		Idx: -1, // useless
-		Arg: &output.Argument{Data: nil, Func: c.fill},
+		Arg: &output.Argument{Data: nil, Func: c.fill, IsRemote: true},
 	})
 	return rs
 }

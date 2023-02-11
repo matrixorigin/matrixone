@@ -64,8 +64,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 				message.Uuid = r.uuid[:]
 			}
 			r.cs.Write(r.ctx, message)
-			// TODO: close here?
-			//r.cs.Close()
 		}
 
 	}
