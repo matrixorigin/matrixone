@@ -23,18 +23,20 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"strconv"
+	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
-	_username = "dump"
-	_password = "111"
-	_host     = "127.0.0.1"
-	_port     = 6001
-	batchSize = 4096
-	timeout   = 10 * time.Second
+	defaultUsername        = "dump"
+	defaultPassword        = "111"
+	defaultHost            = "127.0.0.1"
+	defaultPort            = 6001
+	defaultNetBufferLength = 1046528
+	minNetBufferLength     = 16384
+	timeout                = 10 * time.Second
 )
 
 var (
@@ -66,27 +68,35 @@ func main() {
 	var (
 		username, password, host, database string
 		tables                             Tables
-		port                               int
+		port, netBufferLength              int
 		createDb                           string
 		createTable                        []string
 		err                                error
 	)
 	defer func() {
 		if err != nil {
-			fmt.Printf("error: %v", err)
+			fmt.Fprintf(os.Stderr, "modump error: %v\n", err)
 		}
 		if conn != nil {
-			conn.Close()
+			err := conn.Close()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "modump error while close connection: %v\n", err)
+			}
 		}
 	}()
+
 	ctx := context.Background()
-	flag.StringVar(&username, "u", _username, "username")
-	flag.StringVar(&password, "p", _password, "password")
-	flag.StringVar(&host, "h", _host, "hostname")
-	flag.IntVar(&port, "P", _port, "portNumber")
+	flag.StringVar(&username, "u", defaultUsername, "username")
+	flag.StringVar(&password, "p", defaultPassword, "password")
+	flag.StringVar(&host, "h", defaultHost, "hostname")
+	flag.IntVar(&port, "P", defaultPort, "portNumber")
+	flag.IntVar(&netBufferLength, "net-buffer-length", defaultNetBufferLength, "net_buffer_length")
 	flag.StringVar(&database, "db", "", "databaseName, must be specified")
 	flag.Var(&tables, "tbl", "tableNameList, default all")
 	flag.Parse()
+	if netBufferLength < minNetBufferLength {
+		netBufferLength = minNetBufferLength
+	}
 	if len(database) == 0 {
 		err = moerr.NewInvalidInput(ctx, "database must be specified")
 		return
@@ -133,7 +143,11 @@ func main() {
 			return
 		}
 	}
-
+	bufPool := &sync.Pool{
+		New: func() interface{} {
+			return &bytes.Buffer{}
+		},
+	}
 	for i, create := range createTable {
 		tbl := tables[i]
 		if tbl.Kind == catalog.SystemViewRel || tbl.Kind == catalog.SystemExternalRel {
@@ -145,7 +159,7 @@ func main() {
 			suffix = ";"
 		}
 		fmt.Printf("%s%s\n", create, suffix)
-		err = showInsert(database, tbl.Name)
+		err = showInsert(database, tbl.Name, bufPool, netBufferLength)
 		if err != nil {
 			return
 		}
@@ -230,12 +244,11 @@ func getCreateTable(db, tbl string) (string, error) {
 	return create, nil
 }
 
-func showInsert(db string, tbl string) error {
-	r, err := conn.Query("select * from `" + db + "`.`" + tbl + "` limit 0, " + strconv.Itoa(batchSize))
+func showInsert(db string, tbl string, bufPool *sync.Pool, netBufferLength int) error {
+	r, err := conn.Query("select * from `" + db + "`.`" + tbl + "`")
 	if err != nil {
 		return err
 	}
-	cur := 0
 	colTypes, err := r.ColumnTypes()
 	if err != nil {
 		return err
@@ -247,7 +260,7 @@ func showInsert(db string, tbl string) error {
 		c.Type = col.DatabaseTypeName()
 		cols = append(cols, &c)
 	}
-	buf := new(bytes.Buffer)
+	buf := bufPool.Get().(*bytes.Buffer)
 	for {
 		if !r.Next() {
 			break
@@ -281,20 +294,18 @@ func showInsert(db string, tbl string) error {
 			if !r.Next() {
 				break
 			}
+			if buf.Len() > netBufferLength {
+				break
+			}
 		}
 		if buf.Len() > preLen {
 			buf.WriteString(";\n")
 			fmt.Print(buf.String())
 		}
-
-		r.Close()
 		buf.Reset()
-		cur += batchSize
-		r, err = conn.Query("select * from `" + db + "`.`" + tbl + "` limit " + strconv.Itoa(cur) + ", " + strconv.Itoa(batchSize))
-		if err != nil {
-			return err
-		}
 	}
+	buf.Reset()
+	bufPool.Put(buf)
 	fmt.Printf("\n\n\n")
 	return nil
 }
@@ -306,15 +317,8 @@ func convertValue(v interface{}, typ string) string {
 		return "NULL"
 	}
 	switch typ {
-	case "int", "tinyint", "smallint", "bigint":
-		tmp, _ := strconv.ParseInt(string(ret.([]byte)), 10, 64)
-		return fmt.Sprintf("%v", tmp)
-	case "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint":
-		tmp, _ := strconv.ParseUint(string(ret.([]byte)), 10, 64)
-		return fmt.Sprintf("%v", tmp)
-	case "float", "double":
-		tmp, _ := strconv.ParseFloat(string(ret.([]byte)), 64)
-		return fmt.Sprintf("%v", tmp)
+	case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double":
+		return string(ret.([]byte))
 	default:
 		return "'" + strings.Replace(string(ret.([]byte)), "'", "\\'", -1) + "'"
 	}
