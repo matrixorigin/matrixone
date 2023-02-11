@@ -59,7 +59,7 @@ type CreateTable_FkColName = plan.CreateTable_FkColName
 type ForeignKeyDef = plan.ForeignKeyDef
 type ClusterTable = plan.ClusterTable
 type PrimaryKeyDef = plan.PrimaryKeyDef
-type NewIndexDef = plan.NewIndexDef
+type IndexDef = plan.IndexDef
 
 type CompilerContext interface {
 	// Default database/schema in context

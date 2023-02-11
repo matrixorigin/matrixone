@@ -129,7 +129,7 @@ type ViewDef struct {
 }
 
 type IndexDef struct {
-	Indexes []*plan.NewIndexDef
+	Indexes []*plan.IndexDef
 }
 
 type ForeignKeyDef struct {
@@ -250,12 +250,12 @@ func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
 		case Index:
 			length = binary.BigEndian.Uint64(data[l : l+8])
 			l += 8
-			indexes := make([]*plan.NewIndexDef, length)
+			indexes := make([]*plan.IndexDef, length)
 
 			for i := 0; i < int(length); i++ {
 				dataLength := binary.BigEndian.Uint64(data[l : l+8])
 				l += 8
-				indexdef := &plan.NewIndexDef{}
+				indexdef := &plan.IndexDef{}
 				err := indexdef.Unmarshal(data[l : l+int(dataLength)])
 				if err != nil {
 					return err

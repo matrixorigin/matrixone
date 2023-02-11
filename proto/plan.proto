@@ -258,7 +258,7 @@ message PrimaryKeyDef {
 	repeated string names = 5;
 }
 
-message NewIndexDef {
+message IndexDef {
 	// Generate UUID for each index, currently not used
 	string idx_id			       = 1;
 	string index_name        = 2;
@@ -388,7 +388,7 @@ message TableDef {
 	TableFunction tbl_func	= 7;
 
 	PrimaryKeyDef pkey				= 11;
-	repeated NewIndexDef indexes = 12;
+	repeated IndexDef indexes = 12;
 	repeated ForeignKeyDef fkeys	= 13;
 	repeated uint64 ref_child_tbls	= 14;
 	repeated CheckDef checks		= 15;

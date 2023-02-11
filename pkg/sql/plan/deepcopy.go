@@ -415,11 +415,11 @@ func DeepCopyPrimaryKeyDef(pkeyDef *plan.PrimaryKeyDef) *plan.PrimaryKeyDef {
 	return def
 }
 
-func DeepCopyIndexDef(indexDef *plan.NewIndexDef) *plan.NewIndexDef {
+func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 	if indexDef == nil {
 		return nil
 	}
-	newindexDef := &plan.NewIndexDef{
+	newindexDef := &plan.IndexDef{
 		IdxId:          indexDef.IdxId,
 		IndexName:      indexDef.IndexName,
 		Unique:         indexDef.Unique,
@@ -463,7 +463,7 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		Name2ColIndex: table.Name2ColIndex,
 		CompositePkey: nil,
 		OriginCols:    make([]*plan.ColDef, len(table.OriginCols)),
-		Indexes:       make([]*NewIndexDef, len(table.Indexes)),
+		Indexes:       make([]*IndexDef, len(table.Indexes)),
 	}
 
 	for idx, col := range table.Cols {

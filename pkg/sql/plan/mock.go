@@ -568,7 +568,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				TblId:     uint64(tableIdx),
 				Name:      tableName,
 				Cols:      colDefs,
-				Indexes:   make([]*NewIndexDef, len(table.idxs)),
+				Indexes:   make([]*IndexDef, len(table.idxs)),
 			}
 
 			if table.idxs != nil {
@@ -598,7 +598,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 						})
 					}
 
-					indexdef := &plan.NewIndexDef{
+					indexdef := &plan.IndexDef{
 						IndexName:      idx.indexName,
 						Field:          field,
 						Unique:         true,
@@ -644,14 +644,14 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					Parts: []string{"n_nationkey"},
 				}
 
-				p := &plan.NewIndexDef{
+				p := &plan.IndexDef{
 					IndexName:      "idx1",
 					Field:          testField,
 					Unique:         true,
 					IndexTableName: "nation",
 					TableExist:     true,
 				}
-				tableDef.Indexes = []*plan.NewIndexDef{p}
+				tableDef.Indexes = []*plan.IndexDef{p}
 			}
 
 			if tableName == "v1" {

@@ -743,7 +743,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	nameCount := make(map[string]int)
 
 	for _, indexInfo := range indexInfos {
-		indexDef := &plan.NewIndexDef{}
+		indexDef := &plan.IndexDef{}
 		indexDef.Unique = true
 
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), true)
@@ -866,7 +866,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 	nameCount := make(map[string]int)
 
 	for _, indexInfo := range indexInfos {
-		indexDef := &plan.NewIndexDef{}
+		indexDef := &plan.IndexDef{}
 		indexDef.Unique = false
 
 		field := &plan.Field{
