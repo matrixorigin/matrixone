@@ -128,12 +128,8 @@ type ViewDef struct {
 	View string
 }
 
-type UniqueIndexDef struct {
-	UniqueIndex string
-}
-
-type SecondaryIndexDef struct {
-	SecondaryIndex string
+type IndexDef struct {
+	Indexes []*plan.IndexDef
 }
 
 type ForeignKeyDef struct {
@@ -168,8 +164,7 @@ type ConstraintDef struct {
 type ConstraintType int8
 
 const (
-	UniqueIndex ConstraintType = iota
-	SecondaryIndex
+	Index ConstraintType = iota
 	RefChildTable
 	ForeignKey
 	PrimaryKey
@@ -179,24 +174,24 @@ func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	for _, ct := range c.Cts {
 		switch def := ct.(type) {
-		case *UniqueIndexDef:
-			if err := binary.Write(buf, binary.BigEndian, UniqueIndex); err != nil {
+		case *IndexDef:
+			if err := binary.Write(buf, binary.BigEndian, Index); err != nil {
 				return nil, err
 			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len([]byte(def.UniqueIndex)))); err != nil {
+			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Indexes))); err != nil {
 				return nil, err
 			}
-			buf.Write([]byte(def.UniqueIndex))
 
-		case *SecondaryIndexDef:
-			if err := binary.Write(buf, binary.BigEndian, SecondaryIndex); err != nil {
-				return nil, err
+			for _, indexdef := range def.Indexes {
+				bytes, err := indexdef.Marshal()
+				if err != nil {
+					return nil, err
+				}
+				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
+					return nil, err
+				}
+				buf.Write(bytes)
 			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len([]byte(def.SecondaryIndex)))); err != nil {
-				return nil, err
-			}
-			buf.Write([]byte(def.SecondaryIndex))
-
 		case *RefChildTableDef:
 			if err := binary.Write(buf, binary.BigEndian, RefChildTable); err != nil {
 				return nil, err
@@ -252,18 +247,23 @@ func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
 		typ := ConstraintType(data[l])
 		l += 1
 		switch typ {
-		case UniqueIndex:
+		case Index:
 			length = binary.BigEndian.Uint64(data[l : l+8])
 			l += 8
-			c.Cts = append(c.Cts, &UniqueIndexDef{UniqueIndex: string(data[l : l+int(length)])})
-			l += int(length)
+			indexes := make([]*plan.IndexDef, length)
 
-		case SecondaryIndex:
-			length = binary.BigEndian.Uint64(data[l : l+8])
-			l += 8
-			c.Cts = append(c.Cts, &SecondaryIndexDef{SecondaryIndex: string(data[l : l+int(length)])})
-			l += int(length)
-
+			for i := 0; i < int(length); i++ {
+				dataLength := binary.BigEndian.Uint64(data[l : l+8])
+				l += 8
+				indexdef := &plan.IndexDef{}
+				err := indexdef.Unmarshal(data[l : l+int(dataLength)])
+				if err != nil {
+					return err
+				}
+				l += int(dataLength)
+				indexes[i] = indexdef
+			}
+			c.Cts = append(c.Cts, &IndexDef{indexes})
 		case RefChildTable:
 			length = binary.BigEndian.Uint64(data[l : l+8])
 			l += 8
@@ -323,11 +323,10 @@ type Constraint interface {
 }
 
 // TODO: UniqueIndexDef, SecondaryIndexDef will not be tabledef and need to be moved in Constraint to be able modified
-func (*UniqueIndexDef) constraint()    {}
-func (*SecondaryIndexDef) constraint() {}
-func (*ForeignKeyDef) constraint()     {}
-func (*PrimaryKeyDef) constraint()     {}
-func (*RefChildTableDef) constraint()  {}
+func (*ForeignKeyDef) constraint()    {}
+func (*PrimaryKeyDef) constraint()    {}
+func (*RefChildTableDef) constraint() {}
+func (*IndexDef) constraint()         {}
 
 type Relation interface {
 	Statistics
