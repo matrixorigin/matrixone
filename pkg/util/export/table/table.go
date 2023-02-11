@@ -322,6 +322,7 @@ func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 	}
 	sb.WriteString("\n)")
 	sb.WriteString(TableOptions.GetTableOptions(tbl.PathBuilder))
+	sb.WriteString(";")
 
 	return sb.String()
 }
@@ -391,6 +392,7 @@ func (tbl *View) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 	}
 	sb.WriteString(fmt.Sprintf(" from `%s`.`%s` where ", tbl.OriginTable.Database, tbl.OriginTable.Table))
 	sb.WriteString(tbl.Condition.String())
+	sb.WriteRune(';')
 
 	return sb.String()
 }

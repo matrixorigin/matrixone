@@ -120,14 +120,14 @@ func (s *MOSpan) Free() {
 }
 
 func (s *MOSpan) GetName() string {
-	return spanView.OriginTable.GetName()
+	return SpanView.OriginTable.GetName()
 }
 
-func (s *MOSpan) GetTable() *table.Table { return spanView.OriginTable }
+func (s *MOSpan) GetTable() *table.Table { return SpanView.OriginTable }
 
 func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
-	row.SetColumnVal(rawItemCol, spanView.Table)
+	row.SetColumnVal(rawItemCol, SpanView.Table)
 	row.SetColumnVal(spanIDCol, s.SpanID.String())
 	row.SetColumnVal(traceIDCol, s.TraceID.String())
 	row.SetColumnVal(spanKindCol, s.Kind.String())

@@ -1,6 +1,17 @@
-/*
-Copyright © 2023 NAME HERE <EMAIL ADDRESS>
-*/
+// Copyright 2023 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package cmd
 
 import (
@@ -9,20 +20,11 @@ import (
 	"os"
 )
 
-// rootCmd represents the base command when called without any subcommands
-/*var rootCmd = &cobra.Command{
-	Use:   "mo-tool",
-	Short: `mo-tool is a CLI library for MO CLuster`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
-}*/
-
 var rootCmd = &cobra.Command{
 	Use:   "mo-tool",
 	Short: `mo-tool is a CLI library for MO CLuster`,
 	Run: func(cmd *cobra.Command, args []string) {
-		if version {
+		if *version {
 			if ShowVersion != nil {
 				ShowVersion()
 			} else {
@@ -44,7 +46,7 @@ func Execute() {
 
 var ShowVersion func() = nil
 
-var version bool
+var version *bool
 
 func init() {
 	// Here you will define your flags and configuration settings.
@@ -52,9 +54,8 @@ func init() {
 	// will be global for your application.
 
 	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.mo-tool.yaml)")
-	rootCmd.PersistentFlags().BoolVarP(&version, "version", "v", false, "Print version information")
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
-	//rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	version = rootCmd.Flags().BoolP("version", "v", false, "Print version information")
 }

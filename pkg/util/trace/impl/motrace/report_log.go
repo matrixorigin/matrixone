@@ -46,7 +46,7 @@ func newMOZap() *MOZapLog {
 }
 
 func (m *MOZapLog) GetName() string {
-	return logView.OriginTable.GetName()
+	return LogView.OriginTable.GetName()
 }
 
 // Size 计算近似值
@@ -62,11 +62,11 @@ func (m *MOZapLog) Free() {
 	m.Extra = ""
 }
 
-func (m *MOZapLog) GetTable() *table.Table { return logView.OriginTable }
+func (m *MOZapLog) GetTable() *table.Table { return LogView.OriginTable }
 
 func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
-	row.SetColumnVal(rawItemCol, logView.Table)
+	row.SetColumnVal(rawItemCol, LogView.Table)
 	row.SetColumnVal(traceIDCol, m.SpanContext.TraceID.String())
 	row.SetColumnVal(spanIDCol, m.SpanContext.SpanID.String())
 	row.SetColumnVal(spanKindCol, m.SpanContext.Kind.String())

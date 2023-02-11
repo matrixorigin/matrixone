@@ -162,7 +162,7 @@ var (
 		SupportUserAccess: false,
 	}
 
-	logView = &table.View{
+	LogView = &table.View{
 		Database:    StatsDatabase,
 		Table:       logInfoTbl,
 		OriginTable: SingleRowLogTable,
@@ -183,7 +183,7 @@ var (
 		Condition: &table.ViewSingleCondition{Column: rawItemCol, Table: logInfoTbl},
 	}
 
-	errorView = &table.View{
+	ErrorView = &table.View{
 		Database:    StatsDatabase,
 		Table:       errorInfoTbl,
 		OriginTable: SingleRowLogTable,
@@ -201,7 +201,7 @@ var (
 		Condition: &table.ViewSingleCondition{Column: rawItemCol, Table: errorInfoTbl},
 	}
 
-	spanView = &table.View{
+	SpanView = &table.View{
 		Database:    StatsDatabase,
 		Table:       spanInfoTbl,
 		OriginTable: SingleRowLogTable,
@@ -227,7 +227,7 @@ const (
 )
 
 var tables = []*table.Table{SingleStatementTable, SingleRowLogTable}
-var views = []*table.View{logView, errorView, spanView}
+var views = []*table.View{LogView, ErrorView, SpanView}
 
 // InitSchemaByInnerExecutor init schema, which can access db by io.InternalExecutor on any Node.
 func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor) error {

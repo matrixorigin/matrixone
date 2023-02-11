@@ -38,7 +38,7 @@ type MOErrorHolder struct {
 }
 
 func (h *MOErrorHolder) GetName() string {
-	return errorView.OriginTable.GetName()
+	return ErrorView.OriginTable.GetName()
 }
 
 func (h *MOErrorHolder) Size() int64 {
@@ -48,11 +48,11 @@ func (h *MOErrorHolder) Free() {
 	h.Error = nil
 }
 
-func (h *MOErrorHolder) GetTable() *table.Table { return errorView.OriginTable }
+func (h *MOErrorHolder) GetTable() *table.Table { return ErrorView.OriginTable }
 
 func (h *MOErrorHolder) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
-	row.SetColumnVal(rawItemCol, errorView.Table)
+	row.SetColumnVal(rawItemCol, ErrorView.Table)
 	row.SetColumnVal(timestampCol, h.Timestamp)
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
