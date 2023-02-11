@@ -45,6 +45,7 @@ ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 GOBIN := go
 BIN_NAME := mo-service
 MO_DUMP := mo-dump
+MO_TOOL := mo-tool
 BUILD_CFG := gen_config
 UNAME_S := $(shell uname -s)
 GOPATH := $(shell go env GOPATH)
@@ -120,6 +121,10 @@ build: config cgo cmd/mo-service/$(wildcard *.go)
 .PHONY: modump
 modump:
 	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(MO_DUMP) ./cmd/mo-dump
+
+.PHONY: motool
+motool:
+	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(MO_TOOL) ./cmd/mo-tool
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
