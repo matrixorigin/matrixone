@@ -28,7 +28,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -3296,7 +3295,7 @@ func (ses *Session) getSqlType(sql string) {
 	}
 }
 
-func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter, earlyStop *atomic.Bool) (err error) {
+func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	defer func() {
@@ -3337,11 +3336,19 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	if length == 0 {
 		return
 	}
+
+	skipWrite := false
+	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
+	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
+	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
+	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
+
 	_, err = writer.Write(packet.Payload)
 	if err != nil {
-		return
+		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
+		logErrorf(ses.GetConciseProfile(), "load local '%s', write error: %v", param.Filepath, err)
 	}
-	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := 0, 100, math.MaxFloat64, float64(0), math.MaxFloat64, float64(0)
+	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
 		readStart := time.Now()
 		msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
@@ -3353,7 +3360,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 			}
 			break
 		}
-		readTime := time.Since(readStart).Seconds()
+		readTime := time.Since(readStart)
 		if readTime > maxReadTime {
 			maxReadTime = readTime
 		}
@@ -3371,12 +3378,13 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		proto.SetSequenceID(seq)
 
 		writeStart := time.Now()
-		if !earlyStop.Load() {
+		if !skipWrite {
 			_, err = writer.Write(packet.Payload)
 			if err != nil {
-				return
+				logErrorf(ses.GetConciseProfile(), "load local '%s', epoch: %d, write error: %v", param.Filepath, epoch, err)
+				skipWrite = true
 			}
-			writeTime := time.Since(writeStart).Seconds()
+			writeTime := time.Since(writeStart)
 			if writeTime > maxWriteTime {
 				maxWriteTime = writeTime
 			}
@@ -3385,12 +3393,12 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 			}
 		}
 		if epoch%printEvery == 0 {
-			logutil.Infof("load local '%s', epoch: %d, minReadTime: %f seconds, maxReadTime: %f seconds, minWriteTime: %f seconds, maxWriteTime:%f seconds, quick write:%v", param.Filepath, epoch, minReadTime, maxReadTime, minWriteTime, maxWriteTime, earlyStop.Load())
-			minReadTime, maxReadTime, minWriteTime, maxWriteTime = math.MaxFloat64, float64(0), math.MaxFloat64, float64(0)
+			logInfof(ses.GetConciseProfile(), "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
+			minReadTime, maxReadTime, minWriteTime, maxWriteTime = 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 		}
 		epoch += 1
 	}
-	logutil.Infof("load local '%s', read&write all data from client cost: %f seconds", param.Filepath, time.Since(start).Seconds())
+	logInfof(ses.GetConciseProfile(), "load local '%s', read&write all data from client cost: %s", param.Filepath, time.Since(start))
 	return
 }
 
@@ -3476,7 +3484,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	canCache := true
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
-	var loadLocalEarlyStop *atomic.Bool
 
 	singleStatement := len(cws) == 1
 	for i, cw := range cws {
@@ -3967,16 +3974,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if st, ok := cw.GetAst().(*tree.Load); ok {
 				if st.Local {
 					loadLocalErrGroup = new(errgroup.Group)
-					loadLocalEarlyStop = new(atomic.Bool)
 					loadLocalErrGroup.Go(func() error {
-						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter, loadLocalEarlyStop)
+						return mce.processLoadLocal(proc.Ctx, st.Param, loadLocalWriter)
 					})
 				}
 			}
 
 			if err = runner.Run(0); err != nil {
-				if loadLocalEarlyStop != nil { // release resources
-					loadLocalEarlyStop.Store(true)
+				if loadLocalErrGroup != nil { // release resources
 					err2 := proc.LoadLocalReader.Close()
 					if err2 != nil {
 						logErrorf(ses.GetConciseProfile(), "processLoadLocal reader close failed: %s", err2.Error())

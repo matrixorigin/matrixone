@@ -165,51 +165,31 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr += pkStr
 	}
 
-	uIndexDef, sIndexDef := BuildIndexDefs(tableDef.Defs)
-	if uIndexDef != nil {
-		for i, name := range uIndexDef.IndexNames {
-			uIStr := "UNIQUE KEY "
-			uIStr += fmt.Sprintf("`%s` (", name)
-			for num, part := range uIndexDef.Fields[i].Parts {
-				if num == len(uIndexDef.Fields[i].Parts)-1 {
-					uIStr += fmt.Sprintf("`%s`", part)
+	if tableDef.Indexes != nil {
+		for _, indexdef := range tableDef.Indexes {
+			var indexStr string
+			if indexdef.Unique {
+				indexStr = "UNIQUE KEY "
+			} else {
+				indexStr = "KEY "
+			}
+			indexStr += fmt.Sprintf("`%s` (", indexdef.IndexName)
+			for num, part := range indexdef.Field.Parts {
+				if num == len(indexdef.Field.Parts)-1 {
+					indexStr += fmt.Sprintf("`%s`", part)
 				} else {
-					uIStr += fmt.Sprintf("`%s`,", part)
+					indexStr += fmt.Sprintf("`%s`,", part)
 				}
 			}
-			uIStr += ")"
-			if uIndexDef.Comments[i] != "" {
-				uIStr += fmt.Sprintf(" COMMENT `%s`", uIndexDef.Comments[i])
+			indexStr += ")"
+			if indexdef.Comment != "" {
+				indexStr += fmt.Sprintf(" COMMENT `%s`", indexdef.Comment)
 			}
 			if rowCount != 0 {
 				createStr += ",\n"
 			}
-			createStr += uIStr
+			createStr += indexStr
 		}
-
-	}
-
-	if sIndexDef != nil {
-		for i, name := range sIndexDef.IndexNames {
-			uIStr := "KEY "
-			uIStr += fmt.Sprintf("`%s` (", name)
-			for num, part := range sIndexDef.Fields[i].Parts {
-				if num == len(sIndexDef.Fields[i].Parts)-1 {
-					uIStr += fmt.Sprintf("`%s`", part)
-				} else {
-					uIStr += fmt.Sprintf("`%s`,", part)
-				}
-			}
-			uIStr += ")"
-			if sIndexDef.Comments[i] != "" {
-				uIStr += fmt.Sprintf(" COMMENT `%s`", sIndexDef.Comments[i])
-			}
-			if rowCount != 0 {
-				createStr += ",\n"
-			}
-			createStr += uIStr
-		}
-
 	}
 
 	for _, fk := range tableDef.Fkeys {
