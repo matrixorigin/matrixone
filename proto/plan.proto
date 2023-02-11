@@ -245,8 +245,11 @@ message IndexOption {
 }
 
 message PrimaryKeyDef {
+	// currently not used
 	repeated uint64 cols	= 1;
+	// currently not used
 	uint64 pkey_col_id		= 2;
+	// currently not used
 	IndexOption option		= 3;
 
 	// Composed primary key column name: __mo_cpkey
@@ -256,18 +259,18 @@ message PrimaryKeyDef {
 }
 
 message IndexDef {
-	// Generate UUID for each index
-	string idx_id			= 1;
-	string name				= 2;
-	// Name for anonymous indices, __mo_idx_[INDEX_ID]
-	bool unique				= 3;
-	repeated Expr parts		= 4;
-	IndexOption option		= 5;
-
-	// Index table name: __mo_idx_[TABLE_ID]_[INDEX_ID]
-	// Column name for indexed column(s): __mo_idx_key
-	// Column name for original primary key: __mo_orig_pkey
+	// Generate UUID for each index, currently not used
+	string idx_id			       = 1;
+	string index_name        = 2;
+	Field  field             = 3;
+	bool unique				       = 4;
+	string index_table_name  = 5;
+	bool table_exist        = 6;
+	string comment          = 7;
+	// currently not used
+	IndexOption option		  = 8;
 }
+
 
 message ForeignKeyDef {
 	enum RefAction {
@@ -361,24 +364,10 @@ message ViewDef {
 	string view  = 1;
 }
 
-message UniqueIndexDef {
-	repeated string index_names = 1;
-	repeated string table_names = 2;
-	repeated Field fields = 3;
-	repeated bool table_exists = 4;
-	repeated string comments = 5;
-}
-
-message SecondaryIndexDef {
-	repeated string index_names = 1;
-	repeated string table_names = 2;
-	repeated Field fields = 3;
-	repeated bool table_exists = 4;
-	repeated string comments = 5;
-}
-
 message Field {
+	// Components of index
 	repeated string parts = 1;
+	// Column definition information in corresponding index table
 	repeated ColDef cols = 2;
 }
 
@@ -387,8 +376,6 @@ message TableDef {
 	message DefType {
 		oneof def {
 			PropertiesDef properties	= 1;
-			UniqueIndexDef uIdx			= 2;
-			SecondaryIndexDef sIdx		= 3;
 		}
 	}
 
@@ -401,7 +388,7 @@ message TableDef {
 	TableFunction tbl_func	= 7;
 
 	PrimaryKeyDef pkey				= 11;
-	repeated IndexDef indices		= 12;
+	repeated IndexDef indexes = 12;
 	repeated ForeignKeyDef fkeys	= 13;
 	repeated uint64 ref_child_tbls	= 14;
 	repeated CheckDef checks		= 15;
