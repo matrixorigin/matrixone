@@ -706,22 +706,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	return nil
 }
 
-func getColIdFromExpr(e *plan.Expr) (uint64, bool) {
-	switch exprImpl := e.Expr.(type) {
-	case *plan.Expr_F:
-		for _, expr := range exprImpl.F.Args {
-			if colId, ok := getColIdFromExpr(expr); ok {
-				return colId, ok
-			}
-		}
-		return 0, false
-	case *plan.Expr_Col:
-		return uint64(exprImpl.Col.ColPos), true
-	default:
-		return 0, false
-	}
-}
-
 func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 	switch typ {
 	case tree.REFERENCE_OPTION_CASCADE:
