@@ -172,8 +172,8 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 			} else if len(tblDef.Fkeys) > 0 {
 				newTblInfo.haveConstraint = true
 			} else {
-				for _, def := range tblDef.Defs {
-					if _, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+				for _, indexdef := range tblDef.Indexes {
+					if indexdef.Unique {
 						newTblInfo.haveConstraint = true
 						break
 					}
@@ -256,8 +256,8 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		} else if len(tableDef.Fkeys) > 0 {
 			tblInfo.haveConstraint = true
 		} else {
-			for _, def := range tableDef.Defs {
-				if _, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
+			for _, indexdef := range tableDef.Indexes {
+				if indexdef.Unique {
 					tblInfo.haveConstraint = true
 					break
 				}
@@ -856,19 +856,19 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 	// rewrite index, to get rows of unique table to delete
 	if info.typ != "insert" {
-		for _, def := range tableDef.Defs {
-			if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-				for idx, tblName := range idxDef.UIdx.TableNames {
+		if tableDef.Indexes != nil {
+			for _, indexdef := range tableDef.Indexes {
+				if indexdef.Unique {
 					idxRef := &plan.ObjectRef{
 						SchemaName: builder.compCtx.DefaultDatabase(),
-						ObjName:    tblName,
+						ObjName:    indexdef.IndexTableName,
 					}
 
 					// append table_scan node
 					joinCtx := NewBindContext(builder, bindCtx)
 
 					rightCtx := NewBindContext(builder, joinCtx)
-					astTblName := tree.NewTableName(tree.Identifier(tblName), tree.ObjectNamePrefix{})
+					astTblName := tree.NewTableName(tree.Identifier(indexdef.IndexTableName), tree.ObjectNamePrefix{})
 					rightId, err := builder.buildTable(astTblName, rightCtx)
 					if err != nil {
 						return err
@@ -903,9 +903,9 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					// append join node
 					var joinConds []*Expr
 					var leftExpr *Expr
-					partsLength := len(idxDef.UIdx.Fields[idx].Parts)
+					partsLength := len(indexdef.Field.Parts)
 					if partsLength == 1 {
-						orginIndexColumnName := idxDef.UIdx.Fields[idx].Parts[0]
+						orginIndexColumnName := indexdef.Field.Parts[0]
 						typ := typMap[orginIndexColumnName]
 						leftExpr = &Expr{
 							Typ: typ,
@@ -918,7 +918,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 						}
 					} else {
 						args := make([]*Expr, partsLength)
-						for i, column := range idxDef.UIdx.Fields[idx].Parts {
+						for i, column := range indexdef.Field.Parts {
 							typ := typMap[column]
 							args[i] = &plan.Expr{
 								Typ: typ,
