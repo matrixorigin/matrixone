@@ -52,13 +52,75 @@ func (aip *AutoIncrParam) SetLastInsertID(id uint64) {
 	aip.proc.SetLastInsertID(id)
 }
 
-type Ses interface {
-	GetNextAutoIncrNum([]*plan.ColDef, context.Context, *AutoIncrParam, *batch.Batch, uint64) ([]uint64, []uint64, error)
-	DeleteAutoIncrCache(string)
-	RenameAutoIncrCache(string, string)
+func getNextAutoIncrNum(proc *process.Process, colDefs []*plan.ColDef, ctx context.Context, incrParam *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
+	autoIncrCaches := proc.SessionInfo.AutoIncrCaches
+	autoIncrCaches.Mu.Lock()
+	defer autoIncrCaches.Mu.Unlock()
+	offset, step := make([]uint64, 0), make([]uint64, 0)
+	for i, col := range colDefs {
+		if !col.Typ.AutoIncr {
+			continue
+		}
+		name := fmt.Sprintf("%d_%s", tableID, col.Name)
+		autoincrcache, ok := autoIncrCaches.AutoIncrCaches[name]
+		// Not cached yet or the cache is ran out.
+		// Need new txn for read from the table.
+		if !ok || autoincrcache.CurNum >= autoincrcache.MaxNum {
+			// Need return maxNum for correction.
+			cur := uint64(0)
+			if ok {
+				cur = autoincrcache.CurNum
+			}
+			curNum, maxNum, stp, err := getNextOneCache(ctx, incrParam, bat, tableID, i, name, proc.SessionInfo.AutoIncrCacheSize, cur)
+			if err != nil {
+				return nil, nil, err
+			}
+			autoIncrCaches.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: curNum, MaxNum: maxNum, Step: stp}
+		}
+
+		offset = append(offset, autoIncrCaches.AutoIncrCaches[name].CurNum)
+		step = append(step, autoIncrCaches.AutoIncrCaches[name].Step)
+
+		// Here got the most recent id in the cache.
+		// Need compare witch vec and get the maxNum.
+		maxNum, err := getMax(incrParam, bat, i, autoIncrCaches.AutoIncrCaches[name].Step, 1, autoIncrCaches.AutoIncrCaches[name].CurNum)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		incrParam.SetLastInsertID(maxNum)
+
+		// Update the caches.
+		autoIncrCaches.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: maxNum,
+			MaxNum: autoIncrCaches.AutoIncrCaches[name].MaxNum, Step: autoIncrCaches.AutoIncrCaches[name].Step}
+	}
+
+	return offset, step, nil
 }
 
-func GetNextOneCache(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, tableID uint64, i int, name string, cachesize, curNum uint64) (uint64, uint64, uint64, error) {
+func deleteAutoIncrCache(name string, proc *process.Process) {
+	autoIncrCaches := proc.SessionInfo.AutoIncrCaches
+	autoIncrCaches.Mu.Lock()
+	defer autoIncrCaches.Mu.Unlock()
+	_, ok := autoIncrCaches.AutoIncrCaches[name]
+	if ok {
+		delete(autoIncrCaches.AutoIncrCaches, name)
+	}
+}
+
+func renameAutoIncrCache(newname, oldname string, proc *process.Process) {
+	autoIncrCaches := proc.SessionInfo.AutoIncrCaches
+	autoIncrCaches.Mu.Lock()
+	defer autoIncrCaches.Mu.Unlock()
+	_, ok := autoIncrCaches.AutoIncrCaches[oldname]
+	if ok {
+		autoIncrCaches.AutoIncrCaches[newname] = defines.AutoIncrCache{CurNum: autoIncrCaches.AutoIncrCaches[oldname].CurNum,
+			MaxNum: autoIncrCaches.AutoIncrCaches[oldname].MaxNum, Step: autoIncrCaches.AutoIncrCaches[oldname].Step}
+		delete(autoIncrCaches.AutoIncrCaches, oldname)
+	}
+}
+
+func getNextOneCache(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, tableID uint64, i int, name string, cachesize, curNum uint64) (uint64, uint64, uint64, error) {
 	var err error
 	loopCnt := 0
 loop:
@@ -94,9 +156,7 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 		tblName: tblName,
 	}
 
-	ses := proc.SessionInfo.Session.(Ses)
-
-	offset, step, err := ses.GetNextAutoIncrNum(ColDefs, ctx, incrParam, bat, tableID)
+	offset, step, err := getNextAutoIncrNum(proc, ColDefs, ctx, incrParam, bat, tableID)
 	if err != nil {
 		return err
 	}
@@ -202,7 +262,7 @@ func updateVector[T constraints.Integer](vec *vector.Vector, length, curNum, ste
 }
 
 // Get max get the max number of next ids and the vec number.
-func GetMax(param *AutoIncrParam, bat *batch.Batch, pos int, step, cachesize, oriNum uint64) (uint64, error) {
+func getMax(param *AutoIncrParam, bat *batch.Batch, pos int, step, cachesize, oriNum uint64) (uint64, error) {
 	vec := bat.Vecs[pos]
 	maxNum := oriNum
 	maxNumStore := oriNum
@@ -297,7 +357,7 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 		oriNum = curNum
 	}
 
-	maxNum, err := GetMax(param, bat, pos, step, cachesize, oriNum)
+	maxNum, err := getMax(param, bat, pos, step, cachesize, oriNum)
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -641,8 +701,7 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 			bat.Clean(proc.Mp())
 
 			// Delete the cache.
-			ses := proc.SessionInfo.Session.(Ses)
-			ses.DeleteAutoIncrCache(name)
+			deleteAutoIncrCache(name, proc)
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
@@ -702,8 +761,7 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 			}
 
 			// Rename the old cache.
-			ses := proc.SessionInfo.Session.(Ses)
-			ses.RenameAutoIncrCache(delName, newName+d.Attr.Name)
+			renameAutoIncrCache(delName, newName+d.Attr.Name, proc)
 
 			// In cache implementation no update needed.
 			currentNum = currentNum - 1
@@ -771,8 +829,7 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 			}
 
 			// Delete the cache.
-			ses := proc.SessionInfo.Session.(Ses)
-			ses.DeleteAutoIncrCache(delName)
+			deleteAutoIncrCache(delName, proc)
 
 			bat2 := makeAutoIncrBatch(name+d.Attr.Name, 0, 1, proc.Mp())
 			if err = autoRel.Write(ctx, bat2); err != nil {

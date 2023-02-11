@@ -228,3 +228,42 @@ insert into c1 values(1,2,1,1);
 insert into c1 values(2,2,1,1);
 drop table c1;
 drop table f1;
+
+create table fk_01(a int,b varchar(20),c tinyint,primary key(a,b));
+create table fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col1,col2) REFERENCES fk_01(a,b) on delete RESTRICT on update RESTRICT);
+create table fk_03(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col1) REFERENCES fk_01(a) on delete RESTRICT on update RESTRICT);
+create table fk_04(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col2) REFERENCES fk_01(b) on delete RESTRICT on update RESTRICT);
+drop table fk_04;
+drop table fk_03;
+drop table fk_02;
+drop table fk_01;
+
+drop database if exists db1;
+create database db1;
+use db1;
+create table f1(b int, a int primary key);
+create table t1 (a int, b int);
+create table t2(b int, a int unique);
+truncate table f1;
+drop database db1;
+create database db1;
+use db1;
+show tables;
+drop database db1;
+
+---------Cross-tenant test---------
+create account acc1 ADMIN_NAME 'root' IDENTIFIED BY '123456';
+-- @session:id=1&user=acc1:root&password=123456
+create database db2;
+use db2;
+create table f1(b int, a int primary key);
+create table t1 (a int, b int);
+create table t2(b int, a int unique);
+truncate table f1;
+drop database db2;
+create database db2;
+use db2;
+show tables;
+drop database db2;
+-- @session
+drop account if exists acc1;

@@ -43,3 +43,4 @@ type = "distributed-tae"
 
 [cn.frontend]
 port = 16002
+unix-socket = "/tmp/mysql2.sock"

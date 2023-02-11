@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select * from t1 where a not ilike '%a'",
-		output: "select * from t1 where a not ilike %a",
+		input:  "create table t1 (a int comment '\"123123\\'')",
+		output: "create table t1 (a int comment \"123123'')",
 	}
 )
 
@@ -53,6 +53,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "create table t1 (a int comment '\"123123\\'')",
+		output: "create table t1 (a int comment \"123123'')",
+	}, {
 		input:  "select * from t1 where a not ilike '%a'",
 		output: "select * from t1 where a not ilike %a",
 	}, {
@@ -612,6 +615,12 @@ var (
 		input: "create table t (a int, b char, check (1 + 1) enforced)",
 	}, {
 		input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+	}, {
+		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+	}, {
+		input:  "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
 		input: "create table t (a int, b char, unique key idx (a, b))",
 	}, {
