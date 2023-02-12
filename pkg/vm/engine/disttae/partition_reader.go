@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
@@ -101,6 +102,13 @@ func (p *PartitionReader) getIdxs(colNames []string) (res []uint16) {
 }
 
 func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logutil.Infof("Recovered in partitionReader: ", r)
+		}
+	}()
+
 	if p == nil {
 		return nil, nil
 	}
