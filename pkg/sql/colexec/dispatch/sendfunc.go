@@ -15,7 +15,9 @@
 package dispatch
 
 import (
+	"context"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -31,31 +33,71 @@ const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 
 	SendToAllFunc = iota
-	SendToAnyFunc
+	SendToAnyLocalFunc
 )
 
 // common sender: send to all receiver
-func sendToAllFunc(bat *batch.Batch, bid int64, localReceivers []*process.WaitRegister, remoteReceivers []*WrapperClientSession, proc *process.Process) error {
-	if remoteReceivers != nil {
+func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+	refCountAdd := int64(len(ap.LocalRegs) - 1)
+	atomic.AddInt64(&bat.Cnt, refCountAdd)
+	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+		jm.IncRef(refCountAdd)
+		jm.SetDupCount(int64(len(ap.LocalRegs)))
+	}
+
+	// if the remote receiver is not prepared, send to LocalRegs first
+	// and then waiting the remote receiver notify
+	if !ap.prepared {
+		for _, reg := range ap.LocalRegs {
+			select {
+			case <-reg.Ctx.Done():
+				return moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+			case reg.Ch <- bat:
+			}
+		}
+
+		// wait the remote notify
+		cnt := len(ap.RemoteRegs)
 		encodeData, errEncode := types.Encode(bat)
 		if errEncode != nil {
 			return errEncode
 		}
-		for _, r := range remoteReceivers {
-			if err := sendBatchToClientSession(encodeData, bid, r); err != nil {
+		for cnt > 0 {
+			csinfo := <-proc.DispatchNotifyCh
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			_ = cancel
+
+			newWrapClientSession := &WrapperClientSession{
+				msgId: csinfo.MsgId,
+				ctx:   timeoutCtx,
+				cs:    csinfo.Cs,
+				uuid:  csinfo.Uid,
+			}
+			// TODO: add check the receive info's correctness
+			if err := sendBatchToClientSession(encodeData, newWrapClientSession); err != nil {
+				return err
+			}
+			ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers, newWrapClientSession)
+			cnt--
+		}
+		ap.prepared = true
+
+		return nil
+	}
+
+	if ap.ctr.remoteReceivers != nil {
+		encodeData, errEncode := types.Encode(bat)
+		if errEncode != nil {
+			return errEncode
+		}
+		for _, r := range ap.ctr.remoteReceivers {
+			if err := sendBatchToClientSession(encodeData, r); err != nil {
 				return err
 			}
 		}
 	}
 
-	refCountAdd := int64(len(localReceivers) - 1)
-	atomic.AddInt64(&bat.Cnt, refCountAdd)
-	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
-		jm.IncRef(refCountAdd)
-		jm.SetDupCount(int64(len(localReceivers)))
-	}
-
-	for _, reg := range localReceivers {
+	for _, reg := range ap.LocalRegs {
 		select {
 		case <-reg.Ctx.Done():
 			return moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
@@ -67,31 +109,10 @@ func sendToAllFunc(bat *batch.Batch, bid int64, localReceivers []*process.WaitRe
 }
 
 // common sender: send to any receiver
-func sendToAnyFunc(bat *batch.Batch, bid int64, localReceivers []*process.WaitRegister, remoteReceivers []*WrapperClientSession, proc *process.Process) error {
-	// bid is a continuously increasing number
-	// so use it to decide which chan to send.
-	//
-	// Treate all reg like: [localReg0, localReg1, localReg2, remoteReg0, remoteReg1]
-	// And choose one from then by mod Bid with its length
-	localLen := int64(len(localReceivers))
-	remoteLen := int64(len(remoteReceivers))
-	sendId := bid % (localLen + remoteLen)
-
-	// send to remote receiver
-	if sendId >= localLen {
-		sendId = sendId - localLen
-		encodeData, errEncode := types.Encode(bat)
-		if errEncode != nil {
-			return errEncode
-		}
-		if err := sendBatchToClientSession(encodeData, bid, remoteReceivers[sendId]); err != nil {
-			return err
-		}
-		return nil
-	}
-
+func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
 	// send to local receiver
-	reg := localReceivers[sendId]
+	sendto := ap.sendto % len(ap.LocalRegs)
+	reg := ap.LocalRegs[sendto]
 	select {
 	case <-reg.Ctx.Done():
 		for len(reg.Ch) > 0 { // free memory
@@ -101,16 +122,16 @@ func sendToAnyFunc(bat *batch.Batch, bid int64, localReceivers []*process.WaitRe
 			}
 			bat.Clean(proc.Mp())
 		}
-		// TODO: how to remove the done-receiver?
-		// localReceivers = append(localReceivers[:sendId], localReceivers[sendId+1:]...)
+		ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
 		return nil
 	case reg.Ch <- bat:
+		ap.sendto++
 	}
 
 	return nil
 }
 
-func sendBatchToClientSession(encodeBatData []byte, bid int64, wcs *WrapperClientSession) error {
+func sendBatchToClientSession(encodeBatData []byte, wcs *WrapperClientSession) error {
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
 		msg := cnclient.AcquireMessage()
 		{

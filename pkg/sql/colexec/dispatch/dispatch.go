@@ -30,9 +30,9 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.prepared = false
+	ap.prepared = false
 	if len(ap.RemoteRegs) == 0 {
-		ap.ctr.prepared = true
+		ap.prepared = true
 		ap.ctr.remoteReceivers = nil
 	} else {
 		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, len(ap.RemoteRegs))
@@ -41,8 +41,11 @@ func Prepare(proc *process.Process, arg any) error {
 	switch ap.FuncId {
 	case SendToAllFunc:
 		ap.ctr.sendFunc = sendToAllFunc
-	case SendToAnyFunc:
-		ap.ctr.sendFunc = sendToAnyFunc
+	case SendToAnyLocalFunc:
+		if !ap.prepared {
+			return moerr.NewInternalError(proc.Ctx, "SendToAnyLocalFunc should not send to remote")
+		}
+		ap.ctr.sendFunc = sendToAnyLocalFunc
 	default:
 		return moerr.NewInternalError(proc.Ctx, "wrong sendFunc id for dispatch")
 	}
@@ -55,7 +58,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	// waiting all remote receive prepared
 	// put it in Call() for better parallel
-	if !ap.ctr.prepared {
+	// TODO: minimize the waiting
+	if !ap.prepared {
 		cnt := len(ap.RemoteRegs)
 		for cnt > 0 {
 			csinfo := <-proc.DispatchNotifyCh
@@ -71,7 +75,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			// TODO: add check the receive info's correctness
 			cnt--
 		}
-		ap.ctr.prepared = true
+		ap.prepared = true
 	}
 
 	bat := proc.InputBatch()
@@ -79,10 +83,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return true, nil
 	}
 
-	if err := ap.ctr.sendFunc(bat, ap.ctr.bid, ap.LocalRegs, ap.ctr.remoteReceivers, proc); err != nil {
+	if err := ap.ctr.sendFunc(bat, ap, proc); err != nil {
 		return false, err
 	}
+	if len(ap.LocalRegs) == 0 {
+		return true, nil
+	}
 	proc.SetInputBatch(nil)
-	ap.ctr.bid++
 	return false, nil
 }

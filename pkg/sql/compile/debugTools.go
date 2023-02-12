@@ -198,7 +198,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 				switch arg.FuncId {
 				case dispatch.SendToAllFunc:
 					str += fmt.Sprintf(" to all of MergeReceiver [%s].", chs)
-				case dispatch.SendToAnyFunc:
+				case dispatch.SendToAnyLocalFunc:
 					str += fmt.Sprintf(" to any of MergeReceiver [%s].", chs)
 				default:
 					str += fmt.Sprintf(" unknow type dispatch [%s].", chs)

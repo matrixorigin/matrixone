@@ -34,21 +34,21 @@ type WrapperClientSession struct {
 	// toAddr string
 }
 type container struct {
-	prepared bool
-	bid      int64
-
+	// the clientsession info for the channel you want to dispatch
 	remoteReceivers []*WrapperClientSession
-
-	sendFunc func(bat *batch.Batch, bid int64, localReceiver []*process.WaitRegister, remoteReceiver []*WrapperClientSession, proc *process.Process) error
+	// sendFunc is the rule you want to send batch
+	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) error
 }
 
 type Argument struct {
-	ctr    *container
-	FuncId int
+	ctr      *container
+	prepared bool
+	sendto   int
 
+	// FuncId means the sendFunc
+	FuncId int
 	// LocalRegs means the local register you need to send to.
 	LocalRegs []*process.WaitRegister
-
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
 }

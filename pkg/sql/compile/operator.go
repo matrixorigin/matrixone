@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -874,7 +875,7 @@ func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argumen
 	if all {
 		arg.FuncId = dispatch.SendToAllFunc
 	} else {
-		arg.FuncId = dispatch.SendToAnyFunc
+		arg.FuncId = dispatch.SendToAnyLocalFunc
 	}
 
 	return arg
@@ -895,9 +896,8 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentAddr string, pr
 			continue
 		}
 
-		// strings.Split(currentAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
 		if len(s.NodeInfo.Addr) == 0 || len(currentAddr) == 0 ||
-			currentAddr == s.NodeInfo.Addr {
+			strings.Split(currentAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
 			// Local reg.
 			// Put them into arg.LocalRegs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
