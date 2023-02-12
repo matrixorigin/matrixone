@@ -640,7 +640,6 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 
 			var val morpc.Message
 			var dataBuffer []byte
-			currentBid := int64(-1)
 			for {
 				select {
 				case <-c.Done():
@@ -668,14 +667,9 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 					return
 				}
 
-				if m.GetBid() == currentBid {
-					dataBuffer = append(dataBuffer, m.Data...)
-				} else {
-					currentBid = m.GetBid()
-					dataBuffer = m.Data
-				}
+				dataBuffer = append(dataBuffer, m.Data...)
 
-				fmt.Printf("[scopemergerun] receive message from %s uuid %s, bid = %d\n", info.FromAddr, info.Uuid, m.GetBid())
+				fmt.Printf("[scopemergerun] receive message from %s uuid %s\n", info.FromAddr, info.Uuid)
 
 				if m.BatcWaitingNextToMerge() {
 					continue

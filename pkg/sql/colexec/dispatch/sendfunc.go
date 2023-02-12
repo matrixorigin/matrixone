@@ -122,7 +122,6 @@ func sendBatchToClientSession(encodeBatData []byte, bid int64, wcs *WrapperClien
 			msg.Data = encodeBatData
 			msg.Cmd = pipeline.BatchMessage
 			msg.Sid = pipeline.BatchEnd
-			msg.Bid = bid
 		}
 		if err := wcs.cs.Write(wcs.ctx, msg); err != nil {
 			fmt.Printf("[dispatchdispatch] write whole message (%d, %s) in cs %p failed\n", bid, wcs.uuid, &wcs.cs)
@@ -146,7 +145,6 @@ func sendBatchToClientSession(encodeBatData []byte, bid int64, wcs *WrapperClien
 			msg.Data = encodeBatData[start:end]
 			msg.Cmd = pipeline.BatchMessage
 			msg.Sid = uint64(sid)
-			msg.Bid = bid
 		}
 
 		if err := wcs.cs.Write(wcs.ctx, msg); err != nil {

@@ -280,10 +280,8 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyz
 	var dataBuffer []byte
 	var sequence uint64
 	for {
-		fmt.Printf("[remoterunback] waitting batch. current = %d\n", cnt)
 		select {
 		case <-c.ctx.Done():
-			fmt.Printf("[remoterunback] received ctx.Done(). current = %d\n", cnt)
 			return moerr.NewRPCTimeout(c.ctx)
 		case val = <-mChan:
 		}
@@ -322,8 +320,6 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyz
 			if m.WaitingNextToMerge() {
 				continue
 			}
-			cnt++
-			fmt.Printf("[remoterunback] received %d batch\n", cnt)
 			bat, err := decodeBatch(c.proc.Mp(), dataBuffer)
 			if err != nil {
 				return err
