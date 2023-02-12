@@ -68,7 +68,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 		pointer := value.UnsafePointer()
 		bat := (*batch.Batch)(pointer)
-		fmt.Printf("[mergemerge] receiver %s receive a msg. proc = %p\n", ctr.getCurrentString(), proc)
+		fmt.Printf("[mergemerge] receiver %s received a msg. proc = %p\n", ctr.getCurrentString(), proc)
 		if bat == nil {
 			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
 			ctr.aliveMergeReceiver--

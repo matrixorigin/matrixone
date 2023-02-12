@@ -42,7 +42,12 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			return true, err
 		}
 		bat.Clean(proc.Mp())
+	} else {
+		if ap.IsRemote {
+			fmt.Printf("[outputoutput] nil batch. proc = %p\n", proc)
+		}
 	}
+
 	if ap.IsRemote {
 		ap.dd.bid++
 		fmt.Printf("[outputoutput] send %d batch already. proc = %p\n", ap.dd.bid, proc)

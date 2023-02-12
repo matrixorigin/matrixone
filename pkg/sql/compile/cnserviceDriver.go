@@ -111,7 +111,7 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 		getClusterDetails: getClusterDetails,
 	}
 	// decode message and run it, get final analysis information and err info.
-	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
+	msgTyp, analysis, err := cnMessageHandle(ctx, message, cs, helper, cli)
 	if err != nil {
 		errData = pipeline.EncodedMessageError(ctx, err)
 	}
@@ -121,9 +121,11 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	}
 	backMessage := messageAcquirer().(*pipeline.Message)
 	backMessage.Id = message.GetID()
+	backMessage.Cmd = msgTyp
 	backMessage.Sid = pipeline.MessageEnd
 	backMessage.Err = errData
 	backMessage.Analyse = analysis
+	fmt.Printf("[msghandler] handle done. cmd = %d, sid = %d. write to cs\n", msgTyp, pipeline.MessageEnd)
 	return cs.Write(ctx, backMessage)
 }
 
@@ -138,7 +140,7 @@ func fillEngineForInsert(s *Scope, e engine.Engine) {
 	}
 }
 
-func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper, cli client.TxnClient) (anaData []byte, err error) {
+func cnMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper, cli client.TxnClient) (msgTyp uint64, anaData []byte, err error) {
 	var c *Compile
 	var s *Scope
 	var procHelper *processHelper
@@ -148,12 +150,13 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		panic("unexpected message type for cn-server")
 	}
 
-	// notify the dispatch excutor
-	if m.IsNotifyMessage() {
+	msgTyp = m.GetCmd()
+	switch msgTyp {
+	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch excutor
 		opUuid, err := uuid.FromBytes(m.GetUuid())
 		fmt.Printf("[msghandler] receive %s notify msg\n", opUuid)
 		if err != nil {
-			return nil, err
+			return msgTyp, nil, err
 		}
 
 		var ch chan process.WrapCs
@@ -174,38 +177,44 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 
 		ch <- info
 		fmt.Printf("[msghandler] put %s notify msg to ch %p done\n", opUuid, ch)
-		return nil, nil
-	}
+		return msgTyp, nil, nil
 
-	// generate Compile-structure to run scope.
-	procHelper, err = generateProcessHelper(m.GetProcInfoData(), cli)
-	if err != nil {
-		return nil, err
-	}
-	c = newCompile(ctx, message, procHelper, messageHelper, cs)
+	case pipeline.PipelineMessage:
+		procHelper, err = generateProcessHelper(m.GetProcInfoData(), cli)
+		if err != nil {
+			return msgTyp, nil, err
+		}
+		c = newCompile(ctx, message, procHelper, messageHelper, cs)
 
-	// decode and run the scope.
-	s, err = decodeScope(m.GetData(), c.proc, true)
-	// remote insert operator need to have engine
-	fillEngineForInsert(s, c.e)
+		// decode and run the scope.
+		s, err = decodeScope(m.GetData(), c.proc, true)
+		// remote insert operator need to have engine
+		fillEngineForInsert(s, c.e)
 
-	if err != nil {
-		return nil, err
-	}
-	s = refactorScope(c, c.ctx, s)
+		if err != nil {
+			return msgTyp, nil, err
+		}
+		s = refactorScope(c, c.ctx, s)
+		fmt.Printf("[msghandler] refactorScope done. sproc = %p \n", s.Proc)
 
-	err = s.ParallelRun(c, s.IsRemote)
-	if err != nil {
-		return nil, err
+		err = s.ParallelRun(c, s.IsRemote)
+		if err != nil {
+			fmt.Printf("[msghandler] the received pipeline run failed, err = %s\n", err)
+			return msgTyp, nil, err
+		}
+		fmt.Printf("[msghandler] the received pipeline run success\n")
+		// encode analysis info and return.
+		anas := &pipeline.AnalysisList{
+			List: make([]*plan.AnalyzeInfo, len(c.proc.AnalInfos)),
+		}
+		for i := range anas.List {
+			anas.List[i] = convertToPlanAnalyzeInfo(c.proc.AnalInfos[i])
+		}
+		anaData, err = anas.Marshal()
+		return msgTyp, anaData, err
+	default:
+		return msgTyp, nil, moerr.NewInternalError(ctx, "unknow message type")
 	}
-	// encode analysis info and return.
-	anas := &pipeline.AnalysisList{
-		List: make([]*plan.AnalyzeInfo, len(c.proc.AnalInfos)),
-	}
-	for i := range anas.List {
-		anas.List[i] = convertToPlanAnalyzeInfo(c.proc.AnalInfos[i])
-	}
-	return anas.Marshal()
 }
 
 const maxMessageSizeToMoRpc = 64 * mpool.MB
@@ -213,6 +222,12 @@ const maxMessageSizeToMoRpc = 64 * mpool.MB
 // sendBackBatchToCnClient send back the result batch to cn client.
 func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint64, mHelper *messageHandleHelper, cs morpc.ClientSession) error {
 	if b == nil {
+		message := cnclient.AcquireMessage()
+		{
+			message.Id = messageId
+			message.Sid = pipeline.MessageEnd
+		}
+		cs.Write(ctx, message)
 		return nil
 	}
 	encodeData, errEncode := types.Encode(b)
@@ -251,13 +266,17 @@ func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint
 func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
 	var dataBuffer []byte
+	cnt := 0
 	for {
+		fmt.Printf("[remoterunback] waitting batch. current = %d\n", cnt)
 		select {
 		case <-c.ctx.Done():
+			fmt.Printf("[remoterunback] received ctx.Done(). current = %d\n", cnt)
 			return moerr.NewRPCTimeout(c.ctx)
 		case val = <-mChan:
 		}
 		if val == nil {
+			fmt.Printf("[remoterunback] received an nil val, return\n")
 			return nil
 		}
 		m := val.(*pipeline.Message)
@@ -267,6 +286,7 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyz
 			return err
 		}
 		if m.IsEndMessage() {
+			fmt.Printf("[remoterunback] received end msg batch\n")
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
 				// get analysis info if it has
@@ -287,6 +307,8 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyz
 			if m.WaitingNextToMerge() {
 				continue
 			}
+			cnt++
+			fmt.Printf("[remoterunback] received %d batch\n", cnt)
 			bat, err := decodeBatch(c.proc.Mp(), dataBuffer)
 			if err != nil {
 				return err
@@ -342,7 +364,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 		message.Id = streamSender.ID()
 		message.Data = sData
 		message.ProcInfoData = pData
-		message.Cmd = 0
+		message.Cmd = pipeline.PipelineMessage
 	}
 
 	errSend := streamSender.Send(c.ctx, message)

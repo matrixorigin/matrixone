@@ -121,7 +121,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			}(s.PreScopes[i])
 		}
 	}
-	fmt.Printf("[scopemergerun] have %d remote regs, proc = %p\n", len(s.RemoteReceivRegInfos), s.Proc)
+	fmt.Printf("[scopemergerun] has %d prescopr and %d remote regs, proc = %p\n", len(s.PreScopes), len(s.RemoteReceivRegInfos), s.Proc)
 	var errReceiveChan chan error
 	if len(s.RemoteReceivRegInfos) > 0 {
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
@@ -147,7 +147,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	slen := len(s.PreScopes)
 	rlen := len(s.RemoteReceivRegInfos)
-	fmt.Printf("[scopemergerun] multi local scope %d + remote reg %d, proc = %p\n", slen, rlen, s.Proc)
+	fmt.Printf("[scopemergerun] multi local prescope %d + remote reg %d, proc = %p\n", slen, rlen, s.Proc)
 	for {
 		select {
 		case err := <-errChan:

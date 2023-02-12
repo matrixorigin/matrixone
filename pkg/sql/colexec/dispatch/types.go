@@ -60,6 +60,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			message := cnclient.AcquireMessage()
 			{
 				message.Id = r.msgId
+				message.Cmd = pipeline.BatchMessage
 				message.Sid = pipeline.MessageEnd
 				message.Uuid = r.uuid[:]
 			}

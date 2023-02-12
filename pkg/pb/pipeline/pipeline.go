@@ -23,7 +23,8 @@ import (
 
 const (
 	// Basic message type
-	PipelineMessage = iota
+	UnknowType = iota
+	PipelineMessage
 	BatchMessage
 	PrepareDoneNotifyMessage // for dispatch
 
