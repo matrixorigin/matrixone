@@ -87,7 +87,7 @@ var traceLogCmd = &cobra.Command{
 	Use:   "tracelog",
 	Short: "Help to create external tables in target mo cluster, that helps to access others mo cluster's trace/log/metric info.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := traceLogernalCmdFunc(); err != nil {
+		if err := traceLogCmdFunc(); err != nil {
 			return err
 		}
 		return nil
@@ -96,7 +96,7 @@ var traceLogCmd = &cobra.Command{
 
 const connTimeout = 10 * time.Second
 
-func traceLogernalCmdFunc() error {
+func traceLogCmdFunc() error {
 	var err error
 	var ctx = context.Background()
 	if traceLogExample {
