@@ -300,17 +300,19 @@ SELECT MAX(format(d1, id)), MIN(format(d3, 0)) from format_01;
 max(format(d1, id))    min(format(d3, 0))
 21.000    0
 SELECT ABS(format(d3,0)) FROM format_01;
-[unknown result because it is related to issue#7464]
+invalid argument cast to int, bad value 46,787,698
 SELECT SUM(format(id,2)) FROM format_01;
-[unknown result because it is related to issue#7464]
+invalid argument aggregate function sum, bad value [VARCHAR]
 SELECT CEIL(format(d3, 4))FROM format_01;
-[unknown result because it is related to issue#7464]
+strconv.ParseFloat: parsing "46,787,698.0000": invalid syntax
 SELECT ROUND(format(d4, 0)) FROM format_01;
-[unknown result because it is related to issue#7464]
+invalid argument cast to int, bad value 454,987,456,415
 SELECT power(format(2,1), 2);
-[unknown result because it is related to issue#7464]
+power(format(2, 1), 2)
+4
 SELECT COUNT(format(d3,2)) FROM format_01;
-[unknown result because it is related to issue#7464]
+count(format(d3, 3))
+5
 DROP TABLE IF EXISTS format_02;
 CREATE TABLE format_02(id INT, d1 FLOAT, d2 DOUBLE NOT NULL);
 INSERT INTO format_02 VALUES(1, 1.2, 47832.434);
@@ -421,15 +423,22 @@ format(ceil(d2), 6)
 37,827,330.000000
 3,923,405.000000
 SELECT * from format_02 WHERE format(d2, 2) >= 0;
-[unknown result because it is related to issue#7464]
+invalid argument cast to int, bad value 47,832.43
 SELECT * FROM format_02 WHERE format(d2, 0) NOT BETWEEN 0 AND 100;
-[unknown result because it is related to issue#7464]
+invalid argument cast to int, bad value 47,832
 SELECT * FROM format_02 WHERE format(d2,0) IN (73, 32789);
-[unknown result because it is related to issue#7464]
+id    d1    d2
+2    -3283.33    73.32
 SELECT * FROM format_02 WHERE format(d2,0) NOT IN (73, 32789);
-[unknown result because it is related to issue#7464]
+id  d1  d2
+1    1.2    47832.434
+3    NULL    32789.33
+4    0    -38902093.4324
+5    323232    0
+6    323    3782329.43432
+8    7382    3923404.2132421
 SELECT * FROM format_02 WHERE format(d2, 2) MOD 2 = 0;
-[unknown result because it is related to issue#7464]
+invalid argument cast to int, bad value 47,832.43
 DROP TABLE IF EXISTS format_04;
 CREATE TABLE format_04(a varchar(100), b varchar(100), c varchar(20));
 INSERT INTO format_04 VALUES("-.12334.2","2", "en_US");
@@ -452,9 +461,13 @@ a    b    c
 12332.123456    4    en_US
 12332.1    4    en_US
 SELECT ABS(format(b,5)) FROM format_04;
-[unknown result because it is related to issue#7464]
+invalid argument cast to int, bad value 2.00000
 SELECT FLOOR(format(c,3)) FROM format_04;
-[unknown result because it is related to issue#7464]
+floor(format(c, 3))
+0
+0
+0
+0
 DROP TABLE if exists format_05;
 DROP TABLE if exists format_06;
 CREATE TABLE format_05(
