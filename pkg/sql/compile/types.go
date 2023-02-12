@@ -174,12 +174,6 @@ type Compile struct {
 	// table locally. But int the future, this will disappear.
 	isTemporaryScan bool
 }
-
-type UuidToRegIdx struct {
-	Uuid uuid.UUID
-	Idx  int
-}
-
 type RemoteReceivRegInfo struct {
 	Idx      int
 	Uuid     uuid.UUID

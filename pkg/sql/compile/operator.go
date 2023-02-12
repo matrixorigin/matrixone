@@ -883,7 +883,7 @@ func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argumen
 
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
-func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentAddr string, proc *process.Process) *dispatch.Argument {
+func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
 	arg := new(dispatch.Argument)
 	arg.FuncId = dispatch.SendToAllFunc
 
@@ -896,8 +896,8 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentAddr string, pr
 			continue
 		}
 
-		if len(s.NodeInfo.Addr) == 0 || len(currentAddr) == 0 ||
-			strings.Split(currentAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
+			strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
 			// Local reg.
 			// Put them into arg.LocalRegs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
@@ -915,7 +915,7 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentAddr string, pr
 			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
 				Idx:      idx,
 				Uuid:     newUuid,
-				FromAddr: currentAddr,
+				FromAddr: currentCNAddr,
 			})
 		}
 	}
