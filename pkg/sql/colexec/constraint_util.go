@@ -359,18 +359,18 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 				}
 			}
 		} else {
-			toVec = vector.New(bat.Vecs[idx].Typ)
-			if rowSkip == nil {
-				for j := 0; j < fromVec.Length(); j++ {
-					vector.UnionOne(toVec, fromVec, int64(j), proc.Mp())
-				}
-			} else {
-				for j := 0; j < fromVec.Length(); j++ {
-					if !rowSkip[j] {
-						vector.UnionOne(toVec, fromVec, int64(j), proc.Mp())
-					}
+			filterFlags := make([]uint8, fromVec.Length())
+			cnt := 0
+			for i := 0; i < fromVec.Length(); i++ {
+				if rowSkip != nil && !rowSkip[i] || rowSkip == nil {
+					filterFlags[i] = 1
+					cnt++
+				} else {
+					filterFlags[i] = 0
 				}
 			}
+			toVec = vector.New(bat.Vecs[idx].Typ)
+			vector.UnionBatch(toVec, fromVec, 0, cnt, filterFlags, proc.GetMPool())
 		}
 		updateBatch.SetVector(int32(i), toVec)
 	}

@@ -38,6 +38,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var flags []uint8
+
+func init() {
+	flags = make([]uint8, options.DefaultBlockMaxRows)
+	for i := 0; i < int(options.DefaultBlockMaxRows); i++ {
+		flags[i] = 1
+	}
+}
+
 type WriteS3Container struct {
 	sortIndex        []int
 	nameToNullablity map[string]bool
@@ -222,12 +231,14 @@ func GetBlockMeta(bats []*batch.Batch, container *WriteS3Container, proc *proces
 func reSizeBatch(container *WriteS3Container, bat *batch.Batch, proc *process.Process, batIdx int) (bats []*batch.Batch) {
 	var newBat *batch.Batch
 	var cacheLen uint32
+	var tempFlags []uint8
 	if len(container.cacheBat) <= batIdx {
 		container.cacheBat = append(container.cacheBat, nil)
 	}
 	if container.cacheBat[batIdx] != nil {
 		cacheLen = uint32(container.cacheBat[batIdx].Length())
 	}
+
 	idx := int(cacheLen)
 	cnt := cacheLen + uint32(bat.Length())
 
@@ -240,16 +251,22 @@ func reSizeBatch(container *WriteS3Container, bat *batch.Batch, proc *process.Pr
 		}
 
 		for cnt >= options.DefaultBlockMaxRows {
-			for i := range newBat.Vecs {
-				vector.UnionOne(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
+			if idx%int(options.DefaultBlockMaxRows) != 0 {
+				for i := range newBat.Vecs {
+					tempFlags = flags[:int(options.DefaultBlockMaxRows)-idx]
+					vector.UnionBatch(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), int(options.DefaultBlockMaxRows)-idx, tempFlags, proc.GetMPool())
+				}
+				idx = int(options.DefaultBlockMaxRows)
+			} else {
+				for i := range newBat.Vecs {
+					vector.UnionBatch(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), int(options.DefaultBlockMaxRows), flags, proc.GetMPool())
+				}
+				idx += int(options.DefaultBlockMaxRows)
 			}
-			idx++
-			if idx%int(options.DefaultBlockMaxRows) == 0 {
-				newBat.SetZs(int(options.DefaultBlockMaxRows), proc.GetMPool())
-				bats = append(bats, newBat)
-				newBat = getNewBatch(bat)
-				cnt -= options.DefaultBlockMaxRows
-			}
+			newBat.SetZs(int(options.DefaultBlockMaxRows), proc.GetMPool())
+			bats = append(bats, newBat)
+			newBat = getNewBatch(bat)
+			cnt -= options.DefaultBlockMaxRows
 		}
 	}
 
@@ -257,10 +274,10 @@ func reSizeBatch(container *WriteS3Container, bat *batch.Batch, proc *process.Pr
 		if container.cacheBat[batIdx] == nil {
 			container.cacheBat[batIdx] = getNewBatch(bat)
 		}
-		for i := 0; i < bat.Length(); i++ {
-			for j := range container.cacheBat[batIdx].Vecs {
-				vector.UnionOne(container.cacheBat[batIdx].Vecs[j], bat.Vecs[j], int64(i), proc.GetMPool())
-			}
+
+		tempFlags = flags[:bat.Length()]
+		for j := range container.cacheBat[batIdx].Vecs {
+			vector.UnionBatch(container.cacheBat[batIdx].Vecs[j], bat.Vecs[j], 0, bat.Length(), tempFlags, proc.GetMPool())
 		}
 		container.cacheBat[batIdx].SetZs(container.cacheBat[batIdx].Vecs[0].Length(), proc.GetMPool())
 	} else {
@@ -268,12 +285,9 @@ func reSizeBatch(container *WriteS3Container, bat *batch.Batch, proc *process.Pr
 			if newBat == nil {
 				newBat = getNewBatch(bat)
 			}
-			for cnt > 0 {
-				for i := range newBat.Vecs {
-					vector.UnionOne(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
-				}
-				idx++
-				cnt--
+			tempFlags = flags[:cnt]
+			for i := range newBat.Vecs {
+				vector.UnionBatch(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), int(cnt), tempFlags, proc.GetMPool())
 			}
 			container.cacheBat[batIdx] = newBat
 			container.cacheBat[batIdx].SetZs(container.cacheBat[batIdx].Vecs[0].Length(), proc.GetMPool())
