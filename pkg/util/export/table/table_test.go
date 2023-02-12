@@ -77,12 +77,12 @@ var dummyTableCreateExistsSql = "CREATE EXTERNAL TABLE IF NOT EXISTS `db_dummy`.
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
 	",\n" + dummyFloat64CreateSql +
-	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
+	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines;`
 var dummyTableCreateSql = "CREATE EXTERNAL TABLE `db_dummy`.`tbl_dummy`(" +
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
 	",\n" + dummyFloat64CreateSql +
-	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
+	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines;`
 
 type dummyCondition struct{}
 
@@ -97,7 +97,7 @@ var dummyView = &View{
 	Columns:     []Column{},
 	Condition:   dummyCondition{},
 }
-var dummyViewCreateSql = "CREATE VIEW IF NOT EXISTS `db_dummy`.`view` as select `str`, mo_log_date(`__mo_filepath`) as `log_date`, `__mo_filepath` from `db_dummy`.`tbl_dummy` where `str` = \"NIL\""
+var dummyViewCreateSql = "CREATE VIEW IF NOT EXISTS `db_dummy`.`view` as select `str`, mo_log_date(`__mo_filepath`) as `log_date`, `__mo_filepath` from `db_dummy`.`tbl_dummy` where `str` = \"NIL\";"
 
 func TestRow_SetFloat64(t *testing.T) {
 	type fields struct {
