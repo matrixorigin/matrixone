@@ -2170,13 +2170,23 @@ alter_account_stmt:
     }
 
 alter_database_config_stmt:
-     ALTER DATABASE db_name SET MYSQL_COMPATBILITY_MODE '=' expression
+     ALTER DATABASE db_name SET MYSQL_COMPATBILITY_MODE '=' STRING
      {
         $$ = &tree.AlterDataBaseConfig{
             DbName:$3,
             UpdateConfig: $7,
+            IsAccountLevel: false,
         }
      }
+|    ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATBILITY_MODE '=' STRING
+     {
+        $$ = &tree.AlterDataBaseConfig{
+            AccountName:$4,
+            UpdateConfig: $8,
+            IsAccountLevel: true,
+        }
+     }
+    
 alter_account_auth_option:
 {
     $$ = tree.AlterAccountAuthOption{
@@ -5468,6 +5478,8 @@ constaint_def:
         if $1 != "" {
             switch v := $2.(type) {
             case *tree.PrimaryKeyIndex:
+                v.Name = $1
+            case *tree.ForeignKey:
                 v.Name = $1
             }
         }

@@ -323,12 +323,12 @@ func TestClientSendWithMsgSize(t *testing.T) {
 			LogShardID:       1,
 			DNReplicaID:      2,
 			ServiceAddresses: []string{testServiceAddress},
-			MaxMessageSize:   testServerMaxMsgSize - 100,
+			MaxMessageSize:   testServerMaxMsgSize,
 		}
 	}
 
 	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
-		rec := c.GetLogRecord(testServerMaxMsgSize - 80)
+		rec := c.GetLogRecord(testServerMaxMsgSize + 80)
 		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

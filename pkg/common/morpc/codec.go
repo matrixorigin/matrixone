@@ -43,6 +43,8 @@ var (
 	checksumFieldBytes    = 8
 	totalSizeFieldBytes   = 4
 	payloadSizeFieldBytes = 4
+
+	approximateHeaderSize = 128
 )
 
 func GetMessageSize() int {
@@ -127,6 +129,16 @@ func (c *messageCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 
 func (c *messageCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) error {
 	return c.bc.Encode(data, out, conn)
+}
+
+func (c *messageCodec) Valid(msg Message) error {
+	n := msg.Size() + approximateHeaderSize
+	if n >= c.bc.maxBodySize {
+		return moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
+			n,
+			c.bc.maxBodySize)
+	}
+	return nil
 }
 
 func (c *messageCodec) AddHeaderCodec(hc HeaderCodec) {

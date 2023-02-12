@@ -20,7 +20,6 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1288,8 +1287,7 @@ func TestProcessLoadLocal(t *testing.T) {
 				tmp = tmp[n:]
 			}
 		}(buffer)
-		e := new(atomic.Bool)
-		err := mce.processLoadLocal(proc.Ctx, param, writer, e)
+		err := mce.processLoadLocal(proc.Ctx, param, writer)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))

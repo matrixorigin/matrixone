@@ -1,0 +1,18 @@
+name: Document Issue Check
+
+# Controls when the workflow will run
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  docu_issue_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: guguducken/pull-issue-reviewer@v0.1.0
+        with:
+          token_action: ${{ secrets.TOKEN_ACTION }}
+          uri_notice: ${{ secrets.DOCU_GROUP_HOOK }}
+          id_label: "5138861359"
+          reviewers: "lacrimosaprinz,dengn"
+          mentions: "Prinz,DengNan"
