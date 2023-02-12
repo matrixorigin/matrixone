@@ -109,6 +109,7 @@ func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 
 	// select all merge receivers
 	listeners, alive := newSelectListener(proc.Reg.MergeReceivers)
+	fmt.Printf("[cleanupcleanup] alive reg = %d. proc = %p\n", alive, proc)
 	for alive != 0 {
 		chosen, value, ok := reflect.Select(listeners)
 		if !ok {

@@ -197,9 +197,11 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	if s.IsJoin {
+		fmt.Printf("[ParallelRun] is join run, proc = %p\n", s.Proc)
 		return s.JoinRun(c)
 	}
 	if s.DataSource == nil {
+		fmt.Printf("[ParallelRun] DataSource == nil, mergerun, proc = %p\n", s.Proc)
 		return s.MergeRun(c)
 	}
 	mcpu := s.NodeInfo.Mcpu
@@ -267,7 +269,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
+	fmt.Printf("[ParallelRun] parallel the scope ... proc = %p\n", s.Proc)
 	newScope := newParallelScope(c, s, ss)
+	fmt.Printf("[ParallelRun] parallel the scope done start to run. proc = %p\n", s.Proc)
 	return newScope.MergeRun(c)
 }
 
@@ -599,7 +603,6 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 		panic(err)
 	}
 
-	// TODO: how to handle error when return err
 	for _, rr := range s.RemoteReceivRegInfos {
 		go func(info RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
 			c, cancel := context.WithTimeout(context.Background(), time.Second*10000)
@@ -610,7 +613,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				errChan <- errStream
 				return
 			}
-			fmt.Printf("[scopemergerun] get stream for %s uuid %s success\n", info.FromAddr, info.Uuid)
+			fmt.Printf("[scopemergerun] get stream for %s uuid %s success, addr = %s\n", info.FromAddr, info.Uuid, info.FromAddr)
 			defer func(streamSender morpc.Stream) {
 				// TODO: should close the channel or not?
 				_ = streamSender.Close()
@@ -650,6 +653,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				if val == nil {
 					fmt.Printf("[scopemergerun] receive nil nil from %s uuid %s\n", info.FromAddr, info.Uuid)
 					reg.Ch <- nil
+					close(reg.Ch)
 					errChan <- nil
 					return
 				}
@@ -659,6 +663,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				if m.IsEndMessage() {
 					fmt.Printf("[scopemergerun] receive nil message from %s uuid %s\n", info.FromAddr, info.Uuid)
 					reg.Ch <- nil
+					close(reg.Ch)
 					errChan <- nil
 					return
 				}
@@ -682,6 +687,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 					return
 				}
 				reg.Ch <- bat
+				dataBuffer = nil
 			}
 		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], mp)
 	}
