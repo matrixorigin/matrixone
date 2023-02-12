@@ -72,7 +72,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1410,20 +1409,23 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 	var uniqueIndexTables []engine.Relation
 	if tableDef != nil {
 		uniqueIndexTables = make([]engine.Relation, 0)
-		uDef, _ := plan2.BuildIndexDefs(tableDef.Defs)
-		if uDef != nil {
-			for i := range uDef.TableNames {
-				var indexTable engine.Relation
-				if uDef.TableExists[i] {
-					if isTemp {
-						indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, uDef.TableNames[i]))
-					} else {
-						indexTable, err = dbSource.Relation(ctx, uDef.TableNames[i])
+		if tableDef.Indexes != nil {
+			for _, indexdef := range tableDef.Indexes {
+				if indexdef.Unique {
+					var indexTable engine.Relation
+					if indexdef.TableExist {
+						if isTemp {
+							indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, indexdef.IndexTableName))
+						} else {
+							indexTable, err = dbSource.Relation(ctx, indexdef.IndexTableName)
+						}
+						if err != nil {
+							return nil, nil, err
+						}
+						uniqueIndexTables = append(uniqueIndexTables, indexTable)
 					}
-					if err != nil {
-						return nil, nil, err
-					}
-					uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				} else {
+					continue
 				}
 			}
 		}

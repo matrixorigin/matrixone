@@ -573,7 +573,7 @@ value desc
 ;
 ps_partkey    value
 select * from result_scan(last_query_id()) as u;
-invalid configuration: the filepath must be specified
+invalid input: empty query result
 select
 l_shipmode,
 sum(case
@@ -919,7 +919,7 @@ limit 100
 ;
 c_name    c_custkey    o_orderkey    o_orderdate    o_totalprice    sum(l_quantity)
 select * from result_scan(last_query_id()) as u;
-invalid configuration: the filepath must be specified
+invalid input: empty query result
 select
 sum(l_extendedprice* (1 - l_discount)) as revenue
 from
@@ -999,7 +999,7 @@ order by s_name
 ;
 s_name    s_address
 select * from result_scan(last_query_id()) as u;
-invalid configuration: the filepath must be specified
+invalid input: empty query result
 select
 s_name,
 count(*) as numwait
@@ -1043,7 +1043,7 @@ limit 100
 ;
 s_name    numwait
 select * from result_scan(last_query_id()) as u;
-invalid configuration: the filepath must be specified
+invalid input: empty query result
 select
 cntrycode,
 count(*) as numcust,

@@ -39,7 +39,7 @@ const (
 	testServiceAddress     = "127.0.0.1:9000"
 	testGossipAddress      = "127.0.0.1:9010"
 	dummyGossipSeedAddress = "127.0.0.1:9100"
-	testServerMaxMsgSize   = 200
+	testServerMaxMsgSize   = 1000
 )
 
 func getServiceTestConfig() Config {
