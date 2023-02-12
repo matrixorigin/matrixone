@@ -15,8 +15,6 @@
 package output
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -27,14 +25,9 @@ type debug struct {
 type Argument struct {
 	Data interface{}
 	Func func(interface{}, *batch.Batch) error
-
-	IsRemote bool
-
-	dd debug
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	fmt.Printf("[outputoutput] isRemote = %t, pipelineFailed = %t", arg.IsRemote, pipelineFailed)
 	if !pipelineFailed {
 		_ = arg.Func(arg.Data, nil)
 	}

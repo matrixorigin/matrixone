@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -121,7 +120,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 			}(s.PreScopes[i])
 		}
 	}
-	fmt.Printf("[scopemergerun] has %d prescopr and %d remote regs, proc = %p\n", len(s.PreScopes), len(s.RemoteReceivRegInfos), s.Proc)
 	var errReceiveChan chan error
 	if len(s.RemoteReceivRegInfos) > 0 {
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
@@ -134,40 +132,31 @@ func (s *Scope) MergeRun(c *Compile) error {
 	// check sub-goroutine's error
 	if errReceiveChan == nil {
 		// check sub-goroutine's error
-		fmt.Printf("[scopemergerun] all local , proc = %p\n", s.Proc)
 		for i := 0; i < len(s.PreScopes); i++ {
 			if err := <-errChan; err != nil {
-				fmt.Printf("[scopemergerun] all local. scope[%d] err, proc = %p\n", i, s.Proc)
 				return err
 			}
-			fmt.Printf("[scopemergerun] all local. scope[%d] success, proc = %p\n", i, s.Proc)
 		}
 		return nil
 	}
 
 	slen := len(s.PreScopes)
 	rlen := len(s.RemoteReceivRegInfos)
-	fmt.Printf("[scopemergerun] multi local prescope %d + remote reg %d, proc = %p\n", slen, rlen, s.Proc)
 	for {
 		select {
 		case err := <-errChan:
 			if err != nil {
-				fmt.Printf("[scopemergerun] multi. scope failed, proc = %p\n", s.Proc)
 				return err
 			}
-			fmt.Printf("[scopemergerun] multi. scope success, proc = %p\n", s.Proc)
 			slen--
 		case err := <-errReceiveChan:
 			if err != nil {
-				fmt.Printf("[scopemergerun] multi. reg failed, proc = %p\n", s.Proc)
 				return err
 			}
-			fmt.Printf("[scopemergerun] multi. reg success, proc = %p\n", s.Proc)
 			rlen--
 		}
 
 		if slen == 0 && rlen == 0 {
-			fmt.Printf("[scopemergerun] multi. all done, proc = %p\n", s.Proc)
 			return nil
 		}
 	}
@@ -197,11 +186,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	if s.IsJoin {
-		fmt.Printf("[ParallelRun] is join run, proc = %p\n", s.Proc)
 		return s.JoinRun(c)
 	}
 	if s.DataSource == nil {
-		fmt.Printf("[ParallelRun] DataSource == nil, mergerun, proc = %p\n", s.Proc)
 		return s.MergeRun(c)
 	}
 	mcpu := s.NodeInfo.Mcpu
@@ -269,9 +256,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	fmt.Printf("[ParallelRun] parallel the scope ... proc = %p\n", s.Proc)
 	newScope := newParallelScope(c, s, ss)
-	fmt.Printf("[ParallelRun] parallel the scope done start to run. proc = %p\n", s.Proc)
 	return newScope.MergeRun(c)
 }
 
@@ -613,7 +598,6 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				errChan <- errStream
 				return
 			}
-			fmt.Printf("[scopemergerun] get stream for %s uuid %s success, addr = %s\n", info.FromAddr, info.Uuid, info.FromAddr)
 			defer func(streamSender morpc.Stream) {
 				// TODO: should close the channel or not?
 				_ = streamSender.Close()
@@ -629,14 +613,12 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				errChan <- errSend
 				return
 			}
-			fmt.Printf("[scopemergerun] send notify msg to %s uuid %s success\n", info.FromAddr, info.Uuid)
 
 			messagesReceive, errReceive := streamSender.Receive()
 			if errReceive != nil {
 				errChan <- errReceive
 				return
 			}
-			fmt.Printf("[scopemergerun] begin to receive message from %s uuid %s ...\n", info.FromAddr, info.Uuid)
 
 			var val morpc.Message
 			var dataBuffer []byte
@@ -650,7 +632,6 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 
 				// TODO: what val = nil means?
 				if val == nil {
-					fmt.Printf("[scopemergerun] receive nil nil from %s uuid %s\n", info.FromAddr, info.Uuid)
 					reg.Ch <- nil
 					close(reg.Ch)
 					errChan <- nil
@@ -660,7 +641,6 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				m := val.(*pbpipeline.Message)
 
 				if m.IsEndMessage() {
-					fmt.Printf("[scopemergerun] receive nil message from %s uuid %s\n", info.FromAddr, info.Uuid)
 					reg.Ch <- nil
 					close(reg.Ch)
 					errChan <- nil
@@ -668,8 +648,6 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				}
 
 				dataBuffer = append(dataBuffer, m.Data...)
-
-				fmt.Printf("[scopemergerun] receive message from %s uuid %s\n", info.FromAddr, info.Uuid)
 
 				if m.BatcWaitingNextToMerge() {
 					continue

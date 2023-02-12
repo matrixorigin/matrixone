@@ -24,8 +24,6 @@ type container struct {
 	aliveMergeReceiver int
 	// receiverListener is a structure to listen all the merge receiver.
 	receiverListener []reflect.SelectCase
-
-	debug []int
 }
 
 type Argument struct {

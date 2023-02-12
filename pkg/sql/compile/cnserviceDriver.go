@@ -119,7 +119,6 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	}
 	// batch data, not scope
 	if analysis == nil {
-		fmt.Printf("[msghandler] notify message. return nothing\n")
 		return nil
 	}
 	backMessage := messageAcquirer().(*pipeline.Message)
@@ -128,7 +127,6 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	backMessage.Sid = pipeline.MessageEnd
 	backMessage.Err = errData
 	backMessage.Analyse = analysis
-	fmt.Printf("[msghandler] handle done. cmd = %d, sid = %d. write to cs\n", msgTyp, pipeline.MessageEnd)
 	return cs.Write(ctx, backMessage)
 }
 
@@ -157,7 +155,6 @@ func cnMessageHandle(ctx context.Context, message morpc.Message, cs morpc.Client
 	switch msgTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch excutor
 		opUuid, err := uuid.FromBytes(m.GetUuid())
-		fmt.Printf("[msghandler] receive %s notify msg\n", opUuid)
 		if err != nil {
 			return msgTyp, nil, err
 		}
@@ -171,7 +168,6 @@ func cnMessageHandle(ctx context.Context, message morpc.Message, cs morpc.Client
 				break
 			}
 		}
-		fmt.Printf("[msghandler] get %s notify ch %p done\n", opUuid, ch)
 		info := process.WrapCs{
 			MsgId: m.GetId(),
 			Uid:   opUuid,
@@ -179,7 +175,6 @@ func cnMessageHandle(ctx context.Context, message morpc.Message, cs morpc.Client
 		}
 
 		ch <- info
-		fmt.Printf("[msghandler] put %s notify msg to ch %p done\n", opUuid, ch)
 		return msgTyp, nil, nil
 
 	case pipeline.PipelineMessage:
@@ -198,14 +193,11 @@ func cnMessageHandle(ctx context.Context, message morpc.Message, cs morpc.Client
 			return msgTyp, nil, err
 		}
 		s = refactorScope(c, c.ctx, s)
-		fmt.Printf("[msghandler] refactorScope done. sproc = %p \n", s.Proc)
 
 		err = s.ParallelRun(c, s.IsRemote)
 		if err != nil {
-			fmt.Printf("[msghandler] the received pipeline run failed, err = %s, sproc = %p\n", err, s.Proc)
 			return msgTyp, nil, err
 		}
-		fmt.Printf("[msghandler] the received pipeline run success, sproc = %p\n", s.Proc)
 		// encode analysis info and return.
 		anas := &pipeline.AnalysisList{
 			List: make([]*plan.AnalyzeInfo, len(c.proc.AnalInfos)),
@@ -214,9 +206,6 @@ func cnMessageHandle(ctx context.Context, message morpc.Message, cs morpc.Client
 			anas.List[i] = convertToPlanAnalyzeInfo(c.proc.AnalInfos[i])
 		}
 		anaData, err = anas.Marshal()
-		if anaData == nil {
-			fmt.Printf("[msghandler] warning!!!! nil anaData\n")
-		}
 		return msgTyp, anaData, err
 	default:
 		return msgTyp, nil, moerr.NewInternalError(ctx, "unknow message type")
@@ -228,12 +217,6 @@ const maxMessageSizeToMoRpc = 64 * mpool.MB
 // sendBackBatchToCnClient send back the result batch to cn client.
 func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint64, mHelper *messageHandleHelper, cs morpc.ClientSession) error {
 	if b == nil {
-		//		message := cnclient.AcquireMessage()
-		//{
-		//message.Id = messageId
-		//message.Sid = pipeline.MessageEnd
-		//}
-		//cs.Write(ctx, message)
 		return nil
 	}
 	encodeData, errEncode := types.Encode(b)
@@ -286,7 +269,6 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyz
 		case val = <-mChan:
 		}
 		if val == nil {
-			fmt.Printf("[remoterunback] received an nil val, return\n")
 			return nil
 		}
 		m := val.(*pipeline.Message)
@@ -296,7 +278,6 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyz
 			return err
 		}
 		if m.IsEndMessage() {
-			fmt.Printf("[remoterunback] received end msg batch. c.addr = %s\n", c.addr)
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
 				// get analysis info if it has
@@ -494,7 +475,7 @@ func refactorScope(c *Compile, _ context.Context, s *Scope) *Scope {
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,
 		Idx: -1, // useless
-		Arg: &output.Argument{Data: nil, Func: c.fill, IsRemote: true},
+		Arg: &output.Argument{Data: nil, Func: c.fill},
 	})
 	return rs
 }

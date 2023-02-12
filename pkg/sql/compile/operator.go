@@ -890,7 +890,7 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentAddr string, pr
 	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
 	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
 
-	for i, s := range ss {
+	for _, s := range ss {
 		if s.IsEnd {
 			continue
 		}
@@ -898,12 +898,10 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentAddr string, pr
 		// strings.Split(currentAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
 		if len(s.NodeInfo.Addr) == 0 || len(currentAddr) == 0 ||
 			currentAddr == s.NodeInfo.Addr {
-			fmt.Printf("[compilecompile] ss[%d] is local.\n", i)
 			// Local reg.
 			// Put them into arg.LocalRegs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 		} else {
-			fmt.Printf("[compilecompile] ss[%d] is remote. addr = %s\n", i, s.NodeInfo.Addr)
 			// Remote reg.
 			// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
 			newUuid := uuid.New()
@@ -912,9 +910,7 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentAddr string, pr
 				Uuid:     newUuid,
 				NodeAddr: s.NodeInfo.Addr,
 			})
-
 			colexec.Srv.PutNotifyChIntoUuidMap(newUuid, proc.DispatchNotifyCh)
-			fmt.Printf("[compilecompile] put uuid %s ch %p done.\n", newUuid, proc.DispatchNotifyCh)
 
 			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
 				Idx:      idx,

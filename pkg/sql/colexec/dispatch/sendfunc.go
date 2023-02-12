@@ -15,7 +15,6 @@
 package dispatch
 
 import (
-	"fmt"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -90,13 +89,11 @@ func sendToAnyFunc(bat *batch.Batch, bid int64, localReceivers []*process.WaitRe
 		}
 		return nil
 	}
-	fmt.Printf("[dispatchdispatch] send to any with sendId = %d\n", sendId)
 
 	// send to local receiver
 	reg := localReceivers[sendId]
 	select {
 	case <-reg.Ctx.Done():
-		fmt.Printf("[dispatchdispatch] local[%d] done.\n", sendId)
 		for len(reg.Ch) > 0 { // free memory
 			bat := <-reg.Ch
 			if bat == nil {
@@ -114,7 +111,6 @@ func sendToAnyFunc(bat *batch.Batch, bid int64, localReceivers []*process.WaitRe
 }
 
 func sendBatchToClientSession(encodeBatData []byte, bid int64, wcs *WrapperClientSession) error {
-	fmt.Printf("[dispatchdispatch] write msg into cs ... uuid = %s\n", wcs.uuid)
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
 		msg := cnclient.AcquireMessage()
 		{
@@ -124,10 +120,8 @@ func sendBatchToClientSession(encodeBatData []byte, bid int64, wcs *WrapperClien
 			msg.Sid = pipeline.BatchEnd
 		}
 		if err := wcs.cs.Write(wcs.ctx, msg); err != nil {
-			fmt.Printf("[dispatchdispatch] write whole message (%d, %s) in cs %p failed\n", bid, wcs.uuid, &wcs.cs)
 			return err
 		}
-		fmt.Printf("[dispatchdispatch] write whole message (%d, %s) in cs %p success\n", bid, wcs.uuid, &wcs.cs)
 		return nil
 	}
 
@@ -148,10 +142,8 @@ func sendBatchToClientSession(encodeBatData []byte, bid int64, wcs *WrapperClien
 		}
 
 		if err := wcs.cs.Write(wcs.ctx, msg); err != nil {
-			fmt.Printf("[dispatchdispatch] write part message (%d, %s) in cs %p failed\n", bid, wcs.uuid, &wcs.cs)
 			return err
 		}
-		fmt.Printf("[dispatchdispatch] write part message (%d, %s) in cs %p success\n", bid, wcs.uuid, &wcs.cs)
 		start = end
 	}
 	return nil
