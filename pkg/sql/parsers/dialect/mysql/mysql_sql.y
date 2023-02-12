@@ -2170,13 +2170,23 @@ alter_account_stmt:
     }
 
 alter_database_config_stmt:
-     ALTER DATABASE db_name SET MYSQL_COMPATBILITY_MODE '=' expression
+     ALTER DATABASE db_name SET MYSQL_COMPATBILITY_MODE '=' STRING
      {
         $$ = &tree.AlterDataBaseConfig{
             DbName:$3,
             UpdateConfig: $7,
+            IsAccountLevel: false,
         }
      }
+|    ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATBILITY_MODE '=' STRING
+     {
+        $$ = &tree.AlterDataBaseConfig{
+            AccountName:$4,
+            UpdateConfig: $8,
+            IsAccountLevel: true,
+        }
+     }
+    
 alter_account_auth_option:
 {
     $$ = tree.AlterAccountAuthOption{
@@ -5251,7 +5261,8 @@ table_option:
     }
 |   COMMENT_KEYWORD equal_opt STRING
     {
-        $$ = tree.NewTableOptionComment($3)
+    	str := util.DealCommentString($3)
+        $$ = tree.NewTableOptionComment(str)
     }
 |   COMPRESSION equal_opt STRING
     {
@@ -5468,6 +5479,8 @@ constaint_def:
             switch v := $2.(type) {
             case *tree.PrimaryKeyIndex:
                 v.Name = $1
+            case *tree.ForeignKey:
+                v.Name = $1
             }
         }
         $$ = $2
@@ -5679,7 +5692,8 @@ column_attribute_elem:
     }
 |   COMMENT_KEYWORD STRING
     {
-        $$ = tree.NewAttributeComment(tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char))
+    	str := util.DealCommentString($2)
+        $$ = tree.NewAttributeComment(tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char))
     }
 |   COLLATE collate_name
     {

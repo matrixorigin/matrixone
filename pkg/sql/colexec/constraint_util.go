@@ -153,13 +153,12 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 	}()
 
 	uIdx := 0
-	for _, def := range tableDef.Defs {
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-			// how to get relation?
-			for idx := range idxDef.UIdx.TableNames {
-				partsLength := len(idxDef.UIdx.Fields[idx].Parts)
+	if tableDef.Indexes != nil {
+		for _, indexdef := range tableDef.Indexes {
+			if indexdef.Unique {
+				partsLength := len(indexdef.Field.Parts)
 				uniqueColumnPos := make([]int, partsLength)
-				for p, column := range idxDef.UIdx.Fields[idx].Parts {
+				for p, column := range indexdef.Field.Parts {
 					uniqueColumnPos[p] = updateNameToPos[column]
 				}
 
@@ -212,6 +211,8 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 					uIdx++
 					s3Container.WriteS3Batch(ukBatch, proc, uIdx)
 				}
+			} else {
+				continue
 			}
 		}
 	}

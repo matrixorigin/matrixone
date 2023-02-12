@@ -288,6 +288,10 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 }
 
 func (rb *remoteBackend) doSend(m backendSendMessage) error {
+	if err := rb.codec.Valid(m.message.Message); err != nil {
+		return err
+	}
+
 	for {
 		rb.stateMu.RLock()
 		if rb.stateMu.state == stateStopped {

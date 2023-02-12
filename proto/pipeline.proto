@@ -35,7 +35,8 @@ message Message {
   uint64  id = 7;
   bytes   uuid = 8;
   uint64  batch_cnt = 9;
-  int64   bid = 10;
+  uint32  checksum = 10;
+  uint64  sequence = 11;
 }
 
 message Connector {

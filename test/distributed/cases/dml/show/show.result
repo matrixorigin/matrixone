@@ -4,7 +4,7 @@ use test01;
 create table tt(col2 float comment '"%$^&*()_+@!\'');
 show create table tt;
 Table    Create Table
-tt    CREATE TABLE `tt` (\n`col2` FLOAT DEFAULT NULL COMMENT '"%$^&*()_+@!''\n)
+tt    CREATE TABLE `tt` (\n`col2` FLOAT DEFAULT NULL COMMENT '"%$^&*()_+@!'''\n)
 drop table tt;
 create table t1 (id int not null, str char(10),name varchar(10));
 create table t2 (a int);
