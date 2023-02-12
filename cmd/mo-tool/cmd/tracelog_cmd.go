@@ -176,7 +176,7 @@ func checkRequireParam() error {
 func printExtExample() error {
 	bin := os.Args[0]
 	fmt.Printf(`example:
-  %[1]s external --host "%s" -P %d -u%s -p "%s" --db "%s" \
+  %[1]s tracelog --host "%s" -P %d -u%s -p "%s" --db "%s" \
 	--endpoint "%s" --region "%s" --bucket "%s" \
 	--access-key-id "%s" --secret-access-key "%s" \
 	--path-prefix "%s" --provider "%s"
