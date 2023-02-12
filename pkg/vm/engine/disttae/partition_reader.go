@@ -20,11 +20,13 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
@@ -100,7 +102,15 @@ func (p *PartitionReader) getIdxs(colNames []string) (res []uint16) {
 	return
 }
 
-func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
+func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *plan.Expr, mp *mpool.MPool) (resBat *batch.Batch, resErr error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logutil.Infof("Recovered in partitionReader: ", r)
+			resErr = moerr.ConvertPanicError(ctx, r)
+		}
+	}()
+
 	if p == nil {
 		return nil, nil
 	}
