@@ -16,8 +16,6 @@ package dispatch
 
 import (
 	"bytes"
-	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -58,25 +56,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	// waiting all remote receive prepared
 	// put it in Call() for better parallel
-	// TODO: minimize the waiting
-	if !ap.prepared {
-		cnt := len(ap.RemoteRegs)
-		for cnt > 0 {
-			csinfo := <-proc.DispatchNotifyCh
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
-			_ = cancel
-
-			ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers, &WrapperClientSession{
-				msgId: csinfo.MsgId,
-				ctx:   timeoutCtx,
-				cs:    csinfo.Cs,
-				uuid:  csinfo.Uid,
-			})
-			// TODO: add check the receive info's correctness
-			cnt--
-		}
-		ap.prepared = true
-	}
 
 	bat := proc.InputBatch()
 	if bat == nil {
