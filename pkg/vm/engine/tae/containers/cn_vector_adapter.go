@@ -598,27 +598,28 @@ func (vec *CnTaeVector[T]) releaseDownstream() {
 	}
 }
 
-// TODO: --- I am not sure, if the below functions will work as expected
-
 func (vec *CnTaeVector[T]) Allocated() int {
 
+	//1. If mpool doesn't allocate
 	if !vec.isAllocatedFromMpool {
 		return 0
 	}
 
-	// Only VarLen is allocated using mpool.
-	if vec.GetType().IsVarlen() {
-		return vec.downstreamVector.Size()
-	}
+	// 2. if mpool allocates
+	{
+		if vec.GetType().IsVarlen() {
+			return vec.downstreamVector.Size()
+		}
 
-	// TODO: Not sure if the below part should return 0 or len(downstream.data)
-	//return 0
-	return vec.Length()
+		return vec.downstreamVector.Length()
+	}
 }
+
+// TODO: --- I am not sure, if the below functions will work as expected
 
 func (vec *CnTaeVector[T]) Capacity() int {
 	// TODO: Can we use Length() instead of Capacity?
-	// Not used much. Can we remove?
+	// TODO: Not used much. Can we remove?
 
 	// TODO: Capacity should be based on a number and not based on the Length. Fix it later.
 	return vec.Length()
