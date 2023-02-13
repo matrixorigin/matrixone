@@ -273,7 +273,11 @@ func showInsert(db string, tbl string, bufPool *sync.Pool, netBufferLength int) 
 		preLen := buf.Len()
 		first := true
 		if curBuf.Len() > 0 {
-			buf.Write(curBuf.Bytes()[1:])
+			bts := curBuf.Bytes()
+			if bts[0] == ',' {
+				bts = bts[1:]
+			}
+			buf.Write(bts)
 			curBuf.Reset()
 			first = false
 		}
