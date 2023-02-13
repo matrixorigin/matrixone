@@ -144,7 +144,7 @@ func main() {
 		}
 	}
 	bufPool := &sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			return &bytes.Buffer{}
 		},
 	}
@@ -266,37 +266,41 @@ func showInsert(db string, tbl string, bufPool *sync.Pool, netBufferLength int) 
 		args = append(args, &v)
 	}
 	buf := bufPool.Get().(*bytes.Buffer)
+	curBuf := bufPool.Get().(*bytes.Buffer)
+	initInert := "INSERT INTO `" + tbl + "` VALUES "
 	for {
-		if !r.Next() {
-			break
-		}
-		buf.WriteString("INSERT INTO `" + tbl + "` VALUES ")
+		buf.WriteString(initInert)
 		preLen := buf.Len()
 		first := true
-		for {
+		if curBuf.Len() > 0 {
+			buf.Write(curBuf.Bytes()[1:])
+			curBuf.Reset()
+			first = false
+		}
+		for r.Next() {
 			err = r.Scan(args...)
 			if err != nil {
 				return err
 			}
 			if !first {
-				buf.WriteString(",(")
+				curBuf.WriteString(",(")
 			} else {
-				buf.WriteString("(")
+				curBuf.WriteString("(")
+				first = false
 			}
-			first = false
+
 			for i, v := range args {
 				if i > 0 {
-					buf.WriteString(",")
+					curBuf.WriteString(",")
 				}
-				buf.WriteString(convertValue(v, cols[i].Type))
+				curBuf.WriteString(convertValue(v, cols[i].Type))
 			}
-			buf.WriteString(")")
-			if !r.Next() {
+			curBuf.WriteString(")")
+			if buf.Len()+curBuf.Len() >= netBufferLength {
 				break
 			}
-			if buf.Len() > netBufferLength {
-				break
-			}
+			buf.Write(curBuf.Bytes())
+			curBuf.Reset()
 		}
 		if buf.Len() > preLen {
 			buf.WriteString(";\n")
@@ -304,21 +308,27 @@ func showInsert(db string, tbl string, bufPool *sync.Pool, netBufferLength int) 
 			if err != nil {
 				return err
 			}
+			continue
+		}
+		if curBuf.Len() > 0 {
+			continue
 		}
 		buf.Reset()
+		curBuf.Reset()
+		break
 	}
-	buf.Reset()
 	bufPool.Put(buf)
+	bufPool.Put(curBuf)
 	fmt.Printf("\n\n\n")
 	return nil
 }
 
-func convertValue(v interface{}, typ string) string {
-	typ = strings.ToLower(typ)
+func convertValue(v any, typ string) string {
 	ret := *(v.(*sql.RawBytes))
 	if ret == nil {
 		return "NULL"
 	}
+	typ = strings.ToLower(typ)
 	switch typ {
 	case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double":
 		return string(ret)
