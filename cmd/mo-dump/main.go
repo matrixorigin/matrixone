@@ -278,19 +278,19 @@ func showInsert(db string, tbl string, bufPool *sync.Pool, netBufferLength int) 
 			if err != nil {
 				return err
 			}
-			values := "("
 			if !first {
-				values = ",("
+				buf.WriteString(",(")
+			} else {
+				buf.WriteString("(")
 			}
 			first = false
 			for i, v := range args {
 				if i > 0 {
-					values += ","
+					buf.WriteString(",")
 				}
-				values += convertValue(v, cols[i].Type)
+				buf.WriteString(convertValue(v, cols[i].Type))
 			}
-			values += ")"
-			buf.WriteString(values)
+			buf.WriteString(")")
 			if !r.Next() {
 				break
 			}
@@ -300,7 +300,10 @@ func showInsert(db string, tbl string, bufPool *sync.Pool, netBufferLength int) 
 		}
 		if buf.Len() > preLen {
 			buf.WriteString(";\n")
-			fmt.Print(buf.String())
+			_, err = buf.WriteTo(os.Stdout)
+			if err != nil {
+				return err
+			}
 		}
 		buf.Reset()
 	}
