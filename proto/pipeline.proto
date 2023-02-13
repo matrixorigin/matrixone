@@ -45,10 +45,9 @@ message Connector {
 }
 
 message Dispatch {
-  bool all = 1;
-  bool cross_cn = 2;
-  repeated Connector connector = 3;
-  repeated WrapNode remote_connector = 4;
+  int32 func_id = 1;
+  repeated Connector local_connector = 2;
+  repeated WrapNode remote_connector = 3;
 }
 
 message Aggregate {
@@ -299,10 +298,11 @@ message Pipeline {
 
 message WrapNode {
   string node_addr = 1;
-  repeated bytes uuids = 2;
+  bytes uuid = 2;
 }
 
 message UuidToRegIdx {
-  bytes uuid = 1;
-  int32 idx = 2;
+  int32 idx = 1;
+  bytes uuid = 2;
+  string from_addr = 3;
 }

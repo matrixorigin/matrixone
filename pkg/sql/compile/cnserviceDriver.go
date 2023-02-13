@@ -113,7 +113,7 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 		getClusterDetails: getClusterDetails,
 	}
 	// decode message and run it, get final analysis information and err info.
-	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
+	msgTyp, analysis, err := cnMessageHandle(ctx, message, cs, helper, cli)
 	if err != nil {
 		errData = pipeline.EncodedMessageError(ctx, err)
 	}
@@ -123,6 +123,7 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	}
 	backMessage := messageAcquirer().(*pipeline.Message)
 	backMessage.Id = message.GetID()
+	backMessage.Cmd = msgTyp
 	backMessage.Sid = pipeline.MessageEnd
 	backMessage.Err = errData
 	backMessage.Analyse = analysis
@@ -140,7 +141,7 @@ func fillEngineForInsert(s *Scope, e engine.Engine) {
 	}
 }
 
-func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper, cli client.TxnClient) (anaData []byte, err error) {
+func cnMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper, cli client.TxnClient) (msgTyp uint64, anaData []byte, err error) {
 	var c *Compile
 	var s *Scope
 	var procHelper *processHelper
@@ -149,84 +150,66 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	if !ok {
 		panic("unexpected message type for cn-server")
 	}
-	// it's a Batch
-	if m.IsBatchMessage() {
-		var wg *process.WaitRegister
-		var ok bool
+
+	msgTyp = m.GetCmd()
+	switch msgTyp {
+	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch excutor
 		opUuid, err := uuid.FromBytes(m.GetUuid())
 		if err != nil {
-			return nil, err
+			return msgTyp, nil, err
 		}
 
+		var ch chan process.WrapCs
+		ok := false
 		for {
-			if wg, ok = colexec.Srv.GetRegFromUuidMap(opUuid); !ok {
+			if ch, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
 				runtime.Gosched()
 			} else {
 				break
 			}
 		}
-
-		if m.IsBatchMessageEnd() {
-			requireCnt := m.GetBatchCnt()
-			if requireCnt > 0 {
-				for {
-					// waiting all batch handle done.
-					if colexec.Srv.IsEndStatus(opUuid, requireCnt) {
-						break
-					} else {
-						runtime.Gosched()
-					}
-				}
-			}
-			wg.Ch <- nil
-			close(wg.Ch)
-			colexec.Srv.RemoveUuidFromUuidMap(opUuid)
-
-			return nil, nil
-		} else {
-			// TODO: handle seperate batch
-			mp, err := mpool.NewMPool("cnservice_handle_batch", 0, mpool.NoFixed)
-			if err != nil {
-				return nil, err
-			}
-			bat, err := decodeBatch(mp, m.Data)
-			if err != nil {
-				return nil, err
-			}
-			wg.Ch <- bat
-			colexec.Srv.ReceiveNormalBatch(opUuid)
-			return nil, nil
+		info := process.WrapCs{
+			MsgId: m.GetId(),
+			Uid:   opUuid,
+			Cs:    cs,
 		}
-	}
-	// generate Compile-structure to run scope.
-	procHelper, err = generateProcessHelper(m.GetProcInfoData(), cli)
-	if err != nil {
-		return nil, err
-	}
-	c = newCompile(ctx, message, procHelper, messageHelper, cs)
 
-	// decode and run the scope.
-	s, err = decodeScope(m.GetData(), c.proc, true)
-	// remote insert operator need to have engine
-	fillEngineForInsert(s, c.e)
+		ch <- info
+		return msgTyp, nil, nil
 
-	if err != nil {
-		return nil, err
-	}
-	s = refactorScope(c, c.ctx, s)
+	case pipeline.PipelineMessage:
+		procHelper, err = generateProcessHelper(m.GetProcInfoData(), cli)
+		if err != nil {
+			return msgTyp, nil, err
+		}
+		c = newCompile(ctx, message, procHelper, messageHelper, cs)
 
-	err = s.ParallelRun(c, s.IsRemote)
-	if err != nil {
-		return nil, err
+		// decode and run the scope.
+		s, err = decodeScope(m.GetData(), c.proc, true)
+		// remote insert operator need to have engine
+		fillEngineForInsert(s, c.e)
+
+		if err != nil {
+			return msgTyp, nil, err
+		}
+		s = refactorScope(c, c.ctx, s)
+
+		err = s.ParallelRun(c, s.IsRemote)
+		if err != nil {
+			return msgTyp, nil, err
+		}
+		// encode analysis info and return.
+		anas := &pipeline.AnalysisList{
+			List: make([]*plan.AnalyzeInfo, len(c.proc.AnalInfos)),
+		}
+		for i := range anas.List {
+			anas.List[i] = convertToPlanAnalyzeInfo(c.proc.AnalInfos[i])
+		}
+		anaData, err = anas.Marshal()
+		return msgTyp, anaData, err
+	default:
+		return msgTyp, nil, moerr.NewInternalError(ctx, "unknow message type")
 	}
-	// encode analysis info and return.
-	anas := &pipeline.AnalysisList{
-		List: make([]*plan.AnalyzeInfo, len(c.proc.AnalInfos)),
-	}
-	for i := range anas.List {
-		anas.List[i] = convertToPlanAnalyzeInfo(c.proc.AnalInfos[i])
-	}
-	return anas.Marshal()
 }
 
 const maxMessageSizeToMoRpc = 64 * mpool.MB
@@ -373,7 +356,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 		message.Id = streamSender.ID()
 		message.Data = sData
 		message.ProcInfoData = pData
-		message.Cmd = 0
+		message.Cmd = pipeline.PipelineMessage
 	}
 
 	errSend := streamSender.Send(c.ctx, message)
@@ -526,7 +509,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
-	p.UuidsToRegIdx = convertScopeUuids(s)
+	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
 
 	// Plan
 	if ctxId == 1 {
@@ -610,27 +593,29 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	return ctxId, nil
 }
 
-func convertPipelineUuid(p *pipeline.Pipeline) ([]UuidToRegIdx, error) {
-	ret := make([]UuidToRegIdx, len(p.UuidsToRegIdx))
+func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
+	s.RemoteReceivRegInfos = make([]RemoteReceivRegInfo, len(p.UuidsToRegIdx))
 	for i, u := range p.UuidsToRegIdx {
 		uid, err := uuid.FromBytes(u.GetUuid())
 		if err != nil {
-			return nil, moerr.NewInvalidInputNoCtx("decode uuid failed: %s\n", err)
+			return moerr.NewInvalidInputNoCtx("decode uuid failed: %s\n", err)
 		}
-		ret[i] = UuidToRegIdx{
-			Uuid: uid,
-			Idx:  int(u.GetIdx()),
+		s.RemoteReceivRegInfos[i] = RemoteReceivRegInfo{
+			Idx:      int(u.GetIdx()),
+			Uuid:     uid,
+			FromAddr: u.FromAddr,
 		}
 	}
-	return ret, nil
+	return nil
 }
 
-func convertScopeUuids(s *Scope) (ret []*pipeline.UuidToRegIdx) {
-	ret = make([]*pipeline.UuidToRegIdx, len(s.UuidToRegIdx))
-	for i, u := range s.UuidToRegIdx {
+func convertScopeRemoteReceivInfo(s *Scope) (ret []*pipeline.UuidToRegIdx) {
+	ret = make([]*pipeline.UuidToRegIdx, len(s.RemoteReceivRegInfos))
+	for i, u := range s.RemoteReceivRegInfos {
 		ret[i] = &pipeline.UuidToRegIdx{
-			Uuid: u.Uuid[:],
-			Idx:  int32(u.Idx),
+			Idx:      int32(u.Idx),
+			Uuid:     u.Uuid[:],
+			FromAddr: u.FromAddr,
 		}
 	}
 	return ret
@@ -644,17 +629,15 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		ctx.plan = p.Qry
 	}
 
-	uuidToRegIdx, converErr := convertPipelineUuid(p)
-	if converErr != nil {
-		return nil, converErr
-	}
 	s := &Scope{
-		Magic:        int(p.GetPipelineType()),
-		IsEnd:        p.IsEnd,
-		IsJoin:       p.IsJoin,
-		Plan:         ctx.plan,
-		IsRemote:     isRemote,
-		UuidToRegIdx: uuidToRegIdx,
+		Magic:    int(p.GetPipelineType()),
+		IsEnd:    p.IsEnd,
+		IsJoin:   p.IsJoin,
+		Plan:     ctx.plan,
+		IsRemote: isRemote,
+	}
+	if err := convertPipelineUuid(p, s); err != nil {
+		return s, err
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
@@ -686,9 +669,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
-	for _, u := range s.UuidToRegIdx {
-		colexec.Srv.PutRegFromUuidMap(u.Uuid, s.Proc.Reg.MergeReceivers[u.Idx])
-	}
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
@@ -764,11 +744,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Result:    t.Result,
 		}
 	case *dispatch.Argument:
-		in.Dispatch = &pipeline.Dispatch{
-			All:     t.All,
-			CrossCn: t.CrossCN,
-		}
-		in.Dispatch.Connector = make([]*pipeline.Connector, len(t.LocalRegs))
+		in.Dispatch = &pipeline.Dispatch{FuncId: int32(t.FuncId)}
+		in.Dispatch.LocalConnector = make([]*pipeline.Connector, len(t.LocalRegs))
 		for i := range t.LocalRegs {
 			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
 			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
@@ -777,21 +754,18 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 					return ctxId, nil, err
 				}
 			}
-			in.Dispatch.Connector[i] = &pipeline.Connector{
+			in.Dispatch.LocalConnector[i] = &pipeline.Connector{
 				ConnectorIndex: idx,
 				PipelineId:     ctx0.id,
 			}
 		}
-		if t.CrossCN {
+
+		if len(t.RemoteRegs) > 0 {
 			in.Dispatch.RemoteConnector = make([]*pipeline.WrapNode, len(t.RemoteRegs))
 			for i, r := range t.RemoteRegs {
-				udata := make([][]byte, len(r.Uuids))
-				for j, u := range r.Uuids {
-					udata[j] = u[:]
-				}
 				wn := &pipeline.WrapNode{
 					NodeAddr: r.NodeAddr,
-					Uuids:    udata,
+					Uuid:     r.Uuid[:],
 				}
 				in.Dispatch.RemoteConnector[i] = wn
 			}
@@ -1028,31 +1002,26 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.Dispatch:
 		t := opr.GetDispatch()
-		regs := make([]*process.WaitRegister, len(t.Connector))
-		for i, cp := range t.Connector {
+		regs := make([]*process.WaitRegister, len(t.LocalConnector))
+		for i, cp := range t.LocalConnector {
 			regs[i] = ctx.root.getRegister(cp.PipelineId, cp.ConnectorIndex)
 		}
-		rrs := make([]colexec.WrapperNode, 0)
-		if t.CrossCn {
+		rrs := make([]colexec.ReceiveInfo, 0)
+		if len(t.RemoteConnector) > 0 {
 			for _, rc := range t.RemoteConnector {
-				n := colexec.WrapperNode{
-					NodeAddr: rc.NodeAddr,
-					Uuids:    make([]uuid.UUID, len(rc.Uuids)),
+				uid, err := uuid.FromBytes(rc.Uuid)
+				if err != nil {
+					return v, err
 				}
-				for j, u := range rc.Uuids {
-					uuid, err := uuid.FromBytes(u)
-					if err != nil {
-						return v, err
-					}
-					n.Uuids[j] = uuid
+				n := colexec.ReceiveInfo{
+					NodeAddr: rc.NodeAddr,
+					Uuid:     uid,
 				}
 				rrs = append(rrs, n)
 			}
 		}
-
 		v.Arg = &dispatch.Argument{
-			All:        t.All,
-			CrossCN:    t.CrossCn,
+			FuncId:     int(t.FuncId),
 			LocalRegs:  regs,
 			RemoteRegs: rrs,
 		}
@@ -1295,6 +1264,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 	for i := range proc.AnalInfos {
 		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
+	proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
 
 	c := &Compile{
 		ctx:  ctx,
