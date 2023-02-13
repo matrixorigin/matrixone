@@ -23,20 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type computeFn func([]byte, *bytejson.Path) (*bytejson.ByteJson, error)
-
-func computeJson(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
-	bj := types.DecodeJson(json)
-	return bj.Query(path), nil
-}
-func computeString(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
-	bj, err := types.ParseSliceToByteJson(json)
-	if err != nil {
-		return nil, err
-	}
-	return bj.Query(path), nil
-}
-
 func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
 	defer func() {
 		if err != nil && ret != nil {
@@ -54,12 +40,12 @@ func JsonExtract(vectors []*vector.Vector, proc *process.Process) (ret *vector.V
 		return
 	}
 
-	var fn computeFn
+	var fn types.ComputeFn
 	switch jsonBytes.Typ.Oid {
 	case types.T_json:
-		fn = computeJson
+		fn = types.ComputeJson
 	default:
-		fn = computeString
+		fn = types.ComputeString
 	}
 
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)

@@ -1050,6 +1050,11 @@ func doUse(ctx context.Context, ses *Session, db string) error {
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
 
+	version, _ := GetVersionCompatbility(ctx, ses, db)
+	if ses.GetTenantInfo() != nil {
+		ses.GetTenantInfo().SetVersion(version)
+	}
+
 	logInfof(ses.GetConciseProfile(), "User %s change database from [%s] to [%s]", ses.GetUserName(), oldDB, ses.GetDatabaseName())
 
 	return nil
@@ -3443,6 +3448,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
+
+		if len(ses.GetTenantInfo().GetVersion()) != 0 {
+			proc.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
+		}
 	} else {
 		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
