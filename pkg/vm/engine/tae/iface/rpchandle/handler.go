@@ -18,7 +18,6 @@ import (
 	"context"
 
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -89,6 +88,6 @@ type Handler interface {
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req db.InspectDN,
-		resp *ctl.DNStringResponse,
+		resp *db.InspectResp,
 	) error
 }

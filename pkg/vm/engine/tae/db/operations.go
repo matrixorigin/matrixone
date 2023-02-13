@@ -205,3 +205,29 @@ type WriteReq struct {
 
 type WriteResp struct {
 }
+
+type InspectResp struct {
+	Typ     int    `json:"-"`
+	Message string `json:"msg"`
+	Payload []byte `json:"-"`
+}
+
+const (
+	InspectNormal = 0
+	InspectCata   = 1
+)
+
+func (r *InspectResp) GetResponse() any {
+	var ret any = r
+	switch r.Typ {
+	case InspectCata:
+		ret = new(CatalogResp)
+		types.Decode(r.Payload, ret)
+	}
+	return ret
+}
+
+type CatalogResp struct {
+	Head  string         `json:"Main,omitempty"`
+	Items []*CatalogResp `json:"Sub,omitempty"`
+}

@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
-	ctlpb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -372,19 +371,21 @@ func (h *Handle) HandleInspectDN(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req db.InspectDN,
-	resp *ctlpb.DNStringResponse) (err error) {
+	resp *db.InspectResp) (err error) {
 	tae := h.eng.GetTAE(context.Background())
 	args, _ := shlex.Split(req.Operation)
 	logutil.Info("Inspect", zap.Strings("args", args))
 	b := &bytes.Buffer{}
+
 	inspectCtx := &inspectContext{
 		db:     tae,
 		acinfo: &req.AccessInfo,
 		args:   args,
 		out:    b,
+		resp:   resp,
 	}
 	RunInspect(inspectCtx)
-	resp.ReturnStr = b.String()
+	resp.Message = b.String()
 	return nil
 }
 

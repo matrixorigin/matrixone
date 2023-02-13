@@ -38,8 +38,8 @@ func handleInspectDN() handleFunc {
 			})
 		},
 		func(data []byte) (interface{}, error) {
-			resp := pb.DNStringResponse{}
+			resp := &db.InspectResp{}
 			types.Decode(data, &resp)
-			return resp, nil
+			return resp.GetResponse(), nil
 		})
 }

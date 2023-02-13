@@ -19,6 +19,9 @@ import (
 	"io"
 	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/spf13/cobra"
@@ -29,6 +32,7 @@ type inspectContext struct {
 	acinfo *db.AccessInfo
 	args   []string
 	out    io.Writer
+	resp   *db.InspectResp
 }
 
 // impl Pflag.Value interface
@@ -71,14 +75,18 @@ func (c *catalogArg) fromCommand(cmd *cobra.Command) error {
 }
 
 func runCatalog(arg *catalogArg, respWriter io.Writer) {
-	ret := arg.ctx.db.Catalog.SimplePPString(arg.verbose)
-
 	if arg.outfile != nil {
+		ret := arg.ctx.db.Catalog.SimplePPString(arg.verbose)
 		arg.outfile.WriteString(ret)
 		defer arg.outfile.Close()
 		respWriter.Write([]byte("write file done"))
 	} else {
-		respWriter.Write([]byte(ret))
+		visitor := newCatalogRespVisitor(arg.verbose)
+		arg.ctx.db.Catalog.RecurLoop(visitor)
+
+		ret, _ := types.Encode(visitor.GetResponse())
+		arg.ctx.resp.Payload = ret
+		arg.ctx.resp.Typ = db.InspectCata
 	}
 }
 
@@ -99,7 +107,6 @@ func initCommand(ctx *inspectContext) *cobra.Command {
 		},
 	}
 
-	rootCmd.PersistentFlags().StringP("outfile", "o", "", "write output to a file")
 	rootCmd.PersistentFlags().VarPF(ctx, "ictx", "", "").Hidden = true
 
 	rootCmd.SetArgs(ctx.args)
@@ -107,6 +114,7 @@ func initCommand(ctx *inspectContext) *cobra.Command {
 	rootCmd.SetOut(ctx.out)
 
 	catalogCmd.Flags().CountP("verbose", "v", "verbose level")
+	catalogCmd.Flags().StringP("outfile", "o", "", "write output to a file")
 	rootCmd.AddCommand(catalogCmd)
 	return rootCmd
 }
@@ -114,4 +122,65 @@ func initCommand(ctx *inspectContext) *cobra.Command {
 func RunInspect(ctx *inspectContext) {
 	rootCmd := initCommand(ctx)
 	rootCmd.Execute()
+}
+
+type catalogRespVisitor struct {
+	catalog.LoopProcessor
+	level common.PPLevel
+	stack []*db.CatalogResp
+}
+
+func newCatalogRespVisitor(lv common.PPLevel) *catalogRespVisitor {
+	return &catalogRespVisitor{
+		level: lv,
+		stack: []*db.CatalogResp{{Head: "Catalog"}},
+	}
+}
+
+func (c *catalogRespVisitor) GetResponse() *db.CatalogResp {
+	return c.stack[0]
+}
+
+type LevelStringer interface {
+	StringWithLevel(common.PPLevel) string
+}
+
+func (c *catalogRespVisitor) OnDatabase(database *catalog.DBEntry) error {
+	c.stack = c.stack[:1]
+	resp := &db.CatalogResp{Head: database.StringWithLevel(c.level)}
+	c.stack[0].Items = append(c.stack[0].Items, resp)
+	c.stack = append(c.stack, resp)
+	return nil
+}
+
+func (c *catalogRespVisitor) OnTable(table *catalog.TableEntry) error {
+	if c.level == common.PPL0 {
+		return moerr.GetOkStopCurrRecur()
+	}
+	c.stack = c.stack[:2]
+	resp := &db.CatalogResp{Head: table.StringWithLevel(c.level)}
+	c.stack[1].Items = append(c.stack[1].Items, resp)
+	c.stack = append(c.stack, resp)
+	return nil
+}
+
+func (c *catalogRespVisitor) OnSegment(seg *catalog.SegmentEntry) error {
+	if c.level == common.PPL0 {
+		return moerr.GetOkStopCurrRecur()
+	}
+	c.stack = c.stack[:2]
+	resp := &db.CatalogResp{Head: seg.StringWithLevel(c.level)}
+	c.stack[1].Items = append(c.stack[1].Items, resp)
+	c.stack = append(c.stack, resp)
+	return nil
+}
+
+func (c *catalogRespVisitor) OnBlock(blk *catalog.BlockEntry) error {
+	if c.level == common.PPL0 {
+		return moerr.GetOkStopCurrRecur()
+	}
+	c.stack = c.stack[:3]
+	resp := &db.CatalogResp{Head: blk.StringWithLevel(c.level)}
+	c.stack[2].Items = append(c.stack[2].Items, resp)
+	return nil
 }

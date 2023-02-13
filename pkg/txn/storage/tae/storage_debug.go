@@ -19,8 +19,10 @@ import (
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 )
 
 func (s *taeStorage) Debug(ctx context.Context,
@@ -66,10 +68,9 @@ func (s *taeStorage) Debug(ctx context.Context,
 			ctx, s, txnMeta, data, s.taeHandler.HandleInspectDN,
 		)
 		if err != nil {
-			resp := protoc.MustMarshal(&ctl.DNStringResponse{
-				ReturnStr: "Failed",
+			return types.Encode(&db.InspectResp{
+				Message: "Failed",
 			})
-			return resp, err
 		}
 		return resp.Read()
 	default:
