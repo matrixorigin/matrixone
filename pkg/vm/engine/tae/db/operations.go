@@ -228,6 +228,6 @@ func (r *InspectResp) GetResponse() any {
 }
 
 type CatalogResp struct {
-	Head  string         `json:"Main,omitempty"`
-	Items []*CatalogResp `json:"Sub,omitempty"`
+	Item string         `json:"Item,omitempty"`
+	Sub  []*CatalogResp `json:"Sub,omitempty"`
 }

@@ -133,7 +133,7 @@ type catalogRespVisitor struct {
 func newCatalogRespVisitor(lv common.PPLevel) *catalogRespVisitor {
 	return &catalogRespVisitor{
 		level: lv,
-		stack: []*db.CatalogResp{{Head: "Catalog"}},
+		stack: []*db.CatalogResp{{Item: "Catalog"}},
 	}
 }
 
@@ -141,15 +141,20 @@ func (c *catalogRespVisitor) GetResponse() *db.CatalogResp {
 	return c.stack[0]
 }
 
-type LevelStringer interface {
+func entryLevelString[T interface {
 	StringWithLevel(common.PPLevel) string
+}](entry T, lv common.PPLevel) *db.CatalogResp {
+	return &db.CatalogResp{Item: entry.StringWithLevel(lv)}
+}
+
+func (c *catalogRespVisitor) onstack(idx int, resp *db.CatalogResp) {
+	c.stack = c.stack[:idx+1]
+	c.stack[idx].Sub = append(c.stack[idx].Sub, resp)
+	c.stack = append(c.stack, resp)
 }
 
 func (c *catalogRespVisitor) OnDatabase(database *catalog.DBEntry) error {
-	c.stack = c.stack[:1]
-	resp := &db.CatalogResp{Head: database.StringWithLevel(c.level)}
-	c.stack[0].Items = append(c.stack[0].Items, resp)
-	c.stack = append(c.stack, resp)
+	c.onstack(0, entryLevelString(database, c.level))
 	return nil
 }
 
@@ -157,10 +162,7 @@ func (c *catalogRespVisitor) OnTable(table *catalog.TableEntry) error {
 	if c.level == common.PPL0 {
 		return moerr.GetOkStopCurrRecur()
 	}
-	c.stack = c.stack[:2]
-	resp := &db.CatalogResp{Head: table.StringWithLevel(c.level)}
-	c.stack[1].Items = append(c.stack[1].Items, resp)
-	c.stack = append(c.stack, resp)
+	c.onstack(1, entryLevelString(table, c.level))
 	return nil
 }
 
@@ -168,10 +170,7 @@ func (c *catalogRespVisitor) OnSegment(seg *catalog.SegmentEntry) error {
 	if c.level == common.PPL0 {
 		return moerr.GetOkStopCurrRecur()
 	}
-	c.stack = c.stack[:2]
-	resp := &db.CatalogResp{Head: seg.StringWithLevel(c.level)}
-	c.stack[1].Items = append(c.stack[1].Items, resp)
-	c.stack = append(c.stack, resp)
+	c.onstack(2, entryLevelString(seg, c.level))
 	return nil
 }
 
@@ -179,8 +178,6 @@ func (c *catalogRespVisitor) OnBlock(blk *catalog.BlockEntry) error {
 	if c.level == common.PPL0 {
 		return moerr.GetOkStopCurrRecur()
 	}
-	c.stack = c.stack[:3]
-	resp := &db.CatalogResp{Head: blk.StringWithLevel(c.level)}
-	c.stack[2].Items = append(c.stack[2].Items, resp)
+	c.onstack(3, entryLevelString(blk, c.level))
 	return nil
 }
