@@ -130,7 +130,6 @@ func (c *Compile) Run(_ uint64) (err error) {
 
 	// XXX PrintScope has a none-trivial amount of logging
 	// PrintScope(nil, []*Scope{c.scope})
-
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -1422,7 +1421,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 //	return rs
 //}
 
-func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 	len := len(ss)
 	rs := make([]*Scope, len)
 	idx := 0
@@ -1451,7 +1450,7 @@ func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope) []*Sco
 	mergeChildren := c.newMergeScope(children)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructShuffleJoinDispatch(1, rs, c.addr),
+		Arg: constructBroadcastJoinDispatch(1, rs, c.addr, mergeChildren.Proc),
 	})
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 
@@ -1496,13 +1495,14 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[1]
 
-	for i, u := range s.UuidToRegIdx {
+	for i, u := range s.RemoteReceivRegInfos {
 		if u.Idx == 1 {
-			rs.UuidToRegIdx = append(rs.UuidToRegIdx, UuidToRegIdx{
-				Uuid: u.Uuid,
-				Idx:  0,
+			rs.RemoteReceivRegInfos = append(rs.RemoteReceivRegInfos, RemoteReceivRegInfo{
+				Idx:      0,
+				Uuid:     u.Uuid,
+				FromAddr: u.FromAddr,
 			})
-			s.UuidToRegIdx = append(s.UuidToRegIdx[:i], s.UuidToRegIdx[i+1:]...)
+			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos[:i], s.RemoteReceivRegInfos[i+1:]...)
 			break
 		}
 	}
@@ -1732,7 +1732,6 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 
 func isCurrentCN(addr string, currentCNAddr string) bool {
 	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
-
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
