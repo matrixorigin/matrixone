@@ -600,19 +600,11 @@ func (vec *CnTaeVector[T]) releaseDownstream() {
 
 func (vec *CnTaeVector[T]) Allocated() int {
 
-	//1. If mpool doesn't allocate
 	if !vec.isAllocatedFromMpool {
 		return 0
 	}
 
-	// 2. if mpool allocates
-	{
-		if vec.GetType().IsVarlen() {
-			return vec.downstreamVector.Size()
-		}
-
-		return vec.downstreamVector.Length()
-	}
+	return vec.downstreamVector.Size()
 }
 
 // TODO: --- I am not sure, if the below functions will work as expected
