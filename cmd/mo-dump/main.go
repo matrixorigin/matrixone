@@ -260,6 +260,11 @@ func showInsert(db string, tbl string, bufPool *sync.Pool, netBufferLength int) 
 		c.Type = col.DatabaseTypeName()
 		cols = append(cols, &c)
 	}
+	args := make([]any, 0, len(cols))
+	for range cols {
+		var v sql.RawBytes
+		args = append(args, &v)
+	}
 	buf := bufPool.Get().(*bytes.Buffer)
 	for {
 		if !r.Next() {
@@ -269,11 +274,6 @@ func showInsert(db string, tbl string, bufPool *sync.Pool, netBufferLength int) 
 		preLen := buf.Len()
 		first := true
 		for {
-			args := make([]interface{}, 0, len(cols))
-			for range cols {
-				var v interface{}
-				args = append(args, &v)
-			}
 			err = r.Scan(args...)
 			if err != nil {
 				return err
@@ -312,14 +312,14 @@ func showInsert(db string, tbl string, bufPool *sync.Pool, netBufferLength int) 
 
 func convertValue(v interface{}, typ string) string {
 	typ = strings.ToLower(typ)
-	ret := *(v.(*interface{}))
+	ret := *(v.(*sql.RawBytes))
 	if ret == nil {
 		return "NULL"
 	}
 	switch typ {
 	case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double":
-		return string(ret.([]byte))
+		return string(ret)
 	default:
-		return "'" + strings.Replace(string(ret.([]byte)), "'", "\\'", -1) + "'"
+		return "'" + strings.Replace(string(ret), "'", "\\'", -1) + "'"
 	}
 }
