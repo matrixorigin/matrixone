@@ -34,6 +34,7 @@ func getColumnNameFromExpr(expr *plan.Expr) string {
 	return ""
 }
 
+// deduce selectivity for expr
 func deduceSelectivity(expr *plan.Expr, sortKeyName string) float64 {
 	if expr == nil {
 		return 1
@@ -45,6 +46,8 @@ func deduceSelectivity(expr *plan.Expr, sortKeyName string) float64 {
 		switch funcName {
 		case "=":
 			sortOrder := util.GetClusterByColumnOrder(sortKeyName, getColumnNameFromExpr(expr))
+			//if col is clusterby, we assume most of the rows in blocks we read is needed
+			//otherwise, deduce selectivity according to ndv
 			if sortOrder == 0 {
 				return 0.9
 			} else if sortOrder == 1 {
@@ -55,9 +58,12 @@ func deduceSelectivity(expr *plan.Expr, sortKeyName string) float64 {
 				return 0.01
 			}
 		case "and":
+			//get the smaller one of two children
 			sel = math.Min(deduceSelectivity(exprImpl.F.Args[0], sortKeyName), deduceSelectivity(exprImpl.F.Args[1], sortKeyName))
 			return sel
 		case "or":
+			//get the bigger one of two children
+			//if the result is small, tune it up a little bit
 			sel1 := deduceSelectivity(exprImpl.F.Args[0], sortKeyName)
 			sel2 := deduceSelectivity(exprImpl.F.Args[1], sortKeyName)
 			sel = math.Max(sel1, sel2)
@@ -67,12 +73,15 @@ func deduceSelectivity(expr *plan.Expr, sortKeyName string) float64 {
 				return 1 - (1-sel1)*(1-sel2)
 			}
 		default:
+			//for filters like a>1, no good way to estimate, just 1/3
 			return 0.33
 		}
 	}
 	return 1
 }
 
+// calculate the stats for scan node.
+// we need to get the zonemap from cn, and eval the filters with zonemap
 func CalcStats(ctx context.Context, blocks *[][]BlockMeta, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process, sortKeyName string) (*plan.Stats, error) {
 	var blockNum int
 	var tableCnt, cost int64
