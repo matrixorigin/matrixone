@@ -95,6 +95,7 @@ func main() {
 	flag.Var(&tables, "tbl", "tableNameList, default all")
 	flag.Parse()
 	if netBufferLength < minNetBufferLength {
+		fmt.Fprintf(os.Stderr, "net_buffer_length must be greater than %d, set to %d\n", minNetBufferLength, minNetBufferLength)
 		netBufferLength = minNetBufferLength
 	}
 	if len(database) == 0 {
