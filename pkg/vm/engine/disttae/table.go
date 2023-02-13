@@ -34,7 +34,7 @@ import (
 
 var _ engine.Relation = new(table)
 
-func (tbl *table) Stats(ctx context.Context, expr *plan.Expr) (*plan2.Stats, error) {
+func (tbl *table) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, error) {
 	switch tbl.tableId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
 		return plan2.DefaultStats(), nil
@@ -47,7 +47,7 @@ func (tbl *table) Stats(ctx context.Context, expr *plan.Expr) (*plan2.Stats, err
 		}
 	}
 	if tbl.meta != nil {
-		return plan2.CalcStats(ctx, &tbl.meta.blocks, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName())
+		return CalcStats(ctx, &tbl.meta.blocks, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName())
 	} else {
 		// no meta means not flushed yet, very small table
 		return plan2.DefaultStats(), nil

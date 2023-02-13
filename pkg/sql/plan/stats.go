@@ -1,11 +1,8 @@
 package plan
 
 import (
-	"context"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 )
 
@@ -215,30 +212,4 @@ func DefaultStats() *plan.Stats {
 	stats.Selectivity = 1
 	stats.BlockNum = 1
 	return stats
-}
-
-func CalcStats(ctx context.Context, blocks *[][]disttae.BlockMeta, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process, sortKeyName string) (*plan.Stats, error) {
-	var blockNum int
-	var tableCnt, cost int64
-
-	exprMono := CheckExprIsMonotonic(ctx, expr)
-	columnMap, columns, maxCol := GetColumnsByExpr(expr, tableDef)
-	for i := range *blocks {
-		for j := range (*blocks)[i] {
-			tableCnt += (*blocks)[i][j].Rows
-			if !exprMono || disttae.NeedRead(ctx, expr, (*blocks)[i][j], tableDef, columnMap, columns, maxCol, proc) {
-				cost += (*blocks)[i][j].Rows
-				blockNum++
-			}
-		}
-	}
-
-	stats := new(Stats)
-	stats.BlockNum = int32(blockNum)
-	stats.TableCnt = float64(tableCnt)
-	stats.Cost = float64(cost)
-	stats.Outcnt = float64(cost) * DeduceSelectivity(expr, sortKeyName)
-	stats.Selectivity = stats.Outcnt / stats.TableCnt
-	return stats, nil
-
 }
