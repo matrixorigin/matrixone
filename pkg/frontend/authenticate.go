@@ -6133,8 +6133,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	if err != nil {
 		goto handleFailed
 	}
-	sql = ses.GetDatabaseName()
-	fmt.Println(sql)
+
 	if len(ses.GetDatabaseName()) != 0 && ses.GetDatabaseName() == datname {
 		version, _ := GetVersionCompatbility(ctx, ses, datname)
 		if ses.GetTenantInfo() != nil {
