@@ -16,7 +16,6 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 )
 
@@ -177,45 +176,6 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 			}
 		}
 	}
-}
-
-func DeduceSelectivity(expr *plan.Expr, sortKeyName string) float64 {
-	if expr == nil {
-		return 1
-	}
-	var sel float64
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		funcName := exprImpl.F.Func.ObjName
-		switch funcName {
-		case "=":
-			sortOrder := util.GetClusterByColumnOrder(sortKeyName, getColumnNameFromExpr(expr))
-			if sortOrder == 0 {
-				return 0.9
-			} else if sortOrder == 1 {
-				return 0.6
-			} else if sortOrder == 2 {
-				return 0.3
-			} else {
-				return 0.01
-			}
-		case "and":
-			sel = math.Min(DeduceSelectivity(exprImpl.F.Args[0], sortKeyName), DeduceSelectivity(exprImpl.F.Args[1], sortKeyName))
-			return sel
-		case "or":
-			sel1 := DeduceSelectivity(exprImpl.F.Args[0], sortKeyName)
-			sel2 := DeduceSelectivity(exprImpl.F.Args[1], sortKeyName)
-			sel = math.Max(sel1, sel2)
-			if sel < 0.1 {
-				return sel * 1.05
-			} else {
-				return 1 - (1-sel1)*(1-sel2)
-			}
-		default:
-			return 0.33
-		}
-	}
-	return 1
 }
 
 func DefaultStats() *plan.Stats {

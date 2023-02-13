@@ -709,17 +709,6 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	return nil
 }
 
-func getColumnNameFromExpr(expr *plan.Expr) string {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		return exprImpl.Col.Name
-
-	case *plan.Expr_F:
-		return getColumnNameFromExpr(exprImpl.F.Args[0])
-	}
-	return ""
-}
-
 func containsParamRef(expr *plan.Expr) bool {
 	var ret bool
 	switch exprImpl := expr.Expr.(type) {
