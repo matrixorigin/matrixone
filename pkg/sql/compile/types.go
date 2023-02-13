@@ -113,7 +113,7 @@ type Scope struct {
 
 	Reg *process.WaitRegister
 
-	UuidToRegIdx []UuidToRegIdx
+	RemoteReceivRegInfos []RemoteReceivRegInfo
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
@@ -174,8 +174,8 @@ type Compile struct {
 	// table locally. But int the future, this will disappear.
 	isTemporaryScan bool
 }
-
-type UuidToRegIdx struct {
-	Uuid uuid.UUID
-	Idx  int
+type RemoteReceivRegInfo struct {
+	Idx      int
+	Uuid     uuid.UUID
+	FromAddr string
 }
