@@ -64,6 +64,9 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	if err != nil {
 		return 0, err
 	}
+	if len(path) == 0 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "empty %s", "query result")
+	}
 	typs := make([]types.Type, len(cols))
 	for i, c := range cols {
 		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale, c.Typ.Precision)

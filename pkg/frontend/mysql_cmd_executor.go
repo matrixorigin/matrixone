@@ -2042,6 +2042,11 @@ func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ad *
 	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
 }
 
+// handleAlterAccountConfig alter a account's mysql_compatbility_mode
+func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, st *tree.AlterDataBaseConfig) error {
+	return doAlterAccountConfig(ctx, mce.GetSession(), st)
+}
+
 // handleCreateUser creates the user for the tenant
 func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
 	ses := mce.GetSession()
@@ -2504,7 +2509,12 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
-	return cwft.compile.Run(ts)
+	logDebugf(cwft.ses.GetConciseProfile(), "compile.Run begin")
+	defer func() {
+		logDebugf(cwft.ses.GetConciseProfile(), "compile.Run end")
+	}()
+	err := cwft.compile.Run(ts)
+	return err
 }
 
 func (cwft *TxnComputationWrapper) GetLoadTag() bool {
@@ -2584,7 +2594,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 		*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
-		*tree.ShowCreateDatabase, *tree.ShowCreateTable,
+		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt)
@@ -3286,14 +3296,14 @@ func (ses *Session) getSqlType(sql string) {
 }
 
 func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
 	defer func() {
 		err2 := writer.Close()
 		if err == nil {
 			err = err2
 		}
 	}()
-	ses := mce.GetSession()
-	proto := ses.GetMysqlProtocol()
 	err = plan2.InitInfileParam(param)
 	if err != nil {
 		return
@@ -3326,16 +3336,22 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	if length == 0 {
 		return
 	}
+
+	skipWrite := false
+	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
+	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
+	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
+	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
+
 	_, err = writer.Write(packet.Payload)
 	if err != nil {
-		return
+		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
+		logErrorf(ses.GetConciseProfile(), "load local '%s', write error: %v", param.Filepath, err)
 	}
-	nowStart := time.Now()
+	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
-		logutil.Infof("last time cost %f seconds", time.Since(nowStart).Seconds())
-		nowStart = time.Now()
+		readStart := time.Now()
 		msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
-		logutil.Infof("read tcp cost %f seconds", time.Since(nowStart).Seconds())
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 				seq += 1
@@ -3343,6 +3359,13 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 				err = nil
 			}
 			break
+		}
+		readTime := time.Since(readStart)
+		if readTime > maxReadTime {
+			maxReadTime = readTime
+		}
+		if readTime < minReadTime {
+			minReadTime = readTime
 		}
 		packet, ok = msg.(*Packet)
 		if !ok {
@@ -3355,13 +3378,27 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		proto.SetSequenceID(seq)
 
 		writeStart := time.Now()
-		_, err = writer.Write(packet.Payload)
-		logutil.Infof("write pipe cost %f seconds", time.Since(writeStart).Seconds())
-		if err != nil {
-			return
+		if !skipWrite {
+			_, err = writer.Write(packet.Payload)
+			if err != nil {
+				logErrorf(ses.GetConciseProfile(), "load local '%s', epoch: %d, write error: %v", param.Filepath, epoch, err)
+				skipWrite = true
+			}
+			writeTime := time.Since(writeStart)
+			if writeTime > maxWriteTime {
+				maxWriteTime = writeTime
+			}
+			if writeTime < minWriteTime {
+				minWriteTime = writeTime
+			}
 		}
+		if epoch%printEvery == 0 {
+			logInfof(ses.GetConciseProfile(), "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
+			minReadTime, maxReadTime, minWriteTime, maxWriteTime = 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
+		}
+		epoch += 1
 	}
-	logutil.Infof("processLocalInfile cost:%f seconds", time.Since(start).Seconds())
+	logInfof(ses.GetConciseProfile(), "load local '%s', read&write all data from client cost: %s", param.Filepath, time.Since(start))
 	return
 }
 
@@ -3389,15 +3426,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proc.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:          ses.GetUserName(),
-		Host:          pu.SV.Host,
-		ConnectionID:  uint64(proto.ConnectionID()),
-		Database:      ses.GetDatabaseName(),
-		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
-		TimeZone:      ses.GetTimeZone(),
-		StorageEngine: pu.StorageEngine,
-		LastInsertID:  ses.GetLastInsertID(),
-		Session:       ses,
+		User:              ses.GetUserName(),
+		Host:              pu.SV.Host,
+		ConnectionID:      uint64(proto.ConnectionID()),
+		Database:          ses.GetDatabaseName(),
+		Version:           pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
+		TimeZone:          ses.GetTimeZone(),
+		StorageEngine:     pu.StorageEngine,
+		LastInsertID:      ses.GetLastInsertID(),
+		AutoIncrCaches:    ses.GetAutoIncrCaches(),
+		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
 	}
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
@@ -3666,8 +3704,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.AlterDataBaseConfig:
 			ses.InvalidatePrivilegeCache()
 			selfHandle = true
-			if err = mce.handleAlterDataBaseConfig(requestCtx, st); err != nil {
-				goto handleFailed
+			if st.IsAccountLevel {
+				if err = mce.handleAlterAccountConfig(requestCtx, st); err != nil {
+					goto handleFailed
+				}
+			} else {
+				if err = mce.handleAlterDataBaseConfig(requestCtx, st); err != nil {
+					goto handleFailed
+				}
 			}
 		case *tree.CreateUser:
 			selfHandle = true
@@ -3937,11 +3981,21 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 
 			if err = runner.Run(0); err != nil {
+				if loadLocalErrGroup != nil { // release resources
+					err2 := proc.LoadLocalReader.Close()
+					if err2 != nil {
+						logErrorf(ses.GetConciseProfile(), "processLoadLocal reader close failed: %s", err2.Error())
+					}
+					err2 = loadLocalErrGroup.Wait() // executor failed, but processLoadLocal is still running, wait for it
+					if err2 != nil {
+						logErrorf(ses.GetConciseProfile(), "processLoadLocal goroutine failed: %s", err2.Error())
+					}
+				}
 				goto handleFailed
 			}
 
 			if loadLocalErrGroup != nil {
-				if err = loadLocalErrGroup.Wait(); err != nil {
+				if err = loadLocalErrGroup.Wait(); err != nil { //executor success, but processLoadLocal goroutine failed
 					goto handleFailed
 				}
 			}
@@ -4221,14 +4275,15 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:          ses.GetUserName(),
-		Host:          pu.SV.Host,
-		ConnectionID:  uint64(proto.ConnectionID()),
-		Database:      ses.GetDatabaseName(),
-		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
-		TimeZone:      ses.GetTimeZone(),
-		StorageEngine: pu.StorageEngine,
-		Session:       ses,
+		User:              ses.GetUserName(),
+		Host:              pu.SV.Host,
+		ConnectionID:      uint64(proto.ConnectionID()),
+		Database:          ses.GetDatabaseName(),
+		Version:           pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
+		TimeZone:          ses.GetTimeZone(),
+		StorageEngine:     pu.StorageEngine,
+		AutoIncrCaches:    ses.GetAutoIncrCaches(),
+		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
 	}
 
 	if ses.GetTenantInfo() != nil {
@@ -4743,38 +4798,4 @@ func getAccountId(ctx context.Context) uint32 {
 		accountId = v.(uint32)
 	}
 	return accountId
-}
-
-func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
-	var datname string
-	var configuration string
-
-	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
-		datname = string(createDatabaseStmt.Name)
-		configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+","+"%q"+":"+"0"+"}"+"'", "transaction_ioslation", "SNAPSHOT_ISOLATION", "lower_case_table_names")
-		insertSql := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, datname, configuration)
-
-		bh := ses.GetBackgroundExec(ctx)
-		err := bh.Exec(ctx, insertSql)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
-	var datname string
-
-	if deleteDatabaseStmt, ok := stmt.(*tree.DropDatabase); ok {
-		datname = string(deleteDatabaseStmt.Name)
-		deletesql := getSqlForDeleteMysqlCompatbilityMode(datname)
-
-		bh := ses.GetBackgroundExec(ctx)
-		err := bh.Exec(ctx, deletesql)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }

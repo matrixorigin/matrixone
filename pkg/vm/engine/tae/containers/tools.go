@@ -35,7 +35,7 @@ type CodecTool struct {
 
 func NewCodecTool() *CodecTool {
 	return &CodecTool{
-		storage: NewVector[[]byte](types.T_char.ToType(), false),
+		storage: NewCnTaeVector[[]byte](types.T_char.ToType(), false),
 	}
 }
 

@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -222,72 +221,6 @@ func (ses *Session) GetAutoIncrCaches() defines.AutoIncrCaches {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.autoIncrCaches
-}
-
-func (ses *Session) DeleteAutoIncrCache(name string) {
-	ses.autoIncrCaches.Mu.Lock()
-	defer ses.autoIncrCaches.Mu.Unlock()
-	_, ok := ses.autoIncrCaches.AutoIncrCaches[name]
-	if ok {
-		delete(ses.autoIncrCaches.AutoIncrCaches, name)
-	}
-}
-
-func (ses *Session) RenameAutoIncrCache(oldname, newname string) {
-	ses.autoIncrCaches.Mu.Lock()
-	defer ses.autoIncrCaches.Mu.Unlock()
-	_, ok := ses.autoIncrCaches.AutoIncrCaches[oldname]
-	if ok {
-		ses.autoIncrCaches.AutoIncrCaches[newname] = defines.AutoIncrCache{CurNum: ses.autoIncrCaches.AutoIncrCaches[oldname].CurNum,
-			MaxNum: ses.autoIncrCaches.AutoIncrCaches[oldname].MaxNum, Step: ses.autoIncrCaches.AutoIncrCaches[oldname].Step}
-		delete(ses.autoIncrCaches.AutoIncrCaches, oldname)
-	}
-}
-
-func (ses *Session) GetNextAutoIncrNum(colDefs []*plan.ColDef, ctx context.Context, incrParam *colexec.AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
-	ses.autoIncrCaches.Mu.Lock()
-	defer ses.autoIncrCaches.Mu.Unlock()
-	offset, step := make([]uint64, 0), make([]uint64, 0)
-	for i, col := range colDefs {
-		if !col.Typ.AutoIncr {
-			continue
-		}
-
-		name := fmt.Sprintf("%d_%s", tableID, col.Name)
-		autoincrcache, ok := ses.autoIncrCaches.AutoIncrCaches[name]
-		// Not cached yet or the cache is ran out.
-		// Need new txn for read from the table.
-		if !ok || autoincrcache.CurNum >= autoincrcache.MaxNum {
-			// Need return maxNum for correction.
-			cur := uint64(0)
-			if ok {
-				cur = autoincrcache.CurNum
-			}
-			curNum, maxNum, stp, err := colexec.GetNextOneCache(ctx, incrParam, bat, tableID, i, name, uint64(cacheSize), cur)
-			if err != nil {
-				return nil, nil, err
-			}
-			ses.autoIncrCaches.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: curNum, MaxNum: maxNum, Step: stp}
-		}
-
-		offset = append(offset, ses.autoIncrCaches.AutoIncrCaches[name].CurNum)
-		step = append(step, ses.autoIncrCaches.AutoIncrCaches[name].Step)
-
-		// Here got the most recent id in the cache.
-		// Need compare witch vec and get the maxNum.
-		maxNum, err := colexec.GetMax(incrParam, bat, i, ses.autoIncrCaches.AutoIncrCaches[name].Step, 1, ses.autoIncrCaches.AutoIncrCaches[name].CurNum)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		incrParam.SetLastInsertID(maxNum)
-
-		// Update the caches.
-		ses.autoIncrCaches.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: maxNum,
-			MaxNum: ses.autoIncrCaches.AutoIncrCaches[name].MaxNum, Step: ses.autoIncrCaches.AutoIncrCaches[name].Step}
-	}
-
-	return offset, step, nil
 }
 
 const saveQueryIdCnt = 10
@@ -1926,11 +1859,11 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (con
 		return nil, nil, err
 	}
 
-	tableNames, err := db.Relations(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
+	// tableNames, err := db.Relations(ctx)
+	// if err != nil {
+	// 	return nil, nil, err
+	// }
+	// logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
 	table, err := db.Relation(ctx, tableName)
@@ -2014,6 +1947,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var viewSql *plan2.ViewDef
 	var foreignKeys []*plan2.ForeignKeyDef
 	var primarykey *plan2.PrimaryKeyDef
+	var indexes []*plan2.IndexDef
 	var refChildTbls []uint64
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -2070,28 +2004,8 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		} else if c, ok := def.(*engine.ConstraintDef); ok {
 			for _, ct := range c.Cts {
 				switch k := ct.(type) {
-				case *engine.UniqueIndexDef:
-					u := &plan.UniqueIndexDef{}
-					err = u.UnMarshalUniqueIndexDef(([]byte)(k.UniqueIndex))
-					if err != nil {
-						return nil, nil
-					}
-					defs = append(defs, &plan.TableDef_DefType{
-						Def: &plan.TableDef_DefType_UIdx{
-							UIdx: u,
-						},
-					})
-				case *engine.SecondaryIndexDef:
-					s := &plan.SecondaryIndexDef{}
-					err = s.UnMarshalSecondaryIndexDef(([]byte)(k.SecondaryIndex))
-					if err != nil {
-						return nil, nil
-					}
-					defs = append(defs, &plan.TableDef_DefType{
-						Def: &plan.TableDef_DefType_SIdx{
-							SIdx: s,
-						},
-					})
+				case *engine.IndexDef:
+					indexes = k.Indexes
 				case *engine.ForeignKeyDef:
 					foreignKeys = k.Fkeys
 				case *engine.RefChildTableDef:
@@ -2167,6 +2081,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		RefChildTbls:  refChildTbls,
 		ClusterBy:     clusterByDef,
 		OriginCols:    originCols,
+		Indexes:       indexes,
 	}
 	return obj, tableDef
 }

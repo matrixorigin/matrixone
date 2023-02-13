@@ -1266,6 +1266,7 @@ func TestProcessLoadLocal(t *testing.T) {
 			cnt++
 			return
 		}).AnyTimes()
+		ioses.EXPECT().Close().AnyTimes()
 		proto := &FakeProtocol{
 			ioses: ioses,
 		}

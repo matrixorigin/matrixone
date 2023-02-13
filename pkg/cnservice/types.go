@@ -56,6 +56,10 @@ const (
 	EngineDistributedTAE       EngineType = "distributed-tae"
 	EngineMemory               EngineType = "memory"
 	EngineNonDistributedMemory EngineType = "non-distributed-memory"
+	// ReservedTasks equals how many task must run background.
+	// 1 for metric StorageUsage
+	// 1 for trace ETLMerge
+	ReservedTasks = 2
 )
 
 // Config cn service
@@ -156,8 +160,8 @@ func (c *Config) Validate() error {
 	}
 	if c.TaskRunner.Parallelism == 0 {
 		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
-		if c.TaskRunner.Parallelism == 0 {
-			c.TaskRunner.Parallelism = 1
+		if c.TaskRunner.Parallelism <= ReservedTasks {
+			c.TaskRunner.Parallelism = 1 + ReservedTasks
 		}
 	}
 	if c.TaskRunner.FetchInterval.Duration == 0 {

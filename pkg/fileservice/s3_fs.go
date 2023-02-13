@@ -806,7 +806,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 
 		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
 			if region == "" {
-				options.Region = "ap-east-1" // any region is OK
+				options.Region = "ap-northeast-1" // any region is OK
 			} else {
 				options.Region = region
 			}
@@ -825,6 +825,10 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	if credentialProvider != nil {
+		credentialProvider = aws.NewCredentialsCache(credentialProvider)
 	}
 
 	if credentialProvider != nil {
