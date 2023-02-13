@@ -207,5 +207,5 @@ func DeduceSelectivity(expr *plan.Expr, sortKeyName string) float64 {
 }
 
 func CalcScanStats([][]disttae.BlockMeta) {
-	
+
 }
