@@ -1,3 +1,6 @@
+-- prepare
+create account if not exists `query_type` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+
 -- test TCL sql
 begin;
 commit;
@@ -149,8 +152,11 @@ deallocate prepare s1;
 rollback;
 
 use system;
-select sleep(16);
-select statement,query_type,sql_source_type from  statement_info where user="dump" and sql_source_type="external_sql" order by request_at desc limit 114;
+select sleep(1);
+-- @session:id=1&user=query_type:admin:accountadmin&password=123456
+select sleep(15);
+-- @session
+select statement,query_type,sql_source_type from  statement_info where user="dump" and sql_source_type="external_sql" order by request_at desc limit 112;
 
 
 -- test cloud_user_sql type
@@ -229,7 +235,10 @@ select statement,query_type,sql_source_type from  statement_info where user="dum
 /* cloud_user */ use system;
 /* cloud_user */ drop database test_db;
 
-/* cloud_user */ select sleep(16);
+/* cloud_user */ select sleep(1);
+-- @session:id=1&user=query_type:admin:accountadmin&password=123456
+select sleep(15);
+-- @session
 /* cloud_user */ select statement,query_type,sql_source_type from  statement_info where user="dump" and sql_source_type="cloud_user_sql" order by request_at desc limit 68;
 
 -- test cloud_no_user_sql type
@@ -307,7 +316,10 @@ select statement,query_type,sql_source_type from  statement_info where user="dum
 /* cloud_nonuser */ drop table test_01;
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
-/* cloud_nonuser */ select sleep(16);
+/* cloud_nonuser */ select sleep(1);
+-- @session:id=1&user=query_type:admin:accountadmin&password=123456
+select sleep(15);
+-- @session
 /* cloud_nonuser */ select statement,query_type,sql_source_type from  statement_info where user="dump" order by request_at desc limit 68;
 
 begin;
