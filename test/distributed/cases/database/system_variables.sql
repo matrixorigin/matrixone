@@ -180,7 +180,6 @@ select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name
 drop database test;
 
 drop database if exists test;
-select version();
 create database test;
 use test;
 select version();
