@@ -53,7 +53,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 			ctr.state = Probe
-
 		case Probe:
 			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch

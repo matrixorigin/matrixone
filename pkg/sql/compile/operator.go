@@ -18,18 +18,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -343,11 +338,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		if regMap != nil {
 			sourceArg := sourceIns.Arg.(*dispatch.Argument)
 			arg := &dispatch.Argument{
-				All:        sourceArg.All,
-				CrossCN:    sourceArg.CrossCN,
-				SendFunc:   sourceArg.SendFunc,
+				FuncId:     sourceArg.FuncId,
 				LocalRegs:  make([]*process.WaitRegister, len(sourceArg.LocalRegs)),
-				RemoteRegs: make([]colexec.WrapperNode, len(sourceArg.RemoteRegs)),
+				RemoteRegs: make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs)),
 			}
 			for j := range arg.LocalRegs {
 				sourceReg := sourceArg.LocalRegs[j]
@@ -878,21 +871,25 @@ func constructIntersect(n *plan.Node, proc *process.Process, ibucket, nbucket in
 
 func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argument {
 	arg := new(dispatch.Argument)
-	arg.All = all
-	arg.CrossCN = false
 	arg.LocalRegs = regs
+	if all {
+		arg.FuncId = dispatch.SendToAllFunc
+	} else {
+		arg.FuncId = dispatch.SendToAnyLocalFunc
+	}
+
 	return arg
 }
 
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
-func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *dispatch.Argument {
+func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
 	arg := new(dispatch.Argument)
-	arg.All = true
+	arg.FuncId = dispatch.SendToAllFunc
 
 	scopeLen := len(ss)
-	arg.RemoteRegs = make([]colexec.WrapperNode, 0, scopeLen)
 	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
+	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
 
 	for _, s := range ss {
 		if s.IsEnd {
@@ -906,97 +903,22 @@ func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *d
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 		} else {
 			// Remote reg.
-			// Generate uuid for them and put into arg.RemoteRegs
-			found := false
+			// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
 			newUuid := uuid.New()
 
-			// Length of RemoteRegs must be very small, so find the same NodeAddr with traversal
-			for _, reg := range arg.RemoteRegs {
-				if reg.NodeAddr == s.NodeInfo.Addr {
-					reg.Uuids = append(reg.Uuids, newUuid)
-					found = true
-					break
-				}
-			}
+			arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
+				Uuid:     newUuid,
+				NodeAddr: s.NodeInfo.Addr,
+			})
+			colexec.Srv.PutNotifyChIntoUuidMap(newUuid, proc.DispatchNotifyCh)
 
-			if !found {
-				uuids := make([]uuid.UUID, 0, scopeLen)
-				uuids = append(uuids, newUuid)
-				arg.RemoteRegs = append(arg.RemoteRegs, colexec.WrapperNode{
-					NodeAddr: s.NodeInfo.Addr,
-					Uuids:    uuids,
-				})
-			}
-
-			s.UuidToRegIdx = append(s.UuidToRegIdx, UuidToRegIdx{
-				Uuid: newUuid,
-				Idx:  idx,
+			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
+				Idx:      idx,
+				Uuid:     newUuid,
+				FromAddr: currentCNAddr,
 			})
 		}
 	}
-	if len(arg.RemoteRegs) != 0 {
-		arg.CrossCN = true
-	}
-
-	sendFunc := func(streams []*dispatch.WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, ctxs []context.Context, cnts [][]uint, proc *process.Process) error {
-		// TODO: seperate local and remote to different goroutine?
-		// send bat to streams
-		{
-			// TODO: Split the batch into small if it is too large
-			encodeBatch, err := types.Encode(bat)
-			if err != nil {
-				return err
-			}
-			for i, stream := range streams {
-				// seperate different uuid into different message
-				for j, uuid := range stream.Uuids {
-					message := cnclient.AcquireMessage()
-					{
-						message.Id = stream.Stream.ID()
-						message.Cmd = pipeline.BatchMessage
-						message.Data = encodeBatch
-						message.Uuid = uuid[:]
-					}
-					errSend := stream.Stream.Send(ctxs[i], message)
-					if errSend != nil {
-						return errSend
-					}
-					cnts[i][j]++
-				}
-			}
-		}
-
-		// send bat to localChans
-		{
-			for i, vec := range bat.Vecs {
-				if vec.IsOriginal() {
-					cloneVec, err := vector.Dup(vec, proc.Mp())
-					if err != nil {
-						bat.Clean(proc.Mp())
-						return err
-					}
-					bat.Vecs[i] = cloneVec
-				}
-			}
-
-			refCountAdd := int64(len(localChans) - 1)
-			atomic.AddInt64(&bat.Cnt, refCountAdd)
-			if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
-				jm.IncRef(refCountAdd)
-			}
-
-			for _, reg := range localChans {
-				select {
-				case <-reg.Ctx.Done():
-					return moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
-				case reg.Ch <- bat:
-				}
-			}
-		}
-
-		return nil
-	}
-	arg.SendFunc = sendFunc
 
 	return arg
 }
