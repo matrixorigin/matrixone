@@ -1,9 +1,11 @@
 package plan
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 )
 
@@ -149,7 +151,6 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil {
 			node.Stats = builder.compCtx.Stats(node.ObjRef, HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess()))
-			node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
 		}
 
 	default:
@@ -206,6 +207,38 @@ func DeduceSelectivity(expr *plan.Expr, sortKeyName string) float64 {
 	return 1
 }
 
-func CalcScanStats([][]disttae.BlockMeta) {
+func DefaultStats() *plan.Stats {
+	stats := new(Stats)
+	stats.TableCnt = 1000
+	stats.Cost = 1000
+	stats.Outcnt = 1000
+	stats.Selectivity = 1
+	stats.BlockNum = 1
+	return stats
+}
+
+func CalcStats(ctx context.Context, blocks *[][]disttae.BlockMeta, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process, sortKeyName string) (*plan.Stats, error) {
+	var blockNum int
+	var tableCnt, cost int64
+
+	exprMono := CheckExprIsMonotonic(ctx, expr)
+	columnMap, columns, maxCol := GetColumnsByExpr(expr, tableDef)
+	for i := range *blocks {
+		for j := range (*blocks)[i] {
+			tableCnt += (*blocks)[i][j].Rows
+			if !exprMono || disttae.NeedRead(ctx, expr, (*blocks)[i][j], tableDef, columnMap, columns, maxCol, proc) {
+				cost += (*blocks)[i][j].Rows
+				blockNum++
+			}
+		}
+	}
+
+	stats := new(Stats)
+	stats.BlockNum = int32(blockNum)
+	stats.TableCnt = float64(tableCnt)
+	stats.Cost = float64(cost)
+	stats.Outcnt = float64(cost) * DeduceSelectivity(expr, sortKeyName)
+	stats.Selectivity = stats.Outcnt / stats.TableCnt
+	return stats, nil
 
 }

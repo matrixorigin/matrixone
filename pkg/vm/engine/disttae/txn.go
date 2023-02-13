@@ -687,6 +687,10 @@ func (h *transactionHeap) Pop() any {
 	return x
 }
 
+func NeedRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
+	return needRead(ctx, expr, blkInfo, tableDef, columnMap, columns, maxCol, proc)
+}
+
 // needRead determine if a block needs to be read
 func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
 	var err error
