@@ -3270,7 +3270,7 @@ func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(request
 
 func (ses *Session) getSqlType(sql string) {
 	tenant := ses.GetTenantInfo()
-	if tenant == nil {
+	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
 		ses.sqlSourceType = intereSql
 		return
 	}
