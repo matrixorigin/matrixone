@@ -107,7 +107,7 @@ func newTestCase(all bool) dispatchTestCase {
 			{Oid: types.T_int8},
 		},
 		arg: &Argument{
-			All:       all,
+			FuncId:    SendToAllFunc,
 			LocalRegs: []*process.WaitRegister{reg},
 		},
 		cancel: cancel,
