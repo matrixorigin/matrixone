@@ -79,11 +79,8 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool
 func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	bs := vec.Bytes()
 
-	if vec.GetType().IsVarlen() {
-		mov, _ = movec.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
-	} else {
-		mov = movec.NewOriginalWithData(vec.GetType(), bs.StorageBuf(), &nulls.Nulls{})
-	}
+	mov = NewMoVecFromBytes(vec.GetType(), bs)
+
 	if vec.HasNull() {
 		mov.Nsp.Np = bitmap.New(vec.Length())
 		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
@@ -93,22 +90,21 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	return
 }
 
+func NewMoVecFromBytes(typ types.Type, bs *Bytes) (mov *movec.Vector) {
+	if typ.IsVarlen() {
+		mov, _ = movec.BuildVarlenaVector(typ, bs.Header, bs.Storage)
+	} else {
+		mov = movec.NewOriginalWithData(typ, bs.StorageBuf(), &nulls.Nulls{})
+	}
+
+	return mov
+}
+
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	bs := vec.Bytes()
 	typ := vec.GetType()
-	mov = NewMoVecFromBytes(typ, bs)
 
-	if vec.HasNull() {
-		mov.Nsp.Np = bitmap.New(vec.Length())
-		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
-		//mov.Nsp.Np = vec.NullMask()
-	}
-
-	return
-}
-
-func NewMoVecFromBytes(typ types.Type, bs *Bytes) (mov *movec.Vector) {
-	if typ.IsVarlen() {
+	if vec.GetType().IsVarlen() {
 		var header []types.Varlena
 		if bs.AsWindow {
 			header = make([]types.Varlena, bs.WinLength)
@@ -122,8 +118,8 @@ func NewMoVecFromBytes(typ types.Type, bs *Bytes) (mov *movec.Vector) {
 			copy(storage, bs.Storage)
 		}
 		mov, _ = movec.BuildVarlenaVector(typ, header, storage)
-	} else if typ.IsTuple() {
-		mov = movec.NewOriginal(typ)
+	} else if vec.GetType().IsTuple() {
+		mov = movec.NewOriginal(vec.GetType())
 		cnt := types.DecodeInt32(bs.Storage)
 		if cnt != 0 {
 			if err := types.Decode(bs.Storage, &mov.Col); err != nil {
@@ -135,7 +131,13 @@ func NewMoVecFromBytes(typ types.Type, bs *Bytes) (mov *movec.Vector) {
 		if len(data) > 0 {
 			copy(data, bs.Storage)
 		}
-		mov = movec.NewOriginalWithData(typ, data, new(nulls.Nulls))
+		mov = movec.NewOriginalWithData(vec.GetType(), data, new(nulls.Nulls))
+	}
+
+	if vec.HasNull() {
+		mov.Nsp.Np = bitmap.New(vec.Length())
+		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
+		//mov.Nsp.Np = vec.NullMask()
 	}
 
 	return mov
