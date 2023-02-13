@@ -147,39 +147,36 @@ func main() {
 	}
 	for i, create := range createTable {
 		tbl := tables[i]
-		if tbl.Kind == catalog.SystemViewRel || tbl.Kind == catalog.SystemExternalRel {
-			continue
-		}
-		fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
-		var suffix string
-		if !strings.HasSuffix(create, ";") {
-			suffix = ";"
-		}
-		fmt.Printf("%s%s\n", create, suffix)
-		err = showInsert(database, tbl.Name, bufPool, netBufferLength)
-		if err != nil {
-			return
+		switch tbl.Kind {
+		case catalog.SystemOrdinaryRel:
+			fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
+			showCreateTable(create, false)
+			err = showInsert(database, tbl.Name, bufPool, netBufferLength)
+			if err != nil {
+				return
+			}
+		case catalog.SystemExternalRel:
+			fmt.Printf("/*!EXTERNAL TABLE `%s`*/\n", tbl.Name)
+			fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
+			showCreateTable(create, true)
+		case catalog.SystemViewRel:
+			fmt.Printf("DROP VIEW IF EXISTS `%s`;\n", tbl.Name)
+			showCreateTable(create, true)
+		default:
+			err = moerr.NewNotSupported(ctx, "table type %s", tbl.Kind)
 		}
 	}
+}
 
-	for i, tbl := range tables {
-		if tbl.Kind != catalog.SystemExternalRel {
-			continue
-		}
-		fmt.Printf("/*!EXTERNAL TABLE `%s`*/\n", tbl.Name)
-		fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
-		fmt.Printf("%s;\n\n\n", createTable[i])
-
+func showCreateTable(createSql string, withNextLine bool) {
+	var suffix string
+	if !strings.HasSuffix(createSql, ";") {
+		suffix = ";"
 	}
-
-	for i, tbl := range tables {
-		if tbl.Kind != catalog.SystemViewRel {
-			continue
-		}
-		fmt.Printf("DROP VIEW IF EXISTS `%s`;\n", tbl.Name)
-		fmt.Printf("%s;\n\n\n", createTable[i])
-		continue
+	if withNextLine {
+		suffix += "\n\n"
 	}
+	fmt.Printf("%s%s\n", createSql, suffix)
 }
 
 func getTables(db string, tables Tables) (Tables, error) {
