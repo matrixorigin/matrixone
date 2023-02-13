@@ -864,7 +864,6 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			if colMap[name].Typ.Id == int32(types.T_json) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
-			//field.Parts = append(field.Parts, name)
 			indexParts = append(indexParts, name)
 		}
 
@@ -881,7 +880,6 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef.IndexName = indexInfo.Name
 		}
 		indexDef.IndexTableName = ""
-		//indexDef.Field = field
 		indexDef.Parts = indexParts
 		indexDef.TableExist = false
 		if indexInfo.IndexOption != nil {
