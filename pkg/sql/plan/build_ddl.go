@@ -738,10 +738,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		tableDef := &TableDef{
 			Name: indexTableName,
 		}
-		//field := &plan.Field{
-		//	Parts: make([]string, 0),
-		//	Cols:  make([]*ColDef, 0),
-		//}
 		indexParts := make([]string, 0)
 
 		for _, keyPart := range indexInfo.KeyParts {
@@ -758,7 +754,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if colMap[name].Typ.Id == int32(types.T_json) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
-			//field.Parts = append(field.Parts, name)
 			indexParts = append(indexParts, name)
 		}
 
@@ -780,7 +775,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			//field.Cols = append(field.Cols, colDef)
 			tableDef.Pkey = &PrimaryKeyDef{
 				Names:       []string{keyName},
 				PkeyColName: keyName,
@@ -802,7 +796,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			//field.Cols = append(field.Cols, colDef)
 			tableDef.Pkey = &PrimaryKeyDef{
 				Names:       []string{keyName},
 				PkeyColName: keyName,
@@ -820,7 +813,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			//field.Cols = append(field.Cols, colDef)
 		}
 		if indexInfo.Name == "" {
 			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
@@ -835,7 +827,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			indexDef.IndexName = indexInfo.Name
 		}
 		indexDef.IndexTableName = indexTableName
-		//indexDef.Field = field
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
 		if indexInfo.IndexOption != nil {
@@ -857,10 +848,6 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		indexDef := &plan.IndexDef{}
 		indexDef.Unique = false
 
-		//field := &plan.Field{
-		//	Parts: make([]string, 0),
-		//	Cols:  make([]*ColDef, 0),
-		//}
 		indexParts := make([]string, 0)
 
 		for _, keyPart := range indexInfo.KeyParts {
