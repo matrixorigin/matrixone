@@ -583,7 +583,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		convey.So(hkd, convey.ShouldBeNil)
 
 		stats := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Expr{})
-		convey.So(stats, convey.ShouldNotBeNil)
+		convey.So(stats, convey.ShouldBeNil)
 	})
 }
 
