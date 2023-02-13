@@ -40,6 +40,8 @@ enum CmdMethod {
     GetSnapshot = 5;
     // ForceGC forcing a GC to free memory
     ForceGC     = 6;
+    // Inspect DN info
+    Inspect   = 7;
 }
 
 // DNPingRequest ping request
