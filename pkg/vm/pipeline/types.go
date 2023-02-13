@@ -15,10 +15,11 @@
 package pipeline
 
 import (
+	"reflect"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"reflect"
 )
 
 // Pipeline contains the information associated with a pipeline in a query execution plan.

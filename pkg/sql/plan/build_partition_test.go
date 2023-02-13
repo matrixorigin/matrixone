@@ -111,6 +111,25 @@ func TestKeyPartition(t *testing.T) {
 			)
 			PARTITION BY KEY()
 			PARTITIONS 2;`,
+		`CREATE TABLE t1 (
+				col1 INT NOT NULL,
+				col2 DATE NOT NULL,
+				col3 INT NOT NULL,
+				col4 INT NOT NULL,
+				PRIMARY KEY (col1, col2)
+			)
+			PARTITION BY KEY()
+			PARTITIONS 4;`,
+		`CREATE TABLE t2 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1),
+			unique key (col1, col4)
+		)
+			PARTITION BY KEY()
+			PARTITIONS 4;`,
 	}
 
 	mock := NewMockOptimizer(false)
@@ -154,6 +173,37 @@ func TestKeyPartitionError(t *testing.T) {
 		)
 		PARTITION BY KEY()
 		PARTITIONS 2;`,
+
+		`CREATE TABLE t2 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1),
+			unique key (col3, col4)
+		)
+			PARTITION BY KEY()
+			PARTITIONS 4;`,
+
+		`CREATE TABLE t3 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY (col1, col4),
+			unique key (col1)
+		)
+			PARTITION BY KEY()
+			PARTITIONS 4;`,
+		`CREATE TABLE t1 (
+		col1 INT NOT NULL,
+		col2 DATE NOT NULL,
+		col3 INT NOT NULL,
+		col4 INT NOT NULL,
+		PRIMARY KEY (col1, col2)
+		)
+		PARTITION BY KEY(col3)
+		PARTITIONS 4;`,
 	}
 	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
