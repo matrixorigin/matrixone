@@ -106,17 +106,14 @@ func main() {
 	if err != nil {
 		return
 	}
-	ch := make(chan struct{})
+	ch := make(chan error)
 	go func() {
-		err = conn.Ping() // Before use, we must ping to validate DSN data:
-		if err != nil {
-			return
-		}
-		ch <- struct{}{}
+		err := conn.Ping() // Before use, we must ping to validate DSN data:
+		ch <- err
 	}()
 
 	select {
-	case <-ch:
+	case err = <-ch:
 	case <-time.After(timeout):
 		err = moerr.NewInternalError(ctx, "connect to %s timeout", dsn)
 	}
