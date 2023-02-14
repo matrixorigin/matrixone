@@ -865,7 +865,7 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 	if hasUniqueKey {
 		for _, indexdef := range tableDef.Indexes {
 			if indexdef.Unique {
-				uniqueKeyCols := indexdef.Field.Parts
+				uniqueKeyCols := indexdef.Parts
 				if partitionInfo.PartitionColumns != nil {
 					if !checkUniqueKeyIncludePartKey(partitionInfo.PartitionColumns.PartitionColumns, uniqueKeyCols) {
 						return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
@@ -1035,7 +1035,7 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 			for _, indexdef := range tableDef.Indexes {
 				if indexdef.Unique {
 					// A UNIQUE INDEX must include all columns in the table's partitioning function
-					if !checkUniqueKeyIncludePartKey(pkcols, indexdef.Field.Parts) {
+					if !checkUniqueKeyIncludePartKey(pkcols, indexdef.Parts) {
 						return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
 					}
 				} else {
@@ -1048,11 +1048,11 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 		if uniqueIndexCount >= 2 {
 			var firstUniqueKeyCols []string
 			for _, indexdef := range tableDef.Indexes {
-				firstUniqueKeyCols = indexdef.Field.Parts
+				firstUniqueKeyCols = indexdef.Parts
 				break
 			}
 			for _, indexdef := range tableDef.Indexes {
-				if !checkUniqueKeyIncludePartKey(firstUniqueKeyCols, indexdef.Field.Parts) {
+				if !checkUniqueKeyIncludePartKey(firstUniqueKeyCols, indexdef.Parts) {
 					return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
 				}
 			}

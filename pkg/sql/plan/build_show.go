@@ -174,8 +174,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 				indexStr = "KEY "
 			}
 			indexStr += fmt.Sprintf("`%s` (", indexdef.IndexName)
-			for num, part := range indexdef.Field.Parts {
-				if num == len(indexdef.Field.Parts)-1 {
+			for num, part := range indexdef.Parts {
+				if num == len(indexdef.Parts)-1 {
 					indexStr += fmt.Sprintf("`%s`", part)
 				} else {
 					indexStr += fmt.Sprintf("`%s`,", part)
