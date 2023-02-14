@@ -1,3 +1,4 @@
+create account if not exists `query_type` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 begin;
 commit;
 start transaction;
@@ -206,12 +207,15 @@ col1    col2
 deallocate prepare s1;
 rollback;
 use system;
-select sleep(16);
-sleep(16)
+select sleep(1);
+sleep(1)
 0
-select statement,query_type,sql_source_type from  statement_info where user="dump" and sql_source_type="external_sql" order by request_at desc limit 114;
+select sleep(15);
+sleep(15)
+0
+select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="external_sql" and status != "Running" order by request_at desc limit 112;
 statement    query_type    sql_source_type
-select sleep(16)    DQL    external_sql
+select sleep(1)    DQL    external_sql
 use system    Other    external_sql
 rollback    TCL    external_sql
 deallocate prepare s1    Other    external_sql
@@ -323,8 +327,6 @@ rollback    TCL    external_sql
 start transaction    TCL    external_sql
 commit    TCL    external_sql
 start transaction    TCL    external_sql
-use statement_query_type    Other    external_sql
-create database if not exists statement_query_type    DDL    external_sql
 /* cloud_user */ use statement_query_type;
 /* cloud_user */ begin;
 /* cloud_user */ commit;
@@ -435,12 +437,15 @@ Project
 /* cloud_user */ drop table test_01;
 /* cloud_user */ use system;
 /* cloud_user */ drop database test_db;
-/* cloud_user */ select sleep(16);
-sleep(16)
+/* cloud_user */ select sleep(1);
+sleep(1)
 0
-/* cloud_user */ select statement,query_type,sql_source_type from  statement_info where user="dump" and sql_source_type="cloud_user_sql" order by request_at desc limit 68;
+select sleep(15);
+sleep(15)
+0
+/* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" order by request_at desc limit 68;
 statement    query_type    sql_source_type
-select sleep(16)    DQL    cloud_user_sql
+select sleep(1)    DQL    cloud_user_sql
 drop database test_db    DDL    cloud_user_sql
 use system    Other    cloud_user_sql
 drop table test_01    DDL    cloud_user_sql
@@ -618,12 +623,15 @@ Project
 /* cloud_nonuser */ drop table test_01;
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
-/* cloud_nonuser */ select sleep(16);
-sleep(16)
+/* cloud_nonuser */ select sleep(1);
+sleep(1)
 0
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  statement_info where user="dump" order by request_at desc limit 68;
+select sleep(15);
+sleep(15)
+0
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and status != "Running" order by request_at desc limit 68;
 statement    query_type    sql_source_type
-select sleep(16)    DQL    cloud_nonuser_sql
+select sleep(1)    DQL    cloud_nonuser_sql
 drop database test_db    DDL    cloud_nonuser_sql
 use system    Other    cloud_nonuser_sql
 drop table test_01    DDL    cloud_nonuser_sql
@@ -711,3 +719,4 @@ update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
 [unknown result because it is related to issue#7772]
 rollback ;
+drop account if exists query_type;
