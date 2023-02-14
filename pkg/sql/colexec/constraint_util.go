@@ -156,9 +156,9 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 	if tableDef.Indexes != nil {
 		for _, indexdef := range tableDef.Indexes {
 			if indexdef.Unique {
-				partsLength := len(indexdef.Field.Parts)
+				partsLength := len(indexdef.Parts)
 				uniqueColumnPos := make([]int, partsLength)
-				for p, column := range indexdef.Field.Parts {
+				for p, column := range indexdef.Parts {
 					uniqueColumnPos[p] = updateNameToPos[column]
 				}
 
