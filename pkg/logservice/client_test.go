@@ -348,7 +348,7 @@ func TestServerReceiveWithMsgSize(t *testing.T) {
 		_, err := c.Append(ctx, rec)
 		require.NoError(t, err)
 
-		rec = c.GetLogRecord(testServerMaxMsgSize + 20)
+		rec = c.GetLogRecord(defaultMaxMessageSize + 20)
 		rand.Read(rec.Payload())
 		ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

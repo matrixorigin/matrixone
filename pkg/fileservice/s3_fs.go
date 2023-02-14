@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	stdhttp "net/http"
 	"net/url"
 	pathpkg "path"
 	"sort"
@@ -772,6 +773,16 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
+	if region == "" {
+		// try to get region from bucket
+		resp, err := stdhttp.Head("https://" + bucket + ".s3.amazonaws.com")
+		if err == nil {
+			if value := resp.Header.Get("x-amz-bucket-region"); value != "" {
+				region = value
+			}
+		}
+	}
+
 	var credentialProvider aws.CredentialsProvider
 
 	loadConfigOptions := []func(*config.LoadOptions) error{
@@ -806,7 +817,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 
 		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
 			if region == "" {
-				options.Region = "ap-northeast-1" // any region is OK
+				options.Region = "ap-northeast-1"
 			} else {
 				options.Region = region
 			}

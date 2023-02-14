@@ -261,7 +261,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		RoleId:               proc.SessionInfo.RoleId,
 		User:                 tenant.GetUser(),
 		Host:                 sessInfo.GetHost(),
-		Database:             sessInfo.GetDatabase(),
+		Database:             ses.GetDatabaseName(),
 		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
