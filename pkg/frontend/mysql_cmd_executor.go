@@ -4811,10 +4811,8 @@ func getAccountId(ctx context.Context) uint32 {
 }
 
 func changeVersion(ctx context.Context, ses *Session, db string) error {
-	version, err := GetVersionCompatbility(ctx, ses, db)
-	if err != nil {
-		return err
-	}
+	var err error
+	version, _ := GetVersionCompatbility(ctx, ses, db)
 	if ses.GetTenantInfo() != nil {
 		ses.GetTenantInfo().SetVersion(version)
 	}
