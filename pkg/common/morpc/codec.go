@@ -39,16 +39,16 @@ const (
 )
 
 var (
-	defaultMaxMessageSize = 1024 * 1024 * 100
-	checksumFieldBytes    = 8
-	totalSizeFieldBytes   = 4
-	payloadSizeFieldBytes = 4
+	defaultMaxBodyMessageSize = 1024 * 1024 * 100
+	checksumFieldBytes        = 8
+	totalSizeFieldBytes       = 4
+	payloadSizeFieldBytes     = 4
 
-	approximateHeaderSize = 128
+	approximateHeaderSize = 1024 * 1024 * 10
 )
 
 func GetMessageSize() int {
-	return defaultMaxMessageSize
+	return defaultMaxBodyMessageSize
 }
 
 // WithCodecEnableChecksum enable checksum
@@ -76,9 +76,9 @@ func WithCodecIntegrationHLC(clock clock.Clock) CodecOption {
 func WithCodecMaxBodySize(size int) CodecOption {
 	return func(c *messageCodec) {
 		if size == 0 {
-			size = defaultMaxMessageSize
+			size = defaultMaxBodyMessageSize
 		}
-		c.codec = length.NewWithSize(c.bc, 0, 0, 0, size)
+		c.codec = length.NewWithSize(c.bc, 0, 0, 0, size+approximateHeaderSize)
 		c.bc.maxBodySize = size
 	}
 }
@@ -111,9 +111,12 @@ type messageCodec struct {
 func NewMessageCodec(messageFactory func() Message, options ...CodecOption) Codec {
 	bc := &baseCodec{
 		messageFactory: messageFactory,
-		maxBodySize:    defaultMaxMessageSize,
+		maxBodySize:    defaultMaxBodyMessageSize,
 	}
-	c := &messageCodec{codec: length.NewWithSize(bc, 0, 0, 0, defaultMaxMessageSize), bc: bc}
+	c := &messageCodec{
+		codec: length.NewWithSize(bc, 0, 0, 0, defaultMaxBodyMessageSize+approximateHeaderSize),
+		bc:    bc,
+	}
 	c.AddHeaderCodec(&deadlineContextCodec{})
 	c.AddHeaderCodec(&traceCodec{})
 
@@ -132,7 +135,7 @@ func (c *messageCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer
 }
 
 func (c *messageCodec) Valid(msg Message) error {
-	n := msg.Size() + approximateHeaderSize
+	n := msg.Size()
 	if n >= c.bc.maxBodySize {
 		return moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
 			n,
