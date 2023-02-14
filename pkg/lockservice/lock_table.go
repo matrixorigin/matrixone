@@ -54,7 +54,7 @@ func (l *lockTable) lock(
 		if err := waiter.wait(ctx); err != nil {
 			return err
 		}
-		waiter.resetState()
+		waiter.resetWait()
 	}
 }
 
