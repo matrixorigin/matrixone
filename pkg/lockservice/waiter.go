@@ -158,9 +158,6 @@ func (w *waiter) wait(ctx context.Context) error {
 	if status != waiting {
 		panic(fmt.Sprintf("BUG: waiter's status cannot be %d", status))
 	}
-	if status != waiting {
-		panic(fmt.Sprintf("BUG: waiter's status cannot be %d", status))
-	}
 
 	w.beforeSwapStatusAdjustFunc()
 
