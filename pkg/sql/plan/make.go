@@ -23,7 +23,7 @@ import (
 )
 
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
-	_, scale, err := types.ParseStringToDecimal128WithoutTable(v, isBin...)
+	_, scale, err := types.Parse128(v)
 	if err != nil {
 		return nil, err
 	}

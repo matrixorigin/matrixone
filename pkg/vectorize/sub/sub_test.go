@@ -109,8 +109,8 @@ func TestDec64Sub(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
-		d, _ := types.Decimal64_FromInt64(as[i]-bs[i], 64, 0)
-		if !res[i].Eq(d) {
+		d := types.Decimal64(as[i] - bs[i])
+		if res[i] != d {
 			t.Fatalf("decimal64 sub wrong result")
 		}
 	}
@@ -136,8 +136,16 @@ func TestDec128Sub(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
-		d, _ := types.Decimal128_FromInt64(as[i]-bs[i], 64, 0)
-		if !res[i].Eq(d) {
+		d := types.Decimal128{B0_63: uint64(as[i]), B64_127: 0}
+		if as[i] < 0 {
+			d.B64_127 = ^d.B64_127
+		}
+		e := types.Decimal128{B0_63: uint64(bs[i]), B64_127: 0}
+		if bs[i] < 0 {
+			e.B64_127 = ^e.B64_127
+		}
+		d, _ = d.Sub128(e)
+		if res[i] != d {
 			t.Fatalf("decimal128 sub wrong result")
 		}
 	}
@@ -163,8 +171,8 @@ func TestDec64SubOfOppNumber(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
-		d, _ := types.Decimal64_FromInt64(as[i]-bs[i], 64, 0)
-		if !res[i].Eq(d) {
+		d := types.Decimal64(as[i] - bs[i])
+		if res[i] != d {
 			t.Fatalf("decimal64 sub wrong result")
 		}
 	}
@@ -190,8 +198,16 @@ func TestDec128SubOfOppNumber(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
-		d, _ := types.Decimal128_FromInt64(as[i]-bs[i], 64, 0)
-		if !res[i].Eq(d) {
+		d := types.Decimal128{B0_63: uint64(as[i]), B64_127: 0}
+		if as[i] < 0 {
+			d.B64_127 = ^d.B64_127
+		}
+		e := types.Decimal128{B0_63: uint64(bs[i]), B64_127: 0}
+		if bs[i] < 0 {
+			e.B64_127 = ^e.B64_127
+		}
+		d, _ = d.Sub128(e)
+		if res[i] != d {
 			t.Fatalf("decimal128 sub wrong result")
 		}
 	}
@@ -247,8 +263,8 @@ func TestDec128SubByFloat64(t *testing.T) {
 			}
 
 			res := vector.MustTCols[types.Decimal128](cv)
-			d, _ := types.Decimal128_FromFloat64(c.want, 64, 4)
-			if !res[0].Eq(d) {
+			d, _ := types.Decimal128FromFloat64(c.want, 38, cv.Typ.Scale)
+			if res[0] != d {
 				t.Fatalf("decimal128 sub wrong result")
 			}
 		})

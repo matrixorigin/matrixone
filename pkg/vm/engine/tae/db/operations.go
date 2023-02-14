@@ -17,6 +17,7 @@ package db
 import (
 	"context"
 	"encoding/gob"
+
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 

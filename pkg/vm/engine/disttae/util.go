@@ -18,12 +18,13 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -840,13 +841,13 @@ func findRowByPkValue(vec *vector.Vector, v any) int {
 		rows := vector.MustTCols[types.Decimal64](vec)
 		val := v.(types.Decimal64)
 		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Ge(val)
+			return rows[idx].Compare(val) >= 0
 		})
 	case types.T_decimal128:
 		rows := vector.MustTCols[types.Decimal128](vec)
 		val := v.(types.Decimal128)
 		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Ge(val)
+			return rows[idx].Compare(val) >= 0
 		})
 	case types.T_char, types.T_text, types.T_varchar, types.T_json, types.T_blob:
 		// rows := vector.MustStrCols(vec)

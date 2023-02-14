@@ -956,7 +956,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						d, err := types.Decimal64_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
+						d, err := types.ParseDecimal64(field, vec.Typ.Precision, vec.Typ.Scale)
 						if err != nil {
 							// we tolerate loss of digits.
 							if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
@@ -965,7 +965,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 									return moerr.NewInternalError(proc.Ctx, "the input value '%v' is invalid Decimal64 type for column %d", field, colIdx)
 								}
 								result.Warnings++
-								d = types.Decimal64_Zero
+								d = types.Decimal64(0)
 							}
 						}
 						cols[rowIdx] = d
@@ -975,7 +975,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
+						d, err := types.ParseDecimal128(field, vec.Typ.Precision, vec.Typ.Scale)
 						if err != nil {
 							// we tolerate loss of digits.
 							if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
@@ -986,7 +986,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 									return moerr.NewInternalError(proc.Ctx, "the input value '%v' is invalid Decimal64 type for column %d", field, colIdx)
 								}
 								result.Warnings++
-								d = types.Decimal128_Zero
+								d = types.Decimal128{B0_63: 0, B64_127: 0}
 							}
 						}
 						cols[rowIdx] = d
@@ -1523,14 +1523,14 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseStringToDecimal64(field, vec.Typ.Width, vec.Typ.Scale, vec.GetIsBin())
+						d, err := types.ParseDecimal64(field, vec.Typ.Precision, vec.Typ.Scale)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
 								return err
 							}
 							result.Warnings++
-							d = types.Decimal64_Zero
+							d = types.Decimal64(0)
 							//break
 						}
 						cols[i] = d
@@ -1545,14 +1545,14 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseStringToDecimal128(field, vec.Typ.Width, vec.Typ.Scale, vec.GetIsBin())
+						d, err := types.ParseDecimal128(field, vec.Typ.Precision, vec.Typ.Scale)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
 								return err
 							}
 							result.Warnings++
-							d = types.Decimal128_Zero
+							d = types.Decimal128{B0_63: 0, B64_127: 0}
 							//break
 						}
 						cols[i] = d

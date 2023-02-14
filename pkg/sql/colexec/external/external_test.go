@@ -409,16 +409,16 @@ func Test_GetBatchData(t *testing.T) {
 			},
 			{
 				Typ: &plan.Type{
-					Id:    int32(types.T_decimal64),
-					Width: 15,
-					Scale: 0,
+					Id:        int32(types.T_decimal64),
+					Precision: 15,
+					Scale:     0,
 				},
 			},
 			{
 				Typ: &plan.Type{
-					Id:    int32(types.T_decimal128),
-					Width: 17,
-					Scale: 0,
+					Id:        int32(types.T_decimal128),
+					Precision: 17,
+					Scale:     0,
 				},
 			},
 			{

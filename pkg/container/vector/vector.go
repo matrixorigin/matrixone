@@ -1675,7 +1675,7 @@ func GetInitConstVal(typ types.Type) any {
 	case types.T_timestamp:
 		return types.Timestamp(0)
 	case types.T_decimal64:
-		return types.Decimal64{}
+		return types.Decimal64(0)
 	case types.T_decimal128:
 		return types.Decimal128{}
 	case types.T_uuid:

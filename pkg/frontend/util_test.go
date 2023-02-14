@@ -18,17 +18,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
+	"os"
+	"sort"
+	"testing"
+	"time"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"math"
-	"os"
-	"sort"
-	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -468,8 +469,8 @@ func TestGetSimpleExprValue(t *testing.T) {
 		kases := []args{
 			{"set @@x=1", false, 1},
 			{"set @@x=-1", false, -1},
-			{"set @@x=1.0", false, "1"},
-			{"set @@x=-1.0", false, "-1"},
+			{"set @@x=1.0", false, "1.0"},
+			{"set @@x=-1.0", false, "-1.0"},
 			{fmt.Sprintf("set @@x=%d", math.MaxInt64), false, math.MaxInt64},
 			{fmt.Sprintf("set @@x=%d", -math.MaxInt64), false, -math.MaxInt64},
 			{"set @@x=true", false, true},

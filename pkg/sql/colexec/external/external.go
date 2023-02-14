@@ -1328,12 +1328,12 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 					cols[rowIdx] = float32(d)
 					continue
 				}
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Precision)
+				d, err := types.ParseDecimal128(field, vec.Typ.Precision, vec.Typ.Scale)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float32 type for column %d", field, colIdx)
 				}
-				cols[rowIdx] = float32(d.ToFloat64())
+				cols[rowIdx] = float32(types.Decimal128ToFloat64(d, vec.Typ.Scale))
 			}
 		case types.T_float64:
 			cols := vector.MustTCols[float64](vec)
@@ -1350,12 +1350,12 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 					cols[rowIdx] = d
 					continue
 				}
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Precision)
+				d, err := types.ParseDecimal128(field, vec.Typ.Precision, vec.Typ.Scale)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float64 type for column %d", field, colIdx)
 				}
-				cols[rowIdx] = d.ToFloat64()
+				cols[rowIdx] = types.Decimal128ToFloat64(d, vec.Typ.Scale)
 			}
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			if isNullOrEmpty {
@@ -1436,7 +1436,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := types.Decimal64_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
+				d, err := types.ParseDecimal64(field, vec.Typ.Precision, vec.Typ.Scale)
 				if err != nil {
 					// we tolerate loss of digits.
 					if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
@@ -1451,7 +1451,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
+				d, err := types.ParseDecimal128(field, vec.Typ.Precision, vec.Typ.Scale)
 				if err != nil {
 					// we tolerate loss of digits.
 					if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {

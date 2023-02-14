@@ -296,15 +296,15 @@ func floorFloat64(xs, rs []float64, digits int64) []float64 {
 
 func floorDecimal128(scale int32, xs, rs []types.Decimal128, _ int64) []types.Decimal128 {
 	for i := range xs {
-		strs := strings.Split(xs[i].ToStringWithScale(scale), ".")
-		x, _ := types.Decimal128_FromString(strs[0])
+		strs := strings.Split(xs[i].Format(scale), ".")
+		x, _, _ := types.Parse128(strs[0])
 		if strs[0][0] != '-' || len(strs) == 1 {
 			rs[i] = x
 			continue
 		}
 		v, _ := strconv.ParseFloat(strs[1], 64)
 		if v > float64(0) {
-			x = x.AddInt64(-1)
+			x, _ = x.Sub128(types.Decimal128{B0_63: 1, B64_127: 0})
 		}
 		rs[i] = x
 	}

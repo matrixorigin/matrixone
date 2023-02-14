@@ -89,13 +89,13 @@ func (win *vectorWindow[T]) Equals(o Vector) bool {
 		} else if _, ok := any(v).(types.Decimal64); ok {
 			d := win.Get(i).(types.Decimal64)
 			od := win.Get(i).(types.Decimal64)
-			if d.Ne(od) {
+			if d != od {
 				return false
 			}
 		} else if _, ok := any(v).(types.Decimal128); ok {
 			d := win.Get(i).(types.Decimal128)
 			od := win.Get(i).(types.Decimal128)
-			if d.Ne(od) {
+			if d != od {
 				return false
 			}
 		} else if _, ok := any(v).(types.TS); ok {

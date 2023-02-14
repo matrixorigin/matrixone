@@ -425,10 +425,10 @@ func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 		return vec.GetString(0), nil
 	case types.T_decimal64:
 		val := vector.GetValueAt[types.Decimal64](vec, 0)
-		return val.String(), nil
+		return val.Format(vec.Typ.Scale), nil
 	case types.T_decimal128:
 		val := vector.GetValueAt[types.Decimal128](vec, 0)
-		return val.String(), nil
+		return val.Format(vec.Typ.Scale), nil
 	case types.T_json:
 		val := vec.GetBytes(0)
 		byteJson := types.DecodeJson(val)

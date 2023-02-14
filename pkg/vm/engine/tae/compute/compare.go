@@ -73,9 +73,9 @@ func CompareGeneric(a, b any, t types.Type) int64 {
 	case types.T_uint64:
 		return CompareOrdered[uint64](a, b)
 	case types.T_decimal64:
-		return types.CompareDecimal64Decimal64Aligned(a.(types.Decimal64), b.(types.Decimal64))
+		return int64(a.(types.Decimal64).Compare(b.(types.Decimal64)))
 	case types.T_decimal128:
-		return types.CompareDecimal128Decimal128Aligned(a.(types.Decimal128), b.(types.Decimal128))
+		return int64(a.(types.Decimal128).Compare(b.(types.Decimal128)))
 	case types.T_float32:
 		return CompareOrdered[float32](a, b)
 	case types.T_float64:

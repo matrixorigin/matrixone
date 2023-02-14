@@ -113,12 +113,12 @@ func getConstVecInList(ctx context.Context, proc *process.Process, exprs []*plan
 				veccol[i] = types.Datetime(t.C.GetDatetimeval())
 			case *plan.Const_Decimal64Val:
 				cd64 := t.C.GetDecimal64Val()
-				d64 := types.Decimal64FromInt64Raw(cd64.A)
+				d64 := types.Decimal64(cd64.A)
 				veccol := vec.Col.([]types.Decimal64)
 				veccol[i] = d64
 			case *plan.Const_Decimal128Val:
 				cd128 := t.C.GetDecimal128Val()
-				d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
+				d128 := types.Decimal128{B0_63: uint64(cd128.A), B64_127: uint64(cd128.B)}
 				veccol := vec.Col.([]types.Decimal128)
 				veccol[i] = d128
 			case *plan.Const_Timestampval:
@@ -185,11 +185,11 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 			vec = vector.NewConstFixed(constDatetimeType, length, types.Datetime(t.C.GetDatetimeval()), proc.Mp())
 		case *plan.Const_Decimal64Val:
 			cd64 := t.C.GetDecimal64Val()
-			d64 := types.Decimal64FromInt64Raw(cd64.A)
+			d64 := types.Decimal64(cd64.A)
 			vec = vector.NewConstFixed(constDecimal64Type, length, d64, proc.Mp())
 		case *plan.Const_Decimal128Val:
 			cd128 := t.C.GetDecimal128Val()
-			d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
+			d128 := types.Decimal128{B0_63: uint64(cd128.A), B64_127: uint64(cd128.B)}
 			vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
 		case *plan.Const_Timestampval:
 			pre := expr.Typ.Precision

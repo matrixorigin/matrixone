@@ -24,7 +24,7 @@ type sortElem struct {
 type sortSlice []sortElem
 
 func (x sortSlice) Less(i, j int) bool {
-	return x[i].data.Lt(x[j].data)
+	return x[i].data.Compare(x[j].data) < 0
 }
 func (x sortSlice) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
 
@@ -37,6 +37,6 @@ type heapElem struct {
 type heapSlice []heapElem
 
 func (x heapSlice) Less(i, j int) bool {
-	return x[i].data.Lt(x[j].data)
+	return x[i].data.Compare(x[j].data) < 0
 }
 func (x heapSlice) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
