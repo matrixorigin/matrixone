@@ -28,7 +28,7 @@ func TestAcquireWaiter(t *testing.T) {
 	defer w.close()
 
 	assert.Equal(t, 0, len(w.c))
-	assert.Equal(t, int32(1), w.refCount)
+	assert.Equal(t, int32(1), w.refCount.Load())
 	assert.Equal(t, 0, w.waiters.len())
 }
 
@@ -44,7 +44,7 @@ func TestAddNewWaiter(t *testing.T) {
 
 	w.add(w1)
 	assert.Equal(t, 1, w.waiters.len())
-	assert.Equal(t, int32(2), w1.refCount)
+	assert.Equal(t, int32(2), w1.refCount.Load())
 	w.close()
 }
 

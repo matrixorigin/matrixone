@@ -84,7 +84,7 @@ type waiter struct {
 	status   atomic.Int32
 	c        chan error
 	waiters  waiterQueue
-	refCount int32
+	refCount atomic.Int32
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -98,12 +98,11 @@ func (w *waiter) setFinalizer() {
 }
 
 func (w *waiter) ref() int32 {
-	w.refCount++
-	return w.refCount
+	return w.refCount.Add(1)
 }
 
 func (w *waiter) unref() {
-	n := atomic.AddInt32(&w.refCount, -1)
+	n := w.refCount.Add(-1)
 	if n < 0 {
 		panic("BUG: invalid ref count")
 	}
