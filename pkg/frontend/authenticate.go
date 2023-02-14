@@ -6135,9 +6135,9 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	}
 
 	if len(ses.GetDatabaseName()) != 0 && ses.GetDatabaseName() == datname {
-		version, _ := GetVersionCompatbility(ctx, ses, datname)
-		if ses.GetTenantInfo() != nil {
-			ses.GetTenantInfo().SetVersion(version)
+		err = changeVersion(ctx, ses, ses.GetDatabaseName())
+		if err != nil {
+			goto handleFailed
 		}
 	}
 
@@ -6214,9 +6214,9 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	}
 
 	if len(ses.GetDatabaseName()) != 0 {
-		version, _ := GetVersionCompatbility(ctx, ses, ses.GetDatabaseName())
-		if ses.GetTenantInfo() != nil {
-			ses.GetTenantInfo().SetVersion(version)
+		err = changeVersion(ctx, ses, ses.GetDatabaseName())
+		if err != nil {
+			goto handleFailed
 		}
 	}
 

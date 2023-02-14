@@ -1050,11 +1050,6 @@ func doUse(ctx context.Context, ses *Session, db string) error {
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
 
-	version, _ := GetVersionCompatbility(ctx, ses, db)
-	if ses.GetTenantInfo() != nil {
-		ses.GetTenantInfo().SetVersion(version)
-	}
-
 	logInfof(ses.GetConciseProfile(), "User %s change database from [%s] to [%s]", ses.GetUserName(), oldDB, ses.GetDatabaseName())
 
 	return nil
@@ -3587,6 +3582,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+			err = changeVersion(requestCtx, ses, st.Name)
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.MoDump:
 			selfHandle = true
 			//dump
@@ -4807,4 +4806,15 @@ func getAccountId(ctx context.Context) uint32 {
 		accountId = v.(uint32)
 	}
 	return accountId
+}
+
+func changeVersion(ctx context.Context, ses *Session, db string) error {
+	version, err := GetVersionCompatbility(ctx, ses, db)
+	if err != nil {
+		return err
+	}
+	if ses.GetTenantInfo() != nil {
+		ses.GetTenantInfo().SetVersion(version)
+	}
+	return err
 }
