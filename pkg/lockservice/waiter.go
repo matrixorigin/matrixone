@@ -146,6 +146,7 @@ func (w *waiter) mustRecvNotification() error {
 func (w *waiter) mustSendNotification(value error) {
 	select {
 	case w.c <- value:
+		return
 	default:
 	}
 	panic("BUG: must send value to channel")
