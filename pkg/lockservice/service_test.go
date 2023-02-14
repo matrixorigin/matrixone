@@ -86,6 +86,24 @@ func TestMultipleRowLocks(t *testing.T) {
 	assert.Equal(t, sum, iter)
 }
 
+func TestCtxCancelWhileWaiting(t *testing.T) {
+	l := NewLockService()
+	ctx, cancel := context.WithCancel(context.Background())
+	option := LockOptions{Row, Exclusive, Wait}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+	assert.NoError(t, err)
+	go func(ctx context.Context) {
+		err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+		assert.Error(t, err)
+		wg.Done()
+	}(ctx)
+	cancel()
+	wg.Wait()
+	assert.NoError(t, l.Unlock([]byte(strconv.Itoa(1))))
+}
+
 func TestDeadLock(t *testing.T) {
 	l := NewLockService().(*service)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -36,6 +36,7 @@ func acquireWaiter(txnID []byte) *waiter {
 	if w.ref() != 1 {
 		panic("BUG: invalid ref count")
 	}
+	w.beforeSwapStatusAdjustFunc = func() {}
 	return w
 }
 
@@ -45,14 +46,12 @@ func newWaiter() *waiter {
 		waiters: newWaiterQueue(),
 	}
 	w.setFinalizer()
-	w.status = waiting
+	w.status.Store(waiting)
 	return w
 }
 
-type waiterStatus int32
-
 const (
-	waiting waiterStatus = iota
+	waiting int32 = iota
 	completed
 )
 
@@ -79,7 +78,7 @@ const (
 // 17. waiter-k1-B.wait() returned and get the lock
 type waiter struct {
 	txnID    []byte
-	status   waiterStatus
+	status   atomic.Int32
 	c        chan error
 	waiters  waiterQueue
 	refCount int32
@@ -121,7 +120,11 @@ func (w *waiter) add(waiter ...*waiter) {
 }
 
 func (w *waiter) setCompleted() {
-	w.status = completed
+	w.status.Store(completed)
+}
+
+func (w *waiter) setWaiting() {
+	w.status.Store(waiting)
 }
 
 func (w *waiter) mustGetNotifiedValue() error {
@@ -134,14 +137,13 @@ func (w *waiter) mustGetNotifiedValue() error {
 }
 
 func (w *waiter) resetState() {
-	if w.status != completed {
-		panic(fmt.Sprintf("BUG: waiter's status cannot be %d", w.status))
+	if !w.status.CompareAndSwap(completed, waiting) {
+		panic(fmt.Sprintf("BUG: waiter's status cannot be %d", w.status.Load()))
 	}
-	w.status = waiting
 }
 
 func (w *waiter) wait(ctx context.Context) error {
-	status := w.status
+	status := w.status.Load()
 	if status == completed {
 		return w.mustGetNotifiedValue()
 	}
@@ -149,9 +151,7 @@ func (w *waiter) wait(ctx context.Context) error {
 		panic(fmt.Sprintf("BUG: waiter's status cannot be %d", status))
 	}
 
-	if w.beforeSwapStatusAdjustFunc != nil {
-		w.beforeSwapStatusAdjustFunc()
-	}
+	w.beforeSwapStatusAdjustFunc()
 
 	select {
 	case err := <-w.c:
@@ -167,25 +167,27 @@ func (w *waiter) wait(ctx context.Context) error {
 	}
 
 	// context is timeout, and status not changed, no concurrent happen
-	w.status = completed
+	w.setCompleted()
 	return ctx.Err()
 }
 
 // notify return false means this waiter is completed, cannot be used to notify
 func (w *waiter) notify(value error) bool {
-	status := w.status
-	if status == completed {
-		return false
-	}
+	for {
+		status := w.status.Load()
+		if status == completed {
+			return false
+		}
 
-	if w.beforeSwapStatusAdjustFunc != nil {
 		w.beforeSwapStatusAdjustFunc()
-	}
 
-	// if status changed, notify and timeout are concurrently issued, need
-	// try.
-	w.c <- value
-	return true
+		// if status changed, notify and timeout are concurrently issued, need
+		// try.
+		if w.status.CompareAndSwap(status, completed) {
+			w.c <- value
+			return true
+		}
+	}
 }
 
 // close returns the next waiter to hold the lock, and others waiters will move
@@ -225,8 +227,7 @@ func (w *waiter) reset() {
 	if w.waiters.len() > 0 || len(w.c) > 0 {
 		panic("BUG: waiter should be empty.")
 	}
-	w.beforeSwapStatusAdjustFunc = nil
-	w.status = waiting
+	w.setWaiting()
 	w.waiters.reset()
 	waiterPool.Put(w)
 }

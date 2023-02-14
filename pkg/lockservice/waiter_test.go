@@ -106,7 +106,7 @@ func TestWaitAndNotifyConcurrent(t *testing.T) {
 	defer w.close()
 
 	w.beforeSwapStatusAdjustFunc = func() {
-		w.status = completed
+		w.status.Store(completed)
 		w.c <- nil
 	}
 
@@ -178,8 +178,7 @@ func TestNotifyWithStatusChanged(t *testing.T) {
 	defer w.close()
 
 	w.beforeSwapStatusAdjustFunc = func() {
-		w.status = completed
+		w.status.Store(completed)
 	}
-	assert.True(t, w.notify(nil))
-	assert.NoError(t, w.wait(context.Background()))
+	assert.False(t, w.notify(nil))
 }
