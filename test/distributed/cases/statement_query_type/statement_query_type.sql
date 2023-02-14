@@ -336,3 +336,4 @@ update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
 -- @bvt:issue
 rollback ;
+drop account if exists query_type;
