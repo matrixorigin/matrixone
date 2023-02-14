@@ -29,8 +29,6 @@ func ParseStringToPath(str string) (bytejson.Path, error) {
 	return bytejson.ParseJsonPath(str)
 }
 
-type ComputeFn func([]byte, *bytejson.Path) (*bytejson.ByteJson, error)
-
 func ComputeJson(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
 	bj := DecodeJson(json)
 	return bj.Query(path), nil
