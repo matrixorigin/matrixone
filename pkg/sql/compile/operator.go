@@ -61,12 +61,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -121,6 +123,17 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Cond:       t.Cond,
 			Result:     t.Result,
 			Typs:       t.Typs,
+			Conditions: t.Conditions,
+		}
+	case vm.Right:
+		t := sourceIns.Arg.(*right.Argument)
+		res.Arg = &right.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Cond:       t.Cond,
+			Result:     t.Result,
+			Right_typs: t.Right_typs,
+			Left_typs:  t.Left_typs,
 			Conditions: t.Conditions,
 		}
 	case vm.Limit:
@@ -697,6 +710,23 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	}
 }
 
+func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *right.Argument {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	return &right.Argument{
+		Left_typs:  left_typs,
+		Right_typs: right_typs,
+		Nbucket:    Nbucket,
+		Ibucket:    Ibucket,
+		Result:     result,
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds, proc),
+	}
+}
+
 func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
@@ -1080,6 +1110,16 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 		}
+	case vm.Right:
+		arg := in.Arg.(*right.Argument)
+		return &hashbuild.Argument{
+			Ibucket:     arg.Ibucket,
+			Nbucket:     arg.Nbucket,
+			IsRight:     true,
+			NeedHashMap: true,
+			Typs:        arg.Right_typs,
+			Conditions:  arg.Conditions[1],
+		}
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
 		return &hashbuild.Argument{
@@ -1179,7 +1219,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		}
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
+	if !ok || !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
 		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
@@ -1188,48 +1228,17 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	return e.F.Args[0], e.F.Args[1]
 }
 
-func isEquiJoin(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !supportedJoinCondition(e.F.Func.GetObj()) {
-				continue
-			}
-			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				continue
-			}
-			return true
-		}
-	}
-	return false || isEquiJoin0(exprs)
-}
-
-func isEquiJoin0(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !supportedJoinCondition(e.F.Func.GetObj()) {
-				return false
-			}
-			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	exprs = colexec.SplitAndExprs(exprs)
 	eqConds := make([]*plan.Expr, 0, len(exprs))
 	notEqConds := make([]*plan.Expr, 0, len(exprs))
 	for i, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !supportedJoinCondition(e.F.Func.GetObj()) {
+			if !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
 			}
-			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
+			lpos, rpos := plan2.HasColExpr(e.F.Args[0], -1), plan2.HasColExpr(e.F.Args[1], -1)
 			if lpos == -1 || rpos == -1 || (lpos == rpos) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
@@ -1241,38 +1250,6 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 		return nil, eqConds
 	}
 	return colexec.RewriteFilterExprList(notEqConds), eqConds
-}
-
-func supportedJoinCondition(id int64) bool {
-	fid, _ := function.DecodeOverloadID(id)
-	return fid == function.EQUAL
-}
-
-func hasColExpr(expr *plan.Expr, pos int32) int32 {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if pos == -1 {
-			return e.Col.RelPos
-		}
-		if pos != e.Col.RelPos {
-			return -1
-		}
-		return pos
-	case *plan.Expr_F:
-		for i := range e.F.Args {
-			pos0 := hasColExpr(e.F.Args[i], pos)
-			switch {
-			case pos0 == -1:
-			case pos == -1:
-				pos = pos0
-			case pos != pos0:
-				return -1
-			}
-		}
-		return pos
-	default:
-		return pos
-	}
 }
 
 func exprRelPos(expr *plan.Expr) int32 {
