@@ -106,7 +106,7 @@ func TestWaitAndNotifyConcurrent(t *testing.T) {
 	defer w.close()
 
 	w.beforeSwapStatusAdjustFunc = func() {
-		w.status.Store(completed)
+		w.setStatus(notified)
 		w.c <- nil
 	}
 
@@ -127,7 +127,7 @@ func TestWaitMultiTimes(t *testing.T) {
 	w.add(w2)
 	w.close()
 	assert.NoError(t, w2.wait(ctx))
-	w2.resetState()
+	w2.resetWait()
 
 	w1.add(w2)
 	w1.close()
@@ -148,7 +148,7 @@ func TestSkipCompletedWaiters(t *testing.T) {
 	w.add(w3)
 
 	// make w1 completed
-	w1.setCompleted()
+	w1.setStatus(completed)
 
 	v := w.close()
 	assert.Equal(t, w2, v)
@@ -161,7 +161,7 @@ func TestNotifyAfterCompleted(t *testing.T) {
 	w := acquireWaiter(nil)
 	require.Equal(t, 0, len(w.c))
 	defer w.close()
-	w.setCompleted()
+	w.setStatus(completed)
 	assert.False(t, w.notify(nil))
 }
 
@@ -178,7 +178,7 @@ func TestNotifyWithStatusChanged(t *testing.T) {
 	defer w.close()
 
 	w.beforeSwapStatusAdjustFunc = func() {
-		w.status.Store(completed)
+		w.setStatus(completed)
 	}
 	assert.False(t, w.notify(nil))
 }
