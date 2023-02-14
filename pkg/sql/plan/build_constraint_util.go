@@ -903,9 +903,9 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					// append join node
 					var joinConds []*Expr
 					var leftExpr *Expr
-					partsLength := len(indexdef.Field.Parts)
+					partsLength := len(indexdef.Parts)
 					if partsLength == 1 {
-						orginIndexColumnName := indexdef.Field.Parts[0]
+						orginIndexColumnName := indexdef.Parts[0]
 						typ := typMap[orginIndexColumnName]
 						leftExpr = &Expr{
 							Typ: typ,
@@ -918,7 +918,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 						}
 					} else {
 						args := make([]*Expr, partsLength)
-						for i, column := range indexdef.Field.Parts {
+						for i, column := range indexdef.Parts {
 							typ := typMap[column]
 							args[i] = &plan.Expr{
 								Typ: typ,
