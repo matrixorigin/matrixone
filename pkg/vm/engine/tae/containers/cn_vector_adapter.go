@@ -81,7 +81,7 @@ func (vec *CnTaeVector[T]) Length() int {
 }
 
 func (vec *CnTaeVector[T]) HasNull() bool {
-	return vec.downstreamVector.GetNulls().Any()
+	return vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Clone().Any()
 }
 
 func (vec *CnTaeVector[T]) Append(v any) {
