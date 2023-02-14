@@ -568,51 +568,21 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				TblId:     uint64(tableIdx),
 				Name:      tableName,
 				Cols:      colDefs,
+				Indexes:   make([]*IndexDef, len(table.idxs)),
 			}
 
 			if table.idxs != nil {
-				unidef := &plan.UniqueIndexDef{
-					IndexNames:  make([]string, 0),
-					TableNames:  make([]string, 0),
-					Fields:      make([]*plan.Field, 0),
-					TableExists: make([]bool, 0),
-				}
 
-				for _, idx := range table.idxs {
-					field := &plan.Field{
-						Parts: idx.parts,
-						Cols:  make([]*ColDef, 0),
+				for i, idx := range table.idxs {
+					indexdef := &plan.IndexDef{
+						IndexName:      idx.indexName,
+						Parts:          idx.parts,
+						Unique:         true,
+						IndexTableName: idx.tableName,
+						TableExist:     true,
 					}
-
-					for _, col := range idx.cols {
-						field.Cols = append(field.Cols, &ColDef{
-							Alg: plan.CompressType_Lz4,
-							Typ: &plan.Type{
-								Id:          int32(col.Id),
-								NotNullable: !col.Nullable,
-								Precision:   col.Precision,
-								Scale:       col.Scale,
-							},
-							Name:  col.Name,
-							Pkidx: 1,
-							Default: &plan.Default{
-								NullAbility:  false,
-								Expr:         nil,
-								OriginString: "",
-							},
-						})
-					}
-					unidef.IndexNames = append(unidef.IndexNames, idx.indexName)
-					unidef.TableNames = append(unidef.TableNames, idx.tableName)
-					unidef.Fields = append(unidef.Fields, field)
-					unidef.TableExists = append(unidef.TableExists, true)
+					tableDef.Indexes[i] = indexdef
 				}
-
-				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-					Def: &plan.TableDef_DefType_UIdx{
-						UIdx: unidef,
-					},
-				})
 			}
 
 			if table.fks != nil {
@@ -646,19 +616,16 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 
 			if tableName == "test_idx" {
-				testField := &plan.Field{
-					Parts: []string{"n_nationkey"},
+				indexParts := []string{"n_nationkey"}
+
+				p := &plan.IndexDef{
+					IndexName:      "idx1",
+					Parts:          indexParts,
+					Unique:         true,
+					IndexTableName: "nation",
+					TableExist:     true,
 				}
-				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-					Def: &plan.TableDef_DefType_UIdx{
-						UIdx: &plan.UniqueIndexDef{
-							IndexNames:  []string{"idx1"},
-							TableNames:  []string{"nation"},
-							Fields:      []*plan.Field{testField},
-							TableExists: []bool{false},
-						},
-					},
-				})
+				tableDef.Indexes = []*plan.IndexDef{p}
 			}
 
 			if tableName == "v1" {
