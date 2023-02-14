@@ -23,6 +23,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"os"
 	"strings"
 	"sync"
@@ -34,8 +35,9 @@ const (
 	defaultPassword        = "111"
 	defaultHost            = "127.0.0.1"
 	defaultPort            = 6001
-	defaultNetBufferLength = 1046528
-	minNetBufferLength     = 16384
+	defaultNetBufferLength = mpool.MB
+	minNetBufferLength     = mpool.KB * 16
+	maxNetBufferLength     = mpool.MB * 16
 	timeout                = 10 * time.Second
 )
 
@@ -97,6 +99,10 @@ func main() {
 	if netBufferLength < minNetBufferLength {
 		fmt.Fprintf(os.Stderr, "net_buffer_length must be greater than %d, set to %d\n", minNetBufferLength, minNetBufferLength)
 		netBufferLength = minNetBufferLength
+	}
+	if netBufferLength > maxNetBufferLength {
+		fmt.Fprintf(os.Stderr, "net_buffer_length must be less than %d, set to %d\n", maxNetBufferLength, maxNetBufferLength)
+		netBufferLength = maxNetBufferLength
 	}
 	if len(database) == 0 {
 		err = moerr.NewInvalidInput(ctx, "database must be specified")
@@ -219,9 +225,7 @@ func getTables(db string, tables Tables) (Tables, error) {
 
 func getCreateDB(db string) (string, error) {
 	r := conn.QueryRow("show create database `" + db + "`")
-	var (
-		create string
-	)
+	var create string
 	err := r.Scan(&db, &create)
 	if err != nil {
 		return "", err
