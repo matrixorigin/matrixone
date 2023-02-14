@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -112,6 +111,8 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 		acquirer:          messageAcquirer,
 		getClusterDetails: getClusterDetails,
 	}
+	receiver := newMessageReceiverOnServer(ctx, cs, messageAcquirer, message.GetID())
+
 	// decode message and run it, get final analysis information and err info.
 	msgTyp, analysis, err := cnMessageHandle(ctx, message, cs, helper, cli)
 	if err != nil {
@@ -258,18 +259,15 @@ func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint
 }
 
 // receiveMessageFromCnServer deal the back message from cn-server.
-func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
+func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
+	var err error
 	var dataBuffer []byte
 	var sequence uint64
 	for {
-		select {
-		case <-c.ctx.Done():
-			return moerr.NewRPCTimeout(c.ctx)
-		case val = <-mChan:
-		}
-		if val == nil {
-			return nil
+		val, err = sender.receive()
+		if err != nil {
+			return err
 		}
 		m := val.(*pipeline.Message)
 
@@ -334,43 +332,19 @@ func (s *Scope) remoteRun(c *Compile) error {
 		return errEncodeProc
 	}
 
-	// get the stream-sender
-	streamSender, errStream := cnclient.GetStreamSender(s.NodeInfo.Addr)
-	if errStream != nil {
-		return errStream
+	sender, err := newMessageSenderOnClient(c.ctx, c.addr)
+	if err != nil {
+		return err
 	}
-	defer func(streamSender morpc.Stream) {
-		_ = streamSender.Close()
-	}(streamSender)
-
-	// send encoded message and receive the back message.
-	// TODO: get dead time from config file may suitable.
-	if _, ok := c.ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		c.ctx, cancel = context.WithTimeout(c.ctx, time.Second*10000)
-		_ = cancel
+	err = sender.send(sData, pData, pipeline.PipelineMessage)
+	if err != nil {
+		return err
 	}
 
-	message := cnclient.AcquireMessage()
-	{
-		message.Id = streamSender.ID()
-		message.Data = sData
-		message.ProcInfoData = pData
-		message.Cmd = pipeline.PipelineMessage
-	}
-
-	errSend := streamSender.Send(c.ctx, message)
-	if errSend != nil {
-		return errSend
-	}
-	messagesReceive, errReceive := streamSender.Receive()
-	if errReceive != nil {
-		return errReceive
-	}
 	nextInstruction := s.Instructions[len(s.Instructions)-1]
 	nextAnalyze := c.proc.GetAnalyze(nextInstruction.Idx)
 	nextArg := nextInstruction.Arg.(*connector.Argument)
-	return receiveMessageFromCnServer(c, messagesReceive, nextAnalyze, nextArg)
+	return receiveMessageFromCnServer(c, sender, nextAnalyze, nextArg)
 }
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
