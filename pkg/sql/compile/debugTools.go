@@ -131,7 +131,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 		str := "["
 		for i := range rs {
 			remote := ""
-			for _, u := range s.UuidToRegIdx {
+			for _, u := range s.RemoteReceivRegInfos {
 				if u.Idx == i {
 					remote = fmt.Sprintf("(%s)", u.Uuid)
 					break
@@ -195,28 +195,24 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 						chs += "unknown"
 					}
 				}
-				if arg.All {
+				switch arg.FuncId {
+				case dispatch.SendToAllFunc:
 					str += fmt.Sprintf(" to all of MergeReceiver [%s].", chs)
-				} else {
+				case dispatch.SendToAnyLocalFunc:
 					str += fmt.Sprintf(" to any of MergeReceiver [%s].", chs)
+				default:
+					str += fmt.Sprintf(" unknow type dispatch [%s].", chs)
 				}
 
-				if arg.CrossCN {
+				if len(arg.RemoteRegs) != 0 {
 					remoteChs := ""
 					for i, reg := range arg.RemoteRegs {
 						if i != 0 {
 							remoteChs += ", "
 						}
-						uuids := ""
-						for j, u := range reg.Uuids {
-							if j != 0 {
-								uuids += " ,"
-							}
-							uuids += u.String()
-						}
-						remoteChs += fmt.Sprintf("addr: %s, uuids[%s]", reg.NodeAddr, uuids)
+						remoteChs += fmt.Sprintf("[addr: %s, uuid %s]", reg.NodeAddr, reg.Uuid)
 					}
-					str += fmt.Sprintf(" cross-cn receiver info: [%s]", remoteChs)
+					str += fmt.Sprintf(" cross-cn receiver info: %s", remoteChs)
 				}
 			}
 			return str
