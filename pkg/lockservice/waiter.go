@@ -152,9 +152,10 @@ func (w *waiter) mustSendNotification(value error) {
 }
 
 func (w *waiter) resetWait() {
-	if !w.casStatus(completed, waiting) {
-		panic("invalid reset wait")
+	if w.casStatus(completed, waiting) {
+		return
 	}
+	panic("invalid reset wait")
 }
 
 func (w *waiter) wait(ctx context.Context) error {
