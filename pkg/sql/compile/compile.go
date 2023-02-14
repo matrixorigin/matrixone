@@ -911,7 +911,7 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 
 func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
 	var rs []*Scope
-	isEq := isEquiJoin(n.OnList)
+	isEq := plan2.IsEquiJoin(n.OnList)
 
 	right_typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
@@ -1004,14 +1004,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 				})
 			}
 		} else {
-			rs = c.newBroadcastJoinScopeList(children, ss)
-			for i := range rs {
-				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.LoopLeft,
-					Idx: c.anal.curr,
-					Arg: constructLoopRight(n, left_typs, c.proc),
-				})
-			}
+			panic("dont pass any no-equal right join plan to this function,it should be changed to left join by the planner")
 		}
 	case plan.Node_SINGLE:
 		rs = c.newBroadcastJoinScopeList(ss, children)

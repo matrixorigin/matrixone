@@ -72,6 +72,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 var constBat *batch.Batch
@@ -1032,22 +1033,6 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 		Cond:   colexec.RewriteFilterExprList(n.OnList),
 	}
 }
-func constructLoopRight(n *plan.Node, typs []types.Type, proc *process.Process) *loopleft.Argument {
-	result := make([]colexec.ResultPos, len(n.ProjectList))
-	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
-		if result[i].Rel == 0 {
-			result[i].Rel = 1
-		} else {
-			result[i].Rel = 0
-		}
-	}
-	return &loopleft.Argument{
-		Typs:   typs,
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
-	}
-}
 
 func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
@@ -1234,7 +1219,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		}
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
+	if !ok || !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
 		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
@@ -1243,48 +1228,17 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	return e.F.Args[0], e.F.Args[1]
 }
 
-func isEquiJoin(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !supportedJoinCondition(e.F.Func.GetObj()) {
-				continue
-			}
-			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				continue
-			}
-			return true
-		}
-	}
-	return false || isEquiJoin0(exprs)
-}
-
-func isEquiJoin0(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !supportedJoinCondition(e.F.Func.GetObj()) {
-				return false
-			}
-			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	exprs = colexec.SplitAndExprs(exprs)
 	eqConds := make([]*plan.Expr, 0, len(exprs))
 	notEqConds := make([]*plan.Expr, 0, len(exprs))
 	for i, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !supportedJoinCondition(e.F.Func.GetObj()) {
+			if !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
 			}
-			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
+			lpos, rpos := plan2.HasColExpr(e.F.Args[0], -1), plan2.HasColExpr(e.F.Args[1], -1)
 			if lpos == -1 || rpos == -1 || (lpos == rpos) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
@@ -1296,38 +1250,6 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 		return nil, eqConds
 	}
 	return colexec.RewriteFilterExprList(notEqConds), eqConds
-}
-
-func supportedJoinCondition(id int64) bool {
-	fid, _ := function.DecodeOverloadID(id)
-	return fid == function.EQUAL
-}
-
-func hasColExpr(expr *plan.Expr, pos int32) int32 {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if pos == -1 {
-			return e.Col.RelPos
-		}
-		if pos != e.Col.RelPos {
-			return -1
-		}
-		return pos
-	case *plan.Expr_F:
-		for i := range e.F.Args {
-			pos0 := hasColExpr(e.F.Args[i], pos)
-			switch {
-			case pos0 == -1:
-			case pos == -1:
-				pos = pos0
-			case pos != pos0:
-				return -1
-			}
-		}
-		return pos
-	default:
-		return pos
-	}
 }
 
 func exprRelPos(expr *plan.Expr) int32 {
