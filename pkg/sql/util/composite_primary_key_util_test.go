@@ -29,31 +29,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSimpleCompositePrimaryKey(t *testing.T) {
-	tests := []struct {
-		args []string
-	}{
-		{
-			args: []string{"a", "b", "c"},
-		},
-	}
-	for _, test := range tests {
-		args := test.args
-		cKeyName := BuildCompositePrimaryKeyColumnName(args)
-		s := SplitCompositePrimaryKeyColumnName(cKeyName)
-		require.Equal(t, len(args), len(s))
-		for i := range s {
-			require.Equal(t, args[i], s[i])
-		}
-	}
-}
-
 func TestFillCompositePKeyBatch(t *testing.T) {
 	var proc = testutil.NewProc()
 	columnSi := 10
 	rowCount := 10
-	bat, col, valueCount := MakeBatch(columnSi, rowCount, proc.Mp())
-	err := FillCompositePKeyBatch(bat, col, proc)
+	bat, primaryKeyDef, _ := MakeBatch(columnSi, rowCount, proc.Mp())
+
+	err := FillCompositePKeyBatch(bat, primaryKeyDef, proc)
 	require.Equal(t, err, nil)
 	bs := vector.GetBytesVectorValues(bat.Vecs[len(bat.Vecs)-1])
 	tuples := make([]types.Tuple, 0)
@@ -62,14 +44,9 @@ func TestFillCompositePKeyBatch(t *testing.T) {
 		require.Equal(t, err, nil)
 		tuples = append(tuples, tuple)
 	}
-	names := SplitCompositePrimaryKeyColumnName(col.Name)
-	for i := 0; i < rowCount*len(names); i++ {
-		num, _ := strconv.Atoi(names[i/rowCount])
-		require.Equal(t, tuples[i%rowCount][i/rowCount], valueCount[num*rowCount+i%rowCount])
-	}
 }
 
-func MakeBatch(columnSi int, rowCount int, mp *mpool.MPool) (*batch.Batch, *plan.ColDef, map[int]interface{}) {
+func MakeBatch(columnSi int, rowCount int, mp *mpool.MPool) (*batch.Batch, *plan.PrimaryKeyDef, map[int]interface{}) {
 	idx := columnSi
 	attrs := make([]string, 0, idx)
 
@@ -84,7 +61,7 @@ func MakeBatch(columnSi int, rowCount int, mp *mpool.MPool) (*batch.Batch, *plan
 			keys = append(keys, strconv.Itoa(i))
 		}
 	}
-	cPkeyName := BuildCompositePrimaryKeyColumnName(keys)
+	cPkeyName, _ := BuildCompositePrimaryKeyColumnName()
 	attrs = append(attrs, cPkeyName)
 
 	bat := batch.New(true, attrs)
@@ -98,10 +75,11 @@ func MakeBatch(columnSi int, rowCount int, mp *mpool.MPool) (*batch.Batch, *plan
 
 	bat.Vecs[idx] = vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 
-	colDef := &plan.ColDef{
-		Name: cPkeyName,
+	primaryKeyDef := &plan.PrimaryKeyDef{
+		PkeyColName: cPkeyName,
+		Names:       keys,
 	}
-	return bat, colDef, valueCount
+	return bat, primaryKeyDef, valueCount
 }
 
 func randType() types.T {

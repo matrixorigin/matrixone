@@ -20,14 +20,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 const (
@@ -844,9 +842,7 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 
 	if hasPrimaryKey {
 		var pkcols []string
-		if len(primaryKey.Names) > 0 && util.JudgeIsCompositePrimaryKeyColumn(primaryKey.Names[0]) {
-			pkcols = util.SplitCompositePrimaryKeyColumnName(primaryKey.Names[0])
-		} else {
+		if primaryKey != nil {
 			pkcols = primaryKey.Names
 		}
 

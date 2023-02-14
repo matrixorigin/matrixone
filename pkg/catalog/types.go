@@ -23,10 +23,10 @@ import (
 
 const (
 	Row_ID               = "__mo_rowid"
-	PrefixPriColName     = "__mo_cpkey_"
 	PrefixCBColName      = "__mo_cbkey_"
 	PrefixIndexTableName = "__mo_index_"
 	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
+	CPkeyColName             = "__mo_cpkey_col"
 	IndexTableIndexColName   = "__mo_index_idx_col"
 	IndexTablePrimaryColName = "__mo_index_pri_col"
 	ExternalFilePath         = "__mo_filepath"

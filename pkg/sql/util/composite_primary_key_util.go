@@ -15,12 +15,9 @@
 package util
 
 import (
-	"strconv"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
-	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,54 +25,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func ExtractCompositePrimaryKeyColumnFromColDefs(colDefs []*plan.ColDef) ([]*plan.ColDef, *plan.ColDef) {
-	for num := range colDefs {
-		isCPkey := JudgeIsCompositePrimaryKeyColumn(colDefs[num].Name)
-		if isCPkey {
-			cPKC := colDefs[num]
-			colDefs = append(colDefs[:num], colDefs[num+1:]...)
-			return colDefs, cPKC
-		}
-	}
-	return colDefs, nil
-}
-
 // this func can't judge index table col is compound or not
 func JudgeIsCompositePrimaryKeyColumn(s string) bool {
-	if len(s) < len(catalog.PrefixPriColName) {
-		return false
-	}
-	return s[0:len(catalog.PrefixPriColName)] == catalog.PrefixPriColName
+	return s == catalog.CPkeyColName
 }
 
-func BuildCompositePrimaryKeyColumnName(s []string) string {
-	var name string
-	name = catalog.PrefixPriColName
-	for _, single := range s {
-		lenNum := format.Int64ToString(int64(len(single)))
-		for num := 0; num < 3-len(lenNum); num++ {
-			name += string('0')
-		}
-		name += lenNum
-		name += single
-	}
-	return name
-}
-
-func SplitCompositePrimaryKeyColumnName(s string) []string {
-	var names []string
-	for next := len(catalog.PrefixPriColName); next < len(s); {
-		strLen, _ := strconv.Atoi(s[next : next+3])
-		names = append(names, s[next+3:next+3+strLen])
-		next += strLen + 3
-	}
-
-	return names
+func BuildCompositePrimaryKeyColumnName() (string, error) {
+	return catalog.CPkeyColName, nil
 }
 
 // Build composite primary key batch
-func FillCompositePKeyBatch(bat *batch.Batch, p *plan.ColDef, proc *process.Process) error {
-	names := SplitCompositePrimaryKeyColumnName(p.Name)
+func FillCompositePKeyBatch(bat *batch.Batch, p *plan.PrimaryKeyDef, proc *process.Process) error {
+	names := p.Names
 	cPkeyVecMap := make(map[string]*vector.Vector)
 	for num, attrName := range bat.Attrs {
 		for _, name := range names {
@@ -95,7 +56,7 @@ func FillCompositePKeyBatch(bat *batch.Batch, p *plan.ColDef, proc *process.Proc
 		}
 	}
 	vec, _ := serialWithCompacted(vs, proc)
-	bat.Attrs = append(bat.Attrs, p.Name)
+	bat.Attrs = append(bat.Attrs, p.PkeyColName)
 	bat.Vecs = append(bat.Vecs, vec)
 	return nil
 }

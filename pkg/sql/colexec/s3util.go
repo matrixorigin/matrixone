@@ -60,21 +60,13 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 	}
 
 	// get pk indexes
-	if tableDef.CompositePkey != nil {
-		names := util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)
+	if tableDef.Pkey != nil {
+		names := tableDef.Pkey.Names
 		for num, colDef := range tableDef.Cols {
 			for _, name := range names {
 				if colDef.Name == name {
 					container.sortIndex = append(container.sortIndex, num)
 				}
-			}
-		}
-	} else {
-		// Get Single Col pk index
-		for num, colDef := range tableDef.Cols {
-			if colDef.Primary {
-				container.sortIndex = append(container.sortIndex, num)
-				break
 			}
 		}
 	}

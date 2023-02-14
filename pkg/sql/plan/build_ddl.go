@@ -592,7 +592,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 			}
 		} else {
-			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
+			var err error
+			pkeyName, err = util.BuildCompositePrimaryKeyColumnName()
+			if err != nil {
+				return err
+			}
 			colDef := &ColDef{
 				Name: pkeyName,
 				Alg:  plan.CompressType_Lz4,

@@ -146,8 +146,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			pkDefs = append(pkDefs, colName)
 		}
 	}
-	if tableDef.CompositePkey != nil {
-		pkDefs = append(pkDefs, util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)...)
+	if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
+		pkDefs = append(pkDefs, tableDef.Pkey.Names...)
 	}
 	if len(pkDefs) != 0 {
 		pkStr := "PRIMARY KEY ("

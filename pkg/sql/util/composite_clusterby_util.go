@@ -96,3 +96,23 @@ func FillCompositeClusterByBatch(bat *batch.Batch, cbName string, proc *process.
 	bat.Attrs = append(bat.Attrs, cbName)
 	bat.Vecs = append(bat.Vecs, vec)
 }
+
+func FillCompositeClusterByBatch2(bat *batch.Batch, cbName string, parts []string, proc *process.Process) {
+	names := parts
+	cCBVecMap := make(map[string]*vector.Vector)
+	for num, attrName := range bat.Attrs {
+		for _, name := range names {
+			if attrName == name {
+				cCBVecMap[name] = bat.Vecs[num]
+			}
+		}
+	}
+	vs := make([]*vector.Vector, 0)
+	for _, name := range names {
+		v := cCBVecMap[name]
+		vs = append(vs, v)
+	}
+	vec, _ := multi.Serial(vs, proc)
+	bat.Attrs = append(bat.Attrs, cbName)
+	bat.Vecs = append(bat.Vecs, vec)
+}
