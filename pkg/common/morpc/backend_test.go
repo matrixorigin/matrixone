@@ -68,7 +68,7 @@ func TestSendWithSomeErrorInBatch(t *testing.T) {
 			defer cancel()
 
 			n := 100
-			largePayload := make([]byte, defaultMaxMessageSize)
+			largePayload := make([]byte, defaultMaxBodyMessageSize)
 			futures := make([]*Future, 0, n)
 			requests := make([]Message, 0, n)
 			for i := 0; i < n; i++ {
