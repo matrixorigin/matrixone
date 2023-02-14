@@ -266,6 +266,7 @@ func showInsert(db string, tbl string, bufPool *sync.Pool, netBufferLength int) 
 	}
 	buf := bufPool.Get().(*bytes.Buffer)
 	curBuf := bufPool.Get().(*bytes.Buffer)
+	buf.Grow(netBufferLength)
 	initInert := "INSERT INTO `" + tbl + "` VALUES "
 	for {
 		buf.WriteString(initInert)
