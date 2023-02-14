@@ -574,33 +574,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			if table.idxs != nil {
 
 				for i, idx := range table.idxs {
-					field := &plan.Field{
-						Parts: idx.parts,
-						Cols:  make([]*ColDef, 0),
-					}
-
-					for _, col := range idx.cols {
-						field.Cols = append(field.Cols, &ColDef{
-							Alg: plan.CompressType_Lz4,
-							Typ: &plan.Type{
-								Id:          int32(col.Id),
-								NotNullable: !col.Nullable,
-								Precision:   col.Precision,
-								Scale:       col.Scale,
-							},
-							Name:  col.Name,
-							Pkidx: 1,
-							Default: &plan.Default{
-								NullAbility:  false,
-								Expr:         nil,
-								OriginString: "",
-							},
-						})
-					}
-
 					indexdef := &plan.IndexDef{
 						IndexName:      idx.indexName,
-						Field:          field,
+						Parts:          idx.parts,
 						Unique:         true,
 						IndexTableName: idx.tableName,
 						TableExist:     true,
@@ -640,13 +616,11 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 
 			if tableName == "test_idx" {
-				testField := &plan.Field{
-					Parts: []string{"n_nationkey"},
-				}
+				indexParts := []string{"n_nationkey"}
 
 				p := &plan.IndexDef{
 					IndexName:      "idx1",
-					Field:          testField,
+					Parts:          indexParts,
 					Unique:         true,
 					IndexTableName: "nation",
 					TableExist:     true,

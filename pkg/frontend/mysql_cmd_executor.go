@@ -261,7 +261,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		RoleId:               proc.SessionInfo.RoleId,
 		User:                 tenant.GetUser(),
 		Host:                 sessInfo.GetHost(),
-		Database:             sessInfo.GetDatabase(),
+		Database:             ses.GetDatabaseName(),
 		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
@@ -3510,6 +3510,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
 			err = authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
 			if err != nil {
+				logStatementStatus(requestCtx, ses, stmt, fail, err)
 				return err
 			}
 		}
@@ -3530,6 +3531,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if ses.InActiveTransaction() {
 			err = mce.canExecuteStatementInUncommittedTransaction(requestCtx, stmt)
 			if err != nil {
+				logStatementStatus(requestCtx, ses, stmt, fail, err)
 				return err
 			}
 		}
