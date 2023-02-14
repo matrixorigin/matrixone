@@ -134,13 +134,21 @@ func (w *waiter) casStatus(old, new waiterStatus) bool {
 	return w.status.CompareAndSwap(int32(old), int32(new))
 }
 
-func (w *waiter) mustGetNotifiedValue() error {
+func (w *waiter) mustRecvNotification() error {
 	select {
 	case err := <-w.c:
 		return err
 	default:
 	}
-	panic("BUG: must can get result from channel")
+	panic("BUG: must recv result from channel")
+}
+
+func (w *waiter) mustSendNotification(value error) {
+	select {
+	case w.c <- value:
+	default:
+	}
+	panic("BUG: must send value to channel")
 }
 
 func (w *waiter) resetWait() {
@@ -153,7 +161,7 @@ func (w *waiter) wait(ctx context.Context) error {
 	status := w.getStatus()
 	if status == notified {
 		w.setStatus(completed)
-		return w.mustGetNotifiedValue()
+		return w.mustRecvNotification()
 	}
 	if status != waiting {
 		panic(fmt.Sprintf("BUG: waiter's status cannot be %d", status))
@@ -178,7 +186,7 @@ func (w *waiter) wait(ctx context.Context) error {
 	// notify and timeout are concurrently issued, we use real result to replace
 	// timeout error
 	w.setStatus(completed)
-	return w.mustGetNotifiedValue()
+	return w.mustRecvNotification()
 }
 
 // notify return false means this waiter is completed, cannot be used to notify
@@ -197,7 +205,7 @@ func (w *waiter) notify(value error) bool {
 		// if status changed, notify and timeout are concurrently issued, need
 		// retry.
 		if w.casStatus(status, notified) {
-			w.c <- value
+			w.mustSendNotification(value)
 			return true
 		}
 	}
