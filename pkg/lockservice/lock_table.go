@@ -67,7 +67,7 @@ func (l *lockTable) unlock(ls *cowSlice) {
 	locks.iter(func(key []byte) bool {
 		if lock, ok := l.mu.store.Get(key); ok {
 			if lock.isLockRow() || lock.isLockRangeEnd() {
-				lock.holder.close()
+				lock.waiter.close()
 			}
 			l.mu.store.Delete(key)
 		}
@@ -144,7 +144,7 @@ func (l *lockTable) addRowLockLocked(
 	waiter *waiter,
 	mode LockMode) {
 	lock := newRowLock(txn.txnID, mode)
-	lock.holder = waiter
+	lock.waiter = waiter
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
@@ -158,8 +158,8 @@ func (l *lockTable) addRangeLockLocked(
 	waiter *waiter,
 	mode LockMode) {
 	startLock, endLock := newRangeLock(txn.txnID, mode)
-	startLock.holder = waiter
-	endLock.holder = waiter
+	startLock.waiter = waiter
+	endLock.waiter = waiter
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
@@ -172,7 +172,7 @@ func (l *lockTable) handleLockConflict(txn *activeTxn, w *waiter, conflictWith L
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
 	txn.setBlocked(w)
-	conflictWith.holder.add(w)
+	conflictWith.waiter.add(w)
 	if err := l.detector.check(txn.txnID); err != nil {
 		panic("BUG: active dead lock check can not fail")
 	}
