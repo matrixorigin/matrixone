@@ -619,20 +619,16 @@ func (vec *CnTaeVector[T]) Capacity() int {
 
 func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 
-	newDownstream := NewMoVecFromBytes(vec.GetType(), bs)
-	// Nulls
-	{
-		if vec.Nullable() {
-			newDownstream.Nsp = cnNulls.NewWithSize(0)
-		}
+	newNulls := cnNulls.NewWithSize(0)
+	if nulls != nil && !nulls.IsEmpty() {
+		cnNulls.Add(newNulls, nulls.ToArray()...)
+	}
 
-		if nulls != nil && !nulls.IsEmpty() {
-			cnNulls.Add(newDownstream.Nsp, nulls.ToArray()...)
-		}
+	newDownstream := NewMoVecFromBytes(vec.GetType(), bs)
+	if vec.Nullable() {
+		newDownstream.Nsp = newNulls
 	}
 
 	vec.releaseDownstream()
-
-	// Set newDownStream after completely initializing it. Else, it will cause data-race issue.
 	vec.downstreamVector = newDownstream
 }
