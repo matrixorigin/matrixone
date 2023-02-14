@@ -300,6 +300,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					for idx := range sendResponses {
 						v, err := sendResponses[idx].GetTimeoutFromContext()
 						if err != nil {
+							cs.addResult(err)
 							continue
 						}
 						timeout += v
@@ -316,13 +317,15 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							s.logger.Error("write response failed",
 								zap.Uint64("request-id", sendResponses[idx].Message.GetID()),
 								zap.Error(err))
+							cs.addResult(err)
 							return
 						}
 						written++
 					}
 
 					if written > 0 {
-						if err := cs.conn.Flush(timeout); err != nil {
+						err := cs.conn.Flush(timeout)
+						if err != nil {
 							if ce != nil {
 								fields = append(fields, zap.Error(err))
 							}
@@ -330,6 +333,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						if ce != nil {
 							ce.Write(fields...)
 						}
+						cs.addResult(err)
 					}
 				}
 			}
@@ -366,9 +370,10 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 }
 
 type clientSession struct {
-	codec Codec
-	conn  goetty.IOSession
-	c     chan RPCMessage
+	codec   Codec
+	conn    goetty.IOSession
+	c       chan RPCMessage
+	resultC chan error
 	// streaming id -> last received sequence, no concurrent, access in io goroutine
 	receivedStreamSequences map[uint64]uint32
 	// streaming id -> last sent sequence, multi-stream access in multi-goroutines if
@@ -387,6 +392,7 @@ func newClientSession(conn goetty.IOSession, codec Codec) *clientSession {
 	return &clientSession{
 		codec:                   codec,
 		c:                       make(chan RPCMessage, 16),
+		resultC:                 make(chan error, 1),
 		receivedStreamSequences: make(map[uint64]uint32),
 		conn:                    conn,
 		ctx:                     ctx,
@@ -401,12 +407,14 @@ func (cs *clientSession) Close() error {
 		return nil
 	}
 
+	cs.addResult(moerr.NewClientClosedNoCtx())
 	close(cs.c)
+	close(cs.resultC)
 	cs.mu.closed = true
 	return cs.conn.Close()
 }
 
-func (cs *clientSession) Write(ctx context.Context, message Message) error {
+func (cs *clientSession) AsyncWrite(ctx context.Context, message Message) error {
 	if err := cs.codec.Valid(message); err != nil {
 		return err
 	}
@@ -431,6 +439,13 @@ func (cs *clientSession) Write(ctx context.Context, message Message) error {
 	return nil
 }
 
+func (cs *clientSession) Write(ctx context.Context, response Message) error {
+	if err := cs.AsyncWrite(ctx, response); err != nil {
+		return err
+	}
+	return <-cs.resultC
+}
+
 func (cs *clientSession) cancelWrite() {
 	cs.cancel()
 }
@@ -445,4 +460,11 @@ func (cs *clientSession) validateStreamRequest(id uint64, sequence uint32) bool 
 		cs.sentStreamSequences.Store(id, uint32(0))
 	}
 	return true
+}
+
+func (cs *clientSession) addResult(err error) {
+	select {
+	case cs.resultC <- err:
+	default:
+	}
 }
