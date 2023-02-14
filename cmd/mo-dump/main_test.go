@@ -14,8 +14,11 @@
 package main
 
 import (
+	"bytes"
+	"database/sql"
 	"fmt"
 	"github.com/stretchr/testify/require"
+	"os"
 	"testing"
 )
 
@@ -58,7 +61,49 @@ func TestConvertValue(t *testing.T) {
 }
 
 func makeValue(val string) interface{} {
-	tmp := []byte(val)
-	var ret interface{} = tmp
-	return &ret
+	tmp := sql.RawBytes(val)
+	return &tmp
+}
+
+func TestShowCreateTable(t *testing.T) {
+	kases := []struct {
+		sql          string
+		withNextLine bool
+		res          string
+	}{
+		{
+			sql:          "create table t1 (a int, b int)",
+			withNextLine: false,
+			res:          "create table t1 (a int, b int);\n",
+		},
+		{
+			sql:          "create table t1 (a int, b int)",
+			withNextLine: true,
+			res:          "create table t1 (a int, b int);\n\n\n",
+		},
+		{
+			sql:          "create table t1 (a int, b int);",
+			withNextLine: false,
+			res:          "create table t1 (a int, b int);\n",
+		},
+		{
+			sql:          "create table t1 (a int, b int);",
+			withNextLine: true,
+			res:          "create table t1 (a int, b int);\n\n\n",
+		},
+	}
+	old := os.Stdout
+	for _, v := range kases {
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+		showCreateTable(v.sql, v.withNextLine)
+
+		e := w.Close()
+		require.Nil(t, e)
+		var buf bytes.Buffer
+		_, e = buf.ReadFrom(r)
+		require.Nil(t, e)
+		require.Equal(t, v.res, buf.String())
+	}
+	os.Stdout = old
 }
