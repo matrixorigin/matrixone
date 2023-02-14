@@ -80,10 +80,6 @@ func (vec *CnTaeVector[T]) Length() int {
 	return vec.downstreamVector.Length()
 }
 
-func (vec *CnTaeVector[T]) HasNull() bool {
-	return vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Clone().Any()
-}
-
 func (vec *CnTaeVector[T]) Append(v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
@@ -631,4 +627,9 @@ func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 
 	vec.releaseDownstream()
 	vec.downstreamVector = newDownstream
+}
+
+func (vec *CnTaeVector[T]) HasNull() bool {
+	//TODO: Avoid Clone()
+	return vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Clone().Any()
 }
