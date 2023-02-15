@@ -178,3 +178,11 @@ select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name
 alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
 drop database test;
+
+drop database if exists test;
+create database test;
+use test;
+select version();
+alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+select version();
+drop database test;

@@ -33,8 +33,52 @@ const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 
 	SendToAllFunc = iota
+	SendToAllLocalFunc
 	SendToAnyLocalFunc
 )
+
+// common sender: send to any LocalReceiver
+func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+	refCountAdd := int64(len(ap.LocalRegs) - 1)
+	atomic.AddInt64(&bat.Cnt, refCountAdd)
+	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+		jm.IncRef(refCountAdd)
+		jm.SetDupCount(int64(len(ap.LocalRegs)))
+	}
+
+	for _, reg := range ap.LocalRegs {
+		select {
+		case <-reg.Ctx.Done():
+			return moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+		case reg.Ch <- bat:
+		}
+	}
+
+	return nil
+}
+
+// common sender: send to any LocalReceiver
+func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+	// send to local receiver
+	sendto := ap.sendto % len(ap.LocalRegs)
+	reg := ap.LocalRegs[sendto]
+	select {
+	case <-reg.Ctx.Done():
+		for len(reg.Ch) > 0 { // free memory
+			bat := <-reg.Ch
+			if bat == nil {
+				break
+			}
+			bat.Clean(proc.Mp())
+		}
+		ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
+		return nil
+	case reg.Ch <- bat:
+		ap.sendto++
+	}
+
+	return nil
+}
 
 // common sender: send to all receiver
 func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
@@ -103,29 +147,6 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error 
 			return moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
 		case reg.Ch <- bat:
 		}
-	}
-
-	return nil
-}
-
-// common sender: send to any receiver
-func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
-	// send to local receiver
-	sendto := ap.sendto % len(ap.LocalRegs)
-	reg := ap.LocalRegs[sendto]
-	select {
-	case <-reg.Ctx.Done():
-		for len(reg.Ch) > 0 { // free memory
-			bat := <-reg.Ch
-			if bat == nil {
-				break
-			}
-			bat.Clean(proc.Mp())
-		}
-		ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
-		return nil
-	case reg.Ch <- bat:
-		ap.sendto++
 	}
 
 	return nil

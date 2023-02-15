@@ -39,6 +39,11 @@ func Prepare(proc *process.Process, arg any) error {
 	switch ap.FuncId {
 	case SendToAllFunc:
 		ap.ctr.sendFunc = sendToAllFunc
+	case SendToAllLocalFunc:
+		if !ap.prepared {
+			return moerr.NewInternalError(proc.Ctx, "SendToAllLocalFunc should not send to remote")
+		}
+		ap.ctr.sendFunc = sendToAllLocalFunc
 	case SendToAnyLocalFunc:
 		if !ap.prepared {
 			return moerr.NewInternalError(proc.Ctx, "SendToAnyLocalFunc should not send to remote")
