@@ -75,6 +75,7 @@ func main() {
 		createTable                        []string
 		err                                error
 	)
+	dumpStart := time.Now()
 	defer func() {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "modump error: %v\n", err)
@@ -84,6 +85,9 @@ func main() {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "modump error while close connection: %v\n", err)
 			}
+		}
+		if err == nil {
+			fmt.Fprintf(os.Stdout, "/* MODUMP SUCCESS, COST %v */\n", time.Since(dumpStart))
 		}
 	}()
 
