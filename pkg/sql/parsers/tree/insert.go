@@ -71,21 +71,3 @@ type Assignment struct {
 	Column Identifier
 	Expr   Expr
 }
-
-type UpdateList struct {
-	Columns IdentifierList
-	Rows    *Select
-}
-
-func (node *UpdateList) Format(ctx *FmtCtx) {
-	ctx.WriteString("on duplicate key update ")
-	if node.Columns != nil {
-		ctx.WriteString(" (")
-		node.Columns.Format(ctx)
-		ctx.WriteByte(')')
-	}
-	if node.Rows != nil {
-		ctx.WriteByte(' ')
-		node.Rows.Format(ctx)
-	}
-}

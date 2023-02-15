@@ -158,7 +158,6 @@ import (
     strs []string
 
     duplicateKey tree.DuplicateKey
-    updateList *tree.UpdateList
     fields *tree.Fields
     fieldsList []*tree.Fields
     lines *tree.Lines
