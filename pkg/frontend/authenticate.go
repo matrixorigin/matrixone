@@ -6362,7 +6362,7 @@ func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (s
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	sql := `select json_extract(configuration,'%s') from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s"; `
+	sql := `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s"; `
 	sql = fmt.Sprintf(sql, path, dbName)
 
 	bh.ClearExecResultSet()
