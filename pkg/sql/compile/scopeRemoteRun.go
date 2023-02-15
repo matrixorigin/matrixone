@@ -232,13 +232,16 @@ func (s *Scope) remoteRun(c *Compile) error {
 	}
 	err = sender.send(sData, pData, pipeline.PipelineMessage)
 	if err != nil {
+		sender.close()
 		return err
 	}
 
 	nextInstruction := s.Instructions[len(s.Instructions)-1]
 	nextAnalyze := c.proc.GetAnalyze(nextInstruction.Idx)
 	nextArg := nextInstruction.Arg.(*connector.Argument)
-	return receiveMessageFromCnServer(c, sender, nextAnalyze, nextArg)
+	err = receiveMessageFromCnServer(c, sender, nextAnalyze, nextArg)
+	sender.close()
+	return err
 }
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
