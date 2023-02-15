@@ -3443,6 +3443,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
+
+		if len(ses.GetTenantInfo().GetVersion()) != 0 {
+			proc.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
+		}
 	} else {
 		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
@@ -3577,6 +3581,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			selfHandle = true
 			//use database
 			err = mce.handleChangeDB(requestCtx, st.Name)
+			if err != nil {
+				goto handleFailed
+			}
+			err = changeVersion(requestCtx, ses, st.Name)
 			if err != nil {
 				goto handleFailed
 			}
@@ -4800,4 +4808,13 @@ func getAccountId(ctx context.Context) uint32 {
 		accountId = v.(uint32)
 	}
 	return accountId
+}
+
+func changeVersion(ctx context.Context, ses *Session, db string) error {
+	var err error
+	version, _ := GetVersionCompatbility(ctx, ses, db)
+	if ses.GetTenantInfo() != nil {
+		ses.GetTenantInfo().SetVersion(version)
+	}
+	return err
 }
