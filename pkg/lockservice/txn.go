@@ -115,7 +115,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 		hasDeadLock := false
 		locks.iter(func(lockKey []byte) bool {
 			if lock, ok := l.getLock(lockKey); ok {
-				lock.waiter.waiters.IterTxns(func(id []byte) bool {
+				lock.waiter.waiters.iter(func(id []byte) bool {
 					if !waiters.add(id) {
 						hasDeadLock = true
 						return false

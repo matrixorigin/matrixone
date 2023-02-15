@@ -53,16 +53,13 @@ type TableDef_DefType_Properties = plan.TableDef_DefType_Properties
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
 type PartitionByDef = plan.PartitionByDef
-type TableDef_DefType_UIdx = plan.TableDef_DefType_UIdx
-type TableDef_DefType_SIdx = plan.TableDef_DefType_SIdx
-type UniqueIndexDef = plan.UniqueIndexDef
 type ClusterByDef = plan.ClusterByDef
-type SecondaryIndexDef = plan.SecondaryIndexDef
 type OrderBySpec = plan.OrderBySpec
 type CreateTable_FkColName = plan.CreateTable_FkColName
 type ForeignKeyDef = plan.ForeignKeyDef
 type ClusterTable = plan.ClusterTable
 type PrimaryKeyDef = plan.PrimaryKeyDef
+type IndexDef = plan.IndexDef
 
 type CompilerContext interface {
 	// Default database/schema in context

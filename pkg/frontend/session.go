@@ -1947,6 +1947,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var viewSql *plan2.ViewDef
 	var foreignKeys []*plan2.ForeignKeyDef
 	var primarykey *plan2.PrimaryKeyDef
+	var indexes []*plan2.IndexDef
 	var refChildTbls []uint64
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -2003,28 +2004,8 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		} else if c, ok := def.(*engine.ConstraintDef); ok {
 			for _, ct := range c.Cts {
 				switch k := ct.(type) {
-				case *engine.UniqueIndexDef:
-					u := &plan.UniqueIndexDef{}
-					err = u.UnMarshalUniqueIndexDef(([]byte)(k.UniqueIndex))
-					if err != nil {
-						return nil, nil
-					}
-					defs = append(defs, &plan.TableDef_DefType{
-						Def: &plan.TableDef_DefType_UIdx{
-							UIdx: u,
-						},
-					})
-				case *engine.SecondaryIndexDef:
-					s := &plan.SecondaryIndexDef{}
-					err = s.UnMarshalSecondaryIndexDef(([]byte)(k.SecondaryIndex))
-					if err != nil {
-						return nil, nil
-					}
-					defs = append(defs, &plan.TableDef_DefType{
-						Def: &plan.TableDef_DefType_SIdx{
-							SIdx: s,
-						},
-					})
+				case *engine.IndexDef:
+					indexes = k.Indexes
 				case *engine.ForeignKeyDef:
 					foreignKeys = k.Fkeys
 				case *engine.RefChildTableDef:
@@ -2100,6 +2081,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		RefChildTbls:  refChildTbls,
 		ClusterBy:     clusterByDef,
 		OriginCols:    originCols,
+		Indexes:       indexes,
 	}
 	return obj, tableDef
 }
@@ -2262,7 +2244,7 @@ func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {
-	stats = new(plan2.Stats)
+
 	dbName := obj.GetSchemaName()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
@@ -2277,14 +2259,8 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	blockNum, cost, outcnt, err := table.Stats(ctx, e)
-	if err != nil {
-		return
-	}
-	stats.Cost = float64(cost)
-	stats.Outcnt = float64(outcnt)
-	stats.BlockNum = blockNum
-	return
+	stats, _ = table.Stats(ctx, e)
+	return stats
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
