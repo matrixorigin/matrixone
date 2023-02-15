@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -133,6 +134,11 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				}
 			}
 			_, extent, _ := blockio.DecodeMetaLoc(metaLoc)
+			for _, name := range colNames {
+				if name == catalog.Row_ID {
+					return nil, moerr.NewInternalError(ctx, "The current version does not support modifying the data read from s3 within a transaction")
+				}
+			}
 			ivec, err = p.s3BlockReader.Read(context.Background(), extent, p.getIdxs(colNames), p.proc.GetMPool())
 			if err != nil {
 				return nil, err

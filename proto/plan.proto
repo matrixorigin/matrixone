@@ -262,7 +262,8 @@ message IndexDef {
 	// Generate UUID for each index, currently not used
 	string idx_id			       = 1;
 	string index_name        = 2;
-	Field  field             = 3;
+	// The constituent columns of the index
+	repeated string parts    = 3;
 	bool unique				       = 4;
 	string index_table_name  = 5;
 	bool table_exist        = 6;
@@ -364,13 +365,6 @@ message ViewDef {
 	string view  = 1;
 }
 
-message Field {
-	// Components of index
-	repeated string parts = 1;
-	// Column definition information in corresponding index table
-	repeated ColDef cols = 2;
-}
-
 message TableDef {
 	// XXX: Deprecated and to be removed soon.
 	message DefType {
@@ -425,9 +419,12 @@ message Stats {
 	// hashmap size for nodes which build a hashmap
 	//for other nodes, it's meaningless
 	double hashmap_size		= 5;
+	//for scan, this means total count of all table, before filtering
+	//for other nodes, this is meanlingless
+	double table_cnt = 6;
 	//for scan, selectivity means outcnt divide total count
 	//for other node, currently be 0. will change in the future
-	double selectivity = 6;
+	double selectivity = 7;
 }
 
 message ColData {

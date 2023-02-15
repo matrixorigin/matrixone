@@ -1344,9 +1344,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
 		}
 
-		// rewrite right join to left join
-		builder.rewriteRightJoinToLeftJoin(nodeID)
-
 		if clause.Where != nil {
 			whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
 			if err != nil {
@@ -1632,21 +1629,6 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
 	ReCalcNodeStats(nodeID, builder, false)
 	return nodeID
-}
-
-func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeID int32) {
-	node := builder.qry.Nodes[nodeID]
-	if node.NodeType == plan.Node_JOIN {
-		builder.rewriteRightJoinToLeftJoin(node.Children[0])
-		builder.rewriteRightJoinToLeftJoin(node.Children[1])
-
-		if node.JoinType == plan.Node_RIGHT {
-			node.JoinType = plan.Node_LEFT
-			node.Children = []int32{node.Children[1], node.Children[0]}
-		}
-	} else if len(node.Children) > 0 {
-		builder.rewriteRightJoinToLeftJoin(node.Children[0])
-	}
 }
 
 func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (int32, error) {
@@ -2282,7 +2264,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				}
 			}
 
-			if canTurnInner && node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0 && rejectsNull(filter, builder.compCtx.GetProcess()) {
+			canTurnInner = canTurnInner && rejectsNull(filter, builder.compCtx.GetProcess())
+			leftOrRightJoin := (node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0) || (node.JoinType == plan.Node_RIGHT && joinSides[i]&JoinSideLeft != 0)
+			if canTurnInner && leftOrRightJoin {
 				for _, cond := range node.OnList {
 					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
 				}
@@ -2344,14 +2328,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				}
 
 			case JoinSideLeft:
-				if node.JoinType != plan.Node_OUTER {
+				if node.JoinType != plan.Node_OUTER && node.JoinType != plan.Node_RIGHT {
 					leftPushdown = append(leftPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
 				}
 
 			case JoinSideRight:
-				if node.JoinType == plan.Node_INNER {
+				if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_RIGHT {
 					rightPushdown = append(rightPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)

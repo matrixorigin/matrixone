@@ -28,6 +28,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -223,6 +225,7 @@ func testFileService(
 			},
 		})
 		assert.Nil(t, err)
+
 		var r io.ReadCloser
 		vec := &IOVector{
 			FilePath: "foo",
@@ -241,6 +244,25 @@ func testFileService(
 		assert.Equal(t, []byte("1234"), data)
 		err = r.Close()
 		assert.Nil(t, err)
+
+		vec = &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Offset:            1,
+					Size:              3,
+					ReadCloserForRead: &r,
+				},
+			},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+		data, err = io.ReadAll(r)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("234"), data)
+		err = r.Close()
+		assert.Nil(t, err)
+
 	})
 
 	t.Run("random", func(t *testing.T) {
@@ -289,10 +311,10 @@ func testFileService(
 			}
 
 			// read, random entry
-			parts2 := randomSplit(content, 16)
+			parts = randomSplit(content, 16)
 			readVector.Entries = readVector.Entries[:0]
 			offset = int64(0)
-			for _, part := range parts2 {
+			for _, part := range parts {
 				readVector.Entries = append(readVector.Entries, IOEntry{
 					Offset: offset,
 					Size:   int64(len(part)),
@@ -302,7 +324,57 @@ func testFileService(
 			err = fs.Read(ctx, readVector)
 			assert.Nil(t, err)
 			for i, entry := range readVector.Entries {
-				assert.Equal(t, parts2[i], entry.Data, "path: %s, entry: %+v, content %v", filePath, entry, content)
+				assert.Equal(t, parts[i], entry.Data, "path: %s, entry: %+v, content %v", filePath, entry, content)
+			}
+
+			// read, random entry with ReadCloserForRead
+			parts = randomSplit(content, len(content)/10)
+			readVector.Entries = readVector.Entries[:0]
+			offset = int64(0)
+			readers := make([]io.ReadCloser, len(parts))
+			for i, part := range parts {
+				readVector.Entries = append(readVector.Entries, IOEntry{
+					Offset:            offset,
+					Size:              int64(len(part)),
+					ReadCloserForRead: &readers[i],
+				})
+				offset += int64(len(part))
+			}
+			err = fs.Read(ctx, readVector)
+			assert.Nil(t, err)
+			wg := new(sync.WaitGroup)
+			errCh := make(chan error, 1)
+			numDone := int64(0)
+			for i, entry := range readVector.Entries {
+				wg.Add(1)
+				i := i
+				entry := entry
+				go func() {
+					defer wg.Done()
+					reader := readers[i]
+					data, err := io.ReadAll(reader)
+					assert.Nil(t, err)
+					reader.Close()
+					if !bytes.Equal(parts[i], data) {
+						select {
+						case errCh <- moerr.NewInternalError(context.Background(),
+							"not equal: path: %s, entry: %+v, content %v",
+							filePath, entry, content,
+						):
+						default:
+						}
+					}
+					atomic.AddInt64(&numDone, 1)
+				}()
+			}
+			wg.Wait()
+			if int(numDone) != len(parts) {
+				t.Fatal()
+			}
+			select {
+			case err := <-errCh:
+				t.Fatal(err)
+			default:
 			}
 
 			// list
