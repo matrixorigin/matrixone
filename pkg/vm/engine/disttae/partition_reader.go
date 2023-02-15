@@ -136,7 +136,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			_, extent, _ := blockio.DecodeMetaLoc(metaLoc)
 			for _, name := range colNames {
 				if name == catalog.Row_ID {
-					return nil, moerr.NewInternalError(ctx, "not support update and delete s3 directly, will fix in 0.8")
+					return nil, moerr.NewInternalError(ctx, "The current version does not support modifying the data read from s3 within a transaction")
 				}
 			}
 			ivec, err = p.s3BlockReader.Read(context.Background(), extent, p.getIdxs(colNames), p.proc.GetMPool())
