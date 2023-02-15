@@ -17,19 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strings"
-	"sync/atomic"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -66,12 +59,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -126,6 +121,17 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Cond:       t.Cond,
 			Result:     t.Result,
 			Typs:       t.Typs,
+			Conditions: t.Conditions,
+		}
+	case vm.Right:
+		t := sourceIns.Arg.(*right.Argument)
+		res.Arg = &right.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Cond:       t.Cond,
+			Result:     t.Result,
+			Right_typs: t.Right_typs,
+			Left_typs:  t.Left_typs,
 			Conditions: t.Conditions,
 		}
 	case vm.Limit:
@@ -343,11 +349,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		if regMap != nil {
 			sourceArg := sourceIns.Arg.(*dispatch.Argument)
 			arg := &dispatch.Argument{
-				All:        sourceArg.All,
-				CrossCN:    sourceArg.CrossCN,
-				SendFunc:   sourceArg.SendFunc,
+				FuncId:     sourceArg.FuncId,
 				LocalRegs:  make([]*process.WaitRegister, len(sourceArg.LocalRegs)),
-				RemoteRegs: make([]colexec.WrapperNode, len(sourceArg.RemoteRegs)),
+				RemoteRegs: make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs)),
 			}
 			for j := range arg.LocalRegs {
 				sourceReg := sourceArg.LocalRegs[j]
@@ -704,6 +708,23 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	}
 }
 
+func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *right.Argument {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	return &right.Argument{
+		Left_typs:  left_typs,
+		Right_typs: right_typs,
+		Nbucket:    Nbucket,
+		Ibucket:    Ibucket,
+		Result:     result,
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds, proc),
+	}
+}
+
 func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
@@ -878,128 +899,57 @@ func constructIntersect(n *plan.Node, proc *process.Process, ibucket, nbucket in
 
 func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argument {
 	arg := new(dispatch.Argument)
-	arg.All = all
-	arg.CrossCN = false
 	arg.LocalRegs = regs
+	if all {
+		arg.FuncId = dispatch.SendToAllLocalFunc
+	} else {
+		arg.FuncId = dispatch.SendToAnyLocalFunc
+	}
+
 	return arg
 }
 
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
-func constructShuffleJoinDispatch(idx int, ss []*Scope, currentCNAddr string) *dispatch.Argument {
-	arg := new(dispatch.Argument)
-	arg.All = true
+//func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
+//arg := new(dispatch.Argument)
+//arg.FuncId = dispatch.SendToAllFunc
 
-	scopeLen := len(ss)
-	arg.RemoteRegs = make([]colexec.WrapperNode, 0, scopeLen)
-	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
+//scopeLen := len(ss)
+//arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
+//arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
 
-	for _, s := range ss {
-		if s.IsEnd {
-			continue
-		}
+//for _, s := range ss {
+//if s.IsEnd {
+//continue
+//}
 
-		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
-			strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
-			// Local reg.
-			// Put them into arg.LocalRegs
-			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
-		} else {
-			// Remote reg.
-			// Generate uuid for them and put into arg.RemoteRegs
-			found := false
-			newUuid := uuid.New()
+//if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
+//strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+//// Local reg.
+//// Put them into arg.LocalRegs
+//arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
+//} else {
+//// Remote reg.
+//// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
+//newUuid := uuid.New()
 
-			// Length of RemoteRegs must be very small, so find the same NodeAddr with traversal
-			for _, reg := range arg.RemoteRegs {
-				if reg.NodeAddr == s.NodeInfo.Addr {
-					reg.Uuids = append(reg.Uuids, newUuid)
-					found = true
-					break
-				}
-			}
+//arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
+//Uuid:     newUuid,
+//NodeAddr: s.NodeInfo.Addr,
+//})
+//colexec.Srv.PutNotifyChIntoUuidMap(newUuid, proc.DispatchNotifyCh)
 
-			if !found {
-				uuids := make([]uuid.UUID, 0, scopeLen)
-				uuids = append(uuids, newUuid)
-				arg.RemoteRegs = append(arg.RemoteRegs, colexec.WrapperNode{
-					NodeAddr: s.NodeInfo.Addr,
-					Uuids:    uuids,
-				})
-			}
+//s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
+//Idx:      idx,
+//Uuid:     newUuid,
+//FromAddr: currentCNAddr,
+//})
+//}
+//}
 
-			s.UuidToRegIdx = append(s.UuidToRegIdx, UuidToRegIdx{
-				Uuid: newUuid,
-				Idx:  idx,
-			})
-		}
-	}
-	if len(arg.RemoteRegs) != 0 {
-		arg.CrossCN = true
-	}
-
-	sendFunc := func(streams []*dispatch.WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, ctxs []context.Context, cnts [][]uint, proc *process.Process) error {
-		// TODO: seperate local and remote to different goroutine?
-		// send bat to streams
-		{
-			// TODO: Split the batch into small if it is too large
-			encodeBatch, err := types.Encode(bat)
-			if err != nil {
-				return err
-			}
-			for i, stream := range streams {
-				// seperate different uuid into different message
-				for j, uuid := range stream.Uuids {
-					message := cnclient.AcquireMessage()
-					{
-						message.Id = stream.Stream.ID()
-						message.Cmd = pipeline.BatchMessage
-						message.Data = encodeBatch
-						message.Uuid = uuid[:]
-					}
-					errSend := stream.Stream.Send(ctxs[i], message)
-					if errSend != nil {
-						return errSend
-					}
-					cnts[i][j]++
-				}
-			}
-		}
-
-		// send bat to localChans
-		{
-			for i, vec := range bat.Vecs {
-				if vec.IsOriginal() {
-					cloneVec, err := vector.Dup(vec, proc.Mp())
-					if err != nil {
-						bat.Clean(proc.Mp())
-						return err
-					}
-					bat.Vecs[i] = cloneVec
-				}
-			}
-
-			refCountAdd := int64(len(localChans) - 1)
-			atomic.AddInt64(&bat.Cnt, refCountAdd)
-			if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
-				jm.IncRef(refCountAdd)
-			}
-
-			for _, reg := range localChans {
-				select {
-				case <-reg.Ctx.Done():
-					return moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
-				case reg.Ch <- bat:
-				}
-			}
-		}
-
-		return nil
-	}
-	arg.SendFunc = sendFunc
-
-	return arg
-}
+//return arg
+//}
 
 func constructMergeGroup(_ *plan.Node, needEval bool) *mergegroup.Argument {
 	return &mergegroup.Argument{
@@ -1158,6 +1108,16 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 		}
+	case vm.Right:
+		arg := in.Arg.(*right.Argument)
+		return &hashbuild.Argument{
+			Ibucket:     arg.Ibucket,
+			Nbucket:     arg.Nbucket,
+			IsRight:     true,
+			NeedHashMap: true,
+			Typs:        arg.Right_typs,
+			Conditions:  arg.Conditions[1],
+		}
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
 		return &hashbuild.Argument{
@@ -1257,7 +1217,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		}
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
+	if !ok || !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
 		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
@@ -1266,48 +1226,17 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	return e.F.Args[0], e.F.Args[1]
 }
 
-func isEquiJoin(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !supportedJoinCondition(e.F.Func.GetObj()) {
-				continue
-			}
-			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				continue
-			}
-			return true
-		}
-	}
-	return false || isEquiJoin0(exprs)
-}
-
-func isEquiJoin0(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !supportedJoinCondition(e.F.Func.GetObj()) {
-				return false
-			}
-			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	exprs = colexec.SplitAndExprs(exprs)
 	eqConds := make([]*plan.Expr, 0, len(exprs))
 	notEqConds := make([]*plan.Expr, 0, len(exprs))
 	for i, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !supportedJoinCondition(e.F.Func.GetObj()) {
+			if !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
 			}
-			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
+			lpos, rpos := plan2.HasColExpr(e.F.Args[0], -1), plan2.HasColExpr(e.F.Args[1], -1)
 			if lpos == -1 || rpos == -1 || (lpos == rpos) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
@@ -1319,38 +1248,6 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 		return nil, eqConds
 	}
 	return colexec.RewriteFilterExprList(notEqConds), eqConds
-}
-
-func supportedJoinCondition(id int64) bool {
-	fid, _ := function.DecodeOverloadID(id)
-	return fid == function.EQUAL
-}
-
-func hasColExpr(expr *plan.Expr, pos int32) int32 {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if pos == -1 {
-			return e.Col.RelPos
-		}
-		if pos != e.Col.RelPos {
-			return -1
-		}
-		return pos
-	case *plan.Expr_F:
-		for i := range e.F.Args {
-			pos0 := hasColExpr(e.F.Args[i], pos)
-			switch {
-			case pos0 == -1:
-			case pos == -1:
-				pos = pos0
-			case pos != pos0:
-				return -1
-			}
-		}
-		return pos
-	default:
-		return pos
-	}
 }
 
 func exprRelPos(expr *plan.Expr) int32 {
@@ -1365,20 +1262,6 @@ func exprRelPos(expr *plan.Expr) int32 {
 		}
 	}
 	return -1
-}
-
-func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.SecondaryIndexDef) {
-	var uIdxDef *plan.UniqueIndexDef = nil
-	var sIdxDef *plan.SecondaryIndexDef = nil
-	for _, def := range defs {
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-			uIdxDef = idxDef.UIdx
-		}
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
-			sIdxDef = idxDef.SIdx
-		}
-	}
-	return uIdxDef, sIdxDef
 }
 
 // Get the 'engine.Relation' of the table by using 'ObjectRef' and 'TableDef', if 'TableDef' is nil, the relations of its index table will not be obtained
@@ -1423,20 +1306,23 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 	var uniqueIndexTables []engine.Relation
 	if tableDef != nil {
 		uniqueIndexTables = make([]engine.Relation, 0)
-		uDef, _ := buildIndexDefs(tableDef.Defs)
-		if uDef != nil {
-			for i := range uDef.TableNames {
-				var indexTable engine.Relation
-				if uDef.TableExists[i] {
-					if isTemp {
-						indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, uDef.TableNames[i]))
-					} else {
-						indexTable, err = dbSource.Relation(ctx, uDef.TableNames[i])
+		if tableDef.Indexes != nil {
+			for _, indexdef := range tableDef.Indexes {
+				if indexdef.Unique {
+					var indexTable engine.Relation
+					if indexdef.TableExist {
+						if isTemp {
+							indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, indexdef.IndexTableName))
+						} else {
+							indexTable, err = dbSource.Relation(ctx, indexdef.IndexTableName)
+						}
+						if err != nil {
+							return nil, nil, err
+						}
+						uniqueIndexTables = append(uniqueIndexTables, indexTable)
 					}
-					if err != nil {
-						return nil, nil, err
-					}
-					uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				} else {
+					continue
 				}
 			}
 		}

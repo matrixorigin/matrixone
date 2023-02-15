@@ -89,8 +89,10 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	var pkDefs []string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
 
+	colIdToName := make(map[uint64]string)
 	for _, col := range tableDef.Cols {
 		colName := col.Name
+		colIdToName[col.ColId] = col.Name
 		if colName == catalog.Row_ID {
 			continue
 		}
@@ -163,51 +165,53 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		createStr += pkStr
 	}
 
-	uIndexDef, sIndexDef := buildIndexDefs(tableDef.Defs)
-	if uIndexDef != nil {
-		for i, name := range uIndexDef.IndexNames {
-			uIStr := "UNIQUE KEY "
-			uIStr += fmt.Sprintf("`%s` (", name)
-			for num, part := range uIndexDef.Fields[i].Parts {
-				if num == len(uIndexDef.Fields[i].Parts)-1 {
-					uIStr += fmt.Sprintf("`%s`", part)
+	if tableDef.Indexes != nil {
+		for _, indexdef := range tableDef.Indexes {
+			var indexStr string
+			if indexdef.Unique {
+				indexStr = "UNIQUE KEY "
+			} else {
+				indexStr = "KEY "
+			}
+			indexStr += fmt.Sprintf("`%s` (", indexdef.IndexName)
+			for num, part := range indexdef.Parts {
+				if num == len(indexdef.Parts)-1 {
+					indexStr += fmt.Sprintf("`%s`", part)
 				} else {
-					uIStr += fmt.Sprintf("`%s`,", part)
+					indexStr += fmt.Sprintf("`%s`,", part)
 				}
 			}
-			uIStr += ")"
-			if uIndexDef.Comments[i] != "" {
-				uIStr += fmt.Sprintf(" COMMENT `%s`", uIndexDef.Comments[i])
+			indexStr += ")"
+			if indexdef.Comment != "" {
+				indexStr += fmt.Sprintf(" COMMENT `%s`", indexdef.Comment)
 			}
 			if rowCount != 0 {
 				createStr += ",\n"
 			}
-			createStr += uIStr
+			createStr += indexStr
 		}
-
 	}
 
-	if sIndexDef != nil {
-		for i, name := range sIndexDef.IndexNames {
-			uIStr := "KEY "
-			uIStr += fmt.Sprintf("`%s` (", name)
-			for num, part := range sIndexDef.Fields[i].Parts {
-				if num == len(sIndexDef.Fields[i].Parts)-1 {
-					uIStr += fmt.Sprintf("`%s`", part)
-				} else {
-					uIStr += fmt.Sprintf("`%s`,", part)
-				}
-			}
-			uIStr += ")"
-			if sIndexDef.Comments[i] != "" {
-				uIStr += fmt.Sprintf(" COMMENT `%s`", sIndexDef.Comments[i])
-			}
-			if rowCount != 0 {
-				createStr += ",\n"
-			}
-			createStr += uIStr
+	for _, fk := range tableDef.Fkeys {
+		colNames := make([]string, len(fk.Cols))
+		for i, colId := range fk.Cols {
+			colNames[i] = colIdToName[colId]
+		}
+		_, fkTableDef := ctx.ResolveById(fk.ForeignTbl)
+		fkColIdToName := make(map[uint64]string)
+		for _, col := range fkTableDef.Cols {
+			fkColIdToName[col.ColId] = col.Name
+		}
+		fkColNames := make([]string, len(fk.ForeignCols))
+		for i, colId := range fk.ForeignCols {
+			fkColNames[i] = fkColIdToName[colId]
 		}
 
+		if rowCount != 0 {
+			createStr += ",\n"
+		}
+		createStr += fmt.Sprintf("CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
+			fk.Name, strings.Join(colNames, "`,`"), fkTableDef.Name, strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
 	}
 
 	if rowCount != 0 {

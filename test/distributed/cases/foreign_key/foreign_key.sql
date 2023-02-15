@@ -1,9 +1,7 @@
 --foreign key is varchar,default ON DELETE/update option
 create table fk_01(col1 varchar(30) not null primary key,col2 int);
 create table fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col2) REFERENCES fk_01(col1));
--- @bvt:issue#7934
 show create table fk_02;
--- @bvt:issue
 insert into fk_01 values ('90',5983),('100',734),('190',50);
 insert into fk_02(col2,col3) values ('90',5),('90',4),('100',0),(NULL,80);
 select * from fk_01;
@@ -177,7 +175,6 @@ drop table fk_02;
 drop table fk_01;
 
 --foreign key references unique index,on delete/update SET DEFAULT
--- @bvt:issue#7935
 create table fk_01(col1 bigint unique key,col2 varchar(25),col3 tinyint);
 create table fk_02(col1 bigint,col2 varchar(25),col3 tinyint,constraint ck foreign key(col1) REFERENCES fk_01(col1) on delete CASCADE on update CASCADE);
 insert into fk_01 values (1,'yellow',20),(2,'apple',50);
@@ -198,7 +195,6 @@ select * from fk_02;
 select * from fk_01;
 drop table fk_02;
 drop table fk_01;
--- @bvt:issue
 
 --more foreign key
 create table fk_01(id int primary key auto_increment,title varchar(25));
