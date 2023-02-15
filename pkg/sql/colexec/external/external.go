@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
 	"github.com/pierrec/lz4"
@@ -72,6 +73,8 @@ func String(arg any, buf *bytes.Buffer) {
 }
 
 func Prepare(proc *process.Process, arg any) error {
+	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
+	defer span.End()
 	param := arg.(*Argument).Es
 	if proc.Lim.MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
@@ -119,6 +122,8 @@ func Prepare(proc *process.Process, arg any) error {
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+	_, span := trace.Start(proc.Ctx, "ExternalCall")
+	defer span.End()
 	select {
 	case <-proc.Ctx.Done():
 		proc.SetInputBatch(nil)
@@ -238,7 +243,9 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 	return bat
 }
 
-func filterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+	_, span := trace.Start(ctx, "compileExternScan.ReadDir")
+	defer span.End()
 	filterList := make([]*plan.Expr, 0)
 	filterList2 := make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
@@ -270,8 +277,8 @@ func filterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList
 	return fileListTmp, fileSizeTmp, nil
 }
 
-func FilterFileList(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
-	return filterByAccountAndFilename(node, proc, fileList, fileSize)
+func FilterFileList(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+	return filterByAccountAndFilename(ctx, node, proc, fileList, fileSize)
 }
 
 func IsSysTable(dbName string, tableName string) bool {
@@ -610,6 +617,8 @@ func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, err
 }
 
 func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) (*batch.Batch, error) {
+	_, span := trace.Start(proc.Ctx, "getBatchFromZonemapFile")
+	defer span.End()
 	bat := makeBatch(param, 0, proc.Mp())
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		return bat, nil
@@ -689,6 +698,8 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 }
 
 func needRead(param *ExternalParam, proc *process.Process, objectReader objectio.Reader) bool {
+	_, span := trace.Start(proc.Ctx, "needRead")
+	defer span.End()
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		return true
 	}
