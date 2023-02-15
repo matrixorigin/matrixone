@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"hash/crc32"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -170,8 +169,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
+	//strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0]
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		len(c.addr) == 0 || strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+		len(c.addr) == 0 || c.addr == s.NodeInfo.Addr {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 

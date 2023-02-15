@@ -1724,7 +1724,8 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 }
 
 func isCurrentCN(addr string, currentCNAddr string) bool {
-	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
+	//return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
+	return addr == currentCNAddr
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
