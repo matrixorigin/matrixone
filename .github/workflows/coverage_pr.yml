@@ -93,12 +93,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           if  [ -d  "./store"  ]; then rm -rf ./store; fi
-          GO_VERSION=$(go version)
-          BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
-          LAST_COMMIT_ID=$(git rev-parse HEAD)
-          BUILD_TIME=$(date)
-          MO_VERSION=$(git describe --always --tags $(shell git rev-list --tags --max-count=1))
-          GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.CommitID=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.Version=$(MO_VERSION)'"
+          GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(go version)' -X 'main.BranchName=$(git rev-parse --abbrev-ref HEAD)' -X 'main.CommitID=$(git rev-parse HEAD)' -X 'main.BuildTime=$(date)' -X 'main.Version=$(git describe --always --tags $(git rev-list --tags --max-count=1))'"
           export GOCOVERDIR=$(pwd)
           go build -cover "$GOLDFLAGS" -o mo_service ./cmd/mo-service/
           ./mo_service -launch ./etc/launch-tae-multi-CN-tae-DN/launch.toml &>service.log &
