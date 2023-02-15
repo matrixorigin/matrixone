@@ -22,7 +22,7 @@ type Insert struct {
 	PartitionNames    IdentifierList
 	Columns           IdentifierList
 	Rows              *Select
-	OnDuplicateUpdate *UpdateList
+	OnDuplicateUpdate UpdateExprs
 }
 
 func (node *Insert) Format(ctx *FmtCtx) {
@@ -49,8 +49,8 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Rows.Format(ctx)
 	}
-	if node.OnDuplicateUpdate != nil {
-		ctx.WriteByte(' ')
+	if len(node.OnDuplicateUpdate) > 0 {
+		ctx.WriteString(" on duplicate key update ")
 		node.OnDuplicateUpdate.Format(ctx)
 	}
 }
