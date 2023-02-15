@@ -338,7 +338,9 @@ func convertValue(v any, typ string) string {
 	}
 	typ = strings.ToLower(typ)
 	switch typ {
-	case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double":
+	case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double", "bool", "boolean", "":
+		// why empty string in column type?
+		// see https://github.com/matrixorigin/matrixone/issues/8050#issuecomment-1431251524
 		return string(ret)
 	default:
 		return "'" + strings.Replace(string(ret), "'", "\\'", -1) + "'"
