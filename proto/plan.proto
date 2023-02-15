@@ -419,9 +419,12 @@ message Stats {
 	// hashmap size for nodes which build a hashmap
 	//for other nodes, it's meaningless
 	double hashmap_size		= 5;
+	//for scan, this means total count of all table, before filtering
+	//for other nodes, this is meanlingless
+	double table_cnt = 6;
 	//for scan, selectivity means outcnt divide total count
 	//for other node, currently be 0. will change in the future
-	double selectivity = 6;
+	double selectivity = 7;
 }
 
 message ColData {
