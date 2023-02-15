@@ -17,13 +17,18 @@ package compile
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -35,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -71,6 +77,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 func (s *Scope) MergeRun(c *Compile) error {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	errChan := make(chan error, len(s.PreScopes))
+
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
 		case Normal:
@@ -115,17 +122,46 @@ func (s *Scope) MergeRun(c *Compile) error {
 			}(s.PreScopes[i])
 		}
 	}
+	var errReceiveChan chan error
+	if len(s.RemoteReceivRegInfos) > 0 {
+		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
+		s.notifyAndReceiveFromRemote(errReceiveChan)
+	}
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
 	}
 	// check sub-goroutine's error
-	for i := 0; i < len(s.PreScopes); i++ {
-		if err := <-errChan; err != nil {
-			return err
+	if errReceiveChan == nil {
+		// check sub-goroutine's error
+		for i := 0; i < len(s.PreScopes); i++ {
+			if err := <-errChan; err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	slen := len(s.PreScopes)
+	rlen := len(s.RemoteReceivRegInfos)
+	for {
+		select {
+		case err := <-errChan:
+			if err != nil {
+				return err
+			}
+			slen--
+		case err := <-errReceiveChan:
+			if err != nil {
+				return err
+			}
+			rlen--
+		}
+
+		if slen == 0 && rlen == 0 {
+			return nil
 		}
 	}
-	return nil
 }
 
 // RemoteRun send the scope to a remote node for execution.
@@ -138,6 +174,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	}
 
 	err := s.remoteRun(c)
+
 	// tell connect operator that it's over
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
 	arg.Free(s.Proc, err != nil)
@@ -216,6 +253,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				RelationName: s.DataSource.RelationName,
 				Attributes:   s.DataSource.Attributes,
 			},
+			NodeInfo: s.NodeInfo,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
@@ -227,7 +265,7 @@ func (s *Scope) PushdownRun(c *Compile) error {
 	var end bool // exist flag
 	var err error
 
-	reg := srv.GetConnector(s.DataSource.PushdownId)
+	reg := colexec.Srv.GetConnector(s.DataSource.PushdownId)
 	for {
 		bat := <-reg.Ch
 		if bat == nil {
@@ -251,6 +289,9 @@ func (s *Scope) JoinRun(c *Compile) error {
 	if mcpu < 1 {
 		mcpu = 1
 	}
+
+	isRight := s.isRight()
+
 	chp := s.PreScopes
 	for i := range chp {
 		chp[i].IsEnd = true
@@ -258,17 +299,33 @@ func (s *Scope) JoinRun(c *Compile) error {
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
-			Magic: Merge,
+			Magic:    Merge,
+			NodeInfo: s.NodeInfo,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
-	left, right := c.newLeftScope(s, ss), c.newRightScope(s, ss)
+	left_scope, right_scope := c.newLeftScope(s, ss), c.newRightScope(s, ss)
 	s = newParallelScope(c, s, ss)
+
+	if isRight {
+		channel := make(chan *[]int64)
+		for i := range s.PreScopes {
+			arg := s.PreScopes[i].Instructions[0].Arg.(*right.Argument)
+			arg.Channel = channel
+			arg.NumCPU = uint64(mcpu)
+			if i == 0 {
+				arg.Is_receiver = true
+			}
+		}
+	}
 	s.PreScopes = append(s.PreScopes, chp...)
-	s.PreScopes = append(s.PreScopes, left)
-	s.PreScopes = append(s.PreScopes, right)
+	s.PreScopes = append(s.PreScopes, left_scope)
+	s.PreScopes = append(s.PreScopes, right_scope)
 	return s.MergeRun(c)
+}
+func (s *Scope) isRight() bool {
+	return s != nil && s.Instructions[0].Op == vm.Right
 }
 
 func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
@@ -401,6 +458,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 		}
 		s.Instructions[0] = vm.Instruction{
 			Op:  vm.Merge,
+			Idx: s.Instructions[0].Idx, // TODO: remove it
 			Arg: &merge.Argument{},
 		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
@@ -430,7 +488,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			ss[i].appendInstruction(vm.Instruction{
 				Op: vm.Connector,
 				Arg: &connector.Argument{
-					Reg: s.Proc.Reg.MergeReceivers[i],
+					Reg: s.Proc.Reg.MergeReceivers[j],
 				},
 			})
 			j++
@@ -540,5 +598,90 @@ func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
 	for i := range srcScope.Instructions {
 		targetScope.Instructions[i] = dupInstruction(&srcScope.Instructions[i], regMap)
 	}
+	return nil
+}
+
+func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
+	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, rr := range s.RemoteReceivRegInfos {
+		go func(info RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
+			c, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			_ = cancel
+
+			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
+			if errStream != nil {
+				errChan <- errStream
+				return
+			}
+			defer func(streamSender morpc.Stream) {
+				// TODO: should close the channel or not?
+				_ = streamSender.Close()
+			}(streamSender)
+
+			message := cnclient.AcquireMessage()
+			{
+				message.Id = streamSender.ID()
+				message.Cmd = pbpipeline.PrepareDoneNotifyMessage
+				message.Uuid = info.Uuid[:]
+			}
+			if errSend := streamSender.Send(c, message); errSend != nil {
+				errChan <- errSend
+				return
+			}
+
+			messagesReceive, errReceive := streamSender.Receive()
+			if errReceive != nil {
+				errChan <- errReceive
+				return
+			}
+
+			var val morpc.Message
+			var dataBuffer []byte
+			for {
+				select {
+				case <-c.Done():
+					errChan <- nil
+					return
+				case val = <-messagesReceive:
+				}
+
+				// TODO: what val = nil means?
+				if val == nil {
+					reg.Ch <- nil
+					close(reg.Ch)
+					errChan <- nil
+					return
+				}
+
+				m := val.(*pbpipeline.Message)
+
+				if m.IsEndMessage() {
+					reg.Ch <- nil
+					close(reg.Ch)
+					errChan <- nil
+					return
+				}
+
+				dataBuffer = append(dataBuffer, m.Data...)
+
+				if m.BatcWaitingNextToMerge() {
+					continue
+				}
+
+				bat, err := decodeBatch(mp, dataBuffer)
+				if err != nil {
+					errChan <- err
+					return
+				}
+				reg.Ch <- bat
+				dataBuffer = nil
+			}
+		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], mp)
+	}
+
 	return nil
 }

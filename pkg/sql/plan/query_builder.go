@@ -117,6 +117,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
 			CompositePkey: node.TableDef.CompositePkey,
+			OriginCols:    node.TableDef.OriginCols,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -1343,9 +1344,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
 		}
 
-		// rewrite right join to left join
-		builder.rewriteRightJoinToLeftJoin(nodeID)
-
 		if clause.Where != nil {
 			whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
 			if err != nil {
@@ -1633,21 +1631,6 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	return nodeID
 }
 
-func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeID int32) {
-	node := builder.qry.Nodes[nodeID]
-	if node.NodeType == plan.Node_JOIN {
-		builder.rewriteRightJoinToLeftJoin(node.Children[0])
-		builder.rewriteRightJoinToLeftJoin(node.Children[1])
-
-		if node.JoinType == plan.Node_RIGHT {
-			node.JoinType = plan.Node_LEFT
-			node.Children = []int32{node.Children[1], node.Children[0]}
-		}
-	} else if len(node.Children) > 0 {
-		builder.rewriteRightJoinToLeftJoin(node.Children[0])
-	}
-}
-
 func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (int32, error) {
 	if len(stmt) == 1 {
 		return builder.buildTable(stmt[0], ctx)
@@ -1786,7 +1769,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			}
 			tableDef.Cols = append(tableDef.Cols, col)
 		} else if tableDef.TableType == catalog.SystemViewRel {
-
+			if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
+				currentDB := schema
+				if currentDB == "" {
+					currentDB = builder.compCtx.DefaultDatabase()
+				}
+				if dbOfView == currentDB && nameOfView == table {
+					return 0, moerr.NewInternalError(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
+				}
+			}
 			// set view statment to CTE
 			viewDefString := tableDef.ViewSql.View
 
@@ -1817,13 +1808,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					viewStmt.Name = alterstmt.Name
 					viewStmt.ColNames = alterstmt.ColNames
 					viewStmt.AsSource = alterstmt.AsSource
-					viewStmt.Temporary = alterstmt.Temporary
 				}
 
 				viewName := viewStmt.Name.ObjectName
 				var maskedCTEs map[string]any
 				if len(ctx.cteByName) > 0 {
-					maskedCTEs := make(map[string]any)
+					maskedCTEs = make(map[string]any)
 					for name := range ctx.cteByName {
 						maskedCTEs[name] = nil
 					}
@@ -1832,7 +1822,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				ctx.cteByName[string(viewName)] = &CTERef{
 					ast: &tree.CTE{
 						Name: &tree.AliasClause{
-							Alias: tree.Identifier(viewName),
+							Alias: viewName,
 							Cols:  viewStmt.ColNames,
 						},
 						Stmt: viewStmt.AsSource,
@@ -1841,7 +1831,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					maskedCTEs:      maskedCTEs,
 				}
 
-				newTableName := tree.NewTableName(tree.Identifier(viewName), tree.ObjectNamePrefix{
+				newTableName := tree.NewTableName(viewName, tree.ObjectNamePrefix{
 					CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
 					SchemaName:      tree.Identifier(""),
 					ExplicitCatalog: false,
@@ -2105,7 +2095,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		return 0, err
 	}
 
-	err = ctx.mergeContexts(leftCtx, rightCtx)
+	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
 		return 0, err
 	}
@@ -2243,6 +2233,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			rightTags[tag] = nil
 		}
 
+		var markTag int32
+		if node.JoinType == plan.Node_MARK {
+			markTag = node.BindingTags[0]
+		}
+
 		if node.JoinType == plan.Node_INNER {
 			for _, cond := range node.OnList {
 				filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
@@ -2259,17 +2254,19 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		for i, filter := range filters {
 			canTurnInner := true
 
-			joinSides[i] = getJoinSide(filter, leftTags, rightTags)
+			joinSides[i] = getJoinSide(filter, leftTags, rightTags, markTag)
 			if f, ok := filter.Expr.(*plan.Expr_F); ok {
 				for _, arg := range f.F.Args {
-					if getJoinSide(arg, leftTags, rightTags) == JoinSideBoth {
+					if getJoinSide(arg, leftTags, rightTags, markTag) == JoinSideBoth {
 						canTurnInner = false
 						break
 					}
 				}
 			}
 
-			if canTurnInner && node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0 && rejectsNull(filter, builder.compCtx.GetProcess()) {
+			canTurnInner = canTurnInner && rejectsNull(filter, builder.compCtx.GetProcess())
+			leftOrRightJoin := (node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0) || (node.JoinType == plan.Node_RIGHT && joinSides[i]&JoinSideLeft != 0)
+			if canTurnInner && leftOrRightJoin {
 				for _, cond := range node.OnList {
 					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
 				}
@@ -2288,14 +2285,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			joinSides = make([]int8, len(filters))
 
 			for i, filter := range filters {
-				joinSides[i] = getJoinSide(filter, leftTags, rightTags)
+				joinSides[i] = getJoinSide(filter, leftTags, rightTags, markTag)
 			}
 		} else if node.JoinType == plan.Node_LEFT {
 			var newOnList []*plan.Expr
 			for _, cond := range node.OnList {
 				conj := splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))
 				for _, conjElem := range conj {
-					side := getJoinSide(conjElem, leftTags, rightTags)
+					side := getJoinSide(conjElem, leftTags, rightTags, markTag)
 					if side&JoinSideLeft == 0 {
 						rightPushdown = append(rightPushdown, conjElem)
 					} else {
@@ -2323,33 +2320,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
 					rightPushdown = append(rightPushdown, filter)
 
-				case plan.Node_MARK:
-					if tryMark, ok := filter.Expr.(*plan.Expr_Col); ok {
-						if tryMark.Col.RelPos == node.BindingTags[0] {
-							node.JoinType = plan.Node_SEMI
-							node.BindingTags = nil
-							break
-						}
-					} else if fExpr, ok := filter.Expr.(*plan.Expr_F); ok {
-						if filter.Typ.NotNullable && fExpr.F.Func.ObjName == "not" {
-							arg := fExpr.F.Args[0]
-							if tryMark, ok := arg.Expr.(*plan.Expr_Col); ok {
-								if tryMark.Col.RelPos == node.BindingTags[0] {
-									node.JoinType = plan.Node_ANTI
-									node.BindingTags = nil
-									break
-								}
-							}
-						}
-					}
-
-					if hasTag(filter, node.BindingTags[0]) {
-						cantPushdown = append(cantPushdown, filter)
-					} else {
-						leftPushdown = append(leftPushdown, filter)
-					}
-
-				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
+				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
 					leftPushdown = append(leftPushdown, filter)
 
 				default:
@@ -2357,14 +2328,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				}
 
 			case JoinSideLeft:
-				if node.JoinType != plan.Node_OUTER {
+				if node.JoinType != plan.Node_OUTER && node.JoinType != plan.Node_RIGHT {
 					leftPushdown = append(leftPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
 				}
 
 			case JoinSideRight:
-				if node.JoinType == plan.Node_INNER {
+				if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_RIGHT {
 					rightPushdown = append(rightPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
@@ -2374,8 +2345,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				if node.JoinType == plan.Node_INNER {
 					if f, ok := filter.Expr.(*plan.Expr_F); ok {
 						if f.F.Func.ObjName == "=" {
-							if getJoinSide(f.F.Args[0], leftTags, rightTags) != JoinSideBoth {
-								if getJoinSide(f.F.Args[1], leftTags, rightTags) != JoinSideBoth {
+							if getJoinSide(f.F.Args[0], leftTags, rightTags, markTag) != JoinSideBoth {
+								if getJoinSide(f.F.Args[1], leftTags, rightTags, markTag) != JoinSideBoth {
 									node.OnList = append(node.OnList, filter)
 									break
 								}
@@ -2385,7 +2356,38 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				}
 
 				cantPushdown = append(cantPushdown, filter)
+
+			case JoinSideMark:
+				if tryMark, ok := filter.Expr.(*plan.Expr_Col); ok {
+					if tryMark.Col.RelPos == node.BindingTags[0] {
+						node.JoinType = plan.Node_SEMI
+						node.BindingTags = nil
+						break
+					}
+				} else if fExpr, ok := filter.Expr.(*plan.Expr_F); ok {
+					if filter.Typ.NotNullable && fExpr.F.Func.ObjName == "not" {
+						arg := fExpr.F.Args[0]
+						if tryMark, ok := arg.Expr.(*plan.Expr_Col); ok {
+							if tryMark.Col.RelPos == node.BindingTags[0] {
+								node.JoinType = plan.Node_ANTI
+								node.BindingTags = nil
+								break
+							}
+						}
+					}
+				}
+
+				cantPushdown = append(cantPushdown, filter)
+
+			default:
+				cantPushdown = append(cantPushdown, filter)
 			}
+		}
+
+		if node.JoinType == plan.Node_INNER {
+			//only inner join can deduce new predicate
+			builder.pushdownFilters(node.Children[0], predsDeduction(rightPushdown, node.OnList))
+			builder.pushdownFilters(node.Children[1], predsDeduction(leftPushdown, node.OnList))
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], leftPushdown)

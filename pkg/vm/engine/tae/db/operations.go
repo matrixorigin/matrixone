@@ -17,6 +17,8 @@ package db
 import (
 	"context"
 	"encoding/gob"
+	"time"
+
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
@@ -40,7 +42,6 @@ func init() {
 	gob.Register(new(engine.AttributeDef))
 	gob.Register(new(engine.IndexTableDef))
 	gob.Register(new(engine.PropertiesDef))
-	gob.Register(new(engine.PrimaryIndexDef))
 	gob.Register(new(engine.ConstraintDef))
 
 	// register vector column types
@@ -112,6 +113,15 @@ type FlushTable struct {
 	AccessInfo AccessInfo
 	DatabaseID uint64
 	TableID    uint64
+}
+
+type Checkpoint struct {
+	FlushDuration time.Duration
+}
+
+type InspectDN struct {
+	AccessInfo AccessInfo
+	Operation  string
 }
 
 type CreateDatabaseResp struct {
@@ -194,4 +204,30 @@ type WriteReq struct {
 }
 
 type WriteResp struct {
+}
+
+type InspectResp struct {
+	Typ     int    `json:"-"`
+	Message string `json:"msg"`
+	Payload []byte `json:"-"`
+}
+
+const (
+	InspectNormal = 0
+	InspectCata   = 1
+)
+
+func (r *InspectResp) GetResponse() any {
+	var ret any = r
+	switch r.Typ {
+	case InspectCata:
+		ret = new(CatalogResp)
+		types.Decode(r.Payload, ret)
+	}
+	return ret
+}
+
+type CatalogResp struct {
+	Item string         `json:"Item,omitempty"`
+	Sub  []*CatalogResp `json:"Sub,omitempty"`
 }

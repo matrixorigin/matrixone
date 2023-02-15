@@ -112,7 +112,7 @@ func NewDiskCleaner(
 	return cleaner
 }
 
-func (cleaner *DiskCleaner) JobFactory(ctx context.Context) (err error) {
+func (cleaner *DiskCleaner) GC(ctx context.Context) (err error) {
 	logutil.Info("JobFactory is start")
 	return cleaner.tryClean(ctx)
 }

@@ -114,9 +114,9 @@ INSERT INTO t VALUES(3627832,'hcdusanjfds','xuhuiqudadao');
 INSERT INTO t VALUES(3782,'ehuwqhd3283&*^','ehiw3232$');
 INSERT INTO t VALUES(42,'','nkej32');
 INSERT INTO t VALUES(-2281928939,'wlll','');
-truncated type INT value -2281928939 for column age, 1
+Data truncation: data out of range: data type int32, value '-2281928939'
 INSERT INTO t VALUES(-2281928939,'wlll','');
-truncated type INT value -2281928939 for column age, 1
+Data truncation: data out of range: data type int32, value '-2281928939'
 SELECT left(age, NULL) from t;
 left(age, null)
 null
@@ -227,11 +227,11 @@ INSERT INTO t VALUES(5,-329323809293,0,0);
 INSERT INTO t VALUES(6,47832745,4672493280324.37644342323242,-1.8976931348623157E+308);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 85 near "1.8976931348623157E+308);";
 INSERT INTO t VALUES(7,47832745,4.402823466351E+38,666.666);
-truncated type FLOAT value 4.402823466351e+38 for column d2, 1
+Data truncation: data out of range: data type float32, value '4.402823466351e+38'
 INSERT INTO t VALUES(6,47832745,4672493280324.37644342323242,-1.8976931348623157E+308);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 85 near "1.8976931348623157E+308);";
 INSERT INTO t VALUES(7,47832745,4.402823466351E+38,666.666);
-truncated type FLOAT value 4.402823466351e+38 for column d2, 1
+Data truncation: data out of range: data type float32, value '4.402823466351e+38'
 SELECT left(d1,abs(-5)) from t;
 left(d1, abs(-5))
 12345

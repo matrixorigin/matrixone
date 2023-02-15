@@ -1084,15 +1084,15 @@ drop view v4;
 CREATE TABLE t1 (i1 int DEFAULT NULL,i2 int DEFAULT NULL) ;
 table t1 already exists
 INSERT INTO t1 VALUES (1,    NULL);
-invalid input: insert values does not match the number of columns
+internal error: Column count doesn't match value count at row '0'
 INSERT INTO t1 VALUES (2,    3);
-invalid input: insert values does not match the number of columns
+internal error: Column count doesn't match value count at row '0'
 INSERT INTO t1 VALUES (4,    NULL);
-invalid input: insert values does not match the number of columns
+internal error: Column count doesn't match value count at row '0'
 INSERT INTO t1 VALUES (4,    0);
-invalid input: insert values does not match the number of columns
+internal error: Column count doesn't match value count at row '0'
 INSERT INTO t1 VALUES (NULL, NULL);
-invalid input: insert values does not match the number of columns
+internal error: Column count doesn't match value count at row '0'
 CREATE TABLE t2 (i1 int DEFAULT NULL,i2 int DEFAULT NULL) ;
 table t2 already exists
 INSERT INTO t2 VALUES (4, NULL);
@@ -1112,7 +1112,7 @@ SQL parser error: table "v1" does not exist
 drop view v1;
 invalid view 'view-subquery-with-in.v1'
 INSERT INTO t1 VALUES (NULL, NULL);
-invalid input: insert values does not match the number of columns
+internal error: Column count doesn't match value count at row '0'
 SELECT i1, i2
 FROM t1
 WHERE (i1, i2)

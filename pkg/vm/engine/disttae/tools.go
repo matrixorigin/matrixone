@@ -698,8 +698,13 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 
 	if e.typ == INSERT {
 		ebat = batch.NewWithSize(0)
-		ebat.Vecs = e.bat.Vecs[1:]
-		ebat.Attrs = e.bat.Attrs[1:]
+		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+			ebat.Vecs = e.bat.Vecs
+			ebat.Attrs = e.bat.Attrs
+		} else {
+			ebat.Vecs = e.bat.Vecs[1:]
+			ebat.Attrs = e.bat.Attrs[1:]
+		}
 	} else {
 		ebat = e.bat
 	}
@@ -818,12 +823,16 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			}
 		}
 		for _, def := range defs {
-			if indexDef, ok := def.(*engine.PrimaryIndexDef); ok {
-				for _, name := range indexDef.Names {
-					attr, _ := defs[mp[name]].(*engine.AttributeDef)
-					attr.Attr.Primary = true
+			if constraintDef, ok := def.(*engine.ConstraintDef); ok {
+				for _, ct := range constraintDef.Cts {
+					if pkdef, ok2 := ct.(*engine.PrimaryKeyDef); ok2 {
+						pos := mp[pkdef.Pkey.PkeyColName]
+						attr, _ := defs[pos].(*engine.AttributeDef)
+						attr.Attr.Primary = true
+					}
 				}
 			}
+
 			if clusterByDef, ok := def.(*engine.ClusterByDef); ok {
 				attr, _ := defs[mp[clusterByDef.Name]].(*engine.AttributeDef)
 				attr.Attr.ClusterBy = true

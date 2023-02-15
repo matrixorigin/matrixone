@@ -82,6 +82,7 @@ type server struct {
 	name        string
 	address     string
 	logger      *zap.Logger
+	codec       Codec
 	application goetty.NetApplication
 	stopper     *stopper.Stopper
 	handler     func(ctx context.Context, request Message, sequence uint64, cs ClientSession) error
@@ -102,6 +103,7 @@ func NewRPCServer(name, address string, codec Codec, options ...ServerOption) (R
 	s := &server{
 		name:     name,
 		address:  address,
+		codec:    codec,
 		stopper:  stopper.NewStopper(fmt.Sprintf("rpc-server-%s", name)),
 		sessions: &sync.Map{},
 	}
@@ -348,7 +350,7 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 		return v.(*clientSession), nil
 	}
 
-	cs := newClientSession(rs)
+	cs := newClientSession(rs, s.codec)
 	v, loaded := s.sessions.LoadOrStore(rs.ID(), cs)
 	if loaded {
 		close(cs.c)
@@ -364,8 +366,9 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 }
 
 type clientSession struct {
-	conn goetty.IOSession
-	c    chan RPCMessage
+	codec Codec
+	conn  goetty.IOSession
+	c     chan RPCMessage
 	// streaming id -> last received sequence, no concurrent, access in io goroutine
 	receivedStreamSequences map[uint64]uint32
 	// streaming id -> last sent sequence, multi-stream access in multi-goroutines if
@@ -379,9 +382,10 @@ type clientSession struct {
 	}
 }
 
-func newClientSession(conn goetty.IOSession) *clientSession {
+func newClientSession(conn goetty.IOSession, codec Codec) *clientSession {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &clientSession{
+		codec:                   codec,
 		c:                       make(chan RPCMessage, 16),
 		receivedStreamSequences: make(map[uint64]uint32),
 		conn:                    conn,
@@ -403,6 +407,10 @@ func (cs *clientSession) Close() error {
 }
 
 func (cs *clientSession) Write(ctx context.Context, message Message) error {
+	if err := cs.codec.Valid(message); err != nil {
+		return err
+	}
+
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 

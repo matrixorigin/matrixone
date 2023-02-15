@@ -236,95 +236,50 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 	}
 }
 
-// scanString scans a string surrounded by the given `delim`, which can be
-// either single or double quotes. Assumes that the given delimiter has just
-// been scanned. If the skin contains any escape sequences, this function
-// will fall back to scanStringSlow
 func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
-	start := s.Pos
-
-	for {
-		switch s.cur() {
-		case delim:
-			if s.peek(1) != delim {
-				s.inc()
-				return typ, s.buf[start : s.Pos-1]
+	ch := s.cur()
+	buf := new(strings.Builder)
+	for s.Pos < len(s.buf) {
+		if ch == delim {
+			s.inc()
+			if s.cur() != delim {
+				return typ, buf.String()
 			}
-			fallthrough
-
-		case '\\':
-			var buffer strings.Builder
-			buffer.WriteString(s.buf[start:s.Pos])
-			return s.scanStringSlow(&buffer, delim, typ)
-
-		case eofChar:
-			return LEX_ERROR, s.buf[start:s.Pos]
+		} else if ch == '\\' {
+			ch = handleEscape(s, buf)
+			if ch == eofChar {
+				break
+			}
 		}
-
-		s.inc()
+		buf.WriteByte(byte(ch))
+		if s.Pos < len(s.buf) {
+			s.inc()
+			ch = s.cur()
+		}
 	}
+	return LEX_ERROR, buf.String()
 }
 
-// scanString scans a string surrounded by the given `delim` and containing escape
-// sequencse. The given `buffer` contains the contents of the string that have
-// been scanned so far.
-func (s *Scanner) scanStringSlow(buffer *strings.Builder, delim uint16, typ int) (int, string) {
-	for {
-		ch := s.cur()
-		if ch == eofChar {
-			// Unterminated string.
-			return LEX_ERROR, buffer.String()
-		}
-
-		if ch != delim && ch != '\\' {
-			start := s.Pos
-			for ; s.Pos < len(s.buf); s.Pos++ {
-				ch = uint16(s.buf[s.Pos])
-				if ch == delim || ch == '\\' {
-					break
-				}
-			}
-
-			buffer.WriteString(s.buf[start:s.Pos])
-			if s.Pos >= len(s.buf) {
-				s.inc()
-				continue
-			}
-		}
-		s.inc()
-
-		if ch == '\\' {
-			ch = s.cur()
-			switch ch {
-			case eofChar:
-				return LEX_ERROR, buffer.String()
-			case 'n':
-				ch = '\n'
-			case '0':
-				ch = '\x00'
-			case 'b':
-				ch = 8
-			case 'Z':
-				ch = 26
-			case 'r':
-				ch = '\r'
-			case 't':
-				ch = '\t'
-			case '%', '_':
-				buffer.WriteByte(byte('\\'))
-				continue
-			case '\\', delim:
-			default:
-				continue
-			}
-		} else if ch == delim && s.cur() != delim {
-			break
-		}
-		buffer.WriteByte(byte(ch))
-		s.inc()
+func handleEscape(s *Scanner, buf *strings.Builder) uint16 {
+	s.inc()
+	ch0 := s.cur()
+	switch ch0 {
+	case 'n':
+		ch0 = '\n'
+	case '0':
+		ch0 = 0
+	case 'b':
+		ch0 = 8
+	case 'Z':
+		ch0 = 26
+	case 'r':
+		ch0 = '\r'
+	case 't':
+		ch0 = '\t'
+	case '%', '_':
+		buf.WriteByte('\\')
 	}
-
-	return typ, buffer.String()
+	return ch0
 }
 
 // scanLiteralIdentifier scans an identifier enclosed by backticks. If the identifier

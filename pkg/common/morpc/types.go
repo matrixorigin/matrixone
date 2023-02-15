@@ -123,6 +123,8 @@ type RPCServer interface {
 // Codec codec
 type Codec interface {
 	codec.Codec
+	// Valid valid the message is valid
+	Valid(message Message) error
 	// AddHeaderCodec add header codec. The HeaderCodecs are added sequentially and the headercodecs are
 	// executed in the order in which they are added at codec time.
 	AddHeaderCodec(HeaderCodec)

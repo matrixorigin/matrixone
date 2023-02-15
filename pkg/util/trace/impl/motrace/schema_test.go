@@ -125,7 +125,7 @@ func TestGetSchemaForAccount(t *testing.T) {
 			args: args{
 				account: "user1",
 			},
-			wantPath: "/user1/*/*/*/*/statement_info/*.csv",
+			wantPath: "/user1/*/*/*/*/statement_info/*",
 		},
 	}
 	ctx := context.Background()
@@ -142,7 +142,7 @@ func TestGetSchemaForAccount(t *testing.T) {
 			require.Equal(t, 1, len(schemas))
 			require.Equal(t, true, found)
 			found = false
-			if strings.Contains(SingleStatementTable.ToCreateSql(ctx, true), "/*/*/*/*/*/statement_info/*.csv") {
+			if strings.Contains(SingleStatementTable.ToCreateSql(ctx, true), "/*/*/*/*/*/statement_info/*") {
 				found = true
 			}
 			require.Equal(t, true, found)

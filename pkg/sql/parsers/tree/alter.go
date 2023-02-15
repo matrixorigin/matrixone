@@ -110,20 +110,14 @@ func (ca *AlterAccount) GetQueryType() string     { return QueryTypeDCL }
 
 type AlterView struct {
 	statementImpl
-	IfExists    bool
-	Name        *TableName
-	ColNames    IdentifierList
-	AsSource    *Select
-	IfNotExists bool
-	Temporary   bool
+	IfExists bool
+	Name     *TableName
+	ColNames IdentifierList
+	AsSource *Select
 }
 
 func (node *AlterView) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter ")
-
-	if node.Temporary {
-		ctx.WriteString("temporary ")
-	}
 
 	ctx.WriteString("view ")
 
@@ -147,19 +141,30 @@ func (node *AlterView) GetQueryType() string     { return QueryTypeDDL }
 // alter configuration for mo_mysql_compatbility_mode
 type AlterDataBaseConfig struct {
 	statementImpl
-	DbName       string
-	UpdateConfig Expr
+	AccountName    string
+	DbName         string
+	IsAccountLevel bool
+	UpdateConfig   string
 }
 
 func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
-	ctx.WriteString("alter ")
-	ctx.WriteString("database configuration ")
 
-	ctx.WriteString("for ")
-	ctx.WriteString(fmt.Sprintf("%s ", node.DbName))
+	if node.IsAccountLevel {
+		ctx.WriteString("alter ")
+		ctx.WriteString("account configuration ")
+
+		ctx.WriteString("for ")
+		ctx.WriteString(fmt.Sprintf("%s ", node.AccountName))
+	} else {
+		ctx.WriteString("alter ")
+		ctx.WriteString("database configuration ")
+
+		ctx.WriteString("for ")
+		ctx.WriteString(fmt.Sprintf("%s ", node.DbName))
+	}
 
 	ctx.WriteString("as ")
-	ctx.WriteString(fmt.Sprintf("%s ", node.UpdateConfig.String()))
+	ctx.WriteString(fmt.Sprintf("%s ", node.UpdateConfig))
 }
 
 func (node *AlterDataBaseConfig) GetStatementType() string { return "Alter DataBase config" }

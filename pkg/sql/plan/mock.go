@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type MockCompilerContext struct {
@@ -43,10 +42,6 @@ type MockCompilerContext struct {
 
 	// ctx default: nil
 	ctx context.Context
-}
-
-func (m *MockCompilerContext) GetEngine() engine.Engine {
-	return nil
 }
 
 func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
@@ -80,8 +75,8 @@ type col struct {
 	Name      string
 	Id        types.T
 	Nullable  bool
-	Width     int32
 	Precision int32
+	Scale     int32
 }
 
 type index struct {
@@ -546,8 +541,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					Typ: &plan.Type{
 						Id:          int32(col.Id),
 						NotNullable: !col.Nullable,
-						Width:       col.Width,
 						Precision:   col.Precision,
+						Scale:       col.Scale,
 					},
 					Name:  col.Name,
 					Pkidx: 1,
@@ -573,51 +568,21 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				TblId:     uint64(tableIdx),
 				Name:      tableName,
 				Cols:      colDefs,
+				Indexes:   make([]*IndexDef, len(table.idxs)),
 			}
 
 			if table.idxs != nil {
-				unidef := &plan.UniqueIndexDef{
-					IndexNames:  make([]string, 0),
-					TableNames:  make([]string, 0),
-					Fields:      make([]*plan.Field, 0),
-					TableExists: make([]bool, 0),
-				}
 
-				for _, idx := range table.idxs {
-					field := &plan.Field{
-						Parts: idx.parts,
-						Cols:  make([]*ColDef, 0),
+				for i, idx := range table.idxs {
+					indexdef := &plan.IndexDef{
+						IndexName:      idx.indexName,
+						Parts:          idx.parts,
+						Unique:         true,
+						IndexTableName: idx.tableName,
+						TableExist:     true,
 					}
-
-					for _, col := range idx.cols {
-						field.Cols = append(field.Cols, &ColDef{
-							Alg: plan.CompressType_Lz4,
-							Typ: &plan.Type{
-								Id:          int32(col.Id),
-								NotNullable: !col.Nullable,
-								Width:       col.Width,
-								Precision:   col.Precision,
-							},
-							Name:  col.Name,
-							Pkidx: 1,
-							Default: &plan.Default{
-								NullAbility:  false,
-								Expr:         nil,
-								OriginString: "",
-							},
-						})
-					}
-					unidef.IndexNames = append(unidef.IndexNames, idx.indexName)
-					unidef.TableNames = append(unidef.TableNames, idx.tableName)
-					unidef.Fields = append(unidef.Fields, field)
-					unidef.TableExists = append(unidef.TableExists, true)
+					tableDef.Indexes[i] = indexdef
 				}
-
-				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-					Def: &plan.TableDef_DefType_UIdx{
-						UIdx: unidef,
-					},
-				})
 			}
 
 			if table.fks != nil {
@@ -651,19 +616,16 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 
 			if tableName == "test_idx" {
-				testField := &plan.Field{
-					Parts: []string{"n_nationkey"},
+				indexParts := []string{"n_nationkey"}
+
+				p := &plan.IndexDef{
+					IndexName:      "idx1",
+					Parts:          indexParts,
+					Unique:         true,
+					IndexTableName: "nation",
+					TableExist:     true,
 				}
-				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-					Def: &plan.TableDef_DefType_UIdx{
-						UIdx: &plan.UniqueIndexDef{
-							IndexNames:  []string{"idx1"},
-							TableNames:  []string{"nation"},
-							Fields:      []*plan.Field{testField},
-							TableExists: []bool{false},
-						},
-					},
-				})
+				tableDef.Indexes = []*plan.IndexDef{p}
 			}
 
 			if tableName == "v1" {
@@ -799,6 +761,13 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {
 	return nil, "", nil
+}
+
+func (m *MockCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
+}
+
+func (m *MockCompilerContext) GetBuildingAlterView() (bool, string, string) {
+	return false, "", ""
 }
 
 type MockOptimizer struct {

@@ -99,6 +99,24 @@ func WithDisableGCCheckpoint() func(*Options) {
 	}
 }
 
+func WithCatalogGCInterval(internal time.Duration) func(*Options) {
+	return func(o *Options) {
+		if o.CatalogCfg == nil {
+			o.CatalogCfg = new(CatalogCfg)
+		}
+		o.CatalogCfg.GCInterval = internal
+	}
+}
+
+func WithDisableGCCatalog() func(*Options) {
+	return func(o *Options) {
+		if o.CatalogCfg == nil {
+			o.CatalogCfg = new(CatalogCfg)
+		}
+		o.CatalogCfg.DisableGC = true
+	}
+}
+
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}
@@ -146,6 +164,13 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 	if o.CheckpointCfg.GCCheckpointInterval <= 0 {
 		o.CheckpointCfg.GCCheckpointInterval = DefaultGCCheckpointInterval
+	}
+
+	if o.CatalogCfg == nil {
+		o.CatalogCfg = new(CatalogCfg)
+	}
+	if o.CatalogCfg.GCInterval <= 0 {
+		o.CatalogCfg.GCInterval = DefaultCatalogGCInterval
 	}
 
 	if o.GCCfg == nil {

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
@@ -53,7 +54,7 @@ func (s *service) initDistributedTAE(
 	if err != nil {
 		return err
 	}
-
+	colexec.Srv = colexec.NewServer(hakeeper)
 	// engine
 	pu.StorageEngine = disttae.New(
 		ctx,
@@ -63,6 +64,5 @@ func (s *service) initDistributedTAE(
 		hakeeper,
 		pu.GetClusterDetails,
 	)
-
 	return nil
 }

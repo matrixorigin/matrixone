@@ -63,7 +63,7 @@ func (task *flushBlkTask) Execute() error {
 	if err != nil {
 		return err
 	}
-	if err = BuildBlockIndex(writer.GetWriter(), block, task.meta, task.data, true); err != nil {
+	if err = BuildBlockIndex(writer.GetWriter(), block, task.meta.GetSchema(), task.data, true); err != nil {
 		return err
 	}
 	if task.delta != nil {

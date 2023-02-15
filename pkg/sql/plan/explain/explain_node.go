@@ -128,13 +128,13 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 			}
 		case plan.Node_UPDATE:
 			result += " on "
-			if ndesc.Node.UpdateCtxs != nil {
+			if ndesc.Node.UpdateCtx != nil {
 				first := true
-				for _, ctx := range ndesc.Node.UpdateCtxs {
+				for _, ctx := range ndesc.Node.UpdateCtx.Ref {
 					if !first {
 						result += ", "
 					}
-					result += ctx.DbName + "." + ctx.TblName
+					result += ctx.SchemaName + "." + ctx.ObjName
 					if first {
 						first = false
 					}
@@ -189,7 +189,7 @@ func (ndesc *NodeDescribeImpl) GetActualAnalyzeInfo(ctx context.Context, options
 		}
 		result += describe
 	} else {
-		result += "timeConsumed=0ms waitTime=0ms inputRows=0  outputRows=0 inputSize=0 bytes outputSize:0 bytes, memorySize=0 bytes"
+		result += "timeConsumed=0ns waitTime=0ns inputRows=0  outputRows=0 inputSize=0 bytes outputSize:0 bytes, memorySize=0 bytes"
 	}
 	return result, nil
 }
@@ -435,8 +435,8 @@ func NewAnalyzeInfoDescribeImpl(analyze *plan.AnalyzeInfo) *AnalyzeInfoDescribeI
 }
 
 func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "timeConsumed=" + strconv.FormatInt(a.AnalyzeInfo.TimeConsumed, 10) + "us" +
-		" waitTime=" + strconv.FormatInt(a.AnalyzeInfo.WaitTimeConsumed, 10) + "us" +
+	result := "timeConsumed=" + strconv.FormatInt(a.AnalyzeInfo.TimeConsumed, 10) + "ns" +
+		" waitTime=" + strconv.FormatInt(a.AnalyzeInfo.WaitTimeConsumed, 10) + "ns" +
 		" inputRows=" + strconv.FormatInt(a.AnalyzeInfo.InputRows, 10) +
 		" outputRows=" + strconv.FormatInt(a.AnalyzeInfo.OutputRows, 10) +
 		" inputSize=" + strconv.FormatInt(a.AnalyzeInfo.InputSize, 10) + "bytes" +
@@ -570,21 +570,21 @@ func (r *RowsetDataDescribeImpl) GetDescription(ctx context.Context, options *Ex
 }
 
 type UpdateCtxsDescribeImpl struct {
-	UpdateCtxs []*plan.UpdateCtx
+	UpdateCtx *plan.UpdateCtx
 }
 
 func (u *UpdateCtxsDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Update Columns: "
 	first := true
-	for _, ctx := range u.UpdateCtxs {
-		if ctx.UpdateCols != nil {
-			for _, col := range ctx.UpdateCols {
+	for i, ctx := range u.UpdateCtx.Ref {
+		if u.UpdateCtx.UpdateCol[i] != nil {
+			for colName := range u.UpdateCtx.UpdateCol[i].Map {
 				if !first {
 					result += ", "
 				} else {
 					first = false
 				}
-				result += ctx.DbName + "." + ctx.TblName + "." + col.Name
+				result += ctx.SchemaName + "." + ctx.ObjName + "." + colName
 			}
 		}
 	}

@@ -98,19 +98,21 @@ type DB struct {
 	sync.RWMutex
 	dnMap      map[string]int
 	metaTables map[string]Partitions
-	tables     map[[2]uint64]Partitions
+	partitions map[[2]uint64]Partitions
 }
 
 type Partitions []*Partition
 
 // a partition corresponds to a dn
 type Partition struct {
-	sync.RWMutex
+	lock chan struct{}
 	// multi-version data of logtail, implemented with reusee's memengine
 	data             *memtable.Table[RowID, DataValue, *DataRow]
 	columnsIndexDefs []ColumnsIndexDef
 	// last updated timestamp
 	ts timestamp.Timestamp
+	// used for block read in PartitionReader
+	txn *Transaction
 }
 
 // Transaction represents a transaction
@@ -122,7 +124,9 @@ type Transaction struct {
 	// db       *DB
 	// blockId starts at 0 and keeps incrementing,
 	// this is used to name the file on s3 and then give it to tae to use
-	blockId uint64
+	// not-used now
+	// blockId uint64
+
 	// use for solving halloween problem
 	statementId uint64
 	// local timestamp for workspace operations
@@ -163,8 +167,6 @@ type Entry struct {
 	databaseName string
 	// blockName for s3 file
 	fileName string
-	// blockId for s3 file
-	blockId uint64
 	// update or delete tuples
 	bat     *batch.Batch
 	dnStore DNStore

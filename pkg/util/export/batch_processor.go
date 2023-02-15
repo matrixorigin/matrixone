@@ -233,9 +233,14 @@ func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 	_ = c.pipeImplHolder.Put(name.GetName(), impl)
 }
 
-func (c *MOCollector) Collect(ctx context.Context, i batchpipe.HasName) error {
-	c.awakeCollect <- i
-	return nil
+// Collect item in chan, if collector is stopped then return error
+func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error {
+	select {
+	case <-c.stopCh:
+		return moerr.NewInternalError(ctx, "stopped")
+	case c.awakeCollect <- item:
+		return nil
+	}
 }
 
 // Start all goroutine worker, including collector, generator, and exporter

@@ -437,6 +437,11 @@ func (seg *localSegment) GetPKColumn() containers.Vector {
 	return seg.index.KeyToVector(schema.GetSingleSortKeyType())
 }
 
+func (seg *localSegment) GetPKVecs() []containers.Vector {
+	schema := seg.table.entry.GetSchema()
+	return seg.index.KeyToVectors(schema.GetSingleSortKeyType())
+}
+
 func (seg *localSegment) BatchDedup(key containers.Vector) error {
 	return seg.index.BatchDedup(seg.table.GetSchema().GetSingleSortKey().Name, key)
 }

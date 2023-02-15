@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -294,4 +295,67 @@ func TestReplay(t *testing.T) {
 	driver = restartTestDriver(t, int(common.K)*3)
 	wal = NewStore(driver)
 	wal.Close()
+}
+
+func TestTruncate(t *testing.T) {
+	driver := newTestDriver(t, int(common.M)*64)
+	wal := NewStore(driver)
+	defer wal.Close()
+	entryCount := 5
+	group := entry.GTCustomizedStart
+	for i := 0; i < entryCount; i++ {
+		e := mockEntry()
+		lsn, err := wal.Append(group, e)
+		assert.NoError(t, err)
+		assert.NoError(t, e.WaitDone())
+		entryGroupID, entryLSN := e.GetLsn()
+		assert.Equal(t, group, entryGroupID)
+		assert.Equal(t, lsn, entryLSN)
+		currLsn := wal.GetCurrSeqNum(group)
+		assert.LessOrEqual(t, lsn, currLsn)
+		assert.NoError(t, e.WaitDone())
+	}
+
+	currLsn := wal.GetCurrSeqNum(group)
+	drcurrLsn := driver.GetCurrSeqNum()
+	ckpEntry, err := wal.RangeCheckpoint(group, 0, currLsn)
+	assert.NoError(t, err)
+	assert.NoError(t, ckpEntry.WaitDone())
+	testutils.WaitExpect(4000, func() bool {
+		truncated, err := driver.GetTruncated()
+		assert.NoError(t, err)
+		return truncated >= drcurrLsn
+	})
+	truncated, err := driver.GetTruncated()
+	assert.NoError(t, err)
+	t.Logf("truncated %d, current %d", truncated, drcurrLsn)
+	assert.GreaterOrEqual(t, truncated, drcurrLsn)
+
+	for i := 0; i < entryCount; i++ {
+		e := mockEntry()
+		lsn, err := wal.Append(group, e)
+		assert.NoError(t, err)
+		assert.NoError(t, e.WaitDone())
+		entryGroupID, entryLSN := e.GetLsn()
+		assert.Equal(t, group, entryGroupID)
+		assert.Equal(t, lsn, entryLSN)
+		currLsn := wal.GetCurrSeqNum(group)
+		assert.LessOrEqual(t, lsn, currLsn)
+		assert.NoError(t, e.WaitDone())
+	}
+
+	currLsn = wal.GetCurrSeqNum(group)
+	drcurrLsn = driver.GetCurrSeqNum()
+	ckpEntry, err = wal.RangeCheckpoint(group, 0, currLsn)
+	assert.NoError(t, err)
+	assert.NoError(t, ckpEntry.WaitDone())
+	testutils.WaitExpect(4000, func() bool {
+		truncated, err := driver.GetTruncated()
+		assert.NoError(t, err)
+		return truncated >= drcurrLsn
+	})
+	truncated, err = driver.GetTruncated()
+	assert.NoError(t, err)
+	t.Logf("truncated %d, current %d", truncated, drcurrLsn)
+	assert.GreaterOrEqual(t, truncated, drcurrLsn)
 }

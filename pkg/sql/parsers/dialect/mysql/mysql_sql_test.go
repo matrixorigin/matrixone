@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select 1+1",
-		output: "select 1 + 1",
+		input:  "create table t1 (a int comment '\"123123\\'')",
+		output: "create table t1 (a int comment \"123123'')",
 	}
 )
 
@@ -53,6 +53,15 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "create table t1 (a int comment '\"123123\\'')",
+		output: "create table t1 (a int comment \"123123'')",
+	}, {
+		input:  "select * from t1 where a not ilike '%a'",
+		output: "select * from t1 where a not ilike %a",
+	}, {
+		input:  "select * from t1 where a ilike '%a'",
+		output: "select * from t1 where a ilike %a",
+	}, {
 		input:  "select * from result_scan(query_id)",
 		output: "select * from result_scan(query_id)",
 	}, {
@@ -291,7 +300,7 @@ var (
 		output: "set timestamp = unix_timestamp(2011-07-31 10:00:00)",
 	}, {
 		input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
-		output: "select ltrim(a), rtrim(a), trim(both, , a), trim(both,  , a)",
+		output: "select ltrim(a), rtrim(a), trim(both  from a), trim(both   from a)",
 	}, {
 		input:  "select rpad('hello', -18446744073709551616, '1');",
 		output: "select rpad(hello, -18446744073709551616, 1)",
@@ -342,7 +351,7 @@ var (
 		output: "select space(-18446744073709551616)",
 	}, {
 		input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
-		output: "select ltrim(a), rtrim(a), trim(both, , a), trim(both,  , a)",
+		output: "select ltrim(a), rtrim(a), trim(both  from a), trim(both   from a)",
 	}, {
 		input:  "SELECT (rpad(1.0, 2048,1)) IS NOT FALSE;",
 		output: "select (rpad(1.0, 2048, 1)) is not false",
@@ -606,6 +615,12 @@ var (
 		input: "create table t (a int, b char, check (1 + 1) enforced)",
 	}, {
 		input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+	}, {
+		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+	}, {
+		input:  "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
 		input: "create table t (a int, b char, unique key idx (a, b))",
 	}, {
@@ -1898,6 +1913,22 @@ var (
 		{
 			input:  "create table test (`col` varchar(255) DEFAULT b'0')",
 			output: "create table test (col varchar(255) default 0)",
+		},
+		{
+			input:  "select trim(a)",
+			output: "select trim(a)",
+		},
+		{
+			input: "select trim(a from a)",
+		},
+		{
+			input: "select trim(leading a from b)",
+		},
+		{
+			input: "select trim(trailing b from a)",
+		},
+		{
+			input: "select trim(both a from b) from t",
 		},
 	}
 )
