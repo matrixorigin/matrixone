@@ -18,6 +18,7 @@ import (
 	"encoding/csv"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -50,13 +51,15 @@ func ParsePath(s string) (path Path, err error) {
 		// most common patterns first
 		if r >= '0' && r <= '9' ||
 			r >= 'a' && r <= 'z' ||
-			r >= 'A' && r <= 'Z' ||
-			r == '@' ||
-			r == '/' {
+			r >= 'A' && r <= 'Z' {
 			continue
 		}
 		switch r {
-		case '!', '-', '_', '.', '*', '\'', '(', ')':
+		case '!', '-', '_', '.', '*', '\'', '(', ')', '@', '/':
+			continue
+		}
+		// printable non-ASCII characters
+		if r > unicode.MaxASCII && unicode.IsPrint(r) {
 			continue
 		}
 		err = moerr.NewInvalidPathNoCtx(path.File)
