@@ -925,7 +925,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 
 	switch joinTyp {
 	case plan.Node_INNER:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newJoinScopeList(ss, children)
 		if len(n.OnList) == 0 {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
@@ -952,7 +952,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 			}
 		}
 	case plan.Node_SEMI:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -969,7 +969,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 			}
 		}
 	case plan.Node_LEFT:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1007,7 +1007,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 			panic("dont pass any no-equal right join plan to this function,it should be changed to left join by the planner")
 		}
 	case plan.Node_SINGLE:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1024,7 +1024,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 			}
 		}
 	case plan.Node_ANTI:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newJoinScopeList(ss, children)
 		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
 			if isEq && len(conds) == 1 {
@@ -1042,7 +1042,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 			}
 		}
 	case plan.Node_MARK:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newJoinScopeList(ss, children)
 		for i := range rs {
 			//if isEq {
 			//	rs[i].appendInstruction(vm.Instruction{
@@ -1380,57 +1380,22 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 	return rs
 }
 
-//func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
-//	rs := make([]*Scope, len(ss))
-// join's input will record in the left/right scope when JoinRun
-// so set it to false here.
-//	c.anal.isFirst = false
-//	for i := range ss {
-//		if ss[i].IsEnd {
-//			rs[i] = ss[i]
-//			continue
-//		}
-//		chp := c.newMergeScope(dupScopeList(children))
-//		rs[i] = new(Scope)
-//		rs[i].Magic = Remote
-//		rs[i].IsJoin = true
-//		rs[i].NodeInfo = ss[i].NodeInfo
-//		rs[i].PreScopes = []*Scope{ss[i], chp}
-//		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-//		ss[i].appendInstruction(vm.Instruction{
-//			Op: vm.Connector,
-///			Arg: &connector.Argument{
-//				Reg: rs[i].Proc.Reg.MergeReceivers[0],
-//			},
-//		})
-//		chp.appendInstruction(vm.Instruction{
-//			Op: vm.Connector,
-//			Arg: &connector.Argument{
-//				Reg: rs[i].Proc.Reg.MergeReceivers[1],
-//			},
-//		})
-//		chp.IsEnd = true
-//	}
-//	return rs
-//}
-
-func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
-	len := len(ss)
-	rs := make([]*Scope, len)
-	idx := 0
+func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+	rs := make([]*Scope, len(ss))
+	// join's input will record in the left/right scope when JoinRun
+	// so set it to false here.
+	c.anal.isFirst = false
 	for i := range ss {
 		if ss[i].IsEnd {
 			rs[i] = ss[i]
 			continue
 		}
+		chp := c.newMergeScope(dupScopeList(children))
 		rs[i] = new(Scope)
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = ss[i].NodeInfo
-		if isCurrentCN(rs[i].NodeInfo.Addr, c.addr) {
-			idx = i
-		}
-		rs[i].PreScopes = []*Scope{ss[i]}
+		rs[i].PreScopes = []*Scope{ss[i], chp}
 		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -1438,17 +1403,52 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 				Reg: rs[i].Proc.Reg.MergeReceivers[0],
 			},
 		})
+		chp.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[1],
+			},
+		})
+		chp.IsEnd = true
 	}
-
-	mergeChildren := c.newMergeScope(children)
-	mergeChildren.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructBroadcastJoinDispatch(1, rs, c.addr, mergeChildren.Proc),
-	})
-	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
-
 	return rs
 }
+
+//func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+//len := len(ss)
+//rs := make([]*Scope, len)
+//idx := 0
+//for i := range ss {
+//if ss[i].IsEnd {
+//rs[i] = ss[i]
+//continue
+//}
+//rs[i] = new(Scope)
+//rs[i].Magic = Remote
+//rs[i].IsJoin = true
+//rs[i].NodeInfo = ss[i].NodeInfo
+//if isCurrentCN(rs[i].NodeInfo.Addr, c.addr) {
+//idx = i
+//}
+//rs[i].PreScopes = []*Scope{ss[i]}
+//rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+//ss[i].appendInstruction(vm.Instruction{
+//Op: vm.Connector,
+//Arg: &connector.Argument{
+//Reg: rs[i].Proc.Reg.MergeReceivers[0],
+//},
+//})
+//}
+
+//mergeChildren := c.newMergeScope(children)
+//mergeChildren.appendInstruction(vm.Instruction{
+//Op:  vm.Dispatch,
+//Arg: constructBroadcastJoinDispatch(1, rs, c.addr, mergeChildren.Proc),
+//})
+//rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
+
+//return rs
+//}
 
 func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
@@ -1723,9 +1723,9 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
-func isCurrentCN(addr string, currentCNAddr string) bool {
-	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
-}
+//func isCurrentCN(addr string, currentCNAddr string) bool {
+//return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
+//}
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	rowCount := len(exprs)
