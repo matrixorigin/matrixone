@@ -6319,41 +6319,6 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 	return nil
 }
 
-func getMoMysqlCompatbilityModeConfig(ctx context.Context, ses *Session, dbName string) (string, error) {
-	var err error
-	var sql string
-	var defaultConfig string
-	var erArray []ExecResult
-
-	defaultConfig = fmt.Sprintf("{"+"%q"+":"+"%q"+"}", "version_compatibility", "0.7")
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	sql = `select configuration from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s"; `
-	sql = fmt.Sprintf(sql, dbName)
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return defaultConfig, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return defaultConfig, err
-	}
-
-	if execResultArrayHasData(erArray) {
-		config, err := erArray[0].GetString(ctx, 0, 0)
-		if err != nil {
-			return defaultConfig, err
-		} else {
-			return config, err
-		}
-	}
-	return defaultConfig, err
-}
-
 func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (string, error) {
 	var err error
 	var erArray []ExecResult
