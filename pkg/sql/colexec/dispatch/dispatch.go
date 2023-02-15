@@ -28,26 +28,28 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.prepared = false
-	if len(ap.RemoteRegs) == 0 {
-		ap.prepared = true
-		ap.ctr.remoteReceivers = nil
-	} else {
-		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, len(ap.RemoteRegs))
-	}
 
 	switch ap.FuncId {
 	case SendToAllFunc:
+		if len(ap.RemoteRegs) == 0 {
+			return moerr.NewInternalError(proc.Ctx, "SendToAllFunc should include RemoteRegs")
+		}
+		ap.prepared = false
+		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, len(ap.RemoteRegs))
 		ap.ctr.sendFunc = sendToAllFunc
 	case SendToAllLocalFunc:
-		if !ap.prepared {
+		if len(ap.RemoteRegs) != 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAllLocalFunc should not send to remote")
 		}
+		ap.prepared = true
+		ap.ctr.remoteReceivers = nil
 		ap.ctr.sendFunc = sendToAllLocalFunc
 	case SendToAnyLocalFunc:
-		if !ap.prepared {
+		if len(ap.RemoteRegs) != 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAnyLocalFunc should not send to remote")
 		}
+		ap.prepared = true
+		ap.ctr.remoteReceivers = nil
 		ap.ctr.sendFunc = sendToAnyLocalFunc
 	default:
 		return moerr.NewInternalError(proc.Ctx, "wrong sendFunc id for dispatch")

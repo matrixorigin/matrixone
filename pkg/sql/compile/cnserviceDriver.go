@@ -168,13 +168,17 @@ func cnMessageHandle(ctx context.Context, message morpc.Message, cs morpc.Client
 				break
 			}
 		}
+
+		doneCh := make(chan struct{})
 		info := process.WrapCs{
-			MsgId: m.GetId(),
-			Uid:   opUuid,
-			Cs:    cs,
+			MsgId:  m.GetId(),
+			Uid:    opUuid,
+			Cs:     cs,
+			DoneCh: doneCh,
 		}
 
 		ch <- info
+		<-doneCh
 		return msgTyp, nil, nil
 
 	case pipeline.PipelineMessage:
@@ -262,15 +266,18 @@ func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyz
 	var val morpc.Message
 	var dataBuffer []byte
 	var sequence uint64
+	var ok bool
 	for {
 		select {
 		case <-c.ctx.Done():
 			return moerr.NewRPCTimeout(c.ctx)
-		case val = <-mChan:
+		case val, ok = <-mChan:
 		}
-		if val == nil {
-			return nil
+
+		if val == nil || !ok {
+			return moerr.NewStreamClosed(c.ctx)
 		}
+
 		m := val.(*pipeline.Message)
 
 		// if message contains the back error info.
@@ -1055,6 +1062,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Result:     convertToResultPos(t.RelList, t.ColList),
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
+
 	case vm.Limit:
 		v.Arg = &limit.Argument{Limit: opr.Limit}
 	case vm.LoopAnti:
