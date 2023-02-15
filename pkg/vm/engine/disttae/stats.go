@@ -36,6 +36,28 @@ func getColumnNameFromExpr(expr *plan.Expr) string {
 	return ""
 }
 
+func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
+	if sortOrder == -1 {
+		return cost
+	}
+	// coefficient is 0.5 when tableCnt equals cost, and 1 when tableCnt >> cost
+	coefficient1 := math.Pow(0.5, cost/tableCnt)
+	// coefficient is 0.25 when tableCnt is small, and 1 when very large table.
+	coefficient2 := math.Pow(0.2, (1 / math.Log10(tableCnt)))
+
+	outCnt := cost * coefficient1 * coefficient2
+	if sortOrder == 0 {
+		return outCnt * 0.95
+	} else if sortOrder == 1 {
+		return outCnt * 0.75
+	} else if sortOrder == 2 {
+		return outCnt * 0.55
+	} else {
+		return outCnt * 0.35
+	}
+
+}
+
 // estimate output lines for a filter
 func estimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, ndvMap map[string]float64) float64 {
 	if expr == nil {
@@ -51,12 +73,8 @@ func estimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			sortOrder := util.GetClusterByColumnOrder(sortKeyName, colName)
 			//if col is clusterby, we assume most of the rows in blocks we read is needed
 			//otherwise, deduce selectivity according to ndv
-			if sortOrder == 0 {
-				outcnt = cost * 0.9
-			} else if sortOrder == 1 {
-				outcnt = cost * 0.6
-			} else if sortOrder == 2 {
-				outcnt = cost * 0.3
+			if sortOrder != -1 {
+				outcnt = estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
 			} else {
 				if ndv, ok := ndvMap[colName]; ok {
 					outcnt = tableCnt / ndv
@@ -68,10 +86,10 @@ func estimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			//get the smaller one of two children
 			outcnt = math.Min(estimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, ndvMap), estimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, ndvMap))
 		case "or":
-			//get the bigger one of two children
+			//get the bigger one of two children, and tune the up a little bit
 			out1 := estimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, ndvMap)
 			out2 := estimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, ndvMap)
-			outcnt = math.Max(out1, out2)
+			outcnt = math.Max(out1, out2) * 1.5
 
 		default:
 			//for filters like a>1, no good way to estimate, just 1/3
@@ -79,6 +97,7 @@ func estimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 		}
 	}
 	if outcnt > cost {
+		//outcnt must be smaller than cost
 		return cost
 	}
 	return outcnt
