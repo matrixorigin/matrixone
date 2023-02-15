@@ -67,16 +67,16 @@ func (m *Message) SetAnalysis(data []byte) {
 	m.Analyse = data
 }
 
-func (m *Message) TryToGetMoErr() error {
+func (m *Message) TryToGetMoErr() (error, bool) {
 	errData := m.GetErr()
 	if len(errData) > 0 {
 		err := &moerr.Error{}
 		if errUnmarshal := err.UnmarshalBinary(errData); errUnmarshal != nil {
-			return errUnmarshal
+			return errUnmarshal, true
 		}
-		return err
+		return err, true
 	}
-	return nil
+	return nil, false
 }
 
 func (m *Message) SetMessageType(cmd uint64) {

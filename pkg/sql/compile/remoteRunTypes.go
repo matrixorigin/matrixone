@@ -16,19 +16,46 @@ package compile
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"hash/crc32"
 	"time"
 )
 
+// cnInformation records service information to help handle messages.
+type cnInformation struct {
+	storeEngine       engine.Engine
+	fileService       fileservice.FileService
+	getClusterDetails engine.GetClusterDetailsFunc
+}
+
+// processHelper records source process information to help
+// rebuild the process at the remote node.
+type processHelper struct {
+	id               string
+	lim              process.Limitation
+	unixTime         int64
+	txnOperator      client.TxnOperator
+	txnClient        client.TxnClient
+	sessionInfo      process.SessionInfo
+	analysisNodeList []int32
+}
+
+// messageSenderOnClient is a structure
+// for sending message and receiving results on cn-client.
 type messageSenderOnClient struct {
 	ctx       context.Context
 	ctxCancel context.CancelFunc
@@ -66,7 +93,7 @@ func (sender *messageSenderOnClient) send(
 	return sender.streamSender.Send(sender.ctx, message)
 }
 
-func (sender *messageSenderOnClient) receive() (morpc.Message, error) {
+func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 	var err error
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
@@ -93,30 +120,81 @@ func (sender *messageSenderOnClient) close() {
 	_ = sender.streamSender.Close()
 }
 
+// messageReceiverOnServer is a structure
+// for processing received message and writing results back at cn-server.
 type messageReceiverOnServer struct {
-	ctx       context.Context
-	messageId uint64
+	ctx         context.Context
+	messageId   uint64
+	messageTyp  uint64
+	messageUuid uuid.UUID
+
+	cnInformation cnInformation
+	// information to build a process.
+	procBuildHelper processHelper
 
 	clientSession   morpc.ClientSession
 	messageAcquirer func() morpc.Message
 	maxMessageSize  int
+	scopeData       []byte
 
 	// XXX what's that. So confused.
 	sequence uint64
+
+	// result.
+	finalAnalysisInfo []*process.AnalyzeInfo
 }
 
 func newMessageReceiverOnServer(
-	ctx context.Context,
+	ctx context.Context, message morpc.Message,
 	cs morpc.ClientSession, messageAcquirer func() morpc.Message,
-	messageId uint64) messageReceiverOnServer {
-	return messageReceiverOnServer{
+	storeEngine engine.Engine, fileService fileservice.FileService, txnClient client.TxnClient,
+	getClusterDetails engine.GetClusterDetailsFunc,
+) messageReceiverOnServer {
+	m, ok := message.(*pipeline.Message)
+	if !ok {
+		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
+		panic("cn server receive a message with unexpected type")
+	}
+
+	receiver := messageReceiverOnServer{
 		ctx:             ctx,
-		messageId:       messageId,
+		messageId:       m.GetId(),
+		messageTyp:      m.GetCmd(),
 		clientSession:   cs,
 		messageAcquirer: messageAcquirer,
 		maxMessageSize:  64 * mpool.MB,
 		sequence:        0,
 	}
+
+	switch m.GetCmd() {
+	case pipeline.PrepareDoneNotifyMessage:
+		opUuid, err := uuid.FromBytes(m.GetUuid())
+		if err != nil {
+			logutil.Errorf("decode uuid from pipeline.Message failed, bytes are %v", m.GetUuid())
+			panic("cn receive a message with wrong uuid bytes")
+		}
+		receiver.messageUuid = opUuid
+
+	case pipeline.PipelineMessage:
+		var err error
+		receiver.cnInformation = cnInformation{
+			storeEngine:       storeEngine,
+			fileService:       fileService,
+			getClusterDetails: getClusterDetails,
+		}
+		receiver.procBuildHelper, err = generateProcessHelper(m.GetProcInfoData(), txnClient)
+		if err != nil {
+			logutil.Errorf("decode process info from pipeline.Message failed, bytes are %v", m.GetProcInfoData())
+			panic("cn receive a message with wrong process bytes")
+		}
+		receiver.scopeData = m.Data
+
+	default:
+		logutil.Errorf("unknown cmd %d for pipeline.Message", m.GetCmd())
+		panic("unknown message type")
+	}
+
+	return receiver
 }
 
 func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, error) {
@@ -126,6 +204,43 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 	}
 	message.SetID(receiver.messageId)
 	return message, nil
+}
+
+// newCompile make and return a new compile to run a pipeline.
+func (receiver *messageReceiverOnServer) newCompile() *Compile {
+	// compile is almost surely wanting a small or middle pool.  Later.
+	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
+	if err != nil {
+		panic(err)
+	}
+	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
+	proc := process.New(
+		receiver.ctx, mp,
+		pHelper.txnClient, pHelper.txnOperator,
+		cnInfo.fileService, cnInfo.getClusterDetails,
+	)
+	proc.UnixTime = pHelper.unixTime
+	proc.Id = pHelper.id
+	proc.Lim = pHelper.lim
+	proc.SessionInfo = pHelper.sessionInfo
+	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
+	for i := range proc.AnalInfos {
+		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
+	}
+	proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
+
+	c := &Compile{
+		ctx:  receiver.ctx,
+		proc: proc,
+		e:    cnInfo.storeEngine,
+		anal: &anaylze{},
+		addr: colexec.CnAddr,
+	}
+
+	c.fill = func(_ any, b *batch.Batch) error {
+		return receiver.sendBatch(b)
+	}
+	return c
 }
 
 func (receiver *messageReceiverOnServer) sendError(
@@ -144,6 +259,7 @@ func (receiver *messageReceiverOnServer) sendError(
 
 func (receiver *messageReceiverOnServer) sendBatch(
 	b *batch.Batch) error {
+	// there's no need to send the nil batch.
 	if b == nil {
 		return nil
 	}
@@ -189,15 +305,16 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	return nil
 }
 
-func (receiver *messageReceiverOnServer) sendEndMessage(
-	analysisInfo []*process.AnalyzeInfo, messageType uint64) error {
+func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message, err := receiver.acquireMessage()
 	if err != nil {
 		return err
 	}
 	message.SetSid(pipeline.MessageEnd)
 	message.SetID(receiver.messageId)
-	message.SetMessageType(messageType)
+	message.SetMessageType(receiver.messageTyp)
+
+	analysisInfo := receiver.finalAnalysisInfo
 	if len(analysisInfo) > 0 {
 		anas := &pipeline.AnalysisList{
 			List: make([]*plan.AnalyzeInfo, len(analysisInfo)),
@@ -212,4 +329,30 @@ func (receiver *messageReceiverOnServer) sendEndMessage(
 		message.SetAnalysis(data)
 	}
 	return receiver.clientSession.Write(receiver.ctx, message)
+}
+
+func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, error) {
+	procInfo := &pipeline.ProcessInfo{}
+	err := procInfo.Unmarshal(data)
+	if err != nil {
+		return processHelper{}, err
+	}
+
+	result := processHelper{
+		id:               procInfo.Id,
+		lim:              convertToProcessLimitation(procInfo.Lim),
+		unixTime:         procInfo.UnixTime,
+		txnClient:        cli,
+		analysisNodeList: procInfo.GetAnalysisNodeList(),
+	}
+	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
+	if err != nil {
+		return processHelper{}, err
+	}
+	result.sessionInfo, err = convertToProcessSessionInfo(procInfo.SessionInfo)
+	if err != nil {
+		return processHelper{}, err
+	}
+
+	return result, nil
 }
