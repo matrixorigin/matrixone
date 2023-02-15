@@ -36,12 +36,12 @@ func getColumnNameFromExpr(expr *plan.Expr) string {
 	return ""
 }
 
-// deduce selectivity for expr
-func deduceSelectivity(expr *plan.Expr, sortKeyName string, ndvMap map[string]float64) float64 {
+// estimate output lines for a filter
+func estimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, ndvMap map[string]float64) float64 {
 	if expr == nil {
-		return 1
+		return cost
 	}
-	var sel float64
+	var outcnt float64
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcName := exprImpl.F.Func.ObjName
@@ -52,39 +52,36 @@ func deduceSelectivity(expr *plan.Expr, sortKeyName string, ndvMap map[string]fl
 			//if col is clusterby, we assume most of the rows in blocks we read is needed
 			//otherwise, deduce selectivity according to ndv
 			if sortOrder == 0 {
-				return 0.9
+				outcnt = cost * 0.9
 			} else if sortOrder == 1 {
-				return 0.6
+				outcnt = cost * 0.6
 			} else if sortOrder == 2 {
-				return 0.3
+				outcnt = cost * 0.3
 			} else {
 				if ndv, ok := ndvMap[colName]; ok {
-					return 1 / ndv
+					outcnt = tableCnt / ndv
 				} else {
-					return 0.01
+					outcnt = tableCnt / 100
 				}
 			}
 		case "and":
 			//get the smaller one of two children
-			sel = math.Min(deduceSelectivity(exprImpl.F.Args[0], sortKeyName, ndvMap), deduceSelectivity(exprImpl.F.Args[1], sortKeyName, ndvMap))
-			return sel
+			outcnt = math.Min(estimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, ndvMap), estimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, ndvMap))
 		case "or":
 			//get the bigger one of two children
-			//if the result is small, tune it up a little bit
-			sel1 := deduceSelectivity(exprImpl.F.Args[0], sortKeyName, ndvMap)
-			sel2 := deduceSelectivity(exprImpl.F.Args[1], sortKeyName, ndvMap)
-			sel = math.Max(sel1, sel2)
-			if sel < 0.1 {
-				return sel * 1.05
-			} else {
-				return 1 - (1-sel1)*(1-sel2)
-			}
+			out1 := estimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, ndvMap)
+			out2 := estimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, ndvMap)
+			outcnt = math.Max(out1, out2)
+
 		default:
 			//for filters like a>1, no good way to estimate, just 1/3
-			return 0.33
+			outcnt = cost * 0.33
 		}
 	}
-	return 1
+	if outcnt > cost {
+		return cost
+	}
+	return outcnt
 }
 
 func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64, t types.Type) float64 {
@@ -99,11 +96,24 @@ func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64
 // treat distinct val in zonemap like a sample , then estimate the ndv
 // more blocks, more accurate
 func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64) float64 {
-	// ndvRate is from 0 to 1. 1 means unique key, and 0 means ndv is only 1
-	ndvRate := (distinctValNum / blockNumTotal) / 2
 	// coefficient is 0.1 when 1 block, and 1 when many blocks.
 	coefficient := math.Pow(0.1, (1 / math.Log10(blockNumTotal*10)))
-	return tableCnt * ndvRate * coefficient
+	// very little distinctValNum, assume ndv is very low
+	if distinctValNum <= 1 {
+		return 1 // only one value
+	} else if distinctValNum == 2 {
+		return 2 / coefficient //if only 1 block, ndv is 20. if many block
+	} else if distinctValNum <= 10 && distinctValNum/blockNumTotal < 0.2 {
+		return distinctValNum / coefficient
+	}
+	// assume ndv is high
+	// ndvRate is from 0 to 1. 1 means unique key, and 0 means ndv is only 1
+	ndvRate := (distinctValNum / blockNumTotal) / 2
+	ndv := tableCnt * ndvRate * coefficient
+	if ndv < 1 {
+		ndv = 1
+	}
+	return ndv
 }
 
 func calcNdvUsingMinMax(minVal, maxVal any, t types.Type) float64 {
@@ -179,8 +189,16 @@ func getColumnsNDVFromZoneMap(ctx context.Context, columns []int, blocks *[][]Bl
 			for colIdx := range zonemapVal {
 				currentBlockMin := zonemapVal[colIdx][0]
 				currentBlockMax := zonemapVal[colIdx][1]
-				valMap[colIdx][currentBlockMin] = 1
-				valMap[colIdx][currentBlockMax] = 1
+				if s, ok := currentBlockMin.([]uint8); ok {
+					valMap[colIdx][string(s)] = 1
+				} else {
+					valMap[colIdx][currentBlockMin] = 1
+				}
+				if s, ok := currentBlockMax.([]uint8); ok {
+					valMap[colIdx][string(s)] = 1
+				} else {
+					valMap[colIdx][currentBlockMax] = 1
+				}
 				if compute.CompareGeneric(currentBlockMin, minVal[colIdx], dataTypes[colIdx]) < 0 {
 					minVal[i] = zonemapVal[i][0]
 				}
@@ -226,10 +244,10 @@ func CalcStats(ctx context.Context, blocks *[][]BlockMeta, expr *plan.Expr, tabl
 		if err != nil {
 			return plan2.DefaultStats(), nil
 		}
-		stats.Selectivity = deduceSelectivity(expr, sortKeyName, ndvMap)
+		stats.Outcnt = estimateOutCnt(expr, sortKeyName, stats.TableCnt, stats.Cost, ndvMap)
 	} else {
-		stats.Selectivity = 1
+		stats.Outcnt = stats.TableCnt
 	}
-	stats.Outcnt = stats.TableCnt * stats.Selectivity
+	stats.Selectivity = stats.Outcnt / stats.TableCnt
 	return stats, nil
 }
