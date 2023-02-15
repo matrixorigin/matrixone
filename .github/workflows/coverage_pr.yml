@@ -110,7 +110,7 @@ jobs:
       - name: Coverage Calculate
         if: ${{ steps.ut-pr.outputs.paths != '' }}
         run: |
-          cd $GITHUB_WORKSPACE/matrixone
+          cd $GITHUB_WORKSPACE/matrixoneå
           echo "--------------------coverage start--------------------"
           sed -i '1d' ${{ env.raw_ut_coverage }}
           go tool covdata textfmt -i=${GOCOVERDIR} -o ${{ env.raw_bvt_coverage }}
