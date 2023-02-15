@@ -58,6 +58,22 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 
 }
 
+func estimateOutCntForEquality(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, ndvMap map[string]float64) float64 {
+	colName := getColumnNameFromExpr(expr)
+	sortOrder := util.GetClusterByColumnOrder(sortKeyName, colName)
+	//if col is clusterby, we assume most of the rows in blocks we read is needed
+	//otherwise, deduce selectivity according to ndv
+	if sortOrder != -1 {
+		return estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
+	} else {
+		if ndv, ok := ndvMap[colName]; ok {
+			return tableCnt / ndv
+		} else {
+			return tableCnt / 100
+		}
+	}
+}
+
 // estimate output lines for a filter
 func estimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, ndvMap map[string]float64) float64 {
 	if expr == nil {
@@ -69,31 +85,23 @@ func estimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=":
-			colName := getColumnNameFromExpr(expr)
-			sortOrder := util.GetClusterByColumnOrder(sortKeyName, colName)
-			//if col is clusterby, we assume most of the rows in blocks we read is needed
-			//otherwise, deduce selectivity according to ndv
-			if sortOrder != -1 {
-				outcnt = estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
-			} else {
-				if ndv, ok := ndvMap[colName]; ok {
-					outcnt = tableCnt / ndv
-				} else {
-					outcnt = tableCnt / 100
-				}
-			}
+			outcnt = estimateOutCntForEquality(expr, sortKeyName, tableCnt, cost, ndvMap)
+		case ">", "<", ">=", "<=":
+			//for filters like a>1, no good way to estimate, return 3 * equality
+			outcnt = estimateOutCntForEquality(expr, sortKeyName, tableCnt, cost, ndvMap) * 3
 		case "and":
-			//get the smaller one of two children
-			outcnt = math.Min(estimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, ndvMap), estimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, ndvMap))
+			//get the smaller one of two children, and tune it down a little bit
+			out1 := estimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, ndvMap)
+			out2 := estimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, ndvMap)
+			outcnt = math.Min(out1, out2) * 0.8
 		case "or":
-			//get the bigger one of two children, and tune the up a little bit
+			//get the bigger one of two children, and tune it up a little bit
 			out1 := estimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, ndvMap)
 			out2 := estimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, ndvMap)
 			outcnt = math.Max(out1, out2) * 1.5
-
 		default:
-			//for filters like a>1, no good way to estimate, just 1/3
-			outcnt = cost * 0.33
+			//no good way to estimate, just 0.1*cost
+			outcnt = cost * 0.1
 		}
 	}
 	if outcnt > cost {
