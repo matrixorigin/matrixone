@@ -23,29 +23,20 @@ import (
 func TestPut(t *testing.T) {
 	q := newWaiterQueue()
 	w := acquireWaiter([]byte("w"))
-	q.Put(w)
+	q.put(w)
 	assert.Equal(t, 1, len(q.waiters))
-	assert.Equal(t, uint64(0), q.offset)
 }
 
 func TestLen(t *testing.T) {
 	q := newWaiterQueue()
-	q.Put(acquireWaiter([]byte("w")))
-	q.Put(acquireWaiter([]byte("w1")))
-	q.Put(acquireWaiter([]byte("w2")))
-	assert.Equal(t, uint64(3), q.Len())
+	q.put(acquireWaiter([]byte("w")))
+	q.put(acquireWaiter([]byte("w1")))
+	q.put(acquireWaiter([]byte("w2")))
+	assert.Equal(t, 3, q.len())
 
-	q.MustGet()
-	assert.Equal(t, uint64(2), q.Len())
-	assert.Nil(t, q.waiters[0])
-
-	q.MustGet()
-	assert.Equal(t, uint64(1), q.Len())
-	assert.Nil(t, q.waiters[1])
-
-	q.MustGet()
-	assert.Equal(t, uint64(0), q.Len())
-	assert.Nil(t, q.waiters[2])
+	v, remain := q.pop()
+	assert.Equal(t, q.waiters[1:], remain)
+	assert.Equal(t, []byte("w"), v.txnID)
 
 	defer func() {
 		if err := recover(); err != nil {
@@ -53,30 +44,30 @@ func TestLen(t *testing.T) {
 		}
 		assert.Fail(t, "must panic")
 	}()
-	q.MustGet()
+	q = newWaiterQueue()
+	q.pop()
 }
 
 func TestReset(t *testing.T) {
 	q := newWaiterQueue()
-	q.Put(acquireWaiter([]byte("w")))
-	q.Put(acquireWaiter([]byte("w1")))
-	q.Put(acquireWaiter([]byte("w2")))
-	q.MustGet()
+	q.put(acquireWaiter([]byte("w")))
+	q.put(acquireWaiter([]byte("w1")))
+	q.put(acquireWaiter([]byte("w2")))
+	q.pop()
 
-	q.Reset()
-	assert.Equal(t, uint64(0), q.offset)
+	q.reset()
 	assert.Empty(t, q.waiters)
 }
 
 func TestIterTxns(t *testing.T) {
 	q := newWaiterQueue()
-	q.Put(acquireWaiter([]byte("w")))
-	q.Put(acquireWaiter([]byte("w1")))
-	q.Put(acquireWaiter([]byte("w2")))
+	q.put(acquireWaiter([]byte("w")))
+	q.put(acquireWaiter([]byte("w1")))
+	q.put(acquireWaiter([]byte("w2")))
 
 	var values [][]byte
 	v := 0
-	q.IterTxns(func(b []byte) bool {
+	q.iter(func(b []byte) bool {
 		values = append(values, b)
 		v++
 		return v < 2
