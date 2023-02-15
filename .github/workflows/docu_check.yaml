@@ -12,7 +12,7 @@ jobs:
       - uses: guguducken/pull-issue-reviewer@v0.1.0
         with:
           token_action: ${{ secrets.TOKEN_ACTION }}
-          uri_notice: ${{ secrets. WECHAT_WORK_BOT_WEBHOOK }}
+          uri_notice: ${{ secrets.DOCU_GROUP_HOOK }}
           id_label: "5138861359"
           reviewers: "lacrimosaprinz,dengn"
           mentions: "Prinz,DengNan"
