@@ -240,7 +240,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
             		for j := range ss[i].NodeInfo.Data {                                  
                 		cnt += len(ss[i].NodeInfo.Data[j])                                
             		}                                                                     
-            		str += fmt.Sprintf(", blocklist = %v: %v", cnt, len(ss[i].NodeInfo.Data))                                 
+            		str += fmt.Sprintf(", blocklist = %v", cnt)                           
        		}
 		if ss[i].DataSource != nil {
 			str += gapNextLine()
