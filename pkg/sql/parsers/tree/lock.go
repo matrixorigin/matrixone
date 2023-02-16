@@ -66,7 +66,7 @@ func (node *LockTableStmt) Format(ctx *FmtCtx) {
 		for _, a := range node.TableLocks {
 			ctx.WriteString(prefix)
 			a.Table.Format(ctx)
-			ctx.WriteString(prefix)
+			ctx.WriteString(" ")
 			ctx.WriteString(a.LockType.String())
 			prefix = ", "
 		}
