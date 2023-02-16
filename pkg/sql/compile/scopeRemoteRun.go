@@ -233,7 +233,6 @@ func (s *Scope) remoteRun(c *Compile) error {
 	}
 	err = sender.send(sData, pData, pipeline.PipelineMessage)
 	if err != nil {
-		fmt.Println("Jesus"+DebugShowScopes([]*Scope{s}))
 		sender.close()
 		return err
 	}
