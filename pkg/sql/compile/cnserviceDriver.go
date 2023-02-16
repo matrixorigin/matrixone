@@ -155,6 +155,7 @@ func cnMessageHandle(ctx context.Context, message morpc.Message, cs morpc.Client
 	switch msgTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch excutor
 		opUuid, err := uuid.FromBytes(m.GetUuid())
+		fmt.Printf("[msghandler] get uuid %s notify\n", opUuid)
 		if err != nil {
 			return msgTyp, nil, err
 		}
@@ -168,6 +169,7 @@ func cnMessageHandle(ctx context.Context, message morpc.Message, cs morpc.Client
 				break
 			}
 		}
+		fmt.Printf("[msghandler] get uuid %s ch %p success\n", opUuid, ch)
 
 		doneCh := make(chan struct{})
 		info := process.WrapCs{
@@ -178,6 +180,7 @@ func cnMessageHandle(ctx context.Context, message morpc.Message, cs morpc.Client
 		}
 
 		ch <- info
+		fmt.Printf("[msghandler] notify dispatch uuid %s ch %p done\n", opUuid, ch)
 		<-doneCh
 		return msgTyp, nil, nil
 
@@ -676,10 +679,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
-
-	for i := range s.RemoteReceivRegInfos {
-		colexec.Srv.PutNotifyChIntoUuidMap(s.RemoteReceivRegInfos[i].Uuid, s.Proc.DispatchNotifyCh)
-	}
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)

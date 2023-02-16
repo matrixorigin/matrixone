@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -38,6 +39,10 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.prepared = false
 		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, len(ap.RemoteRegs))
 		ap.ctr.sendFunc = sendToAllFunc
+		for _, rr := range ap.RemoteRegs {
+			colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
+		}
+
 	case SendToAllLocalFunc:
 		if len(ap.RemoteRegs) != 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAllLocalFunc should not send to remote")

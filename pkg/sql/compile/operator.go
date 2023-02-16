@@ -911,7 +911,6 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, 
 				Uuid:     newUuid,
 				NodeAddr: s.NodeInfo.Addr,
 			})
-			colexec.Srv.PutNotifyChIntoUuidMap(newUuid, proc.DispatchNotifyCh)
 
 			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
 				Idx:      idx,
@@ -922,8 +921,10 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, 
 	}
 
 	if hasRemote {
+		fmt.Printf("[ccompile] dispatc = SendToAllFunc\n")
 		arg.FuncId = dispatch.SendToAllFunc
 	} else {
+		fmt.Printf("[ccompile] dispatc = SendToAllLocalFunc\n")
 		arg.FuncId = dispatch.SendToAllLocalFunc
 	}
 
