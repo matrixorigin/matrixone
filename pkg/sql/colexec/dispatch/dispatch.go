@@ -70,6 +70,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return true, nil
 	}
 
+	if bat.Length() == 0 {
+		return false, nil
+	}
+
 	for i, vec := range bat.Vecs {
 		if vec.IsOriginal() {
 			cloneVec, err := vector.Dup(vec, proc.Mp())

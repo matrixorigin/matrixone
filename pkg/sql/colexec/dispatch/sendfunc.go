@@ -88,9 +88,10 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error 
 		for cnt > 0 {
 			csinfo := <-proc.DispatchNotifyCh
 			ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers, &WrapperClientSession{
-				msgId: csinfo.MsgId,
-				cs:    csinfo.Cs,
-				uuid:  csinfo.Uid,
+				msgId:  csinfo.MsgId,
+				cs:     csinfo.Cs,
+				uuid:   csinfo.Uid,
+				doneCh: csinfo.DoneCh,
 			})
 			cnt--
 		}

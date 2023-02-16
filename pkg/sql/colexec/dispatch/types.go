@@ -33,6 +33,7 @@ type WrapperClientSession struct {
 	cs    morpc.ClientSession
 	uuid  uuid.UUID
 	// toAddr string
+	doneCh chan struct{}
 }
 type container struct {
 	// the clientsession info for the channel you want to dispatch
@@ -71,6 +72,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 				message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
 			}
 			r.cs.Write(timeoutCtx, message)
+			close(r.doneCh)
 		}
 
 	}

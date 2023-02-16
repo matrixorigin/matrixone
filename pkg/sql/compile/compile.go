@@ -130,6 +130,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 
 	// XXX PrintScope has a none-trivial amount of logging
 	// PrintScope(nil, []*Scope{c.scope})
+	fmt.Printf("[scopescope] %s", DebugShowScopes([]*Scope{c.scope}))
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -946,7 +947,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_SEMI:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -963,7 +964,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_LEFT:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -980,7 +981,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_SINGLE:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -997,7 +998,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_ANTI:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newJoinScopeList(ss, children)
 		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
 			if isEq && len(conds) == 1 {
@@ -1015,7 +1016,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_MARK:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newJoinScopeList(ss, children)
 		for i := range rs {
 			//if isEq {
 			//	rs[i].appendInstruction(vm.Instruction{
@@ -1353,39 +1354,39 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 	return rs
 }
 
-//func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
-//rs := make([]*Scope, len(ss))
-//// join's input will record in the left/right scope when JoinRun
-//// so set it to false here.
-//c.anal.isFirst = false
-//for i := range ss {
-//if ss[i].IsEnd {
-//rs[i] = ss[i]
-//continue
-//}
-//chp := c.newMergeScope(dupScopeList(children))
-//rs[i] = new(Scope)
-//rs[i].Magic = Remote
-//rs[i].IsJoin = true
-//rs[i].NodeInfo = ss[i].NodeInfo
-//rs[i].PreScopes = []*Scope{ss[i], chp}
-//rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-//ss[i].appendInstruction(vm.Instruction{
-//Op: vm.Connector,
-//Arg: &connector.Argument{
-//Reg: rs[i].Proc.Reg.MergeReceivers[0],
-//},
-//})
-//chp.appendInstruction(vm.Instruction{
-//Op: vm.Connector,
-//Arg: &connector.Argument{
-//Reg: rs[i].Proc.Reg.MergeReceivers[1],
-//},
-//})
-//chp.IsEnd = true
-//}
-//return rs
-//}
+func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+	rs := make([]*Scope, len(ss))
+	// join's input will record in the left/right scope when JoinRun
+	// so set it to false here.
+	c.anal.isFirst = false
+	for i := range ss {
+		if ss[i].IsEnd {
+			rs[i] = ss[i]
+			continue
+		}
+		chp := c.newMergeScope(dupScopeList(children))
+		rs[i] = new(Scope)
+		rs[i].Magic = Remote
+		rs[i].IsJoin = true
+		rs[i].NodeInfo = ss[i].NodeInfo
+		rs[i].PreScopes = []*Scope{ss[i], chp}
+		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+		ss[i].appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[0],
+			},
+		})
+		chp.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[1],
+			},
+		})
+		chp.IsEnd = true
+	}
+	return rs
+}
 
 func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 	len := len(ss)
