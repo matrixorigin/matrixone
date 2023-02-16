@@ -21,6 +21,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -462,6 +463,39 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 	}
 
 	return
+}
+
+func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+
+	stat, err := os.Stat(nativePath)
+	if os.IsNotExist(err) {
+		return nil, moerr.NewFileNotFound(ctx, filePath)
+	}
+
+	if stat.IsDir() {
+		return nil, moerr.NewFileNotFound(ctx, filePath)
+	}
+
+	fileSize := stat.Size()
+	nBlock := ceilingDiv(fileSize, _BlockSize)
+	contentSize := fileSize - _ChecksumSize*nBlock
+
+	return &DirEntry{
+		Name:  pathpkg.Base(filePath),
+		IsDir: false,
+		Size:  contentSize,
+	}, nil
 }
 
 func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
