@@ -1947,6 +1947,10 @@ var (
 			output: "Lock Table t LOW_PRIORITY WRITE",
 		},
 		{
+			input:  "LOCK TABLES t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
+			output: "Lock Table t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
+		},
+		{
 			input:  "UNLOCK TABLES",
 			output: "UnLock Table",
 		},
