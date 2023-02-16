@@ -16,6 +16,9 @@ package compile
 
 import (
 	"context"
+	"hash/crc32"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,8 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"hash/crc32"
-	"time"
 )
 
 // cnInformation records service information to help handle messages.

@@ -124,7 +124,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 	}
 	var errReceiveChan chan error
 	if len(s.RemoteReceivRegInfos) > 0 {
-		s.settingCh()
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
 		s.notifyAndReceiveFromRemote(errReceiveChan)
 	}
@@ -680,11 +679,5 @@ func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, for
 			forwardCh <- bat
 			dataBuffer = nil
 		}
-	}
-}
-
-func (s *Scope) settingCh() {
-	for i := range s.RemoteReceivRegInfos {
-		colexec.Srv.PutNotifyChIntoUuidMap(s.RemoteReceivRegInfos[i].Uuid, s.Proc.DispatchNotifyCh)
 	}
 }
