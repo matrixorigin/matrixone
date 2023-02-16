@@ -201,3 +201,4 @@ alter account config abc set mysql_compatbility_mode = '{"version_compatibility"
 select version();
 drop database test;
 drop database test1;
+-- @session
