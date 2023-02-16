@@ -593,11 +593,11 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 		go func(info RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
+				reg.Ch <- nil
 				errChan <- errStream
 				return
 			}
 			defer func(streamSender morpc.Stream) {
-				reg.Ch <- nil
 				close(reg.Ch)
 				_ = streamSender.Close()
 			}(streamSender)
@@ -611,21 +611,25 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				message.Uuid = info.Uuid[:]
 			}
 			if errSend := streamSender.Send(c, message); errSend != nil {
+				reg.Ch <- nil
 				errChan <- errSend
 				return
 			}
 
 			messagesReceive, errReceive := streamSender.Receive()
 			if errReceive != nil {
+				reg.Ch <- nil
 				errChan <- errReceive
 				return
 			}
 
 			if err := receiveMsgAndForward(c, messagesReceive, reg.Ch, mp); err != nil {
+				reg.Ch <- nil
 				errChan <- err
 				return
 			}
-
+			reg.Ch <- nil
+			errChan <- nil
 		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], mp)
 	}
 
