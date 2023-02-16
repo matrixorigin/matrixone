@@ -4,7 +4,7 @@ use test01;
 create table tt(col2 float comment '"%$^&*()_+@!\'');
 show create table tt;
 Table    Create Table
-tt    CREATE TABLE `tt` (\n`col2` FLOAT DEFAULT NULL COMMENT '"%$^&*()_+@!'''\n)
+tt    CREATE TABLE `tt` (\n`col2` FLOAT DEFAULT NULL COMMENT '"%$^&*()_+@!''\n)
 drop table tt;
 create table t1 (id int not null, str char(10),name varchar(10));
 create table t2 (a int);
@@ -18,22 +18,22 @@ t1
 t2
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT    NO        NULL        
-name    VARCHAR(10)    YES        NULL        
-str    CHAR(10)    YES        NULL        
+id    INT    NO        NULL
+str    CHAR(10)    YES        NULL
+name    VARCHAR(10)    YES        NULL
 show full columns from t1;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT    NULL    NO        NULL        select,insert,update,references    
-name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references    
-str    CHAR(10)    NULL    YES        NULL        select,insert,update,references    
+id    INT    NULL    NO        NULL        select,insert,update,references
+str    CHAR(10)    NULL    YES        NULL        select,insert,update,references
+name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references
 show full columns from t1 like '%';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT    NULL    NO        NULL        select,insert,update,references    
-name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references    
-str    CHAR(10)    NULL    YES        NULL        select,insert,update,references    
+id    INT    NULL    NO        NULL        select,insert,update,references
+str    CHAR(10)    NULL    YES        NULL        select,insert,update,references
+name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references
 show full columns from t1 where `Field`='id';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT    NULL    NO        NULL        select,insert,update,references    
+id    INT    NULL    NO        NULL        select,insert,update,references
 drop database if exists test01;
 show charset;
 Charset    Description    Default collation    Maxlen
@@ -45,10 +45,10 @@ create database test01;
 use test01;
 show columns from test02.t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    TINYINT    YES        NULL        
-b    SMALLINT    YES        NULL        
-c    INT    YES        NULL        
-d    BIGINT    YES        NULL        
+a    TINYINT    YES        NULL
+b    SMALLINT    YES        NULL
+c    INT    YES        NULL
+d    BIGINT    YES        NULL
 create database if not exists db11111111111;
 show table status from db11111111111;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment
@@ -219,7 +219,6 @@ Trigger    Event    Table    Statement    Timing    Created    sql_mode    Defin
 use mo_catalog;
 show tables;
 Tables_in_mo_catalog
-mo_tables
 mo_user
 mo_account
 mo_role
@@ -228,8 +227,9 @@ mo_role_grant
 mo_role_privs
 mo_user_defined_function
 mo_mysql_compatbility_mode
-mo_database
 mo_columns
+mo_tables
+mo_database
 show table_number from mo_catalog;
 Number of tables in mo_catalog
 11
@@ -332,10 +332,10 @@ PRIMARY KEY  (h1,u1)
 );
 show INDEX FROM show_02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+show_02    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 show_02    0    h1    1    h1    A    0    NULL    NULL    NO            YES    NULL
 show_02    0    u1    1    u1    A    0    NULL    NULL    NO            YES    NULL
 show_02    1    PRIMARY    1    __mo_cpkey_002h1002u1    A    0    NULL    NULL    NO            YES    NULL
-show_02    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 DROP TABLE show_02;
 DROP TABLE IF EXISTS show_03;
 CREATE TABLE show_03(a int, b int);
@@ -345,9 +345,9 @@ Table    Create Table
 show_03    CREATE TABLE `show_03` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `x` (`a`) COMMENT `x`\n)
 show INDEX FROM show_03;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-show_03    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 show_03    0    a    1    a    A    0    NULL    NULL    YES            YES    NULL
 show_03    0    b    1    b    A    0    NULL    NULL    YES            YES    NULL
+show_03    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 DROP TABLE show_03;
 CREATE TABLE show_04(a int, b int, unique key(a));
 show CREATE TABLE show_04;
@@ -361,24 +361,20 @@ show_04    0    b    1    b    A    0    NULL    NULL    YES            YES    N
 show_04    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 DROP TABLE show_04;
 DROP DATABASE IF EXISTS show_03;
-
+CREATE DATABASE show_03;
 USE show_03;
-
-delimiter $$
-CREATE FUNCTION myfun(ia int,ib int) returns int
-BEGIN
-RETURN ia + ib;
-
-end
-$$
-delimiter;
-
+create function hello() returns int language sql as 'select id from test_table limit 1';
+function hello already exists
 show FUNCTION status;
-
-show FUNCTION status LIKE 'pattern';
-
-show FUNCTION status where db = 'show_03';
-
+Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
+udf_first    helloworld    FUNCTION    dump    2023-02-09 10:11:30    2023-02-09 10:11:30    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+show_03    helloworld1    FUNCTION    dump    2023-02-10 10:17:36    2023-02-10 10:17:36    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+show_03    helloworld    FUNCTION    dump    2023-02-10 10:13:08    2023-02-10 10:13:08    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+show_03    hello    FUNCTION    dump    2023-02-16 02:54:47    2023-02-16 02:54:47    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+show FUNCTION status LIKE 'hello';
+Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
+show_03    hello    FUNCTION    dump    2023-02-16 02:54:47    2023-02-16 02:54:47    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+DROP DATABASE show_03;
 DROP DATABASE test;
 create database test;
 use test;

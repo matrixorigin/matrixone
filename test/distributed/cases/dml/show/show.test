@@ -224,21 +224,14 @@ show INDEX FROM show_04;
 DROP TABLE show_04;
 
 -- SHOW FUNCTION STATUS [like_or_where]
--- @bvt:issue#7367
 DROP DATABASE IF EXISTS show_03;
+CREATE DATABASE show_03;
 USE show_03;
-delimiter $$
-CREATE FUNCTION myfun(ia int,ib int) returns int
-BEGIN
-RETURN ia + ib;
-end
-$$
-delimiter;
+create function hello() returns int language sql as 'select id from test_table limit 1';
 
 show FUNCTION status;
-show FUNCTION status LIKE 'pattern';
-show FUNCTION status where db = 'show_03';
--- @bvt:issue
+show FUNCTION status LIKE 'hello';
+DROP DATABASE show_03;
 
 DROP DATABASE test;
 create database test;
