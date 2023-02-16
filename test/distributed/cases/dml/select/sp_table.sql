@@ -1,0 +1,2 @@
+select reldatabase,relname,relkind from mo_catalog.mo_tables where relname = '%!%mo_increment_columns' order by reldatabase;
+select relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' order by relname;
