@@ -455,9 +455,10 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		result = " (cost=0)"
 		//result = " (cost=%.2f..%.2f rows=%.2f ndv=%.2f rowsize=%.f)"
 	} else {
-		var blockNumStr, hashmapSizeStr string
+		var blockNumStr, hashmapSizeStr, selString string
 		if c.Stats.BlockNum > 0 {
 			blockNumStr = " blockNum=" + strconv.FormatInt(int64(c.Stats.BlockNum), 10)
+			selString = " selectivity=" + strconv.FormatFloat(c.Stats.Selectivity, 'f', 2, 64)
 		}
 		if c.Stats.HashmapSize > 0 {
 			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapSize, 'f', 2, 64)
@@ -465,7 +466,7 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 
 		result = " (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
 			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +
-			blockNumStr + hashmapSizeStr + ")"
+			blockNumStr + selString + hashmapSizeStr + ")"
 	}
 	return result, nil
 }
