@@ -199,7 +199,9 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		}
 		nextAnalyze.Network(bat)
 		sendToConnectOperator(nextOperator, bat)
-		dataBuffer = dataBuffer[:0]
+		// XXX maybe we can use dataBuffer = dataBuffer[:0] to do memory reuse.
+		// but it seems that decode batch will do some memory reflect. but not copy.
+		dataBuffer = nil
 	}
 }
 
@@ -1248,7 +1250,6 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := new(batch.Batch)
 	//mp := proc.Mp()
 	err := types.Decode(data, bat)
-
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
 		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)

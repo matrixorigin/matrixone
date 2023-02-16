@@ -115,7 +115,9 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 }
 
 func (sender *messageSenderOnClient) close() {
-	sender.ctxCancel()
+	if sender.ctxCancel != nil {
+		sender.ctxCancel()
+	}
 	// XXX not a good way to deal it if close failed.
 	_ = sender.streamSender.Close()
 }
