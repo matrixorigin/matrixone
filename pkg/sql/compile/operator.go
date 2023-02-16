@@ -17,9 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strings"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -903,7 +901,7 @@ func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argumen
 	arg := new(dispatch.Argument)
 	arg.LocalRegs = regs
 	if all {
-		arg.FuncId = dispatch.SendToAllFunc
+		arg.FuncId = dispatch.SendToAllLocalFunc
 	} else {
 		arg.FuncId = dispatch.SendToAnyLocalFunc
 	}
@@ -913,45 +911,45 @@ func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argumen
 
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
-func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
-	arg := new(dispatch.Argument)
-	arg.FuncId = dispatch.SendToAllFunc
+//func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
+//arg := new(dispatch.Argument)
+//arg.FuncId = dispatch.SendToAllFunc
 
-	scopeLen := len(ss)
-	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
-	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
+//scopeLen := len(ss)
+//arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
+//arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
 
-	for _, s := range ss {
-		if s.IsEnd {
-			continue
-		}
+//for _, s := range ss {
+//if s.IsEnd {
+//continue
+//}
 
-		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
-			strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
-			// Local reg.
-			// Put them into arg.LocalRegs
-			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
-		} else {
-			// Remote reg.
-			// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
-			newUuid := uuid.New()
+//if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
+//strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+//// Local reg.
+//// Put them into arg.LocalRegs
+//arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
+//} else {
+//// Remote reg.
+//// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
+//newUuid := uuid.New()
 
-			arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
-				Uuid:     newUuid,
-				NodeAddr: s.NodeInfo.Addr,
-			})
-			colexec.Srv.PutNotifyChIntoUuidMap(newUuid, proc.DispatchNotifyCh)
+//arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
+//Uuid:     newUuid,
+//NodeAddr: s.NodeInfo.Addr,
+//})
+//colexec.Srv.PutNotifyChIntoUuidMap(newUuid, proc.DispatchNotifyCh)
 
-			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
-				Idx:      idx,
-				Uuid:     newUuid,
-				FromAddr: currentCNAddr,
-			})
-		}
-	}
+//s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
+//Idx:      idx,
+//Uuid:     newUuid,
+//FromAddr: currentCNAddr,
+//})
+//}
+//}
 
-	return arg
-}
+//return arg
+//}
 
 func constructMergeGroup(_ *plan.Node, needEval bool) *mergegroup.Argument {
 	return &mergegroup.Argument{
