@@ -188,7 +188,7 @@ select version();
 drop database test;
 
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
--- @session:id=1&user=abc:admin&password=123456
+-- @session:id=2&user=abc:admin&password=123456
 drop database if exists test;
 drop database if exists test1;
 create database test;
