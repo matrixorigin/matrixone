@@ -134,7 +134,7 @@ func TestSendWithPayloadCannotBlockIfFutureRemoved(t *testing.T) {
 			req.payload = []byte("hello")
 			f, err := b.Send(ctx, req)
 			require.NoError(t, err)
-			id := f.id
+			id := f.getSendMessageID()
 			// keep future in the futures map
 			f.ref()
 			defer f.unRef()
@@ -164,7 +164,7 @@ func TestSendWithPayloadCannotBlockIfFutureClosed(t *testing.T) {
 			req.payload = []byte("hello")
 			f, err := b.Send(ctx, req)
 			require.NoError(t, err)
-			id := f.id
+			id := f.getSendMessageID()
 			f.mu.Lock()
 			f.mu.closed = true
 			f.releaseFunc = nil // make it nil to keep this future in b.mu.features
@@ -487,7 +487,9 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 
 	c := make(chan Message, 1)
 	s := newStream(c,
-		func(m backendSendMessage) error {
+		func() *Future { return newFuture(nil) },
+		func(m *Future) error {
+			m.messageSended(nil)
 			return nil
 		},
 		func(s *stream) {},
@@ -503,7 +505,8 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 func TestGCStream(t *testing.T) {
 	c := make(chan Message, 1)
 	s := newStream(c,
-		func(m backendSendMessage) error {
+		func() *Future { return newFuture(nil) },
+		func(m *Future) error {
 			return nil
 		},
 		func(s *stream) {},
@@ -761,21 +764,25 @@ type testBackend struct {
 func (b *testBackend) Send(ctx context.Context, request Message) (*Future, error) {
 	b.active()
 	f := newFuture(nil)
-	f.init(request.GetID(), ctx)
+	f.init(RPCMessage{Ctx: ctx, Message: request})
 	return f, nil
 }
 
 func (b *testBackend) SendInternal(ctx context.Context, request Message) (*Future, error) {
 	b.active()
 	f := newFuture(nil)
-	f.init(request.GetID(), ctx)
+	f.init(RPCMessage{Ctx: ctx, Message: request})
 	return f, nil
 }
 
 func (b *testBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	b.active()
 	st := newStream(make(chan Message, 1),
-		func(m backendSendMessage) error { return nil },
+		func() *Future { return newFuture(nil) },
+		func(m *Future) error {
+			m.messageSended(nil)
+			return nil
+		},
 		func(s *stream) {
 			if s.unlockAfterClose {
 				b.Unlock()

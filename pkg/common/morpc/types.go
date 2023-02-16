@@ -103,8 +103,6 @@ type ClientSession interface {
 	Close() error
 	// Write writing the response message to the client.
 	Write(ctx context.Context, response Message) error
-	// AsyncWrite is similar to Write, but perform sending response asynchronously
-	AsyncWrite(ctx context.Context, response Message) error
 }
 
 // RPCServer RPC server implementation corresponding to RPCClient.
