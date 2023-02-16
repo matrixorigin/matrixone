@@ -96,13 +96,13 @@ func (s *service) Lock(
 	tableID uint64,
 	rows [][]byte,
 	txnID []byte,
-	options LockOptions) (bool, error) {
+	options LockOptions) error {
 	txn := s.activeTxns.getActiveTxn(txnID, true)
 	l := s.getLockTable(tableID)
 	if err := l.lock(ctx, txn, rows, options); err != nil {
-		return false, err
+		return err
 	}
-	return true, nil
+	return nil
 }
 
 func (s *service) Unlock(txnID []byte) error {

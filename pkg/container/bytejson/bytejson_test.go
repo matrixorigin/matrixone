@@ -185,7 +185,7 @@ func TestQuery(t *testing.T) {
 		require.Nil(t, err)
 		path, err := ParseJsonPath(kase.pathStr)
 		require.Nil(t, err)
-		out := bj.Query(&path)
+		out := bj.Query([]*Path{&path})
 		require.JSONEq(t, kase.outStr, out.String())
 	}
 }
