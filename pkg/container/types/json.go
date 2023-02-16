@@ -28,15 +28,3 @@ func ParseSliceToByteJson(dt []byte) (bytejson.ByteJson, error) {
 func ParseStringToPath(str string) (bytejson.Path, error) {
 	return bytejson.ParseJsonPath(str)
 }
-
-func ComputeJson(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
-	bj := DecodeJson(json)
-	return bj.Query(path), nil
-}
-func ComputeString(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
-	bj, err := ParseSliceToByteJson(json)
-	if err != nil {
-		return nil, err
-	}
-	return bj.Query(path), nil
-}
