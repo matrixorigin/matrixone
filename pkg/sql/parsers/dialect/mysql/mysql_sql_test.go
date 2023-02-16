@@ -1930,6 +1930,30 @@ var (
 		{
 			input: "select trim(both a from b) from t",
 		},
+		{
+			input:  "LOCK TABLES t READ",
+			output: "Lock Table t READ",
+		},
+		{
+			input:  "LOCK TABLES t READ LOCAL",
+			output: "Lock Table t READ LOCAL",
+		},
+		{
+			input:  "LOCK TABLES t WRITE",
+			output: "Lock Table t WRITE",
+		},
+		{
+			input:  "LOCK TABLES t LOW_PRIORITY WRITE",
+			output: "Lock Table t LOW_PRIORITY WRITE",
+		},
+		{
+			input:  "LOCK TABLES t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
+			output: "Lock Table t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
+		},
+		{
+			input:  "UNLOCK TABLES",
+			output: "UnLock Table",
+		},
 	}
 )
 

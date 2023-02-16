@@ -75,6 +75,7 @@ func main() {
 		createTable                        []string
 		err                                error
 	)
+	dumpStart := time.Now()
 	defer func() {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "modump error: %v\n", err)
@@ -84,6 +85,9 @@ func main() {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "modump error while close connection: %v\n", err)
 			}
+		}
+		if err == nil {
+			fmt.Fprintf(os.Stdout, "/* MODUMP SUCCESS, COST %v */\n", time.Since(dumpStart))
 		}
 	}()
 
@@ -334,7 +338,9 @@ func convertValue(v any, typ string) string {
 	}
 	typ = strings.ToLower(typ)
 	switch typ {
-	case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double":
+	case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double", "bool", "boolean", "":
+		// why empty string in column type?
+		// see https://github.com/matrixorigin/matrixone/issues/8050#issuecomment-1431251524
 		return string(ret)
 	default:
 		return "'" + strings.Replace(string(ret), "'", "\\'", -1) + "'"
