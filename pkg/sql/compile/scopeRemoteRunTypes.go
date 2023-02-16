@@ -271,6 +271,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return err
 	}
 
+	checksum := crc32.ChecksumIEEE(data)
 	if len(data) <= receiver.maxMessageSize {
 		m, errA := receiver.acquireMessage()
 		if errA != nil {
@@ -278,7 +279,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		}
 		m.SetData(data)
 		// XXX too bad.
-		m.SetCheckSum(crc32.ChecksumIEEE(data))
+		m.SetCheckSum(checksum)
 		m.SetSequence(receiver.sequence)
 		receiver.sequence++
 		return receiver.clientSession.Write(receiver.ctx, m)
@@ -297,7 +298,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 			m.SetSid(pipeline.WaitingNext)
 		}
 		m.SetData(data[start:end])
-		m.SetCheckSum(crc32.ChecksumIEEE(data))
+		m.SetCheckSum(checksum)
 		m.SetSequence(receiver.sequence)
 		receiver.sequence++
 

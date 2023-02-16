@@ -120,7 +120,6 @@ func cnMessageHandle(receiver messageReceiverOnServer) error {
 				break
 			}
 		}
-		fmt.Printf("[msghandler] get uuid %s ch %p success\n", opUuid, ch)
 
 		doneCh := make(chan struct{})
 		info := process.WrapCs{
@@ -186,9 +185,6 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 			return nil
 		}
 		// XXX some order check just for safety ?
-		if m.Checksum != crc32.ChecksumIEEE(m.Data) {
-			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
-		}
 		if sequence != m.Sequence {
 			return moerr.NewInternalErrorNoCtx("Packages passed by morpc are out of order")
 		}
@@ -198,6 +194,10 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		if m.WaitingNextToMerge() {
 			continue
 		}
+		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
+			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
+		}
+
 		bat, err := decodeBatch(c.proc.Mp(), dataBuffer)
 		if err != nil {
 			return err
