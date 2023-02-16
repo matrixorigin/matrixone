@@ -235,13 +235,6 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 			str += showInstruction(instruction, rmp)
 		}
 		str += "]"
-		{                                                                         
-            		cnt := 0                                                              
-            		for j := range ss[i].NodeInfo.Data {                                  
-                		cnt += len(ss[i].NodeInfo.Data[j])                                
-            		}                                                                     
-            		str += fmt.Sprintf(", blocklist = %v", cnt)                           
-       		}
 		if ss[i].DataSource != nil {
 			str += gapNextLine()
 			str += fmt.Sprintf("DataSource: %s,", showDataSource(ss[i].DataSource))
