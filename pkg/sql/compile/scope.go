@@ -525,6 +525,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 			Addr: srcScope.NodeInfo.Addr,
 			Data: make([][]byte, len(srcScope.NodeInfo.Data)),
 		},
+		RemoteReceivRegInfos: srcScope.RemoteReceivRegInfos,
 	}
 
 	// copy node.Data
