@@ -198,6 +198,10 @@ import (
 
     killOption tree.KillOption
     statementOption tree.StatementOption
+
+    tableLock tree.TableLock
+    tableLocks []tree.TableLock
+    tableLockType tree.TableLockType
 }
 
 %token LEX_ERROR
@@ -382,6 +386,7 @@ import (
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
+%type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt import_data_stmt
 %type <statement> analyze_stmt
@@ -611,6 +616,10 @@ import (
 %token <str> QUERY_RESULT
 %start start_command
 
+%type<tableLock> table_lock_elem
+%type<tableLocks> table_lock_list
+%type<tableLockType> table_lock_type
+
 %%
 
 start_command:
@@ -650,6 +659,7 @@ stmt:
 |   use_stmt
 |   transaction_stmt
 |   set_stmt
+|   lock_stmt
 |   revoke_stmt
 |   grant_stmt
 |   load_data_stmt
@@ -1962,6 +1972,56 @@ update_value:
     column_name '=' expr_or_default
     {
         $$ = &tree.UpdateExpr{Names: []*tree.UnresolvedName{$1}, Expr: $3}
+    }
+
+lock_stmt:
+    lock_table_stmt
+|   unlock_table_stmt
+
+lock_table_stmt:
+    LOCK TABLES table_lock_list
+    {
+        $$ = &tree.LockTableStmt{TableLocks:$3}
+    }
+
+table_lock_list:
+    table_lock_elem
+    {
+       $$ = []tree.TableLock{$1}
+    }
+|   table_lock_list ',' table_lock_elem
+    {
+       $$ = append($1, $3);
+    }
+
+table_lock_elem:
+    table_name table_lock_type
+    {
+        $$ = tree.TableLock{$1, $2}
+    }
+
+table_lock_type:  
+    READ
+    {
+        $$ = tree.TableLockRead
+    }
+|   READ LOCAL
+    {
+        $$ = tree.TableLockReadLocal
+    }
+|   WRITE
+    {
+        $$ = tree.TableLockWrite
+    }
+|   LOW_PRIORITY WRITE
+    {
+        $$ = tree.TableLockLowPriorityWrite
+    }
+
+unlock_table_stmt:
+    UNLOCK TABLES
+    {
+       $$ = &tree.UnLockTableStmt{}
     }
 
 prepareable_stmt:
