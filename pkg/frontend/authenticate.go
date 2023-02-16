@@ -6319,18 +6319,16 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 	return nil
 }
 
-func getMoMysqlCompatbilityModeConfig(ctx context.Context, ses *Session, dbName string) (string, error) {
+func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (string, error) {
 	var err error
-	var sql string
-	var defaultConfig string
 	var erArray []ExecResult
-
-	defaultConfig = fmt.Sprintf("{"+"%q"+":"+"%q"+"}", "version_compatibility", "0.7")
+	defaultConfig := "0.7"
+	path := "$.version_compatibility"
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	sql = `select configuration from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s"; `
-	sql = fmt.Sprintf(sql, dbName)
+	sql := `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s"; `
+	sql = fmt.Sprintf(sql, path, dbName)
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
@@ -6352,24 +6350,4 @@ func getMoMysqlCompatbilityModeConfig(ctx context.Context, ses *Session, dbName 
 		}
 	}
 	return defaultConfig, err
-}
-
-func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (string, error) {
-	var err error
-	var allConfig string
-	defaultConfig := "0.7"
-	path := "$.version_compatibility"
-	allConfig, err = getMoMysqlCompatbilityModeConfig(ctx, ses, dbName)
-	if err != nil {
-		return defaultConfig, err
-	}
-	pStar, err := types.ParseStringToPath(path)
-	if err != nil {
-		return defaultConfig, err
-	}
-	ret, err := types.ComputeString([]byte(allConfig), &pStar)
-	if err != nil {
-		return defaultConfig, err
-	}
-	return string(ret.GetString()), err
 }
