@@ -72,8 +72,6 @@ type JoinMap struct {
 	mp      *StrHashMap
 	hasNull bool
 	idx     *index.LowCardinalityIndex
-
-	nullSels []int64
 }
 
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)

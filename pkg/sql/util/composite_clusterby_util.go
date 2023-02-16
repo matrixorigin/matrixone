@@ -65,6 +65,9 @@ func GetClusterByColumnOrder(cbName, colName string) int {
 	if cbName == colName {
 		return 0
 	}
+	if !JudgeIsCompositeClusterByColumn(cbName) {
+		return -1
+	}
 	idx := 0
 	for next := len(catalog.PrefixCBColName); next < len(cbName); {
 		strLen, _ := strconv.Atoi(cbName[next : next+3])
