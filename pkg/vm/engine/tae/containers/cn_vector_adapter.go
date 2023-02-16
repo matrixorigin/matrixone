@@ -41,10 +41,12 @@ type CnTaeVector[T any] struct {
 	// Used in Append()
 	mpool *mpool.MPool
 
-	// isAllocatedFromMpool is used for ResetWithData() & Allocated()
-	// When ResetWithData(bytes) is called, we are not allocating using the vector's Mpool. isAllocatedFromMpool  is used to track that.
-	// So when we call Allocated() after ResetWithData(), we should get Zero.
-	isAllocatedFromMpool bool
+	// isOriginal is used for ResetWithData() & Allocated()
+	// When ResetWithData(bytes) is called, this vector is not the original/first copy of the data.
+	// When this.Append(newData) is called, then it becomes the owner of newData
+	// So when we call Allocated() after ResetWithData(), we should return Zero if it is not the owner.
+	// And we should return the this.Size() if it is an owner.
+	isOriginal bool
 }
 
 func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeVector[T] {
@@ -67,7 +69,7 @@ func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTa
 		alloc = common.DefaultAllocator
 	}
 	vec.mpool = alloc
-	vec.isAllocatedFromMpool = false
+	vec.isOriginal = false
 
 	return &vec
 }
@@ -88,7 +90,7 @@ func (vec *CnTaeVector[T]) Append(v any) {
 		_ = vec.downstreamVector.Append(v, false, vec.mpool)
 	}
 
-	vec.isAllocatedFromMpool = true
+	vec.isOriginal = true
 }
 
 func (vec *CnTaeVector[T]) AppendMany(vs ...any) {
@@ -294,10 +296,11 @@ func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 
 	n = int64(len(downStreamVectorByteArr))
 
-	vec.releaseDownstream()
-	vec.downstreamVector = cnVector.New(vec.GetType())
+	newVector := cnVector.New(vec.GetType())
+	err = newVector.UnmarshalBinary(downStreamVectorByteArr)
 
-	err = vec.downstreamVector.UnmarshalBinary(downStreamVectorByteArr)
+	vec.releaseDownstream()
+	vec.downstreamVector = newVector
 
 	return
 }
@@ -324,7 +327,7 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 	// 			    2. I did try only allocating using mpool2 alone, but that didn't work.
 
 	/*
-		cloned.isAllocatedFromMpool = true
+		cloned.isOriginal = true
 
 		// Create a duplicate of the downstream CN vector
 		vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
@@ -587,16 +590,15 @@ func (vec *CnTaeVector[T]) Close() {
 }
 
 func (vec *CnTaeVector[T]) releaseDownstream() {
-	if vec.downstreamVector != nil && vec.isAllocatedFromMpool {
+	if vec.downstreamVector != nil {
 		vec.downstreamVector.Free(vec.mpool)
 		vec.downstreamVector = nil
-		vec.isAllocatedFromMpool = false
 	}
 }
 
 func (vec *CnTaeVector[T]) Allocated() int {
 
-	if !vec.isAllocatedFromMpool {
+	if !vec.isOriginal {
 		return 0
 	}
 
@@ -620,7 +622,7 @@ func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 		cnNulls.Add(newNulls, nulls.ToArray()...)
 	}
 
-	newDownstream := NewMoVecFromBytes(vec.GetType(), bs)
+	newDownstream := AllocateNewMoVecFromBytes(vec.GetType(), bs, vec.GetAllocator())
 	if vec.Nullable() {
 		newDownstream.Nsp = newNulls
 	}
@@ -631,5 +633,5 @@ func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 
 func (vec *CnTaeVector[T]) HasNull() bool {
 	//TODO: Avoid Clone()
-	return vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Clone().Any()
+	return vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Any()
 }

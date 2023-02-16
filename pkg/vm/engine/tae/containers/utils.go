@@ -79,8 +79,11 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool
 func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	bs := vec.Bytes()
 
-	mov = NewMoVecFromBytes(vec.GetType(), bs)
-
+	if vec.GetType().IsVarlen() {
+		mov, _ = movec.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
+	} else {
+		mov = movec.NewOriginalWithData(vec.GetType(), bs.StorageBuf(), &nulls.Nulls{})
+	}
 	if vec.HasNull() {
 		mov.Nsp.Np = bitmap.New(vec.Length())
 		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
@@ -90,14 +93,26 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	return
 }
 
-func NewMoVecFromBytes(typ types.Type, bs *Bytes) (mov *movec.Vector) {
+func AllocateNewMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (mov *movec.Vector) {
 	if typ.IsVarlen() {
-		mov, _ = movec.BuildVarlenaVector(typ, bs.Header, bs.Storage)
-	} else {
-		mov = movec.NewOriginalWithData(typ, bs.StorageBuf(), &nulls.Nulls{})
-	}
+		dataByteArr := bs.HeaderBuf()
+		// TODO: Ignoring error. Is it safe?
+		dataAllocated, _ := pool.Alloc(len(dataByteArr))
+		copy(dataAllocated, dataByteArr)
 
-	return mov
+		areaByteArr := bs.StorageBuf()
+		areaAllocated, _ := pool.Alloc(len(areaByteArr))
+		copy(areaAllocated, areaByteArr)
+
+		mov = movec.NewWithDataAndArea(typ, dataAllocated, areaAllocated)
+	} else {
+
+		dataByteArr := bs.StorageBuf()
+		dataAllocated, _ := pool.Alloc(len(dataByteArr))
+		copy(dataAllocated, dataByteArr)
+		mov = movec.NewWithData(typ, dataAllocated, &nulls.Nulls{})
+	}
+	return
 }
 
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {

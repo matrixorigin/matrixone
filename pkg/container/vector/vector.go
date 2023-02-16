@@ -543,6 +543,24 @@ func NewOriginalWithData(typ types.Type, data []byte, nsp *nulls.Nulls) *Vector 
 	return v
 }
 
+func NewWithData(typ types.Type, data []byte, nsp *nulls.Nulls) *Vector {
+	v := &Vector{
+		Nsp:  nsp,
+		Typ:  typ,
+		data: data,
+	}
+	v.colFromData()
+	return v
+}
+
+func NewWithDataAndArea(typ types.Type, data []byte, area []byte) *Vector {
+	vec := New(typ)
+	vec.data = data
+	vec.area = area
+	vec.colFromData()
+	return vec
+}
+
 func NewWithNspSize(typ types.Type, n int64) *Vector {
 	return &Vector{
 		Nsp:      nulls.NewWithSize(int(n)),
