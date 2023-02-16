@@ -177,7 +177,6 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 				}
 				mergeAnalyseInfo(c.anal, ana)
 			}
-			dataBuffer = nil
 			return nil
 		}
 		// XXX some order check just for safety ?
