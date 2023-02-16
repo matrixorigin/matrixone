@@ -1951,7 +1951,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var refChildTbls []uint64
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
 			col := &plan2.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
@@ -1970,7 +1969,8 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Comment:   attr.Attr.Comment,
 				ClusterBy: attr.Attr.ClusterBy,
 			}
-			if isCPkey {
+			// Is it a composite primary key
+			if attr.Attr.Name == catalog.CPrimaryKeyColName {
 				CompositePkey = col
 				continue
 			}

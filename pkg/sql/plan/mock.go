@@ -19,8 +19,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -698,7 +696,6 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectR
 	name := strings.ToLower(tableName)
 	tableDef := DeepCopyTableDef(m.tables[name])
 	if tableDef != nil && !m.isDml {
-
 		for i, col := range tableDef.Cols {
 			if col.Typ.Id == int32(types.T_Rowid) {
 				tableDef.Cols = append(tableDef.Cols[:i], tableDef.Cols[i+1:]...)
@@ -707,8 +704,8 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectR
 		}
 
 		for i, col := range tableDef.Cols {
-			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(col.Name)
-			if isCPkey {
+			// judege whether it is a composite primary key
+			if col.Name == catalog.CPrimaryKeyColName {
 				tableDef.Cols = append(tableDef.Cols[:i], tableDef.Cols[i+1:]...)
 				break
 			}
