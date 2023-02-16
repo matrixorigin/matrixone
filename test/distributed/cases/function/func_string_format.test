@@ -123,6 +123,15 @@ SELECT SIN(format(d1,2)), TAN(format(id, 0)), COS(format(id,0)) from format_01;
 SELECT cot(format(45, 0)), ACOS(format(60, 1)), ATAN(format(75, 0)), SINH(format(90, 1));
 SELECT EXP(format(4, 2));
 SELECT MAX(format(d1, id)), MIN(format(d3, 0)) from format_01;
+SELECT power(format(2,1), 2);
+SELECT COUNT(format(d3,2)) FROM format_01;
+
+
+-- Abnormal test
+SELECT ABS(format(d3,0)) FROM format_01;
+SELECT SUM(format(id,2)) FROM format_01;
+SELECT CEIL(format(d3, 4))FROM format_01;
+SELECT ROUND(format(d4, 0)) FROM format_01;
 DROP TABLE format_01;
 
 
@@ -138,7 +147,6 @@ INSERT INTO format_02 VALUES(3, NULL, 32789.33);
 INSERT INTO format_02 VALUES(4, 0, -38902093.4324);
 INSERT INTO format_02 VALUES(5, 323232.0, 0);
 INSERT INTO format_02 VALUES(6, 323, 37827329.43432);
-
 
 -- Abnormal insertion
 INSERT INTO format_02 VALUES(6, -1.8976931348623157E+308, 0);
@@ -158,6 +166,14 @@ SELECT d1, d2 FROM format_02 WHERE format(id,0) BETWEEN 0 AND 400;
 SELECT * from format_02 WHERE format(id, 1) like '1.2';
 SELECT format(FLOOR(d2),4) FROM format_02;
 SELECT format(CEIL(d2),6) FROM format_02;
+SELECT * FROM format_02 WHERE format(d2,0) IN (73, 32789);
+SELECT * FROM format_02 WHERE format(d2,0) NOT IN (73, 32789);
+
+
+-- Abnormal test
+SELECT * from format_02 WHERE format(d2, 2) >= 0;
+SELECT * FROM format_02 WHERE format(d2, 0) NOT BETWEEN 0 AND 100;
+SELECT * FROM format_02 WHERE format(d2, 2) MOD 2 = 0;
 
 
 -- Nesting of functions related to string
