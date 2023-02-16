@@ -34,40 +34,23 @@ import (
 
 var _ engine.Relation = new(table)
 
-func (tbl *table) Stats(ctx context.Context, expr *plan.Expr) (int32, int64, int64, error) {
+func (tbl *table) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, error) {
 	switch tbl.tableId {
-	case catalog.MO_DATABASE_ID:
-		return 1, 1000, 1000, nil
-	case catalog.MO_TABLES_ID:
-		return 4, 4000, 4000, nil
-	case catalog.MO_COLUMNS_ID:
-		return 4, 4000, 4000, nil
+	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+		return plan2.DefaultStats(), nil
 	}
-	var blockNum int
-	var cost, outcnt int64
 
 	if tbl.meta == nil || !tbl.updated {
 		err := GetTableMeta(ctx, tbl, expr)
 		if err != nil {
-			return 0, 0, 0, err
+			return plan2.DefaultStats(), err
 		}
 	}
 	if tbl.meta != nil {
-		exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
-		columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
-		for _, blockmetas := range tbl.meta.blocks {
-			for _, blk := range blockmetas {
-				if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
-					cost += blockRows(blk)
-					blockNum++
-				}
-			}
-		}
-		outcnt = int64(float64(cost) * plan2.DeduceSelectivity(expr, tbl.getCbName()))
-		return int32(blockNum), cost, outcnt, nil
+		return CalcStats(ctx, &tbl.meta.blocks, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName())
 	} else {
 		// no meta means not flushed yet, very small table
-		return 1, 100, 100, nil
+		return plan2.DefaultStats(), nil
 	}
 }
 
