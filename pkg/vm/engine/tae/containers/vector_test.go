@@ -499,3 +499,71 @@ func BenchmarkVectorExtend(t *testing.B) {
 		vec1.Extend(vec2)
 	}
 }
+
+func TestResetWithIntData(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts1 := withAllocator(Options{})
+	vec1 := MakeVector(types.T_int64.ToType(), false, opts1)
+
+	vec1.Append(int64(1)) // vec.Capacity is 4, length is 1
+
+	opts2 := withAllocator(Options{})
+	vec2 := MakeVector(types.T_int64.ToType(), false, opts2)
+
+	// vec2 and vec shares the same memory and only vec has the ownership of the memory
+	bs := vec1.Bytes()
+	vec2.ResetWithData(bs, nil)
+
+	vec2.Append(int64(2))
+	vec2.Append(int64(3))
+	vec2.Append(int64(4))
+
+	assert.Equal(t, 1, vec1.Length())
+	assert.Equal(t, 4, vec2.Length())
+
+	vec1.Append(int64(5))
+	vec2.Append(int64(6))
+
+	assert.Equal(t, 2, vec1.Length())
+	assert.Equal(t, 5, vec2.Length())
+
+	vec1.Close()
+	assert.Zero(t, opts1.Allocator.CurrNB())
+
+	vec2.Close()
+	assert.Zero(t, opts2.Allocator.CurrNB())
+}
+
+func TestResetWithIntString(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts1 := withAllocator(Options{})
+	vec1 := MakeVector(types.T_varchar.ToType(), false, opts1)
+
+	vec1.Append([]byte("a")) // vec.Capacity is 4, length is 1
+
+	opts2 := withAllocator(Options{})
+	vec2 := MakeVector(types.T_varchar.ToType(), false, opts2)
+
+	// vec2 and vec shares the same memory and only vec has the ownership of the memory
+	bs := vec1.Bytes()
+	vec2.ResetWithData(bs, nil)
+
+	vec2.Append([]byte("b"))
+	vec2.Append([]byte("c"))
+	vec2.Append([]byte("d"))
+
+	assert.Equal(t, 1, vec1.Length())
+	assert.Equal(t, 4, vec2.Length())
+
+	vec1.Append([]byte("e"))
+	vec2.Append([]byte("f"))
+
+	assert.Equal(t, 2, vec1.Length())
+	assert.Equal(t, 5, vec2.Length())
+
+	vec1.Close()
+	assert.Zero(t, opts1.Allocator.CurrNB())
+
+	vec2.Close()
+	assert.Zero(t, opts2.Allocator.CurrNB())
+}
