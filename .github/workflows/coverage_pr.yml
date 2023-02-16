@@ -24,12 +24,14 @@ jobs:
 
       - name: Set Variables
         run: |
+          cd $GITHUB_WORKSPACE/matrixone
+          echo "test_scope=$(go list ./... | grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog' | xargs)" >> $GITHUB_ENV
           echo "raw_ut_coverage='ut_coverage.raw'" >> $GITHUB_ENV
           echo "raw_bvt_coverage='bvt_coverage.raw'" >> $GITHUB_ENV
           echo "raw_bvt_coverage_temp='bvt_coverage_temp.raw'" >> $GITHUB_ENV
           echo "raw_ut_coverage_temp='ut_coverage_temp.raw'" >> $GITHUB_ENV
           echo "all_coervage='all_coverage.raw'" >> $GITHUB_ENV
-          echo "test_report='ALL-Report.out'" >> $GITHUB_ENV
+          echo "test_report='test_report.out'" >> $GITHUB_ENV
           echo "coverage_line=75" >> $GITHUB_ENV
 
       - name: Set up Go
@@ -44,12 +46,6 @@ jobs:
           echo "apikey=${{ secrets.S3APIKEY }}" >> $GITHUB_ENV
           echo "apisecret=${{ secrets.S3APISECRET }}" >> $GITHUB_ENV
           echo "bucket=${{ secrets.S3BUCKET }}" >> $GITHUB_ENV
-      
-      - name: Build MatrixOne
-        run: |
-          cd $GITHUB_WORKSPACE/matrixone && make clean && make config && make cgo
-          echo "test_scope=$(go list ./... | grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog' | xargs)" >> $GITHUB_ENV
-          echo ${{ env.test_scope }}
           
       - name: Get Changed Paths
         uses: guguducken/change-paths-action@v0.0.7
@@ -59,7 +55,7 @@ jobs:
           ignore: "/,etc/,optools/,LICENSES/,cgo/,cmd/,docs/,proto/,test/,.github/,pkg/pb/"
           source-path: ${{ env.test_scope }}
       
-      - name: PR Unit Test
+      - name: Start PR Unit Test
         if: ${{ steps.ut-pr.outputs.paths != '' }}
         timeout-minutes: 60
         run: |
@@ -94,16 +90,15 @@ jobs:
           cd $GITHUB_WORKSPACE/matrixone
           if  [ -d  "./store"  ]; then rm -rf ./store; fi
           GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(go version)' -X 'main.BranchName=$(git rev-parse --abbrev-ref HEAD)' -X 'main.CommitID=$(git rev-parse HEAD)' -X 'main.BuildTime=$(date)' -X 'main.Version=$(git describe --always --tags $(git rev-list --tags --max-count=1))'"
-          export GOCOVERDIR=$(pwd)
-          go build -cover "$GOLDFLAGS" -o mo_service ./cmd/mo-service/
-          ./mo_service -launch ./etc/launch-tae-multi-CN-tae-DN/launch.toml &>service.log &
+          export GOCOVERDIR=$GITHUB_WORKSPACE/matrixone
+          go build -cover "$GOLDFLAGS" -o mo-service ./cmd/mo-service/
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch-tae-CN-tae-DN
       
       - name: Start PR BVT Test
         if: ${{ steps.ut-pr.outputs.paths != '' }}
         id: bvt_on_pr_version
         continue-on-error: true
         run: |
-          sleep 300s
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases 2>&1
 
@@ -112,8 +107,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           echo "--------------------coverage start--------------------"
-          sed -i '1d' ${{ env.raw_ut_coverage }}
-          go tool covdata textfmt -i=${GOCOVERDIR} -o ${{ env.raw_bvt_coverage }}
+          go tool covdata textfmt -i="$GITHUB_WORKSPACE/matrixone" -o ${{ env.raw_bvt_coverage }}
           cat ${{ env.raw_bvt_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" > ${{ env.raw_bvt_coverage_temp }}
           cat ${{ env.raw_ut_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" > ${{ env.raw_ut_coverage_temp }}
           awk -F '[ ]+' 'FNR==NR{arr[$1,$2]=$3;next}{if(arr[$1,$2]==0 && $3>=1){arr[$1,$2]=1}}END{for(i in arr){split(i,ind,SUBSEP);printf("%s %s %s\n",ind[1],ind[2],arr[i])};}' ${{ env.raw_ut_coverage_temp }} ${{ env.raw_bvt_coverage_temp }} > ${{ env.all_coervage }}
