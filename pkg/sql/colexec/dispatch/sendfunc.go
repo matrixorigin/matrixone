@@ -16,7 +16,6 @@ package dispatch
 
 import (
 	"context"
-	"fmt"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -66,7 +65,6 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) e
 	reg := ap.LocalRegs[sendto]
 	select {
 	case <-reg.Ctx.Done():
-		fmt.Printf("[dispatchdispatch] local chan close from ctx. len --. proc = %p\n", proc)
 		for len(reg.Ch) > 0 { // free memory
 			bat := <-reg.Ch
 			if bat == nil {

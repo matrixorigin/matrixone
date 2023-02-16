@@ -124,6 +124,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 	}
 	var errReceiveChan chan error
 	if len(s.RemoteReceivRegInfos) > 0 {
+		s.settingCh()
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
 		s.notifyAndReceiveFromRemote(errReceiveChan)
 	}
@@ -587,10 +588,6 @@ func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
 
 func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 	for _, rr := range s.RemoteReceivRegInfos {
-		mp, err := mpool.NewMPool("receive_batch", 0, mpool.NoFixed)
-		if err != nil {
-			panic(err)
-		}
 		go func(info RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
@@ -631,7 +628,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 			}
 			reg.Ch <- nil
 			errChan <- nil
-		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], mp)
+		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], s.Proc.GetMPool())
 	}
 
 	return nil
@@ -683,5 +680,11 @@ func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, for
 			forwardCh <- bat
 			dataBuffer = nil
 		}
+	}
+}
+
+func (s *Scope) settingCh() {
+	for i := range s.RemoteReceivRegInfos {
+		colexec.Srv.PutNotifyChIntoUuidMap(s.RemoteReceivRegInfos[i].Uuid, s.Proc.DispatchNotifyCh)
 	}
 }

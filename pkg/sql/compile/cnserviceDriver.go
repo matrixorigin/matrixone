@@ -676,6 +676,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
+
 	for i := range s.RemoteReceivRegInfos {
 		colexec.Srv.PutNotifyChIntoUuidMap(s.RemoteReceivRegInfos[i].Uuid, s.Proc.DispatchNotifyCh)
 	}
