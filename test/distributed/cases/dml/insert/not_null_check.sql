@@ -20,3 +20,4 @@ insert into t values (1, null);
 insert into t values (2, null);
 insert into t values (3, null);
 update t set a=null;
+drop database if exists test;
