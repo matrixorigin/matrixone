@@ -844,28 +844,45 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 		panic("deadline not set in context")
 	}
 	s.activeFunc()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return moerr.NewStreamClosedNoCtx()
-	}
-
-	s.sequence++
 
 	f := s.newFutureFunc()
 	f.ref()
+	defer f.Close()
+
+	s.mu.RLock()
+	if s.mu.closed {
+		s.mu.RUnlock()
+		return moerr.NewStreamClosedNoCtx()
+	}
+
+	err := s.doSendLocked(ctx, f, request)
+	// unlock before future.close to avoid deadlock with future.Close
+	// 1. current goroutine:        stream.Rlock
+	// 2. backend read goroutine:   cancelActiveStream -> backend.Lock
+	// 3. backend read goroutine:   cancelActiveStream -> stream.Lock : deadlock here
+	// 4. current goroutine:        f.Close -> backend.Lock           : deadlock here
+	s.mu.RUnlock()
+
+	if err != nil {
+		return err
+	}
+	// stream only wait send completed
+	return f.waitSendCompleted()
+}
+
+func (s *stream) doSendLocked(
+	ctx context.Context,
+	f *Future,
+	request Message) error {
+	s.sequence++
 	f.init(RPCMessage{
 		Ctx:            ctx,
 		Message:        request,
 		stream:         true,
 		streamSequence: s.sequence,
 	})
-	defer f.Close()
-	if err := s.sendFunc(f); err != nil {
-		return err
-	}
-	// stream only wait send completed
-	return f.waitSendCompleted()
+
+	return s.sendFunc(f)
 }
 
 func (s *stream) Receive() (chan Message, error) {
