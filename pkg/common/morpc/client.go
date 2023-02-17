@@ -381,6 +381,7 @@ func (c *client) closeIdleBackends() {
 			if !b.Locked() &&
 				time.Since(b.LastActiveTime()) > c.options.maxIdleDuration {
 				idleBackends = append(idleBackends, b)
+				// panic(2)
 				continue
 			}
 			newBackends = append(newBackends, b)
