@@ -555,6 +555,10 @@ func GetValue(col *movec.Vector, row uint32) any {
 	if col.Nsp.Np != nil && col.Nsp.Np.Contains(uint64(row)) {
 		return types.Null{}
 	}
+	return GetNonNullValue(col, row)
+}
+
+func GetNonNullValue(col *movec.Vector, row uint32) any {
 	switch col.Typ.Oid {
 	case types.T_bool:
 		return movec.GetValueAt[bool](col, int64(row))

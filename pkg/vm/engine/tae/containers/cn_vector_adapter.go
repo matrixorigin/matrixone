@@ -314,39 +314,25 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 	}
 
 	// Create a new NewCnTaeVector
-	cloned := NewCnTaeVector[T](vec.GetType(), vec.Nullable(), opts)
+	clonedTaeVector := NewCnTaeVector[T](vec.GetType(), vec.Nullable(), opts)
 
-	// Note: We are using ForeachWindow instead of cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
-	// Reason: Using cnVector.Window(...) is giving "panic: internal error: mp header corruption"
-	//		   in tables_test.go#TestTxn6(...), when vec.Close() is invoked.
-	// 		   Attaching the cnVector.Window(...) code for reference.
-	// My thoughts: 1. I think, the issue was because cnVector.Window(...)
-	//				- is allocated by mpool1 (the allocator... argument)
-	//				- and Free() by mpool2, (the vec.mpool field)
-	//
-	// 			    2. I did try only allocating using mpool2 alone, but that didn't work.
+	// Clone current Nsp
+	clonedNsp := vec.downstreamVector.Nsp.Clone()
 
-	/*
-		cloned.isOriginal = true
+	// Create DownStreamVector.Window() using clonedNsp
+	for i := offset; i < offset+length; i++ {
+		isNull := clonedNsp.Contains(uint64(i))
 
-		// Create a duplicate of the downstream CN vector
-		vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
-
-		// Attach that downstream duplicate to the window and perform window action.
-		// The result is subset of downstream vector.
-		cloned.downstreamVector = cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
-	*/
-
-	op := func(v any, _ int) error {
-		cloned.Append(v)
-		return nil
-	}
-	err := vec.ForeachWindow(offset, length, op, nil)
-	if err != nil {
-		return nil
+		if isNull {
+			_ = clonedTaeVector.downstreamVector.Append(types.DefaultVal[T](), true, vec.mpool)
+		} else {
+			val := GetNonNullValue(vec.downstreamVector, uint32(i))
+			_ = clonedTaeVector.downstreamVector.Append(val, false, vec.mpool)
+		}
 	}
 
-	return cloned
+	clonedTaeVector.isOriginal = true
+	return clonedTaeVector
 }
 
 func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
