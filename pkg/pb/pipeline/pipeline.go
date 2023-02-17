@@ -47,6 +47,50 @@ func (m *Message) SetID(id uint64) {
 	m.Id = id
 }
 
+func (m *Message) SetSid(sid uint64) {
+	m.Sid = sid
+}
+
+func (m *Message) SetCheckSum(sum uint32) {
+	m.Checksum = sum
+}
+
+func (m *Message) SetSequence(s uint64) {
+	m.Sequence = s
+}
+
+func (m *Message) SetMoError(ctx context.Context, err error) {
+	m.Err = EncodedMessageError(ctx, err)
+}
+
+func (m *Message) SetAnalysis(data []byte) {
+	m.Analyse = data
+}
+
+func (m *Message) TryToGetMoErr() (error, bool) {
+	errData := m.GetErr()
+	if len(errData) > 0 {
+		err := &moerr.Error{}
+		if errUnmarshal := err.UnmarshalBinary(errData); errUnmarshal != nil {
+			return errUnmarshal, true
+		}
+		return err, true
+	}
+	return nil, false
+}
+
+func (m *Message) SetMessageType(cmd uint64) {
+	m.Cmd = cmd
+}
+
+func (m *Message) SetData(data []byte) {
+	m.Data = data
+}
+
+func (m *Message) SetProcData(data []byte) {
+	m.ProcInfoData = data
+}
+
 func (m *Message) DebugString() string {
 	errInfo := "none"
 	if len(m.Err) > 0 {

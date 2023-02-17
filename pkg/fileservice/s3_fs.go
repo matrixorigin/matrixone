@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	stdhttp "net/http"
 	"net/url"
 	pathpkg "path"
 	"sort"
@@ -228,6 +229,51 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 	}
 
 	return
+}
+
+func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	ctx, span := trace.Start(ctx, "S3FS.StatFile")
+	defer span.End()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	path, err := ParsePathAtService(filePath, s.name)
+	if err != nil {
+		return nil, err
+	}
+	key := s.pathToKey(path.File)
+
+	output, err := s.client.HeadObject(
+		ctx,
+		&s3.HeadObjectInput{
+			Bucket: ptrTo(s.bucket),
+			Key:    ptrTo(key),
+		},
+	)
+	if err != nil {
+		var httpError *http.ResponseError
+		if errors.As(err, &httpError) {
+			if httpError.Response.StatusCode == 404 {
+				return nil, moerr.NewFileNotFound(ctx, filePath)
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &DirEntry{
+		Name:  pathpkg.Base(filePath),
+		IsDir: false,
+		Size:  output.ContentLength,
+	}, nil
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
@@ -772,6 +818,16 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
+	if region == "" {
+		// try to get region from bucket
+		resp, err := stdhttp.Head("https://" + bucket + ".s3.amazonaws.com")
+		if err == nil {
+			if value := resp.Header.Get("x-amz-bucket-region"); value != "" {
+				region = value
+			}
+		}
+	}
+
 	var credentialProvider aws.CredentialsProvider
 
 	loadConfigOptions := []func(*config.LoadOptions) error{
@@ -806,7 +862,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 
 		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
 			if region == "" {
-				options.Region = "ap-northeast-1" // any region is OK
+				options.Region = "ap-northeast-1"
 			} else {
 				options.Region = region
 			}
