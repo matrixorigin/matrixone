@@ -136,9 +136,6 @@ func (c *messageCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer
 
 func (c *messageCodec) Valid(msg Message) error {
 	n := msg.Size()
-	if m, ok := msg.(PayloadMessage); ok {
-		n += len(m.GetPayloadField())
-	}
 	if n >= c.bc.maxBodySize {
 		return moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
 			n,
