@@ -45,6 +45,10 @@ type FileService interface {
 	// Delete deletes multi file
 	// returns ErrFileNotFound if requested file not found
 	Delete(ctx context.Context, filePaths ...string) error
+
+	// Stat returns infomations about a file
+	// returns ErrFileNotFound if requested file not found
+	StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 }
 
 type IOVector struct {
