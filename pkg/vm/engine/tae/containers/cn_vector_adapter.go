@@ -35,18 +35,19 @@ type CnTaeVector[T any] struct {
 	// Below 2 attributes,ie isNullable & mpool, are specific to "Previous DN TAE Vector" implementation
 
 	// Used in Equals(). Note: We can't use cnVector.Nsp.Np to replace this flag, as this information
-	// will be lost in Marshalling/UnMarshalling
+	// will be lost in Marshalling/UnMarshalling. It is also used in CloneWithBuffer()
 	isNullable bool
 
 	// Used in Append()
 	mpool *mpool.MPool
 
-	// isOriginal is used for ResetWithData() & Allocated()
-	// When ResetWithData(bytes) is called, this vector is not the original/first copy of the data.
-	// When this.Append(newData) is called, then it becomes the owner of newData
-	// So when we call Allocated() after ResetWithData(), we should return Zero if it is not the owner.
-	// And we should return the this.Size() if it is an owner.
-	isOriginal bool
+	// containsFirstCopy is used for ResetWithData() & Allocated()
+	// When ResetWithData(bytes) is called, this vector is not the FirstCopy of the data.
+	// When this.Append(newData) is called, then it becomes the owner of newData, ie now it contains FirstCopy data.
+	// Rule:
+	// 1. When we immediately call Allocated() after ResetWithData(), we should return Zero.
+	// 2. If there is any Append() after ResetWithData(), we should return the vec.downstream.Size()
+	containsFirstCopy bool
 }
 
 func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeVector[T] {
@@ -69,7 +70,7 @@ func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTa
 		alloc = common.DefaultAllocator
 	}
 	vec.mpool = alloc
-	vec.isOriginal = false
+	vec.containsFirstCopy = false
 
 	return &vec
 }
@@ -90,7 +91,7 @@ func (vec *CnTaeVector[T]) Append(v any) {
 		_ = vec.downstreamVector.Append(v, false, vec.mpool)
 	}
 
-	vec.isOriginal = true
+	vec.containsFirstCopy = true
 }
 
 func (vec *CnTaeVector[T]) AppendMany(vs ...any) {
@@ -313,6 +314,9 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 		opts.Allocator = allocator[0]
 	}
 
+	/**** Alternate Approach 1.
+
+
 	// Create a new NewCnTaeVector
 	clonedTaeVector := NewCnTaeVector[T](vec.GetType(), vec.Nullable(), opts)
 
@@ -332,7 +336,31 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 	}
 
 	clonedTaeVector.isOriginal = true
-	return clonedTaeVector
+
+	*/
+
+	/**** Alternate Approach 2.
+	Using cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
+	Problem: It doesn't apply window on the `downstream.data` and `downstream.area`.
+	When vec.Close() is called, it tries to clear the whole vec.data, and end up returning
+	"panic: internal error: mp header corruption".
+
+	If  cnVector.Window() updates the vec.data, then we can use it directly here.
+	*/
+
+	// Create a new NewCnTaeVector
+	cloned := NewCnTaeVector[T](vec.GetType(), vec.Nullable(), opts)
+
+	op := func(v any, _ int) error {
+		cloned.Append(v)
+		return nil
+	}
+	err := vec.ForeachWindow(offset, length, op, nil)
+	if err != nil {
+		return nil
+	}
+
+	return cloned
 }
 
 func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
@@ -347,6 +375,10 @@ func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
 			length: length,
 		},
 	}
+}
+
+func (vec *CnTaeVector[T]) HasNull() bool {
+	return vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Any()
 }
 
 // TODO: --- We can remove below functions as they don't have any usage
@@ -584,7 +616,7 @@ func (vec *CnTaeVector[T]) releaseDownstream() {
 
 func (vec *CnTaeVector[T]) Allocated() int {
 
-	if !vec.isOriginal {
+	if !vec.containsFirstCopy {
 		return 0
 	}
 
@@ -615,9 +647,4 @@ func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 
 	vec.releaseDownstream()
 	vec.downstreamVector = newDownstream
-}
-
-func (vec *CnTaeVector[T]) HasNull() bool {
-	//TODO: Avoid Clone()
-	return vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Any()
 }
