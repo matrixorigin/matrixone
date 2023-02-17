@@ -110,7 +110,7 @@ func AllocateNewMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (mo
 		dataByteArr := bs.StorageBuf()
 		dataAllocated, _ := pool.Alloc(len(dataByteArr))
 		copy(dataAllocated, dataByteArr)
-		mov = movec.NewWithData(typ, dataAllocated, &nulls.Nulls{})
+		mov = movec.NewWithData(typ, dataAllocated)
 	}
 	return
 }

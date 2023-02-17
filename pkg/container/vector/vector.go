@@ -543,14 +543,12 @@ func NewOriginalWithData(typ types.Type, data []byte, nsp *nulls.Nulls) *Vector 
 	return v
 }
 
-func NewWithData(typ types.Type, data []byte, nsp *nulls.Nulls) *Vector {
-	v := &Vector{
-		Nsp:  nsp,
-		Typ:  typ,
-		data: data,
-	}
-	v.colFromData()
-	return v
+func NewWithData(typ types.Type, data []byte) *Vector {
+	vec := New(typ)
+	vec.data = data
+	vec.colFromData()
+	//TODO: a builder pattern would be more convenient
+	return vec
 }
 
 func NewWithDataAndArea(typ types.Type, data []byte, area []byte) *Vector {
