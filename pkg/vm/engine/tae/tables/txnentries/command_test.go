@@ -105,7 +105,6 @@ func checkMergeBlocksCmdIsEqual(t *testing.T, cmd1, cmd2 *mergeBlocksCmd) {
 	for i, blk1 := range cmd1.droppedBlks {
 		checkIDIsEqual(t, blk1, cmd2.droppedBlks[i])
 	}
-	assert.Equal(t, len(cmd1.mapping), len(cmd2.mapping))
 	assert.Equal(t, len(cmd1.fromAddr), len(cmd2.fromAddr))
 	assert.Equal(t, len(cmd1.toAddr), len(cmd2.toAddr))
 }

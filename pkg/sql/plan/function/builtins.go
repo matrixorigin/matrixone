@@ -2071,20 +2071,32 @@ var builtins = map[int]Functions{
 		Id:     JSON_EXTRACT,
 		Flag:   plan.Function_STRICT,
 		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			if len(inputs) < 2 {
+				return wrongFunctionParameters, nil
+			}
+			if inputs[0] != types.T_json && !types.IsString(inputs[0]) && inputs[0] != types.T_any { //any: null scalar
+				return wrongFunctionParameters, nil
+			}
+			ts = make([]types.T, len(inputs))
+			ts[0] = inputs[0]
+			for i := 1; i < len(inputs); i++ {
+				if !types.IsString(inputs[i]) && inputs[i] != types.T_any {
+					ts[i] = types.T_varchar
+					continue
+				}
+				ts[i] = inputs[i]
+			}
+			return 0, ts
+		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Volatile:  false,
-				Args:      []types.T{types.T_varchar, types.T_varchar},
-				ReturnTyp: types.T_json,
-				Fn:        binary.JsonExtract,
-			},
-			{
-				Index:     1,
-				Volatile:  false,
-				Args:      []types.T{types.T_json, types.T_varchar},
-				ReturnTyp: types.T_json,
-				Fn:        binary.JsonExtract,
+				Index:           0,
+				Volatile:        false,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_json,
+				UseNewFramework: true,
+				NewFn:           multi.JsonExtract,
 			},
 		},
 	},

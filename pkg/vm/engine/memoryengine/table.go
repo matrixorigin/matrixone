@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,8 +34,19 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) Stats(ctx context.Context, e *plan2.Expr) (int32, int64, int64, error) {
+func (t *Table) Stats(ctx context.Context, e *plan2.Expr) (*plan.Stats, error) {
+	stats := plan2.DefaultStats()
+	rows, err := t.Rows(ctx)
+	if err != nil {
+		return stats, err
+	}
+	stats.TableCnt = float64(rows)
+	stats.Cost = stats.TableCnt
+	stats.Outcnt = stats.TableCnt
+	return stats, nil
+}
 
+func (t *Table) Rows(ctx context.Context) (int64, error) {
 	resps, err := DoTxnRequest[TableStatsResp](
 		ctx,
 		t.txnOperator,
@@ -46,17 +58,10 @@ func (t *Table) Stats(ctx context.Context, e *plan2.Expr) (int32, int64, int64, 
 		},
 	)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, err
 	}
-
 	resp := resps[0]
-
-	return 0, int64(resp.Rows), int64(resp.Rows), nil
-}
-
-func (t *Table) Rows(ctx context.Context) (int64, error) {
-	_, rows, _, err := t.Stats(ctx, nil)
-	return rows, err
+	return int64(resp.Rows), err
 }
 
 func (t *Table) Size(ctx context.Context, columnName string) (int64, error) {

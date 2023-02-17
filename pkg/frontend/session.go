@@ -2244,7 +2244,7 @@ func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {
-	stats = new(plan2.Stats)
+
 	dbName := obj.GetSchemaName()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
@@ -2259,14 +2259,8 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	blockNum, cost, outcnt, err := table.Stats(ctx, e)
-	if err != nil {
-		return
-	}
-	stats.Cost = float64(cost)
-	stats.Outcnt = float64(outcnt)
-	stats.BlockNum = blockNum
-	return
+	stats, _ = table.Stats(ctx, e)
+	return stats
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {

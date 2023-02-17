@@ -76,15 +76,14 @@ func (rel *baseRelation) TableColumns(_ context.Context) ([]*engine.Attribute, e
 	return cols, nil
 }
 
-func (rel *baseRelation) Stats(context.Context, *plan2.Expr) (int32, int64, int64, error) {
-	//for tae, return 0 blocks. it does not matter and will be deleted in the future
-	rows := rel.handle.Rows()
-	return 0, rows, rows, nil
+func (rel *baseRelation) Stats(context.Context, *plan2.Expr) (*plan2.Stats, error) {
+	//for tae, it does not matter and will be deleted in the future
+	return plan2.DefaultStats(), nil
 }
 
 func (rel *baseRelation) Rows(c context.Context) (int64, error) {
-	_, rows, _, err := rel.Stats(c, nil)
-	return rows, err
+	rows := rel.handle.Rows()
+	return rows, nil
 }
 
 func (rel *baseRelation) GetSchema(_ context.Context) *catalog.Schema {

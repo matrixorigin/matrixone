@@ -118,18 +118,18 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 		container.pk[def.Name] = true
 	}
 
-	if tableDef.Indexes != nil {
-		for _, indexdef := range tableDef.Indexes {
-			if indexdef.Unique {
-				for j := range indexdef.Field.Cols {
-					coldef := indexdef.Field.Cols[j]
-					container.nameToNullablity[coldef.Name] = coldef.Default.NullAbility
-				}
-			} else {
-				continue
-			}
-		}
-	}
+	//if tableDef.Indexes != nil {
+	//	for _, indexdef := range tableDef.Indexes {
+	//		if indexdef.Unique {
+	//			for j := range indexdef.Field.Cols {
+	//				coldef := indexdef.Field.Cols[j]
+	//				container.nameToNullablity[coldef.Name] = coldef.Default.NullAbility
+	//			}
+	//		} else {
+	//			continue
+	//		}
+	//	}
+	//}
 
 	if tableDef.ClusterBy != nil {
 		container.nameToNullablity[tableDef.ClusterBy.Name] = true

@@ -62,6 +62,8 @@ type TenantInfo struct {
 	useAllSecondaryRole bool
 
 	delimiter byte
+
+	version string
 }
 
 func (ti *TenantInfo) String() string {
@@ -149,6 +151,14 @@ func (ti *TenantInfo) SetUseSecondaryRole(v bool) {
 
 func (ti *TenantInfo) GetUseSecondaryRole() bool {
 	return ti.useAllSecondaryRole
+}
+
+func (ti *TenantInfo) GetVersion() string {
+	return ti.version
+}
+
+func (ti *TenantInfo) SetVersion(version string) {
+	ti.version = version
 }
 
 func GetDefaultTenant() string {
@@ -6105,11 +6115,30 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		goto handleFailed
 	}
 
+	//step2: update the mo_mysql_compatbility_mode of that database
 	sql = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where dat_name = "%s";`
 	sql = fmt.Sprintf(sql, update_config, datname)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step3: update the session verison
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
+
+	if len(ses.GetDatabaseName()) != 0 && ses.GetDatabaseName() == datname {
+		err = changeVersion(ctx, ses, ses.GetDatabaseName())
+		if err != nil {
+			goto handleFailed
+		}
 	}
 
 	err = bh.Exec(ctx, "commit;")
@@ -6149,7 +6178,8 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	}
 
 	//step 1: check account exists or not
-	sql = getSqlForCheckTenant(accountName)
+	sql = `select account_name from mo_catalog.mo_mysql_compatbility_mode where account_name = "%s";`
+	sql = fmt.Sprintf(sql, accountName)
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
@@ -6173,6 +6203,23 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	if err != nil {
 		goto handleFailed
 	}
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step3: update the session verison
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
+
+	if len(ses.GetDatabaseName()) != 0 {
+		err = changeVersion(ctx, ses, ses.GetDatabaseName())
+		if err != nil {
+			goto handleFailed
+		}
+	}
 
 	err = bh.Exec(ctx, "commit;")
 	if err != nil {
@@ -6195,10 +6242,8 @@ func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 	var sql string
 	var accountName string
 	var datname string
-	var erArray []ExecResult
 	var configuration string
 
-	accountId := ses.GetTxnCompileCtx().GetAccountId()
 	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
 		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
@@ -6208,29 +6253,20 @@ func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 			goto handleFailed
 		}
 
-		//step 1: check account exists or not
-		sql = `select account_name from mo_catalog.mo_account where account_id = %d;`
-		sql = fmt.Sprintf(sql, accountId)
-		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
+		//step 1: get account_name and database_name
+		if ses.GetTenantInfo() != nil {
+			accountName = ses.GetTenantInfo().GetTenant()
+		} else {
 			goto handleFailed
 		}
-
-		erArray, err = getResultSet(ctx, bh)
-		if err != nil {
-			goto handleFailed
-		}
-
-		if execResultArrayHasData(erArray) {
-			accountName, err = erArray[0].GetString(ctx, 0, 0)
-			if err != nil {
-				goto handleFailed
-			}
-		}
-
-		//step 2: insert the record
 		datname = string(createDatabaseStmt.Name)
+
+		//step 2: check database name
+		if _, ok := bannedCatalogDatabases[datname]; ok {
+			goto handleFailed
+		}
+
+		//step 3: insert the record
 		configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
 		sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountName, datname, configuration)
 
@@ -6271,4 +6307,37 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 		}
 	}
 	return nil
+}
+
+func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (string, error) {
+	var err error
+	var erArray []ExecResult
+	defaultConfig := "0.7"
+	path := "$.version_compatibility"
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	sql := `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s"; `
+	sql = fmt.Sprintf(sql, path, dbName)
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return defaultConfig, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return defaultConfig, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		config, err := erArray[0].GetString(ctx, 0, 0)
+		if err != nil {
+			return defaultConfig, err
+		} else {
+			return config, err
+		}
+	}
+	return defaultConfig, err
 }
