@@ -68,7 +68,7 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool
 	cloned = MakeVector(src.GetType(), src.Nullable(), opts)
 	bs := src.Bytes()
 	var nulls *roaring64.Bitmap
-	if src.HasNull() {
+	if src.Nullable() {
 		nulls = src.NullMask().Clone()
 	}
 	nbs := FillBufferWithBytes(bs, buffer)
