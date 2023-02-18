@@ -175,7 +175,7 @@ func startCNService(
 			panic(err)
 		}
 		// TODO: global client need to refactor
-		err = cnclient.NewCNClient(&cnclient.ClientConfig{})
+		err = cnclient.NewCNClient(&cnclient.ClientConfig{RPC: cfg.getCNServiceConfig().RPC})
 		if err != nil {
 			panic(err)
 		}

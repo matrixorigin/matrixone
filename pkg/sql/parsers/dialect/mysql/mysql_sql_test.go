@@ -583,13 +583,13 @@ var (
 		output: "insert into t1 (f1) values (-1)",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=VALUES(a)+VALUES(b), b=VALUES(a)+VALUES(c);",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (values(a) + values(b), values(a) + values(c))",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = values(a) + values(b), b = values(a) + values(c)",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2, b=3;",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (2, 3)",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2, b = 3",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2/2, b=3;",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (2 / 2, 3)",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2 / 2, b = 3",
 	}, {
 		input:  "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
 		output: "insert into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",

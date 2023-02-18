@@ -19,6 +19,7 @@ import (
 	"context"
 	"io"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -321,6 +322,38 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
 	return nil
 
+}
+
+func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+
+	stat, err := os.Stat(nativePath)
+	if os.IsNotExist(err) {
+		return nil, moerr.NewFileNotFoundNoCtx(path.File)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if stat.IsDir() {
+		return nil, moerr.NewFileNotFoundNoCtx(path.File)
+	}
+
+	return &DirEntry{
+		Name:  pathpkg.Base(filePath),
+		IsDir: false,
+		Size:  stat.Size(),
+	}, nil
 }
 
 func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {

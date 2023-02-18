@@ -58,44 +58,6 @@ func TestSend(t *testing.T) {
 	)
 }
 
-func TestSendWithSomeErrorInBatch(t *testing.T) {
-	testBackendSend(t,
-		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
-			return conn.Write(msg, goetty.WriteOptions{Flush: true})
-		},
-		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*100000)
-			defer cancel()
-
-			n := 100
-			largePayload := make([]byte, defaultMaxBodyMessageSize)
-			futures := make([]*Future, 0, n)
-			requests := make([]Message, 0, n)
-			for i := 0; i < n; i++ {
-				req := newTestMessage(uint64(i))
-				if i%2 == 0 {
-					req.SetPayloadField(largePayload)
-				}
-				f, err := b.Send(ctx, req)
-				assert.NoError(t, err)
-				defer f.Close()
-				futures = append(futures, f)
-				requests = append(requests, req)
-			}
-
-			for i, f := range futures {
-				resp, err := f.Get()
-				if i%2 == 0 {
-					assert.Error(t, err)
-				} else {
-					assert.NoError(t, err)
-					assert.Equal(t, requests[i], resp)
-				}
-			}
-		},
-	)
-}
-
 func TestSendWithPayloadCannotTimeout(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
@@ -134,7 +96,7 @@ func TestSendWithPayloadCannotBlockIfFutureRemoved(t *testing.T) {
 			req.payload = []byte("hello")
 			f, err := b.Send(ctx, req)
 			require.NoError(t, err)
-			id := f.id
+			id := f.getSendMessageID()
 			// keep future in the futures map
 			f.ref()
 			defer f.unRef()
@@ -164,7 +126,7 @@ func TestSendWithPayloadCannotBlockIfFutureClosed(t *testing.T) {
 			req.payload = []byte("hello")
 			f, err := b.Send(ctx, req)
 			require.NoError(t, err)
-			id := f.id
+			id := f.getSendMessageID()
 			f.mu.Lock()
 			f.mu.closed = true
 			f.releaseFunc = nil // make it nil to keep this future in b.mu.features
@@ -487,7 +449,9 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 
 	c := make(chan Message, 1)
 	s := newStream(c,
-		func(m backendSendMessage) error {
+		func() *Future { return newFuture(nil) },
+		func(m *Future) error {
+			m.messageSended(nil)
 			return nil
 		},
 		func(s *stream) {},
@@ -503,7 +467,8 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 func TestGCStream(t *testing.T) {
 	c := make(chan Message, 1)
 	s := newStream(c,
-		func(m backendSendMessage) error {
+		func() *Future { return newFuture(nil) },
+		func(m *Future) error {
 			return nil
 		},
 		func(s *stream) {},
@@ -761,21 +726,25 @@ type testBackend struct {
 func (b *testBackend) Send(ctx context.Context, request Message) (*Future, error) {
 	b.active()
 	f := newFuture(nil)
-	f.init(request.GetID(), ctx)
+	f.init(RPCMessage{Ctx: ctx, Message: request})
 	return f, nil
 }
 
 func (b *testBackend) SendInternal(ctx context.Context, request Message) (*Future, error) {
 	b.active()
 	f := newFuture(nil)
-	f.init(request.GetID(), ctx)
+	f.init(RPCMessage{Ctx: ctx, Message: request})
 	return f, nil
 }
 
 func (b *testBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	b.active()
 	st := newStream(make(chan Message, 1),
-		func(m backendSendMessage) error { return nil },
+		func() *Future { return newFuture(nil) },
+		func(m *Future) error {
+			m.messageSended(nil)
+			return nil
+		},
 		func(s *stream) {
 			if s.unlockAfterClose {
 				b.Unlock()
@@ -850,7 +819,7 @@ func (tm *testMessage) DebugString() string {
 }
 
 func (tm *testMessage) Size() int {
-	return 8
+	return 8 + len(tm.payload)
 }
 
 func (tm *testMessage) MarshalTo(data []byte) (int, error) {

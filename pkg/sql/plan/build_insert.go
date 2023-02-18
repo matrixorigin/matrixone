@@ -21,7 +21,7 @@ import (
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Plan, err error) {
-	if stmt.OnDuplicateUpdate != nil {
+	if len(stmt.OnDuplicateUpdate) > 0 {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ...")
 	}
 	if isReplace {
