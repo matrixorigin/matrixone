@@ -344,8 +344,16 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 	Problem: It doesn't apply window on the `downstream.data` and `downstream.area`.
 	When vec.Close() is called, it tries to clear the whole vec.data, and end up returning
 	"panic: internal error: mp header corruption".
+	If  cnVector.Window() updates the vec.data, then we should be able to use it directly here.
 
-	If  cnVector.Window() updates the vec.data, then we can use it directly here.
+	Code:
+		cloned.isAllocatedFromMpool = true
+		// Create a duplicate of the downstream CN vector
+		vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
+		// Attach that downstream duplicate to the window and perform window action.
+		// The result is subset of downstream vector.
+		cloned.downstreamVector = cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
+
 	*/
 
 	// Create a new NewCnTaeVector
