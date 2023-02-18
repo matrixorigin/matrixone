@@ -1583,15 +1583,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes = append(nodes, engine.Node{
 				Rel:  rel,
 				Mcpu: 1,
-				Data: ranges[:1],
 			})
 		} else {
 			nodes = append(nodes, engine.Node{
 				Rel:  rel,
-				Data: ranges[:1],
 				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 			})
 		}
+		nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
 		ranges = ranges[1:]
 	}
 	if len(ranges) == 0 {
