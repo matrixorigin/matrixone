@@ -158,7 +158,6 @@ import (
     strs []string
 
     duplicateKey tree.DuplicateKey
-    updateList *tree.UpdateList
     fields *tree.Fields
     fieldsList []*tree.Fields
     lines *tree.Lines
@@ -507,7 +506,7 @@ import (
 //%type <resourceOptions> conn_option_list conn_options
 //%type <resourceOption> conn_option
 %type <updateExpr> update_value
-%type <updateExprs> update_list
+%type <updateExprs> update_list on_duplicate_key_update_opt
 %type <completionType> completion_type
 %type <str> password_opt
 %type <boolVal> grant_option_opt enforce enforce_opt
@@ -608,7 +607,6 @@ import (
 %type <indexHintScope> index_hint_scope
 %type <indexHint> index_hint
 %type <indexHintList> index_hint_list index_hint_list_opt
-%type <updateList> on_duplicate_key_update_opt
 
 %token <str> KILL
 %type <killOption> kill_opt
@@ -3151,25 +3149,11 @@ insert_data:
 
 on_duplicate_key_update_opt:
     {
-		$$ = nil
+		$$ = []*tree.UpdateExpr{}
     }
-|   ON DUPLICATE KEY UPDATE set_value_list
+|   ON DUPLICATE KEY UPDATE update_list
     {
-    		if $5 == nil {
-      			yylex.Error("the ON DUPLICATE KEY UPDATE list can not be empty")
-      			return 1
-      		}
-      		var identList tree.IdentifierList
-      		var valueList tree.Exprs
-      		for _, a := range $5 {
-      			identList = append(identList, a.Column)
-      			valueList = append(valueList, a.Expr)
-      		}
-      		vc := tree.NewValuesClause([]tree.Exprs{valueList})
-      		$$ = &tree.UpdateList{
-      			Columns: identList,
-      			Rows: tree.NewSelect(vc, nil, nil),
-      		}
+      	$$ = $5
     }
 
 set_value_list:

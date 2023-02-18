@@ -377,23 +377,25 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 	}
 	return cur
 }
-func (bj ByteJson) Query(path *Path) *ByteJson {
-	out := make([]ByteJson, 0, 1)
-	out = bj.query(out, path)
+func (bj ByteJson) Query(paths []*Path) *ByteJson {
+	out := make([]ByteJson, 0, len(paths))
+	for _, path := range paths {
+		tmp := bj.query(nil, path)
+		if len(tmp) > 0 {
+			allNull := checkAllNull(tmp)
+			if !allNull {
+				out = append(out, tmp...)
+			}
+		}
+	}
 	if len(out) == 0 {
 		return &ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 	}
-	if len(out) == 1 {
+	if len(out) == 1 && len(paths) == 1 {
 		return &out[0]
 	}
-	fullNull := true
-	for i := 0; i < len(out); i++ {
-		if out[i].Type != TpCodeLiteral || out[i].Data[0] != LiteralNull {
-			fullNull = false
-			break
-		}
-	}
-	if fullNull {
+	allNull := checkAllNull(out)
+	if allNull {
 		return &ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 	}
 	return mergeToArray(out)

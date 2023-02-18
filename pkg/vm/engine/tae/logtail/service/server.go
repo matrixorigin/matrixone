@@ -267,13 +267,8 @@ func (s *LogtailServer) onSubscription(
 		return nil
 	}
 
-	timeout := s.cfg.ResponseSendTimeout
-	if deadline, ok := sendCtx.Deadline(); ok {
-		timeout = time.Until(deadline)
-	}
-
 	sub := subscription{
-		timeout: timeout,
+		timeout: ContextTimeout(sendCtx, s.cfg.ResponseSendTimeout),
 		tableID: tableID,
 		req:     req,
 		session: session,
