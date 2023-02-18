@@ -141,7 +141,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				continue
 			}
 			if v > rows {
-				ctr.sels = append(ctr.sels, make([]int32, 0, 0))
+				ctr.sels = append(ctr.sels, make([]int32, 0))
 			}
 			ai := int64(v) - 1
 			ctr.sels[ai] = append(ctr.sels[ai], int32(i+k))
