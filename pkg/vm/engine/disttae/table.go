@@ -457,59 +457,29 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	if len(ranges) == 1 && len(ranges[0]) == 0 {
 		return tbl.newMergeReader(ctx, num, expr)
 	}
-	rds := make([]engine.Reader, num)
-	blks := make([]BlockMeta, len(ranges))
-	for i := range ranges {
-		blks[i] = blockUnmarshal(ranges[i])
-	}
-	ts := tbl.db.txn.meta.SnapshotTS
-	tableDef := tbl.getTableDef()
-
-	if len(ranges) < num {
-		for i := range ranges {
-			rds[i] = &blockReader{
-				fs:         tbl.db.fs,
-				tableDef:   tableDef,
-				primaryIdx: tbl.primaryIdx,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       []BlockMeta{blks[i]},
-			}
+	if len(ranges) > 1 && len(ranges[0]) == 0 {
+		rds := make([]engine.Reader, num)
+		mrds := make([]mergeReader, num)
+		rds0, err := tbl.newMergeReader(ctx, num, expr)
+		if err != nil {
+			return nil, err
 		}
-		for j := len(ranges); j < num; j++ {
-			rds[j] = &emptyReader{}
+		for i := range rds0 {
+			mrds[i].rds = append(mrds[i].rds, rds0[i])
+		}
+		rds0, err = tbl.newBlockReader(ctx, num, expr, ranges[1:])
+		if err != nil {
+			return nil, err
+		}
+		for i := range rds0 {
+			mrds[i].rds = append(mrds[i].rds, rds0[i])
+		}
+		for i := range rds {
+			rds[i] = &mrds[i]
 		}
 		return rds, nil
 	}
-	step := (len(ranges)) / num
-	if step < 1 {
-		step = 1
-	}
-	for i := 0; i < num; i++ {
-		if i == num-1 {
-			rds[i] = &blockReader{
-				fs:         tbl.db.fs,
-				tableDef:   tableDef,
-				primaryIdx: tbl.primaryIdx,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       blks[i*step:],
-			}
-		} else {
-			rds[i] = &blockReader{
-				fs:         tbl.db.fs,
-				tableDef:   tableDef,
-				primaryIdx: tbl.primaryIdx,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       blks[i*step : (i+1)*step],
-			}
-		}
-	}
-	return rds, nil
+	return tbl.newBlockReader(ctx, num, expr, ranges)
 }
 
 func (tbl *table) newMergeReader(ctx context.Context, num int,
@@ -562,6 +532,62 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 	}
 	for i := range rds {
 		rds[i] = &mrds[i]
+	}
+	return rds, nil
+}
+
+func (tbl *table) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
+	rds := make([]engine.Reader, num)
+	blks := make([]BlockMeta, len(ranges))
+	for i := range ranges {
+		blks[i] = blockUnmarshal(ranges[i])
+	}
+	ts := tbl.db.txn.meta.SnapshotTS
+	tableDef := tbl.getTableDef()
+
+	if len(ranges) < num {
+		for i := range ranges {
+			rds[i] = &blockReader{
+				fs:         tbl.db.fs,
+				tableDef:   tableDef,
+				primaryIdx: tbl.primaryIdx,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       []BlockMeta{blks[i]},
+			}
+		}
+		for j := len(ranges); j < num; j++ {
+			rds[j] = &emptyReader{}
+		}
+		return rds, nil
+	}
+	step := (len(ranges)) / num
+	if step < 1 {
+		step = 1
+	}
+	for i := 0; i < num; i++ {
+		if i == num-1 {
+			rds[i] = &blockReader{
+				fs:         tbl.db.fs,
+				tableDef:   tableDef,
+				primaryIdx: tbl.primaryIdx,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       blks[i*step:],
+			}
+		} else {
+			rds[i] = &blockReader{
+				fs:         tbl.db.fs,
+				tableDef:   tableDef,
+				primaryIdx: tbl.primaryIdx,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       blks[i*step : (i+1)*step],
+			}
+		}
 	}
 	return rds, nil
 }
