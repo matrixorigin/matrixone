@@ -387,22 +387,17 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		dimensions = append(dimensions, vertices[child])
 	}
 	sort.Slice(dimensions, func(i, j int) bool {
-		/*
-			if dimensions[i].pkSelRate < dimensions[j].pkSelRate {
-				return true
-			} else if dimensions[i].pkSelRate > dimensions[j].pkSelRate {
-				return false
-			} else {
-				if math.Abs(dimensions[i].selectivity-dimensions[j].selectivity) > 0.01 {
-					return dimensions[i].selectivity < dimensions[j].selectivity
-				} else {
-					return dimensions[i].outcnt < dimensions[j].outcnt
-				}
-			}
-		*/
-		return dimensions[i].pkSelRate < dimensions[j].pkSelRate ||
-			(dimensions[i].pkSelRate == dimensions[j].pkSelRate &&
-				dimensions[i].outcnt < dimensions[j].outcnt)
+		if dimensions[i].pkSelRate < dimensions[j].pkSelRate {
+			return true
+		} else if dimensions[i].pkSelRate > dimensions[j].pkSelRate {
+			return false
+		} else {
+			//if math.Abs(dimensions[i].selectivity-dimensions[j].selectivity) > 0.01 {
+			//	return dimensions[i].selectivity < dimensions[j].selectivity
+			//} else {
+			return dimensions[i].outcnt < dimensions[j].outcnt
+			//}
+		}
 	})
 
 	for _, child := range dimensions {
