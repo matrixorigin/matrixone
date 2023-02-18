@@ -390,11 +390,11 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		} else if dimensions[i].pkSelRate > dimensions[j].pkSelRate {
 			return false
 		} else {
-			if math.Abs(dimensions[i].selectivity-dimensions[j].selectivity) > 0.01 {
-				return dimensions[i].selectivity < dimensions[j].selectivity
-			} else {
-				return dimensions[i].outcnt < dimensions[j].outcnt
-			}
+			//if math.Abs(dimensions[i].selectivity-dimensions[j].selectivity) > 0.01 {
+			//	return dimensions[i].selectivity < dimensions[j].selectivity
+			//} else {
+			return dimensions[i].outcnt < dimensions[j].outcnt
+			//}
 		}
 	})
 
