@@ -431,7 +431,7 @@ func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
 			continue
 		}
 		for _, filter := range filters {
-			ret, col := checkFilter(filter)
+			ret, col := CheckFilter(filter)
 			if ret && col != nil {
 				newExpr := DeepCopyExpr(filter)
 				if substituteMatchColumn(newExpr, col1, col2) {
@@ -445,21 +445,21 @@ func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
 
 // for predicate deduction, filter must be like func(col)>1 , or (col=1) or (col=2)
 // and only 1 colRef is allowd in the filter
-func checkFilter(expr *plan.Expr) (bool, *ColRef) {
+func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=":
 			switch exprImpl.F.Args[1].Expr.(type) {
 			case *plan.Expr_C:
-				return checkFilter(exprImpl.F.Args[0])
+				return CheckFilter(exprImpl.F.Args[0])
 			default:
 				return false, nil
 			}
 		default:
 			var col *ColRef
 			for _, arg := range exprImpl.F.Args {
-				ret, c := checkFilter(arg)
+				ret, c := CheckFilter(arg)
 				if !ret {
 					return false, nil
 				} else if c != nil {
