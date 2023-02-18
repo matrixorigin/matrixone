@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -159,11 +158,14 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		if subTrees[i].Stats == nil {
 			return true
 		}
-		if math.Abs(subTrees[i].Stats.Selectivity-subTrees[j].Stats.Selectivity) > 0.01 {
-			return subTrees[i].Stats.Selectivity < subTrees[j].Stats.Selectivity
-		} else {
-			return subTrees[i].Stats.Outcnt < subTrees[j].Stats.Outcnt
-		}
+		/*
+			if math.Abs(subTrees[i].Stats.Selectivity-subTrees[j].Stats.Selectivity) > 0.01 {
+				return subTrees[i].Stats.Selectivity < subTrees[j].Stats.Selectivity
+			} else {
+				return subTrees[i].Stats.Outcnt < subTrees[j].Stats.Outcnt
+			}
+		*/
+		return subTrees[i].Stats.Outcnt < subTrees[j].Stats.Outcnt
 	})
 
 	leafByTag := make(map[int32]int32)
@@ -385,17 +387,22 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		dimensions = append(dimensions, vertices[child])
 	}
 	sort.Slice(dimensions, func(i, j int) bool {
-		if dimensions[i].pkSelRate < dimensions[j].pkSelRate {
-			return true
-		} else if dimensions[i].pkSelRate > dimensions[j].pkSelRate {
-			return false
-		} else {
-			if math.Abs(dimensions[i].selectivity-dimensions[j].selectivity) > 0.01 {
-				return dimensions[i].selectivity < dimensions[j].selectivity
+		/*
+			if dimensions[i].pkSelRate < dimensions[j].pkSelRate {
+				return true
+			} else if dimensions[i].pkSelRate > dimensions[j].pkSelRate {
+				return false
 			} else {
-				return dimensions[i].outcnt < dimensions[j].outcnt
+				if math.Abs(dimensions[i].selectivity-dimensions[j].selectivity) > 0.01 {
+					return dimensions[i].selectivity < dimensions[j].selectivity
+				} else {
+					return dimensions[i].outcnt < dimensions[j].outcnt
+				}
 			}
-		}
+		*/
+		return dimensions[i].pkSelRate < dimensions[j].pkSelRate ||
+			(dimensions[i].pkSelRate == dimensions[j].pkSelRate &&
+				dimensions[i].outcnt < dimensions[j].outcnt)
 	})
 
 	for _, child := range dimensions {

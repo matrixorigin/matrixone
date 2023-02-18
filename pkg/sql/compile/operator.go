@@ -292,12 +292,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.HashBuild:
 		t := sourceIns.Arg.(*hashbuild.Argument)
 		res.Arg = &hashbuild.Argument{
-			NeedHashMap: t.NeedHashMap,
-			NeedExpr:    t.NeedExpr,
-			Ibucket:     t.Ibucket,
-			Nbucket:     t.Nbucket,
-			Typs:        t.Typs,
-			Conditions:  t.Conditions,
+			NeedHashMap:    t.NeedHashMap,
+			NeedExpr:       t.NeedExpr,
+			NeedSelectList: t.NeedSelectList,
+			Ibucket:        t.Ibucket,
+			Nbucket:        t.Nbucket,
+			Typs:           t.Typs,
+			Conditions:     t.Conditions,
 		}
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
@@ -1068,23 +1069,26 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 	case vm.Mark:
 		arg := in.Arg.(*mark.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
+			NeedHashMap:    true,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+			Conditions:     arg.Conditions[1],
 		}
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
+			NeedHashMap:    true,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+			Conditions:     arg.Conditions[1],
 		}
 	case vm.Left:
 		arg := in.Arg.(*left.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
+			NeedHashMap:    true,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+			Conditions:     arg.Conditions[1],
 		}
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
@@ -1096,51 +1100,59 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 	case vm.Single:
 		arg := in.Arg.(*single.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
+			NeedHashMap:    true,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+			Conditions:     arg.Conditions[1],
 		}
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopJoin:
 		arg := in.Arg.(*loopjoin.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopLeft:
 		arg := in.Arg.(*loopleft.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopSemi:
 		arg := in.Arg.(*loopsemi.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopSingle:
 		arg := in.Arg.(*loopsingle.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopMark:
 		arg := in.Arg.(*loopmark.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 
 	default:
