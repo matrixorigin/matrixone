@@ -1578,16 +1578,17 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 		return nodes, nil
 	}
-	// ranges[0] means memtable
 	if len(ranges[0]) == 0 {
 		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{
 				Rel:  rel,
 				Mcpu: 1,
+				Data: ranges[:1],
 			})
 		} else {
 			nodes = append(nodes, engine.Node{
 				Rel:  rel,
+				Data: ranges[:1],
 				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 			})
 		}
@@ -1600,21 +1601,29 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	for i := 0; i < len(ranges); i += step {
 		j := i / step
 		if i+step >= len(ranges) {
-			nodes = append(nodes, engine.Node{
-				Rel:  rel,
-				Id:   c.cnList[j].Id,
-				Addr: c.cnList[j].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-				Data: ranges[i:],
-			})
+			if strings.Split(c.addr, ":")[0] == strings.Split(c.cnList[j].Addr, ":")[0] {
+				nodes[0].Data = append(nodes[0].Data, ranges[i:]...)
+			} else {
+				nodes = append(nodes, engine.Node{
+					Rel:  rel,
+					Id:   c.cnList[j].Id,
+					Addr: c.cnList[j].Addr,
+					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
+					Data: ranges[i:],
+				})
+			}
 		} else {
-			nodes = append(nodes, engine.Node{
-				Rel:  rel,
-				Id:   c.cnList[j].Id,
-				Addr: c.cnList[j].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-				Data: ranges[i : i+step],
-			})
+			if strings.Split(c.addr, ":")[0] == strings.Split(c.cnList[j].Addr, ":")[0] {
+				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
+			} else {
+				nodes = append(nodes, engine.Node{
+					Rel:  rel,
+					Id:   c.cnList[j].Id,
+					Addr: c.cnList[j].Addr,
+					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
+					Data: ranges[i : i+step],
+				})
+			}
 		}
 	}
 	return nodes, nil
