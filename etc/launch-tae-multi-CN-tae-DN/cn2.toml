@@ -2,7 +2,7 @@ service-type = "CN"
 data-dir = "./mo-data"
 
 [log]
-level = "error"
+level = "info"
 format = "console"
 max-size = 512
 
