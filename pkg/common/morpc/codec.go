@@ -269,7 +269,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	}
 
 	// 3.1 message body
-	body, err := c.writeBody(out, msg.Message, totalSize)
+	body, err := c.writeBody(out, msg.Message)
 	if err != nil {
 		discardWritten()
 		return err
@@ -409,21 +409,11 @@ func (c *baseCodec) readCustomHeaders(flag byte, msg *RPCMessage, data []byte, o
 
 func (c *baseCodec) writeBody(
 	out *buf.ByteBuf,
-	msg Message,
-	writtenSize int) ([]byte, error) {
-	maxCanWrite := c.maxBodySize - writtenSize
+	msg Message) ([]byte, error) {
 	size := msg.Size()
 	if size == 0 {
 		return nil, nil
 	}
-
-	if size > maxCanWrite {
-		return nil,
-			moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
-				size+writtenSize,
-				c.maxBodySize)
-	}
-
 	if !c.compressEnabled {
 		index, _ := setWriterIndexAfterGow(out, size)
 		data := out.RawSlice(index, index+size)
