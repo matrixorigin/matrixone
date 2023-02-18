@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
