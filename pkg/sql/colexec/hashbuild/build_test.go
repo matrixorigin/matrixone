@@ -113,9 +113,9 @@ func TestLowCardinalityBuild(t *testing.T) {
 	require.NotNil(t, mp.Index())
 
 	sels := mp.Sels()
-	require.Equal(t, []int64{0, 2, 6, 7}, sels[0])
-	require.Equal(t, []int64{1, 4}, sels[1])
-	require.Equal(t, []int64{3, 5}, sels[2])
+	require.Equal(t, []int32{0, 2, 6, 7}, sels[0])
+	require.Equal(t, []int32{1, 4}, sels[1])
+	require.Equal(t, []int32{3, 5}, sels[2])
 
 	mp.Free()
 	tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
