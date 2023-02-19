@@ -120,12 +120,16 @@ func cnMessageHandle(receiver messageReceiverOnServer) error {
 				break
 			}
 		}
+
+		doneCh := make(chan struct{})
 		info := process.WrapCs{
-			MsgId: receiver.messageId,
-			Uid:   opUuid,
-			Cs:    receiver.clientSession,
+			MsgId:  receiver.messageId,
+			Uid:    opUuid,
+			Cs:     receiver.clientSession,
+			DoneCh: doneCh,
 		}
 		ch <- info
+		<-doneCh
 		return nil
 
 	case pipeline.PipelineMessage:
@@ -163,6 +167,7 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		if err != nil {
 			return err
 		}
+
 		m := val.(*pipeline.Message)
 
 		if errInfo, get := m.TryToGetMoErr(); get {
@@ -180,9 +185,6 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 			return nil
 		}
 		// XXX some order check just for safety ?
-		if m.Checksum != crc32.ChecksumIEEE(m.Data) {
-			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
-		}
 		if sequence != m.Sequence {
 			return moerr.NewInternalErrorNoCtx("Packages passed by morpc are out of order")
 		}
@@ -192,6 +194,10 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		if m.WaitingNextToMerge() {
 			continue
 		}
+		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
+			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
+		}
+
 		bat, err := decodeBatch(c.proc.Mp(), dataBuffer)
 		if err != nil {
 			return err
@@ -900,6 +906,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Result:     convertToResultPos(t.RelList, t.ColList),
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
+
 	case vm.Limit:
 		v.Arg = &limit.Argument{Limit: opr.Limit}
 	case vm.LoopAnti:

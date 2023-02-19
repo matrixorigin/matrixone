@@ -25,17 +25,6 @@ import (
 	"math"
 )
 
-func getColumnNameFromExpr(expr *plan.Expr) string {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		return exprImpl.Col.Name
-
-	case *plan.Expr_F:
-		return getColumnNameFromExpr(exprImpl.F.Args[0])
-	}
-	return ""
-}
-
 func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 	if sortOrder == -1 {
 		return cost
@@ -59,14 +48,19 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 }
 
 func estimateOutCntForEquality(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, ndvMap map[string]float64) float64 {
-	colName := getColumnNameFromExpr(expr)
-	sortOrder := util.GetClusterByColumnOrder(sortKeyName, colName)
+	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
+	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
+	ret, col := plan2.CheckFilter(expr)
+	if !ret {
+		return cost / 5
+	}
+	sortOrder := util.GetClusterByColumnOrder(sortKeyName, col.Name)
 	//if col is clusterby, we assume most of the rows in blocks we read is needed
 	//otherwise, deduce selectivity according to ndv
 	if sortOrder != -1 {
 		return estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
 	} else {
-		if ndv, ok := ndvMap[colName]; ok {
+		if ndv, ok := ndvMap[col.Name]; ok {
 			return tableCnt / ndv
 		} else {
 			return tableCnt / 100
