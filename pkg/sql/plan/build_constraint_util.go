@@ -38,6 +38,8 @@ type dmlSelectInfo struct {
 	rootId         int32
 	derivedTableId int32
 
+	onDuplicate []int32
+
 	onIdx    []int32 //remove these row
 	onIdxTbl []*ObjectRef
 
@@ -386,8 +388,9 @@ func updateToSelect(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Upda
 
 func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) error {
 	var err error
-	var updateColumns []string
+	var insertColumns []string
 	tableDef := info.tblInfo.tableDefs[0]
+	tableObjRef := info.tblInfo.objRef[0]
 	syntaxHasColumnNames := false
 	isClusterTable := info.tblInfo.isClusterTable[0]
 	colToIdx := make(map[string]int)
@@ -403,12 +406,12 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isClusterTable {
 			for _, col := range tableDef.Cols {
 				if !util.IsClusterTableAttribute(col.Name) {
-					updateColumns = append(updateColumns, col.Name)
+					insertColumns = append(insertColumns, col.Name)
 				}
 			}
 		} else {
 			for _, col := range tableDef.Cols {
-				updateColumns = append(updateColumns, col.Name)
+				insertColumns = append(insertColumns, col.Name)
 			}
 		}
 	} else {
@@ -421,7 +424,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			if _, exists := colToIdx[string(column)]; !exists {
 				return moerr.NewInvalidInput(builder.GetContext(), "insert value into unknown column '%s'", colName)
 			}
-			updateColumns = append(updateColumns, colName)
+			insertColumns = append(insertColumns, colName)
 		}
 	}
 
@@ -440,7 +443,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				}
 			}
 		} else {
-			colCount := len(updateColumns)
+			colCount := len(insertColumns)
 			for j, row := range slt.Rows {
 				if len(row) != colCount {
 					return moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("Column count doesn't match value count at row '%v'", j))
@@ -455,7 +458,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
 
-		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, updateColumns, colToIdx)
+		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx)
 		if err != nil {
 			return err
 		}
@@ -490,7 +493,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	lastNode := builder.qry.Nodes[info.rootId]
-	if len(updateColumns) != len(lastNode.ProjectList) {
+	if len(insertColumns) != len(lastNode.ProjectList) {
 		return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 	}
 
@@ -499,7 +502,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	oldProject := append([]*Expr{}, lastNode.ProjectList...)
 
 	insertColToExpr := make(map[string]*Expr)
-	for i, column := range updateColumns {
+	for i, column := range insertColumns {
 		colIdx := colToIdx[column]
 		projExpr := &plan.Expr{
 			Typ: oldProject[i].Typ,
@@ -546,10 +549,10 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		BindingTags: []int32{lastTag},
 	}, projectCtx)
 
-	info.projectList = make([]*Expr, len(projectList))
+	info.projectList = make([]*Expr, 0, len(projectList))
 	info.derivedTableId = info.rootId
 	for i, e := range projectList {
-		info.projectList[i] = &plan.Expr{
+		info.projectList = append(info.projectList, &plan.Expr{
 			Typ: e.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -557,9 +560,156 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 					ColPos: int32(i),
 				},
 			},
-		}
+		})
 	}
 	info.idx = int32(len(info.projectList))
+
+	// if insert with on duplicate key . need append a join node
+	// create table t1 (a int primary key, b int unique key, c int);
+	// insert into t1 values (1,1,3),(2,2,3) on duplicate key update a=a+1, b=b-2;
+	// rewrite to : select _t.*, t1.row_id, t1.a+1, t1.b-2，c from
+	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
+	if len(stmt.OnDuplicateUpdate) > 0 {
+		rightTableDef := DeepCopyTableDef(tableDef)
+		rightObjRef := DeepCopyObjectRef(tableObjRef)
+		hiddenCol := builder.compCtx.GetHideKeyDef(tableObjRef.SchemaName, tableObjRef.ObjName)
+		rightTableDef.Cols = append(rightTableDef.Cols, hiddenCol)
+		rightTableDef.Name2ColIndex = map[string]int32{}
+		uniqueCols := make(map[string]int)
+		for i, col := range rightTableDef.Cols {
+			rightTableDef.Name2ColIndex[col.Name] = int32(i)
+			if col.Primary {
+				uniqueCols[col.Name] = i
+			}
+		}
+		if rightTableDef.Pkey != nil {
+			for _, colName := range rightTableDef.Pkey.Names {
+				uniqueCols[colName] = int(rightTableDef.Name2ColIndex[colName])
+			}
+		}
+		for _, index := range rightTableDef.Indexes {
+			if index.Unique {
+				if len(index.Parts) == 1 {
+					colName := index.Parts[0]
+					uniqueCols[colName] = int(rightTableDef.Name2ColIndex[colName])
+				}
+			}
+		}
+
+		// if table have unique columns, we do the rewrite. if not, do nothing(do not throw error)
+		if len(uniqueCols) > 0 {
+
+			joinCtx := NewBindContext(builder, bindCtx)
+			rightCtx := NewBindContext(builder, joinCtx)
+			rightId := builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				ObjRef:      rightObjRef,
+				TableDef:    rightTableDef,
+				BindingTags: []int32{builder.genNewTag()},
+			}, rightCtx)
+			rightTag := builder.qry.Nodes[rightId].BindingTags[0]
+			baseNodeTag := builder.qry.Nodes[info.rootId].BindingTags[0]
+
+			//get update cols
+			updateCols := make(map[string]tree.Expr)
+			for _, updateExpr := range stmt.OnDuplicateUpdate {
+				col := updateExpr.Names[0].Parts[0]
+				updateCols[col] = updateExpr.Expr
+			}
+
+			var defExpr *Expr
+			idxs := make([]int32, len(rightTableDef.Cols))
+			for i, col := range rightTableDef.Cols {
+				idxs[i] = int32(i)
+				info.idx = info.idx + 1
+				if updateExpr, exists := updateCols[col.Name]; exists {
+					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+					if _, ok := updateExpr.(*tree.DefaultVal); ok {
+						defExpr, err = getDefaultExpr(builder.GetContext(), col)
+						if err != nil {
+							return err
+						}
+					} else {
+						defExpr, err = binder.BindExpr(updateExpr, 0, true)
+						if err != nil {
+							return err
+						}
+						// todo: replace values expr
+					}
+					defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
+					if err != nil {
+						return err
+					}
+					info.projectList = append(info.projectList, defExpr)
+				} else {
+					info.projectList = append(info.projectList, &plan.Expr{
+						Typ: col.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: rightTag,
+								ColPos: int32(i),
+							},
+						},
+					})
+				}
+			}
+
+			// get join condition
+			var joinConds *Expr
+			joinIdx := 0
+			for _, colIdx := range uniqueCols {
+				col := rightTableDef.Cols[colIdx]
+				leftExpr := &Expr{
+					Typ: col.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: baseNodeTag,
+							ColPos: int32(colIdx),
+						},
+					},
+				}
+				rightExpr := &plan.Expr{
+					Typ: col.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: rightTag,
+							ColPos: int32(colIdx),
+						},
+					},
+				}
+				condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+				if err != nil {
+					return err
+				}
+				if joinIdx == 0 {
+					joinConds = condExpr
+				} else {
+					joinConds, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{joinConds, condExpr})
+					if err != nil {
+						return err
+					}
+				}
+				joinIdx++
+			}
+
+			//append join node
+			leftCtx := builder.ctxByNode[info.rootId]
+			err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
+			if err != nil {
+				return err
+			}
+			newRootId := builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{info.rootId, rightId},
+				JoinType: plan.Node_LEFT,
+				OnList:   []*Expr{joinConds},
+			}, joinCtx)
+			bindCtx.binder = NewTableBinder(builder, bindCtx)
+			info.rootId = newRootId
+			info.onDuplicate = idxs
+		}
+
+	}
 
 	return nil
 }
