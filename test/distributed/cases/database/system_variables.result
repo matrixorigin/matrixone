@@ -528,9 +528,7 @@ drop database test1;
 drop account if exists abc;
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 alter account config sys set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
-null
 alter account config abc set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
-null
 alter account config abc1 set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 internal error: there is no account abc1
 drop account abc;
