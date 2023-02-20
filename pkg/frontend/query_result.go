@@ -516,7 +516,8 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	}
 
 	//step2: read every batch from the query result
-	indexes := make([]uint16, len(columnDefs.ResultCols))
+	columnCount := len(columnDefs.ResultCols)
+	indexes := make([]uint16, columnCount)
 	for i := range indexes {
 		indexes[i] = uint16(i)
 	}
@@ -524,11 +525,12 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	// preparation
 	//=====================
 	//prepare batch
-	tmpBatch := batch.NewWithSize(len(columnDefs.ResultCols))
+
+	tmpBatch := batch.NewWithSize(columnCount)
 	defer tmpBatch.Clean(ses.GetMemPool())
 	//prepare result set
 	mrs := &MysqlResultSet{}
-	typs := make([]types.Type, len(columnDefs.ResultCols))
+	typs := make([]types.Type, columnCount)
 	for i, c := range columnDefs.ResultCols {
 		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale, c.Typ.Precision)
 		mcol := &MysqlColumn{}
@@ -541,13 +543,13 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	}
 	mrs.Data = make([][]interface{}, 1)
 	for i := 0; i < 1; i++ {
-		mrs.Data[i] = make([]interface{}, len(columnDefs.ResultCols))
+		mrs.Data[i] = make([]interface{}, columnCount)
 	}
 	exportParam := &ExportParam{
 		ExportParam: eParam,
 	}
 	//prepare output queue
-	oq := NewOutputQueue(ctx, nil, mrs, 1, exportParam, ses.GetShowStmtType())
+	oq := NewOutputQueue(ctx, ses, columnCount, mrs, exportParam)
 	oq.reset()
 	//prepare export param
 	exportParam.DefaultBufSize = ses.GetParameterUnit().SV.ExportDataDefaultFlushSize

@@ -343,29 +343,39 @@ func (oq *outputQueue) resetLineStr() {
 	oq.lineStr = oq.lineStr[:0]
 }
 
-func NewOutputQueue(ses *Session, columnCount int) *outputQueue {
-	//Create a new temporary result set per pipeline thread.
-	mrs := &MysqlResultSet{}
-	//Warning: Don't change ResultColumns in this.
-	//Reference the shared ResultColumns of the session among multi-thread.
-	sesMrs := ses.GetMysqlResultSet()
-	mrs.Columns = sesMrs.Columns
-	mrs.Name2Index = sesMrs.Name2Index
-
+func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *MysqlResultSet, ep *ExportParam) *outputQueue {
 	const countOfResultSet = 1
-	//group row
-	mrs.Data = make([][]interface{}, countOfResultSet)
-	for i := 0; i < countOfResultSet; i++ {
-		mrs.Data[i] = make([]interface{}, columnCount)
+	if ctx == nil {
+		ctx = ses.GetRequestContext()
 	}
+	if mrs == nil {
+		//Create a new temporary result set per pipeline thread.
+		mrs = &MysqlResultSet{}
+		//Warning: Don't change ResultColumns in this.
+		//Reference the shared ResultColumns of the session among multi-thread.
+		sesMrs := ses.GetMysqlResultSet()
+		mrs.Columns = sesMrs.Columns
+		mrs.Name2Index = sesMrs.Name2Index
+
+		//group row
+		mrs.Data = make([][]interface{}, countOfResultSet)
+		for i := 0; i < countOfResultSet; i++ {
+			mrs.Data[i] = make([]interface{}, columnCount)
+		}
+	}
+
+	if ep == nil {
+		ep = ses.GetExportParam()
+	}
+
 	return &outputQueue{
-		ctx:          ses.GetRequestContext(),
+		ctx:          ctx,
 		ses:          ses,
 		proto:        ses.GetMysqlProtocol(),
 		mrs:          mrs,
 		rowIdx:       0,
 		length:       uint64(countOfResultSet),
-		ep:           ses.GetExportParam(),
+		ep:           ep,
 		showStmtType: ses.GetShowStmtType(),
 	}
 }
@@ -633,7 +643,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	proto := ses.GetMysqlProtocol()
 	proto.ResetStatistics()
 
-	oq := NewOutputQueue(ses, len(bat.Vecs))
+	oq := NewOutputQueue(nil, ses, len(bat.Vecs), nil, nil)
 	row2colTime := time.Duration(0)
 	procBatchBegin := time.Now()
 	n := vector.Length(bat.Vecs[0])
