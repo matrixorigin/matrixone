@@ -710,7 +710,7 @@ var (
 		"mo_role_privs":              0,
 		"mo_user_defined_function":   0,
 		"mo_mysql_compatbility_mode": 0,
-		`%!%mo_increment_columns`:    0,
+		catalog.AutoIncrTableName:    0,
 	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
@@ -725,9 +725,9 @@ var (
 		"mo_role_privs":              0,
 		"mo_user_defined_function":   0,
 		"mo_mysql_compatbility_mode": 0,
-		"%!%mo_increment_columns":    0,
+		catalog.AutoIncrTableName:    0,
 	}
-	createAutoTableSql = "create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);"
+	createAutoTableSql = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
@@ -821,7 +821,7 @@ var (
 		`drop table if exists mo_catalog.mo_user_grant;`,
 		`drop table if exists mo_catalog.mo_role_grant;`,
 		`drop table if exists mo_catalog.mo_role_privs;`,
-		//"drop table if exists mo_catalog.`%!%mo_increment_columns`;",
+		//"drop table if exists mo_catalog.`catalog.AutoIncrTableName`;",
 	}
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
@@ -1398,7 +1398,7 @@ func getSqlForDeleteMysqlCompatbilityModeForAccount(account_name string) string 
 
 // isClusterTable decides a table is the index table or not
 func isIndexTable(name string) bool {
-	return strings.HasPrefix(name, "__mo_index_unique")
+	return strings.HasPrefix(name, catalog.IndexTableNamePrefix)
 }
 
 // isClusterTable decides a table is the cluster table or not
