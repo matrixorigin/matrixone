@@ -181,7 +181,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 	if !ValidDate(year, month, day) {
 		return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 	}
-	result := FromClock(year, month, day, hour, minute, second+uint8(carry), msec)
+	result := DatetimeFromClock(year, month, day, hour, minute, second+uint8(carry), msec)
 	y, m, d, _ := result.ToDate().Calendar(true)
 	if !ValidDate(y, m, d) {
 		return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
@@ -207,27 +207,27 @@ func (dt Datetime) UnixTimestamp(loc *time.Location) int64 {
 	return dt.ConvertToGoTime(loc).Unix()
 }
 
-func FromUnix(loc *time.Location, ts int64) Datetime {
+func DatetimeFromUnix(loc *time.Location, ts int64) Datetime {
 	t := time.Unix(ts, 0).In(loc)
 	_, offset := t.Zone()
-	return Datetime((ts+int64(offset))*microSecsPerSec + unixEpoch)
+	return Datetime((ts+int64(offset))*microSecsPerSec + unixEpochSecs)
 }
 
-func FromUnixWithNsec(loc *time.Location, sec int64, nsec int64) Datetime {
+func DatetimeFromUnixWithNsec(loc *time.Location, sec int64, nsec int64) Datetime {
 	t := time.Unix(sec, nsec).In(loc)
 	_, offset := t.Zone()
 	msec := math.Round(float64(nsec) / 1000)
-	return Datetime((sec+int64(offset))*microSecsPerSec + int64(msec) + unixEpoch)
+	return Datetime((sec+int64(offset))*microSecsPerSec + int64(msec) + unixEpochSecs)
 }
 
 func Now(loc *time.Location) Datetime {
 	now := time.Now().In(loc)
 	_, offset := now.Zone()
-	return Datetime(now.UnixMicro() + int64(offset)*microSecsPerSec + unixEpoch)
+	return Datetime(now.UnixMicro() + int64(offset)*microSecsPerSec + unixEpochSecs)
 }
 
 func UTC() Datetime {
-	return Datetime(time.Now().UnixMicro() + unixEpoch)
+	return Datetime(time.Now().UnixMicro() + unixEpochSecs)
 }
 
 func (dt Datetime) ToDate() Date {
@@ -275,8 +275,8 @@ func (dt Datetime) Hour() int8 {
 	return hour
 }
 
-func FromClock(year int32, month, day, hour, minute, sec uint8, msec uint32) Datetime {
-	days := FromCalendar(year, month, day)
+func DatetimeFromClock(year int32, month, day, hour, minute, sec uint8, msec uint32) Datetime {
+	days := DateFromCalendar(year, month, day)
 	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(minute)*secsPerMinute + int64(sec)
 	return Datetime(secs*microSecsPerSec + int64(msec))
 }
@@ -322,7 +322,7 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 			return 0, false
 		}
 	}
-	newDate := FromCalendar(y, m, d)
+	newDate := DateFromCalendar(y, m, d)
 	return dt + Datetime(newDate-oldDate)*secsPerDay*microSecsPerSec, true
 }
 
@@ -444,7 +444,7 @@ func (dt Datetime) YearWeek(mode int) (year int, week int) {
 }
 
 func (dt Datetime) ToTimestamp(loc *time.Location) Timestamp {
-	return Timestamp(dt.ConvertToGoTime(loc).UnixMicro() + unixEpoch)
+	return Timestamp(dt.ConvertToGoTime(loc).UnixMicro() + unixEpochSecs)
 }
 
 func (dt Datetime) SecondMicrosecondStr() string {
@@ -516,4 +516,8 @@ func ValidDatetime(year int32, month, day uint8) bool {
 		}
 	}
 	return false
+}
+
+func (dt Datetime) SecsSinceUnixEpoch() int64 {
+	return (int64(dt) - unixEpochSecs) / microSecsPerSec
 }

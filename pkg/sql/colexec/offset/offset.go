@@ -31,7 +31,7 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
@@ -43,7 +43,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 
 	if ap.Seen > ap.Offset {
 		return false, nil

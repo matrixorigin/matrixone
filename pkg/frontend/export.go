@@ -16,8 +16,11 @@ package frontend
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"os"
 	"strconv"
@@ -30,6 +33,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+type ExportParam struct {
+	*tree.ExportParam
+	// file handler
+	File *os.File
+	// bufio.writer
+	Writer *bufio.Writer
+	// curFileSize
+	CurFileSize uint64
+	Rows        uint64
+	FileCnt     uint
+	ColumnFlag  []bool
+	Symbol      [][]byte
+	// default flush size
+	DefaultBufSize int64
+	OutputStr      []byte
+	LineSize       uint64
+
+	//file service & buffer for the line
+	UseFileService bool
+	FileService    fileservice.FileService
+	LineBuffer     *bytes.Buffer
+	Ctx            context.Context
+	AsyncReader    *io.PipeReader
+	AsyncWriter    *io.PipeWriter
+	AsyncGroup     *errgroup.Group
+}
 
 var OpenFile = os.OpenFile
 var escape byte = '"'
@@ -54,7 +84,7 @@ func (cld *CloseExportData) Close() {
 	})
 }
 
-func initExportFileParam(ep *tree.ExportParam, mrs *MysqlResultSet) {
+func initExportFileParam(ep *ExportParam, mrs *MysqlResultSet) {
 	ep.DefaultBufSize *= 1024 * 1024
 	n := (int)(mrs.GetColumnCount())
 	if n <= 0 {
@@ -74,16 +104,50 @@ func initExportFileParam(ep *tree.ExportParam, mrs *MysqlResultSet) {
 	}
 }
 
-var openNewFile = func(ctx context.Context, ep *tree.ExportParam, mrs *MysqlResultSet) error {
+var openNewFile = func(ctx context.Context, ep *ExportParam, mrs *MysqlResultSet) error {
 	lineSize := ep.LineSize
 	var err error
 	ep.CurFileSize = 0
-	filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
-	ep.File, err = OpenFile(filePath, os.O_RDWR|os.O_EXCL|os.O_CREATE, 0o666)
-	if err != nil {
-		return err
+	if !ep.UseFileService {
+		filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
+		ep.File, err = OpenFile(filePath, os.O_RDWR|os.O_EXCL|os.O_CREATE, 0o666)
+		if err != nil {
+			return err
+		}
+		ep.Writer = bufio.NewWriterSize(ep.File, int(ep.DefaultBufSize))
+	} else {
+		//default 1MB
+		if ep.LineBuffer == nil {
+			ep.LineBuffer = &bytes.Buffer{}
+		} else {
+			ep.LineBuffer.Reset()
+		}
+		ep.AsyncReader, ep.AsyncWriter = io.Pipe()
+		filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
+
+		asyncWriteFunc := func() error {
+			vec := fileservice.IOVector{
+				FilePath: filePath,
+				Entries: []fileservice.IOEntry{
+					{
+						ReaderForWrite: ep.AsyncReader,
+						Size:           -1,
+					},
+				},
+			}
+			err := ep.FileService.Write(ctx, vec)
+			if err != nil {
+				err2 := ep.AsyncReader.CloseWithError(err)
+				if err2 != nil {
+					return err2
+				}
+			}
+			return err
+		}
+
+		ep.AsyncGroup, _ = errgroup.WithContext(ctx)
+		ep.AsyncGroup.Go(asyncWriteFunc)
 	}
-	ep.Writer = bufio.NewWriterSize(ep.File, int(ep.DefaultBufSize))
 	if ep.Header {
 		var header string
 		n := len(mrs.Columns)
@@ -98,6 +162,9 @@ var openNewFile = func(ctx context.Context, ep *tree.ExportParam, mrs *MysqlResu
 			return moerr.NewInternalError(ctx, "the header line size is over the maxFileSize")
 		}
 		if err := writeDataToCSVFile(ep, []byte(header)); err != nil {
+			return err
+		}
+		if _, err := EndOfLine(ep); err != nil {
 			return err
 		}
 	}
@@ -140,29 +207,86 @@ var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte
 	return nil
 }
 
-var Flush = func(ep *tree.ExportParam) error {
-	return ep.Writer.Flush()
+var Flush = func(ep *ExportParam) error {
+	if !ep.UseFileService {
+		return ep.Writer.Flush()
+	}
+	return nil
 }
 
-var Seek = func(ep *tree.ExportParam) (int64, error) {
-	return ep.File.Seek(int64(ep.CurFileSize-ep.LineSize), io.SeekStart)
+var Seek = func(ep *ExportParam) (int64, error) {
+	if !ep.UseFileService {
+		return ep.File.Seek(int64(ep.CurFileSize-ep.LineSize), io.SeekStart)
+	}
+	return 0, nil
 }
 
-var Read = func(ep *tree.ExportParam) (int, error) {
-	ep.OutputStr = make([]byte, ep.LineSize)
-	return ep.File.Read(ep.OutputStr)
+var Read = func(ep *ExportParam) (int, error) {
+	if !ep.UseFileService {
+		ep.OutputStr = make([]byte, ep.LineSize)
+		return ep.File.Read(ep.OutputStr)
+	} else {
+		ep.OutputStr = make([]byte, ep.LineSize)
+		copy(ep.OutputStr, ep.LineBuffer.Bytes())
+		ep.LineBuffer.Reset()
+		return int(ep.LineSize), nil
+	}
 }
 
-var Truncate = func(ep *tree.ExportParam) error {
-	return ep.File.Truncate(int64(ep.CurFileSize - ep.LineSize))
+var Truncate = func(ep *ExportParam) error {
+	if !ep.UseFileService {
+		return ep.File.Truncate(int64(ep.CurFileSize - ep.LineSize))
+	} else {
+		return nil
+	}
 }
 
-var Close = func(ep *tree.ExportParam) error {
-	return ep.File.Close()
+var Close = func(ep *ExportParam) error {
+	if !ep.UseFileService {
+		ep.FileCnt++
+		return ep.File.Close()
+	} else {
+		ep.FileCnt++
+		err := ep.AsyncWriter.Close()
+		if err != nil {
+			return err
+		}
+		err = ep.AsyncGroup.Wait()
+		if err != nil {
+			return err
+		}
+		err = ep.AsyncReader.Close()
+		if err != nil {
+			return err
+		}
+		ep.AsyncReader = nil
+		ep.AsyncWriter = nil
+		ep.AsyncGroup = nil
+		return err
+	}
 }
 
-var Write = func(ep *tree.ExportParam, output []byte) (int, error) {
-	return ep.Writer.Write(output)
+var Write = func(ep *ExportParam, output []byte) (int, error) {
+	if !ep.UseFileService {
+		return ep.Writer.Write(output)
+	} else {
+		return ep.LineBuffer.Write(output)
+	}
+}
+
+var EndOfLine = func(ep *ExportParam) (int, error) {
+	if ep.UseFileService {
+		n, err := ep.AsyncWriter.Write(ep.LineBuffer.Bytes())
+		if err != nil {
+			err2 := ep.AsyncWriter.CloseWithError(err)
+			if err2 != nil {
+				return 0, err2
+			}
+		}
+		ep.LineBuffer.Reset()
+		return n, err
+	}
+	return 0, nil
 }
 
 func writeToCSVFile(oq *outputQueue, output []byte) error {
@@ -170,7 +294,7 @@ func writeToCSVFile(oq *outputQueue, output []byte) error {
 		if oq.ep.Rows == 0 {
 			return moerr.NewInternalError(oq.ctx, "the OneLine size is over the maxFileSize")
 		}
-		oq.ep.FileCnt++
+
 		if err := Flush(oq.ep); err != nil {
 			return err
 		}
@@ -203,7 +327,7 @@ func writeToCSVFile(oq *outputQueue, output []byte) error {
 	return nil
 }
 
-var writeDataToCSVFile = func(ep *tree.ExportParam, output []byte) error {
+var writeDataToCSVFile = func(ep *ExportParam, output []byte) error {
 	for {
 		if n, err := Write(ep, output); err != nil {
 			return err
@@ -397,5 +521,6 @@ func exportDataToCSVFile(oq *outputQueue) error {
 		}
 	}
 	oq.ep.Rows++
-	return nil
+	_, err := EndOfLine(oq.ep)
+	return err
 }

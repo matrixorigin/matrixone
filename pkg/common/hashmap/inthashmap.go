@@ -77,6 +77,14 @@ func (m *IntHashMap) AddGroups(rows uint64) {
 	m.rows += rows
 }
 
+func (m *IntHashMap) Size() int64 {
+	// TODO: add the size of the other IntHashMap parts
+	if m.hashMap == nil {
+		return 0
+	}
+	return m.hashMap.Size()
+}
+
 func (m *IntHashMap) Cardinality() uint64 {
 	return m.hashMap.Cardinality()
 }

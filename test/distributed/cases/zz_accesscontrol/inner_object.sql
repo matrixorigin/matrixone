@@ -11,6 +11,24 @@ select role_id,role_name,owner from mo_catalog.mo_role where role_name in ("moad
 create account account1 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 -- @session:id=2&user=account1:admin&password=123456
 select role_id,role_name,owner from mo_catalog.mo_role;
+show databases;
+show grants;
+use system;
+show triggers;
+use mo_catalog;
+show columns from mo_tables;
+select datname, dat_createsql from mo_database;
+select relname from mo_tables where relname="sql_statement_total";
+select relname from mo_tables where relname="mo_user";
+select relname from mo_tables where relname="tables";
+select user_name,authentication_string from mo_user;
+select role_name from mo_role;
+create database account_db;
+use account_db;
+show tables;
+create table a(col int);
+show create table a;
+show tables;
 -- @session
 
 --public只有连接权限

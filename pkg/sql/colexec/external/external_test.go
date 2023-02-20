@@ -23,13 +23,17 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -62,8 +66,13 @@ func newTestCase(all bool, format, jsondata string) externalTestCase {
 		},
 		arg: &Argument{
 			Es: &ExternalParam{
-				Ctx:       ctx,
-				Fileparam: &ExternalFileparam{},
+				ExParamConst: ExParamConst{
+					Ctx: ctx,
+				},
+				ExParam: ExParam{
+					Fileparam: &ExFileparam{},
+					Filter:    &FilterParam{},
+				},
 			},
 		},
 		cancel:   cancel,
@@ -89,28 +98,29 @@ func Test_Prepare(t *testing.T) {
 	convey.Convey("external Prepare", t, func() {
 		for _, tcs := range cases {
 			param := tcs.arg.Es
-			err := Prepare(tcs.proc, tcs.arg)
-			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(param.extern, convey.ShouldNotBeNil)
-			convey.So(param.Fileparam.End, convey.ShouldBeTrue)
 			extern := &tree.ExternParam{
-				Filepath: "",
-				Tail: &tree.TailParameter{
-					IgnoredLines: 0,
+				ExParamConst: tree.ExParamConst{
+					Filepath: "",
+					Tail: &tree.TailParameter{
+						IgnoredLines: 0,
+					},
+					Format: tcs.format,
+					Option: defaultOption,
 				},
-				FileService: tcs.proc.FileService,
-				Format:      tcs.format,
-				JsonData:    tcs.jsondata,
-				Option:      defaultOption,
-				Ctx:         context.Background(),
+				ExParam: tree.ExParam{
+					FileService: tcs.proc.FileService,
+					JsonData:    tcs.jsondata,
+					Ctx:         context.Background(),
+				},
 			}
 			json_byte, err := json.Marshal(extern)
 			if err != nil {
 				panic(err)
 			}
 			param.CreateSql = string(json_byte)
+			tcs.arg.Es.Extern = extern
 			err = Prepare(tcs.proc, tcs.arg)
-			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err, convey.ShouldBeNil)
 			convey.So(param.FileList, convey.ShouldBeNil)
 			convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
 
@@ -119,16 +129,18 @@ func Test_Prepare(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			param.CreateSql = string(json_byte)
 			err = Prepare(tcs.proc, tcs.arg)
-			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			if tcs.format == tree.JSONLINE {
 				extern = &tree.ExternParam{
-					Filepath: "",
-					Tail: &tree.TailParameter{
-						IgnoredLines: 0,
+					ExParamConst: tree.ExParamConst{
+						Filepath: "",
+						Tail: &tree.TailParameter{
+							IgnoredLines: 0,
+						},
+						Format: tcs.format,
+						Option: defaultOption,
 					},
-					Format: tcs.format,
-					Option: defaultOption,
 				}
 				extern.JsonData = tcs.jsondata
 				json_byte, err = json.Marshal(extern)
@@ -145,7 +157,7 @@ func Test_Prepare(t *testing.T) {
 				param.CreateSql = string(json_byte)
 
 				err = Prepare(tcs.proc, tcs.arg)
-				convey.So(err, convey.ShouldNotBeNil)
+				convey.So(err, convey.ShouldBeNil)
 			}
 		}
 	})
@@ -156,29 +168,35 @@ func Test_Call(t *testing.T) {
 		for _, tcs := range cases {
 			param := tcs.arg.Es
 			extern := &tree.ExternParam{
-				Filepath: "",
-				Tail: &tree.TailParameter{
-					IgnoredLines: 0,
+				ExParamConst: tree.ExParamConst{
+					Filepath: "",
+					Tail: &tree.TailParameter{
+						IgnoredLines: 0,
+					},
+					Format: tcs.format,
 				},
-				FileService: tcs.proc.FileService,
-				Format:      tcs.format,
-				JsonData:    tcs.jsondata,
-				Ctx:         context.Background(),
+				ExParam: tree.ExParam{
+					FileService: tcs.proc.FileService,
+					JsonData:    tcs.jsondata,
+					Ctx:         context.Background(),
+				},
 			}
-			param.extern = extern
+			param.Extern = extern
 			param.Fileparam.End = false
 			param.FileList = []string{"abc.txt"}
-			end, err := Call(1, tcs.proc, tcs.arg)
+			param.FileOffset = [][2]int{{0, -1}}
+			param.FileSize = []int64{1}
+			end, err := Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end, convey.ShouldBeFalse)
 
 			param.Fileparam.End = false
-			end, err = Call(1, tcs.proc, tcs.arg)
+			end, err = Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end, convey.ShouldBeTrue)
 
 			param.Fileparam.End = true
-			end, err = Call(1, tcs.proc, tcs.arg)
+			end, err = Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end, convey.ShouldBeTrue)
 		}
@@ -188,31 +206,35 @@ func Test_Call(t *testing.T) {
 func Test_getCompressType(t *testing.T) {
 	convey.Convey("getCompressType succ", t, func() {
 		param := &tree.ExternParam{
-			CompressType: tree.GZIP,
-			Ctx:          context.Background(),
+			ExParamConst: tree.ExParamConst{
+				CompressType: tree.GZIP,
+			},
+			ExParam: tree.ExParam{
+				Ctx: context.Background(),
+			},
 		}
-		compress := getCompressType(param)
+		compress := getCompressType(param, param.Filepath)
 		convey.So(compress, convey.ShouldEqual, param.CompressType)
 
 		param.CompressType = tree.AUTO
 		param.Filepath = "a.gz"
-		compress = getCompressType(param)
+		compress = getCompressType(param, param.Filepath)
 		convey.So(compress, convey.ShouldEqual, tree.GZIP)
 
 		param.Filepath = "a.bz2"
-		compress = getCompressType(param)
+		compress = getCompressType(param, param.Filepath)
 		convey.So(compress, convey.ShouldEqual, tree.BZIP2)
 
 		param.Filepath = "a.lz4"
-		compress = getCompressType(param)
+		compress = getCompressType(param, param.Filepath)
 		convey.So(compress, convey.ShouldEqual, tree.LZ4)
 
 		param.Filepath = "a.csv"
-		compress = getCompressType(param)
+		compress = getCompressType(param, param.Filepath)
 		convey.So(compress, convey.ShouldEqual, tree.NOCOMPRESS)
 
 		param.Filepath = "a"
-		compress = getCompressType(param)
+		compress = getCompressType(param, param.Filepath)
 		convey.So(compress, convey.ShouldEqual, tree.NOCOMPRESS)
 	})
 }
@@ -220,35 +242,39 @@ func Test_getCompressType(t *testing.T) {
 func Test_getUnCompressReader(t *testing.T) {
 	convey.Convey("getUnCompressReader succ", t, func() {
 		param := &tree.ExternParam{
-			CompressType: tree.NOCOMPRESS,
-			Ctx:          context.Background(),
+			ExParamConst: tree.ExParamConst{
+				CompressType: tree.NOCOMPRESS,
+			},
+			ExParam: tree.ExParam{
+				Ctx: context.Background(),
+			},
 		}
-		read, err := getUnCompressReader(param, nil)
+		read, err := getUnCompressReader(param, param.Filepath, nil)
 		convey.So(read, convey.ShouldBeNil)
 		convey.So(err, convey.ShouldBeNil)
 
 		param.CompressType = tree.BZIP2
-		read, err = getUnCompressReader(param, &os.File{})
+		read, err = getUnCompressReader(param, param.Filepath, &os.File{})
 		convey.So(read, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeNil)
 
 		param.CompressType = tree.FLATE
-		read, err = getUnCompressReader(param, &os.File{})
+		read, err = getUnCompressReader(param, param.Filepath, &os.File{})
 		convey.So(read, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeNil)
 
 		param.CompressType = tree.LZ4
-		read, err = getUnCompressReader(param, &os.File{})
+		read, err = getUnCompressReader(param, param.Filepath, &os.File{})
 		convey.So(read, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeNil)
 
 		param.CompressType = tree.LZW
-		read, err = getUnCompressReader(param, &os.File{})
+		read, err = getUnCompressReader(param, param.Filepath, &os.File{})
 		convey.So(read, convey.ShouldBeNil)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		param.CompressType = "abc"
-		read, err = getUnCompressReader(param, &os.File{})
+		read, err = getUnCompressReader(param, param.Filepath, &os.File{})
 		convey.So(read, convey.ShouldBeNil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
@@ -262,8 +288,10 @@ func Test_makeBatch(t *testing.T) {
 			},
 		}
 		param := &ExternalParam{
-			Cols:  []*plan.ColDef{col},
-			Attrs: []string{"a"},
+			ExParamConst: ExParamConst{
+				Cols:  []*plan.ColDef{col},
+				Attrs: []string{"a"},
+			},
 		}
 		plh := &ParseLineHandler{
 			batchSize: 1,
@@ -430,14 +458,20 @@ func Test_GetBatchData(t *testing.T) {
 			},
 		}
 		param := &ExternalParam{
-			Attrs: atrrs,
-			Cols:  cols,
-			extern: &tree.ExternParam{
-				Tail: &tree.TailParameter{
-					Fields: &tree.Fields{},
+			ExParamConst: ExParamConst{
+				Attrs: atrrs,
+				Cols:  cols,
+				Extern: &tree.ExternParam{
+					ExParamConst: tree.ExParamConst{
+						Tail: &tree.TailParameter{
+							Fields: &tree.Fields{},
+						},
+						Format: tree.CSV,
+					},
+					ExParam: tree.ExParam{
+						Ctx: context.Background(),
+					},
 				},
-				Format: tree.CSV,
-				Ctx:    context.Background(),
 			},
 		}
 		param.Name2ColIndex = make(map[string]int32)
@@ -481,7 +515,7 @@ func Test_GetBatchData(t *testing.T) {
 			convey.So(err, convey.ShouldNotBeNil)
 		}
 
-		param.extern.Tail.Fields.EnclosedBy = 't'
+		param.Extern.Tail.Fields.EnclosedBy = 't'
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -503,8 +537,8 @@ func Test_GetBatchData(t *testing.T) {
 		}
 
 		//test jsonline
-		param.extern.Format = tree.JSONLINE
-		param.extern.JsonData = tree.OBJECT
+		param.Extern.Format = tree.JSONLINE
+		param.Extern.JsonData = tree.OBJECT
 		param.Attrs = atrrs
 		param.Cols = cols
 		plh.simdCsvLineArray = [][]string{jsonline_object}
@@ -517,17 +551,27 @@ func Test_GetBatchData(t *testing.T) {
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		param.extern.Format = tree.CSV
+		param.Extern.Format = tree.CSV
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		param.extern.Format = tree.JSONLINE
-		param.extern.JsonData = tree.ARRAY
+		param.Extern.Format = tree.JSONLINE
+		param.Extern.JsonData = tree.ARRAY
+		param.prevStr = ""
 		plh.simdCsvLineArray = [][]string{jsonline_array}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
+		prevStr, str := jsonline_array[0][:len(jsonline_array[0])-2], jsonline_array[0][len(jsonline_array[0])-2:]
+		plh.simdCsvLineArray = [][]string{{prevStr}}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(param.prevStr, convey.ShouldEqual, prevStr)
 
-		param.extern.JsonData = "test"
+		plh.simdCsvLineArray = [][]string{{str}}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldBeNil)
+
+		param.Extern.JsonData = "test"
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -548,6 +592,7 @@ func Test_GetBatchData(t *testing.T) {
 
 func TestReadDirSymlink(t *testing.T) {
 	root := t.TempDir()
+	ctx := context.Background()
 
 	// create a/b/c
 	err := os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0755)
@@ -566,20 +611,229 @@ func TestReadDirSymlink(t *testing.T) {
 
 	// read a/b/d/foo
 	fooPathInB := filepath.Join(root, "a", "b", "d", "foo")
-	files, err := ReadDir(&tree.ExternParam{
-		Filepath: fooPathInB,
-		Ctx:      context.Background(),
+	files, _, err := plan2.ReadDir(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: fooPathInB,
+		},
+		ExParam: tree.ExParam{
+			Ctx: ctx,
+		},
 	})
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(files))
 	assert.Equal(t, fooPathInB, files[0])
 
 	path1 := root + "/a//b/./../b/c/foo"
-	files1, err := ReadDir(&tree.ExternParam{
-		Filepath: path1,
+	files1, _, err := plan2.ReadDir(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: path1,
+		},
+		ExParam: tree.ExParam{
+			Ctx: ctx,
+		},
 	})
 	assert.Nil(t, err)
 	pathWant1 := root + "/a/b/c/foo"
 	assert.Equal(t, 1, len(files1))
 	assert.Equal(t, pathWant1, files1[0])
+}
+
+func Test_fliterByAccountAndFilename(t *testing.T) {
+	type args struct {
+		node     *plan.Node
+		proc     *process.Process
+		fileList []string
+		fileSize []int64
+	}
+
+	files := []struct {
+		date types.Date
+		path string
+		size int64
+	}{
+		{738551, "etl:/sys/logs/2023/02/01/filepath", 1},
+		{738552, "etl:/sys/logs/2023/02/02/filepath", 2},
+		{738553, "etl:/sys/logs/2023/02/03/filepath", 3},
+		{738554, "etl:/sys/logs/2023/02/04/filepath", 4},
+		{738555, "etl:/sys/logs/2023/02/05/filepath", 5},
+		{738556, "etl:/sys/logs/2023/02/06/filepath", 6},
+	}
+
+	toPathArr := func(files []struct {
+		date types.Date
+		path string
+		size int64
+	}) []string {
+		fileList := make([]string, len(files))
+		for idx, f := range files {
+			fileList[idx] = f.path
+		}
+		return fileList
+	}
+	toSizeArr := func(files []struct {
+		date types.Date
+		path string
+		size int64
+	}) []int64 {
+		fileSize := make([]int64, len(files))
+		for idx, f := range files {
+			fileSize[idx] = f.size
+		}
+		return fileSize
+	}
+
+	fileList := toPathArr(files)
+	fileSize := toSizeArr(files)
+
+	equalDate2DateFid := function.EncodeOverloadID(function.EQUAL, 14)
+	lessDate2DateFid := function.EncodeOverloadID(function.LESS_THAN, 14)
+	mologdateFid := function.EncodeOverloadID(function.MO_LOG_DATE, 0)
+	tableName := "dummy_table"
+
+	mologdateConst := func(idx int) *plan.Expr {
+		return &plan.Expr{
+			Typ: &plan.Type{
+				Size: 4,
+				Id:   int32(types.T_date),
+			},
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: false,
+					Value: &plan.Const_Dateval{
+						Dateval: int32(files[idx].date),
+					},
+				},
+			},
+		}
+	}
+	mologdateFunc := func() *plan.Expr {
+		return &plan.Expr{
+			Typ: &plan.Type{
+				Size: 1,
+				Id:   int32(types.T_bool),
+			},
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: mologdateFid, ObjName: "mo_log_date"},
+					Args: []*plan.Expr{
+						{
+							Typ: nil,
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									RelPos: 0,
+									ColPos: 0,
+									Name:   tableName + "." + catalog.ExternalFilePath,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	nodeWithFunction := func(expr *plan.Expr_F) *plan.Node {
+		return &plan.Node{
+			NodeType: plan.Node_EXTERNAL_SCAN,
+			Stats:    &plan.Stats{},
+			TableDef: &plan.TableDef{
+				TableType: "func_table",
+				TblFunc: &plan.TableFunction{
+					Name: tableName,
+				},
+				Cols: []*plan.ColDef{
+					{
+						Name: catalog.ExternalFilePath,
+						Typ: &plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: types.MaxVarcharLen,
+							Table: tableName,
+						},
+					},
+				},
+			},
+			FilterList: []*plan.Expr{
+				{
+					Typ: &plan.Type{
+						Size: 1,
+						Id:   int32(types.T_bool),
+					},
+					Expr: expr,
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name  string
+		args  args
+		want  []string
+		want1 []int64
+	}{
+		{
+			name: "mo_log_date_20230205",
+			args: args{
+				node: nodeWithFunction(&plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{Obj: equalDate2DateFid, ObjName: "="},
+						Args: []*plan.Expr{
+							mologdateConst(5),
+							mologdateFunc(),
+						},
+					},
+				}),
+				proc:     testutil.NewProc(),
+				fileList: fileList,
+				fileSize: fileSize,
+			},
+			want:  []string{files[5].path},
+			want1: []int64{files[5].size},
+		},
+		{
+			name: "mo_log_date_gt_20230202",
+			args: args{
+				node: nodeWithFunction(&plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{Obj: lessDate2DateFid, ObjName: "<"},
+						Args: []*plan.Expr{
+							mologdateConst(2),
+							mologdateFunc(),
+						},
+					},
+				}),
+				proc:     testutil.NewProc(),
+				fileList: fileList,
+				fileSize: fileSize,
+			},
+			want:  toPathArr(files[3:]),
+			want1: toSizeArr(files[3:]),
+		},
+		{
+			name: "mo_log_date_lt_20230202",
+			args: args{
+				node: nodeWithFunction(&plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{Obj: lessDate2DateFid, ObjName: "<"},
+						Args: []*plan.Expr{
+							mologdateFunc(),
+							mologdateConst(2),
+						},
+					},
+				}),
+				proc:     testutil.NewProc(),
+				fileList: fileList,
+				fileSize: fileSize,
+			},
+			want:  toPathArr(files[:2]),
+			want1: toSizeArr(files[:2]),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, got1, err := filterByAccountAndFilename(tt.args.node, tt.args.proc, tt.args.fileList, tt.args.fileSize)
+			require.Nil(t, err)
+			require.Equal(t, tt.want, got)
+			require.Equal(t, tt.want1, got1)
+		})
+	}
 }

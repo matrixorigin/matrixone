@@ -84,14 +84,14 @@ func (l *store) setInitialClusterInfo(numOfLogShards uint64,
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
-		l.logger.Error("failed to propose initial cluster info", zap.Error(err))
+		l.runtime.Logger().Error("failed to propose initial cluster info", zap.Error(err))
 		return err
 	}
 	if result.Value == uint64(pb.HAKeeperBootstrapFailed) {
 		panic("bootstrap failed")
 	}
 	if result.Value != uint64(pb.HAKeeperCreated) {
-		l.logger.Error("initial cluster info already set")
+		l.runtime.Logger().Error("initial cluster info already set")
 	}
 	return nil
 }
@@ -103,7 +103,7 @@ func (l *store) updateIDAlloc(count uint64) error {
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
-		l.logger.Error("propose get id failed", zap.Error(err))
+		l.runtime.Logger().Error("propose get id failed", zap.Error(err))
 		return err
 	}
 	// TODO: add a test for this
@@ -114,7 +114,7 @@ func (l *store) updateIDAlloc(count uint64) error {
 func (l *store) hakeeperCheck() {
 	isLeader, term, err := l.isLeaderHAKeeper()
 	if err != nil {
-		l.logger.Error("failed to get HAKeeper Leader ID", zap.Error(err))
+		l.runtime.Logger().Error("failed to get HAKeeper Leader ID", zap.Error(err))
 		return
 	}
 
@@ -125,12 +125,12 @@ func (l *store) hakeeperCheck() {
 	state, err := l.getCheckerState()
 	if err != nil {
 		// TODO: check whether this is temp error
-		l.logger.Error("failed to get checker state", zap.Error(err))
+		l.runtime.Logger().Error("failed to get checker state", zap.Error(err))
 		return
 	}
 	switch state.State {
 	case pb.HAKeeperCreated:
-		l.logger.Warn("waiting for initial cluster info to be set, check skipped")
+		l.runtime.Logger().Warn("waiting for initial cluster info to be set, check skipped")
 		return
 	case pb.HAKeeperBootstrapping:
 		l.bootstrap(term, state)
@@ -150,11 +150,11 @@ func (l *store) assertHAKeeperState(s pb.HAKeeperState) {
 	state, err := l.getCheckerState()
 	if err != nil {
 		// TODO: check whether this is temp error
-		l.logger.Error("failed to get checker state", zap.Error(err))
+		l.runtime.Logger().Error("failed to get checker state", zap.Error(err))
 		return
 	}
 	if state.State != s {
-		l.logger.Panic("unexpected state",
+		l.runtime.Logger().Panic("unexpected state",
 			zap.String("expected", s.String()),
 			zap.String("got", state.State.String()))
 	}
@@ -169,19 +169,19 @@ func (l *store) healthCheck(term uint64, state *pb.CheckerState) {
 	defer l.assertHAKeeperState(pb.HAKeeperRunning)
 	cmds, err := l.getScheduleCommand(true, term, state)
 	if err != nil {
-		l.logger.Error("failed to get check schedule commands", zap.Error(err))
+		l.runtime.Logger().Error("failed to get check schedule commands", zap.Error(err))
 		return
 	}
-	l.logger.Debug(fmt.Sprintf("cluster health check generated %d schedule commands", len(cmds)))
+	l.runtime.Logger().Debug(fmt.Sprintf("cluster health check generated %d schedule commands", len(cmds)))
 	if len(cmds) > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 		defer cancel()
 		for _, cmd := range cmds {
-			l.logger.Debug("adding schedule command to hakeeper", zap.String("command", cmd.LogString()))
+			l.runtime.Logger().Debug("adding schedule command to hakeeper", zap.String("command", cmd.LogString()))
 		}
 		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
 			// TODO: check whether this is temp error
-			l.logger.Debug("failed to add schedule commands", zap.Error(err))
+			l.runtime.Logger().Debug("failed to add schedule commands", zap.Error(err))
 			return
 		}
 	}
@@ -211,25 +211,25 @@ func (l *store) registerTaskUser() {
 
 	// TODO: rename TaskTableUser to moadmin
 	if err := l.setTaskTableUser(user); err != nil {
-		l.logger.Error("failed to set task table user", zap.Error(err))
+		l.runtime.Logger().Error("failed to set task table user", zap.Error(err))
 	}
 }
 
 func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 	cmds, err := l.getScheduleCommand(false, term, state)
 	if err != nil {
-		l.logger.Error("failed to get bootstrap schedule commands", zap.Error(err))
+		l.runtime.Logger().Error("failed to get bootstrap schedule commands", zap.Error(err))
 		return
 	}
 	if len(cmds) > 0 {
 		for _, c := range cmds {
-			l.logger.Debug("bootstrap cmd", zap.String("cmd", c.LogString()))
+			l.runtime.Logger().Debug("bootstrap cmd", zap.String("cmd", c.LogString()))
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 		defer cancel()
 		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
 			// TODO: check whether this is temp error
-			l.logger.Debug("failed to add schedule commands", zap.Error(err))
+			l.runtime.Logger().Debug("failed to add schedule commands", zap.Error(err))
 			return
 		}
 		l.bootstrapCheckCycles = checkBootstrapCycles
@@ -304,14 +304,14 @@ func (l *store) setTaskTableUser(user pb.TaskTableUser) error {
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
-		l.logger.Error("failed to propose task user info", zap.Error(err))
+		l.runtime.Logger().Error("failed to propose task user info", zap.Error(err))
 		return err
 	}
 	if result.Value == uint64(pb.TaskSchedulerStopped) {
 		panic("failed to set task user")
 	}
 	if result.Value != uint64(pb.TaskSchedulerCreated) {
-		l.logger.Error("task user info already set")
+		l.runtime.Logger().Error("task user info already set")
 	}
 	return nil
 }

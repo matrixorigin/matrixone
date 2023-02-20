@@ -67,6 +67,27 @@ func BenchmarkTableBatchInsert(b *testing.B) {
 	bat.Commit()
 }
 
+func BenchmarkParallelTableBatchInsert(b *testing.B) {
+	table := NewTable[Int, int, TestRow]()
+	b.RunParallel(func(pb *testing.PB) {
+		var row TestRow
+		tx := NewTransaction(Time{})
+		bat, err := table.NewBatch(tx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		i := 0
+		for pb.Next() {
+			row.key = Int(i)
+			row.value = i
+			err := bat.Insert(row)
+			assert.Nil(b, err)
+			i++
+		}
+		bat.Commit()
+	})
+}
+
 func BenchmarkTableGet(b *testing.B) {
 	table := NewTable[Int, int, TestRow]()
 	var row TestRow
@@ -85,4 +106,26 @@ func BenchmarkTableGet(b *testing.B) {
 			b.Fatal()
 		}
 	}
+}
+
+func BenchmarkParallelTableGet(b *testing.B) {
+	table := NewTable[Int, int, TestRow]()
+	var row TestRow
+	tx := NewTransaction(Time{})
+	row.key = Int(42)
+	row.value = 42
+	err := table.Insert(tx, row)
+	assert.Nil(b, err)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			value, err := table.Get(tx, Int(42))
+			if err != nil {
+				b.Fatal(err)
+			}
+			if value != 42 {
+				b.Fatal()
+			}
+		}
+	})
 }

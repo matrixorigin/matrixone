@@ -29,12 +29,12 @@ type Relation interface {
 	SimplePPString(common.PPLevel) string
 	GetCardinality(attr string) int64
 	Schema() any
+	UpdateConstraint([]byte) error
 	MakeSegmentIt() SegmentIt
 	MakeBlockIt() BlockIt
 
 	DeleteByPhyAddrKey(key any) error
 	GetValueByPhyAddrKey(key any, col int) (any, error)
-
 	DeleteByPhyAddrKeys(keys containers.Vector) error
 
 	RangeDelete(id *common.ID, start, end uint32, dt DeleteType) error
@@ -47,12 +47,12 @@ type Relation interface {
 
 	BatchDedup(col containers.Vector) error
 	Append(data *containers.Batch) error
+	AddBlksWithMetaLoc(pkVecs []containers.Vector, file string, metaLcos []string, flag int32) error
 
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)
-	CreateNonAppendableSegment() (Segment, error)
+	CreateNonAppendableSegment(is1PC bool) (Segment, error)
 	GetSegment(id uint64) (Segment, error)
-
 	SoftDeleteSegment(id uint64) (err error)
 
 	GetDB() (Database, error)

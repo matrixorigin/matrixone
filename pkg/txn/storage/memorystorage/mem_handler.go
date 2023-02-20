@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
@@ -44,12 +43,12 @@ import (
 type MemHandler struct {
 
 	// catalog
-	databases  *memtable.Table[ID, *DatabaseRow, *DatabaseRow]
-	relations  *memtable.Table[ID, *RelationRow, *RelationRow]
-	attributes *memtable.Table[ID, *AttributeRow, *AttributeRow]
+	databases  *memorytable.Table[ID, *DatabaseRow, *DatabaseRow]
+	relations  *memorytable.Table[ID, *RelationRow, *RelationRow]
+	attributes *memorytable.Table[ID, *AttributeRow, *AttributeRow]
 
 	// data
-	data *memtable.Table[DataKey, DataValue, DataRow]
+	data *memorytable.Table[DataKey, DataValue, DataRow]
 
 	// transactions
 	transactions struct {
@@ -66,40 +65,36 @@ type MemHandler struct {
 	}
 
 	// misc
-	mheap                  *mpool.MPool
-	defaultIsolationPolicy IsolationPolicy
-	clock                  clock.Clock
-	idGenerator            memoryengine.IDGenerator
+	mheap       *mpool.MPool
+	clock       clock.Clock
+	idGenerator memoryengine.IDGenerator
 }
 
 type Iter[
 	K memorytable.Ordered[K],
 	V any,
 ] struct {
-	TableIter *memtable.TableIter[K, V]
+	TableIter *memorytable.TableIter[K, V]
 	TableID   ID
 	AttrsMap  map[string]*AttributeRow
 	Expr      *plan.Expr
 	nextFunc  func() bool
-	ReadTime  Time
 	Tx        *Transaction
 }
 
 func NewMemHandler(
 	mp *mpool.MPool,
-	defaultIsolationPolicy IsolationPolicy,
 	clock clock.Clock,
 	idGenerator memoryengine.IDGenerator,
 ) *MemHandler {
 	h := &MemHandler{
-		databases:              memtable.NewTable[ID, *DatabaseRow, *DatabaseRow](),
-		relations:              memtable.NewTable[ID, *RelationRow, *RelationRow](),
-		attributes:             memtable.NewTable[ID, *AttributeRow, *AttributeRow](),
-		data:                   memtable.NewTable[DataKey, DataValue, DataRow](),
-		mheap:                  mp,
-		defaultIsolationPolicy: defaultIsolationPolicy,
-		clock:                  clock,
-		idGenerator:            idGenerator,
+		databases:   memorytable.NewTable[ID, *DatabaseRow, *DatabaseRow](),
+		relations:   memorytable.NewTable[ID, *RelationRow, *RelationRow](),
+		attributes:  memorytable.NewTable[ID, *AttributeRow, *AttributeRow](),
+		data:        memorytable.NewTable[DataKey, DataValue, DataRow](),
+		mheap:       mp,
+		clock:       clock,
+		idGenerator: idGenerator,
 	}
 	h.transactions.Map = make(map[string]*Transaction)
 	h.iterators.Map = make(map[ID]*Iter[DataKey, DataValue])
@@ -161,7 +156,31 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 		}
 
 	case *engine.ConstraintDef:
-		// update
+		pkeyDef := def.GetPrimaryKeyDef()
+		if pkeyDef != nil {
+			// set primary index
+			if err := m.iterRelationAttributes(
+				tx, req.TableID,
+				func(_ ID, row *AttributeRow) error {
+					isPrimary := false
+					if pkeyDef.Pkey.PkeyColName == row.Name {
+						isPrimary = true
+					}
+					if isPrimary == row.Primary {
+						return nil
+					}
+					row.Primary = isPrimary
+					if err := m.attributes.Update(tx, row); err != nil {
+						return err
+					}
+					return nil
+				},
+			); err != nil {
+				return err
+			}
+		}
+
+		// update Constraint
 		if table.Constraint, err = def.MarshalBinary(); err != nil {
 			return nil
 		}
@@ -207,31 +226,6 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 			table.Properties[prop.Key] = prop.Value
 		}
 		if err := m.relations.Update(tx, table); err != nil {
-			return err
-		}
-
-	case *engine.PrimaryIndexDef:
-		// set primary index
-		if err := m.iterRelationAttributes(
-			tx, req.TableID,
-			func(_ ID, row *AttributeRow) error {
-				isPrimary := false
-				for _, name := range def.Names {
-					if name == row.Name {
-						isPrimary = true
-						break
-					}
-				}
-				if isPrimary == row.Primary {
-					return nil
-				}
-				row.Primary = isPrimary
-				if err := m.attributes.Update(tx, row); err != nil {
-					return err
-				}
-				return nil
-			},
-		); err != nil {
 			return err
 		}
 
@@ -335,7 +329,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 
 	// handle defs
 	var relAttrs []engine.Attribute
-	var primaryColumnNames []string
+	var primaryColumnName string
 	for _, def := range req.Defs {
 		switch def := def.(type) {
 
@@ -353,6 +347,10 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 			if err != nil {
 				return err
 			}
+			pKeyDef := def.GetPrimaryKeyDef()
+			if pKeyDef != nil {
+				primaryColumnName = pKeyDef.Pkey.PkeyColName
+			}
 		case *engine.AttributeDef:
 			relAttrs = append(relAttrs, def.Attr)
 
@@ -364,8 +362,8 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 				row.Properties[prop.Key] = prop.Value
 			}
 
-		case *engine.PrimaryIndexDef:
-			primaryColumnNames = def.Names
+		//case *engine.PrimaryIndexDef:
+		//	primaryColumnNames = def.Names
 
 		default:
 			panic(fmt.Sprintf("unknown table def: %T", def))
@@ -394,16 +392,14 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 			return moerr.NewConstraintViolationNoCtx(`duplicate column "%s"`, attr.Name)
 		}
 		nameSet[attr.Name] = true
-		if len(primaryColumnNames) > 0 {
+		if primaryColumnName != "" {
 			isPrimary := false
-			for _, name := range primaryColumnNames {
-				if name == attr.Name {
-					isPrimary = true
-					break
-				}
+			if primaryColumnName == attr.Name {
+				isPrimary = true
 			}
 			attr.Primary = isPrimary
 		}
+
 		id, err := m.idGenerator.NewID(ctx)
 		if err != nil {
 			return err
@@ -518,7 +514,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 			value := memorytable.VectorAt(req.Vector, i)
 			rowID := value.Value.(types.Rowid)
 			entries, err := m.data.Index(tx, Tuple{
-				index_RowID, memtable.ToOrdered(rowID),
+				index_RowID, memorytable.ToOrdered(rowID),
 			})
 			if err != nil {
 				return err
@@ -556,7 +552,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 				value := memorytable.VectorAt(req.Vector, i)
 				key := DataKey{
 					tableID:    req.TableID,
-					primaryKey: Tuple{memtable.ToOrdered(value.Value)},
+					primaryKey: Tuple{memorytable.ToOrdered(value.Value)},
 				}
 				if err := m.data.Delete(tx, key); err != nil {
 					return err
@@ -586,7 +582,10 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 		return err
 	}
 	attrIndex := attr.Order
-	iter := m.data.NewIter(tx)
+	iter, err := m.data.NewIter(tx)
+	if err != nil {
+		return err
+	}
 	defer iter.Close()
 	tableKey := DataKey{
 		tableID: req.TableID,
@@ -692,7 +691,10 @@ func (m *MemHandler) deleteAttributesByRelationID(tx *Transaction, relationID ID
 }
 
 func (m *MemHandler) deleteRelationData(tx *Transaction, relationID ID) error {
-	iter := m.data.NewIter(tx)
+	iter, err := m.data.NewIter(tx)
+	if err != nil {
+		return err
+	}
 	defer iter.Close()
 	tableKey := DataKey{
 		tableID: relationID,
@@ -798,6 +800,7 @@ func (m *MemHandler) HandleGetPrimaryKeys(ctx context.Context, meta txn.TxnMeta,
 
 func (m *MemHandler) HandleGetRelations(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetRelationsReq, resp *memoryengine.GetRelationsResp) error {
 	tx := m.getTx(meta)
+
 	entries, err := m.relations.Index(tx, Tuple{
 		index_DatabaseID,
 		req.DatabaseID,
@@ -901,11 +904,6 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 			return err
 		}
 
-		if len(primaryAttrNames) > 0 {
-			resp.Defs = append(resp.Defs, &engine.PrimaryIndexDef{
-				Names: primaryAttrNames,
-			})
-		}
 		sort.Slice(attrRows, func(i, j int) bool {
 			return attrRows[i].Order < attrRows[j].Order
 		})
@@ -964,7 +962,10 @@ func (m *MemHandler) HandleGetHiddenKeys(ctx context.Context, meta txn.TxnMeta, 
 func (m *MemHandler) HandleNewTableIter(ctx context.Context, meta txn.TxnMeta, req memoryengine.NewTableIterReq, resp *memoryengine.NewTableIterResp) error {
 	tx := m.getTx(meta)
 
-	tableIter := m.data.NewIter(tx)
+	tableIter, err := m.data.NewIter(tx)
+	if err != nil {
+		return err
+	}
 	attrsMap := make(map[string]*AttributeRow)
 	if err := m.iterRelationAttributes(
 		tx, req.TableID,
@@ -987,8 +988,7 @@ func (m *MemHandler) HandleNewTableIter(ctx context.Context, meta txn.TxnMeta, r
 			}
 			return tableIter.Seek(tableKey)
 		},
-		ReadTime: tx.Time,
-		Tx:       tx,
+		Tx: tx,
 	}
 
 	m.iterators.Lock()
@@ -1084,24 +1084,24 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 
 	maxRows := 4096
 	type Row struct {
-		Value       DataValue
-		PhysicalRow *memtable.PhysicalRow[DataKey, DataValue]
+		Value DataValue
 	}
 	var rows []Row
 
 	for ok := fn(); ok; ok = iter.TableIter.Next() {
-		item := iter.TableIter.Item()
-		value, err := item.Read(iter.ReadTime, iter.Tx)
+		key, value, err := iter.TableIter.Read()
 		if err != nil {
 			return err
 		}
-		if item.Key.tableID != iter.TableID {
+		if err != nil {
+			return err
+		}
+		if key.tableID != iter.TableID {
 			break
 		}
 
 		rows = append(rows, Row{
-			Value:       value,
-			PhysicalRow: item,
+			Value: value,
 		})
 		if len(rows) >= maxRows {
 			break
@@ -1109,11 +1109,11 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 	}
 
 	// sort to emulate TAE behavior TODO remove this after BVT fixes
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].PhysicalRow.LastUpdate.Before(
-			rows[j].PhysicalRow.LastUpdate,
-		)
-	})
+	//sort.Slice(rows, func(i, j int) bool {
+	//	return rows[i].PhysicalRow.LastUpdate.Before(
+	//		rows[j].PhysicalRow.LastUpdate,
+	//	)
+	//})
 
 	tx := m.getTx(meta)
 	for _, row := range rows {
@@ -1232,7 +1232,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 		physicalRow := NewDataRow(
 			tableID,
 			[]Tuple{
-				{index_RowID, memtable.ToOrdered(rowID)},
+				{index_RowID, memorytable.ToOrdered(rowID)},
 			},
 		)
 		physicalRow.value = make(DataValue, 0, len(nameToAttrs))
@@ -1255,7 +1255,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 			if attr.Primary {
 				physicalRow.key.primaryKey = append(
 					physicalRow.key.primaryKey,
-					memtable.ToOrdered(col.Value),
+					memorytable.ToOrdered(col.Value),
 				)
 			}
 
@@ -1270,7 +1270,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 		if len(physicalRow.key.primaryKey) == 0 {
 			physicalRow.key.primaryKey = append(
 				physicalRow.key.primaryKey,
-				memtable.ToOrdered(rowID),
+				memorytable.ToOrdered(rowID),
 			)
 		}
 
@@ -1289,13 +1289,11 @@ func (m *MemHandler) getTx(meta txn.TxnMeta) *Transaction {
 	defer m.transactions.Unlock()
 	tx, ok := m.transactions.Map[id]
 	if !ok {
-		tx = memtable.NewTransaction(
-			id,
-			Time{
-				Timestamp: meta.SnapshotTS,
-			},
-			m.defaultIsolationPolicy,
-		)
+		ts := meta.SnapshotTS
+		if ts.IsEmpty() {
+			ts = memorytable.Now(m.clock)
+		}
+		tx = memorytable.NewTransaction(ts)
 		m.transactions.Map[id] = tx
 	}
 	return tx
@@ -1308,12 +1306,7 @@ func (*MemHandler) HandleClose(ctx context.Context) error {
 func (m *MemHandler) HandleCommit(ctx context.Context, meta txn.TxnMeta) error {
 	tx := m.getTx(meta)
 	commitTS := meta.CommitTS
-	if commitTS.IsEmpty() {
-		commitTS = tx.Time.Timestamp
-	}
-	if err := tx.Commit(Time{
-		Timestamp: commitTS,
-	}); err != nil {
+	if err := tx.Commit(commitTS); err != nil {
 		return err
 	}
 	return nil
@@ -1324,7 +1317,7 @@ func (m *MemHandler) HandleCommitting(ctx context.Context, meta txn.TxnMeta) err
 }
 
 func (m *MemHandler) HandleDestroy(ctx context.Context) error {
-	*m = *NewMemHandler(m.mheap, m.defaultIsolationPolicy, m.clock, m.idGenerator)
+	*m = *NewMemHandler(m.mheap, m.clock, m.idGenerator)
 	return nil
 }
 
@@ -1372,7 +1365,10 @@ func (m *MemHandler) HandleTableStats(ctx context.Context, meta txn.TxnMeta, req
 	tx := m.getTx(meta)
 
 	// maybe an estimation is enough
-	iter := m.data.NewIter(tx)
+	iter, err := m.data.NewIter(tx)
+	if err != nil {
+		return err
+	}
 	defer iter.Close()
 	n := 0
 	tableKey := DataKey{

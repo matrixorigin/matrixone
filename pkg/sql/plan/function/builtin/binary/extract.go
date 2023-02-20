@@ -79,7 +79,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		unit := leftValues[0]
 		_, err := extract.ExtractFromDate(unit, rightValues, resultValues)
 		if err != nil {
-			return nil, moerr.NewInternalErrorNoCtx("invalid input")
+			return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
 		}
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
@@ -98,7 +98,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		}
 		return resultVector, nil
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("invalid input")
+		return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
 	}
 }
 
@@ -115,7 +115,7 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		unit := leftValues[0]
 		resultValues, err := extract.ExtractFromDatetime(unit, rightValues, resultValues)
 		if err != nil {
-			return nil, moerr.NewInternalErrorNoCtx("invalid input")
+			return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
 		}
 		return vector.NewConstString(resultType, 1, resultValues[0], proc.Mp()), nil
 	case left.IsScalar() && !right.IsScalar():
@@ -130,6 +130,6 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		}
 		return vector.NewWithStrings(resultType, resultValues, right.Nsp, proc.Mp()), nil
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("invalid input")
+		return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
 	}
 }

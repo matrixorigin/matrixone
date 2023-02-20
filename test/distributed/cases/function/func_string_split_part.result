@@ -1,0 +1,66 @@
+select split_part('axbxc','x',1);
+split_part(axbxc, x, 1)
+a
+select split_part('axbxcxd','x',2);
+split_part(axbxcxd, x, 2)
+b
+select split_part('axbxcxd','x',3);
+split_part(axbxcxd, x, 3)
+c
+select split_part('axbxcxd','xc',1);
+split_part(axbxcxd, xc, 1)
+axb
+select split_part('axbxcxd','xc',2);
+split_part(axbxcxd, xc, 2)
+xd
+select split_part('axbxcxd','xc',3);
+split_part(axbxcxd, xc, 3)
+null
+select split_part('axbxcxd','asas',1);
+split_part(axbxcxd, asas, 1)
+axbxcxd
+select split_part('axbxcxd','asas',2);
+split_part(axbxcxd, asas, 2)
+null
+select split_part(null,'asas',3);
+split_part(null, asas, 3)
+null
+select split_part('axbxcxd',null,3);
+split_part(axbxcxd, null, 3)
+null
+select split_part('axbxcxd','asas',null);
+split_part(axbxcxd, asas, null)
+null
+select split_part('axxx','x',1);
+split_part(axxx, x, 1)
+a
+select split_part('axxx','x',2);
+split_part(axxx, x, 2)
+null
+select split_part('axxx','x',0);
+invalid input: split_part: field contains non-positive integer
+select split_part('axxx','x',-1);
+Data truncation: data out of range: data type uint32, value '-1'
+create table t1(a varchar,b varchar,c int);
+insert into t1 values('axbxc','x',1),('axbxcxd','x',2),('axbxcxd','x',3),('axbxcxd','xc',1),('axbxcxd','xc',2),('axbxcxd','xc',3),('axbxcxd','asas',1),('axbxcxd','asas',2),(null,'asas',3),('axbxcxd',null,3),('axbxcxd','asas',null),('axxx','x',1),('axxx','x',2);
+select split_part(a,b,c) from t1;
+split_part(a, b, c)
+a
+b
+c
+axb
+xd
+null
+axbxcxd
+null
+null
+null
+null
+a
+null
+insert into t1 values('axxx','x',0);
+select split_part(a,b,c) from t1;
+invalid input: split_part: field contains non-positive integer
+insert into t1 values('axxx','x',-1);
+select split_part(a,b,c) from t1;
+Data truncation: data out of range: data type uint, value '-1'

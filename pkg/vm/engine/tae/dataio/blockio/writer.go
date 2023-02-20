@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type Writer struct {
@@ -44,6 +45,36 @@ func (w *Writer) WriteBlock(columns *containers.Batch) (block objectio.BlockObje
 	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
 	block, err = w.writer.Write(bat)
 	return
+}
+
+func (w *Writer) WriteBlockAndZoneMap(batch *batch.Batch, idxs []uint16) (objectio.BlockObject, error) {
+	block, err := w.writer.Write(batch)
+	if err != nil {
+		return nil, err
+	}
+	for _, idx := range idxs {
+		var zoneMap objectio.IndexData
+		vec := containers.NewVectorWithSharedMemory(batch.Vecs[idx], true)
+		zm := index.NewZoneMap(batch.Vecs[idx].Typ)
+		ctx := new(index.KeysCtx)
+		ctx.Keys = vec
+		ctx.Count = batch.Vecs[idx].Length()
+		defer ctx.Keys.Close()
+		err = zm.BatchUpdate(ctx)
+		if err != nil {
+			return nil, err
+		}
+		buf, err := zm.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		zoneMap, err = objectio.NewZoneMap(idx, buf)
+		if err != nil {
+			return nil, err
+		}
+		w.writer.WriteIndex(block, zoneMap)
+	}
+	return block, nil
 }
 
 func (w *Writer) Sync() ([]objectio.BlockObject, error) {

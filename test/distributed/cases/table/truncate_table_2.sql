@@ -17,9 +17,11 @@ select * from trun_table_01;
 insert into trun_table_01(clo2 ,clo3 ,clo4,clo5,clo6,clo7,clo8 ,col9,col10,col11,col12,col13,col14,col15,col16,col17,col18) values (-2,3,56,9,8,10,50,99.0,82.99,'yellllow','1999-11-11','1999-11-11 12:00:00','2010-11-11 11:00:00.00',false,54.3,'tttext','{"a": "3","b": [0,1,2]}');
 insert into trun_table_01(clo2 ,clo3 ,clo4,clo5,clo6,clo7,clo8 ,col9,col10,col11,col12,col13,col14,col15,col16,col17,col18) values (-2,90,56,9,8,10,50,99.0,82.99,'yellllow','2011-01-21','1999-11-11 12:00:00','2010-11-11 11:00:00.00',false,11.43,'tttext','{"a": "3","b": [0,1,2]}');
 select * from trun_table_01;
+-- @bvt:issue#7133
 update trun_table_01 set clo3=90 ,col12='2011-01-21' where clo1=1;
 update trun_table_01 set clo3=66 ,col12='2011-01-21' where clo1=1;
 select * from trun_table_01;
+-- @bvt:issue
 truncate  table trun_table_01;
 select * from trun_table_01;
 delete from  trun_table_01 where clo1=2;
@@ -46,16 +48,20 @@ delete from trun_table_02 where clo1=1;
 insert into trun_table_02 values (3,-2,100,56,9,8,10,50,99.0,82.99,'yellllow','2021-01-21','1999-11-11 12:00:00','2010-11-11 11:00:00.00',false,23.98430943,'tttext','{"a": "3","b": [0,1,2]}');
 insert into trun_table_02 values (4,-2,102,56,9,8,10,50,99.0,82.99,'yellllow','2022-10-11','1999-11-11 12:00:00','2010-11-11 11:00:00.00',false,2.43,'tttext','{"a": "3","b": [0,1,2]}');
 select * from trun_table_02;
+-- @bvt:issue#7133
 delete from trun_table_02 where clo1=3;
 select * from trun_table_02;
+-- @bvt:issue
 truncate table trun_table_02;
 select * from trun_table_02;
 insert into trun_table_02 select * from trun_table_01;
 select * from trun_table_02;
+-- @bvt:issue#7133
 update trun_table_02 set clo3=90 where clo1=1;
 select * from trun_table_02;
 update trun_table_02 set clo3=90, col12='1992-11-01' where clo1=1;
 select * from trun_table_02;
+-- @bvt:issue
 truncate table trun_table_02;
 select * from trun_table_02;
 drop table trun_table_02;

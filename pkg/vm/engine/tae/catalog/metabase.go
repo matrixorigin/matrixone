@@ -28,6 +28,7 @@ import (
 )
 
 type MetaBaseEntry struct {
+	//chain of MetadataMVCCNode
 	*txnbase.MVCCChain
 	ID uint64
 }
@@ -119,12 +120,36 @@ func (be *MetaBaseEntry) CreateWithTS(ts types.TS) {
 	be.Insert(node)
 }
 
+func (be *MetaBaseEntry) CreateWithLoc(ts types.TS, metaLoc string, deltaLoc string) {
+	node := &MetadataMVCCNode{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: ts,
+		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
+		MetaLoc:     metaLoc,
+		DeltaLoc:    deltaLoc,
+	}
+	be.Insert(node)
+}
+
 func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	node := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
+	}
+	be.Insert(node)
+}
+
+func (be *MetaBaseEntry) CreateWithTxnAndMeta(txn txnif.AsyncTxn, metaLoc string, deltaLoc string) {
+	node := &MetadataMVCCNode{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: txnif.UncommitTS,
+		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
+		MetaLoc:     metaLoc,
+		DeltaLoc:    deltaLoc,
 	}
 	be.Insert(node)
 }

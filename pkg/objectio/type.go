@@ -18,10 +18,20 @@ import (
 	"context"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
+
+type WriteType int8
+
+const (
+	WriteTS WriteType = iota
+)
+
+type WriteOptions struct {
+	Type WriteType
+	Val  any
+}
 
 // Writer is to virtualize batches into multiple blocks
 // and write them into filefservice at one time
@@ -39,7 +49,7 @@ type Writer interface {
 
 	// WriteEnd is to write multiple batches written to
 	// the buffer to the fileservice at one time
-	WriteEnd(ctx context.Context) ([]BlockObject, error)
+	WriteEnd(ctx context.Context, items ...WriteOptions) ([]BlockObject, error)
 }
 
 // Reader is to read data from fileservice

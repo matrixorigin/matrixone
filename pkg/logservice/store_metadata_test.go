@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -59,7 +60,7 @@ func TestAddMetadataRejectDupl(t *testing.T) {
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	cfg.Fill()
-	s := store{cfg: cfg, logger: testLogger}
+	s := store{cfg: cfg, runtime: runtime.DefaultRuntime()}
 	require.NoError(t, mkdirAll(s.cfg.DataDir, cfg.FS))
 	s.addMetadata(10, 1)
 	s.addMetadata(10, 1)
@@ -71,12 +72,12 @@ func TestRemoveMetadata(t *testing.T) {
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	cfg.Fill()
-	s := store{cfg: cfg}
+	s := store{cfg: cfg, runtime: runtime.DefaultRuntime()}
 	require.NoError(t, mkdirAll(s.cfg.DataDir, cfg.FS))
 	s.addMetadata(10, 1)
 	s.addMetadata(20, 2)
 	s.removeMetadata(10, 1)
-	ss := store{cfg: s.cfg}
+	ss := store{cfg: s.cfg, runtime: runtime.DefaultRuntime()}
 	ss.mu.metadata = metadata.LogStore{}
 	assert.NoError(t, ss.loadMetadata())
 	require.Equal(t, 1, len(ss.mu.metadata.Shards))

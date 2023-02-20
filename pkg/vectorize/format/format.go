@@ -272,6 +272,9 @@ func formatDECH(number string, precision string) (string, error) {
 func format(number string, precision string, comma, decimalPoint []byte) (string, error) {
 	var buffer bytes.Buffer
 
+	if len(number) == 0 {
+		return "", nil
+	}
 	//handle precision
 	if unicode.IsDigit(rune(precision[0])) {
 		for i, v := range precision {
@@ -304,6 +307,19 @@ func format(number string, precision string, comma, decimalPoint []byte) (string
 	} else if number[:1] == "-" {
 		buffer.Write([]byte{'-'})
 		number = number[1:]
+	}
+
+	// Check for scientific notition.
+	for _, v := range number {
+		if v == 'E' || v == 'e' {
+			num, err := strconv.ParseFloat(number, 64)
+			if err != nil {
+				return "", err
+			}
+			// Convert to non-scientific notition.
+			number = strconv.FormatFloat(num, 'f', -1, 64)
+			break
+		}
 	}
 
 	for i, v := range number {

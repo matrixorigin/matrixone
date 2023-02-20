@@ -16,7 +16,7 @@ package moengine
 
 import (
 	"context"
-	"fmt"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -58,9 +58,16 @@ func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error)
 	return defs, nil
 }
 
-func (rel *baseRelation) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
-	// implement me
-	return nil
+func (rel *baseRelation) UpdateConstraint(_ context.Context, def *engine.ConstraintDef) error {
+	bin, err := def.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return rel.handle.UpdateConstraint(bin)
+}
+
+func (rel *baseRelation) UpdateConstraintWithBin(_ context.Context, bin []byte) error {
+	return rel.handle.UpdateConstraint(bin)
 }
 
 func (rel *baseRelation) TableColumns(_ context.Context) ([]*engine.Attribute, error) {
@@ -69,14 +76,18 @@ func (rel *baseRelation) TableColumns(_ context.Context) ([]*engine.Attribute, e
 	return cols, nil
 }
 
-func (rel *baseRelation) FilteredStats(c context.Context, expr *plan.Expr) (int32, int64, error) {
-	//for tae, return 0 blocks. it does not matter and will be deleted in the future
-	return 0, rel.handle.Rows(), nil
+func (rel *baseRelation) Stats(context.Context, *plan2.Expr) (*plan2.Stats, error) {
+	//for tae, it does not matter and will be deleted in the future
+	return plan2.DefaultStats(), nil
 }
 
-func (rel *baseRelation) Stats(context.Context) (int32, int64, error) {
-	//for tae, return 0 blocks. it does not matter and will be deleted in the future
-	return 0, rel.handle.Rows(), nil
+func (rel *baseRelation) Rows(c context.Context) (int64, error) {
+	rows := rel.handle.Rows()
+	return rows, nil
+}
+
+func (rel *baseRelation) GetSchema(_ context.Context) *catalog.Schema {
+	return rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 }
 
 func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute, error) {
@@ -136,10 +147,14 @@ func (rel *baseRelation) NewReader(_ context.Context, num int, _ *plan.Expr, _ [
 	return rds, nil
 }
 
-func (rel *baseRelation) GetTableID(_ context.Context) string {
-	return fmt.Sprintf("%d", rel.handle.ID())
+func (rel *baseRelation) GetTableID(_ context.Context) uint64 {
+	return rel.handle.ID()
 }
 
 func (rel *baseRelation) GetRelationID(_ context.Context) uint64 {
 	return rel.handle.ID()
+}
+
+func (rel *baseRelation) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
+	return nil, nil, nil
 }

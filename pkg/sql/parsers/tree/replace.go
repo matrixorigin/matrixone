@@ -44,6 +44,9 @@ func (node *Replace) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *Replace) GetStatementType() string { return "Replace" }
+func (node *Replace) GetQueryType() string     { return QueryTypeDML }
+
 func NewReplace(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Replace {
 	return &Replace{
 		Table:          t,

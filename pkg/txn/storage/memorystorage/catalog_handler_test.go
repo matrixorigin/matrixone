@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/stretchr/testify/assert"
 )
@@ -41,7 +40,6 @@ func TestCatalogHandler(t *testing.T) {
 	catalogHandler, err := NewCatalogHandler(
 		NewMemHandler(
 			mpool.MustNewZero(),
-			memtable.Serializable,
 			clock,
 			memoryengine.RandomIDGenerator,
 		),

@@ -42,6 +42,8 @@ func (node *Revoke) Format(ctx *FmtCtx) {
 		node.RevokeRole.Format(ctx)
 	}
 }
+func (node *Revoke) GetStatementType() string { return "Revoke" }
+func (node *Revoke) GetQueryType() string     { return QueryTypeDCL }
 
 type RevokePrivilege struct {
 	statementImpl
@@ -87,6 +89,9 @@ func (node *RevokePrivilege) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *RevokePrivilege) GetStatementType() string { return "Revoke Privilege" }
+func (node *RevokePrivilege) GetQueryType() string     { return QueryTypeDCL }
+
 func NewRevoke() *Revoke {
 	return &Revoke{}
 }
@@ -121,6 +126,9 @@ func (node *RevokeRole) Format(ctx *FmtCtx) {
 		}
 	}
 }
+
+func (node *RevokeRole) GetStatementType() string { return "Revoke Role" }
+func (node *RevokeRole) GetQueryType() string     { return QueryTypeDCL }
 
 type PrivilegeLevel struct {
 	NodeFormatter

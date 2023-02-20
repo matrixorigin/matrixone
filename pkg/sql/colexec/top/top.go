@@ -51,7 +51,7 @@ func Prepare(_ *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
@@ -73,7 +73,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				proc.SetInputBatch(nil)
 				return true, nil
 			}
-			err := ctr.build(ap, bat, proc)
+			err := ctr.build(ap, bat, proc, anal)
 			if err != nil {
 				ap.Free(proc, true)
 			}
@@ -91,7 +91,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	}
 }
 
-func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Process, analyze process.Analyze) error {
 	ctr.n = len(bat.Vecs)
 	ctr.poses = ctr.poses[:0]
 	for _, f := range ap.Fs {
@@ -110,6 +110,10 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 		if flg {
 			ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
 			bat.Vecs = append(bat.Vecs, vec)
+		} else {
+			if vec != nil {
+				analyze.Alloc(int64(vec.Size()))
+			}
 		}
 	}
 	if ctr.bat == nil {

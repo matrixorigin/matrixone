@@ -36,7 +36,9 @@ type memoryNode struct {
 	data   *containers.Batch
 	prefix []byte
 
+	//index for primary key : Art tree + ZoneMap.
 	pkIndex indexwrapper.Index
+	//index for non-primary key : ZoneMap.
 	indexes map[int]indexwrapper.Index
 }
 

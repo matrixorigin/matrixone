@@ -44,7 +44,7 @@ name = "LOCAL"
 backend = "MEM"
 
 [[fileservice]]
-name = "S3"
+name = "SHARED"
 backend = "MEM"
 
 [[fileservice]]

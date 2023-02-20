@@ -15,12 +15,15 @@
 package plan
 
 import (
+	"context"
+	"unicode/utf8"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-func makePlan2DecimalExprWithType(v string, isBin ...bool) (*plan.Expr, error) {
+func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
 	_, scale, err := types.ParseStringToDecimal128WithoutTable(v, isBin...)
 	if err != nil {
 		return nil, err
@@ -32,7 +35,7 @@ func makePlan2DecimalExprWithType(v string, isBin ...bool) (*plan.Expr, error) {
 		Precision:   34,
 		NotNullable: true,
 	}
-	return appendCastBeforeExpr(makePlan2StringConstExprWithType(v, isBin...), typ)
+	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
 }
 
 func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
@@ -186,7 +189,7 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 			Id:          int32(types.T_varchar),
 			NotNullable: true,
 			Size:        4,
-			Width:       int32(len(v)),
+			Width:       int32(utf8.RuneCountInString(v)),
 		},
 	}
 }
@@ -205,12 +208,12 @@ func MakePlan2NullTextConstExprWithType(v string) *plan.Expr {
 			Id:          int32(types.T_text),
 			NotNullable: false,
 			Size:        4,
-			Width:       int32(len(v)),
+			Width:       int32(utf8.RuneCountInString(v)),
 		},
 	}
 }
 
-func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
+func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
@@ -220,7 +223,7 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 		expr.Typ = targetType
 		return expr, nil
 	}
-	id, _, _, err := function.GetFunctionByName("cast", []types.Type{t1, t2})
+	id, _, _, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
 	}
@@ -271,10 +274,17 @@ func makePlan2Type(typ *types.Type) *plan.Type {
 	}
 }
 
+var MakeTypeByPlan2Type = makeTypeByPlan2Type
+
 func makeTypeByPlan2Type(typ *plan.Type) types.Type {
+	var size int32 = 0
+	oid := types.T(typ.Id)
+	if oid != types.T_any && oid != types.T_interval {
+		size = int32(oid.TypeLen())
+	}
 	return types.Type{
 		Oid:       types.T(typ.Id),
-		Size:      typ.Size,
+		Size:      size,
 		Width:     typ.Width,
 		Scale:     typ.Scale,
 		Precision: typ.Precision,

@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -51,7 +52,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -60,9 +61,12 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc, anal); err != nil {
+			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
 				ap.Free(proc, true)
 				return false, err
+			}
+			if ap.ctr.mp != nil {
+				anal.Alloc(ap.ctr.mp.Size())
 			}
 			ctr.state = End
 		default:
@@ -71,7 +75,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull, ctr.idx)
 				}
 				proc.SetInputBatch(ctr.bat)
+				ctr.mp = nil
 				ctr.bat = nil
+				ctr.sels = nil
 			} else {
 				proc.SetInputBatch(nil)
 			}
@@ -81,18 +87,21 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	}
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var err error
 
 	for {
+		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
+		anal.WaitStop(start)
+
 		if bat == nil {
 			break
 		}
 		if bat.Length() == 0 {
 			continue
 		}
-		anal.Input(bat)
+		anal.Input(bat, isFirst)
 		anal.Alloc(int64(bat.Size()))
 		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat); err != nil {
 			return err
@@ -103,7 +112,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return nil
 	}
 	ctr.cleanEvalVectors(proc.Mp())
-	if err = ctr.evalJoinCondition(ctr.bat, ap.Conditions, proc); err != nil {
+	if err = ctr.evalJoinCondition(ctr.bat, ap.Conditions, proc, anal); err != nil {
 		return err
 	}
 
@@ -132,10 +141,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				continue
 			}
 			if v > rows {
-				ctr.sels = append(ctr.sels, make([]int64, 0, 8))
+				ctr.sels = append(ctr.sels, make([]int32, 0))
 			}
 			ai := int64(v) - 1
-			ctr.sels[ai] = append(ctr.sels[ai], int64(i+k))
+			ctr.sels[ai] = append(ctr.sels[ai], int32(i+k))
 		}
 	}
 	return nil
@@ -146,7 +155,7 @@ func (ctr *container) indexBuild() error {
 	//      => dictionary = ["a"->1, "b"->2, "c"->3]
 	//      => poses = [1, 2, 1, 3, 2, 3, 1, 1]
 	// sels = [[0, 2, 6, 7], [1, 4], [3, 5]]
-	ctr.sels = make([][]int64, index.MaxLowCardinality)
+	ctr.sels = make([][]int32, index.MaxLowCardinality)
 	poses := vector.MustTCols[uint16](ctr.idx.GetPoses())
 	for k, v := range poses {
 		if v == 0 {
@@ -154,17 +163,17 @@ func (ctr *container) indexBuild() error {
 		}
 		bucket := int(v) - 1
 		if len(ctr.sels[bucket]) == 0 {
-			ctr.sels[bucket] = make([]int64, 0, 64)
+			ctr.sels[bucket] = make([]int32, 0, 64)
 		}
-		ctr.sels[bucket] = append(ctr.sels[bucket], int64(k))
+		ctr.sels[bucket] = append(ctr.sels[bucket], int32(k))
 	}
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
+func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
@@ -176,6 +185,9 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 				ctr.evecs[i].needFree = false
 				break
 			}
+		}
+		if ctr.evecs[i].needFree && vec != nil {
+			analyze.Alloc(int64(vec.Size()))
 		}
 
 		// 1. multiple equivalent conditions are not considered currently

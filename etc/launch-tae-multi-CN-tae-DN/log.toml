@@ -3,7 +3,7 @@ service-type = "LOG"
 data-dir = "./mo-data"
 
 [log]
-level = "debug"
+level = "info"
 format = "console"
 max-size = 512
 
@@ -12,9 +12,14 @@ name = "LOCAL"
 backend = "DISK"
 
 [[fileservice]]
-name = "S3"
+name = "SHARED"
 backend = "DISK"
 data-dir = "mo-data/s3"
+
+[fileservice.cache]
+memory-capacity = "512MB"
+disk-capacity = "8GB"
+disk-path = "mo-data/file-service-cache"
 
 [[fileservice]]
 name = "ETL"

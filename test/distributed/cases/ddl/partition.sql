@@ -36,7 +36,9 @@ select col1 from pt_table_3;
 
 --hash partiton列为date列表达式
 create table pt_table_5(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 char(255))partition by hash(year(col12));
+-- @bvt:issue#7682
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_3;
+-- @bvt:issue
 select col12 from pt_table_5;
 show create table pt_table_5;
 

@@ -270,7 +270,7 @@ func randDate() types.Date {
 	year := rand.Intn(types.MaxDateYear) + types.MinDateYear
 	month := rand.Intn(12) + 1
 	day := rand.Intn(int(types.LastDay(int32(year), uint8(month)))) + 1
-	return types.FromCalendar(int32(year), uint8(month), uint8(day))
+	return types.DateFromCalendar(int32(year), uint8(month), uint8(day))
 }
 
 func randTime() types.Time {
@@ -282,7 +282,7 @@ func randTime() types.Time {
 	minute := rand.Intn(60)
 	second := rand.Intn(60)
 	microSecond := rand.Intn(1e6)
-	return types.FromTimeClock(isNeg, uint64(hour), uint8(minute), uint8(second), uint32(microSecond))
+	return types.TimeFromClock(isNeg, uint64(hour), uint8(minute), uint8(second), uint32(microSecond))
 }
 
 func randDatetime() types.Datetime {
@@ -293,7 +293,7 @@ func randDatetime() types.Datetime {
 	minute := rand.Intn(60)
 	second := rand.Intn(60)
 	microSecond := rand.Intn(1e6)
-	return types.FromClock(int32(year), uint8(month), uint8(day), uint8(hour), uint8(minute), uint8(second), uint32(microSecond))
+	return types.DatetimeFromClock(int32(year), uint8(month), uint8(day), uint8(hour), uint8(minute), uint8(second), uint32(microSecond))
 }
 
 func randTimestamp() types.Timestamp {

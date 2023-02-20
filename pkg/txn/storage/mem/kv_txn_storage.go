@@ -185,6 +185,10 @@ func (kv *KVTxnStorage) StartRecovery(ctx context.Context, c chan txn.TxnMeta) {
 	}
 }
 
+func (kv *KVTxnStorage) Start() error {
+	return nil
+}
+
 func (kv *KVTxnStorage) Close(ctx context.Context) error {
 	return nil
 }

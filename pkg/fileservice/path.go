@@ -16,7 +16,9 @@ package fileservice
 
 import (
 	"encoding/csv"
+	"os"
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -49,12 +51,15 @@ func ParsePath(s string) (path Path, err error) {
 		// most common patterns first
 		if r >= '0' && r <= '9' ||
 			r >= 'a' && r <= 'z' ||
-			r >= 'A' && r <= 'Z' ||
-			r == '/' {
+			r >= 'A' && r <= 'Z' {
 			continue
 		}
 		switch r {
-		case '!', '-', '_', '.', '*', '\'', '(', ')':
+		case '!', '-', '_', '.', '*', '\'', '(', ')', '@', '/':
+			continue
+		}
+		// printable non-ASCII characters
+		if r > unicode.MaxASCII && unicode.IsPrint(r) {
 			continue
 		}
 		err = moerr.NewInvalidPathNoCtx(path.File)
@@ -101,4 +106,13 @@ func JoinPath(serviceName string, path string) string {
 	buf.WriteString(ServiceNameSeparator)
 	buf.WriteString(path)
 	return buf.String()
+}
+
+var osPathSeparatorStr = string([]rune{os.PathSeparator})
+
+func toOSPath(filePath string) string {
+	if os.PathSeparator == '/' {
+		return filePath
+	}
+	return strings.ReplaceAll(filePath, "/", osPathSeparatorStr)
 }

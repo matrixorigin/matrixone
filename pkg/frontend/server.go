@@ -16,8 +16,8 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
-	"syscall"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -29,11 +29,14 @@ var initConnectionID uint32 = 1000
 
 // MOServer MatrixOne Server
 type MOServer struct {
-	addr     string
-	uaddr    string
-	app      goetty.NetApplication
-	app_unix goetty.NetApplication
-	rm       *RoutineManager
+	addr  string
+	uaddr string
+	app   goetty.NetApplication
+	rm    *RoutineManager
+}
+
+func (mo *MOServer) GetRoutineManager() *RoutineManager {
+	return mo.rm
 }
 
 func (mo *MOServer) Start() error {
@@ -44,27 +47,16 @@ func (mo *MOServer) Start() error {
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("Server Listening on : %s ", mo.addr)
-	if mo.app_unix != nil {
-		logutil.Infof("Server Listening on : %s ", mo.uaddr)
-	}
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
-
-	if mo.app_unix != nil {
-		mo.app_unix.Start()
-	}
 	return mo.app.Start()
 }
 
 func (mo *MOServer) Stop() error {
-	if mo.app_unix != nil {
-		mo.app_unix.Stop()
-		syscall.Unlink(mo.uaddr)
-	}
 	return mo.app.Stop()
 }
 
@@ -79,7 +71,14 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MO
 		logutil.Panicf("start server failed with %+v", err)
 	}
 	// TODO asyncFlushBatch
-	app, err := goetty.NewApplication(addr, rm.Handler,
+	addresses := []string{addr}
+	unixAddr := pu.SV.GetUnixSocketAddress()
+	if unixAddr != "" {
+		addresses = append(addresses, "unix://"+unixAddr)
+	}
+	app, err := goetty.NewApplicationWithListenAddress(
+		addresses,
+		rm.Handler,
 		goetty.WithAppLogger(logutil.GetGlobalLogger()),
 		goetty.WithAppSessionOptions(
 			goetty.WithSessionCodec(codec),
@@ -90,23 +89,19 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MO
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-
-	app_unix, err := goetty.NewApplication("unix://"+pu.SV.UAddr, rm.Handler,
-		goetty.WithAppLogger(logutil.GetGlobalLogger()),
-		goetty.WithAppSessionOptions(
-			goetty.WithSessionCodec(codec),
-			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
-			goetty.WithSessionRWBUfferSize(1024*1024, 1024*1024)),
-		goetty.WithAppSessionAware(rm))
-	if err != nil {
-		logutil.Infof("start server on unix domain socket %v failed with %+v", pu.SV.UAddr, err)
-	}
-
+	initVarByConfig(pu)
 	return &MOServer{
-		addr:     addr,
-		app:      app,
-		uaddr:    pu.SV.UAddr,
-		app_unix: app_unix,
-		rm:       rm,
+		addr:  addr,
+		app:   app,
+		uaddr: pu.SV.UnixSocketAddress,
+		rm:    rm,
 	}
+}
+
+func initVarByConfig(pu *config.ParameterUnit) {
+	if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
+		GSysVariables.sysVars["save_query_result"] = int8(1)
+	}
+	GSysVariables.sysVars["query_result_maxsize"] = pu.SV.QueryResultMaxsize
+	GSysVariables.sysVars["query_result_timeout"] = pu.SV.QueryResultTimeout
 }

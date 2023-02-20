@@ -38,7 +38,7 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -51,12 +51,12 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	if bat.Length() == 0 {
 		return false, nil
 	}
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
 	rbat := batch.NewWithSize(len(ap.Es))
 	for i, e := range ap.Es {
 		vec, err := colexec.EvalExpr(bat, proc, e)
-		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
 			bat.Clean(proc.Mp())
 			rbat.Clean(proc.Mp())
 			return false, err
@@ -64,17 +64,22 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		rbat.Vecs[i] = vec
 	}
 	for i, vec := range bat.Vecs {
+		isSame := false
 		for _, rVec := range rbat.Vecs {
 			if vec == rVec {
 				bat.Vecs[i] = nil
+				isSame = true
 				break
 			}
+		}
+		if !isSame && vec != nil {
+			anal.Alloc(int64(vec.Size()))
 		}
 	}
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
 	bat.Clean(proc.Mp())
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return false, nil
 }

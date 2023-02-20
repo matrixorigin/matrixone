@@ -52,7 +52,7 @@ func TestParseDNConfig(t *testing.T) {
 	
 	[[fileservice]]
 	# s3 fileservice instance, used to store data.
-	name = "s3"
+	name = "SHARED"
 	# use disk as fileservice backend.
 	backend = "DISK"
 	# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
@@ -69,7 +69,7 @@ func TestParseDNConfig(t *testing.T) {
 	assert.Equal(t, dnservice.StorageMEM, cfg.DN.Txn.Storage.Backend)
 	assert.Equal(t, 2, len(cfg.FileServices))
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
-	assert.Equal(t, "s3", cfg.FileServices[1].Name)
+	assert.Equal(t, defines.SharedFileServiceName, cfg.FileServices[1].Name)
 	assert.Equal(t, 2, len(cfg.getDNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))
 }
 
@@ -84,7 +84,7 @@ func TestFileServiceFactory(t *testing.T) {
 		Backend: "MEM",
 	})
 	c.FileServices = append(c.FileServices, fileservice.Config{
-		Name:    defines.S3FileServiceName,
+		Name:    defines.SharedFileServiceName,
 		Backend: "MEM",
 	})
 	c.FileServices = append(c.FileServices, fileservice.Config{

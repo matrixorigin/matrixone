@@ -104,6 +104,9 @@ func (s *service) Shard() metadata.DNShard {
 }
 
 func (s *service) Start() error {
+	if err := s.storage.Start(); err != nil {
+		return err
+	}
 	s.startRecovery()
 	return nil
 }

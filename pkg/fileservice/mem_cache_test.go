@@ -51,7 +51,11 @@ func TestMemCacheLeak(t *testing.T) {
 			},
 		},
 	}
-	err = m.Read(ctx, vec, fs.Read)
+	err = m.Read(ctx, vec)
+	assert.Nil(t, err)
+	err = fs.Read(ctx, vec)
+	assert.Nil(t, err)
+	err = m.Update(ctx, vec)
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), m.lru.size)
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
@@ -68,7 +72,11 @@ func TestMemCacheLeak(t *testing.T) {
 			},
 		},
 	}
-	err = m.Read(ctx, vec, fs.Read)
+	err = m.Read(ctx, vec)
+	assert.Nil(t, err)
+	err = fs.Read(ctx, vec)
+	assert.Nil(t, err)
+	err = m.Update(ctx, vec)
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), m.lru.size)
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)

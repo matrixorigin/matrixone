@@ -207,7 +207,7 @@ select * from json_table_6,unnest(json_table_6.j1,"$") as u where u.`key`="key1"
 select seq,value from json_table_6,unnest(json_table_6.j1,"$.a") as u where u.`path` like "%a";
 
 --insert into table select xxx from unnest
-create table unnest_table_1(col0 json,col1 varchar(255),col2 int,col3 varchar(255),col4 varchar(255),col5 int,col6 varchar(255),col7 varchar(255));
+create table unnest_table_1(col0 json,col1 varchar(255),col2 int,col3 varchar(255),col4 varchar(255),col5 int,col6 json,col7 json);
 insert into unnest_table_1 select * from json_table_6,unnest(json_table_6.j1,"$.*") as u;
 select * from unnest_table_1;
 

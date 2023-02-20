@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	pathpkg "path"
 	"sort"
 	"strings"
 	"sync"
@@ -49,6 +50,12 @@ func (m *MemoryFS) Name() string {
 }
 
 func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	m.RLock()
 	defer m.RUnlock()
 
@@ -88,6 +95,12 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 }
 
 func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	m.Lock()
 	defer m.Unlock()
 
@@ -108,6 +121,11 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	path, err := ParsePathAtService(vector.FilePath, m.name)
 	if err != nil {
@@ -128,7 +146,7 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
 	})
 
-	r := newIOEntriesReader(vector.Entries)
+	r := newIOEntriesReader(ctx, vector.Entries)
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -143,6 +161,11 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	path, err := ParsePathAtService(vector.FilePath, m.name)
 	if err != nil {
@@ -166,7 +189,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	}
 
 	for i, entry := range vector.Entries {
-		if entry.ignore {
+		if entry.done {
 			continue
 		}
 
@@ -197,8 +220,11 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 		}
 
 		if setData {
-			if int64(len(entry.Data)) < entry.Size {
+			if int64(len(entry.Data)) < entry.Size || entry.Size < 0 {
 				entry.Data = data
+				if entry.Size < 0 {
+					entry.Size = int64(len(data))
+				}
 			} else {
 				copy(entry.Data, data)
 			}
@@ -214,7 +240,44 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	return nil
 }
 
+func (m *MemoryFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	path, err := ParsePathAtService(filePath, m.name)
+	if err != nil {
+		return nil, err
+	}
+
+	m.RLock()
+	defer m.RUnlock()
+
+	pivot := &_MemFSEntry{
+		FilePath: path.File,
+	}
+
+	fsEntry, ok := m.tree.Get(pivot)
+	if !ok {
+		return nil, moerr.NewFileNotFoundNoCtx(path.File)
+	}
+
+	return &DirEntry{
+		Name:  pathpkg.Base(filePath),
+		IsDir: false,
+		Size:  int64(len(fsEntry.Data)),
+	}, nil
+}
+
 func (m *MemoryFS) Delete(ctx context.Context, filePaths ...string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	m.Lock()
 	defer m.Unlock()
 	for _, filePath := range filePaths {

@@ -46,7 +46,13 @@ func handleFlush() handleFunc {
 					return nil, err
 				}
 
-				defer txnOp.Commit(proc.Ctx)
+				defer func() {
+					if err := proc.SessionInfo.StorageEngine.Commit(proc.Ctx, txnOp); err != nil {
+						_ = txnOp.Rollback(proc.Ctx)
+					} else {
+						_ = txnOp.Commit(proc.Ctx)
+					}
+				}()
 			}
 			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
 			if err != nil {
@@ -57,18 +63,14 @@ func handleFlush() handleFunc {
 				return nil, err
 			}
 			dId := database.GetDatabaseId(proc.Ctx)
-			tId := rel.GetTableID(proc.Ctx)
+			tableId := rel.GetTableID(proc.Ctx)
 			dbId, err := strconv.Atoi(dId)
-			if err != nil {
-				return nil, err
-			}
-			tableId, err := strconv.Atoi(tId)
 			if err != nil {
 				return nil, err
 			}
 			payload, err := types.Encode(db.FlushTable{
 				DatabaseID: uint64(dbId),
-				TableID:    uint64(tableId),
+				TableID:    tableId,
 				AccessInfo: db.AccessInfo{
 					AccountID: proc.SessionInfo.AccountId,
 					UserID:    proc.SessionInfo.UserId,

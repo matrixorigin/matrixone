@@ -65,7 +65,7 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		resultValues := make([]types.Decimal128, 1)
 		col, err := oct.OctFloat(inputValues, resultValues)
 		if err != nil {
-			return nil, moerr.NewInternalErrorNoCtx("the input value is out of integer range")
+			return nil, moerr.NewInternalError(proc.Ctx, "the input value is out of integer range")
 		}
 		vector.SetCol(resultVector, col)
 		return resultVector, nil
@@ -77,7 +77,7 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		resultValues := vector.MustTCols[types.Decimal128](resultVector)
 		_, err = oct.OctFloat(inputValues, resultValues)
 		if err != nil {
-			return nil, moerr.NewInternalErrorNoCtx("the input value is out of integer range")
+			return nil, moerr.NewInternalError(proc.Ctx, "the input value is out of integer range")
 		}
 		return resultVector, nil
 	}

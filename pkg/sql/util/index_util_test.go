@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -38,19 +37,18 @@ func TestBuildIndexTableName(t *testing.T) {
 		{
 			indexNames:     "a",
 			uniques:        true,
-			indexTableName: catalog.PrefixIndexTableName + "unique_a_",
+			indexTableName: catalog.PrefixIndexTableName + "unique_",
 		},
 		{
 			indexNames:     "b",
 			uniques:        false,
-			indexTableName: catalog.PrefixIndexTableName + "secondary_b_",
+			indexTableName: catalog.PrefixIndexTableName + "secondary_",
 		},
 	}
 	for _, test := range tests {
-		indexName := test.indexNames
 		unique := test.uniques
 		ctx := context.TODO()
-		indexTableName, err := BuildIndexTableName(ctx, unique, indexName)
+		indexTableName, err := BuildIndexTableName(ctx, unique)
 		require.Equal(t, indexTableName[:len(test.indexTableName)], test.indexTableName)
 		require.Equal(t, err, nil)
 	}
@@ -61,7 +59,7 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 	tests := []struct {
 		vecs  []*vector.Vector
 		attrs []string
-		p     []*plan.ColDef
+		parts []string
 		proc  *process.Process
 	}{
 		{
@@ -71,13 +69,8 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 				testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
 			},
 			attrs: []string{"a", "b", "c"},
-			p: []*plan.ColDef{
-				{
-					Name: BuildCompositePrimaryKeyColumnName([]string{"a", "b", "c"}),
-					Typ:  &plan.Type{Id: int32(types.T_varchar), Size: types.VarlenaSize},
-				},
-			},
-			proc: proc,
+			parts: []string{"a", "b", "c"},
+			proc:  proc,
 		},
 		{
 			vecs: []*vector.Vector{
@@ -86,24 +79,17 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 				testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
 			},
 			attrs: []string{"a", "b", "c"},
-			p: []*plan.ColDef{
-				{
-					Name: "a",
-					Typ:  &plan.Type{Id: int32(types.T_int64)},
-				},
-			},
-			proc: proc,
+			parts: []string{"a"},
+			proc:  proc,
 		},
 	}
 	for _, test := range tests {
-		if JudgeIsCompositePrimaryKeyColumn(test.p[0].Name) {
+		if len(test.parts) >= 2 {
 			vec, _ := multi.Serial(test.vecs, proc)
-			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.p, test.proc)
-			require.Equal(t, b.Attrs[0], test.p[0].Name)
+			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc)
 			require.Equal(t, vec.Col, b.Vecs[0].Col)
 		} else {
-			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.p, test.proc)
-			require.Equal(t, b.Attrs[0], test.p[0].Name)
+			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc)
 			require.Equal(t, test.vecs[0].Col, b.Vecs[0].Col)
 		}
 	}
@@ -114,7 +100,7 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 	tests := []struct {
 		vecs  []*vector.Vector
 		attrs []string
-		p     []*plan.ColDef
+		parts []string
 		proc  *process.Process
 	}{
 		{
@@ -124,13 +110,8 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 				testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
 			},
 			attrs: []string{"a", "b", "c"},
-			p: []*plan.ColDef{
-				{
-					Name: BuildCompositePrimaryKeyColumnName([]string{"a", "b", "c"}),
-					Typ:  &plan.Type{Id: int32(types.T_varchar), Size: types.VarlenaSize},
-				},
-			},
-			proc: proc,
+			parts: []string{"a", "b", "c"},
+			proc:  proc,
 		},
 		{
 			vecs: []*vector.Vector{
@@ -139,23 +120,21 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 				testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
 			},
 			attrs: []string{"a", "b", "c"},
-			p: []*plan.ColDef{
-				{
-					Name: "b",
-					Typ:  &plan.Type{Id: int32(types.T_int64)},
-				},
-			},
-			proc: proc,
+			parts: []string{"b"},
+			proc:  proc,
 		},
 	}
 	for _, test := range tests {
 		nulls.Add(test.vecs[1].Nsp, 1)
-		if JudgeIsCompositePrimaryKeyColumn(test.p[0].Name) {
-			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.p, test.proc)
-			require.Equal(t, b.Vecs[0].Length(), 2)
+		//if JudgeIsCompositeIndexColumn(test.f) {
+		if len(test.parts) >= 2 {
+			//b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
+			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc)
+			require.Equal(t, 2, b.Vecs[0].Length())
 		} else {
-			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.p, test.proc)
-			require.Equal(t, b.Vecs[0].Length(), 2)
+			//b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
+			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc)
+			require.Equal(t, 2, b.Vecs[0].Length())
 		}
 	}
 }

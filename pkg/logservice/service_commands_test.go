@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -177,9 +178,8 @@ func TestHandleAddReplica(t *testing.T) {
 	}()
 
 	service1 := Service{
-		store: store1,
-
-		logger: testLogger,
+		store:   store1,
+		runtime: runtime.DefaultRuntime(),
 	}
 	cmd := pb.ScheduleCommand{
 		ConfigChange: &pb.ConfigChange{
@@ -207,8 +207,8 @@ func TestHandleRemoveReplica(t *testing.T) {
 	}()
 
 	service1 := Service{
-		store:  store1,
-		logger: testLogger,
+		store:   store1,
+		runtime: runtime.DefaultRuntime(),
 	}
 	cmd := pb.ScheduleCommand{
 		ConfigChange: &pb.ConfigChange{

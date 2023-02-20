@@ -45,7 +45,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_date.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 0, 0, 0, 0)},
+			want:    []types.Time{types.TimeFromClock(false, 0, 0, 0, 0)},
 		},
 		{
 			name:    "TimeTest-FromDate02",
@@ -54,7 +54,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_date.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 0, 0, 0, 0)},
+			want:    []types.Time{types.TimeFromClock(false, 0, 0, 0, 0)},
 		},
 
 		//============================== Datetime ==============================
@@ -65,7 +65,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_datetime.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 16, 22, 44, 0)},
+			want:    []types.Time{types.TimeFromClock(false, 16, 22, 44, 0)},
 		},
 		{
 			name:    "TimeTest-FromDatetime02",
@@ -74,7 +74,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_datetime.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 16, 22, 44, 123500)},
+			want:    []types.Time{types.TimeFromClock(false, 16, 22, 44, 123500)},
 		},
 
 		//============================== DateString ==============================
@@ -86,7 +86,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 2011010111, 22, 33, 0)},
+			want:    []types.Time{types.TimeFromClock(false, 2011010111, 22, 33, 0)},
 		},
 		{
 			name:    "TimeTest-FromDateString02",
@@ -95,7 +95,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 16, 22, 44, 123500)},
+			want:    []types.Time{types.TimeFromClock(false, 16, 22, 44, 123500)},
 		},
 		{
 			name:    "TimeTest-FromDateString03",
@@ -104,7 +104,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 16, 22, 44, 0)},
+			want:    []types.Time{types.TimeFromClock(false, 16, 22, 44, 0)},
 		},
 		{
 			name:    "TimeTest-FromDateString04",
@@ -113,7 +113,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(true, 11, 22, 33, 0)},
+			want:    []types.Time{types.TimeFromClock(true, 11, 22, 33, 0)},
 		},
 		{
 			name:    "TimeTest-FromDateString05",
@@ -122,7 +122,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(true, 0, 2, 33, 123000)},
+			want:    []types.Time{types.TimeFromClock(true, 0, 2, 33, 123000)},
 		},
 		//============================== Int64 ==============================
 		{
@@ -132,7 +132,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_int64.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
+			want:    []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
 		},
 		{
 			name:    "TimeTest-FromInt64-02",
@@ -141,7 +141,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_int64.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 2022121211, 22, 33, 0)},
+			want:    []types.Time{types.TimeFromClock(false, 2022121211, 22, 33, 0)},
 		},
 		{
 			name:    "TimeTest-FromInt64-03",
@@ -150,7 +150,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_int64.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(true, 2022121211, 22, 33, 0)},
+			want:    []types.Time{types.TimeFromClock(true, 2022121211, 22, 33, 0)},
 		},
 		//============================== Decimal128 ==============================
 		{
@@ -160,7 +160,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_decimal128.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 2022121211, 22, 33, 444000)},
+			want:    []types.Time{types.TimeFromClock(false, 2022121211, 22, 33, 444000)},
 		},
 		{
 			name:    "TimeTest-FromDecimal128-02",
@@ -169,7 +169,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_decimal128.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 2022121211, 22, 33, 445000)},
+			want:    []types.Time{types.TimeFromClock(false, 2022121211, 22, 33, 445000)},
 		},
 		{
 			name:    "TimeTest-FromDecimal128-03",
@@ -178,7 +178,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_decimal128.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(true, 2022121211, 22, 33, 444000)},
+			want:    []types.Time{types.TimeFromClock(true, 2022121211, 22, 33, 444000)},
 		},
 		{
 			name:    "TimeTest-FromDecimal128-04",
@@ -187,7 +187,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_decimal128.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(true, 2022121211, 22, 33, 445000)},
+			want:    []types.Time{types.TimeFromClock(true, 2022121211, 22, 33, 445000)},
 		},
 	}
 

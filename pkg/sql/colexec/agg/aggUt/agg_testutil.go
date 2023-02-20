@@ -52,7 +52,7 @@ func RunTest(t *testing.T, testCases []testCase) {
 	for _, c := range testCases {
 		// update some parameter
 		switch c.op {
-		case agg.AggregateAvg, agg.AggregateVariance, agg.AggregateStdDevPop:
+		case agg.AggregateAvg, agg.AggregateVariance, agg.AggregateStdDevPop, agg.AggregateMedian:
 			c.hasDecimalResult = true
 		default:
 			c.hasDecimalResult = false
@@ -171,8 +171,9 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		d, marshalErr := agg0.MarshalBinary()
 		require.NoError(t, marshalErr)
 		agg1, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
-		unmarshalErr := agg1.UnmarshalBinary(d, m)
+		unmarshalErr := agg1.UnmarshalBinary(d)
 		require.NoError(t, unmarshalErr)
+		agg1.WildAggReAlloc(m)
 
 		// Fill() after marshal and unmarshal
 		if l > 0 && vec != nil {
@@ -217,8 +218,9 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		d, marshalErr := agg0.MarshalBinary()
 		require.NoError(t, marshalErr)
 		mAgg, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
-		unmarshalErr := mAgg.UnmarshalBinary(d, m)
+		unmarshalErr := mAgg.UnmarshalBinary(d)
 		require.NoError(t, unmarshalErr)
+		mAgg.WildAggReAlloc(m)
 
 		// Merge()
 		mAgg.Merge(agg1, 0, 0)

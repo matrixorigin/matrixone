@@ -125,14 +125,17 @@ commit ;
 select * from t_code_rule;
 
 begin;
+-- @bvt:issue#7133
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',5);
 delete from t_code_rule where code_id=18373453;
 select * from t_code_rule;
+-- @bvt:issue
 rollback ;
 select * from t_code_rule;
 
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',5);
 begin ;
+-- @bvt:issue#7133
 delete from t_code_rule where code_id=18373453;
 commit ;
 
@@ -146,6 +149,7 @@ begin;
 update t_code_rule set org_name=NULL where code_id=18373453;
 commit ;
 select * from t_code_rule;
+-- @bvt:issue
 
 --anormal transaction sql
 begin ;

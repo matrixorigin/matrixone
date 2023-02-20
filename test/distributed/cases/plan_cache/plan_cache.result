@@ -1,0 +1,36 @@
+drop table if exists test1;
+create table test1(t timestamp);
+insert into test1 values(now());
+insert into test1 values(now());
+insert into test1 values(now());
+insert into test1 values(now());
+select count(1) from test1 group by t;
+count(1)
+1
+1
+1
+1
+drop table if exists test2;
+create table test2(s char(26));
+insert into test2 values(substr(now(),1,26));
+insert into test2 values(substr(now(),1,26));
+insert into test2 values(substr(now(),1,26));
+insert into test2 values(substr(now(),1,26));
+select count(1) from test2 group by s;
+count(1)
+1
+1
+1
+1
+drop table if exists test3;
+create table test3(s char(25));
+insert into test3 values(substr(substr(now(),1,26),2,25));
+insert into test3 values(substr(substr(now(),1,26),2,25));
+insert into test3 values(substr(substr(now(),1,26),2,25));
+insert into test3 values(substr(substr(now(),1,26),2,25));
+select count(1) from test3 group by s;
+count(1)
+1
+1
+1
+1

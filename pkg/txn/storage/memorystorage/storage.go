@@ -58,6 +58,10 @@ func (s *Storage) StartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
 	s.handler.HandleStartRecovery(ctx, ch)
 }
 
+func (s *Storage) Start() error {
+	return nil
+}
+
 func (s *Storage) Close(ctx context.Context) error {
 	return s.handler.HandleClose(ctx)
 }

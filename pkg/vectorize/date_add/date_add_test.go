@@ -33,24 +33,24 @@ func TestDateAdd(t *testing.T) {
 		success bool
 	}{
 		{
-			args1:   []types.Date{types.FromCalendar(2021, 8, 13)},
+			args1:   []types.Date{types.DateFromCalendar(2021, 8, 13)},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Day)},
-			want:    []types.Date{types.FromCalendar(2021, 8, 14)},
+			want:    []types.Date{types.DateFromCalendar(2021, 8, 14)},
 			success: true,
 		},
 		{
-			args1:   []types.Date{types.FromCalendar(2021, 1, 31)},
+			args1:   []types.Date{types.DateFromCalendar(2021, 1, 31)},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Month)},
-			want:    []types.Date{types.FromCalendar(2021, 2, 28)},
+			want:    []types.Date{types.DateFromCalendar(2021, 2, 28)},
 			success: true,
 		},
 		{
-			args1:   []types.Date{types.FromCalendar(9999, 12, 31)},
+			args1:   []types.Date{types.DateFromCalendar(9999, 12, 31)},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Day)},
-			want:    []types.Date{types.FromCalendar(1, 1, 1)},
+			want:    []types.Date{types.DateFromCalendar(1, 1, 1)},
 			success: false,
 		},
 	}
@@ -83,24 +83,24 @@ func TestDatetimeAdd(t *testing.T) {
 		success bool
 	}{
 		{
-			args1:   []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 1, 1)},
+			args1:   []types.Datetime{types.DatetimeFromClock(2020, 1, 1, 1, 1, 1, 1)},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.MicroSecond)},
-			want:    []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 1, 2)},
+			want:    []types.Datetime{types.DatetimeFromClock(2020, 1, 1, 1, 1, 1, 2)},
 			success: true,
 		},
 		{
-			args1:   []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 1, 1)},
+			args1:   []types.Datetime{types.DatetimeFromClock(2020, 1, 1, 1, 1, 1, 1)},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Second)},
-			want:    []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 2, 1)},
+			want:    []types.Datetime{types.DatetimeFromClock(2020, 1, 1, 1, 1, 2, 1)},
 			success: true,
 		},
 		{
-			args1:   []types.Datetime{types.FromClock(9999, 1, 1, 1, 1, 1, 1)},
+			args1:   []types.Datetime{types.DatetimeFromClock(9999, 1, 1, 1, 1, 1, 1)},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Year)},
-			want:    []types.Datetime{types.FromClock(1, 1, 1, 0, 0, 0, 0)},
+			want:    []types.Datetime{types.DatetimeFromClock(1, 1, 1, 0, 0, 0, 0)},
 			success: false,
 		},
 	}
@@ -136,28 +136,28 @@ func TestDateStringAdd(t *testing.T) {
 			args1:   []string{"2018-01-01"},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Day)},
-			want:    []types.Datetime{types.FromClock(2018, 1, 2, 0, 0, 0, 0)},
+			want:    []types.Datetime{types.DatetimeFromClock(2018, 1, 2, 0, 0, 0, 0)},
 			success: true,
 		},
 		{
 			args1:   []string{"2018-01-01"},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Second)},
-			want:    []types.Datetime{types.FromClock(2018, 1, 1, 0, 0, 1, 0)},
+			want:    []types.Datetime{types.DatetimeFromClock(2018, 1, 1, 0, 0, 1, 0)},
 			success: true,
 		},
 		{
 			args1:   []string{"2018-01-01 00:00:01"},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Second)},
-			want:    []types.Datetime{types.FromClock(2018, 1, 1, 0, 0, 2, 0)},
+			want:    []types.Datetime{types.DatetimeFromClock(2018, 1, 1, 0, 0, 2, 0)},
 			success: true,
 		},
 		{
 			args1:   []string{"xxxx"},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Second)},
-			want:    []types.Datetime{types.FromClock(1, 1, 1, 0, 0, 0, 0)},
+			want:    []types.Datetime{types.DatetimeFromClock(1, 1, 1, 0, 0, 0, 0)},
 			success: false,
 		},
 	}

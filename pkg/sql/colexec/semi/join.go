@@ -16,6 +16,7 @@ package semi
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,7 +39,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -54,7 +55,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			ctr.state = Probe
 
 		case Probe:
+			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
+			anal.WaitStop(start)
+
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -66,7 +70,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				bat.Clean(proc.Mp())
 				continue
 			}
-			if err := ctr.probe(bat, ap, proc, anal); err != nil {
+			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
 				ap.Free(proc, true)
 				return false, err
 			}
@@ -81,24 +85,28 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+	start := time.Now()
 	bat := <-proc.Reg.MergeReceivers[1].Ch
+	anal.WaitStop(start)
+
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
 	ctr.cleanEvalVectors(proc.Mp())
-	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
+	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc, anal); err != nil {
 		rbat.Clean(proc.Mp())
 		return err
 	}
@@ -150,15 +158,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		eligible = eligible[:0]
 	}
 	rbat.ExpandNulls()
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
+func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
@@ -170,6 +178,9 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 				ctr.evecs[i].needFree = false
 				break
 			}
+		}
+		if ctr.evecs[i].needFree && vec != nil {
+			analyze.Alloc(int64(vec.Size()))
 		}
 	}
 	return nil

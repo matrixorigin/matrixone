@@ -1,0 +1,46 @@
+drop database if exists test_temporary;
+create database test_temporary;
+use test_temporary;
+create temporary table t (a int);
+create table t1 (a int);
+show tables;
+tables_in_temporary_table
+t1
+insert into t values (1), (2), (3);
+select * from t;
+a
+1
+2
+3
+delete from t where a = 1;
+select * from t;
+a
+2
+3
+update t set a = 4 where a = 3;
+select * from t;
+a
+2
+4
+insert into t1 values (100);
+insert into t select * from t1;
+select * from t;
+a
+2
+4
+100
+drop database if exists test_temporary2;
+create database test_temporary2;
+use test_temporary2;
+create temporary table t (a int);
+create table t1 (a int);
+select * from t;
+a
+drop table t;
+select * from test_temporary.t;
+a
+2
+4
+100
+drop database if exists test_temporary;
+drop database if exists test_temporary2;

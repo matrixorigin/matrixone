@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
@@ -49,11 +50,11 @@ func (s *service) initDistributedTAE(
 	}
 
 	// use s3 as main fs
-	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.S3FileServiceName)
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
 	if err != nil {
 		return err
 	}
-
+	colexec.Srv = colexec.NewServer(hakeeper)
 	// engine
 	pu.StorageEngine = disttae.New(
 		ctx,
@@ -63,6 +64,5 @@ func (s *service) initDistributedTAE(
 		hakeeper,
 		pu.GetClusterDetails,
 	)
-
 	return nil
 }

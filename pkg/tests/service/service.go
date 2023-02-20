@@ -301,7 +301,7 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	}
 
 	// TODO: CN and LOG use process level runtime
-	runtime.SetupProcessLevelRuntime(c.newRuntime(metadata.ServiceType_CN, ""))
+	runtime.SetupProcessLevelRuntime(c.newRuntime())
 
 	// build addresses for all services
 	c.network.addresses = c.buildServiceAddresses()
@@ -1295,7 +1295,6 @@ func (c *testCluster) buildLogConfigs(
 
 		localAddr := cfg.ServiceAddress
 		opt := buildLogOptions(cfg, c.backendFilterFactory(localAddr))
-		opt = append(opt, logservice.WithLogger(c.logger))
 		opts = append(opts, opt)
 	}
 	return cfgs, opts
@@ -1341,7 +1340,7 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		}
 		ds, err := newDNService(
 			cfg,
-			c.newRuntime(metadata.ServiceType_DN, cfg.UUID),
+			c.newRuntime(),
 			fs,
 			opt)
 		require.NoError(c.t, err)
@@ -1614,7 +1613,7 @@ func (c *testCluster) waitSystemInitCompleted(ctx context.Context) error {
 	return nil
 }
 
-func (c *testCluster) newRuntime(st metadata.ServiceType, uuid string) runtime.Runtime {
+func (c *testCluster) newRuntime() runtime.Runtime {
 	return runtime.NewRuntime(metadata.ServiceType_CN, "", c.logger, runtime.WithClock(c.clock))
 }
 

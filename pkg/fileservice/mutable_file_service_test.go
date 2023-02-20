@@ -107,4 +107,12 @@ func testMutableFileService(
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("123dq123"), vec.Entries[0].Data)
 
+	// context canceled
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = mutator.Mutate(ctx)
+	assert.ErrorIs(t, err, context.Canceled)
+	err = mutator.Append(ctx)
+	assert.ErrorIs(t, err, context.Canceled)
+
 }

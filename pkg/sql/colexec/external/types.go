@@ -19,6 +19,7 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -32,27 +33,61 @@ func ColumnCntLargerErrorInfo() string {
 
 // Use for External table scan param
 type ExternalParam struct {
-	Attrs         []string
-	Cols          []*plan.ColDef
-	Name2ColIndex map[string]int32
-	CreateSql     string
-	Ctx           context.Context
-	plh           *ParseLineHandler
-	extern        *tree.ExternParam
-	IgnoreLine    int
-	IgnoreLineTag int
-	// tag indicate the fileScan is finished
-	Fileparam    *ExternalFileparam
-	FileList     []string
-	reader       io.ReadCloser
-	maxBatchSize uint64
+	// Externally passed parameters that will not change
+	ExParamConst
+	// Inner parameters
+	ExParam
 }
 
-type ExternalFileparam struct {
+type ExParamConst struct {
+	IgnoreLine    int
+	IgnoreLineTag int
+	maxBatchSize  uint64
+	CreateSql     string
+	Attrs         []string
+	Cols          []*plan.ColDef
+	OriginCols    []*plan.ColDef
+	FileList      []string
+	FileSize      []int64
+	FileOffset    [][2]int
+	Name2ColIndex map[string]int32
+	Ctx           context.Context
+	Extern        *tree.ExternParam
+	tableDef      *plan.TableDef
+	ClusterTable  *plan.ClusterTable
+}
+
+type ExParam struct {
+	prevStr   string
+	reader    io.ReadCloser
+	plh       *ParseLineHandler
+	Fileparam *ExFileparam
+	Zoneparam *ZonemapFileparam
+	Filter    *FilterParam
+}
+
+type ExFileparam struct {
 	End       bool
 	FileCnt   int
 	FileFin   int
 	FileIndex int
+	Filepath  string
+}
+
+type ZonemapFileparam struct {
+	bs     []objectio.BlockObject
+	offset int
+}
+
+type FilterParam struct {
+	maxCol       int
+	exprMono     bool
+	columns      []uint16 // save real index in table to read column's data from files
+	defColumns   []uint16 // save col index in tableDef.Cols, cooperate with columnMap
+	columnMap    map[int]int
+	File2Size    map[string]int64
+	FilterExpr   *plan.Expr
+	objectReader objectio.Reader
 }
 
 type Argument struct {

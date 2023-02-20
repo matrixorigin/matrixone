@@ -72,6 +72,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.FileService = p.FileService
 	proc.GetClusterDetails = p.GetClusterDetails
 	proc.UnixTime = p.UnixTime
+	proc.LastInsertID = p.LastInsertID
 
 	// reg and cancel
 	proc.Ctx = newctx
@@ -83,6 +84,8 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 			Ch:  make(chan *batch.Batch, 1),
 		}
 	}
+	proc.DispatchNotifyCh = make(chan WrapCs)
+	proc.LoadLocalReader = p.LoadLocalReader
 	return proc
 }
 
@@ -146,7 +149,7 @@ func (proc *Process) GetAnalyze(idx int) Analyze {
 	if idx >= len(proc.AnalInfos) {
 		return &analyze{analInfo: nil}
 	}
-	return &analyze{analInfo: proc.AnalInfos[idx]}
+	return &analyze{analInfo: proc.AnalInfos[idx], wait: 0}
 }
 
 func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, error) {

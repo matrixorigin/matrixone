@@ -33,14 +33,15 @@ func NewMemCache(capacity int64) *MemCache {
 	}
 }
 
+var _ Cache = new(MemCache)
+
 func (m *MemCache) Read(
 	ctx context.Context,
 	vector *IOVector,
-	upstreamRead func(context.Context, *IOVector) error,
 ) (
 	err error,
 ) {
-	ctx, span := trace.Start(ctx, "MemCache.Read")
+	_, span := trace.Start(ctx, "MemCache.Read")
 	defer span.End()
 
 	numHit := 0
@@ -51,14 +52,13 @@ func (m *MemCache) Read(
 		}
 	}()
 
-	noObject := true
 	for i, entry := range vector.Entries {
+		if entry.done {
+			continue
+		}
 		if entry.ToObject == nil {
 			continue
 		}
-		noObject = false
-
-		// read from cache
 		key := CacheKey{
 			Path:   vector.FilePath,
 			Offset: entry.Offset,
@@ -68,34 +68,30 @@ func (m *MemCache) Read(
 		if ok {
 			vector.Entries[i].Object = obj
 			vector.Entries[i].ObjectSize = size
-			vector.Entries[i].ignore = true
+			vector.Entries[i].done = true
 			numHit++
 		}
 	}
 
-	if err := upstreamRead(ctx, vector); err != nil {
-		return err
-	}
-
-	if noObject {
-		return nil
-	}
-
-	for i, entry := range vector.Entries {
-		if !entry.ignore && entry.Object != nil {
-			// new object, set cache
-			key := CacheKey{
-				Path:   vector.FilePath,
-				Offset: entry.Offset,
-				Size:   entry.Size,
-			}
-			m.lru.Set(key, entry.Object, entry.ObjectSize)
-		}
-
-		vector.Entries[i].ignore = false
-	}
-
 	return
+}
+
+func (m *MemCache) Update(
+	ctx context.Context,
+	vector *IOVector,
+) error {
+	for _, entry := range vector.Entries {
+		if entry.Object == nil {
+			continue
+		}
+		key := CacheKey{
+			Path:   vector.FilePath,
+			Offset: entry.Offset,
+			Size:   entry.Size,
+		}
+		m.lru.Set(key, entry.Object, entry.ObjectSize)
+	}
+	return nil
 }
 
 func (m *MemCache) Flush() {

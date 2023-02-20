@@ -16,10 +16,10 @@ package metric
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 

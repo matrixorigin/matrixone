@@ -98,6 +98,12 @@ Disguise the COMMAND CMD_FIELD_LIST as sql query.
 */
 const (
 	cmdFieldListSql = "__++__internal_cmd_field_list"
+	intereSql       = "internal_sql"
+	cloudUserSql    = "cloud_user_sql"
+	cloudNoUserSql  = "cloud_nonuser_sql"
+	externSql       = "external_sql"
+	cloudUserTag    = "cloud_user"
+	cloudNoUserTag  = "cloud_nonuser"
 )
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
@@ -143,6 +149,9 @@ func (icfl *InternalCmdFieldList) String() string {
 func (icfl *InternalCmdFieldList) Format(ctx *tree.FmtCtx) {
 	ctx.WriteString(makeCmdFieldListSql(icfl.tableName))
 }
+
+func (icfl *InternalCmdFieldList) GetStatementType() string { return "InternalCmd" }
+func (icfl *InternalCmdFieldList) GetQueryType() string     { return tree.QueryTypeDQL }
 
 // ExecResult is the result interface of the execution
 type ExecResult interface {

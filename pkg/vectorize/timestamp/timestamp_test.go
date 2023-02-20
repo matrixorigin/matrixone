@@ -33,7 +33,7 @@ func TestDateToTimestamp(t *testing.T) {
 	}{
 		{
 			name:    "normal test cases",
-			args:    []types.Date{types.FromCalendar(2022, 3, 30)},
+			args:    []types.Date{types.DateFromCalendar(2022, 3, 30)},
 			want:    []types.Timestamp{types.FromClockUTC(2022, 3, 30, 0, 0, 0, 0)},
 			success: true,
 		},
@@ -57,7 +57,7 @@ func TestDatetimeToTimestamp(t *testing.T) {
 	}{
 		{
 			name:    "normal test cases",
-			args:    []types.Datetime{types.FromClock(2022, 3, 30, 0, 0, 0, 0)},
+			args:    []types.Datetime{types.DatetimeFromClock(2022, 3, 30, 0, 0, 0, 0)},
 			want:    []types.Timestamp{types.FromClockUTC(2022, 3, 30, 0, 0, 0, 0)},
 			success: true,
 		},

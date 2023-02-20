@@ -1,2 +1,0 @@
-select statement_id, transaction_id, session_id, account, `user`, host, `database`, statement, statement_tag, statement_fingerprint, node_uuid, node_type, request_at, response_at, duration, `status`, err_code, error, exec_plan, rows_read, bytes_scan from system.statement_info where statement_id = '';
-statement_id	transaction_id	session_id	account	user	host	database	statement	statement_tag	statement_fingerprint	node_uuid	node_type	request_at	response_at	duration	status	err_code	error	exec_plan	rows_read	bytes_scan

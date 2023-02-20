@@ -78,7 +78,7 @@ func TestIntersect(t *testing.T) {
 	cnt := 0
 	end := false
 	for {
-		end, err = Call(0, c.proc, c.arg)
+		end, err = Call(0, c.proc, c.arg, false, false)
 		if end {
 			break
 		}

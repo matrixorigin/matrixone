@@ -442,6 +442,11 @@ type CreateViewExecutor struct {
 	cv *tree.CreateView
 }
 
+type AlterViewExecutor struct {
+	*statusStmtExecutor
+	av *tree.AlterView
+}
+
 type DropViewExecutor struct {
 	*statusStmtExecutor
 	dv *tree.DropView

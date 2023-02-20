@@ -48,9 +48,9 @@ func WithMinIncrementalInterval(interval time.Duration) Option {
 	}
 }
 
-func WithMinGlobalInterval(interval time.Duration) Option {
+func WithGlobalMinCount(count int) Option {
 	return func(r *runner) {
-		r.options.minGlobalInterval = interval
+		r.options.globalMinCount = count
 	}
 }
 
@@ -63,5 +63,11 @@ func WithForceFlushTimeout(to time.Duration) Option {
 func WithForceFlushCheckInterval(interval time.Duration) Option {
 	return func(r *runner) {
 		r.options.forceFlushCheckInterval = interval
+	}
+}
+
+func WithGlobalVersionInterval(interval time.Duration) Option {
+	return func(r *runner) {
+		r.options.globalVersionInterval = interval
 	}
 }

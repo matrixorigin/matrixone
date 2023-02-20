@@ -17,9 +17,10 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
 	"reflect"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
@@ -187,6 +188,10 @@ func GetPtrAt(v *Vector, idx int64) unsafe.Pointer {
 // Raw version, get from v.data.   Adopt python convention and
 // neg idx means counting from end, that is, -1 means last element.
 func (v *Vector) getRawValueAt(idx int64) []byte {
+	if v.IsScalar() && len(v.data) == 0 {
+		return v.encodeColToByteSlice()
+	}
+
 	tlen := int64(v.GetType().TypeSize())
 	dlen := int64(len(v.data))
 	if idx >= 0 {
@@ -375,11 +380,17 @@ func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 	return nil
 }
 
-func (v *Vector) ConstExpand(m *mpool.MPool) *Vector {
+/*
+ConstExpand
+expandCols:
+- true: extend the field Col of the vector that is scalar null
+- false: same as before
+*/
+func (v *Vector) ConstExpand(expandCols bool, m *mpool.MPool) *Vector {
 	if !v.isConst {
 		return v
 	}
-	if v.IsScalarNull() {
+	if !expandCols && v.IsScalarNull() {
 		vlen := uint64(v.ScalarLength())
 		nulls.AddRange(v.Nsp, 0, vlen)
 		return v
@@ -782,11 +793,7 @@ func (v *Vector) Append(w any, isNull bool, m *mpool.MPool) error {
 	case types.T_Rowid:
 		return appendOne(v, w.(types.Rowid), isNull, m)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
-		if isNull {
-			return appendOneBytes(v, nil, true, m)
-		}
-		wv := w.([]byte)
-		return appendOneBytes(v, wv, false, m)
+		return appendOneBytes(v, w.([]byte), isNull, m)
 	}
 	return nil
 }
@@ -917,7 +924,7 @@ func Dup(v *Vector, m *mpool.MPool) (*Vector, error) {
 // Window just returns a window out of input and no deep copy.
 func Window(v *Vector, start, end int, w *Vector) *Vector {
 	w.Typ = v.Typ
-	w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+	w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), uint64(start), w.Nsp)
 	w.data = v.data
 	w.area = v.area
 	w.setupColFromData(start, end)
@@ -1337,6 +1344,10 @@ func UnionMulti(v, w *Vector, sel int64, cnt int, m *mpool.MPool) (err error) {
 		return err
 	}
 
+	if w.IsScalar() {
+		sel = 0
+	}
+
 	if v.GetType().IsTuple() {
 		vs := v.Col.([][]interface{})
 		ws := w.Col.([][]interface{})
@@ -1344,27 +1355,29 @@ func UnionMulti(v, w *Vector, sel int64, cnt int, m *mpool.MPool) (err error) {
 			vs = append(vs, ws[sel])
 		}
 		v.Col = vs
-	} else if v.GetType().IsVarlen() {
-		tgt := MustTCols[types.Varlena](v)
-		bs := w.GetBytes(sel)
-		if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
-			return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
-		}
-		if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
-			if len(bs) > 0 {
-				return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), 0)
-			}
-		}
-		for i := 0; i < cnt; i++ {
-			tgt[curIdx], v.area, err = types.BuildVarlena(bs, v.area, m)
-			curIdx += 1
-		}
 	} else {
-		src := w.getRawValueAt(sel)
-		for i := 0; i < cnt; i++ {
-			tgt := v.getRawValueAt(int64(curIdx))
-			copy(tgt, src)
-			curIdx += 1
+		if v.GetType().IsVarlen() {
+			tgt := MustTCols[types.Varlena](v)
+			bs := w.GetBytes(sel)
+			if v.GetType().Width != 0 && len(bs) > int(v.GetType().Width) {
+				return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), v.GetType().Width)
+			}
+			if v.GetType().Width == 0 && (v.GetType().Oid == types.T_varchar || v.GetType().Oid == types.T_char) {
+				if len(bs) > 0 {
+					return moerr.NewOutOfRangeNoCtx("varchar/char ", "%v oversize of %v ", string(bs), 0)
+				}
+			}
+			for i := 0; i < cnt; i++ {
+				tgt[curIdx], v.area, err = types.BuildVarlena(bs, v.area, m)
+				curIdx += 1
+			}
+		} else {
+			src := w.getRawValueAt(sel)
+			for i := 0; i < cnt; i++ {
+				tgt := v.getRawValueAt(int64(curIdx))
+				copy(tgt, src)
+				curIdx += 1
+			}
 		}
 	}
 
@@ -1677,4 +1690,57 @@ func GetInitConstVal(typ types.Type) any {
 		//T_any T_star T_tuple T_interval
 		return int64(0)
 	}
+}
+
+func CopyConst(toVec, fromVec *Vector, length int, m *mpool.MPool) error {
+	typ := fromVec.Typ
+	var item any
+	switch typ.Oid {
+	case types.T_bool:
+		item = MustTCols[bool](fromVec)[0]
+	case types.T_int8:
+		item = MustTCols[int8](fromVec)[0]
+	case types.T_int16:
+		item = MustTCols[int16](fromVec)[0]
+	case types.T_int32:
+		item = MustTCols[int32](fromVec)[0]
+	case types.T_int64:
+		item = MustTCols[int64](fromVec)[0]
+	case types.T_uint8:
+		item = MustTCols[uint8](fromVec)[0]
+	case types.T_uint16:
+		item = MustTCols[uint16](fromVec)[0]
+	case types.T_uint32:
+		item = MustTCols[uint32](fromVec)[0]
+	case types.T_uint64:
+		item = MustTCols[uint64](fromVec)[0]
+	case types.T_float32:
+		item = MustTCols[float32](fromVec)[0]
+	case types.T_float64:
+		item = MustTCols[float64](fromVec)[0]
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+		item = MustBytesCols(fromVec)[0]
+	case types.T_date:
+		item = MustTCols[types.Date](fromVec)[0]
+	case types.T_datetime:
+		item = MustTCols[types.Datetime](fromVec)[0]
+	case types.T_time:
+		item = MustTCols[types.Time](fromVec)[0]
+	case types.T_timestamp:
+		item = MustTCols[types.Timestamp](fromVec)[0]
+	case types.T_decimal64:
+		item = MustTCols[types.Decimal64](fromVec)[0]
+	case types.T_decimal128:
+		item = MustTCols[types.Decimal128](fromVec)[0]
+	case types.T_uuid:
+		item = MustTCols[types.Uuid](fromVec)[0]
+	default:
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("vec %v can not copy", fromVec))
+	}
+
+	for i := 0; i < length; i++ {
+		toVec.Append(item, false, m)
+	}
+
+	return nil
 }

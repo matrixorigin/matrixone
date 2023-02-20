@@ -144,7 +144,7 @@ func mockTimingCase(t *testing.T, metricMp map[string][]int64, pos int, idx *ind
 	err := Prepare(tc.proc, tc.arg)
 	require.NoError(t, err)
 	tc.proc.Reg.InputBatch = testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
-	_, err = Call(0, tc.proc, tc.arg)
+	_, err = Call(0, tc.proc, tc.arg, false, false)
 	require.NoError(t, err)
 	groupbyEnd := time.Now().UnixNano()
 	metricMp["groupbyCost"][pos] = groupbyEnd - groupbyStart

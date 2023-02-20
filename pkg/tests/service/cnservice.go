@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/tests"
 )
 
 // CNService describes expected behavior for dn service.
@@ -151,7 +152,7 @@ func newCNService(
 }
 
 func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.Config {
-	port, err := getAvailablePort("127.0.0.1")
+	port, err := tests.GetAvailablePort("127.0.0.1")
 	if err != nil {
 		panic(err)
 	}

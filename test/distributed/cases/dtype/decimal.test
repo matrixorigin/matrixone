@@ -76,7 +76,7 @@ select * from t1 where decimal_col='-17666000000000000000' order by decimal_col 
 drop table t1;
 
 #Test cases of cast
--- @bvt:issue#4432
+-- @bvt:issue#4241
 select cast(10000002383263201056 as decimal) mod 50 as result;
 -- @bvt:issue
 select cast(cast(19999999999999999999 as decimal) as unsigned);

@@ -16,6 +16,7 @@ package loopleft
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -38,7 +39,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -54,7 +55,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 
 		case Probe:
 			var err error
+			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
+			anal.WaitStop(start)
+
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -63,9 +67,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				continue
 			}
 			if ctr.bat.Length() == 0 {
-				err = ctr.emptyProbe(bat, ap, proc, anal)
+				err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast)
 			} else {
-				err = ctr.probe(bat, ap, proc, anal)
+				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
 			}
 			bat.Clean(proc.Mp())
 			return false, err
@@ -79,15 +83,18 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+	start := time.Now()
 	bat := <-proc.Reg.MergeReceivers[1].Ch
+	anal.WaitStop(start)
+
 	if bat != nil {
 		ctr.bat = bat
 	}
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	anal.Input(bat)
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
+	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	count := bat.Length()
 	for i, rp := range ap.Result {
@@ -100,13 +107,13 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	}
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	anal.Input(bat)
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
+	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
@@ -190,7 +197,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	rbat.ExpandNulls()
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
 }

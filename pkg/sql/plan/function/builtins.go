@@ -15,7 +15,11 @@
 package function
 
 import (
+	"context"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -30,7 +34,7 @@ func initBuiltIns() {
 	var err error
 
 	for fid, fs := range builtins {
-		err = appendFunction(fid, fs)
+		err = appendFunction(context.Background(), fid, fs)
 		if err != nil {
 			panic(err)
 		}
@@ -181,11 +185,12 @@ var builtins = map[int]Functions{
 		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Volatile:  false,
-				Args:      []types.T{},
-				ReturnTyp: types.T_timestamp,
-				Fn:        multi.CurrentTimestamp,
+				Index:           0,
+				Volatile:        false,
+				RealTimeRelated: true,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_timestamp,
+				Fn:              multi.CurrentTimestamp,
 			},
 		},
 	},
@@ -894,6 +899,12 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_decimal128,
 				Fn:        multi.CeilDecimal128,
 			},
+			{
+				Index:     7,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_float64,
+				Fn:        multi.CeilStr,
+			},
 		},
 	},
 	FLOOR: {
@@ -942,6 +953,12 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
 				Fn:        multi.FloorDecimal128,
+			},
+			{
+				Index:     7,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_float64,
+				Fn:        multi.FloorStr,
 			},
 		},
 	},
@@ -1973,6 +1990,27 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	LAST_QUERY_ID: {
+		Id:     LAST_QUERY_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.LastQueryIDWithoutParam,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.LastQueryID,
+			},
+		},
+	},
 	ROLES_GRAPHML: {
 		Id:     ROLES_GRAPHML,
 		Flag:   plan.Function_STRICT,
@@ -2033,20 +2071,77 @@ var builtins = map[int]Functions{
 		Id:     JSON_EXTRACT,
 		Flag:   plan.Function_STRICT,
 		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			if len(inputs) < 2 {
+				return wrongFunctionParameters, nil
+			}
+			if inputs[0] != types.T_json && !types.IsString(inputs[0]) && inputs[0] != types.T_any { //any: null scalar
+				return wrongFunctionParameters, nil
+			}
+			ts = make([]types.T, len(inputs))
+			ts[0] = inputs[0]
+			for i := 1; i < len(inputs); i++ {
+				if !types.IsString(inputs[i]) && inputs[i] != types.T_any {
+					ts[i] = types.T_varchar
+					continue
+				}
+				ts[i] = inputs[i]
+			}
+			return 0, ts
+		},
+		Overloads: []Function{
+			{
+				Index:           0,
+				Volatile:        false,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_json,
+				UseNewFramework: true,
+				NewFn:           multi.JsonExtract,
+			},
+		},
+	},
+	JSON_QUOTE: {
+		Id:     JSON_QUOTE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Volatile:  true,
-				Args:      []types.T{types.T_varchar, types.T_varchar},
+				Volatile:  false,
+				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_json,
-				Fn:        binary.JsonExtractByString,
+				Fn:        unary.JsonQuote,
+			},
+		},
+	},
+	JSON_UNQUOTE: {
+		Id:     JSON_UNQUOTE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_json},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.JsonUnquote,
 			},
 			{
 				Index:     1,
-				Volatile:  true,
-				Args:      []types.T{types.T_json, types.T_varchar},
-				ReturnTyp: types.T_json,
-				Fn:        binary.JsonExtractByJson,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.JsonUnquote,
+			},
+			{
+				Index:     2,
+				Args:      []types.T{types.T_char},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.JsonUnquote,
+			},
+			{
+				Index:     3,
+				Args:      []types.T{types.T_text},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.JsonUnquote,
 			},
 		},
 	},
@@ -2303,6 +2398,19 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	REPLACE: {
+		Id:     REPLACE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.Replace,
+			},
+		},
+	},
 	REGEXP_REPLACE: {
 		Id:     REGEXP_REPLACE,
 		Flag:   plan.Function_STRICT,
@@ -2336,6 +2444,12 @@ var builtins = map[int]Functions{
 			{
 				Index:     0,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_bool,
+				Fn:        multi.RegularLike,
+			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_bool,
 				Fn:        multi.RegularLike,
 			},
@@ -2661,6 +2775,24 @@ var builtins = map[int]Functions{
 		Id:     FORMAT,
 		Flag:   plan.Function_STRICT,
 		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			l := len(inputs)
+			if l < 2 {
+				return wrongFunctionParameters, nil
+			}
+
+			//if the first param's type is timeType, return wrongFunctionParameters
+			timeType := [...]types.T{types.T_date, types.T_datetime, types.T_timestamp, types.T_time}
+			timeTypeSet := make(map[types.T]bool)
+			for _, v := range timeType {
+				timeTypeSet[v] = true
+			}
+			if timeTypeSet[inputs[0]] {
+				return wrongFunctionParameters, nil
+			}
+
+			return normalTypeCheck(overloads, inputs)
+		},
 		Overloads: []Function{
 			{
 				Index:     0,
@@ -2696,6 +2828,314 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_uint8,
 				Volatile:  true,
 				Fn:        unary.Sleep[float64],
+			},
+		},
+	},
+	INSTR: {
+		Id:     INSTR,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_int64,
+				Volatile:  false,
+				Fn:        binary.Instr,
+			},
+		},
+	},
+	SPLIT_PART: {
+		Id:     SPLIT_PART,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_uint32},
+				ReturnTyp: types.T_varchar,
+				Volatile:  false,
+				Fn:        multi.SplitPart,
+			},
+		},
+	},
+	CURRENT_DATE: {
+		Id:     CURRENT_DATE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_date,
+				Volatile:        false,
+				RealTimeRelated: true,
+				Fn:              unary.CurrentDate,
+			},
+		},
+	},
+	ASCII: {
+		Id:     ASCII,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiString,
+			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_char},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiString,
+			},
+			{
+				Index:     2,
+				Args:      []types.T{types.T_text},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiString,
+			},
+			{
+				Index:     3,
+				Args:      []types.T{types.T_int8},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiInt[int8],
+			},
+			{
+				Index:     4,
+				Args:      []types.T{types.T_int16},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiInt[int16],
+			},
+			{
+				Index:     5,
+				Args:      []types.T{types.T_int32},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiInt[int32],
+			},
+			{
+				Index:     6,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiInt[int64],
+			},
+			{
+				Index:     7,
+				Args:      []types.T{types.T_uint8},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiUint[uint8],
+			},
+			{
+				Index:     8,
+				Args:      []types.T{types.T_uint16},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiUint[uint16],
+			},
+			{
+				Index:     9,
+				Args:      []types.T{types.T_uint32},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiUint[uint32],
+			},
+			{
+				Index:     10,
+				Args:      []types.T{types.T_uint64},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.AsciiUint[uint64],
+			},
+		},
+	},
+	MO_TABLE_ROWS: {
+		Id:     MO_TABLE_ROWS,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MoTableRows,
+			},
+		},
+	},
+	MO_TABLE_SIZE: {
+		Id:     MO_TABLE_SIZE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MoTableSize,
+			},
+		},
+	},
+	CURRENT_ACCOUNT_ID: {
+		Id:     CURRENT_ACCOUNT_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_uint32,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[uint32](result)
+					return res.Append(proc.SessionInfo.AccountId, false)
+				},
+			},
+		},
+	},
+	CURRENT_ACCOUNT_NAME: {
+		Id:     CURRENT_ACCOUNT_NAME,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_varchar,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[types.Varlena](result)
+					return res.AppendStr([]byte(proc.SessionInfo.Account), false)
+				},
+			},
+		},
+	},
+	CURRENT_ROLE_ID: {
+		Id:     CURRENT_ROLE_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_uint32,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[uint32](result)
+					return res.Append(proc.SessionInfo.RoleId, false)
+				},
+			},
+		},
+	},
+	CURRENT_ROLE_NAME: {
+		Id:     CURRENT_ROLE_NAME,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_varchar,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[types.Varlena](result)
+					return res.AppendStr([]byte(proc.SessionInfo.Role), false)
+				},
+			},
+		},
+	},
+	CURRENT_USER_ID: {
+		Id:     CURRENT_USER_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_uint32,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[uint32](result)
+					return res.Append(proc.SessionInfo.UserId, false)
+				},
+			},
+		},
+	},
+	CURRENT_USER_NAME: {
+		Id:     CURRENT_USER_NAME,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				ReturnTyp:       types.T_varchar,
+				UseNewFramework: true,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					res := vector.MustFunctionResult[types.Varlena](result)
+					return res.AppendStr([]byte(proc.SessionInfo.User), false)
+				},
+			},
+		},
+	},
+	MO_TABLE_COL_MAX: {
+		Id:     MO_TABLE_COL_MAX,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_varchar,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MoTableColMax,
+			},
+		},
+	},
+	MO_TABLE_COL_MIN: {
+		Id:     MO_TABLE_COL_MIN,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_varchar,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MoTableColMin,
+			},
+		},
+	},
+	TRIM: {
+		Id:     TRIM,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:               0,
+				Args:                []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp:           types.T_varchar,
+				UseNewFramework:     true,
+				ParameterMustScalar: []bool{true, false, false},
+				NewFn:               multi.Trim,
+			},
+		},
+	},
+	MO_LOG_DATE: {
+		Id:     MO_LOG_DATE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_date,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.MOLogDate,
 			},
 		},
 	},

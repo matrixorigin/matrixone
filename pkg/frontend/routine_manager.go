@@ -23,20 +23,30 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type RoutineManager struct {
-	mu            sync.Mutex
-	ctx           context.Context
-	clients       map[goetty.IOSession]*Routine
-	pu            *config.ParameterUnit
-	skipCheckUser bool
-	tlsConfig     *tls.Config
+	mu             sync.Mutex
+	ctx            context.Context
+	clients        map[goetty.IOSession]*Routine
+	pu             *config.ParameterUnit
+	skipCheckUser  bool
+	tlsConfig      *tls.Config
+	autoIncrCaches defines.AutoIncrCaches
+}
+
+func (rm *RoutineManager) GetAutoIncrCache() defines.AutoIncrCaches {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	return rm.autoIncrCaches
 }
 
 func (rm *RoutineManager) SetSkipCheckUser(b bool) {
@@ -95,10 +105,14 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.getProtocol(), nil, pu, gSysVariables, true)
+	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true)
 	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
 	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
+
+	// Add  autoIncrCaches in session structure.
+	ses.SetAutoIncrCaches(rm.autoIncrCaches)
+
 	routine.setSession(ses)
 	pro.SetSession(ses)
 
@@ -107,7 +121,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
 	if err != nil {
-		logError(pro.GetConciseProfile(), "failed to handshake with server, quiting routine...")
+		logErrorf(pro.GetConciseProfile(), "failed to handshake with server, quiting routine... %s", err)
 		routine.killConnection(true)
 		return
 	}
@@ -120,6 +134,10 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 When the io is closed, the Closed will be called.
 */
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
+	logutil.Debugf("clean resource of the connection %d:%s", rs.ID(), rs.RemoteAddress())
+	defer func() {
+		logutil.Debugf("resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
+	}()
 	var rt *Routine
 	var ok bool
 
@@ -133,6 +151,14 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	if rt != nil {
 		ses := rt.getSession()
 		if ses != nil {
+			rt.decreaseCount(func() {
+				account := ses.GetTenantInfo()
+				accountName := sysAccountName
+				if account != nil {
+					accountName = account.GetTenant()
+				}
+				metric.ConnectionCounter(accountName).Dec()
+			})
 			logDebugf(ses.GetConciseProfile(), "the io session was closed.")
 		}
 		rt.cleanup()
@@ -179,6 +205,10 @@ func getConnectionInfo(rs goetty.IOSession) string {
 }
 
 func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {
+	logutil.Debugf("get request from %d:%s", rs.ID(), rs.RemoteAddress())
+	defer func() {
+		logutil.Debugf("request from %d:%s has been processed", rs.ID(), rs.RemoteAddress())
+	}()
 	var err error
 	var isTlsHeader bool
 	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler")
@@ -296,12 +326,26 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	return nil
 }
 
+// clientCount returns the count of the clients
+func (rm *RoutineManager) clientCount() int {
+	var count int
+	rm.mu.Lock()
+	count = len(rm.clients)
+	rm.mu.Unlock()
+	return count
+}
+
 func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineManager, error) {
 	rm := &RoutineManager{
 		ctx:     ctx,
 		clients: make(map[goetty.IOSession]*Routine),
 		pu:      pu,
 	}
+
+	// Initialize auto incre cache.
+	rm.autoIncrCaches.AutoIncrCaches = make(map[string]defines.AutoIncrCache)
+	rm.autoIncrCaches.Mu = &rm.mu
+
 	if pu.SV.EnableTls {
 		err := initTlsConfig(rm, pu.SV)
 		if err != nil {

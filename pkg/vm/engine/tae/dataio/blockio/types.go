@@ -16,9 +16,10 @@ package blockio
 
 import (
 	"fmt"
-	"github.com/google/uuid"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -26,10 +27,15 @@ import (
 
 const (
 	CheckpointExt = "ckp"
+	GCFullExt     = "fgc"
 )
 
 func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) string {
 	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), CheckpointExt)
+}
+
+func EncodeGCMetadataFileName(dir, prefix string, start, end types.TS) string {
+	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), GCFullExt)
 }
 
 // EncodeObjectName Generate uuid as the file name of the block&segment
@@ -46,6 +52,15 @@ func DecodeCheckpointMetadataFileName(name string) (start, end types.TS) {
 	return
 }
 
+func DecodeGCMetadataFileName(name string) (start, end types.TS, ext string) {
+	fileName := strings.Split(name, ".")
+	info := strings.Split(fileName[0], "_")
+	start = types.StringToTS(info[1])
+	end = types.StringToTS(info[2])
+	ext = fileName[1]
+	return
+}
+
 // EncodeMetaLocWithObject Generate a metaloc from an object file
 func EncodeMetaLocWithObject(
 	extent objectio.Extent,
@@ -56,12 +71,14 @@ func EncodeMetaLocWithObject(
 		return "", err
 	}
 	meta := blocks[0].GetMeta()
+	metaLen := blocks[0].GetExtent().Length()
 	name := meta.GetName()
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d:%d",
+	metaLoc := fmt.Sprintf("%s:%d_%d_%d_%d:%d:%d",
 		name,
-		extent.Offset(),
-		extent.Length(),
-		extent.OriginSize(),
+		blocks[0].GetExtent().Offset(),
+		metaLen,
+		metaLen,
+		extent.Id(),
 		rows,
 		size,
 	)
@@ -84,11 +101,15 @@ func DecodeMetaLoc(metaLoc string) (string, objectio.Extent, uint32) {
 	if err != nil {
 		panic(any(err))
 	}
+	id, err := strconv.ParseUint(location[3], 10, 32)
+	if err != nil {
+		panic(any(err))
+	}
 	rows, err := strconv.ParseUint(info[2], 10, 32)
 	if err != nil {
 		panic(any(err))
 	}
-	extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
+	extent := objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
 	return name, extent, uint32(rows)
 }
 

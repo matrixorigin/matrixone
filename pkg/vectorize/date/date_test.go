@@ -27,8 +27,8 @@ func TestDateTimeToDate(t *testing.T) {
 		want []types.Date
 	}{
 		{
-			args: []types.Datetime{types.FromClock(2022, 3, 30, 20, 20, 20, 20)},
-			want: []types.Date{types.FromCalendar(2022, 3, 30)},
+			args: []types.Datetime{types.DatetimeFromClock(2022, 3, 30, 20, 20, 20, 20)},
+			want: []types.Date{types.DateFromCalendar(2022, 3, 30)},
 		},
 	}
 

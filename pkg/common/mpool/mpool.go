@@ -113,6 +113,7 @@ func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 const (
 	NumFixedPool = 7
 	kMemHdrSz    = 16
+	B            = 1
 	KB           = 1024
 	MB           = 1024 * KB
 	GB           = 1024 * MB

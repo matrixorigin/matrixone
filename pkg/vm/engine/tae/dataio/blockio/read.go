@@ -99,6 +99,9 @@ func BlockReadInner(
 			return nil, err
 		}
 		recordDeletes(columnBatch, deleteBatch, ts)
+		logutil.Infof(
+			"blockread %d read delete %d: base %s filter out %v\n",
+			info.BlockID, deleteBatch.Length(), ts.ToString(), columnBatch.DeleteCnt())
 		deleteBatch.Close()
 	}
 	// remove rows from columns
@@ -224,7 +227,9 @@ func readColumnBatchByMetaloc(
 				bat.Deletes.Add(uint32(i))
 			}
 		}
-		logutil.Infof("blockread scan filter cost %v\n", time.Since(t0))
+		logutil.Infof(
+			"blockread %d scan filter cost %v: base %s filter out %v\n ",
+			info.BlockID, time.Since(t0), ts.ToString(), bat.DeleteCnt())
 	}
 
 	return bat, nil

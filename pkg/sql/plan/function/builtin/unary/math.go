@@ -97,16 +97,16 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vals := vs[0].Col.([]float64)
 	for i := range vals {
 		if vals[i] == float64(1) {
-			return nil, moerr.NewInvalidArgNoCtx("log base", 1)
+			return nil, moerr.NewInvalidArg(proc.Ctx, "log base", 1)
 		}
 	}
 	v1, err := math1([]*vector.Vector{vs[0]}, proc, momath.Ln)
 	if err != nil {
-		return nil, moerr.NewInvalidArgNoCtx("log input", "<= 0")
+		return nil, moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
 	}
 	v2, err := math1([]*vector.Vector{vs[1]}, proc, momath.Ln)
 	if err != nil {
-		return nil, moerr.NewInvalidArgNoCtx("log input", "<= 0")
+		return nil, moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
 	}
 	return operator.DivFloat[float64]([]*vector.Vector{v2, v1}, proc)
 }

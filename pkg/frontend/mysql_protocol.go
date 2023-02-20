@@ -173,6 +173,8 @@ type MysqlProtocol interface {
 	//the OK or EOF packet thread safe
 	sendEOFOrOkPacket(warnings uint16, status uint16) error
 
+	sendLocalInfileRequest(filename string) error
+
 	ResetStatistics()
 
 	GetStats() string
@@ -367,7 +369,18 @@ func (mp *MysqlProtocolImpl) ResetStatistics() {
 }
 
 func (mp *MysqlProtocolImpl) Quit() {
+	mp.m.Lock()
+	defer mp.m.Unlock()
 	mp.ProtocolImpl.Quit()
+	if mp.strconvBuffer != nil {
+		mp.strconvBuffer = nil
+	}
+	if mp.lenEncBuffer != nil {
+		mp.lenEncBuffer = nil
+	}
+	if mp.binaryNullBuffer != nil {
+		mp.binaryNullBuffer = nil
+	}
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
@@ -710,34 +723,31 @@ func (mp *MysqlProtocolImpl) readDate(data []byte, pos int) (int, string) {
 }
 
 func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, len uint8) (int, string) {
-	var symbol byte
+	var retStr string
 	negate := data[pos]
 	pos++
 	if negate == 1 {
-		symbol = '-'
+		retStr += "-"
 	}
 	day, pos, _ := mp.io.ReadUint32(data, pos)
+	if day > 0 {
+		retStr += fmt.Sprintf("%dd ", day)
+	}
 	hour := data[pos]
 	pos++
 	minute := data[pos]
 	pos++
 	second := data[pos]
 	pos++
-	// time with ms
+
 	if len == 12 {
-		ms, pos, _ := mp.io.ReadUint32(data, pos)
-		if day > 0 {
-			return pos, fmt.Sprintf("%c%dd %02d:%02d:%02d.%06d", symbol, day, hour, minute, second, ms)
-		} else {
-			return pos, fmt.Sprintf("%c%02d:%02d:%02d.%06d", symbol, hour, minute, second, ms)
-		}
+		ms, _, _ := mp.io.ReadUint32(data, pos)
+		retStr += fmt.Sprintf("%02d:%02d:%02d.%06d", hour, minute, second, ms)
+	} else {
+		retStr += fmt.Sprintf("%02d:%02d:%02d", hour, minute, second)
 	}
 
-	if day > 0 {
-		return pos, fmt.Sprintf("%c%dd %02d:%02d:%02d", symbol, day, hour, minute, second)
-	} else {
-		return pos, fmt.Sprintf("%c%02d:%02d:%02d", symbol, hour, minute, second)
-	}
+	return pos, retStr
 }
 
 func (mp *MysqlProtocolImpl) readDateTime(data []byte, pos int) (int, string) {
@@ -1573,6 +1583,19 @@ func (mp *MysqlProtocolImpl) makeOKPayloadWithEof(affectedRows, lastInsertId uin
 	return data[:pos]
 }
 
+func (mp *MysqlProtocolImpl) makeLocalInfileRequestPayload(filename string) []byte {
+	data := make([]byte, HeaderOffset+1+len(filename)+1)
+	pos := HeaderOffset
+	pos = mp.io.WriteUint8(data, pos, defines.LocalInFileHeader)
+	pos = mp.writeStringFix(data, pos, filename, len(filename))
+	return data[:pos]
+}
+
+func (mp *MysqlProtocolImpl) sendLocalInfileRequest(filename string) error {
+	req := mp.makeLocalInfileRequestPayload(filename)
+	return mp.writePackets(req)
+}
+
 func (mp *MysqlProtocolImpl) sendOKPacketWithEof(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
 	okPkt := mp.makeOKPayloadWithEof(affectedRows, lastInsertId, status, warnings, message)
 	return mp.writePackets(okPkt)
@@ -1671,7 +1694,7 @@ func setColFlag(column *MysqlColumn) {
 func setCharacter(column *MysqlColumn) {
 	switch column.columnType {
 	// blob type should use 0x3f to show the binary data
-	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_BLOB:
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT:
 		column.SetCharset(0x21)
 	default:
 		column.SetCharset(0x3f)
@@ -1911,11 +1934,6 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 				} else {
 					data = mp.appendTime(data, t)
 				}
-			}
-			if value, err := mrs.GetValue(ctx, rowIdx, i); err != nil {
-				return nil, err
-			} else {
-				data = mp.appendTime(data, value.(types.Time))
 			}
 		case defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
 			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
@@ -2535,7 +2553,8 @@ Reference to :mysql 8.0.23 mysys/crypt_genhash_impl.cc generate_user_salt(char*,
 */
 func generate_salt(n int) []byte {
 	buf := make([]byte, n)
-	rand.Read(buf)
+	r := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
+	r.Read(buf)
 	for i := 0; i < n; i++ {
 		buf[i] &= 0x7f
 		if buf[i] == 0 || buf[i] == '$' {
@@ -2546,9 +2565,7 @@ func generate_salt(n int) []byte {
 }
 
 func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
-	rand.Seed(time.Now().UTC().UnixNano())
 	salt := generate_salt(20)
-	tcp.Ref()
 	mysql := &MysqlProtocolImpl{
 		ProtocolImpl: ProtocolImpl{
 			io:           NewIOPackage(true),

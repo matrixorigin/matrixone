@@ -25,7 +25,7 @@ data-dir = "data-dir2"
 
 [[fileservice]]
 # s3 fileservice instance, used to store data.
-name = "s3"
+name = "SHARED"
 # use disk as fileservice backend.
 backend = "DISK"
 # set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"

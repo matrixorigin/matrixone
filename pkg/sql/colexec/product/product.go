@@ -32,7 +32,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -60,7 +60,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				bat.Clean(proc.Mp())
 				continue
 			}
-			if err := ctr.probe(bat, ap, proc, anal); err != nil {
+			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
 				bat.Clean(proc.Mp())
 				ap.Free(proc, true)
 				return false, err
@@ -83,9 +83,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
-	anal.Input(bat)
+	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
@@ -115,7 +115,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	rbat.ExpandNulls()
-	anal.Output(rbat)
+	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
 }

@@ -15,11 +15,17 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func buildValues(stmt *tree.ValuesStatement, ctx CompilerContext) (p *Plan, err error) {
-	// no support values statement now
-	return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support values statement")
+	selectStmt := &tree.Select{
+		Select: &tree.ValuesClause{
+			Rows:    stmt.Rows,
+			RowWord: true,
+		},
+		OrderBy: stmt.OrderBy,
+		Limit:   stmt.Limit,
+	}
+	return BuildPlan(ctx, selectStmt)
 }

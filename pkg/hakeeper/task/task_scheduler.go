@@ -52,9 +52,19 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
+	tasks := append(runningTasks, createdTasks...)
+	for _, task := range tasks {
+		if task.IsInitTask() {
+			runtime.ProcessLevelRuntime().
+				SubLogger(runtime.SystemInit).Debug(
+				"task schedule query init task",
+				zap.String("task", task.Metadata.String()))
+		}
+	}
+
 	runtime.ProcessLevelRuntime().Logger().Debug("task schedule query tasks", zap.Int("created", len(createdTasks)),
 		zap.Int("running", len(runningTasks)))
-	if len(runningTasks) == 0 && len(createdTasks) == 0 {
+	if len(tasks) == 0 {
 		return
 	}
 	orderedCN := getCNOrdered(runningTasks, workingCN)

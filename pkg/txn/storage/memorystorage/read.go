@@ -95,10 +95,10 @@ func (s *Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payl
 			s.handler.HandleTableStats,
 		)
 
-	case memoryengine.OpGetLogTail:
+	case memoryengine.OpGetTableColumns:
 		return handleRead(
 			ctx, txnMeta, payload,
-			s.handler.HandleGetLogTail,
+			s.handler.HandleGetTableColumns,
 		)
 
 	}

@@ -33,6 +33,9 @@ func (node *DropDatabase) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *DropDatabase) GetStatementType() string { return "Drop Database" }
+func (node *DropDatabase) GetQueryType() string     { return QueryTypeDDL }
+
 func NewDropDatabase(n Identifier, i bool) *DropDatabase {
 	return &DropDatabase{
 		Name:     n,
@@ -56,6 +59,9 @@ func (node *DropTable) Format(ctx *FmtCtx) {
 	node.Names.Format(ctx)
 }
 
+func (node *DropTable) GetStatementType() string { return "Drop Table" }
+func (node *DropTable) GetQueryType() string     { return QueryTypeDDL }
+
 func NewDropTable(i bool, n TableNames) *DropTable {
 	return &DropTable{
 		IfExists: i,
@@ -78,6 +84,9 @@ func (node *DropView) Format(ctx *FmtCtx) {
 	ctx.WriteByte(' ')
 	node.Names.Format(ctx)
 }
+
+func (node *DropView) GetStatementType() string { return "Drop View" }
+func (node *DropView) GetQueryType() string     { return QueryTypeDDL }
 
 func NewDropView(i bool, n TableNames) *DropView {
 	return &DropView{
@@ -105,6 +114,9 @@ func (node *DropIndex) Format(ctx *FmtCtx) {
 	ctx.WriteString(" on ")
 	node.TableName.Format(ctx)
 }
+
+func (node *DropIndex) GetStatementType() string { return "Drop Index" }
+func (node *DropIndex) GetQueryType() string     { return QueryTypeDDL }
 
 func NewDropIndex(i Identifier, t TableName, ife bool, m []MiscOption) *DropIndex {
 	return &DropIndex{
@@ -134,6 +146,9 @@ func (node *DropRole) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *DropRole) GetStatementType() string { return "Drop Role" }
+func (node *DropRole) GetQueryType() string     { return QueryTypeDCL }
+
 func NewDropRole(ife bool, r []*Role) *DropRole {
 	return &DropRole{
 		IfExists: ife,
@@ -160,6 +175,9 @@ func (node *DropUser) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *DropUser) GetStatementType() string { return "Drop User" }
+func (node *DropUser) GetQueryType() string     { return QueryTypeDCL }
+
 func NewDropUser(ife bool, u []*User) *DropUser {
 	return &DropUser{
 		IfExists: ife,
@@ -181,3 +199,6 @@ func (node *DropAccount) Format(ctx *FmtCtx) {
 	ctx.WriteString(" ")
 	ctx.WriteString(node.Name)
 }
+
+func (node *DropAccount) GetStatementType() string { return "Drop Account" }
+func (node *DropAccount) GetQueryType() string     { return QueryTypeDCL }

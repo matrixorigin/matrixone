@@ -19,7 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
@@ -359,7 +359,7 @@ func verifyAttr(
 		if value == nil {
 			panic(fmt.Sprintf("%s should not be nil", attrName))
 		}
-		if !memtable.TypeMatch(value, types[i].Oid) {
+		if !memorytable.TypeMatch(value, types[i].Oid) {
 			panic(fmt.Sprintf("%s should be %v typed", name, types[i]))
 		}
 	}

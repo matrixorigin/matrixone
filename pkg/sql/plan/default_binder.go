@@ -15,14 +15,17 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strings"
 )
 
-func NewDefaultBinder(builder *QueryBuilder, ctx *BindContext, typ *Type, cols []string) *DefaultBinder {
+func NewDefaultBinder(sysCtx context.Context, builder *QueryBuilder, ctx *BindContext, typ *Type, cols []string) *DefaultBinder {
 	b := &DefaultBinder{typ: typ, cols: cols}
+	b.sysCtx = sysCtx
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b
@@ -51,7 +54,7 @@ func (b *DefaultBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool
 		}
 	}
 	if idx == -1 {
-		err = moerr.NewInvalidInputNoCtx("column '%s' does not exist", col)
+		err = moerr.NewInvalidInput(b.GetContext(), "column '%s' does not exist", col)
 		return
 	}
 	expr = &plan.Expr{
@@ -67,13 +70,13 @@ func (b *DefaultBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool
 }
 
 func (b *DefaultBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInputNoCtx("cannot bind agregate functions '%s'", funcName)
+	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind agregate functions '%s'", funcName)
 }
 
 func (b *DefaultBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInputNoCtx("cannot bind window functions '%s'", funcName)
+	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind window functions '%s'", funcName)
 }
 
 func (b *DefaultBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYINoCtx("subquery in JOIN condition")
+	return nil, moerr.NewNYI(b.GetContext(), "subquery in JOIN condition")
 }

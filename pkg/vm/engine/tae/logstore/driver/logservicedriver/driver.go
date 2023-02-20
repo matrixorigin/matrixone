@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	ReplayReadSize = common.M * 2
-	MaxReadSize    = common.M * 2
+	ReplayReadSize = common.M * 64
+	MaxReadSize    = common.M * 64
 )
 
 func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {

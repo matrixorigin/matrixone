@@ -16,9 +16,10 @@ package table_function
 
 import (
 	"bytes"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestString(t *testing.T) {
@@ -28,15 +29,15 @@ func TestString(t *testing.T) {
 
 func TestCall(t *testing.T) {
 	arg := Argument{Name: "unnest"}
-	end, err := Call(0, testutil.NewProc(), &arg)
+	end, err := Call(0, testutil.NewProc(), &arg, false, false)
 	require.NoError(t, err)
 	require.True(t, end)
 	arg.Name = "generate_series"
-	end, err = Call(0, testutil.NewProc(), &arg)
+	end, err = Call(0, testutil.NewProc(), &arg, false, false)
 	require.NoError(t, err)
 	require.True(t, end)
 	arg.Name = "not_exist"
-	end, err = Call(0, testutil.NewProc(), &arg)
+	end, err = Call(0, testutil.NewProc(), &arg, false, false)
 	require.Error(t, err)
 	require.True(t, end)
 }

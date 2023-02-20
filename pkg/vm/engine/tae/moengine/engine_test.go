@@ -264,7 +264,7 @@ func TestEngineAllType(t *testing.T) {
 		}
 	}
 	//delRows, err := rel.Truncate(ctx)
-	err = dbase.Truncate(ctx, schema.Name)
+	_, err = dbase.Truncate(ctx, schema.Name)
 	assert.Nil(t, err)
 	//assert.Equal(t, rows, int64(delRows))
 	assert.Nil(t, txn.Commit())
@@ -275,9 +275,8 @@ func TestEngineAllType(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	_, n, err := rel.Stats(ctx)
+	_, err = rel.Stats(ctx, nil)
 	assert.Nil(t, err)
-	assert.Zero(t, n)
 	assert.Nil(t, txn.Commit())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }

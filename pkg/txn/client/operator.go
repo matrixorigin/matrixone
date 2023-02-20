@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
@@ -98,6 +99,13 @@ func WithTxnCacheWrite() TxnOption {
 	}
 }
 
+// WithSnapshotTS use a spec snapshot timestamp to build TxnOperator.
+func WithSnapshotTS(ts timestamp.Timestamp) TxnOption {
+	return func(tc *txnOperator) {
+		tc.mu.txn.SnapshotTS = ts
+	}
+}
+
 type txnOperator struct {
 	rt     runtime.Runtime
 	sender rpc.TxnSender
@@ -130,7 +138,7 @@ func newTxnOperator(
 		opt(tc)
 	}
 	tc.adjust()
-	util.LogTxnCreated(tc.rt.Logger(), txnMeta)
+	util.LogTxnCreated(tc.rt.Logger(), tc.mu.txn)
 	return tc
 }
 

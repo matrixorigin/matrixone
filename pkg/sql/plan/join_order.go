@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -26,10 +27,11 @@ type joinEdge struct {
 }
 
 type joinVertex struct {
-	node      *plan.Node
-	pks       []int32
-	outcnt    float64
-	pkSelRate float64
+	node        *plan.Node
+	pks         []int32
+	selectivity float64
+	outcnt      float64
+	pkSelRate   float64
 
 	children map[int32]any
 	parent   int32
@@ -87,7 +89,7 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 
 		var joinSide int8
 		for _, cond := range node.OnList {
-			joinSide |= getJoinSide(cond, leftTags, rightTags)
+			joinSide |= getJoinSide(cond, leftTags, rightTags, 0)
 		}
 
 		if joinSide == JoinSideLeft {
@@ -154,12 +156,14 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		if subTrees[j].Stats == nil {
 			return false
 		}
-
 		if subTrees[i].Stats == nil {
 			return true
 		}
-
-		return subTrees[i].Stats.Outcnt < subTrees[j].Stats.Outcnt
+		if math.Abs(subTrees[i].Stats.Selectivity-subTrees[j].Stats.Selectivity) > 0.01 {
+			return subTrees[i].Stats.Selectivity < subTrees[j].Stats.Selectivity
+		} else {
+			return subTrees[i].Stats.Outcnt < subTrees[j].Stats.Outcnt
+		}
 	})
 
 	leafByTag := make(map[int32]int32)
@@ -278,11 +282,12 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 
 	for i, node := range leaves {
 		vertices[i] = &joinVertex{
-			node:      node,
-			outcnt:    node.Stats.Outcnt,
-			pkSelRate: 1.0,
-			children:  make(map[int32]any),
-			parent:    -1,
+			node:        node,
+			selectivity: node.Stats.Selectivity,
+			outcnt:      node.Stats.Outcnt,
+			pkSelRate:   1.0,
+			children:    make(map[int32]any),
+			parent:      -1,
 		}
 
 		if node.NodeType == plan.Node_TABLE_SCAN {
@@ -380,9 +385,17 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		dimensions = append(dimensions, vertices[child])
 	}
 	sort.Slice(dimensions, func(i, j int) bool {
-		return dimensions[i].pkSelRate < dimensions[j].pkSelRate ||
-			(dimensions[i].pkSelRate == dimensions[j].pkSelRate &&
-				dimensions[i].outcnt < dimensions[j].outcnt)
+		if dimensions[i].pkSelRate < dimensions[j].pkSelRate {
+			return true
+		} else if dimensions[i].pkSelRate > dimensions[j].pkSelRate {
+			return false
+		} else {
+			//if math.Abs(dimensions[i].selectivity-dimensions[j].selectivity) > 0.01 {
+			//	return dimensions[i].selectivity < dimensions[j].selectivity
+			//} else {
+			return dimensions[i].outcnt < dimensions[j].outcnt
+			//}
+		}
 	})
 
 	for _, child := range dimensions {
@@ -430,12 +443,15 @@ func (builder *QueryBuilder) filterOnPK(filter *plan.Expr, pks []int32) bool {
 }
 
 func (builder *QueryBuilder) enumerateTags(nodeID int32) []int32 {
+	var tags []int32
+
 	node := builder.qry.Nodes[nodeID]
 	if len(node.BindingTags) > 0 {
-		return node.BindingTags
+		tags = append(tags, node.BindingTags...)
+		if node.NodeType != plan.Node_JOIN {
+			return tags
+		}
 	}
-
-	var tags []int32
 
 	for _, childID := range builder.qry.Nodes[nodeID].Children {
 		tags = append(tags, builder.enumerateTags(childID)...)

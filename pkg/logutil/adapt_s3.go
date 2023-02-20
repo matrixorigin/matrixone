@@ -23,7 +23,7 @@ import (
 )
 
 func GetS3Logger() logging.Logger {
-	logger := GetSkip1Logger().Named(defines.S3FileServiceName)
+	logger := GetSkip1Logger().Named(defines.SharedFileServiceName)
 	return &S3Logger{
 		Logger: logger,
 	}

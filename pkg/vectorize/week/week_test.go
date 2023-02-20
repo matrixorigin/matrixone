@@ -30,16 +30,16 @@ func TestDateToWeek(t *testing.T) {
 		{
 			name: "Date to week for ",
 			inputDate: []types.Date{
-				types.FromCalendar(2003, 12, 30),
-				types.FromCalendar(2004, 1, 2),
+				types.DateFromCalendar(2003, 12, 30),
+				types.DateFromCalendar(2004, 1, 2),
 
-				types.FromCalendar(2004, 12, 31),
-				types.FromCalendar(2005, 1, 1),
+				types.DateFromCalendar(2004, 12, 31),
+				types.DateFromCalendar(2005, 1, 1),
 
-				types.FromCalendar(2001, 2, 16),
-				types.FromCalendar(2012, 6, 18),
-				types.FromCalendar(2015, 9, 25),
-				types.FromCalendar(2022, 12, 5),
+				types.DateFromCalendar(2001, 2, 16),
+				types.DateFromCalendar(2012, 6, 18),
+				types.DateFromCalendar(2015, 9, 25),
+				types.DateFromCalendar(2022, 12, 5),
 			},
 			expected: []uint8{1, 1, 53, 53, 7, 25, 39, 49},
 		},
@@ -62,16 +62,16 @@ func TestDatetimeToWeek(t *testing.T) {
 		{
 			name: "Datetime to day test",
 			inputDatetime: []types.Datetime{
-				types.FromClock(2003, 12, 30, 0, 0, 0, 0),
-				types.FromClock(2004, 1, 2, 0, 0, 0, 0),
+				types.DatetimeFromClock(2003, 12, 30, 0, 0, 0, 0),
+				types.DatetimeFromClock(2004, 1, 2, 0, 0, 0, 0),
 
-				types.FromClock(2004, 12, 31, 0, 0, 0, 0),
-				types.FromClock(2005, 1, 1, 0, 0, 0, 0),
+				types.DatetimeFromClock(2004, 12, 31, 0, 0, 0, 0),
+				types.DatetimeFromClock(2005, 1, 1, 0, 0, 0, 0),
 
-				types.FromClock(2001, 2, 16, 0, 0, 0, 0),
-				types.FromClock(2012, 6, 18, 0, 0, 0, 0),
-				types.FromClock(2015, 9, 25, 0, 0, 0, 0),
-				types.FromClock(2022, 12, 5, 0, 0, 0, 0),
+				types.DatetimeFromClock(2001, 2, 16, 0, 0, 0, 0),
+				types.DatetimeFromClock(2012, 6, 18, 0, 0, 0, 0),
+				types.DatetimeFromClock(2015, 9, 25, 0, 0, 0, 0),
+				types.DatetimeFromClock(2022, 12, 5, 0, 0, 0, 0),
 			},
 			expected: []uint8{1, 1, 53, 53, 7, 25, 39, 49},
 		},

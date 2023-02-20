@@ -16,8 +16,8 @@ package memoryengine
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -34,12 +34,19 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) FilteredStats(ctx context.Context, expr *plan.Expr) (int32, int64, error) {
-	return t.Stats(ctx)
+func (t *Table) Stats(ctx context.Context, e *plan2.Expr) (*plan.Stats, error) {
+	stats := plan2.DefaultStats()
+	rows, err := t.Rows(ctx)
+	if err != nil {
+		return stats, err
+	}
+	stats.TableCnt = float64(rows)
+	stats.Cost = stats.TableCnt
+	stats.Outcnt = stats.TableCnt
+	return stats, nil
 }
 
-func (t *Table) Stats(ctx context.Context) (int32, int64, error) {
-
+func (t *Table) Rows(ctx context.Context) (int64, error) {
 	resps, err := DoTxnRequest[TableStatsResp](
 		ctx,
 		t.txnOperator,
@@ -51,12 +58,10 @@ func (t *Table) Stats(ctx context.Context) (int32, int64, error) {
 		},
 	)
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
-
 	resp := resps[0]
-
-	return 0, int64(resp.Rows), nil
+	return int64(resp.Rows), err
 }
 
 func (t *Table) Size(ctx context.Context, columnName string) (int64, error) {
@@ -354,6 +359,10 @@ func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err
 	return resp.Attrs, nil
 }
 
-func (t *Table) GetTableID(ctx context.Context) string {
-	return fmt.Sprintf("%d", t.id)
+func (t *Table) GetTableID(ctx context.Context) uint64 {
+	return uint64(t.id)
+}
+
+func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
+	return nil, nil, nil
 }

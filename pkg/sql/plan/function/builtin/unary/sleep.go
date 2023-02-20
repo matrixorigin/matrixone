@@ -46,13 +46,33 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 	if inputs.IsScalar() {
 		sleepSeconds := sleepSlice[0]
 		sleepNano := time.Nanosecond * time.Duration(sleepSeconds*1e9)
-		rs = proc.AllocScalarVector(resultType)
+		length := int64(inputs.Length())
+		if length == 1 {
+			rs = proc.AllocScalarVector(resultType)
+			result := vector.MustTCols[uint8](rs)
+			select {
+			case <-time.After(sleepNano):
+				result[0] = 0
+			case <-proc.Ctx.Done(): //query aborted
+				result[0] = 1
+			}
+			return
+		}
+		rs, err = proc.AllocVectorOfRows(resultType, length, nil)
+		if err != nil {
+			return
+		}
 		result := vector.MustTCols[uint8](rs)
-		select {
-		case <-time.After(sleepNano):
-			result[0] = 0
-		case <-proc.Ctx.Done(): //query aborted
-			result[0] = 1
+		for i := int64(0); i < length; i++ {
+			select {
+			case <-time.After(sleepNano):
+				result[i] = 0
+			case <-proc.Ctx.Done(): //query aborted
+				for ; i < length; i++ {
+					result[i] = 1
+				}
+				return
+			}
 		}
 		return
 	}

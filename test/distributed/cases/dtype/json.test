@@ -32,20 +32,20 @@ load data infile '$resources/json/export_1.csv' into table t2 ignore 1 lines;
 select * from t1;
 select * from t2;
 select * from t1 into outfile '$resources/json/export_2.csv' fields terminated by '\t';
-load data local infile '$resources/json/export_2.csv' into table t1 fields terminated by '\t' ignore 1 lines;
-load data local infile '$resources/json/export_2.csv' into table t2 fields terminated by '\t' ignore 1 lines;
+load data  infile '$resources/json/export_2.csv' into table t1 fields terminated by '\t' ignore 1 lines;
+load data  infile '$resources/json/export_2.csv' into table t2 fields terminated by '\t' ignore 1 lines;
 select * from t1;
 select * from t2;
 
 #Test cases of load
 delete from t1;
-load data local infile '$resources/json/data_1.csv' into table t1 fields terminated by '\t';
+load data  infile '$resources/json/data_1.csv' into table t1 fields terminated by '\t';
 select * from t1;
-load data local infile '$resources/json/data_2.csv' into table t1;
+load data  infile '$resources/json/data_2.csv' into table t1;
 select * from t1;
 drop table if exists t3;
 create table t3 (a json,b json);
-load data local infile '$resources/json/data_3.csv' into table t3;
+load data  infile '$resources/json/data_3.csv' into table t3;
 select * from t3;
 
 #Test cases of ddl

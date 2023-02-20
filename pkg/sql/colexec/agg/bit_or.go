@@ -14,7 +14,10 @@
 
 package agg
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"math"
+)
 
 type BitOr[T1 types.Ints | types.UInts | types.Floats] struct {
 }
@@ -50,8 +53,20 @@ func (bo *BitOr[T1]) Fill(_ int64, v1 T1, v2 uint64, _ int64, IsEmpty bool, hasN
 	if hasNull {
 		return v2, IsEmpty
 	} else if IsEmpty {
+		if float64(v1) > math.MaxUint64 {
+			return math.MaxInt64, false
+		}
+		if float64(v1) < 0 {
+			return uint64(int64(v1)), false
+		}
 		return uint64(v1), false
 	} else {
+		if float64(v1) > math.MaxUint64 {
+			return math.MaxInt64 | v2, false
+		}
+		if float64(v1) < 0 {
+			return uint64(int64(v1)) | v2, false
+		}
 		return uint64(v1) | v2, false
 	}
 }

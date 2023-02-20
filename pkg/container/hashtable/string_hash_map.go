@@ -284,6 +284,17 @@ func (ht *StringHashMap) Cardinality() uint64 {
 	return ht.elemCnt
 }
 
+func (ht *StringHashMap) Size() int64 {
+	// 33 is the origin size of StringHashMaps
+	ret := int64(33)
+	for i := range ht.rawData {
+		ret += int64(len(ht.rawData[i]))
+		// 32 is the len of ht.cells[i]
+		ret += 32
+	}
+	return ret
+}
+
 type StringHashMapIterator struct {
 	table *StringHashMap
 	pos   uint64

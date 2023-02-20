@@ -24,6 +24,7 @@ CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL),
 ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
 SELECT cast(date(d1) as signed) FROM t1;
+SELECT d1 % 7 FROM t1;
 drop table t1;
 
 

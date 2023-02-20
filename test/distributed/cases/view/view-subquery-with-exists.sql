@@ -3,13 +3,11 @@
 -- @case
 -- @desc:test for  subquery with  exists
 -- @label:bvt
--- @bvt:issue#3312
 SELECT EXISTS(SELECT 1+1);
 create view v1 as SELECT EXISTS(SELECT 1+1);
 select * from v1;
 drop view v1;
 
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -354,7 +352,6 @@ drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t1 ( a int, b int );
 INSERT INTO t1 VALUES (1,1),(2,2),(3,3);
--- @bvt:issue#3312
 SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a > t1.a) IS NULL from t1 a;
 SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a < t1.a) IS NOT NULL from t1 a;
 SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a = t1.a) IS NULL from t1 a;
@@ -368,7 +365,6 @@ select * from v3;
 drop view v1;
 drop view v2;
 drop view v3;
--- @bvt:issue
 drop table if exists t1;
 
 -- @case
@@ -377,12 +373,10 @@ drop table if exists t1;
 drop table if exists t1;
 create table t1 (df decimal(5,1));
 insert into t1 values(1.1);
--- @bvt:issue#3312
 select 1.1 * exists(select * from t1);
 create view v1 as select 1.1 * exists(select * from t1);
 select * from v1;
 drop view v1;
--- @bvt:issue
 drop table if exists t1;
 
 -- @case

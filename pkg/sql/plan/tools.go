@@ -15,11 +15,12 @@
 package plan
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func MakeExpr(name string, args []*Expr) *plan.Expr {
-	expr, err := bindFuncExprImplByPlanExpr(name, args)
+func MakeExpr(ctx context.Context, name string, args []*Expr) *plan.Expr {
+	expr, err := bindFuncExprImplByPlanExpr(ctx, name, args)
 	if err != nil {
 		panic(err)
 	}

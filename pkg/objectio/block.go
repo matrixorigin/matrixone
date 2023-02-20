@@ -17,6 +17,7 @@ package objectio
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // Block is the organizational structure of a batch in objectio
@@ -63,6 +64,12 @@ func (b *Block) GetExtent() Extent {
 }
 
 func (b *Block) GetColumn(idx uint16) (ColumnObject, error) {
+	if idx >= uint16(len(b.columns)) {
+		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+
+			"block: %v, column count: %d",
+			idx, b.name,
+			len(b.columns))
+	}
 	return b.columns[idx], nil
 }
 
@@ -118,35 +125,38 @@ func (b *Block) MarshalMeta() ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func (b *Block) UnMarshalMeta(data []byte) error {
+func (b *Block) UnMarshalMeta(data []byte) (uint32, error) {
 	var err error
 	cache := bytes.NewBuffer(data)
+	size := uint32(0)
 	b.header = BlockHeader{}
 	if err = binary.Read(cache, endian, &b.header.tableId); err != nil {
-		return err
+		return 0, err
 	}
 	if err = binary.Read(cache, endian, &b.header.segmentId); err != nil {
-		return err
+		return 0, err
 	}
 	if err = binary.Read(cache, endian, &b.header.blockId); err != nil {
-		return err
+		return 0, err
 	}
 	if err = binary.Read(cache, endian, &b.header.columnCount); err != nil {
-		return err
+		return 0, err
 	}
 	if err = binary.Read(cache, endian, &b.header.dummy); err != nil {
-		return err
+		return 0, err
 	}
 	if err = binary.Read(cache, endian, &b.header.checksum); err != nil {
-		return err
+		return 0, err
 	}
+	size += HeaderSize
 	b.columns = make([]ColumnObject, b.header.columnCount)
 	for i := range b.columns {
 		b.columns[i] = NewColumnBlock(uint16(i), b.object)
 		err = b.columns[i].(*ColumnBlock).UnMarshalMate(cache)
 		if err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return err
+	size += ColumnMetaSize * uint32(b.header.columnCount)
+	return size, err
 }

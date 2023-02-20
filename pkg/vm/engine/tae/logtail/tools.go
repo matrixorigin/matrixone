@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func ToStringTemplate(vec containers.Vector, printN int, opts ...common.TypePrintOpt) string {
@@ -47,11 +47,11 @@ func ToStringTemplate(vec containers.Vector, printN int, opts ...common.TypePrin
 
 const PrintN = 3
 
-func DebugBatchToString(name string, bat *containers.Batch, isSpecialRowID bool) string {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+func DebugBatchToString(name string, bat *containers.Batch, isSpecialRowID bool, lvl zapcore.Level) string {
+	if logutil.GetSkip1Logger().Core().Enabled(lvl) {
 		return BatchToString(name, bat, isSpecialRowID)
 	}
-	return "not debug level"
+	return "not required level"
 }
 
 func BatchToString(name string, bat *containers.Batch, isSpecialRowID bool) string {

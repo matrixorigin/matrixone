@@ -49,7 +49,7 @@ func generalBin[T binT](vectors []*vector.Vector, proc *process.Process, cb binF
 		vector.SetCol(resultVector, resultValues)
 		err := cb(inputVector, resultVector, proc)
 		if err != nil {
-			return nil, moerr.NewInvalidInputNoCtx("The input value is out of range")
+			return nil, moerr.NewInvalidInput(proc.Ctx, "The input value is out of range")
 		}
 		return resultVector, nil
 	} else {
@@ -59,7 +59,7 @@ func generalBin[T binT](vectors []*vector.Vector, proc *process.Process, cb binF
 		}
 		err = cb(inputVector, resultVector, proc)
 		if err != nil {
-			return nil, moerr.NewInvalidInputNoCtx("The input value is out of range")
+			return nil, moerr.NewInvalidInput(proc.Ctx, "The input value is out of range")
 		}
 		return resultVector, nil
 	}

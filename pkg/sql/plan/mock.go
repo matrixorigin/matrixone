@@ -17,9 +17,12 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,15 +32,20 @@ import (
 )
 
 type MockCompilerContext struct {
-	objects map[string]*ObjectRef
-	tables  map[string]*TableDef
-	stats   map[string]*Stats
-	pks     map[string][]int
-
+	objects         map[string]*ObjectRef
+	tables          map[string]*TableDef
+	stats           map[string]*Stats
+	pks             map[string][]int
+	id2name         map[uint64]string
+	isDml           bool
 	mysqlCompatible bool
 
 	// ctx default: nil
 	ctx context.Context
+}
+
+func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
+	return []uint32{catalog.System_Account}, nil
 }
 
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -67,8 +75,16 @@ type col struct {
 	Name      string
 	Id        types.T
 	Nullable  bool
-	Width     int32
 	Precision int32
+	Scale     int32
+}
+
+type index struct {
+	indexName  string
+	tableName  string
+	parts      []string
+	cols       []col
+	tableExist bool
 }
 
 // NewEmptyCompilerContext for test create/drop statement
@@ -81,20 +97,25 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 }
 
 type Schema struct {
-	cols   []col
-	pks    []int
-	outcnt float64
+	cols      []col
+	pks       []int
+	idxs      []index
+	fks       []*ForeignKeyDef
+	clusterby *ClusterByDef
+	outcnt    float64
 }
 
 const SF float64 = 1
 
-func NewMockCompilerContext() *MockCompilerContext {
+func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	tpchSchema := make(map[string]*Schema)
 	moSchema := make(map[string]*Schema)
+	constraintTestSchema := make(map[string]*Schema)
 
 	schemas := map[string]map[string]*Schema{
-		"tpch":       tpchSchema,
-		"mo_catalog": moSchema,
+		"tpch":            tpchSchema,
+		"mo_catalog":      moSchema,
+		"constraint_test": constraintTestSchema,
 	}
 
 	tpchSchema["nation"] = &Schema{
@@ -103,6 +124,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"n_name", types.T_varchar, false, 25, 0},
 			{"n_regionkey", types.T_int32, false, 0, 0},
 			{"n_comment", types.T_varchar, true, 152, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks:    []int{0},
 		outcnt: 25,
@@ -113,6 +135,16 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"n_name", types.T_varchar, false, 25, 0},
 			{"r_regionkey", types.T_int32, false, 0, 0}, //change N_REGIONKEY to R_REGIONKEY for test NaturalJoin And UsingJoin
 			{"n_comment", types.T_varchar, true, 152, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:    []int{0},
+		outcnt: 25,
+	}
+	tpchSchema["test_idx"] = &Schema{
+		cols: []col{
+			{"n_nationkey", types.T_int32, false, 0, 0},
+			{"n_name", types.T_varchar, false, 25, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks:    []int{0},
 		outcnt: 25,
@@ -122,6 +154,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"r_regionkey", types.T_int32, false, 0, 0},
 			{"r_name", types.T_varchar, false, 25, 0},
 			{"r_comment", types.T_varchar, true, 152, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks:    []int{0},
 		outcnt: 5,
@@ -135,8 +168,9 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"p_type", types.T_varchar, false, 25, 0},
 			{"p_size", types.T_int32, false, 0, 0},
 			{"p_container", types.T_varchar, false, 10, 0},
-			{"p_retailprice", types.T_float64, false, 15, 2},
+			{"p_retailprice", types.T_decimal64, false, 15, 2},
 			{"p_comment", types.T_varchar, false, 23, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks:    []int{0},
 		outcnt: SF * 2e5,
@@ -148,8 +182,9 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"s_address", types.T_varchar, false, 40, 0},
 			{"s_nationkey", types.T_int32, false, 0, 0},
 			{"s_phone", types.T_varchar, false, 15, 0},
-			{"s_acctbal", types.T_float64, false, 15, 2},
+			{"s_acctbal", types.T_decimal64, false, 15, 2},
 			{"s_comment", types.T_varchar, false, 101, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks:    []int{0},
 		outcnt: SF * 1e4,
@@ -159,8 +194,9 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"ps_partkey", types.T_int32, false, 0, 0},
 			{"ps_suppkey", types.T_int32, false, 0, 0},
 			{"ps_availqty", types.T_int32, false, 0, 0},
-			{"ps_supplycost", types.T_float64, false, 15, 2},
+			{"ps_supplycost", types.T_decimal64, false, 15, 2},
 			{"ps_comment", types.T_varchar, false, 199, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks:    []int{0, 1},
 		outcnt: SF * 8e5,
@@ -172,9 +208,10 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"c_address", types.T_varchar, false, 40, 0},
 			{"c_nationkey", types.T_int32, false, 0, 0},
 			{"c_phone", types.T_varchar, false, 15, 0},
-			{"c_acctbal", types.T_float64, false, 15, 2},
+			{"c_acctbal", types.T_decimal64, false, 15, 2},
 			{"c_mktsegment", types.T_varchar, false, 10, 0},
 			{"c_comment", types.T_varchar, false, 117, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks:    []int{0},
 		outcnt: SF * 15e4,
@@ -184,12 +221,13 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"o_orderkey", types.T_int64, false, 0, 0},
 			{"o_custkey", types.T_int32, false, 0, 0},
 			{"o_orderstatus", types.T_varchar, false, 1, 0},
-			{"o_totalprice", types.T_float64, false, 15, 2},
+			{"o_totalprice", types.T_decimal64, false, 15, 2},
 			{"o_orderdate", types.T_date, false, 0, 0},
 			{"o_orderpriority", types.T_varchar, false, 15, 0},
 			{"o_clerk", types.T_varchar, false, 15, 0},
 			{"o_shippriority", types.T_int32, false, 0, 0},
 			{"o_comment", types.T_varchar, false, 79, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks:    []int{0},
 		outcnt: SF * 15e5,
@@ -201,9 +239,9 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"l_suppkey", types.T_int32, false, 0, 0},
 			{"l_linenumber", types.T_int32, false, 0, 0},
 			{"l_quantity", types.T_int32, false, 0, 0},
-			{"l_extendedprice", types.T_float64, false, 15, 2},
-			{"l_discount", types.T_float64, false, 15, 2},
-			{"l_tax", types.T_float64, false, 15, 2},
+			{"l_extendedprice", types.T_decimal64, false, 15, 2},
+			{"l_discount", types.T_decimal64, false, 15, 2},
+			{"l_tax", types.T_decimal64, false, 15, 2},
 			{"l_returnflag", types.T_varchar, false, 1, 0},
 			{"l_linestatus", types.T_varchar, false, 1, 0},
 			{"l_shipdate", types.T_date, false, 0, 0},
@@ -212,6 +250,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"l_shipinstruct", types.T_varchar, false, 25, 0},
 			{"l_shipmode", types.T_varchar, false, 10, 0},
 			{"l_comment", types.T_varchar, false, 44, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks:    []int{0, 3},
 		outcnt: SF * 6e6,
@@ -227,6 +266,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 		cols: []col{
 			{"datname", types.T_varchar, false, 50, 0},
 			{"account_id", types.T_uint32, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 	}
 	moSchema["mo_tables"] = &Schema{
@@ -235,6 +275,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"relname", types.T_varchar, false, 50, 0},
 			{"relkind", types.T_varchar, false, 50, 0},
 			{"account_id", types.T_uint32, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 	}
 	moSchema["mo_columns"] = &Schema{
@@ -250,30 +291,264 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"att_default", types.T_varchar, false, 1024, 0},
 			{"att_comment", types.T_varchar, false, 1024, 0},
 			{"account_id", types.T_uint32, false, 0, 0},
+			{"att_is_hidden", types.T_bool, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+	}
+	moSchema["mo_user"] = &Schema{
+		cols: []col{
+			{"user_id", types.T_int32, false, 50, 0},
+			{"user_host", types.T_varchar, false, 100, 0},
+			{"user_name", types.T_varchar, false, 300, 0},
+			{"authentication_string", types.T_varchar, false, 100, 0},
+			{"status", types.T_varchar, false, 100, 0},
+			{"created_time", types.T_timestamp, false, 0, 0},
+			{"expired_time", types.T_timestamp, false, 0, 0},
+			{"login_type", types.T_varchar, false, 100, 0},
+			{"creator", types.T_int32, false, 50, 0},
+			{"owner", types.T_int32, false, 50, 0},
+			{"default_role", types.T_int32, false, 50, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+	}
+
+	moSchema["mo_role_privs"] = &Schema{
+		cols: []col{
+			{"privilege_level", types.T_varchar, false, 100, 0},
+			{"obj_id", types.T_uint64, false, 100, 0},
+			{"obj_type", types.T_varchar, false, 16, 0},
+			{"role_id", types.T_int32, false, 50, 0},
+			{"role_name", types.T_varchar, false, 100, 0},
+			{"granted_time", types.T_timestamp, false, 0, 0},
+			{"operation_user_id", types.T_uint32, false, 50, 0},
+			{"privilege_name", types.T_varchar, false, 100, 0},
+			{"with_grant_option", types.T_bool, false, 0, 0},
+			{"privilege_id", types.T_int32, false, 50, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+	}
+
+	moSchema["mo_user_defined_function"] = &Schema{
+		cols: []col{
+			{"function_id", types.T_int32, false, 50, 0},
+			{"name", types.T_varchar, false, 100, 0},
+			{"args", types.T_text, false, 1000, 0},
+			{"retType", types.T_varchar, false, 20, 0},
+			{"body", types.T_text, false, 1000, 0},
+			{"language", types.T_varchar, false, 20, 0},
+			{"db", types.T_varchar, false, 100, 0},
+			{"definer", types.T_varchar, false, 50, 0},
+			{"modified_time", types.T_timestamp, false, 0, 0},
+			{"created_time", types.T_timestamp, false, 0, 0},
+			{"type", types.T_varchar, false, 10, 0},
+			{"security_type", types.T_varchar, false, 10, 0},
+			{"comment", types.T_varchar, false, 5000, 0},
+			{"character_set_client", types.T_varchar, false, 64, 0},
+			{"collation_connection", types.T_varchar, false, 64, 0},
+			{"database_collation", types.T_varchar, false, 64, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+	}
+
+	//---------------------------------------------constraint test schema---------------------------------------------------------
+	/*
+		create table emp(
+			empno int unsigned primary key,
+			ename varchar(15),
+			job varchar(10),
+			mgr int unsigned,
+			hiredate date,
+			sal decimal(7,2),
+			comm decimal(7,2),
+			deptno int unsigned,
+			unique key(ename, job),
+			foreign key (deptno) references dept(deptno)
+		);
+	*/
+	constraintTestSchema["emp"] = &Schema{
+		cols: []col{
+			{"empno", types.T_uint32, true, 32, 0},
+			{"ename", types.T_varchar, true, 15, 0},
+			{"job", types.T_varchar, true, 10, 0},
+			{"mgr", types.T_uint32, true, 32, 0},
+			{"hiredate", types.T_date, true, 0, 0},
+			{"sal", types.T_decimal64, true, 7, 0},
+			{"comm", types.T_decimal64, true, 7, 0},
+			{"deptno", types.T_uint32, true, 32, 0},
+			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0}, // primary key "empno"
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "",                          // string
+				Cols:        []uint64{7},                 // []uint64
+				ForeignTbl:  272450,                      // uint64
+				ForeignCols: []uint64{1},                 // []uint64
+				OnDelete:    plan.ForeignKeyDef_RESTRICT, // ForeignKeyDef_RefAction
+				OnUpdate:    plan.ForeignKeyDef_RESTRICT, // ForeignKeyDef_RefAction
+			},
+		},
+		idxs: []index{
+			{
+				indexName: "",
+				tableName: "__mo_index_unique__412f4fad-77ba-11ed-b347-000c29847904",
+				parts:     []string{"ename", "job"},
+				cols: []col{
+					{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
+				},
+				tableExist: true,
+			},
+		},
+		outcnt: 14,
+	}
+
+	// index table
+	constraintTestSchema["__mo_index_unique__412f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
+		cols: []col{
+			{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
+			{"__mo_index_pri_col", types.T_uint32, true, 32, 0},
+			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 13,
+	}
+
+	/*
+		create table dept(
+			deptno int unsigned auto_increment,
+			dname varchar(15),
+			loc varchar(50),
+			primary key(deptno),
+			unique index(dname)
+		);
+	*/
+	constraintTestSchema["dept"] = &Schema{
+		cols: []col{
+			{"deptno", types.T_uint32, true, 32, 0},
+			{"dname", types.T_varchar, true, 15, 0},
+			{"loc", types.T_varchar, true, 50, 0},
+			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0}, // primary key "deptno"
+		idxs: []index{
+			{
+				indexName: "",
+				tableName: "__mo_index_unique__8e3246dd-7a19-11ed-ba7d-000c29847904",
+				parts:     []string{"dname"},
+				cols: []col{
+					{"__mo_index_idx_col", types.T_varchar, true, 15, 0},
+				},
+				tableExist: true,
+			},
+		},
+		outcnt: 4,
+	}
+
+	// index table
+	constraintTestSchema["__mo_index_unique__8e3246dd-7a19-11ed-ba7d-000c29847904"] = &Schema{
+		cols: []col{
+			{"__mo_index_idx_col", types.T_varchar, true, 15, 0},
+			{"__mo_index_pri_col", types.T_uint32, true, 32, 0},
+			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+	/*
+		create table products (
+			pid int not null,
+			pname varchar(50) not null,
+			description varchar(20) not null,
+			price decimal(9,2) not null
+		) cluster by(pid,pname);
+	*/
+	constraintTestSchema["products"] = &Schema{
+		cols: []col{
+			{"pid", types.T_int32, true, 32, 0},
+			{"pname", types.T_varchar, true, 50, 0},
+			{"description", types.T_varchar, true, 20, 0},
+			{"price", types.T_uint32, true, 9, 0},
+			{"__mo_cbkey_003pid005pname", types.T_varchar, true, 65535, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		clusterby: &ClusterByDef{
+			Name: "__mo_cbkey_003pid005pname",
+		},
+		outcnt: 14,
+	}
+
+	//+----------+--------------+------+-----+---------+-------+
+	//| Field    | Type         | Null | Key | Default | Extra |
+	//+----------+--------------+------+-----+---------+-------+
+	//| empno    | int unsigned | YES  | MUL | NULL    |       |
+	//| ename    | varchar(15)  | YES  |     | NULL    |       |
+	//| job      | varchar(10)  | YES  |     | NULL    |       |
+	//| mgr      | int unsigned | YES  |     | NULL    |       |
+	//| hiredate | date         | YES  |     | NULL    |       |
+	//| sal      | decimal(7,2) | YES  |     | NULL    |       |
+	//| comm     | decimal(7,2) | YES  |     | NULL    |       |
+	//| deptno   | int unsigned | YES  |     | NULL    |       |
+	//+----------+--------------+------+-----+---------+-------+
+	constraintTestSchema["employees"] = &Schema{
+		cols: []col{
+			{"empno", types.T_uint32, true, 32, 0},
+			{"ename", types.T_varchar, true, 15, 0},
+			{"job", types.T_varchar, true, 10, 0},
+			{"mgr", types.T_uint32, true, 32, 0},
+			{"hiredate", types.T_date, true, 0, 0},
+			{"sal", types.T_decimal64, true, 7, 0},
+			{"comm", types.T_decimal64, true, 7, 0},
+			{"deptno", types.T_uint32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		idxs: []index{
+			{
+				indexName: "",
+				tableName: "__mo_index_unique__6380d30e-79f8-11ed-9c02-000c29847904",
+				parts:     []string{"empno", "ename"},
+				cols: []col{
+					{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
+				},
+				tableExist: true,
+			},
+		},
+		outcnt: 14,
+	}
+
+	constraintTestSchema["__mo_index_unique__6380d30e-79f8-11ed-9c02-000c29847904"] = &Schema{
+		cols: []col{
+			{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:    []int{0},
+		outcnt: 12,
 	}
 
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
 	stats := make(map[string]*Stats)
 	pks := make(map[string][]int)
+	id2name := make(map[uint64]string)
 	// build tpch/mo context data(schema)
 	for db, schema := range schemas {
 		tableIdx := 0
 		for tableName, table := range schema {
 			colDefs := make([]*ColDef, 0, len(table.cols))
 
-			for _, col := range table.cols {
+			for idx, col := range table.cols {
 				colDefs = append(colDefs, &ColDef{
+					ColId: uint64(idx),
 					Typ: &plan.Type{
 						Id:          int32(col.Id),
 						NotNullable: !col.Nullable,
-						Width:       col.Width,
 						Precision:   col.Precision,
+						Scale:       col.Scale,
 					},
-					Name:    col.Name,
-					Pkidx:   1,
-					Default: &plan.Default{},
+					Name:  col.Name,
+					Pkidx: 1,
+					Default: &plan.Default{
+						NullAbility: col.Nullable,
+					},
 				})
 			}
 
@@ -289,22 +564,79 @@ func NewMockCompilerContext() *MockCompilerContext {
 			}
 
 			tableDef := &TableDef{
-				Name: tableName,
-				Cols: colDefs,
+				TableType: catalog.SystemOrdinaryRel,
+				TblId:     uint64(tableIdx),
+				Name:      tableName,
+				Cols:      colDefs,
+				Indexes:   make([]*IndexDef, len(table.idxs)),
 			}
+
+			if table.idxs != nil {
+
+				for i, idx := range table.idxs {
+					indexdef := &plan.IndexDef{
+						IndexName:      idx.indexName,
+						Parts:          idx.parts,
+						Unique:         true,
+						IndexTableName: idx.tableName,
+						TableExist:     true,
+					}
+					tableDef.Indexes[i] = indexdef
+				}
+			}
+
+			if table.fks != nil {
+				tableDef.Fkeys = table.fks
+			}
+
+			if table.clusterby != nil {
+				tableDef.ClusterBy = &plan.ClusterByDef{
+					Name: "__mo_cbkey_003pid005pname",
+				}
+			}
+
+			if tableName != "v1" {
+				properties := []*plan.Property{
+					{
+						Key:   catalog.SystemRelAttr_Kind,
+						Value: catalog.SystemOrdinaryRel,
+					},
+					{
+						Key:   catalog.SystemRelAttr_Comment,
+						Value: tableName,
+					},
+				}
+				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+					Def: &plan.TableDef_DefType_Properties{
+						Properties: &plan.PropertiesDef{
+							Properties: properties,
+						},
+					},
+				})
+			}
+
+			if tableName == "test_idx" {
+				indexParts := []string{"n_nationkey"}
+
+				p := &plan.IndexDef{
+					IndexName:      "idx1",
+					Parts:          indexParts,
+					Unique:         true,
+					IndexTableName: "nation",
+					TableExist:     true,
+				}
+				tableDef.Indexes = []*plan.IndexDef{p}
+			}
+
 			if tableName == "v1" {
 				tableDef.TableType = catalog.SystemViewRel
 				viewData, _ := json.Marshal(ViewData{
 					Stmt:            "select n_name from nation where n_nationkey > ?",
 					DefaultDatabase: "tpch",
 				})
-				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-					Def: &plan.TableDef_DefType_View{
-						View: &plan.ViewDef{
-							View: string(viewData),
-						},
-					},
-				})
+				tableDef.ViewSql = &plan.ViewDef{
+					View: string(viewData),
+				}
 				properties := []*plan.Property{
 					{
 						Key:   catalog.SystemRelAttr_Kind,
@@ -319,7 +651,9 @@ func NewMockCompilerContext() *MockCompilerContext {
 					},
 				})
 			}
+
 			tables[tableName] = tableDef
+			id2name[tableDef.TblId] = tableName
 			tableIdx++
 
 			if table.outcnt == 0 {
@@ -334,10 +668,13 @@ func NewMockCompilerContext() *MockCompilerContext {
 	}
 
 	return &MockCompilerContext{
+		isDml:   isDml,
 		objects: objects,
 		tables:  tables,
+		id2name: id2name,
 		stats:   stats,
 		pks:     pks,
+		ctx:     context.TODO(),
 	}
 }
 
@@ -359,7 +696,39 @@ func (m *MockCompilerContext) GetUserName() string {
 
 func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectRef, *TableDef) {
 	name := strings.ToLower(tableName)
-	return m.objects[name], m.tables[name]
+	tableDef := DeepCopyTableDef(m.tables[name])
+	if tableDef != nil && !m.isDml {
+
+		for i, col := range tableDef.Cols {
+			if col.Typ.Id == int32(types.T_Rowid) {
+				tableDef.Cols = append(tableDef.Cols[:i], tableDef.Cols[i+1:]...)
+				break
+			}
+		}
+
+		for i, col := range tableDef.Cols {
+			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(col.Name)
+			if isCPkey {
+				tableDef.Cols = append(tableDef.Cols[:i], tableDef.Cols[i+1:]...)
+				break
+			}
+		}
+	}
+	return m.objects[name], tableDef
+}
+
+func (m *MockCompilerContext) ResolveById(tableId uint64) (*ObjectRef, *TableDef) {
+	name := m.id2name[tableId]
+	tableDef := DeepCopyTableDef(m.tables[name])
+	if tableDef != nil && !m.isDml {
+		for i, col := range tableDef.Cols {
+			if col.Typ.Id == int32(types.T_Rowid) {
+				tableDef.Cols = append(tableDef.Cols[:i], tableDef.Cols[i+1:]...)
+				break
+			}
+		}
+	}
+	return m.objects[name], tableDef
 }
 
 func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*ColDef {
@@ -371,7 +740,7 @@ func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) 
 }
 
 func (m *MockCompilerContext) GetHideKeyDef(dbName string, tableName string) *ColDef {
-	return m.tables[tableName].Cols[0]
+	return m.tables[tableName].Cols[len(m.tables[tableName].Cols)-1]
 }
 
 func (m *MockCompilerContext) Stats(obj *ObjectRef, e *Expr) *Stats {
@@ -390,6 +759,17 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 	return testutil.NewProc()
 }
 
+func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {
+	return nil, "", nil
+}
+
+func (m *MockCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
+}
+
+func (m *MockCompilerContext) GetBuildingAlterView() (bool, string, string) {
+	return false, "", ""
+}
+
 type MockOptimizer struct {
 	ctxt MockCompilerContext
 }
@@ -400,9 +780,9 @@ func NewEmptyMockOptimizer() *MockOptimizer {
 	}
 }
 
-func NewMockOptimizer() *MockOptimizer {
+func NewMockOptimizer(isDml bool) *MockOptimizer {
 	return &MockOptimizer{
-		ctxt: *NewMockCompilerContext(),
+		ctxt: *NewMockCompilerContext(isDml),
 	}
 }
 

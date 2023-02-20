@@ -16,6 +16,7 @@ package errutil
 
 import (
 	"context"
+	"github.com/stretchr/testify/require"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -64,12 +65,24 @@ func TestReportError(t *testing.T) {
 			name: "normal",
 			args: args{context.Background(), testErr},
 		},
+		{
+			name: "noReport",
+			args: args{ContextWithNoReport(context.Background(), true), testErr},
+		},
 	}
+
+	var counter atomic.Int32
+	var doReportFunc = func(context.Context, error, int) {
+		counter.Add(1)
+	}
+	SetErrorReporter(doReportFunc)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ReportError(tt.args.ctx, tt.args.err)
 		})
 	}
+	require.Equal(t, counter.Load(), int32(len(tests)-1))
 }
 
 func TestWalkDeep(t *testing.T) {

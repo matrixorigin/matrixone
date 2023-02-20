@@ -76,11 +76,11 @@ func TestConnector(t *testing.T) {
 				}
 			}
 		}
-		_, _ = Call(0, tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg, false, false)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		_, _ = Call(0, tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg, false, false)
 		tc.proc.Reg.InputBatch = nil
-		_, _ = Call(0, tc.proc, tc.arg)
+		_, _ = Call(0, tc.proc, tc.arg, false, false)
 		for len(tc.arg.Reg.Ch) > 0 {
 			bat := <-tc.arg.Reg.Ch
 			if bat == nil {

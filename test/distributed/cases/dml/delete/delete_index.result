@@ -1,0 +1,631 @@
+drop database if exists db1;
+create database db1;
+use db1;
+drop table if exists t1;
+create table t1(a int, b int, c int, unique key(a));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete from t1 where a = 1;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+insert into t1 values(1, 1, 1);
+delete from t1 where a is null;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+1    1    1
+delete from t1;
+select * from t1;
+a    b    c
+drop table if exists t1;
+create table t1(a int, b int, c int, unique key(a, b));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete from t1 where a = 1;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+insert into t1 values(1, 1, 1);
+delete from t1 where a is null;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+1    1    1
+delete from t1;
+select * from t1;
+a    b    c
+drop table if exists t1;
+create table t1(a int, b int, c int, unique key(a), unique key(b));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete from t1 where a = 1;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+insert into t1 values(1, 1, 1);
+delete from t1 where a is null;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+1    1    1
+delete from t1;
+select * from t1;
+a    b    c
+drop table if exists t1;
+create table t1(a int, b int, c int, unique key(a, b), unique key(b, c));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete from t1 where a = 1;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+insert into t1 values(1, 1, 1);
+delete from t1 where a is null;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+1    1    1
+delete from t1;
+select * from t1;
+a    b    c
+drop table if exists t1;
+create table t1(a int, b int, c int, unique key(a, b), unique key(c));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete from t1 where a = 1;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+insert into t1 values(1, 1, 1);
+delete from t1 where a is null;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+1    1    1
+delete from t1;
+select * from t1;
+a    b    c
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int, b int, c int, unique key(a));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+create table t2(a int, b int, c int);
+insert into t2 values(1, 1, 1);
+insert into t2 values(2, 2, 2);
+insert into t2 values(3, 3, 3);
+insert into t2 values(4, 4, 4);
+insert into t2 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+select * from t2;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete t1, t2 from t1,t2 where t1.a = t2.a;
+select * from t1;
+a    b    c
+null    5    5
+select * from t2;
+a    b    c
+null    5    5
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int, b int, c int, unique key(a), unique key(b));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+create table t2(a int, b int, c int);
+insert into t2 values(1, 1, 1);
+insert into t2 values(2, 2, 2);
+insert into t2 values(3, 3, 3);
+insert into t2 values(4, 4, 4);
+insert into t2 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+select * from t2;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete t1, t2 from t1,t2 where t1.a = t2.a;
+select * from t1;
+a    b    c
+null    5    5
+select * from t2;
+a    b    c
+null    5    5
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+Duplicate entry '5' for key '__mo_index_idx_col'
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int, b int, c int, unique key(a, b));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+create table t2(a int, b int, c int);
+insert into t2 values(1, 1, 1);
+insert into t2 values(2, 2, 2);
+insert into t2 values(3, 3, 3);
+insert into t2 values(4, 4, 4);
+insert into t2 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+select * from t2;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete t1, t2 from t1,t2 where t1.a = t2.a;
+select * from t1;
+a    b    c
+null    5    5
+select * from t2;
+a    b    c
+null    5    5
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int, b int, c int, unique key(a, b), unique key(b, c));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+create table t2(a int, b int, c int);
+insert into t2 values(1, 1, 1);
+insert into t2 values(2, 2, 2);
+insert into t2 values(3, 3, 3);
+insert into t2 values(4, 4, 4);
+insert into t2 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+select * from t2;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete t1, t2 from t1,t2 where t1.a = t2.a;
+select * from t1;
+a    b    c
+null    5    5
+select * from t2;
+a    b    c
+null    5    5
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+Duplicate entry '3a15053a1505' for key '__mo_index_idx_col'
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int, b int, c int, unique key(a));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+create table t2(a int, b int, c int, unique key(b));
+insert into t2 values(1, 1, 1);
+insert into t2 values(2, 2, 2);
+insert into t2 values(3, 3, 3);
+insert into t2 values(4, 4, 4);
+insert into t2 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+select * from t2;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete t1, t2 from t1,t2 where t1.a = t2.a;
+select * from t1;
+a    b    c
+null    5    5
+select * from t2;
+a    b    c
+null    5    5
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int, b int, c int, unique key(a), unique key(b));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+create table t2(a int, b int, c int, unique key(b), unique key(c));
+insert into t2 values(1, 1, 1);
+insert into t2 values(2, 2, 2);
+insert into t2 values(3, 3, 3);
+insert into t2 values(4, 4, 4);
+insert into t2 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+select * from t2;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete t1, t2 from t1,t2 where t1.a = t2.a;
+select * from t1;
+a    b    c
+null    5    5
+select * from t2;
+a    b    c
+null    5    5
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+Duplicate entry '5' for key '__mo_index_idx_col'
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int, b int, c int, unique key(a, b));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+create table t2(a int, b int, c int, unique key(b, c));
+insert into t2 values(1, 1, 1);
+insert into t2 values(2, 2, 2);
+insert into t2 values(3, 3, 3);
+insert into t2 values(4, 4, 4);
+insert into t2 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+select * from t2;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete t1, t2 from t1,t2 where t1.a = t2.a;
+select * from t1;
+a    b    c
+null    5    5
+select * from t2;
+a    b    c
+null    5    5
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int, b int, c int, unique key(a, b), unique key(b, c));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+create table t2(a int, b int, c int, unique key(a, c), unique key(b, c));
+insert into t2 values(1, 1, 1);
+insert into t2 values(2, 2, 2);
+insert into t2 values(3, 3, 3);
+insert into t2 values(4, 4, 4);
+insert into t2 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+select * from t2;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete t1, t2 from t1,t2 where t1.a = t2.a;
+select * from t1;
+a    b    c
+null    5    5
+select * from t2;
+a    b    c
+null    5    5
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+Duplicate entry '3a15053a1505' for key '__mo_index_idx_col'
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int, b int, c int, unique key(a, b), unique key(c));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+create table t2(a int, b int, c int, unique key(a), unique key(b, c));
+insert into t2 values(1, 1, 1);
+insert into t2 values(2, 2, 2);
+insert into t2 values(3, 3, 3);
+insert into t2 values(4, 4, 4);
+insert into t2 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+select * from t2;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete t1, t2 from t1,t2 where t1.a = t2.a;
+select * from t1;
+a    b    c
+null    5    5
+select * from t2;
+a    b    c
+null    5    5
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+Duplicate entry '5' for key '__mo_index_idx_col'
+drop table if exists t1;
+create table t1(a int, b int, c int, primary key(c), unique key(a));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete from t1 where a = 1;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+insert into t1 values(1, 1, 1);
+delete from t1 where a is null;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+1    1    1
+delete from t1;
+select * from t1;
+a    b    c
+drop table if exists t1;
+create table t1(a int, b int, c int, primary key(c), unique key(a, b));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete from t1 where a = 1;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+insert into t1 values(1, 1, 1);
+delete from t1 where a is null;
+select * from t1;
+a    b    c
+2    2    2
+3    3    3
+4    4    4
+1    1    1
+delete from t1;
+select * from t1;
+a    b    c
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int, b int, c int, unique key(a), primary key(b));
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);
+insert into t1 values(NULL, 5, 5);
+create table t2(a int, b int, c int, unique key(b), primary key(b, c));
+insert into t2 values(1, 1, 1);
+insert into t2 values(2, 2, 2);
+insert into t2 values(3, 3, 3);
+insert into t2 values(4, 4, 4);
+insert into t2 values(NULL, 5, 5);
+select * from t1;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+select * from t2;
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+null    5    5
+delete t1, t2 from t1,t2 where t1.a = t2.a;
+select * from t1;
+a    b    c
+null    5    5
+select * from t2;
+a    b    c
+null    5    5
+insert into t1 values(1, 1, 1);
+insert into t1 values(2, 2, 2);
+insert into t1 values(3, 3, 3);
+insert into t1 values(4, 4, 4);

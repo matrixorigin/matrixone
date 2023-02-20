@@ -1,0 +1,6 @@
+drop table if exists t1;
+create table t1(a int,b text,c text);
+insert into t1 values(1,"a","bc"),(2,"ab","c"),(3,"aa","bb"),(3,"aa","bb");
+select group_concat(distinct a,b,c separator '|') from t1;
+select group_concat(distinct b,c separator '|') from t1 group by a;
+select group_concat(distinct b,c separator '|') from t1;

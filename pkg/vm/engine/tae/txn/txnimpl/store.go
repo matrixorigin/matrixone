@@ -45,11 +45,9 @@ type txnStore struct {
 	catalog       *catalog.Catalog
 	cmdMgr        *commandManager
 	logs          []entry.Entry
-	//warChecker records all the db/table/segment/blocks visited/changed by the txn for
-	//           DML-DDL(DML encounters DDL) conflict detection when preparing commit.
-	warChecker  *warChecker
-	dataFactory *tables.DataFactory
-	writeOps    atomic.Uint32
+	warChecker    *warChecker
+	dataFactory   *tables.DataFactory
+	writeOps      atomic.Uint32
 }
 
 var TxnStoreFactory = func(
@@ -179,6 +177,21 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 	// 	return txnbase.ErrNotFound
 	// }
 	return db.Append(id, data)
+}
+
+func (store *txnStore) AddBlksWithMetaLoc(
+	dbId, tid uint64,
+	pkVecs []containers.Vector,
+	file string,
+	metaLoc []string,
+	flag int32,
+) error {
+	store.IncreateWriteCnt()
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return err
+	}
+	return db.AddBlksWithMetaLoc(tid, pkVecs, file, metaLoc, flag)
 }
 
 func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
@@ -432,12 +445,12 @@ func (store *txnStore) CreateSegment(dbId, tid uint64, is1PC bool) (seg handle.S
 	return db.CreateSegment(tid, is1PC)
 }
 
-func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64) (seg handle.Segment, err error) {
+func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) (seg handle.Segment, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateNonAppendableSegment(tid)
+	return db.CreateNonAppendableSegment(tid, is1PC)
 }
 
 func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
@@ -469,6 +482,18 @@ func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) (blk
 		return
 	}
 	return db.CreateNonAppendableBlock(id)
+}
+
+func (store *txnStore) CreateNonAppendableBlockWithMeta(
+	dbId uint64,
+	id *common.ID,
+	metaLoc string,
+	deltaLoc string) (blk handle.Block, err error) {
+	var db *txnDB
+	if db, err = store.getOrSetDB(dbId); err != nil {
+		return
+	}
+	return db.CreateNonAppendableBlockWithMeta(id, metaLoc, deltaLoc)
 }
 
 func (store *txnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {

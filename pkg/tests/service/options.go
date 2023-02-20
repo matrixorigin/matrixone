@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -61,6 +62,13 @@ const (
 	defaultLogHeartbeatInterval = 1 * time.Second
 	defaultDNHeartbeatInterval  = 1 * time.Second
 	defaultCNHeartbeatInterval  = 1 * time.Second
+
+	// default logtail push server configuration
+	defaultRpcMaxMessageSize          = 16 * mpool.KB
+	defaultRpcPayloadCopyBufferSize   = 16 * mpool.KB
+	defaultLogtailCollectInterval     = 50 * time.Millisecond
+	defaultLogtailResponseSendTimeout = 10 * time.Second
+	defaultMaxLogtailFetchFailure     = 5
 )
 
 // Options are params for creating test cluster.
@@ -97,6 +105,14 @@ type Options struct {
 		logStoreTimeout time.Duration
 		dnStoreTimeout  time.Duration
 		cnStoreTimeout  time.Duration
+	}
+
+	logtailPushServer struct {
+		rpcMaxMessageSize          int64
+		rpcPayloadCopyBufferSize   int64
+		logtailCollectInterval     time.Duration
+		logtailResponseSendTimeout time.Duration
+		maxLogtailFetchFailure     int
 	}
 }
 
@@ -172,6 +188,23 @@ func (opt *Options) validate() {
 	}
 	if opt.logger == nil {
 		opt.logger = logutil.GetGlobalLogger()
+	}
+
+	// logtail push server configuration
+	if opt.logtailPushServer.rpcMaxMessageSize <= 0 {
+		opt.logtailPushServer.rpcMaxMessageSize = defaultRpcMaxMessageSize
+	}
+	if opt.logtailPushServer.rpcPayloadCopyBufferSize <= 0 {
+		opt.logtailPushServer.rpcPayloadCopyBufferSize = defaultRpcPayloadCopyBufferSize
+	}
+	if opt.logtailPushServer.logtailCollectInterval <= 0 {
+		opt.logtailPushServer.logtailCollectInterval = defaultLogtailCollectInterval
+	}
+	if opt.logtailPushServer.logtailResponseSendTimeout <= 0 {
+		opt.logtailPushServer.logtailResponseSendTimeout = defaultLogtailResponseSendTimeout
+	}
+	if opt.logtailPushServer.maxLogtailFetchFailure <= 0 {
+		opt.logtailPushServer.maxLogtailFetchFailure = defaultMaxLogtailFetchFailure
 	}
 }
 
@@ -341,6 +374,36 @@ func (opt Options) GetCNEngineType() dnservice.StorageType {
 // WithKeepData sets keep data after cluster closed.
 func (opt Options) WithKeepData() Options {
 	opt.keepData = true
+	return opt
+}
+
+// WithLogtailRpcMaxMessageSize sets max rpc message size for logtail push server.
+func (opt Options) WithLogtailRpcMaxMessageSize(size int64) Options {
+	opt.logtailPushServer.rpcMaxMessageSize = size
+	return opt
+}
+
+// WithLogtailRpcPayloadCopyBufferSize sets max rpc payload copy buffer size.
+func (opt Options) WithLogtailRpcPayloadCopyBufferSize(size int64) Options {
+	opt.logtailPushServer.rpcPayloadCopyBufferSize = size
+	return opt
+}
+
+// WithLogtailCollectInterval sets collection interval for logtail push server.
+func (opt Options) WithLogtailCollectInterval(interval time.Duration) Options {
+	opt.logtailPushServer.logtailCollectInterval = interval
+	return opt
+}
+
+// WithLogtailResponseSendTimeout sets response send timeout for logtail push server.
+func (opt Options) WithLogtailResponseSendTimeout(timeout time.Duration) Options {
+	opt.logtailPushServer.logtailResponseSendTimeout = timeout
+	return opt
+}
+
+// WithLogtailMaxFetchFailure sets max failure times when collecting logtail.
+func (opt Options) WithLogtailMaxFetchFailure(max int) Options {
+	opt.logtailPushServer.maxLogtailFetchFailure = max
 	return opt
 }
 

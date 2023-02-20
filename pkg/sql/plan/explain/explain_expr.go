@@ -16,6 +16,7 @@ package explain
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -61,6 +62,9 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions)
 			result += strconv.FormatUint(uint64(val.U32Val), 10)
 		case *plan.Const_U64Val:
 			result += strconv.FormatUint(val.U64Val, 10)
+
+		case *plan.Const_Fval:
+			result += strconv.FormatFloat(float64(val.Fval), 'f', -1, 32)
 
 		case *plan.Const_Dval:
 			result += strconv.FormatFloat(val.Dval, 'f', -1, 64)
@@ -126,7 +130,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 	funcName := funcExpr.F.GetFunc().GetObjName()
 	funcDef := funcExpr.F.GetFunc()
 
-	funcProtoType, err := function.GetFunctionByID(funcDef.Obj & function.DistinctMask)
+	funcProtoType, err := function.GetFunctionByID(ctx, funcDef.Obj&function.DistinctMask)
 	if err != nil {
 		return result, moerr.NewInvalidInput(ctx, "invalid function or opreator '%s'", funcName)
 	}
@@ -186,7 +190,12 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		if err != nil {
 			return result, err
 		}
-		result += "CAST(" + describeExpr + " AS " + types.T(Typ.Id).String() + ")"
+		tt := types.T(Typ.Id)
+		if tt == types.T_decimal64 || tt == types.T_decimal128 {
+			result += fmt.Sprintf("CAST(%s AS %s(%d, %d))", describeExpr, tt.String(), Typ.Precision, Typ.Scale)
+		} else {
+			result += "CAST(" + describeExpr + " AS " + tt.String() + ")"
+		}
 	case function.CASE_WHEN_EXPRESSION:
 		// TODO need rewrite to deal with case is nil
 		result += "CASE"

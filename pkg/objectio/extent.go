@@ -15,21 +15,22 @@
 package objectio
 
 type Extent struct {
-	id         uint64
+	id         uint32
 	offset     uint32
 	length     uint32
 	originSize uint32
 }
 
-func NewExtent(offset, length, originSize uint32) Extent {
+func NewExtent(id, offset, length, originSize uint32) Extent {
 	return Extent{
+		id:         id,
 		offset:     offset,
 		length:     length,
 		originSize: originSize,
 	}
 }
 
-func (ex Extent) Id() uint64 { return ex.id }
+func (ex Extent) Id() uint32 { return ex.id }
 
 func (ex Extent) End() uint32 { return ex.offset + ex.length }
 

@@ -25,6 +25,7 @@ func NewProjectionBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *
 	b := &ProjectionBinder{
 		havingBinder: havingBinder,
 	}
+	b.sysCtx = builder.GetContext()
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b
@@ -71,7 +72,7 @@ func (b *ProjectionBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, 
 }
 
 func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYINoCtx("window functions")
+	return nil, moerr.NewNYI(b.GetContext(), "window functions")
 }
 
 func (b *ProjectionBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {

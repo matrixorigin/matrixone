@@ -59,9 +59,6 @@ type container struct {
 	// End: Join working is over
 	state int
 
-	// // sels[i] records the table used to build hash table has which row numbers in the i-th group
-	// sels [][]int64
-
 	// in the probe stage, when we invoke func find to find rows in the hashtable,it will modify the
 	// inBuckets Slice, inBuckets[i] means the i-th row is whether in the bucket
 	// 0 means no, 1 means yes
@@ -85,17 +82,13 @@ type container struct {
 	buildEqVec   []*vector.Vector
 	buildEqEvecs []evalVector
 
-	// a tag means wheretr the build table has null
-	hasNull bool
-
-	Nsp       *nulls.Nulls
-	joinFlags []bool
+	markVals  []bool
+	markNulls *nulls.Nulls
 
 	mp *hashmap.JoinMap
 
 	nullWithBatch *batch.Batch
-
-	rewriteCond *plan.Expr
+	rewriteCond   *plan.Expr
 }
 
 // // for join operator, it's a two-ary operator, we will reference to two table
@@ -142,22 +135,7 @@ type Argument struct {
 	// they are both ok
 	Conditions [][]*plan.Expr
 
-	// tell whether the tuple marked with NULL should be outputed
-	OutputNull bool
-
-	// tell whether mark col should be outputed
-	OutputMark bool
-
 	Typs []types.Type
-
-	// markMeaning means,if MarkMeaning is true and a tuple is marked as true, output it,if is marked with false,
-	// don't output. The same way that if MarkMeaning is false and a tuple is marked as false, output it,if is
-	// marked with true, don't output.
-	MarkMeaning bool
-
-	// if OutputAnyway is true,we will output all tuples from left table
-	OutputAnyway bool
-
 	Cond *plan.Expr
 
 	OnList []*plan.Expr
@@ -178,10 +156,6 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
-	}
-	if ctr.nullWithBatch != nil {
-		ctr.nullWithBatch.Clean(mp)
-		ctr.nullWithBatch = nil
 	}
 }
 

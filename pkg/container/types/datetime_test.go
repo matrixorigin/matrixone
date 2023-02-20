@@ -25,10 +25,10 @@ import (
 var dayInMonth []int = []int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
 func TestDate(t *testing.T) {
-	fmt.Println(FromCalendar(1215, 6, 15).Calendar(true))
-	fmt.Println(FromCalendar(1776, 7, 4).Calendar(true))
-	fmt.Println(FromCalendar(1989, 4, 26).Calendar(true))
-	fmt.Println(FromCalendar(2019, 6, 9).Calendar(true))
+	fmt.Println(DateFromCalendar(1215, 6, 15).Calendar(true))
+	fmt.Println(DateFromCalendar(1776, 7, 4).Calendar(true))
+	fmt.Println(DateFromCalendar(1989, 4, 26).Calendar(true))
+	fmt.Println(DateFromCalendar(2019, 6, 9).Calendar(true))
 
 	for i := 1; i <= 3000; i++ {
 		for j := 1; j <= len(dayInMonth); j++ {
@@ -38,7 +38,7 @@ func TestDate(t *testing.T) {
 				yw, w := tsys.ISOWeek()
 				wd := tsys.Weekday()
 
-				t := FromCalendar(int32(i), uint8(j), uint8(k))
+				t := DateFromCalendar(int32(i), uint8(j), uint8(k))
 				y1, m1, d1, _ := t.Calendar(true)
 				yw1, w1 := t.WeekOfYear()
 				wd1 := t.DayOfWeek()
@@ -60,7 +60,7 @@ func days(year, mon int) int {
 }
 
 func TestDatetime(t *testing.T) {
-	dt := FromClock(2021, 8, 13, 17, 55, 34, 0)
+	dt := DatetimeFromClock(2021, 8, 13, 17, 55, 34, 0)
 	fmt.Println(dt.ToDate().Calendar(true))
 	fmt.Println(dt.Clock())
 
@@ -303,7 +303,7 @@ func TestUnix(t *testing.T) {
 
 		require.Equal(t, motimeUnix, goUnix)
 
-		parse_time := FromUnix(time.UTC, motimeUnix)
+		parse_time := DatetimeFromUnix(time.UTC, motimeUnix)
 		require.Equal(t, motime, parse_time)
 	}
 }

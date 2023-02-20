@@ -21,15 +21,15 @@ null    null    null
 12:00:01    00:00:19    02:34:03
 create table time_02(t1 time);
 insert into time_02 values("200:60:60");
-truncated type TIME value 200:60:60 for column t1, 1
+invalid input: invalid time value 200:60:60
 insert into time_02 values("2562047788:00:00");
-truncated type TIME value 2562047788:00:00 for column t1, 1
+invalid input: invalid time value 2562047788:00:00
 insert into time_02 values("-2562047788:00:00");
-truncated type TIME value -2562047788:00:00 for column t1, 1
+invalid input: invalid time value -2562047788:00:00
 insert into time_02 values("abc");
-truncated type TIME value abc for column t1, 1
+invalid input: invalid time value abc
 insert into time_02 values("中文");
-truncated type TIME value 中文 for column t1, 1
+invalid input: invalid time value 中文
 insert into time_02 values(200);
 insert into time_02 values("");
 select * from time_02;
@@ -127,9 +127,8 @@ create table time_02 (t1 int,t2 time primary key,t3 varchar(25))partition by has
 SQL syntax error: type TIME not allowed in partition clause
 create table time_03 (t1 int,t2 time primary key,t3 varchar(25));
 insert into time_03 values (30,"101412","yellow");
-
 insert into time_03 values (40,"101412","apple");
-Duplicate entry '10:14:12' for key 't2'
+Duplicate entry '10:14:12.000000' for key 't2'
 select * from time_03;
 t1    t2    t3
 30    10:14:12    yellow

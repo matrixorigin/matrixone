@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -182,4 +183,12 @@ func (e *Engine) Nodes() (engine.Nodes, error) {
 func (e *Engine) Hints() (h engine.Hints) {
 	h.CommitOrRollbackTimeout = time.Minute * 5
 	return
+}
+
+func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
+	return "", "", moerr.NewNYI(ctx, "interface GetNameById is not implemented")
+}
+
+func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
+	return "", "", nil, moerr.NewNYI(ctx, "interface GetRelationById is not implemented")
 }

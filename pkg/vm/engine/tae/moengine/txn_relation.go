@@ -41,7 +41,7 @@ func newRelation(h handle.Relation) *txnRelation {
 	return r
 }
 
-func (rel *txnRelation) Write(_ context.Context, bat *batch.Batch) error {
+func (rel *txnRelation) Write(ctx context.Context, bat *batch.Batch) error {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	allNullables := schema.AllNullables()
 	taeBatch := containers.NewEmptyBatch()
@@ -51,7 +51,23 @@ func (rel *txnRelation) Write(_ context.Context, bat *batch.Batch) error {
 		//v := MOToVector(vec, allNullables[i])
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
+	if schema.HasSortKey() && !schema.HasPK() { // has cluster by key
+		clusterby := schema.GetSingleSortKey()
+		vec := taeBatch.GetVectorByName(clusterby.Name)
+		if vec.HasNull() {
+			return moerr.NewInternalError(ctx, "null value is not supported in cluster by column for now")
+		}
+	}
 	return rel.handle.Append(taeBatch)
+}
+
+func (rel *txnRelation) AddBlksWithMetaLoc(
+	ctx context.Context,
+	pkVecs []containers.Vector,
+	file string,
+	metaLocs []string,
+	flag int32) error {
+	return rel.handle.AddBlksWithMetaLoc(pkVecs, file, metaLocs, flag)
 }
 
 func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {

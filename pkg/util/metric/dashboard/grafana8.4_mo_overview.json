@@ -385,7 +385,7 @@
                 "type": "mysql",
                 "uid": "${datasource}"
             },
-            "description": "Total memory used by MO server，averaged by the past 1 minute",
+            "description": "Total memory used by MO server, averaged by the past 1 minute",
             "fieldConfig": {
                 "defaults": {
                     "color": {

@@ -30,6 +30,9 @@ func TestSleep(t *testing.T) {
 	vs[0].MakeScalar(1)
 	_, err = Sleep[uint64](vs, proc)
 	require.NoError(t, err)
+	vs[0].MakeScalar(2)
+	_, err = Sleep[uint64](vs, proc)
+	require.NoError(t, err)
 	vs = []*vector.Vector{testutil.NewFloat64Vector(1, types.T_float64.ToType(), proc.Mp(), false, []float64{-1})}
 	_, err = Sleep[float64](vs, proc)
 	require.Error(t, err)

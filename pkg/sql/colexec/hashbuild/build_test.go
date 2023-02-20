@@ -77,7 +77,7 @@ func TestBuild(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		for {
-			ok, err := Call(0, tc.proc, tc.arg)
+			ok, err := Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
 			require.Equal(t, true, ok)
 			mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
@@ -106,16 +106,16 @@ func TestLowCardinalityBuild(t *testing.T) {
 	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
 	tc.proc.Reg.MergeReceivers[0].Ch <- nil
 
-	ok, err := Call(0, tc.proc, tc.arg)
+	ok, err := Call(0, tc.proc, tc.arg, false, false)
 	require.NoError(t, err)
 	require.Equal(t, true, ok)
 	mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
 	require.NotNil(t, mp.Index())
 
 	sels := mp.Sels()
-	require.Equal(t, []int64{0, 2, 6, 7}, sels[0])
-	require.Equal(t, []int64{1, 4}, sels[1])
-	require.Equal(t, []int64{3, 5}, sels[2])
+	require.Equal(t, []int32{0, 2, 6, 7}, sels[0])
+	require.Equal(t, []int32{1, 4}, sels[1])
+	require.Equal(t, []int32{3, 5}, sels[2])
 
 	mp.Free()
 	tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
@@ -137,7 +137,7 @@ func BenchmarkBuild(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			for {
-				ok, err := Call(0, tc.proc, tc.arg)
+				ok, err := Call(0, tc.proc, tc.arg, false, false)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
 				mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)

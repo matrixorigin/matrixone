@@ -88,14 +88,17 @@ type TableItem struct {
 	Rowid    types.Rowid
 
 	// table def
-	Kind      string
-	ViewDef   string
-	Comment   string
-	Partition string
-	CreateSql string
+	Kind       string
+	ViewDef    string
+	Constraint []byte
+	Comment    string
+	Partition  string
+	CreateSql  string
 
 	// primary index
 	PrimaryIdx int
+	// clusterBy key
+	ClusterByIdx int
 
 	// Mark if it is a delete
 	deleted bool
@@ -122,6 +125,7 @@ type column struct {
 	isAutoIncrement int8
 	hasUpdate       int8
 	updateExpr      []byte
+	isClusterBy     int8
 }
 
 type columns []column
@@ -134,8 +138,14 @@ func databaseItemLess(a, b *DatabaseItem) bool {
 	if a.AccountId < b.AccountId {
 		return true
 	}
+	if a.AccountId > b.AccountId {
+		return false
+	}
 	if a.Name < b.Name {
 		return true
+	}
+	if a.Name > b.Name {
+		return false
 	}
 	return a.Ts.Greater(b.Ts)
 }
@@ -144,11 +154,23 @@ func tableItemLess(a, b *TableItem) bool {
 	if a.AccountId < b.AccountId {
 		return true
 	}
+	if a.AccountId > b.AccountId {
+		return false
+	}
 	if a.DatabaseId < b.DatabaseId {
 		return true
 	}
+	if a.DatabaseId > b.DatabaseId {
+		return false
+	}
 	if a.Name < b.Name {
 		return true
+	}
+	if a.Name > b.Name {
+		return false
+	}
+	if a.Ts.Equal(b.Ts) {
+		return a.deleted
 	}
 	return a.Ts.Greater(b.Ts)
 }

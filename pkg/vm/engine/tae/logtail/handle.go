@@ -40,12 +40,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
+	"go.uber.org/zap"
 )
 
-const Size90M = 80 * 1024 * 1024
+const Size90M = 90 * 1024 * 1024
 
 type CheckpointClient interface {
-	CollectCheckpointsInRange(start, end types.TS) (location string, checkpointed types.TS)
+	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	FlushTable(dbID, tableID uint64, ts types.TS) error
 }
 
@@ -65,6 +66,7 @@ func DecideTableScope(tableID uint64) Scope {
 }
 
 func HandleSyncLogTailReq(
+	ctx context.Context,
 	ckpClient CheckpointClient,
 	mgr *Manager,
 	c *catalog.Catalog,
@@ -89,7 +91,10 @@ func HandleSyncLogTailReq(
 		start = tableEntry.GetCreatedAt()
 	}
 
-	ckpLoc, checkpointed := ckpClient.CollectCheckpointsInRange(start, end)
+	ckpLoc, checkpointed, err := ckpClient.CollectCheckpointsInRange(ctx, start, end)
+	if err != nil {
+		return
+	}
 
 	if checkpointed.GreaterEq(end) {
 		return api.SyncLogTailResp{
@@ -119,12 +124,9 @@ func HandleSyncLogTailReq(
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
 		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
 		if (forceFlush && name == tableEntry.GetSchema().Name) || resp.ProtoSize() > Size90M {
-			if err = ckpClient.FlushTable(did, tid, end); err != nil {
-				logutil.Errorf("[logtail] flush err: %v", err)
-				return api.SyncLogTailResp{}, err
-			}
+			_ = ckpClient.FlushTable(did, tid, end)
 			// try again after flushing
-			newResp, err := HandleSyncLogTailReq(ckpClient, mgr, c, req, false)
+			newResp, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
 			logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)
 			return newResp, err
 		}
@@ -269,7 +271,8 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 
 	if b.insBatch.Length() > 0 {
 		bat, err := containersBatchToProtoBatch(b.insBatch)
-		logutil.Debugf("[logtail] catalog insert to %d-%s, %s", tblID, tableName, DebugBatchToString("catalog", b.insBatch, true))
+		logutil.Debugf("[logtail] catalog insert to %d-%s, %s", tblID, tableName,
+			DebugBatchToString("catalog", b.insBatch, true, zap.DebugLevel))
 		if err != nil {
 			return api.SyncLogTailResp{}, err
 		}
@@ -285,7 +288,8 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}
 	if b.delBatch.Length() > 0 {
 		bat, err := containersBatchToProtoBatch(b.delBatch)
-		logutil.Debugf("[logtail] catalog delete from %d-%s, %s", tblID, tableName, DebugBatchToString("catalog", b.delBatch, false))
+		logutil.Debugf("[logtail] catalog delete from %d-%s, %s", tblID, tableName,
+			DebugBatchToString("catalog", b.delBatch, false, zap.DebugLevel))
 		if err != nil {
 			return api.SyncLogTailResp{}, err
 		}
@@ -310,12 +314,12 @@ func catalogEntry2Batch[T *catalog.DBEntry | *catalog.TableEntry](
 	dstBatch *containers.Batch,
 	e T,
 	schema *catalog.Schema,
-	fillDataRow func(e T, attr string, col containers.Vector),
+	fillDataRow func(e T, attr string, col containers.Vector, ts types.TS),
 	rowid types.Rowid,
 	commitTs types.TS,
 ) {
 	for _, col := range schema.ColDefs {
-		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name))
+		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name), commitTs)
 	}
 	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid)
 	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
@@ -525,16 +529,17 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			return err
 		}
 
-		blockID := uint64(0)
 		tableName := b.tname
 		if metaChange {
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
 			logutil.Infof("[Logtail] send block meta for %q", b.tname)
 		}
 		if metaChange {
-			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname, DebugBatchToString("meta", batch, true))
+			logutil.Infof("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+				DebugBatchToString("meta", batch, true, zap.InfoLevel))
 		} else {
-			logutil.Debugf("[logtail] table data [%v] %d-%s: %s", typ, b.tid, b.tname, DebugBatchToString("data", batch, false))
+			logutil.Infof("[logtail] table data [%v] %d-%s: %s", typ, b.tid, b.tname,
+				DebugBatchToString("data", batch, false, zap.InfoLevel))
 		}
 
 		entry := &api.Entry{
@@ -543,7 +548,6 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			TableName:    tableName,
 			DatabaseId:   b.did,
 			DatabaseName: b.dname,
-			BlockId:      blockID,
 			Bat:          bat,
 		}
 		entries = append(entries, entry)
@@ -610,7 +614,7 @@ func LoadCheckpointEntries(
 				return
 			}
 			data := NewCheckpointData()
-			if err = data.ReadFrom(reader, jobScheduler, common.DefaultAllocator); err != nil {
+			if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
 				result.Err = err
 				return
 			}

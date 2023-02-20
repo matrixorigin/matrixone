@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"io"
+	"time"
 )
 
 // FileService is a write-once file system
@@ -44,6 +45,10 @@ type FileService interface {
 	// Delete deletes multi file
 	// returns ErrFileNotFound if requested file not found
 	Delete(ctx context.Context, filePaths ...string) error
+
+	// Stat returns infomations about a file
+	// returns ErrFileNotFound if requested file not found
+	StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 }
 
 type IOVector struct {
@@ -52,6 +57,7 @@ type IOVector struct {
 	// service name is optional, if omitted, the receiver FileService will use the default name of the service
 	// file name parts are separated by '/'
 	// valid characters in file name: 0-9 a-z A-Z / ! - _ . * ' ( )
+	// and all printable non-ASCII characters
 	// example:
 	// s3:a/b/c S3:a/b/c represents the same file 'a/b/c' located in 'S3' service
 	FilePath string
@@ -59,6 +65,10 @@ type IOVector struct {
 	// empty Entries is not allowed
 	// when writing, overlapping Entries is not allowed
 	Entries []IOEntry
+	// ExpireAt specifies the expire time of the file
+	// implementations may or may not delete the file after this time
+	// zero value means no expire
+	ExpireAt time.Time
 }
 
 type IOEntry struct {
@@ -82,6 +92,8 @@ type IOEntry struct {
 	ReadCloserForRead *io.ReadCloser
 
 	// when writing, if Reader is not nil, read data from it instead of reading Data field
+	// number of bytes to be read is specified by Size field
+	// if number of bytes is unknown, set Size field to -1
 	ReaderForWrite io.Reader
 
 	// when reading, if the ToObject field is not nil, the returning object will be set to this field
@@ -104,10 +116,9 @@ type IOEntry struct {
 	// used in capacity limited caches
 	ObjectSize int64
 
-	// ignore indicates the entry should be ignored
-	// if true, implementations must not change any field
-	// for caches to skip individual IOEntry without using another IOVector
-	ignore bool
+	// done indicates whether the entry is filled with data
+	// for implementing cascade cache
+	done bool
 }
 
 // DirEntry is a file or dir

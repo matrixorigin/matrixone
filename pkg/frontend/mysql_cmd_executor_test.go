@@ -17,12 +17,18 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"io"
 	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+
+	"github.com/fagongzi/goetty/v2"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/google/uuid"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -45,7 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
@@ -53,13 +59,13 @@ import (
 )
 
 func init() {
-	trace.Init(context.Background(), trace.EnableTracer(false))
-	trace.DisableLogErrorReport(true)
+	motrace.Init(context.Background(), motrace.EnableTracer(false))
+	motrace.DisableLogErrorReport(true)
 }
 
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
-	stm := &trace.StatementInfo{}
-	ctx = trace.ContextWithStatement(ctx, stm)
+	stm := &motrace.StatementInfo{}
+	ctx = motrace.ContextWithStatement(ctx, stm)
 	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, bool) context.Context {
 		return ctx
 	})
@@ -153,7 +159,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().GetColumns().Return(cols, nil).AnyTimes()
 
 		cws := []ComputationWrapper{
-			use_t,
+			//use_t,
 			create_1,
 			select_1,
 		}
@@ -166,7 +172,7 @@ func Test_mce(t *testing.T) {
 			"set @@tx_isolation=`READ-COMMITTED`",
 			//TODO:fix it after parser is ready
 			//"set a = b",
-			"drop database T",
+			//"drop database T",
 		}
 
 		sql1Col := &MysqlColumn{}
@@ -230,6 +236,11 @@ func Test_mce(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 
 		ses := NewSession(proto, nil, pu, &gSys, true)
+		ses.txnHandler = &TxnHandler{
+			storage:   &engine.EntireEngine{Engine: pu.StorageEngine},
+			txnClient: pu.TxnClient,
+		}
+		ses.txnHandler.SetSession(ses)
 		ses.SetRequestContext(ctx)
 
 		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
@@ -782,7 +793,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
 		proc := &process.Process{}
-		ses := &Session{}
+		ses := &Session{planCache: newPlanCache(1)}
 		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)
@@ -829,8 +840,16 @@ func Test_handleShowColumns(t *testing.T) {
 		proto.ses = ses
 
 		ses.mrs = &MysqlResultSet{}
-		err = handleShowColumns(ses)
-		convey.So(err, convey.ShouldBeNil)
+
+		tableName := &tree.UnresolvedObjectName{
+			NumParts: 2,
+		}
+		tableName.Parts[0] = "x"
+		tableName.Parts[0] = "y"
+		err = handleShowColumns(ses, &tree.ShowColumns{
+			Table: tableName,
+		})
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 
@@ -1086,7 +1105,8 @@ func TestHandleDump(t *testing.T) {
 		}
 		mce.ses = ses
 		dump := &tree.MoDump{
-			OutFile: "test",
+			DumpDatabase: true,
+			OutFile:      "test",
 		}
 		err = mce.handleDump(ctx, dump)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -1165,14 +1185,14 @@ func TestSerializePlanToJson(t *testing.T) {
 	}
 
 	for _, sql := range sqls {
-		mock := plan.NewMockOptimizer()
+		mock := plan.NewMockOptimizer(false)
 		plan, err := buildSingleSql(mock, t, sql)
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		json, rows, bytes := serializePlanToJson(mock.CurrentContext().GetContext(), plan, uuid.New())
-		require.Equal(t, int64(0), rows)
-		require.Equal(t, int64(0), bytes)
+		json, _, stats := serializePlanToJson(mock.CurrentContext().GetContext(), plan, uuid.New())
+		require.Equal(t, int64(0), stats.RowsRead)
+		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))
 	}
 }
@@ -1185,4 +1205,130 @@ func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, e
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
 	return plan.BuildPlan(ctx, stmts[0])
+}
+
+func Test_getSqlType(t *testing.T) {
+	convey.Convey("call getSqlType func", t, func() {
+		sql := "use db"
+		ses := &Session{}
+		ses.getSqlType(sql)
+		convey.So(ses.sqlSourceType, convey.ShouldEqual, intereSql)
+
+		user := "special_user"
+		tenant := &TenantInfo{
+			User: user,
+		}
+		ses.SetTenantInfo(tenant)
+		SetSpecialUser(user, nil)
+		ses.getSqlType(sql)
+		convey.So(ses.sqlSourceType, convey.ShouldEqual, intereSql)
+
+		tenant.User = "dump"
+		ses.getSqlType(sql)
+		convey.So(ses.sqlSourceType, convey.ShouldEqual, externSql)
+
+		sql = "/* cloud_user */ use db"
+		ses.getSqlType(sql)
+		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudUserSql)
+
+		sql = "/* cloud_nonuser */ use db"
+		ses.getSqlType(sql)
+		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudNoUserSql)
+
+		sql = "/* json */ use db"
+		ses.getSqlType(sql)
+		convey.So(ses.sqlSourceType, convey.ShouldEqual, externSql)
+	})
+}
+
+func TestProcessLoadLocal(t *testing.T) {
+	convey.Convey("call processLoadLocal func", t, func() {
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "test.csv",
+			},
+		}
+		proc := testutil.NewProc()
+		var writer *io.PipeWriter
+		proc.LoadLocalReader, writer = io.Pipe()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		cnt := 0
+		ioses.EXPECT().Read(gomock.Any()).DoAndReturn(func(options goetty.ReadOptions) (pkt any, err error) {
+			if cnt == 0 {
+				pkt = &Packet{Length: 5, Payload: []byte("hello"), SequenceID: 1}
+			} else if cnt == 1 {
+				pkt = &Packet{Length: 5, Payload: []byte("world"), SequenceID: 2}
+			} else {
+				err = moerr.NewInvalidInput(proc.Ctx, "length 0")
+			}
+			cnt++
+			return
+		}).AnyTimes()
+		ioses.EXPECT().Close().AnyTimes()
+		proto := &FakeProtocol{
+			ioses: ioses,
+		}
+
+		mce := NewMysqlCmdExecutor()
+		ses := &Session{
+			protocol: proto,
+		}
+		mce.ses = ses
+		buffer := make([]byte, 4096)
+		go func(buf []byte) {
+			tmp := buf
+			for {
+				n, err := proc.LoadLocalReader.Read(tmp)
+				if err != nil {
+					break
+				}
+				tmp = tmp[n:]
+			}
+		}(buffer)
+		err := mce.processLoadLocal(proc.Ctx, param, writer)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
+		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
+	})
+}
+
+func Test_StatementClassify(t *testing.T) {
+	type arg struct {
+		stmt tree.Statement
+		want bool
+	}
+
+	args := []arg{
+		{&tree.ShowCreateTable{}, true},
+		{&tree.ShowCreateView{}, true},
+		{&tree.ShowCreateDatabase{}, true},
+		{&tree.ShowColumns{}, true},
+		{&tree.ShowDatabases{}, true},
+		{&tree.ShowTarget{}, true},
+		{&tree.ShowTableStatus{}, true},
+		{&tree.ShowGrants{}, true},
+		{&tree.ShowTables{}, true},
+		{&tree.ShowProcessList{}, true},
+		{&tree.ShowErrors{}, true},
+		{&tree.ShowWarnings{}, true},
+		{&tree.ShowCollation{}, true},
+		{&tree.ShowVariables{}, true},
+		{&tree.ShowStatus{}, true},
+		{&tree.ShowIndex{}, true},
+		{&tree.ShowFunctionStatus{}, true},
+		{&tree.ShowNodeList{}, true},
+		{&tree.ShowLocks{}, true},
+		{&tree.ShowTableNumber{}, true},
+		{&tree.ShowColumnNumber{}, true},
+		{&tree.ShowTableValues{}, true},
+		{&tree.ShowAccounts{}, true},
+	}
+
+	for _, a := range args {
+		ret, err := StatementCanBeExecutedInUncommittedTransaction(nil, a.stmt)
+		assert.Nil(t, err)
+		assert.Equal(t, ret, a.want)
+	}
 }

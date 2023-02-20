@@ -156,7 +156,18 @@ func (l *Lexer) toHexNum(lval *yySymType, str string) int {
 }
 
 func (l *Lexer) toBit(lval *yySymType, str string) int {
-	ival, err := strconv.ParseUint(str[2:], 2, 64)
+	var (
+		ival uint64
+		err  error
+	)
+	if len(str) < 2 {
+		ival, err = strconv.ParseUint(str, 2, 64)
+	} else if str[1] == 'b' {
+		ival, err = strconv.ParseUint(str[2:], 2, 64)
+	} else {
+		ival, err = strconv.ParseUint(str, 2, 64)
+	}
+
 	if err != nil {
 		// TODO: toDecimal()
 		//l.scanner.LastError = err

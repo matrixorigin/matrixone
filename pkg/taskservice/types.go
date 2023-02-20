@@ -73,7 +73,7 @@ type conditions struct {
 
 	hasTaskExecutorCond bool
 	taskExecutorOp      Op
-	taskExecutor        uint32
+	taskExecutor        task.TaskCode
 
 	orderByDesc bool
 }
@@ -86,7 +86,7 @@ func WithTaskIDDesc() Condition {
 }
 
 // WithTaskExecutorCond set task executor condition
-func WithTaskExecutorCond(op Op, value uint32) Condition {
+func WithTaskExecutorCond(op Op, value task.TaskCode) Condition {
 	return func(qo *conditions) {
 		qo.hasTaskExecutorCond = true
 		qo.taskExecutorOp = op
@@ -204,7 +204,7 @@ type TaskRunner interface {
 	// Parallelism maximum number of concurrently executing Tasks
 	Parallelism() int
 	// RegisterExecutor register the task executor
-	RegisterExecutor(code uint32, executor TaskExecutor)
+	RegisterExecutor(code task.TaskCode, executor TaskExecutor)
 }
 
 // TaskStorage task storage

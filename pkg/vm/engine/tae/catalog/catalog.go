@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -46,6 +47,7 @@ const (
 	SegmentAttr_ID               = "id"
 	SegmentAttr_CreateAt         = "create_at"
 	SegmentAttr_State            = "state"
+	SegmentAttr_Sorted           = "sorted"
 	SnapshotAttr_BlockMaxRow     = "block_max_row"
 	SnapshotAttr_SegmentMaxBlock = "segment_max_block"
 )
@@ -143,7 +145,53 @@ func (catalog *Catalog) InitSystemDB() {
 		panic(err)
 	}
 }
-
+func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
+	logutil.Infof("GC Catalog %v", ts.ToString())
+	processor := LoopProcessor{}
+	processor.DatabaseFn = func(d *DBEntry) error {
+		d.RLock()
+		needGC := d.DeleteBefore(ts)
+		d.RUnlock()
+		if needGC {
+			catalog.RemoveEntry(d)
+		}
+		return nil
+	}
+	processor.TableFn = func(te *TableEntry) error {
+		te.RLock()
+		needGC := te.DeleteBefore(ts)
+		te.RUnlock()
+		if needGC {
+			db := te.db
+			db.RemoveEntry(te)
+		}
+		return nil
+	}
+	processor.SegmentFn = func(se *SegmentEntry) error {
+		se.RLock()
+		needGC := se.DeleteBefore(ts)
+		se.RUnlock()
+		if needGC {
+			tbl := se.table
+			tbl.RemoveEntry(se)
+		}
+		return nil
+	}
+	processor.BlockFn = func(be *BlockEntry) error {
+		be.RLock()
+		needGC := be.DeleteBefore(ts)
+		be.RUnlock()
+		if needGC {
+			seg := be.segment
+			seg.RemoveEntry(be)
+		}
+		return nil
+	}
+	err := catalog.RecurLoop(&processor)
+	if err != nil {
+		panic(err)
+	}
+}
 func (catalog *Catalog) ReplayCmd(
 	txncmd txnif.TxnCmd,
 	dataFactory DataFactory,
@@ -325,7 +373,7 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		dbid := ins.GetVectorByName(pkgcatalog.SystemRelAttr_DBID).Get(i).(uint64)
 		name := string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Name).Get(i).([]byte))
 		schema := NewEmptySchema(name)
-		schemaOffset = schema.ReadFromBatch(insCol, schemaOffset)
+		schemaOffset = schema.ReadFromBatch(insCol, schemaOffset, tid)
 		schema.Comment = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte))
 		schema.Partition = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte))
 		schema.Relkind = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte))
@@ -348,8 +396,8 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		txnNode := txnbase.ReadTuple(delTxn, i)
 		catalog.onReplayDeleteTable(dbid, tid, txnNode)
 	}
-
 }
+
 func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, txnNode *txnbase.TxnMVCCNode, dataFactory DataFactory) {
 	catalog.OnReplayTableID(tid)
 	db, err := catalog.GetDatabaseByID(dbid)
@@ -360,9 +408,19 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl, _ := db.GetTableEntryByID(tid)
 	if tbl != nil {
 		tblCreatedAt := tbl.GetCreatedAt()
-		if !tblCreatedAt.Equal(txnNode.End) {
+		if tblCreatedAt.Greater(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
+		// update constraint
+		un := &TableMVCCNode{
+			EntryMVCCNode: &EntryMVCCNode{
+				CreatedAt: tblCreatedAt,
+			},
+			TxnMVCCNode:       txnNode,
+			SchemaConstraints: string(schema.Constraint),
+		}
+		tbl.Insert(un)
+
 		return
 	}
 	tbl = NewReplayTableEntry()
@@ -375,7 +433,8 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
-		TxnMVCCNode: txnNode,
+		TxnMVCCNode:       txnNode,
+		SchemaConstraints: string(schema.Constraint),
 	}
 	tbl.Insert(un)
 }
@@ -459,9 +518,10 @@ func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *container
 		if appendable {
 			state = ES_Appendable
 		}
+		sorted := ins.GetVectorByName(SegmentAttr_Sorted).Get(i).(bool)
 		sid := ins.GetVectorByName(SegmentAttr_ID).Get(i).(uint64)
 		txnNode := txnbase.ReadTuple(insTxn, i)
-		catalog.onReplayCreateSegment(dbid, tid, sid, state, txnNode, dataFactory)
+		catalog.onReplayCreateSegment(dbid, tid, sid, state, sorted, txnNode, dataFactory)
 	}
 	idVec = delTxn.GetVectorByName(SnapshotAttr_DBID)
 	for i := 0; i < idVec.Length(); i++ {
@@ -472,7 +532,7 @@ func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *container
 		catalog.onReplayDeleteSegment(dbid, tid, rowIDToU64(sid), txnNode)
 	}
 }
-func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state EntryState, txnNode *txnbase.TxnMVCCNode, dataFactory DataFactory) {
+func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state EntryState, sorted bool, txnNode *txnbase.TxnMVCCNode, dataFactory DataFactory) {
 	catalog.OnReplaySegmentID(segid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -496,6 +556,7 @@ func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state En
 	seg.table = rel
 	seg.ID = segid
 	seg.state = state
+	seg.sorted = sorted
 	seg.segData = dataFactory.MakeSegmentFactory()(seg)
 	rel.AddEntryLocked(seg)
 	un := &MetadataMVCCNode{
@@ -856,6 +917,7 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	}
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(database.String()))
+	// database.Close()
 	catalog.Lock()
 	defer catalog.Unlock()
 	if n, ok := catalog.entries[database.GetID()]; !ok {

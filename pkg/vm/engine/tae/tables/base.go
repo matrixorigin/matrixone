@@ -81,12 +81,17 @@ func newBaseBlock(
 }
 
 func (blk *baseBlock) Close() {
-	// TODO
+	blk.meta = nil
+	blk.mvcc.Close()
+	blk.mvcc = nil
 }
 
 func (blk *baseBlock) PinNode() *Node {
 	n := blk.node.Load()
-	n.Ref()
+	// if ref fails, reload.
+	// Note: avoid bad case where releasing happens before Ref()
+	for ; !n.RefIfHasRef(); n = blk.node.Load() {
+	}
 	return n
 }
 

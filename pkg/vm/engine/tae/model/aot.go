@@ -145,9 +145,11 @@ func (aot *AOT[B, R]) Max() (b B) {
 	return
 }
 
-// Truncate prunes the blocks
+// Truncate prunes the blocks.
+// Deletable blocks are those have all txns prepared before the given timestamp
 // For example: truncate the table by timestamp
 // blocks:           (Page1[bornTs=1], Page2[bornTs=10], Page3[bornTs=20])
+// Call              Remain               Delete
 // Truncate(ts=5):   (Page1,Page2,Page3), ()
 // Truncate(ts=12):  (Page2,Page3),       (Page1)
 // Truncate(ts=30):  (Page3),             (Page1,Page2)
@@ -156,10 +158,11 @@ func (aot *AOT[B, R]) Truncate(stopFn func(_ B) bool) (cnt int) {
 	cpy := aot.blocks.Copy()
 	aot.Unlock()
 
-	valid := false
+	valid := false // if there is a block stopping search early
 	candidates := make([]B, 0)
 	cpy.Scan(func(block B) bool {
 		if stopFn(block) {
+			// this block's bornTS >= given ts
 			valid = true
 			return false
 		}
@@ -169,6 +172,9 @@ func (aot *AOT[B, R]) Truncate(stopFn func(_ B) bool) (cnt int) {
 	})
 
 	// logutil.Infof("valid=%v, candidates len=%d", valid, len(candidates))
+
+	// 1. clear them all? probably not a good idea, wrong checkpoint?
+	// 2. just delete one block? seems not neccessary
 	if !valid || len(candidates) <= 1 {
 		return
 	}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/lni/dragonboat/v4"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"go.uber.org/zap"
 )
@@ -37,7 +38,7 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		// running as a result of store.startReplicas(), we just ignore the
 		// dragonboat.ErrShardAlreadyExist error below.
 		if err != dragonboat.ErrShardAlreadyExist {
-			s.logger.Error("failed to start hakeeper replica", zap.Error(err))
+			s.runtime.SubLogger(runtime.SystemInit).Error("failed to start hakeeper replica", zap.Error(err))
 			return err
 		}
 	}
@@ -52,14 +53,14 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		}
 		if err := s.store.setInitialClusterInfo(numOfLogShards,
 			numOfDNShards, numOfLogReplicas); err != nil {
-			s.logger.Error("failed to set initial cluster info", zap.Error(err))
+			s.runtime.SubLogger(runtime.SystemInit).Error("failed to set initial cluster info", zap.Error(err))
 			if err == dragonboat.ErrShardNotFound {
 				return nil
 			}
 			time.Sleep(time.Second)
 			continue
 		}
-		s.logger.Info("initial cluster info set")
+		s.runtime.SubLogger(runtime.SystemInit).Info("initial cluster info set")
 		break
 	}
 	for i := 0; i < checkBootstrapCycles; i++ {
@@ -79,11 +80,11 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 func (s *Service) createInitTasks(ctx context.Context) error {
 	if err := s.store.taskScheduler.Create(ctx, []task.TaskMetadata{{
 		ID:       task.TaskCode_SystemInit.String(),
-		Executor: uint32(task.TaskCode_SystemInit),
+		Executor: task.TaskCode_SystemInit,
 	}}); err != nil {
-		s.logger.Error("failed to create init tasks", zap.Error(err))
+		s.runtime.SubLogger(runtime.SystemInit).Error("failed to create init tasks", zap.Error(err))
 		return err
 	}
-	s.logger.Info("init tasks created")
+	s.runtime.SubLogger(runtime.SystemInit).Info("init tasks created")
 	return nil
 }

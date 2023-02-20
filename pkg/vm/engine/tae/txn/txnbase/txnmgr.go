@@ -416,6 +416,21 @@ func (mgr *TxnManager) OnException(new error) {
 	}
 }
 
+// MinTSForTest is only be used in ut to ensure that
+// files that have been gc will not be used.
+func (mgr *TxnManager) MinTSForTest() types.TS {
+	mgr.RLock()
+	defer mgr.RUnlock()
+	minTS := types.MaxTs()
+	for _, txn := range mgr.IDMap {
+		startTS := txn.GetStartTS()
+		if startTS.Less(minTS) {
+			minTS = startTS
+		}
+	}
+	return minTS
+}
+
 func (mgr *TxnManager) Start() {
 	mgr.PreparingSM.Start()
 }

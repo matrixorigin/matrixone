@@ -75,14 +75,16 @@ func TestDNStateUpdate(t *testing.T) {
 			ShardID:   1,
 			ReplicaID: 1,
 		}},
+		LogtailServerAddress: "addr-0",
 	}
 	tick1 := uint64(100)
 
 	state.Update(hb1, tick1)
 	assert.Equal(t, state.Stores["dn-a"], DNStoreInfo{
-		Tick:           tick1,
-		ServiceAddress: hb1.ServiceAddress,
-		Shards:         hb1.Shards,
+		Tick:                 tick1,
+		ServiceAddress:       hb1.ServiceAddress,
+		Shards:               hb1.Shards,
+		LogtailServerAddress: hb1.LogtailServerAddress,
 	})
 
 	hb2 := DNStoreHeartbeat{
@@ -91,14 +93,16 @@ func TestDNStateUpdate(t *testing.T) {
 		Shards: []DNShardInfo{
 			{ShardID: 1, ReplicaID: 1},
 			{ShardID: 2, ReplicaID: 1}},
+		LogtailServerAddress: "addr-0",
 	}
 	tick2 := uint64(200)
 
 	state.Update(hb2, tick2)
 	assert.Equal(t, state.Stores[hb2.UUID], DNStoreInfo{
-		Tick:           tick2,
-		ServiceAddress: hb2.ServiceAddress,
-		Shards:         hb2.Shards,
+		Tick:                 tick2,
+		ServiceAddress:       hb2.ServiceAddress,
+		Shards:               hb2.Shards,
+		LogtailServerAddress: "addr-0",
 	})
 }
 

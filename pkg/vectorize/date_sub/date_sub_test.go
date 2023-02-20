@@ -32,16 +32,16 @@ func TestDateSub(t *testing.T) {
 		want  []types.Date
 	}{
 		{
-			args1: []types.Date{types.FromCalendar(2021, 8, 13)},
+			args1: []types.Date{types.DateFromCalendar(2021, 8, 13)},
 			args2: []int64{1},
 			args3: []int64{int64(types.Day)},
-			want:  []types.Date{types.FromCalendar(2021, 8, 12)},
+			want:  []types.Date{types.DateFromCalendar(2021, 8, 12)},
 		},
 		{
-			args1: []types.Date{types.FromCalendar(2021, 1, 1)},
+			args1: []types.Date{types.DateFromCalendar(2021, 1, 1)},
 			args2: []int64{1},
 			args3: []int64{int64(types.Day)},
-			want:  []types.Date{types.FromCalendar(2020, 12, 31)},
+			want:  []types.Date{types.DateFromCalendar(2020, 12, 31)},
 		},
 	}
 
@@ -68,16 +68,16 @@ func TestDatetimeSub(t *testing.T) {
 		want  []types.Datetime
 	}{
 		{
-			args1: []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 1, 1)},
+			args1: []types.Datetime{types.DatetimeFromClock(2020, 1, 1, 1, 1, 1, 1)},
 			args2: []int64{1},
 			args3: []int64{int64(types.MicroSecond)},
-			want:  []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 1, 0)},
+			want:  []types.Datetime{types.DatetimeFromClock(2020, 1, 1, 1, 1, 1, 0)},
 		},
 		{
-			args1: []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 1, 1)},
+			args1: []types.Datetime{types.DatetimeFromClock(2020, 1, 1, 1, 1, 1, 1)},
 			args2: []int64{2},
 			args3: []int64{int64(types.Second)},
-			want:  []types.Datetime{types.FromClock(2020, 1, 1, 1, 0, 59, 1)},
+			want:  []types.Datetime{types.DatetimeFromClock(2020, 1, 1, 1, 0, 59, 1)},
 		},
 	}
 
@@ -108,21 +108,21 @@ func TestDateStringSub(t *testing.T) {
 			args1:   []string{"2018-01-02"},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Day)},
-			want:    []types.Datetime{types.FromClock(2018, 1, 1, 0, 0, 0, 0)},
+			want:    []types.Datetime{types.DatetimeFromClock(2018, 1, 1, 0, 0, 0, 0)},
 			contain: false,
 		},
 		{
 			args1:   []string{"2018-01-02"},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Second)},
-			want:    []types.Datetime{types.FromClock(2018, 1, 1, 23, 59, 59, 0)},
+			want:    []types.Datetime{types.DatetimeFromClock(2018, 1, 1, 23, 59, 59, 0)},
 			contain: false,
 		},
 		{
 			args1:   []string{"2018-01-01 00:00:02"},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Second)},
-			want:    []types.Datetime{types.FromClock(2018, 1, 1, 0, 0, 1, 0)},
+			want:    []types.Datetime{types.DatetimeFromClock(2018, 1, 1, 0, 0, 1, 0)},
 			contain: false,
 		},
 	}

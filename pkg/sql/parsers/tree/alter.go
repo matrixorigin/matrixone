@@ -51,6 +51,9 @@ func (node *AlterUser) Format(ctx *FmtCtx) {
 	node.CommentOrAttribute.Format(ctx)
 }
 
+func (node *AlterUser) GetStatementType() string { return "Alter User" }
+func (node *AlterUser) GetQueryType() string     { return QueryTypeDCL }
+
 func NewAlterUser(ife bool, u []*User, r *Role, m UserMiscOption) *AlterUser {
 	return &AlterUser{
 		IfExists: ife,
@@ -101,3 +104,68 @@ func (ca *AlterAccount) Format(ctx *FmtCtx) {
 	ca.StatusOption.Format(ctx)
 	ca.Comment.Format(ctx)
 }
+
+func (ca *AlterAccount) GetStatementType() string { return "Alter Account" }
+func (ca *AlterAccount) GetQueryType() string     { return QueryTypeDCL }
+
+type AlterView struct {
+	statementImpl
+	IfExists bool
+	Name     *TableName
+	ColNames IdentifierList
+	AsSource *Select
+}
+
+func (node *AlterView) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter ")
+
+	ctx.WriteString("view ")
+
+	if node.IfExists {
+		ctx.WriteString("if exists ")
+	}
+
+	node.Name.Format(ctx)
+	if len(node.ColNames) > 0 {
+		ctx.WriteString(" (")
+		node.ColNames.Format(ctx)
+		ctx.WriteByte(')')
+	}
+	ctx.WriteString(" as ")
+	node.AsSource.Format(ctx)
+}
+
+func (node *AlterView) GetStatementType() string { return "Alter View" }
+func (node *AlterView) GetQueryType() string     { return QueryTypeDDL }
+
+// alter configuration for mo_mysql_compatbility_mode
+type AlterDataBaseConfig struct {
+	statementImpl
+	AccountName    string
+	DbName         string
+	IsAccountLevel bool
+	UpdateConfig   string
+}
+
+func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
+
+	if node.IsAccountLevel {
+		ctx.WriteString("alter ")
+		ctx.WriteString("account configuration ")
+
+		ctx.WriteString("for ")
+		ctx.WriteString(fmt.Sprintf("%s ", node.AccountName))
+	} else {
+		ctx.WriteString("alter ")
+		ctx.WriteString("database configuration ")
+
+		ctx.WriteString("for ")
+		ctx.WriteString(fmt.Sprintf("%s ", node.DbName))
+	}
+
+	ctx.WriteString("as ")
+	ctx.WriteString(fmt.Sprintf("%s ", node.UpdateConfig))
+}
+
+func (node *AlterDataBaseConfig) GetStatementType() string { return "Alter DataBase config" }
+func (node *AlterDataBaseConfig) GetQueryType() string     { return QueryTypeDDL }

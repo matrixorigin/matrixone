@@ -339,13 +339,13 @@ func TestClusterDetailsQuery(t *testing.T) {
 	tsm.state.DNState.Stores["uuid3"] = pb.DNStoreInfo{
 		Tick:           3,
 		ServiceAddress: "addr3",
-
 		Shards: []pb.DNShardInfo{
 			{
 				ShardID:   2,
 				ReplicaID: 1,
 			},
 		},
+		LogtailServerAddress: "addr4",
 	}
 	tsm.state.LogState.Shards[1] = pb.LogShardInfo{
 		ShardID:  1,
@@ -403,6 +403,7 @@ func TestClusterDetailsQuery(t *testing.T) {
 						ReplicaID: 1,
 					},
 				},
+				LogtailServerAddress: "addr4",
 			},
 		},
 		CNStores: []pb.CNStore{

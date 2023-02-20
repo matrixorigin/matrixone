@@ -66,17 +66,15 @@ var (
 		{
 			Name: "value",
 			Typ: &plan.Type{
-				Id:          int32(types.T_varchar),
+				Id:          int32(types.T_json),
 				NotNullable: false,
-				Width:       types.MaxVarcharLen,
 			},
 		},
 		{
 			Name: "this",
 			Typ: &plan.Type{
-				Id:          int32(types.T_varchar),
+				Id:          int32(types.T_json),
 				NotNullable: false,
-				Width:       types.MaxVarcharLen,
 			},
 		},
 	}

@@ -16,8 +16,14 @@ package process
 
 import (
 	"context"
+	"io"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -30,8 +36,15 @@ type Analyze interface {
 	Stop()
 	Start()
 	Alloc(int64)
-	Input(*batch.Batch)
-	Output(*batch.Batch)
+	Input(*batch.Batch, bool)
+	Output(*batch.Batch, bool)
+	WaitStop(time.Time)
+	DiskIO(*batch.Batch)
+	S3IOByte(*batch.Batch)
+	S3IOCount(int)
+	Network(*batch.Batch)
+	AddScanTime(t time.Time)
+	AddInsertTime(t time.Time)
 }
 
 // WaitRegister channel
@@ -70,18 +83,23 @@ type Limitation struct {
 
 // SessionInfo session information
 type SessionInfo struct {
-	User          string
-	Host          string
-	Role          string
-	ConnectionID  uint64
-	AccountId     uint32
-	RoleId        uint32
-	UserId        uint32
-	LastInsertID  uint64
-	Database      string
-	Version       string
-	TimeZone      *time.Location
-	StorageEngine engine.Engine
+	Account           string
+	User              string
+	Host              string
+	Role              string
+	ConnectionID      uint64
+	AccountId         uint32
+	RoleId            uint32
+	UserId            uint32
+	LastInsertID      uint64
+	Database          string
+	Version           string
+	TimeZone          *time.Location
+	StorageEngine     engine.Engine
+	QueryId           []string
+	ResultColTypes    []types.Type
+	AutoIncrCaches    defines.AutoIncrCaches
+	AutoIncrCacheSize uint64
 }
 
 // AnalyzeInfo  analyze information for query
@@ -94,12 +112,26 @@ type AnalyzeInfo struct {
 	OutputRows int64
 	// TimeConsumed, time taken by the node in milliseconds
 	TimeConsumed int64
+	// WaitTimeConsumed, time taken by the node waiting for channel in milliseconds
+	WaitTimeConsumed int64
 	// InputSize, data size accepted by node
 	InputSize int64
 	// OutputSize, data size output by node
 	OutputSize int64
 	// MemorySize, memory alloc by node
 	MemorySize int64
+	// DiskIO, data size read from disk
+	DiskIO int64
+	// S3IOByte, data size read from s3
+	S3IOByte int64
+	// S3IOCount, query count that read from s3
+	S3IOCount int64
+	// NetworkIO, message size send between CN node
+	NetworkIO int64
+	// ScanTime, scan cost time in external scan
+	ScanTime int64
+	// InsertTime, insert cost time in load flow
+	InsertTime int64
 }
 
 // Process contains context used in query execution
@@ -135,6 +167,17 @@ type Process struct {
 	LoadTag bool
 
 	LastInsertID *uint64
+
+	LoadLocalReader *io.PipeReader
+
+	DispatchNotifyCh chan WrapCs
+}
+
+type WrapCs struct {
+	MsgId  uint64
+	Uid    uuid.UUID
+	Cs     morpc.ClientSession
+	DoneCh chan struct{}
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
@@ -152,6 +195,7 @@ func (proc *Process) GetLastInsertID() uint64 {
 
 type analyze struct {
 	start    time.Time
+	wait     time.Duration
 	analInfo *AnalyzeInfo
 }
 

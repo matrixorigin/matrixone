@@ -17,6 +17,11 @@ package rpc
 import (
 	"context"
 	"fmt"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,9 +35,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"testing"
-	"time"
 )
 
 const ModuleName = "TAEHANDLE"
@@ -152,7 +156,8 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	}
 
 	mh.Handle = &Handle{
-		eng: moengine.NewEngine(tae),
+		eng:          moengine.NewEngine(tae),
+		jobScheduler: tasks.NewParallelJobScheduler(5),
 	}
 	mh.Handle.mu.txnCtxs = make(map[string]*txnContext)
 	return mh
@@ -203,10 +208,8 @@ type Entry struct {
 	databaseId   uint64
 	tableName    string
 	databaseName string
-	// blockName for s3 file
+	//object name for s3 file
 	fileName string
-	// blockId for s3 file
-	blockId uint64
 	// update or delete tuples
 	bat *batch.Batch
 }
@@ -245,9 +248,11 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			}
 		}
 		for _, def := range defs {
-			if indexDef, ok := def.(*engine.PrimaryIndexDef); ok {
-				for _, name := range indexDef.Names {
-					attr, _ := defs[mp[name]].(*engine.AttributeDef)
+			if constraintDef, ok := def.(*engine.ConstraintDef); ok {
+				pkeyDef := constraintDef.GetPrimaryKeyDef()
+				if pkeyDef != nil {
+					pkeyColName := pkeyDef.Pkey.PkeyColName
+					attr, _ := defs[mp[pkeyColName]].(*engine.AttributeDef)
 					attr.Attr.Primary = true
 				}
 			}
@@ -319,7 +324,8 @@ func makePBEntry(
 	dbId,
 	tableId uint64,
 	dbName,
-	tbName string,
+	tbName,
+	file string,
 	bat *batch.Batch) (pe *api.Entry, err error) {
 	e := Entry{
 		typ:          typ,
@@ -327,6 +333,7 @@ func makePBEntry(
 		databaseId:   dbId,
 		tableName:    tbName,
 		tableId:      tableId,
+		fileName:     file,
 		bat:          bat,
 	}
 	return toPBEntry(e)
@@ -551,6 +558,7 @@ func makeCreateDatabaseEntries(
 		catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG,
 		catalog.MO_DATABASE,
+		"",
 		createDbBat,
 	)
 	if err != nil {
@@ -588,7 +596,7 @@ func makeCreateTableEntries(
 		}
 		createTbEntry, err := makePBEntry(INSERT,
 			catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat)
+			catalog.MO_CATALOG, catalog.MO_TABLES, "", bat)
 		if err != nil {
 			return nil, err
 		}
@@ -599,8 +607,10 @@ func makeCreateTableEntries(
 		if err != nil {
 			return nil, err
 		}
-		createColumnEntry, err := makePBEntry(INSERT, catalog.MO_CATALOG_ID,
-			catalog.MO_COLUMNS_ID, catalog.MO_CATALOG, catalog.MO_COLUMNS, bat)
+		createColumnEntry, err := makePBEntry(
+			INSERT, catalog.MO_CATALOG_ID,
+			catalog.MO_COLUMNS_ID, catalog.MO_CATALOG,
+			catalog.MO_COLUMNS, "", bat)
 		if err != nil {
 			return nil, err
 		}
@@ -695,7 +705,7 @@ func genCreateTableTuple(
 		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
 			return nil, err
 		}
-		idx = catalog.MO_TABLES_CONSTRAINT
+		idx = catalog.MO_TABLES_CONSTRAINT_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // constraint
 		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
 			return nil, err
@@ -722,7 +732,6 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		TableName:    e.tableName,
 		DatabaseName: e.databaseName,
 		FileName:     e.fileName,
-		BlockId:      e.blockId,
 	}, nil
 }
 
@@ -737,6 +746,17 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 		rbat.Vecs = append(rbat.Vecs, pbVector)
 	}
 	return rbat, nil
+}
+
+func toTAEBatchWithSharedMemory(schema *catalog2.Schema,
+	bat *batch.Batch) *containers.Batch {
+	allNullables := schema.AllNullables()
+	taeBatch := containers.NewEmptyBatch()
+	for i, vec := range bat.Vecs {
+		v := containers.NewVectorWithSharedMemory(vec, allNullables[i])
+		taeBatch.AddVector(bat.Attrs[i], v)
+	}
+	return taeBatch
 }
 
 //gen LogTail

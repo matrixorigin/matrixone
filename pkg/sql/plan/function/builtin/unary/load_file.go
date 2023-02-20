@@ -45,7 +45,7 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	ctx, err := io.ReadAll(r)
 	defer r.Close()
 	if len(ctx) > blobsize {
-		return nil, moerr.NewInternalErrorNoCtx("Data too long for blob")
+		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
 	}
 	var isNull bool
 	if len(ctx) == 0 {

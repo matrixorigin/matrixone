@@ -56,6 +56,10 @@ const (
 	EngineDistributedTAE       EngineType = "distributed-tae"
 	EngineMemory               EngineType = "memory"
 	EngineNonDistributedMemory EngineType = "non-distributed-memory"
+	// ReservedTasks equals how many task must run background.
+	// 1 for metric StorageUsage
+	// 1 for trace ETLMerge
+	ReservedTasks = 2
 )
 
 // Config cn service
@@ -81,7 +85,7 @@ type Config struct {
 		MinCount            int64                `toml:"min-count"`
 		ScanInterval        toml.Duration        `toml:"scan-interval"`
 		IncrementalInterval toml.Duration        `toml:"incremental-interval"`
-		GlobalInterval      toml.Duration        `toml:"global-interval"`
+		GlobalMinCount      int64                `toml:"global-min-count"`
 	}
 
 	// parameters for cn-server related buffer.
@@ -156,8 +160,8 @@ func (c *Config) Validate() error {
 	}
 	if c.TaskRunner.Parallelism == 0 {
 		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
-		if c.TaskRunner.Parallelism == 0 {
-			c.TaskRunner.Parallelism = 1
+		if c.TaskRunner.Parallelism <= ReservedTasks {
+			c.TaskRunner.Parallelism = 1 + ReservedTasks
 		}
 	}
 	if c.TaskRunner.FetchInterval.Duration == 0 {

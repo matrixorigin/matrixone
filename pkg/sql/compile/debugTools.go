@@ -48,6 +48,7 @@ var debugInstructionNames = map[int]string{
 	vm.LoopSemi:     "loop semi",
 	vm.LoopAnti:     "loop anti",
 	vm.LoopSingle:   "loop single",
+	vm.LoopMark:     "loop mark",
 	vm.MergeTop:     "merge top",
 	vm.MergeLimit:   "merge limit",
 	vm.MergeOrder:   "merge order",
@@ -126,14 +127,21 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 	}
 
 	// get receiver id string
-	getReceiverStr := func(rs []*process.WaitRegister) string {
+	getReceiverStr := func(s *Scope, rs []*process.WaitRegister) string {
 		str := "["
 		for i := range rs {
+			remote := ""
+			for _, u := range s.RemoteReceivRegInfos {
+				if u.Idx == i {
+					remote = fmt.Sprintf("(%s)", u.Uuid)
+					break
+				}
+			}
 			if i != 0 {
 				str += ", "
 			}
 			if id, ok := rmp[rs[i]]; ok {
-				str += fmt.Sprintf("%d", id)
+				str += fmt.Sprintf("%d%s", id, remote)
 			} else {
 				str += "unknown"
 			}
@@ -177,20 +185,34 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 			if id == vm.Dispatch {
 				arg := instruction.Arg.(*dispatch.Argument)
 				chs := ""
-				for i := range arg.Regs {
+				for i := range arg.LocalRegs {
 					if i != 0 {
 						chs += ", "
 					}
-					if receiverId, okk := mp[arg.Regs[i]]; okk {
+					if receiverId, okk := mp[arg.LocalRegs[i]]; okk {
 						chs += fmt.Sprintf("%d", receiverId)
 					} else {
 						chs += "unknown"
 					}
 				}
-				if arg.All {
-					str += fmt.Sprintf(" to all of MergeReceiver [%s]", chs)
-				} else {
-					str += fmt.Sprintf(" to any of MergeReceiver [%s]", chs)
+				switch arg.FuncId {
+				case dispatch.SendToAllFunc, dispatch.SendToAllLocalFunc:
+					str += fmt.Sprintf(" to all of MergeReceiver [%s].", chs)
+				case dispatch.SendToAnyLocalFunc:
+					str += fmt.Sprintf(" to any of MergeReceiver [%s].", chs)
+				default:
+					str += fmt.Sprintf(" unknow type dispatch [%s].", chs)
+				}
+
+				if arg.FuncId == dispatch.SendToAllFunc && len(arg.RemoteRegs) != 0 {
+					remoteChs := ""
+					for i, reg := range arg.RemoteRegs {
+						if i != 0 {
+							remoteChs += ", "
+						}
+						remoteChs += fmt.Sprintf("[addr: %s, uuid %s]", reg.NodeAddr, reg.Uuid)
+					}
+					str += fmt.Sprintf(" cross-cn receiver info: %s", remoteChs)
 				}
 			}
 			return str
@@ -203,7 +225,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 		str := addGap()
 		receiverStr := "nil"
 		if ss[i].Proc != nil {
-			receiverStr = getReceiverStr(ss[i].Proc.Reg.MergeReceivers)
+			receiverStr = getReceiverStr(ss[i], ss[i].Proc.Reg.MergeReceivers)
 		}
 		str += fmt.Sprintf("Scope %d (Magic: %s, Receiver: %s): [", i+1, magicShow(ss[i].Magic), receiverStr)
 		for j, instruction := range ss[i].Instructions {

@@ -16,6 +16,7 @@ package intersectall
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -52,7 +53,7 @@ func Prepare(proc *process.Process, arg any) error {
 // use values from left relation to probe and update the array.
 // throw away values that do not exist in the hash table.
 // preserve values that exist in the hash table (the minimum of the number of times that exist in either).
-func Call(idx int, proc *process.Process, argument any) (bool, error) {
+func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (bool, error) {
 	var err error
 	analyzer := proc.GetAnalyze(idx)
 	analyzer.Start()
@@ -61,15 +62,18 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 	for {
 		switch arg.ctr.state {
 		case Build:
-			if err = arg.ctr.build(proc, analyzer); err != nil {
+			if err = arg.ctr.build(proc, analyzer, isFirst); err != nil {
 				arg.Free(proc, true)
 				return false, err
+			}
+			if arg.ctr.hashTable != nil {
+				analyzer.Alloc(arg.ctr.hashTable.Size())
 			}
 			arg.ctr.state = Probe
 
 		case Probe:
 			last := false
-			last, err = arg.ctr.probe(proc, analyzer)
+			last, err = arg.ctr.probe(proc, analyzer, isFirst, isLast)
 			if err != nil {
 				arg.Free(proc, true)
 				return false, err
@@ -89,9 +93,12 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 }
 
 // build use all batches from proc.Reg.MergeReceiver[1](right relation) to build the hash map.
-func (ctr *container) build(proc *process.Process, analyzer process.Analyze) error {
+func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isFirst bool) error {
 	for {
+		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[1].Ch
+		analyzer.WaitStop(start)
+
 		if bat == nil {
 			break
 		}
@@ -99,7 +106,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze) err
 			continue
 		}
 
-		analyzer.Input(bat)
+		analyzer.Input(bat, isFirst)
 		// build hashTable and a counter to record how many times each key appears
 		{
 			itr := ctr.hashTable.NewIterator()
@@ -138,10 +145,12 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze) err
 // If a row of the batch appears in the hash table and the value of it in the ctr.counter is greater than 0，
 // send it to the next operator and counter--; else, continue.
 // if batch is the last one, return true, else return false.
-func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bool, error) {
+func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	for {
-
+		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
+		analyzer.WaitStop(start)
+
 		if bat == nil {
 			return true, nil
 		}
@@ -149,7 +158,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bo
 			continue
 		}
 
-		analyzer.Input(bat)
+		analyzer.Input(bat, isFirst)
 		//data to send to the next op
 		var outputBat *batch.Batch
 		//counter to record whether a row should add to output batch or not
@@ -212,7 +221,8 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bo
 			}
 
 		}
-		analyzer.Output(outputBat)
+		analyzer.Alloc(int64(outputBat.Size()))
+		analyzer.Output(outputBat, isLast)
 		proc.SetInputBatch(outputBat)
 		bat.Clean(proc.Mp())
 		return false, nil

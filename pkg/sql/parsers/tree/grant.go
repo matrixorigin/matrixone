@@ -41,6 +41,9 @@ func (node *Grant) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *Grant) GetStatementType() string { return "Grant" }
+func (node *Grant) GetQueryType() string     { return QueryTypeDCL }
+
 func NewGrant() *Grant {
 	return &Grant{}
 }
@@ -90,6 +93,9 @@ func (node *GrantPrivilege) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *GrantPrivilege) GetStatementType() string { return "Grant Privilege" }
+func (node *GrantPrivilege) GetQueryType() string     { return QueryTypeDCL }
+
 type GrantRole struct {
 	statementImpl
 	Roles       []*Role
@@ -121,6 +127,9 @@ func (node *GrantRole) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *GrantRole) GetStatementType() string { return "Grant Role" }
+func (node *GrantRole) GetQueryType() string     { return QueryTypeDCL }
+
 type GrantProxy struct {
 	statementImpl
 	ProxyUser   *User
@@ -147,3 +156,6 @@ func (node *GrantProxy) Format(ctx *FmtCtx) {
 		ctx.WriteString(" with grant option")
 	}
 }
+
+func (node *GrantProxy) GetStatementType() string { return "Grant Proxy" }
+func (node *GrantProxy) GetQueryType() string     { return QueryTypeDCL }

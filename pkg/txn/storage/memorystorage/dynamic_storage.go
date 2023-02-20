@@ -47,6 +47,10 @@ func NewDynamicStorage(
 
 var _ storage.TxnStorage = new(DynamicStorage)
 
+func (d *DynamicStorage) Start() error {
+	return nil
+}
+
 func (d *DynamicStorage) Close(ctx context.Context) error {
 	storage, err := d.get(ctx)
 	if err != nil {

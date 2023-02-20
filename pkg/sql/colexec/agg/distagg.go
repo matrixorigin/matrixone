@@ -189,7 +189,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 				if hasNull {
 					continue
 				}
-				v := (any)(vec.GetString(int64(i) + start)).(T1)
+				v := (any)(vec.GetBytes(int64(i) + start)).(T1)
 				a.srcs[j] = append(a.srcs[j], v)
 				a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 			}
@@ -270,13 +270,14 @@ func (a *UnaryDistAgg[T1, T2]) Merge(b Agg[any], x, y int64) error {
 	if a.es[x] && !b0.es[y] {
 		a.otyp = b0.otyp
 	}
-	for _, v := range b0.srcs[y] {
+	for i, v := range b0.srcs[y] {
 		if ok, err = a.maps[x].InsertValue(v); err != nil {
 			return err
 		}
 		if ok {
 			a.vs[x], a.es[x] = a.fill(x, v, a.vs[x], 1, a.es[x], false)
 		}
+		a.srcs[y] = append(a.srcs[x], b0.srcs[y][i])
 	}
 	return nil
 }
@@ -298,13 +299,14 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, v
 		if a.es[j] && !b0.es[int64(i)+start] {
 			a.otyp = b0.otyp
 		}
-		for _, v := range b0.srcs[k] {
+		for h, v := range b0.srcs[k] {
 			if ok, err = a.maps[j].InsertValue(v); err != nil {
 				return err
 			}
 			if ok {
 				a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], 1, a.es[j], false)
 			}
+			a.srcs[j] = append(a.srcs[j], b0.srcs[k][h])
 		}
 	}
 	return nil
@@ -401,9 +403,12 @@ func getDistAggStrVs(strUnaryDistAgg any) []string {
 	return result
 }
 
-func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte, m *mpool.MPool) error {
+func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
+	// avoid resulting errors caused by morpc overusing memory
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
 	decode := new(EncodeAggDistinct[T1])
-	if err := types.Decode(data, decode); err != nil {
+	if err := types.Decode(copyData, decode); err != nil {
 		return err
 	}
 
@@ -412,15 +417,13 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte, m *mpool.MPool) erro
 	a.ityps = decode.InputType
 	a.otyp = decode.OutputType
 	a.es = decode.Es
-	data, err := m.Alloc(len(decode.Da))
-	if err != nil {
-		return err
-	}
+	data = make([]byte, len(decode.Da))
 	copy(data, decode.Da)
 	a.da = data
 	setDistAggValues[T1, T2](a, a.otyp)
 	a.srcs = decode.Srcs
 	a.maps = make([]*hashmap.StrHashMap, len(a.srcs))
+	m := mpool.MustNewZero()
 	for i, src := range a.srcs {
 		mp, err := hashmap.NewStrMap(true, 0, 0, m)
 		if err != nil {

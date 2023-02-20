@@ -191,8 +191,10 @@ const (
 	NOT_IN                               // NOT IN
 	LIKE                                 // LIKE
 	NOT_LIKE                             // NOT LIKE
-	REG_MATCH                            // REG_MATCH
-	NOT_REG_MATCH                        // NOT REG_MATCH
+	ILIKE
+	NOT_ILIKE
+	REG_MATCH     // REG_MATCH
+	NOT_REG_MATCH // NOT REG_MATCH
 	IS_DISTINCT_FROM
 	IS_NOT_DISTINCT_FROM
 	NULL_SAFE_EQUAL // <=>
@@ -242,6 +244,10 @@ func (op ComparisonOp) ToString() string {
 		return "some"
 	case ALL:
 		return "all"
+	case ILIKE:
+		return "ilike"
+	case NOT_ILIKE:
+		return "not ilike"
 	default:
 		return "Unknown ComparisonExprOperator"
 	}
@@ -659,7 +665,11 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}
-	node.Exprs.Format(ctx)
+	if node.Func.FunctionReference.(*UnresolvedName).Parts[0] == "trim" {
+		trimExprsFormat(ctx, node.Exprs)
+	} else {
+		node.Exprs.Format(ctx)
+	}
 	ctx.WriteByte(')')
 
 	if node.WindowSpec != nil {
@@ -702,6 +712,30 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		}
 
 		ctx.WriteByte(')')
+	}
+}
+
+func trimExprsFormat(ctx *FmtCtx, exprs Exprs) {
+	tp := exprs[0].(*NumVal).String()
+	switch tp {
+	case "0":
+		exprs[3].Format(ctx)
+	case "1":
+		exprs[2].Format(ctx)
+		ctx.WriteString(" from ")
+		exprs[3].Format(ctx)
+	case "2":
+		exprs[1].Format(ctx)
+		ctx.WriteString(" from ")
+		exprs[3].Format(ctx)
+	case "3":
+		exprs[1].Format(ctx)
+		ctx.WriteString(" ")
+		exprs[2].Format(ctx)
+		ctx.WriteString(" from ")
+		exprs[3].Format(ctx)
+	default:
+		panic("unknown trim type")
 	}
 }
 

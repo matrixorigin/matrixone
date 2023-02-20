@@ -25,24 +25,7 @@ mo-data/
 vendor/
 
 # bvt generate files
-# launch-tae-logservice
-test/resources/into_outfile/outfile_float_2.csv
-test/resources/into_outfile/outfile_integer_numbers_1.csv
-test/resources/into_outfile/outfile_time_date_2.csv
-test/resources/into_outfile/outfile_uuid.csv
-test/resources/into_outfile_2/outfile_float_2.csv
-test/resources/into_outfile_2/outfile_integer_numbers_1.csv
-test/resources/into_outfile_2/outfile_time_date_2.csv
-test/resources/json/export_1.csv
-test/resources/json/export_2.csv
-# launch-tae-CN-tae-DN
-test/distributed/resources/into_outfile/outfile_float_2.csv
-test/distributed/resources/into_outfile/outfile_integer_numbers_1.csv
-test/distributed/resources/into_outfile/outfile_time_date_2.csv
-test/distributed/resources/into_outfile/outfile_uuid.csv
-test/distributed/resources/into_outfile_2/outfile_float_2.csv
-test/distributed/resources/into_outfile_2/outfile_integer_numbers_1.csv
-test/distributed/resources/into_outfile_2/outfile_time_date_2.csv
-test/distributed/resources/json/export_1.csv
-test/distributed/resources/json/export_2.csv
+test/distributed/resources/into_outfile/outfile_*.csv
+test/distributed/resources/into_outfile_2/outfile_*.csv
+test/distributed/resources/json/export_*.csv
 

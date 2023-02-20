@@ -24,6 +24,11 @@ func (m Task) IsDelayTask() bool {
 	return m.Metadata.Options.DelayDuration > 0
 }
 
+// IsInitTask returns true if the task is an init task
+func (m Task) IsInitTask() bool {
+	return m.Metadata.Executor == TaskCode_SystemInit
+}
+
 // GetDelayDuration returns delay duration
 func (m Task) GetDelayDuration() time.Duration {
 	return time.Duration(m.Metadata.Options.DelayDuration)

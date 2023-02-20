@@ -168,7 +168,7 @@ func (s *store) Start() error {
 	if err := s.server.Start(); err != nil {
 		return err
 	}
-	s.rt.Logger().Info("dn heartbeat task started")
+	s.rt.SubLogger(runtime.SystemInit).Info("dn heartbeat task started")
 	return s.stopper.RunTask(s.heartbeatTask)
 }
 

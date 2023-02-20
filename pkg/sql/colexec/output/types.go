@@ -25,4 +25,7 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if !pipelineFailed {
+		_ = arg.Func(arg.Data, nil)
+	}
 }

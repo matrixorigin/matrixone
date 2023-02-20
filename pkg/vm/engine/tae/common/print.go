@@ -17,6 +17,7 @@ package common
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -79,12 +80,27 @@ func TypeStringValue(t types.Type, v any, opts ...TypePrintOpt) string {
 			}
 		}
 		if printable {
+			if len(buf) > 500 {
+				buf = buf[:500]
+			}
 			return string(buf)
 		} else if opt.doNotPrintBinary {
 			return fmt.Sprintf("binary[%d]", len(buf))
 		} else {
 			return fmt.Sprintf("%x", buf)
 		}
+	case types.T_date:
+		val := v.(types.Date)
+		return val.String()
+	case types.T_datetime:
+		val := v.(types.Datetime)
+		return val.String2(6)
+	case types.T_time:
+		val := v.(types.Time)
+		return val.String2(6)
+	case types.T_timestamp:
+		val := v.(types.Timestamp)
+		return val.String2(time.Local, 6)
 	case types.T_decimal64:
 		val := v.(types.Decimal64)
 		return val.String()

@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
@@ -177,20 +176,6 @@ type OperationHandler interface {
 		req TableStatsReq,
 		resp *TableStatsResp,
 	) error
-
-	HandleGetLogTail(
-		ctx context.Context,
-		meta txn.TxnMeta,
-		req apipb.SyncLogTailReq,
-		resp *apipb.SyncLogTailResp,
-	) error
-
-	HandlePreCommit(
-		ctx context.Context,
-		meta txn.TxnMeta,
-		req apipb.PrecommitWriteCmd,
-		resp *apipb.SyncLogTailResp,
-	) error
 }
 
 type OperationHandlerProvider interface {
@@ -319,11 +304,6 @@ func handle(
 	case OpTableStats:
 		var r TableStatsResp
 		err = handler.HandleTableStats(ctx, meta, req.(TableStatsReq), &r)
-		ret = r
-
-	case OpGetLogTail:
-		var r apipb.SyncLogTailResp
-		err = handler.HandleGetLogTail(ctx, meta, req.(apipb.SyncLogTailReq), &r)
 		ret = r
 
 	default:

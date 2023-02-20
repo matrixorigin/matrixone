@@ -27,7 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input: `kill query 9223372036854775809`,
+		input:  "create table t1 (a int comment '\"123123\\'')",
+		output: "create table t1 (a int comment \"123123'')",
 	}
 )
 
@@ -52,6 +53,21 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "create table t1 (a int comment '\"123123\\'')",
+		output: "create table t1 (a int comment \"123123'')",
+	}, {
+		input:  "select * from t1 where a not ilike '%a'",
+		output: "select * from t1 where a not ilike %a",
+	}, {
+		input:  "select * from t1 where a ilike '%a'",
+		output: "select * from t1 where a ilike %a",
+	}, {
+		input:  "select * from result_scan(query_id)",
+		output: "select * from result_scan(query_id)",
+	}, {
+		input:  "select * from meta_scan('query_id');",
+		output: "select * from meta_scan(query_id)",
+	}, {
 		input:  "show variables like 'sql_mode'",
 		output: "show variables like sql_mode",
 	}, {
@@ -80,7 +96,7 @@ var (
 		output: "select id, name, view_type, attribute, attribute_filed, size, created_at, updated_at from view_warehouse limit 10 offset 0",
 	}, {
 		input:  "select algo_alarm_record.* from algo_alarm_record inner join (SELECT id FROM algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) WHERE first_id = 0 AND created_at >= '2022-09-18 00:00:00' AND created_at <= '2022-10-18 00:00:00' and algo_id not in (9808,9809) order by id desc limit 0,10 ) e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc;",
-		output: "select algo_alarm_record* from algo_alarm_record inner join (select id from algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) where first_id = 0 and created_at >= 2022-09-18 00:00:00 and created_at <= 2022-10-18 00:00:00 and algo_id not in (9808, 9809) order by id desc limit 10 offset 0) as e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc",
+		output: "select algo_alarm_record.* from algo_alarm_record inner join (select id from algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) where first_id = 0 and created_at >= 2022-09-18 00:00:00 and created_at <= 2022-10-18 00:00:00 and algo_id not in (9808, 9809) order by id desc limit 10 offset 0) as e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc",
 	}, {
 		input: "select a from t1 use index(b)",
 	}, {
@@ -90,7 +106,13 @@ var (
 		input:  "CREATE  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
 		output: "create view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
 	}, {
+		input:  "ALTER  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
+		output: "alter view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
+	}, {
 		input: "select time from t1 as value",
+	}, {
+		input:  "alter database test set mysql_compatbility_mode = '{transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0}'",
+		output: "alter database configuration for test as {transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0} ",
 	}, {
 		input: "show profiles",
 	}, {
@@ -201,6 +223,9 @@ var (
 		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
 	}, {
+		input:  "select binary('Geeksforgeeks')",
+		output: "select cast(Geeksforgeeks as binary)",
+	}, {
 		input:  "show schemas where 1",
 		output: "show databases where 1",
 	}, {
@@ -275,7 +300,7 @@ var (
 		output: "set timestamp = unix_timestamp(2011-07-31 10:00:00)",
 	}, {
 		input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
-		output: "select ltrim(a), rtrim(a), trim(both, , a), trim(both,  , a)",
+		output: "select ltrim(a), rtrim(a), trim(both  from a), trim(both   from a)",
 	}, {
 		input:  "select rpad('hello', -18446744073709551616, '1');",
 		output: "select rpad(hello, -18446744073709551616, 1)",
@@ -326,7 +351,7 @@ var (
 		output: "select space(-18446744073709551616)",
 	}, {
 		input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
-		output: "select ltrim(a), rtrim(a), trim(both, , a), trim(both,  , a)",
+		output: "select ltrim(a), rtrim(a), trim(both  from a), trim(both   from a)",
 	}, {
 		input:  "SELECT (rpad(1.0, 2048,1)) IS NOT FALSE;",
 		output: "select (rpad(1.0, 2048, 1)) is not false",
@@ -388,7 +413,10 @@ var (
 		input: "select cast(variance(ff) as decimal(10, 3)) from t2",
 	}, {
 		input:  "SELECT GROUP_CONCAT(DISTINCT 2) from t1",
-		output: "select group_concat(distinct 2) from t1",
+		output: "select group_concat(distinct 2, ,) from t1",
+	}, {
+		input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
+		output: "select group_concat(distinct a, ,) from t1",
 	}, {
 		input: "select variance(2) from t1",
 	}, {
@@ -461,10 +489,18 @@ var (
 		input:  "CREATE VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
 		output: "create view v as select * from t where t.id = f(t.name)",
 	}, {
+		input:  "ALTER VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
+		output: "alter view v as select * from t where t.id = f(t.name)",
+	}, {
 		input:  "CREATE VIEW v AS SELECT qty, price, qty*price AS value FROM t;",
 		output: "create view v as select qty, price, qty * price as value from t",
 	}, {
+		input:  "ALTER VIEW v AS SELECT qty, price, qty*price AS value FROM t;",
+		output: "alter view v as select qty, price, qty * price as value from t",
+	}, {
 		input: "create view v_today (today) as select current_day from t",
+	}, {
+		input: "alter view v_today (today) as select current_day from t",
 	}, {
 		input: "explain (analyze true,verbose false) select * from emp",
 	}, {
@@ -547,13 +583,13 @@ var (
 		output: "insert into t1 (f1) values (-1)",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=VALUES(a)+VALUES(b), b=VALUES(a)+VALUES(c);",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (values(a) + values(b), values(a) + values(c))",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = values(a) + values(b), b = values(a) + values(c)",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2, b=3;",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (2, 3)",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2, b = 3",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2/2, b=3;",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (2 / 2, 3)",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2 / 2, b = 3",
 	}, {
 		input:  "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
 		output: "insert into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
@@ -579,6 +615,12 @@ var (
 		input: "create table t (a int, b char, check (1 + 1) enforced)",
 	}, {
 		input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+	}, {
+		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+	}, {
+		input:  "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
 		input: "create table t (a int, b char, unique key idx (a, b))",
 	}, {
@@ -647,6 +689,12 @@ var (
 		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 	}, {
 		input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
+		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+	}, {
+		input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 lines",
+		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+	}, {
+		input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 rows",
 		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 	}, {
 		input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
@@ -1745,6 +1793,166 @@ var (
 		},
 		{
 			input: "alter account if exists abc admin_name 'root' identified by '111' comment 'str'",
+		},
+		{
+			input: `create cluster table a (a int)`,
+		},
+		{
+			input: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+		},
+		{
+			input: `insert into a accounts(acc1, acc2) select a, b from a`,
+		},
+		{
+			input: `insert into a (a, b) accounts(acc1, acc2) values (1, 2), (1, 2)`,
+		},
+		{
+			input:  `insert into a () accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			output: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+		},
+		{
+			input: `insert into a (a, b) accounts(acc1, acc2) select a, b from a`,
+		},
+		{
+			input:  `insert into a accounts(acc1, acc2) set a = b, b = b + 1`,
+			output: `insert into a (a, b) accounts(acc1, acc2) values (b, b + 1)`,
+		},
+		{
+			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A accounts (a1, a2) FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+			output: "load data infile test/loadfile5 ignore into table t.a accounts(a1, a2) fields terminated by , (, , c, d, e, f)",
+		},
+		{
+			input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
+			output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
+		},
+		{
+			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
+			output: `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
+		},
+		{
+			input:  `create function twosum (x int, y int) returns int language sql as 'select $1 + $2'`,
+			output: `create function twosum (x int, y int) returns int language sql as 'select $1 + $2'`,
+		},
+		{
+			input:  `create function charat (x int) returns char language sql as 'select $1'`,
+			output: `create function charat (x int) returns char language sql as 'select $1'`,
+		},
+		{
+			input:  `create function charat (x int default 15) returns char language sql as 'select $1'`,
+			output: `create function charat (x int default 15) returns char language sql as 'select $1'`,
+		},
+		{
+			input:  `create function t.increment (x float) returns float language sql as 'select $1 + 1'`,
+			output: `create function t.increment (x float) returns float language sql as 'select $1 + 1'`,
+		},
+		{
+			input:  `drop function helloworld ()`,
+			output: `drop function helloworld ()`,
+		},
+		{
+			input:  `drop function charat (int)`,
+			output: `drop function charat (int)`,
+		},
+		{
+			input:  `drop function twosum (int, int)`,
+			output: `drop function twosum (int, int)`,
+		},
+		{
+			input:  `drop function t.increment (float)`,
+			output: `drop function t.increment (float)`,
+		},
+		{
+			input:  `create extension python as strutil file 'stringutils.whl'`,
+			output: `create extension python as strutil file stringutils.whl`,
+		},
+		{
+			input:  `load strutil`,
+			output: `load strutil`,
+		},
+		{
+			input: `select * from (values row(1, 2), row(3, 3)) as a`,
+		},
+		{
+			input: `select t1.* from (values row(1, 1), row(3, 3)) as a(c1, c2) inner join t1 on a.c1 = t1.b`,
+		},
+		{
+			input:  "modump query_result '0adaxg' into '/Users/tmp/test'",
+			output: "modump query_result 0adaxg into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		},
+		{
+			input:  `modump query_result "queryId" into '/Users/tmp/test' FIELDS TERMINATED BY ','`,
+			output: "modump query_result queryId into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		},
+		{
+			input:  "modump query_result 'abcx' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'",
+			output: "modump query_result abcx into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		},
+		{
+			input:  "modump query_result '098e32' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'TRUE'",
+			output: "modump query_result 098e32 into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
+		},
+		{
+			input:  "modump query_result '09eqr' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE'",
+			output: "modump query_result 09eqr into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false",
+		},
+		{
+			input:  "modump query_result 'd097i7' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100",
+			output: "modump query_result d097i7 into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400",
+		},
+		{
+			input:  "modump query_result '09eqrteq' into '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100 FORCE_QUOTE (a, b)",
+			output: "modump query_result 09eqrteq into /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400 force_quote a, b",
+		},
+		{
+			input: "show accounts",
+		},
+		{
+			input:  "show accounts like '%dafgda_'",
+			output: "show accounts like %dafgda_",
+		},
+		{
+			input:  "create table test (`col` varchar(255) DEFAULT b'0')",
+			output: "create table test (col varchar(255) default 0)",
+		},
+		{
+			input:  "select trim(a)",
+			output: "select trim(a)",
+		},
+		{
+			input: "select trim(a from a)",
+		},
+		{
+			input: "select trim(leading a from b)",
+		},
+		{
+			input: "select trim(trailing b from a)",
+		},
+		{
+			input: "select trim(both a from b) from t",
+		},
+		{
+			input:  "LOCK TABLES t READ",
+			output: "Lock Table t READ",
+		},
+		{
+			input:  "LOCK TABLES t READ LOCAL",
+			output: "Lock Table t READ LOCAL",
+		},
+		{
+			input:  "LOCK TABLES t WRITE",
+			output: "Lock Table t WRITE",
+		},
+		{
+			input:  "LOCK TABLES t LOW_PRIORITY WRITE",
+			output: "Lock Table t LOW_PRIORITY WRITE",
+		},
+		{
+			input:  "LOCK TABLES t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
+			output: "Lock Table t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
+		},
+		{
+			input:  "UNLOCK TABLES",
+			output: "UnLock Table",
 		},
 	}
 )

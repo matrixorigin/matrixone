@@ -66,8 +66,10 @@ func handleRead[Req any, Resp any](
 ) {
 
 	var req Req
-	if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
-		return nil, err
+	if len(payload) != 0 {
+		if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
+			return nil, err
+		}
 	}
 
 	var resp Resp

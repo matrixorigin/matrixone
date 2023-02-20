@@ -16,6 +16,8 @@ package config
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -51,7 +53,7 @@ var (
 	defaultHost = "0.0.0.0"
 
 	//listening unix domain socket
-	defaultUnixAddr = "/var/lib/mysql/mysql.sock"
+	defaultUnixAddr = "/tmp/mysql.sock"
 
 	//guest mmu limitation.  1 << 40 = 1099511627776
 	defaultGuestMmuLimitation = 1099511627776
@@ -117,6 +119,9 @@ var (
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
 
+	// defaultMetricUpdateStorageUsageInterval default: 15 min.
+	defaultMetricUpdateStorageUsageInterval = 15 * time.Minute
+
 	// defaultMergeCycle default: 4 hours
 	defaultMergeCycle = 4 * time.Hour
 
@@ -128,6 +133,12 @@ var (
 
 	// defaultSessionTimeout default: 10 minutes
 	defaultSessionTimeout = 24 * time.Hour
+
+	// defaultLogsExtension default: tae. Support val in [csv, tae]
+	defaultLogsExtension = "tae"
+
+	// defaultMergedExtension default: tae. Support val in [csv, tae]
+	defaultMergedExtension = "tae"
 )
 
 // FrontendParameters of the frontend
@@ -153,8 +164,8 @@ type FrontendParameters struct {
 	//listening ip
 	Host string `toml:"host"`
 
-	//listening unix domain socket
-	UAddr string `toml:"UAddr"`
+	// UnixSocketAddress listening unix domain socket
+	UnixSocketAddress string `toml:"unix-socket"`
 
 	//guest mmu limitation. default: 1 << 40 = 1099511627776
 	GuestMmuLimitation int64 `toml:"guestMmuLimitation"`
@@ -253,6 +264,17 @@ type FrontendParameters struct {
 
 	// MaxMessageSize max size for read messages from dn. Default is 10M
 	MaxMessageSize uint64 `toml:"max-message-size"`
+
+	// default off
+	SaveQueryResult string `toml:"saveQueryResult"`
+
+	// default 24 (h)
+	QueryResultTimeout uint64 `toml:"queryResultTimeout"`
+
+	// default 100 (MB)
+	QueryResultMaxsize uint64 `toml:"queryResultMaxsize"`
+
+	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -280,8 +302,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.Host = defaultHost
 	}
 
-	if fp.UAddr == "" {
-		fp.UAddr = defaultUnixAddr
+	if fp.UnixSocketAddress == "" {
+		fp.UnixSocketAddress = defaultUnixAddr
 	}
 
 	if fp.GuestMmuLimitation == 0 {
@@ -355,6 +377,22 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.SessionTimeout.Duration == 0 {
 		fp.SessionTimeout.Duration = defaultSessionTimeout
 	}
+
+	if fp.SaveQueryResult == "" {
+		fp.SaveQueryResult = "off"
+	}
+
+	if fp.QueryResultTimeout == 0 {
+		fp.QueryResultTimeout = 24
+	}
+
+	if fp.QueryResultMaxsize == 0 {
+		fp.QueryResultMaxsize = 100
+	}
+
+	if fp.AutoIncrCacheSize == 0 {
+		fp.AutoIncrCacheSize = 3000
+	}
 }
 
 func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
@@ -369,6 +407,57 @@ func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version s
 	fp.LogMaxDays = int64(log.MaxDays)
 	fp.LogMaxBackups = int64(log.MaxBackups)
 	fp.MoVersion = version
+}
+
+func (fp *FrontendParameters) GetUnixSocketAddress() string {
+	if fp.UnixSocketAddress == "" {
+		return ""
+	}
+	ok, err := isFileExist(fp.UnixSocketAddress)
+	if err != nil || ok {
+		return ""
+	}
+
+	canCreate := func() string {
+		f, err := os.Create(fp.UnixSocketAddress)
+		if err != nil {
+			return ""
+		}
+		if err := f.Close(); err != nil {
+			panic(err)
+		}
+		if err := os.Remove(fp.UnixSocketAddress); err != nil {
+			panic(err)
+		}
+		return fp.UnixSocketAddress
+	}
+
+	rootPath := filepath.Dir(fp.UnixSocketAddress)
+	f, err := os.Open(rootPath)
+	if os.IsNotExist(err) {
+		err := os.MkdirAll(rootPath, 0755)
+		if err != nil {
+			return ""
+		}
+		return canCreate()
+	} else if err != nil {
+		return ""
+	}
+	if err := f.Close(); err != nil {
+		panic(err)
+	}
+	return canCreate()
+}
+
+func isFileExist(file string) (bool, error) {
+	f, err := os.Open(file)
+	if err == nil {
+		return true, f.Close()
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 // ObservabilityParameters hold metric/trace switch
@@ -413,6 +502,9 @@ type ObservabilityParameters struct {
 	// MetricGatherInterval default is 15 sec.
 	MetricGatherInterval int `toml:"metricGatherInterval"`
 
+	// MetricUpdateStorageUsageInterval, default: 30 min
+	MetricUpdateStorageUsageInterval toml.Duration `toml:"metricUpdateStorageUsageInterval"`
+
 	// MergeCycle default: 14400 sec (4 hours).
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"mergeCycle"`
@@ -421,7 +513,13 @@ type ObservabilityParameters struct {
 	MergeMaxFileSize int `toml:"mergeMaxFileSize"`
 
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
-	PathBuilder string `toml:"PathBuilder"`
+	PathBuilder string `toml:"pathBuilder"`
+
+	// LogsExtension default: tae. Support val in [csv, tae]
+	LogsExtension string `toml:"logsExtension"`
+
+	// MergedExtension default: tae. Support val in [csv, tae]
+	MergedExtension string `toml:"mergedExtension"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
@@ -451,6 +549,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 		op.MetricGatherInterval = defaultMetricGatherInterval
 	}
 
+	if op.MetricUpdateStorageUsageInterval.Duration <= 0 {
+		op.MetricUpdateStorageUsageInterval.Duration = defaultMetricUpdateStorageUsageInterval
+	}
+
 	if op.MergeCycle.Duration <= 0 {
 		op.MergeCycle.Duration = defaultMergeCycle
 	}
@@ -461,6 +563,14 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.MergeMaxFileSize <= 0 {
 		op.MergeMaxFileSize = defaultMaxFileSize
+	}
+
+	if op.LogsExtension == "" {
+		op.LogsExtension = defaultLogsExtension
+	}
+
+	if op.MergedExtension == "" {
+		op.MergedExtension = defaultMergedExtension
 	}
 }
 

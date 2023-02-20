@@ -176,8 +176,9 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 		cc.mu.client = nil
 
 		hb2 := pb.DNStoreHeartbeat{
-			UUID:           s.ID(),
-			ServiceAddress: "addr2",
+			UUID:                 s.ID(),
+			ServiceAddress:       "addr2",
+			LogtailServerAddress: "addr3",
 		}
 		cb, err := c2.SendDNHeartbeat(ctx, hb2)
 		require.NoError(t, err)
@@ -195,8 +196,9 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 			ServiceAddress: "addr1",
 		}
 		dn := pb.DNStore{
-			UUID:           s.ID(),
-			ServiceAddress: "addr2",
+			UUID:                 s.ID(),
+			ServiceAddress:       "addr2",
+			LogtailServerAddress: "addr3",
 		}
 		assert.Equal(t, []pb.CNStore{cn}, cd.CNStores)
 		assert.Equal(t, []pb.DNStore{dn}, cd.DNStores)

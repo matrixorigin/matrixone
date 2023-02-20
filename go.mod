@@ -10,22 +10,24 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.15.11
 	github.com/aws/aws-sdk-go-v2/credentials v1.12.6
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.26.11
+	github.com/aws/aws-sdk-go-v2/service/sts v1.16.7
 	github.com/aws/smithy-go v1.11.3
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/docker/go-units v0.4.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20221212064628-78e333520b1d
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20221212132037-abf2d4c05484
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/mock v1.6.0
-	github.com/google/btree v1.0.1
+	github.com/google/btree v1.1.2
 	github.com/google/gofuzz v1.2.0
 	github.com/google/gops v0.3.25
+	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.3.0
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
-	github.com/matrixorigin/simdcsv v0.0.0-20221106123050-31511b2d3fa8
+	github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
@@ -35,17 +37,22 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.33.0
 	github.com/smartystreets/goconvey v1.7.2
+	github.com/spf13/cobra v0.0.5
 	github.com/stretchr/testify v1.8.0
 	github.com/tidwall/btree v1.4.3
 	github.com/tidwall/pretty v1.2.1
 	github.com/yireyun/go-queue v0.0.0-20220725040158-a4dd64810e1e
+	go.opentelemetry.io/proto/otlp v0.19.0
+	go.uber.org/ratelimit v0.2.0
 	go.uber.org/zap v1.21.0
+	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 	golang.org/x/sys v0.0.0-20220811171246-fbc7d0a398ab
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
 require (
 	github.com/VictoriaMetrics/metrics v1.18.1 // indirect
+	github.com/andres-erbsen/clock v0.0.0-20160526145045-9e14626cd129 // indirect
 	github.com/armon/go-metrics v0.0.0-20180917152333-f0300d1749da // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.4.2 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.12.6 // indirect
@@ -58,7 +65,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.9.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.13.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.11.9 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sts v1.16.7 // indirect
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292 // indirect
 	github.com/frankban/quicktest v1.14.3 // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
@@ -71,9 +77,11 @@ require (
 	github.com/hashicorp/go-uuid v1.0.1 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/hashicorp/memberlist v0.3.1 // indirect
+	github.com/inconshreveable/mousetrap v1.0.0 // indirect
 	github.com/miekg/dns v1.1.26 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
+	github.com/spf13/pflag v1.0.3 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20200902074654-038fdea0a05b // indirect
@@ -107,7 +115,7 @@ require (
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/client_golang v1.11.0
 	github.com/prometheus/client_model v0.2.0
-	github.com/prometheus/common v0.26.0 // indirect
+	github.com/prometheus/common v0.26.0
 	github.com/prometheus/procfs v0.6.0 // indirect
 	github.com/rogpeppe/go-internal v1.8.1 // indirect
 	github.com/shirou/gopsutil/v3 v3.22.4
@@ -127,7 +135,7 @@ require (
 // see https://github.com/hashicorp/memberlist/pull/273 for progress
 replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0.4.1-0.20221125074841-7595e1626d36
 
-replace github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20221116064434-34611fc96385
+replace github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20221226075848-d266f8c2420c
 
 replace github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376 => github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376
 

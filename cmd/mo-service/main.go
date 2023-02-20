@@ -21,6 +21,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
@@ -45,7 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"go.uber.org/zap"
 )
 
@@ -53,11 +55,13 @@ var (
 	configFile = flag.String("cfg", "", "toml configuration used to start mo-service")
 	launchFile = flag.String("launch", "", "toml configuration used to launch mo cluster")
 	version    = flag.Bool("version", false, "print version information")
+	daemon     = flag.Bool("daemon", false, "run mo-service in daemon mode")
 )
 
 func main() {
 	flag.Parse()
 	maybePrintVersion()
+	maybeRunInDaemonMode()
 
 	if *cpuProfilePathFlag != "" {
 		stop := startCPUProfile()
@@ -171,7 +175,7 @@ func startCNService(
 			panic(err)
 		}
 		// TODO: global client need to refactor
-		err = cnclient.NewCNClient(&cnclient.ClientConfig{})
+		err = cnclient.NewCNClient(&cnclient.ClientConfig{RPC: cfg.getCNServiceConfig().RPC})
 		if err != nil {
 			panic(err)
 		}
@@ -225,7 +229,7 @@ func startLogService(
 ) error {
 	lscfg := cfg.getLogServiceConfig()
 	s, err := logservice.NewService(lscfg, fileService,
-		logservice.WithLogger(logutil.GetGlobalLogger().Named("log-service").With(zap.String("uuid", lscfg.UUID))))
+		logservice.WithRuntime(runtime.ProcessLevelRuntime()))
 	if err != nil {
 		panic(err)
 	}
@@ -248,7 +252,7 @@ func startLogService(
 }
 
 func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService) error {
-	var writerFactory export.FSWriterFactory
+	var writerFactory table.WriterFactory
 	var err error
 	var UUID string
 	var initWG sync.WaitGroup
@@ -278,42 +282,63 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
 
 	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetFSWriterFactory(fs, UUID, nodeRole)
+		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, SV.LogsExtension)
 		_ = table.SetPathBuilder(ctx, SV.PathBuilder)
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
+		collector := export.NewMOCollector(ctx)
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
-			if ctx, err = trace.Init(ctx,
-				trace.WithMOVersion(SV.MoVersion),
-				trace.WithNode(UUID, nodeRole),
-				trace.EnableTracer(!SV.DisableTrace),
-				trace.WithBatchProcessMode(SV.BatchProcessor),
-				trace.WithBatchProcessor(export.NewMOCollector(ctx)),
-				trace.WithFSWriterFactory(export.GetFSWriterFactory4Trace(fs, UUID, nodeRole)),
-				trace.WithExportInterval(SV.TraceExportInterval),
-				trace.WithLongQueryTime(SV.LongQueryTime),
-				trace.WithSQLExecutor(nil),
-				trace.DebugMode(SV.EnableTraceDebug),
+			if err = motrace.InitWithConfig(ctx,
+				&SV,
+				motrace.WithNode(UUID, nodeRole),
+				motrace.WithBatchProcessor(collector),
+				motrace.WithFSWriterFactory(writerFactory),
+				motrace.WithSQLExecutor(nil),
 			); err != nil {
 				panic(err)
 			}
 			initWG.Done()
 			<-ctx.Done()
 			// flush trace/log/error framework
-			if err = trace.Shutdown(trace.DefaultContext()); err != nil {
+			if err = motrace.Shutdown(ctx); err != nil {
 				logutil.Warn("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
 			}
 		})
 		initWG.Wait()
 	}
 	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, &SV, UUID, nodeRole, metric.WithWriterFactory(writerFactory),
-			metric.WithExportInterval(SV.MetricExportInterval),
-			metric.WithMultiTable(SV.MetricMultiTable))
+		stopper.RunNamedTask("metric", func(ctx context.Context) {
+			metric.InitMetric(ctx, nil, &SV, UUID, nodeRole, metric.WithWriterFactory(writerFactory))
+			<-ctx.Done()
+			metric.StopMetricSync()
+		})
 	}
-	if err = export.InitMerge(ctx, SV.MergeCycle.Duration, SV.MergeMaxFileSize); err != nil {
+	if err = export.InitMerge(ctx, &SV); err != nil {
 		return err
 	}
 	return nil
+}
+
+func maybeRunInDaemonMode() {
+	if _, isChild := os.LookupEnv("daemon"); *daemon && !isChild {
+		childENV := []string{"daemon=true"}
+		pwd, err := os.Getwd()
+		if err != nil {
+			panic(err)
+		}
+		cpid, err := syscall.ForkExec(os.Args[0], os.Args, &syscall.ProcAttr{
+			Dir: pwd,
+			Env: append(os.Environ(), childENV...),
+			Sys: &syscall.SysProcAttr{
+				Setsid: true,
+			},
+			Files: []uintptr{0, 1, 2}, // print message to the same pty
+		})
+		if err != nil {
+			panic(err)
+		}
+		log.Printf("mo-service is running in daemon mode, child process is %d", cpid)
+		os.Exit(0)
+	}
 }
