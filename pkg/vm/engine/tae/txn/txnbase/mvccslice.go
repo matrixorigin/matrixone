@@ -145,12 +145,6 @@ func (be *MVCCSlice) ForEach(fn func(un txnif.MVCCNode) bool, reverse bool) {
 		be.forEach(fn)
 	}
 }
-func (be *MVCCSlice) Close() {
-	be.forEach(func(un txnif.MVCCNode) bool {
-		un.Close()
-		return true
-	})
-}
 func (be *MVCCSlice) forEach(fn func(un txnif.MVCCNode) bool) {
 	for i := len(be.MVCC) - 1; i >= 0; i-- {
 		n := be.MVCC[i]

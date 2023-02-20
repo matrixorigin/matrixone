@@ -813,7 +813,13 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 			}
 		}
 		_, ok := param.Filter.File2Size[param.Fileparam.Filepath]
-		if !ok {
+		if !ok && param.Extern.QueryResult {
+			e, err := service.StatFile(proc.Ctx, param.Fileparam.Filepath)
+			if err != nil {
+				return nil, err
+			}
+			param.Filter.File2Size[param.Fileparam.Filepath] = e.Size
+		} else if !ok {
 			fs := objectio.NewObjectFS(service, dir)
 			dirs, err := fs.ListDir(dir)
 			if err != nil {
