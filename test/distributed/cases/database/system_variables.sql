@@ -212,4 +212,7 @@ create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 alter account config sys set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 alter account config abc set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 alter account config abc1 set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+-- @session:id=3&user=abc:admin&password=123456
+alter account config abc set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+alter account config abc1 set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 drop account abc;
