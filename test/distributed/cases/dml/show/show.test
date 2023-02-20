@@ -192,86 +192,6 @@ CREATE TABLE show_01(sname varchar(30),id int);
 show INDEX FROM show_01;
 DROP TABLE show_01;
 
-
--- @suite
--- @setup
-DROP TABLE IF EXISTS show_02;
-CREATE TABLE show_02 (
-  h1 varchar(16) NOT NULL default '',
-  u1 varchar(16) NOT NULL default '',
-  PRIMARY KEY  (h1,u1)
-);
-show INDEX FROM show_02;
-DROP TABLE show_02;
-
-
--- @suite
--- @setup
-DROP TABLE IF EXISTS show_03;
-CREATE TABLE show_03(a int, b int);
-CREATE unique index x ON show_03(a) comment 'x';
-show CREATE table show_03;
-show INDEX FROM show_03;
-DROP TABLE show_03;
-
-
--- @suite
--- @setup
-CREATE TABLE show_04(a int, b int, unique key(a));
-show CREATE TABLE show_04;
-CREATE INDEX b ON show_04(b);
-show INDEX FROM show_04;
-DROP TABLE show_04;
-
--- SHOW FUNCTION STATUS [like_or_where]
--- @bvt:issue#7367
-DROP DATABASE IF EXISTS show_03;
-USE show_03;
-delimiter $$
-CREATE FUNCTION myfun(ia int,ib int) returns int
-BEGIN
-RETURN ia + ib;
-end
-$$
-delimiter;
-
-show FUNCTION status;
-show FUNCTION status LIKE 'pattern';
-show FUNCTION status where db = 'show_03';
--- @bvt:issue
-
-DROP DATABASE test;
-create database test;
-use test;
-drop table if exists t1;
-create table t1(a int, b int, c int, primary key(a));
-show columns from t1;
-drop table t1;
-
-drop table if exists t2;
-create table t2(a int, b int, c int, primary key(a, b));
-show columns from t2;
-drop table t2;
-
-drop table if exists t3;
-create table t3(a int, b int, c int, primary key(a, b, c));
-show columns from t3;
-drop table t3;
-
-drop database test;
-
--- SHOW INDEX FROM tbl_name [FROM db_name]
--- @suite
--- @setup
-DROP DATABASE IF EXISTS test;
-CREATE DATABASE test;
-USE test;
-DROP TABLE IF EXISTS show_01;
-CREATE TABLE show_01(sname varchar(30),id int);
-show INDEX FROM show_01;
-DROP TABLE show_01;
-
-
 -- @suite
 -- @setup
 DROP TABLE IF EXISTS show_02;
@@ -311,5 +231,24 @@ create function hello() returns int language sql as 'select id from test_table l
 
 show FUNCTION status;
 show FUNCTION status LIKE 'hello';
-
 DROP DATABASE show_03;
+
+DROP DATABASE test;
+create database test;
+use test;
+drop table if exists t1;
+create table t1(a int, b int, c int, primary key(a));
+show columns from t1;
+drop table t1;
+
+drop table if exists t2;
+create table t2(a int, b int, c int, primary key(a, b));
+show columns from t2;
+drop table t2;
+
+drop table if exists t3;
+create table t3(a int, b int, c int, primary key(a, b, c));
+show columns from t3;
+drop table t3;
+
+drop database test;
