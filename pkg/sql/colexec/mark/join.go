@@ -300,7 +300,7 @@ func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, conds []*plan.Exp
 }
 
 // calculate the state of non-equal conditions for those tuples in JoinMap
-func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int64, vals []uint64, k int, i int, proc *process.Process, bat *batch.Batch) (resultType, error) {
+func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint64, k int, i int, proc *process.Process, bat *batch.Batch) (resultType, error) {
 	if ap.Cond != nil {
 		condState := condFalse
 		sels := mSels[vals[k]-1]
@@ -351,7 +351,7 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 func (ctr *container) evalNullSels(bat *batch.Batch) {
 	joinMap := bat.Ht.(*hashmap.JoinMap)
 	jmSels := joinMap.Sels()
-	selsMap := make(map[int64]bool)
+	selsMap := make(map[int32]bool)
 	for _, sel := range jmSels {
 		for _, i := range sel {
 			selsMap[i] = true
@@ -359,7 +359,7 @@ func (ctr *container) evalNullSels(bat *batch.Batch) {
 	}
 	var nullSels []int64
 	for i := 0; i < bat.Length(); i++ {
-		if selsMap[int64(i)] {
+		if selsMap[int32(i)] {
 			ctr.sels = append(ctr.sels, int64(i))
 			continue
 		}

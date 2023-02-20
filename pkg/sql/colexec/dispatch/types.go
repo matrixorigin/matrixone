@@ -16,9 +16,11 @@ package dispatch
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -28,10 +30,10 @@ import (
 
 type WrapperClientSession struct {
 	msgId uint64
-	ctx   context.Context
 	cs    morpc.ClientSession
 	uuid  uuid.UUID
 	// toAddr string
+	doneCh chan struct{}
 }
 type container struct {
 	// the clientsession info for the channel you want to dispatch
@@ -43,7 +45,7 @@ type container struct {
 type Argument struct {
 	ctr      *container
 	prepared bool
-	sendto   int
+	sendCnt  int
 
 	// FuncId means the sendFunc
 	FuncId int
@@ -55,8 +57,9 @@ type Argument struct {
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if arg.ctr.remoteReceivers != nil {
-		// TODO: how to handle pipelineFailed?
 		for _, r := range arg.ctr.remoteReceivers {
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			_ = cancel
 			message := cnclient.AcquireMessage()
 			{
 				message.Id = r.msgId
@@ -64,7 +67,12 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 				message.Sid = pipeline.MessageEnd
 				message.Uuid = r.uuid[:]
 			}
-			r.cs.Write(r.ctx, message)
+			if pipelineFailed {
+				err := moerr.NewInternalErrorNoCtx("pipeline failed")
+				message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
+			}
+			r.cs.Write(timeoutCtx, message)
+			close(r.doneCh)
 		}
 
 	}
@@ -88,4 +96,5 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		}
 		close(arg.LocalRegs[i].Ch)
 	}
+
 }

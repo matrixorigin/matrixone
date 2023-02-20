@@ -1,10 +1,10 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package types
+package service
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"context"
+	"time"
 )
 
-func ParseStringToByteJson(str string) (bytejson.ByteJson, error) {
-	return bytejson.ParseFromString(str)
-}
-func ParseSliceToByteJson(dt []byte) (bytejson.ByteJson, error) {
-	return bytejson.ParseFromByteSlice(dt)
-}
-
-func ParseStringToPath(str string) (bytejson.Path, error) {
-	return bytejson.ParseJsonPath(str)
+func ContextTimeout(
+	ctx context.Context, backoff time.Duration,
+) time.Duration {
+	timeout := backoff
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = time.Until(deadline)
+	}
+	return timeout
 }

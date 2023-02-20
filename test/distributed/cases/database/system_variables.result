@@ -498,3 +498,30 @@ select version();
 version()
 8.0.30-MatrixOne-v0.7.0
 drop database test;
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+drop database if exists test;
+drop database if exists test1;
+create database test;
+create database test1;
+use test;
+select version();
+version()
+0.7
+alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+select version();
+version()
+8.0.30-MatrixOne-v0.7.0
+use test1;
+select version();
+version()
+0.7
+alter account config abc set mysql_compatbility_mode = '{"version_compatibility": "0.7"}';
+select version();
+version()
+0.7
+use test1;
+select version();
+version()
+0.7
+drop database test;
+drop database test1;
