@@ -643,7 +643,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	proto := ses.GetMysqlProtocol()
 	proto.ResetStatistics()
 
-	oq := NewOutputQueue(nil, ses, len(bat.Vecs), nil, nil)
+	oq := NewOutputQueue(ses.GetRequestContext(), ses, len(bat.Vecs), nil, nil)
 	row2colTime := time.Duration(0)
 	procBatchBegin := time.Now()
 	n := vector.Length(bat.Vecs[0])
