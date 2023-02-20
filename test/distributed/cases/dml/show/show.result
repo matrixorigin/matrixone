@@ -320,9 +320,9 @@ DROP TABLE IF EXISTS show_01;
 CREATE TABLE show_01(sname varchar(30),id int);
 show INDEX FROM show_01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-show_01    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 show_01    0    id    1    id    A    0    NULL    NULL    YES            YES    NULL
 show_01    0    sname    1    sname    A    0    NULL    NULL    YES            YES    NULL
+show_01    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 DROP TABLE show_01;
 DROP TABLE IF EXISTS show_02;
 CREATE TABLE show_02 (
@@ -332,10 +332,10 @@ PRIMARY KEY  (h1,u1)
 );
 show INDEX FROM show_02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-show_02    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+show_02    1    PRIMARY    1    __mo_cpkey_002h1002u1    A    0    NULL    NULL    NO            YES    NULL
 show_02    0    h1    1    h1    A    0    NULL    NULL    NO            YES    NULL
 show_02    0    u1    1    u1    A    0    NULL    NULL    NO            YES    NULL
-show_02    1    PRIMARY    1    __mo_cpkey_002h1002u1    A    0    NULL    NULL    NO            YES    NULL
+show_02    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 DROP TABLE show_02;
 DROP TABLE IF EXISTS show_03;
 CREATE TABLE show_03(a int, b int);
@@ -363,14 +363,14 @@ DROP TABLE show_04;
 DROP DATABASE IF EXISTS show_03;
 CREATE DATABASE show_03;
 USE show_03;
-create function hello() returns int language sql as 'select id from test_table limit 1';
-function hello already exists
+create function hihi() returns int language sql as 'select id from test_table limit 1';
 show FUNCTION status;
 Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
+show_03    hihi    FUNCTION    dump    2023-02-20 05:58:38    2023-02-20 05:58:38    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 show_03    hello    FUNCTION    dump    2023-02-20 02:07:55    2023-02-20 02:07:55    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-show FUNCTION status LIKE 'hello';
+show FUNCTION status LIKE 'hihi';
 Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
-show_03    hello    FUNCTION    dump    2023-02-20 02:07:55    2023-02-20 02:07:55    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+show_03    hihi    FUNCTION    dump    2023-02-20 05:58:38    2023-02-20 05:58:38    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 DROP DATABASE show_03;
 DROP DATABASE test;
 create database test;
