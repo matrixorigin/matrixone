@@ -134,6 +134,13 @@ func testFileService(
 		assert.Equal(t, []byte("56"), buf1.Bytes())
 		assert.Equal(t, []byte("123456789ab"), vec.Entries[6].Data)
 
+		// stat
+		entry, err := fs.StatFile(ctx, "foo")
+		assert.Nil(t, err)
+		assert.Equal(t, "foo", entry.Name)
+		assert.Equal(t, false, entry.IsDir)
+		assert.Equal(t, int64(11), entry.Size)
+
 		// read from non-zero offset
 		vec = IOVector{
 			FilePath: "foo",

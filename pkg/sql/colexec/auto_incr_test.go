@@ -17,6 +17,7 @@ package colexec
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -29,7 +30,7 @@ func Test_makeAutoIncrBatch(t *testing.T) {
 		name := "a"
 		num, step := 0, 1
 		bat := makeAutoIncrBatch(name, uint64(num), uint64(step), mp)
-		convey.So(bat.Attrs, convey.ShouldResemble, AUTO_INCR_TABLE_COLNAME[1:])
+		convey.So(bat.Attrs, convey.ShouldResemble, catalog.AutoIncrColumnNames[1:])
 		convey.So(len(bat.Vecs), convey.ShouldEqual, 3)
 		convey.So(bat.Vecs[1].Col, convey.ShouldResemble, []uint64{uint64(num)})
 		convey.So(bat.Vecs[2].Col, convey.ShouldResemble, []uint64{uint64(step)})
@@ -42,25 +43,25 @@ func Test_getAutoIncrTableDef(t *testing.T) {
 		convey.So(len(def), convey.ShouldEqual, 4)
 		nameAttr, ok := def[0].(*engine.AttributeDef)
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(nameAttr.Attr.Name, convey.ShouldEqual, AUTO_INCR_TABLE_COLNAME[1])
+		convey.So(nameAttr.Attr.Name, convey.ShouldEqual, catalog.AutoIncrColumnNames[1])
 		convey.So(nameAttr.Attr.Type, convey.ShouldResemble, types.T_varchar.ToType())
 		convey.So(nameAttr.Attr.Primary, convey.ShouldBeTrue)
 
 		numAttr, ok := def[1].(*engine.AttributeDef)
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(numAttr.Attr.Name, convey.ShouldEqual, AUTO_INCR_TABLE_COLNAME[2])
+		convey.So(numAttr.Attr.Name, convey.ShouldEqual, catalog.AutoIncrColumnNames[2])
 		convey.So(numAttr.Attr.Type, convey.ShouldResemble, types.T_uint64.ToType())
 		convey.So(numAttr.Attr.Primary, convey.ShouldBeFalse)
 
 		stepAttr, ok := def[2].(*engine.AttributeDef)
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(stepAttr.Attr.Name, convey.ShouldEqual, AUTO_INCR_TABLE_COLNAME[3])
+		convey.So(stepAttr.Attr.Name, convey.ShouldEqual, catalog.AutoIncrColumnNames[3])
 		convey.So(stepAttr.Attr.Type, convey.ShouldResemble, types.T_uint64.ToType())
 		convey.So(stepAttr.Attr.Primary, convey.ShouldBeFalse)
 
 		constraint, ok := def[3].(*engine.ConstraintDef)
 		convey.So(ok, convey.ShouldBeTrue)
 		pkeyDef := constraint.GetPrimaryKeyDef()
-		convey.So(pkeyDef.Pkey.Names, convey.ShouldResemble, []string{AUTO_INCR_TABLE_COLNAME[1]})
+		convey.So(pkeyDef.Pkey.Names, convey.ShouldResemble, []string{catalog.AutoIncrColumnNames[1]})
 	})
 }

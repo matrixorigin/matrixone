@@ -231,6 +231,51 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 	return
 }
 
+func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	ctx, span := trace.Start(ctx, "S3FS.StatFile")
+	defer span.End()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	path, err := ParsePathAtService(filePath, s.name)
+	if err != nil {
+		return nil, err
+	}
+	key := s.pathToKey(path.File)
+
+	output, err := s.client.HeadObject(
+		ctx,
+		&s3.HeadObjectInput{
+			Bucket: ptrTo(s.bucket),
+			Key:    ptrTo(key),
+		},
+	)
+	if err != nil {
+		var httpError *http.ResponseError
+		if errors.As(err, &httpError) {
+			if httpError.Response.StatusCode == 404 {
+				return nil, moerr.NewFileNotFound(ctx, filePath)
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &DirEntry{
+		Name:  pathpkg.Base(filePath),
+		IsDir: false,
+		Size:  output.ContentLength,
+	}, nil
+}
+
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	select {
 	case <-ctx.Done():

@@ -247,6 +247,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		if stmt.IsClusterTable {
 			kind = catalog.SystemClusterRel
 		}
+		// when create hidden talbe(like: auto_incr_table, index_table)， we set relKind to empty
+		if catalog.IsHiddenTable(createTable.TableDef.Name) {
+			kind = ""
+		}
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,

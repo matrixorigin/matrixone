@@ -16,6 +16,7 @@ package dispatch
 
 import (
 	"context"
+	"hash/crc32"
 	"sync/atomic"
 	"time"
 
@@ -33,11 +34,12 @@ const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 
 	SendToAllFunc = iota
+	SendToAllLocalFunc
 	SendToAnyLocalFunc
 )
 
-// common sender: send to all receiver
-func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+// common sender: send to any LocalReceiver
+func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
 	refCountAdd := int64(len(ap.LocalRegs) - 1)
 	atomic.AddInt64(&bat.Cnt, refCountAdd)
 	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
@@ -45,44 +47,55 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error 
 		jm.SetDupCount(int64(len(ap.LocalRegs)))
 	}
 
-	// if the remote receiver is not prepared, send to LocalRegs first
-	// and then waiting the remote receiver notify
-	if !ap.prepared {
-		for _, reg := range ap.LocalRegs {
-			select {
-			case <-reg.Ctx.Done():
-				return moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
-			case reg.Ch <- bat:
-			}
+	for _, reg := range ap.LocalRegs {
+		select {
+		case <-reg.Ctx.Done():
+			return moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+		case reg.Ch <- bat:
 		}
+	}
 
-		// wait the remote notify
-		cnt := len(ap.RemoteRegs)
-		encodeData, errEncode := types.Encode(bat)
-		if errEncode != nil {
-			return errEncode
+	return nil
+}
+
+// common sender: send to any LocalReceiver
+func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+	// send to local receiver
+	sendto := ap.sendCnt % len(ap.LocalRegs)
+	reg := ap.LocalRegs[sendto]
+	select {
+	case <-reg.Ctx.Done():
+		for len(reg.Ch) > 0 { // free memory
+			bat := <-reg.Ch
+			if bat == nil {
+				break
+			}
+			bat.Clean(proc.Mp())
 		}
+		ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
+		return nil
+	case reg.Ch <- bat:
+		ap.sendCnt++
+	}
+
+	return nil
+}
+
+// common sender: send to all receiver
+func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+	if !ap.prepared {
+		cnt := len(ap.RemoteRegs)
 		for cnt > 0 {
 			csinfo := <-proc.DispatchNotifyCh
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
-			_ = cancel
-
-			newWrapClientSession := &WrapperClientSession{
-				msgId: csinfo.MsgId,
-				ctx:   timeoutCtx,
-				cs:    csinfo.Cs,
-				uuid:  csinfo.Uid,
-			}
-			// TODO: add check the receive info's correctness
-			if err := sendBatchToClientSession(encodeData, newWrapClientSession); err != nil {
-				return err
-			}
-			ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers, newWrapClientSession)
+			ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers, &WrapperClientSession{
+				msgId:  csinfo.MsgId,
+				cs:     csinfo.Cs,
+				uuid:   csinfo.Uid,
+				doneCh: csinfo.DoneCh,
+			})
 			cnt--
 		}
 		ap.prepared = true
-
-		return nil
 	}
 
 	if ap.ctr.remoteReceivers != nil {
@@ -97,6 +110,13 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error 
 		}
 	}
 
+	refCountAdd := int64(len(ap.LocalRegs) - 1)
+	atomic.AddInt64(&bat.Cnt, refCountAdd)
+	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+		jm.IncRef(refCountAdd)
+		jm.SetDupCount(int64(len(ap.LocalRegs)))
+	}
+
 	for _, reg := range ap.LocalRegs {
 		select {
 		case <-reg.Ctx.Done():
@@ -108,39 +128,20 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error 
 	return nil
 }
 
-// common sender: send to any receiver
-func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
-	// send to local receiver
-	sendto := ap.sendto % len(ap.LocalRegs)
-	reg := ap.LocalRegs[sendto]
-	select {
-	case <-reg.Ctx.Done():
-		for len(reg.Ch) > 0 { // free memory
-			bat := <-reg.Ch
-			if bat == nil {
-				break
-			}
-			bat.Clean(proc.Mp())
-		}
-		ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
-		return nil
-	case reg.Ch <- bat:
-		ap.sendto++
-	}
-
-	return nil
-}
-
 func sendBatchToClientSession(encodeBatData []byte, wcs *WrapperClientSession) error {
+	checksum := crc32.ChecksumIEEE(encodeBatData)
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+		_ = cancel
 		msg := cnclient.AcquireMessage()
 		{
 			msg.Id = wcs.msgId
 			msg.Data = encodeBatData
 			msg.Cmd = pipeline.BatchMessage
 			msg.Sid = pipeline.BatchEnd
+			msg.Checksum = checksum
 		}
-		if err := wcs.cs.Write(wcs.ctx, msg); err != nil {
+		if err := wcs.cs.Write(timeoutCtx, msg); err != nil {
 			return err
 		}
 		return nil
@@ -154,15 +155,18 @@ func sendBatchToClientSession(encodeBatData []byte, wcs *WrapperClientSession) e
 			end = len(encodeBatData)
 			sid = pipeline.BatchEnd
 		}
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+		_ = cancel
 		msg := cnclient.AcquireMessage()
 		{
 			msg.Id = wcs.msgId
 			msg.Data = encodeBatData[start:end]
 			msg.Cmd = pipeline.BatchMessage
 			msg.Sid = uint64(sid)
+			msg.Checksum = checksum
 		}
 
-		if err := wcs.cs.Write(wcs.ctx, msg); err != nil {
+		if err := wcs.cs.Write(timeoutCtx, msg); err != nil {
 			return err
 		}
 		start = end

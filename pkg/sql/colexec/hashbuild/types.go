@@ -40,7 +40,7 @@ type container struct {
 
 	hasNull bool
 
-	sels [][]int64
+	sels [][]int32
 
 	bat *batch.Batch
 
@@ -50,21 +50,18 @@ type container struct {
 	mp *hashmap.StrHashMap
 
 	idx *index.LowCardinalityIndex
-
-	nullSels []int64
 }
 
 type Argument struct {
 	ctr *container
 	// need to generate a push-down filter expression
-	NeedExpr    bool
-	NeedHashMap bool
-	Ibucket     uint64
-	Nbucket     uint64
-	Typs        []types.Type
-	Conditions  []*plan.Expr
-
-	IsRight bool
+	NeedExpr       bool
+	NeedHashMap    bool
+	NeedSelectList bool
+	Ibucket        uint64
+	Nbucket        uint64
+	Typs           []types.Type
+	Conditions     []*plan.Expr
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

@@ -66,14 +66,12 @@ type Iterator interface {
 type JoinMap struct {
 	cnt    *int64
 	dupCnt *int64
-	sels   [][]int64
+	sels   [][]int32
 	// push-down filter expression, possibly a bloomfilter
 	expr    *plan.Expr
 	mp      *StrHashMap
 	hasNull bool
 	idx     *index.LowCardinalityIndex
-
-	nullSels []int64
 }
 
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)
