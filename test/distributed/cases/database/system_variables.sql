@@ -206,3 +206,10 @@ select version();
 drop database test;
 drop database test1;
 -- @session
+
+drop account if exists abc;
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+alter account config sys set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+alter account config abc set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+alter account config abc1 set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+drop account abc;

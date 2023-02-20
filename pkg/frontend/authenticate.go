@@ -5431,6 +5431,8 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	var comment = ""
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
+	var configuration string
+	var sql string
 	ctx, span := trace.Debug(ctx, "createTablesInMoCatalogOfGeneralTenant")
 	defer span.End()
 
@@ -5477,6 +5479,14 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		}
 	} else {
 		err = moerr.NewInternalError(ctx, "get the id of tenant %s failed", ca.Name)
+		goto handleFailed
+	}
+
+	//step2.Add new entries to the mo_mysql_compatbility_mode when create a new account
+	configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
+	sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, "%!%mo_mysql_compatbility_mode_temp_db", configuration)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
 		goto handleFailed
 	}
 
@@ -6178,22 +6188,24 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	}
 
 	//step 1: check account exists or not
-	sql = `select account_name from mo_catalog.mo_mysql_compatbility_mode where account_name = "%s";`
-	sql = fmt.Sprintf(sql, accountName)
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		goto handleFailed
-	}
+	if accountName != sysAccountName {
+		sql = `select account_name from mo_catalog.mo_mysql_compatbility_mode where account_name = "%s";`
+		sql = fmt.Sprintf(sql, accountName)
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
 
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		goto handleFailed
-	}
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			goto handleFailed
+		}
 
-	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "there is no account %s", accountName)
-		goto handleFailed
+		if !execResultArrayHasData(erArray) {
+			err = moerr.NewInternalError(ctx, "there is no account %s", accountName)
+			goto handleFailed
+		}
 	}
 
 	//step2: update the config table
