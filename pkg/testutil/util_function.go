@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -457,7 +458,8 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, want, get)
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		r := vector.GenerateFunctionStrParameter(v)
 		s := vector.GenerateFunctionStrParameter(vExpected)
 		for i = 0; i < uint64(fc.fnLength); i++ {
@@ -629,7 +631,8 @@ func newVectorByType(
 	case types.T_timestamp:
 		values := val.([]types.Timestamp)
 		return vector.NewWithFixed[types.Timestamp](typ, values, nsp, mp)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		values := val.([]string)
 		return vector.NewWithStrings(typ, values, nsp, mp)
 	case types.T_uuid:

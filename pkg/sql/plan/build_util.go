@@ -90,6 +90,24 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
 			}
 			return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
+		case defines.MYSQL_TYPE_BINARY:
+			width := n.InternalType.DisplayWith
+			if width == -1 {
+				width = 1
+			}
+			if width > types.MaxBinaryLen {
+				return nil, moerr.NewOutOfRange(ctx, "binary", " typeLen is over the MaxBinaryLen: %v", types.MaxBinaryLen)
+			}
+			return &plan.Type{Id: int32(types.T_binary), Size: 24, Width: width}, nil
+		case defines.MYSQL_TYPE_VARBINARY:
+			width := n.InternalType.DisplayWith
+			if width == -1 {
+				return nil, moerr.NewSyntaxError(ctx, "Should assign width to varbinary type")
+			}
+			if width > types.MaxVarBinaryLen {
+				return nil, moerr.NewOutOfRange(ctx, "binary", "typeLen is over the MaxVarBinaryLen: %v", types.MaxVarBinaryLen)
+			}
+			return &plan.Type{Id: int32(types.T_varbinary), Size: 24, Width: width}, nil
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
 			width := n.InternalType.DisplayWith
 			// for char type,if we didn't specify the length,

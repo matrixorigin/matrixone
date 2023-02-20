@@ -123,6 +123,10 @@ func newCount(typ types.Type, dist bool, isStar bool) Agg[any] {
 		return newGenericCount[[]byte](typ, dist, isStar)
 	case types.T_text:
 		return newGenericCount[[]byte](typ, dist, isStar)
+	case types.T_binary:
+		return newGenericCount[[]byte](typ, dist, isStar)
+	case types.T_varbinary:
+		return newGenericCount[[]byte](typ, dist, isStar)
 	case types.T_date:
 		return newGenericCount[types.Date](typ, dist, isStar)
 	case types.T_datetime:
@@ -168,6 +172,10 @@ func newAnyValue(typ types.Type, dist bool) Agg[any] {
 	case types.T_char:
 		return newGenericAnyValue[[]byte](typ, dist)
 	case types.T_varchar:
+		return newGenericAnyValue[[]byte](typ, dist)
+	case types.T_binary:
+		return newGenericAnyValue[[]byte](typ, dist)
+	case types.T_varbinary:
 		return newGenericAnyValue[[]byte](typ, dist)
 	case types.T_blob:
 		return newGenericAnyValue[[]byte](typ, dist)
@@ -295,6 +303,18 @@ func newMax(typ types.Type, dist bool) Agg[any] {
 		return newGenericMax[float32](typ, dist)
 	case types.T_float64:
 		return newGenericMax[float64](typ, dist)
+	case types.T_binary:
+		aggPriv := NewStrMax()
+		if dist {
+			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	case types.T_varbinary:
+		aggPriv := NewStrMax()
+		if dist {
+			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_char:
 		aggPriv := NewStrMax()
 		if dist {
@@ -377,6 +397,18 @@ func newMin(typ types.Type, dist bool) Agg[any] {
 		return newGenericMin[float32](typ, dist)
 	case types.T_float64:
 		return newGenericMin[float64](typ, dist)
+	case types.T_binary:
+		aggPriv := NewStrMin()
+		if dist {
+			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	case types.T_varbinary:
+		aggPriv := NewStrMin()
+		if dist {
+			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_char:
 		aggPriv := NewStrMin()
 		if dist {
@@ -462,6 +494,10 @@ func newApprox(typ types.Type, dist bool) Agg[any] {
 	case types.T_blob:
 		return newGenericApproxcd[[]byte](typ, dist)
 	case types.T_text:
+		return newGenericApproxcd[[]byte](typ, dist)
+	case types.T_binary:
+		return newGenericApproxcd[[]byte](typ, dist)
+	case types.T_varbinary:
 		return newGenericApproxcd[[]byte](typ, dist)
 	case types.T_date:
 		return newGenericApproxcd[types.Date](typ, dist)

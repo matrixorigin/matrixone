@@ -916,7 +916,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 				row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			row[i] = vec.GetBytes(rowIndex)
 		} else {
@@ -4688,6 +4688,10 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varchar:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_binary:
+		col.SetColumnType(defines.MYSQL_TYPE_BINARY)
+	case types.T_varbinary:
+		col.SetColumnType(defines.MYSQL_TYPE_VARBINARY)
 	case types.T_date:
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:

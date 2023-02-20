@@ -6028,10 +6028,10 @@ simple_expr:
         locale := ""
         $$ = tree.NewCastExpr($3, &tree.T{
             InternalType: tree.InternalType{
-                Family: tree.StringFamily,
+                Family: tree.BinaryFamily,
                 FamilyString: "BINARY",
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+                Oid:    uint32(defines.MYSQL_TYPE_BINARY),
             },
         })
     }
@@ -6138,15 +6138,15 @@ mo_cast_type:
 
 mysql_cast_type:
     decimal_type
-|   BINARY length_opt
+|   BINARY length_option_opt
     {
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-                Family: tree.StringFamily,
+                Family: tree.BinaryFamily,
                 FamilyString: $1,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+                Oid:    uint32(defines.MYSQL_TYPE_BINARY),
                 DisplayWith: $2,
             },
         }
@@ -7672,29 +7672,29 @@ char_type:
             },
         }
     }
-|   BINARY length_opt
+|   BINARY length_option_opt
     {
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-                Family: tree.StringFamily,
+                Family: tree.BinaryFamily,
                 FamilyString: $1,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+                Oid:    uint32(defines.MYSQL_TYPE_BINARY),
                 DisplayWith: $2,
             },
         }
     }
-|   VARBINARY length_opt
+|   VARBINARY length_option_opt
     {
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-                Family: tree.StringFamily,
+                Family: tree.BinaryFamily,
                 Locale: &locale,
                 FamilyString: $1,
                 DisplayWith: $2,
-                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+                Oid:    uint32(defines.MYSQL_TYPE_VARBINARY),
             },
         }
     }

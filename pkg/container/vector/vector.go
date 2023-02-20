@@ -318,7 +318,8 @@ func (v *Vector) FillDefaultValue() {
 		fillDefaultValue[types.TS](v)
 	case types.T_Rowid:
 		fillDefaultValue[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		fillDefaultValue[types.Varlena](v)
 	default:
 		panic("unsupported type in FillDefaultValue")
@@ -370,7 +371,8 @@ func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 		return toConstVector[types.TS](v, row, mp)
 	case types.T_Rowid:
 		return toConstVector[types.Rowid](v, row, mp)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		if nulls.Contains(v.Nsp, uint64(row)) {
 			return NewConstNull(v.GetType(), 1)
 		}
@@ -437,7 +439,8 @@ func (v *Vector) ConstExpand(expandCols bool, m *mpool.MPool) *Vector {
 		expandVector[types.TS](v, types.TxnTsSize, m)
 	case types.T_Rowid:
 		expandVector[types.Rowid](v, types.RowidSize, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		expandVector[types.Varlena](v, types.VarlenaSize, m)
 	}
 	v.isConst = false
@@ -646,7 +649,8 @@ func (v *Vector) initConst(typ types.Type) {
 		v.Col = make([]types.TS, 1)
 	case types.T_Rowid:
 		v.Col = make([]types.Rowid, 1)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob,
+		types.T_json, types.T_text, types.T_binary, types.T_varbinary:
 		v.Col = make([]types.Varlena, 1)
 	}
 }
@@ -792,7 +796,8 @@ func (v *Vector) Append(w any, isNull bool, m *mpool.MPool) error {
 		return appendOne(v, w.(types.TS), isNull, m)
 	case types.T_Rowid:
 		return appendOne(v, w.(types.Rowid), isNull, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		return appendOneBytes(v, w.([]byte), isNull, m)
 	}
 	return nil
@@ -1056,7 +1061,8 @@ func Shrink(v *Vector, sels []int64) {
 		ShrinkFixed[float32](v, sels)
 	case types.T_float64:
 		ShrinkFixed[float64](v, sels)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -1137,7 +1143,8 @@ func Shuffle(v *Vector, sels []int64, m *mpool.MPool) error {
 		ShuffleFixed[float32](v, sels, m)
 	case types.T_float64:
 		ShuffleFixed[float64](v, sels, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		ShuffleFixed[types.Varlena](v, sels, m)
 	case types.T_date:
 		ShuffleFixed[types.Date](v, sels, m)
@@ -1622,7 +1629,8 @@ func (v *Vector) String() string {
 		return VecToString[types.TS](v)
 	case types.T_Rowid:
 		return VecToString[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		col := MustStrCols(v)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
@@ -1683,7 +1691,8 @@ func GetInitConstVal(typ types.Type) any {
 	case types.T_Rowid:
 		var emptyRowid [types.RowidSize]byte
 		return emptyRowid[:]
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob,
+		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
 		var emptyVarlena [types.VarlenaSize]byte
 		return emptyVarlena[:]
 	default:
@@ -1718,7 +1727,8 @@ func CopyConst(toVec, fromVec *Vector, length int, m *mpool.MPool) error {
 		item = MustTCols[float32](fromVec)[0]
 	case types.T_float64:
 		item = MustTCols[float64](fromVec)[0]
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		item = MustBytesCols(fromVec)[0]
 	case types.T_date:
 		item = MustTCols[types.Date](fromVec)[0]

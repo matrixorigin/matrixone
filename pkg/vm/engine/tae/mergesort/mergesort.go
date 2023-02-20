@@ -74,7 +74,8 @@ func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
 		txnts.Sort(cols[pk], sortedIdx)
 	case types.T_Rowid:
 		rowid.Sort(cols[pk], sortedIdx)
-	case types.T_char, types.T_json, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_json, types.T_varchar,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		varchar.Sort(cols[pk], sortedIdx)
 	default:
 		panic(fmt.Sprintf("%s not supported", cols[pk].GetType().String()))
@@ -131,7 +132,8 @@ func MergeSortedColumn(column []containers.Vector, sortedIdx *[]uint32, fromLayo
 		ret, mapping = txnts.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_Rowid:
 		ret, mapping = rowid.Merge(column, sortedIdx, fromLayout, toLayout)
-	case types.T_char, types.T_json, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_json, types.T_varchar,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		ret, mapping = varchar.Merge(column, sortedIdx, fromLayout, toLayout)
 	default:
 		panic(fmt.Sprintf("%s not supported", column[0].GetType().String()))

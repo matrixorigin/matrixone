@@ -1817,7 +1817,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 					case types.T_float64:
 						cols := vector.MustTCols[float64](vec)
 						vec.Col = cols[:needLen]
-					case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text: //bytes is different
+					case types.T_char, types.T_varchar, types.T_json,
+						types.T_binary, types.T_varbinary, types.T_blob, types.T_text: //bytes is different
 						cols := vector.MustTCols[types.Varlena](vec)
 						vec.Col = cols[:needLen]
 					case types.T_date:

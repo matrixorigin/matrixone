@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"math/rand"
@@ -648,6 +649,15 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(requestCtx context.Context, stmt *
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
 					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
+					return
+				}
+				pos = newPos
+				vars[i] = []byte(val)
+
+			case defines.MYSQL_TYPE_BINARY, defines.MYSQL_TYPE_VARBINARY:
+				val, newPos, ok := mp.readStringLenEnc(data, pos)
+				if !ok {
+					err = moerr.NewInvalidInput(requestCtx, "mysql protocal error, malformed packet")
 					return
 				}
 				pos = newPos
@@ -1893,7 +1903,8 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			} else {
 				buffer = mp.appendUint64(buffer, math.Float64bits(value))
 			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
+			defines.MYSQL_TYPE_BINARY, defines.MYSQL_TYPE_VARBINARY, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
 			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
@@ -2054,11 +2065,22 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 					data = mp.appendStringLenEncOfInt64(data, value)
 				}
 			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
+			defines.MYSQL_TYPE_VARBINARY, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_BINARY:
+			// Make hexadecimal output.
+			if value, err2 := mrs.GetValue(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				hexhead := "0x"
+				res := hex.EncodeToString(value.([]byte))
+				res = hexhead + res
+				data = mp.appendStringLenEnc(data, res)
 			}
 		case defines.MYSQL_TYPE_DATE:
 			if value, err2 := mrs.GetValue(ctx, r, i); err2 != nil {

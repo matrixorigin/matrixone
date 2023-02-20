@@ -38,6 +38,7 @@ const (
 	EnumFamily
 	SetFamily
 	UuidFamily
+	BinaryFamily
 
 	//test
 	BlobFamily
@@ -148,6 +149,18 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 			ctx.WriteByte(')')
 		}
 	case "varchar":
+		if node.DisplayWith >= 0 {
+			ctx.WriteByte('(')
+			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
+			ctx.WriteByte(')')
+		}
+	case "binary":
+		if node.DisplayWith >= 0 {
+			ctx.WriteByte('(')
+			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
+			ctx.WriteByte(')')
+		}
+	case "varbinary":
 		if node.DisplayWith >= 0 {
 			ctx.WriteByte('(')
 			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
@@ -318,6 +331,18 @@ var (
 		Family: StringFamily,
 		Locale: &emptyLocale,
 		Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+	}}
+
+	TYPE_BINARY = &T{InternalType: InternalType{
+		Family: BinaryFamily,
+		Locale: &emptyLocale,
+		Oid:    uint32(defines.MYSQL_TYPE_BINARY),
+	}}
+
+	TYPE_VARBINARY = &T{InternalType: InternalType{
+		Family: BinaryFamily,
+		Locale: &emptyLocale,
+		Oid:    uint32(defines.MYSQL_TYPE_VARBINARY),
 	}}
 
 	TYPE_BIT = &T{InternalType: InternalType{
