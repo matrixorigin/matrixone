@@ -247,6 +247,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		if stmt.IsClusterTable {
 			kind = catalog.SystemClusterRel
 		}
+		// when create hidden talbe(like: auto_incr_table, index_table)， we set relKind to empty
+		if catalog.IsHiddenTable(createTable.TableDef.Name) {
+			kind = ""
+		}
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
@@ -500,8 +504,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			// now tableRef.Indices is empty, you can not test it
 			for _, index := range tableRef.Indexes {
 				if index.Unique {
-					if len(index.Field.Parts) == 1 {
-						uniqueColName := index.Field.Parts[0]
+					if len(index.Parts) == 1 {
+						uniqueColName := index.Parts[0]
 						colId := tableRef.Cols[columnNamePos[uniqueColName]].ColId
 						uniqueColumn[uniqueColName] = colId
 					}
@@ -738,10 +742,8 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		tableDef := &TableDef{
 			Name: indexTableName,
 		}
-		field := &plan.Field{
-			Parts: make([]string, 0),
-			Cols:  make([]*ColDef, 0),
-		}
+		indexParts := make([]string, 0)
+
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
@@ -756,7 +758,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if colMap[name].Typ.Id == int32(types.T_json) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
-			field.Parts = append(field.Parts, name)
+			indexParts = append(indexParts, name)
 		}
 
 		var keyName string
@@ -777,7 +779,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			field.Cols = append(field.Cols, colDef)
 			tableDef.Pkey = &PrimaryKeyDef{
 				Names:       []string{keyName},
 				PkeyColName: keyName,
@@ -799,7 +800,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			field.Cols = append(field.Cols, colDef)
 			tableDef.Pkey = &PrimaryKeyDef{
 				Names:       []string{keyName},
 				PkeyColName: keyName,
@@ -817,7 +817,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			field.Cols = append(field.Cols, colDef)
 		}
 		if indexInfo.Name == "" {
 			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
@@ -832,7 +831,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			indexDef.IndexName = indexInfo.Name
 		}
 		indexDef.IndexTableName = indexTableName
-		indexDef.Field = field
+		indexDef.Parts = indexParts
 		indexDef.TableExist = true
 		if indexInfo.IndexOption != nil {
 			indexDef.Comment = indexInfo.IndexOption.Comment
@@ -853,10 +852,8 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		indexDef := &plan.IndexDef{}
 		indexDef.Unique = false
 
-		field := &plan.Field{
-			Parts: make([]string, 0),
-			Cols:  make([]*ColDef, 0),
-		}
+		indexParts := make([]string, 0)
+
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
@@ -871,7 +868,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			if colMap[name].Typ.Id == int32(types.T_json) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
-			field.Parts = append(field.Parts, name)
+			indexParts = append(indexParts, name)
 		}
 
 		if indexInfo.Name == "" {
@@ -887,7 +884,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef.IndexName = indexInfo.Name
 		}
 		indexDef.IndexTableName = ""
-		indexDef.Field = field
+		indexDef.Parts = indexParts
 		indexDef.TableExist = false
 		if indexInfo.IndexOption != nil {
 			indexDef.Comment = indexInfo.IndexOption.Comment

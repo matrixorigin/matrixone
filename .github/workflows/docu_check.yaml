@@ -1,12 +1,12 @@
-name: Document Issue Check
 
-# Controls when the workflow will run
+name: PR Document Issue Check
 on:
-  pull_request:
-    types: [opened]
+  pull_request_target:
+    types: [ opened ]
+    branches: [ main,'[0-9]+.[0-9]+.[0-9]+' ]
 
 jobs:
-  docu_issue_check:
+  ducu_issue_check:
     runs-on: ubuntu-latest
     steps:
       - uses: guguducken/pull-issue-reviewer@v0.1.0
@@ -16,3 +16,4 @@ jobs:
           id_label: "5138861359"
           reviewers: "lacrimosaprinz,dengn"
           mentions: "Prinz,DengNan"
+      

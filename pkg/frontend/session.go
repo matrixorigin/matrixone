@@ -323,6 +323,15 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Dispose()
 	})
+	proc := process.New(
+		context.Background(),
+		ses.GetMemPool(),
+		ses.GetTxnHandler().GetTxnClient(),
+		ses.GetTxnHandler().GetTxnOperator(),
+		pu.FileService,
+		pu.GetClusterDetails,
+	)
+	ses.GetTxnCompileCtx().SetProcess(proc)
 	return ses
 }
 
@@ -1699,9 +1708,10 @@ func (th *TxnHandler) GetStorage() engine.Engine {
 }
 
 func (th *TxnHandler) GetTxn() (TxnOperator, error) {
-	err := th.GetSession().TxnStart()
+	ses := th.GetSession()
+	err := ses.TxnStart()
 	if err != nil {
-		logutil.Errorf("GetTxn. error:%v", err)
+		logErrorf(ses.GetConciseProfile(), "GetTxn. error:%v", err)
 		return nil, err
 	}
 	return th.GetTxnOperator(), nil
@@ -2244,7 +2254,7 @@ func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {
-	stats = new(plan2.Stats)
+
 	dbName := obj.GetSchemaName()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
@@ -2259,14 +2269,8 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	blockNum, cost, outcnt, err := table.Stats(ctx, e)
-	if err != nil {
-		return
-	}
-	stats.Cost = float64(cost)
-	stats.Outcnt = float64(outcnt)
-	stats.BlockNum = blockNum
-	return
+	stats, _ = table.Stats(ctx, e)
+	return stats
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
@@ -2278,28 +2282,17 @@ func (tcc *TxnCompilerContext) GetProcess() *process.Process {
 func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
 	proc := tcc.proc
 	// get file size
-	fs := objectio.NewObjectFS(proc.FileService, catalog.QueryResultMetaDir)
-	dirs, err := fs.ListDir(catalog.QueryResultMetaDir)
+	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
+	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
 		return nil, "", err
 	}
-	var size int64 = -1
-	name := catalog.BuildQueryResultMetaName(proc.SessionInfo.Account, uuid)
-	for _, d := range dirs {
-		if d.Name == name {
-			size = d.Size
-		}
-	}
-	if size == -1 {
-		return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
-	}
 	// read meta's meta
-	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
 	reader, err := objectio.NewObjectReader(path, proc.FileService)
 	if err != nil {
 		return nil, "", err
 	}
-	bs, err := reader.ReadAllMeta(proc.Ctx, size, proc.Mp())
+	bs, err := reader.ReadAllMeta(proc.Ctx, e.Size, proc.Mp())
 	if err != nil {
 		return nil, "", err
 	}

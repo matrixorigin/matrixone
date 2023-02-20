@@ -27,3 +27,4 @@ insert into t values (2, null);
 insert into t values (3, null);
 update t set a=null;
 constraint violation: Column 'a' cannot be null
+drop database if exists test;

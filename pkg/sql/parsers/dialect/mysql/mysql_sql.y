@@ -158,7 +158,6 @@ import (
     strs []string
 
     duplicateKey tree.DuplicateKey
-    updateList *tree.UpdateList
     fields *tree.Fields
     fieldsList []*tree.Fields
     lines *tree.Lines
@@ -198,6 +197,10 @@ import (
 
     killOption tree.KillOption
     statementOption tree.StatementOption
+
+    tableLock tree.TableLock
+    tableLocks []tree.TableLock
+    tableLockType tree.TableLockType
 }
 
 %token LEX_ERROR
@@ -382,8 +385,9 @@ import (
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
+%type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
-%type <statement> load_data_stmt import_data_stmt
+%type <statement> load_data_stmt
 %type <statement> analyze_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
 %type <statement> replace_stmt
@@ -502,7 +506,7 @@ import (
 //%type <resourceOptions> conn_option_list conn_options
 //%type <resourceOption> conn_option
 %type <updateExpr> update_value
-%type <updateExprs> update_list
+%type <updateExprs> update_list on_duplicate_key_update_opt
 %type <completionType> completion_type
 %type <str> password_opt
 %type <boolVal> grant_option_opt enforce enforce_opt
@@ -603,13 +607,16 @@ import (
 %type <indexHintScope> index_hint_scope
 %type <indexHint> index_hint
 %type <indexHintList> index_hint_list index_hint_list_opt
-%type <updateList> on_duplicate_key_update_opt
 
 %token <str> KILL
 %type <killOption> kill_opt
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %start start_command
+
+%type<tableLock> table_lock_elem
+%type<tableLocks> table_lock_list
+%type<tableLockType> table_lock_type
 
 %%
 
@@ -650,10 +657,10 @@ stmt:
 |   use_stmt
 |   transaction_stmt
 |   set_stmt
+|   lock_stmt
 |   revoke_stmt
 |   grant_stmt
 |   load_data_stmt
-|   import_data_stmt
 |   load_extension_stmt
 |   do_stmt
 |   declare_stmt
@@ -764,17 +771,6 @@ mo_dump_stmt:
 
 
 
-import_data_stmt:
-    IMPORT DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt
-    {
-        $$ = &tree.Import{
-            Local: $3,
-            Param: $4,
-            DuplicateHandling: $5,
-            Table: $8,
-        }
-        $$.(*tree.Import).Param.Tail = $9
-    }
 
 load_data_stmt:
     LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name accounts_opt tail_param_opt parallel_opt
@@ -1964,6 +1960,56 @@ update_value:
         $$ = &tree.UpdateExpr{Names: []*tree.UnresolvedName{$1}, Expr: $3}
     }
 
+lock_stmt:
+    lock_table_stmt
+|   unlock_table_stmt
+
+lock_table_stmt:
+    LOCK TABLES table_lock_list
+    {
+        $$ = &tree.LockTableStmt{TableLocks:$3}
+    }
+
+table_lock_list:
+    table_lock_elem
+    {
+       $$ = []tree.TableLock{$1}
+    }
+|   table_lock_list ',' table_lock_elem
+    {
+       $$ = append($1, $3);
+    }
+
+table_lock_elem:
+    table_name table_lock_type
+    {
+        $$ = tree.TableLock{$1, $2}
+    }
+
+table_lock_type:  
+    READ
+    {
+        $$ = tree.TableLockRead
+    }
+|   READ LOCAL
+    {
+        $$ = tree.TableLockReadLocal
+    }
+|   WRITE
+    {
+        $$ = tree.TableLockWrite
+    }
+|   LOW_PRIORITY WRITE
+    {
+        $$ = tree.TableLockLowPriorityWrite
+    }
+
+unlock_table_stmt:
+    UNLOCK TABLES
+    {
+       $$ = &tree.UnLockTableStmt{}
+    }
+
 prepareable_stmt:
     create_stmt
 |   insert_stmt
@@ -3091,25 +3137,11 @@ insert_data:
 
 on_duplicate_key_update_opt:
     {
-		$$ = nil
+		$$ = []*tree.UpdateExpr{}
     }
-|   ON DUPLICATE KEY UPDATE set_value_list
+|   ON DUPLICATE KEY UPDATE update_list
     {
-    		if $5 == nil {
-      			yylex.Error("the ON DUPLICATE KEY UPDATE list can not be empty")
-      			return 1
-      		}
-      		var identList tree.IdentifierList
-      		var valueList tree.Exprs
-      		for _, a := range $5 {
-      			identList = append(identList, a.Column)
-      			valueList = append(valueList, a.Expr)
-      		}
-      		vc := tree.NewValuesClause([]tree.Exprs{valueList})
-      		$$ = &tree.UpdateList{
-      			Columns: identList,
-      			Rows: tree.NewSelect(vc, nil, nil),
-      		}
+      	$$ = $5
     }
 
 set_value_list:

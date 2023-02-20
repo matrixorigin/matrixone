@@ -34,40 +34,23 @@ import (
 
 var _ engine.Relation = new(table)
 
-func (tbl *table) Stats(ctx context.Context, expr *plan.Expr) (int32, int64, int64, error) {
+func (tbl *table) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, error) {
 	switch tbl.tableId {
-	case catalog.MO_DATABASE_ID:
-		return 1, 1000, 1000, nil
-	case catalog.MO_TABLES_ID:
-		return 4, 4000, 4000, nil
-	case catalog.MO_COLUMNS_ID:
-		return 4, 4000, 4000, nil
+	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+		return plan2.DefaultStats(), nil
 	}
-	var blockNum int
-	var cost, outcnt int64
 
 	if tbl.meta == nil || !tbl.updated {
 		err := GetTableMeta(ctx, tbl, expr)
 		if err != nil {
-			return 0, 0, 0, err
+			return plan2.DefaultStats(), err
 		}
 	}
 	if tbl.meta != nil {
-		exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
-		columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
-		for _, blockmetas := range tbl.meta.blocks {
-			for _, blk := range blockmetas {
-				if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
-					cost += blockRows(blk)
-					blockNum++
-				}
-			}
-		}
-		outcnt = int64(float64(cost) * plan2.DeduceSelectivity(expr, tbl.getCbName()))
-		return int32(blockNum), cost, outcnt, nil
+		return CalcStats(ctx, &tbl.meta.blocks, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName())
 	} else {
 		// no meta means not flushed yet, very small table
-		return 1, 100, 100, nil
+		return plan2.DefaultStats(), nil
 	}
 }
 
@@ -474,6 +457,84 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	if len(ranges) == 1 && len(ranges[0]) == 0 {
 		return tbl.newMergeReader(ctx, num, expr)
 	}
+	if len(ranges) > 1 && len(ranges[0]) == 0 {
+		rds := make([]engine.Reader, num)
+		mrds := make([]mergeReader, num)
+		rds0, err := tbl.newMergeReader(ctx, num, expr)
+		if err != nil {
+			return nil, err
+		}
+		for i := range rds0 {
+			mrds[i].rds = append(mrds[i].rds, rds0[i])
+		}
+		rds0, err = tbl.newBlockReader(ctx, num, expr, ranges[1:])
+		if err != nil {
+			return nil, err
+		}
+		for i := range rds0 {
+			mrds[i].rds = append(mrds[i].rds, rds0[i])
+		}
+		for i := range rds {
+			rds[i] = &mrds[i]
+		}
+		return rds, nil
+	}
+	return tbl.newBlockReader(ctx, num, expr, ranges)
+}
+
+func (tbl *table) newMergeReader(ctx context.Context, num int,
+	expr *plan.Expr) ([]engine.Reader, error) {
+	var index memtable.Tuple
+	/*
+		// consider halloween problem
+		if int64(tbl.db.txn.statementId)-1 > 0 {
+			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
+		}
+	*/
+	if tbl.primaryIdx >= 0 && expr != nil {
+		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
+		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
+		if ok {
+			index = memtable.Tuple{
+				index_PrimaryKey,
+				memtable.ToOrdered(v),
+			}
+		}
+	}
+	writes := make([]Entry, 0, len(tbl.db.txn.writes))
+	tbl.db.txn.Lock()
+	for i := range tbl.db.txn.writes {
+		for _, entry := range tbl.db.txn.writes[i] {
+			if entry.databaseId == tbl.db.databaseId &&
+				entry.tableId == tbl.tableId {
+				writes = append(writes, entry)
+			}
+		}
+	}
+	tbl.db.txn.Unlock()
+	rds := make([]engine.Reader, num)
+	mrds := make([]mergeReader, num)
+	for _, i := range tbl.dnList {
+		var blks []ModifyBlockMeta
+
+		if tbl.meta != nil {
+			blks = tbl.meta.modifedBlocks[i]
+		}
+		tbl.parts[i].txn = tbl.db.txn
+		rds0, err := tbl.parts[i].NewReader(ctx, num, index, tbl.defs, tbl.tableDef,
+			tbl.skipBlocks, blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
+		if err != nil {
+			return nil, err
+		}
+		mrds[i].rds = append(mrds[i].rds, rds0...)
+	}
+	for i := range rds {
+		rds[i] = &mrds[i]
+	}
+	return rds, nil
+}
+
+func (tbl *table) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	blks := make([]BlockMeta, len(ranges))
 	for i := range ranges {
@@ -525,60 +586,6 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 				blks:       blks[i*step : (i+1)*step],
 			}
 		}
-	}
-	return rds, nil
-}
-
-func (tbl *table) newMergeReader(ctx context.Context, num int,
-	expr *plan.Expr) ([]engine.Reader, error) {
-	var index memtable.Tuple
-	/*
-		// consider halloween problem
-		if int64(tbl.db.txn.statementId)-1 > 0 {
-			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
-		}
-	*/
-	if tbl.primaryIdx >= 0 && expr != nil {
-		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
-		if ok {
-			index = memtable.Tuple{
-				index_PrimaryKey,
-				memtable.ToOrdered(v),
-			}
-		}
-	}
-	writes := make([]Entry, 0, len(tbl.db.txn.writes))
-	tbl.db.txn.Lock()
-	for i := range tbl.db.txn.writes {
-		for _, entry := range tbl.db.txn.writes[i] {
-			if entry.databaseId == tbl.db.databaseId &&
-				entry.tableId == tbl.tableId {
-				writes = append(writes, entry)
-			}
-		}
-	}
-	tbl.db.txn.Unlock()
-	rds := make([]engine.Reader, num)
-	mrds := make([]mergeReader, num)
-	for _, i := range tbl.dnList {
-		var blks []ModifyBlockMeta
-
-		if tbl.meta != nil {
-			blks = tbl.meta.modifedBlocks[i]
-		}
-		tbl.parts[i].txn = tbl.db.txn
-		rds0, err := tbl.parts[i].NewReader(ctx, num, index, tbl.defs, tbl.tableDef,
-			tbl.skipBlocks, blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
-		if err != nil {
-			return nil, err
-		}
-		for i := range rds0 {
-			mrds[i].rds = append(mrds[i].rds, rds0[i])
-		}
-	}
-	for i := range rds {
-		rds[i] = &mrds[i]
 	}
 	return rds, nil
 }

@@ -428,15 +428,9 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		Comment:        indexDef.Comment,
 	}
 
-	field := &plan.Field{
-		Parts: make([]string, len(indexDef.Field.Parts)),
-		Cols:  make([]*plan.ColDef, len(indexDef.Field.Cols)),
-	}
-	copy(field.Parts, indexDef.Field.Parts)
-	for num := range indexDef.Field.Cols {
-		field.Cols[num] = DeepCopyColDef(indexDef.Field.Cols[num])
-	}
-	newindexDef.Field = field
+	newParts := make([]string, len(indexDef.Parts))
+	copy(newParts, indexDef.Parts)
+	newindexDef.Parts = newParts
 	return newindexDef
 }
 
