@@ -110,8 +110,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	msel := ctr.mp.Sels()
-	unmatch := make([]int64, 0)
-	matched_sels := make(map[int64]bool)
+	unmatch := make([]int32, 0)
+	matched_sels := make(map[int32]bool)
 
 	if !ap.Is_receiver {
 		ap.Channel <- &ctr.matched_sels
@@ -171,7 +171,7 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 					return err
 				}
 			} else {
-				if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], unmatch[i], proc.Mp()); err != nil {
+				if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], int64(unmatch[i]), proc.Mp()); err != nil {
 					rbat.Clean(proc.Mp())
 					return err
 				}
@@ -239,7 +239,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 							return err
 						}
 					} else {
-						if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+						if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
 							rbat.Clean(proc.Mp())
 							return err
 						}

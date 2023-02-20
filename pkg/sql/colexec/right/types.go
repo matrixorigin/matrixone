@@ -49,7 +49,7 @@ type container struct {
 
 	mp *hashmap.JoinMap
 
-	matched_sels []int64
+	matched_sels []int32
 
 	sum int
 }
@@ -65,7 +65,7 @@ type Argument struct {
 	Conditions [][]*plan.Expr
 
 	Is_receiver bool
-	Channel     chan *[]int64
+	Channel     chan *[]int32
 	NumCPU      uint64
 }
 
