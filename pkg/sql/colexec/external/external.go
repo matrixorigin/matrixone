@@ -244,7 +244,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 }
 
 func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
-	_, span := trace.Start(ctx, "compileExternScan.ReadDir")
+	_, span := trace.Start(ctx, "filterByAccountAndFilename")
 	defer span.End()
 	filterList := make([]*plan.Expr, 0)
 	filterList2 := make([]*plan.Expr, 0)
