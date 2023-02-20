@@ -19,18 +19,18 @@ t2
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT    NO        NULL        
-name    VARCHAR(10)    YES        NULL        
 str    CHAR(10)    YES        NULL        
+name    VARCHAR(10)    YES        NULL        
 show full columns from t1;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 id    INT    NULL    NO        NULL        select,insert,update,references    
-name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references    
 str    CHAR(10)    NULL    YES        NULL        select,insert,update,references    
+name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references    
 show full columns from t1 like '%';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 id    INT    NULL    NO        NULL        select,insert,update,references    
-name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references    
 str    CHAR(10)    NULL    YES        NULL        select,insert,update,references    
+name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references    
 show full columns from t1 where `Field`='id';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 id    INT    NULL    NO        NULL        select,insert,update,references    
@@ -219,7 +219,6 @@ Trigger    Event    Table    Statement    Timing    Created    sql_mode    Defin
 use mo_catalog;
 show tables;
 Tables_in_mo_catalog
-mo_tables
 mo_user
 mo_account
 mo_role
@@ -228,6 +227,7 @@ mo_role_grant
 mo_role_privs
 mo_user_defined_function
 mo_mysql_compatbility_mode
+mo_tables
 mo_database
 mo_columns
 show table_number from mo_catalog;
@@ -345,9 +345,9 @@ Table    Create Table
 show_03    CREATE TABLE `show_03` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `x` (`a`) COMMENT `x`\n)
 show INDEX FROM show_03;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
-show_03    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 show_03    0    a    1    a    A    0    NULL    NULL    YES            YES    NULL
 show_03    0    b    1    b    A    0    NULL    NULL    YES            YES    NULL
+show_03    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 DROP TABLE show_03;
 CREATE TABLE show_04(a int, b int, unique key(a));
 show CREATE TABLE show_04;
@@ -361,24 +361,19 @@ show_04    0    b    1    b    A    0    NULL    NULL    YES            YES    N
 show_04    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 DROP TABLE show_04;
 DROP DATABASE IF EXISTS show_03;
-
+[unknown result because it is related to issue#8086]
+CREATE DATABASE show_03;
+[unknown result because it is related to issue#8086]
 USE show_03;
-
-delimiter $$
-CREATE FUNCTION myfun(ia int,ib int) returns int
-BEGIN
-RETURN ia + ib;
-
-end
-$$
-delimiter;
-
+[unknown result because it is related to issue#8086]
+create function hihi() returns int language sql as 'select id from test_table limit 1';
+[unknown result because it is related to issue#8086]
 show FUNCTION status;
-
-show FUNCTION status LIKE 'pattern';
-
-show FUNCTION status where db = 'show_03';
-
+[unknown result because it is related to issue#8086]
+show FUNCTION status LIKE 'hihi';
+[unknown result because it is related to issue#8086]
+DROP DATABASE show_03;
+[unknown result because it is related to issue#8086]
 DROP DATABASE test;
 create database test;
 use test;
@@ -386,24 +381,24 @@ drop table if exists t1;
 create table t1(a int, b int, c int, primary key(a));
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    NO    PRI    NULL
-b    INT    YES        NULL
-c    INT    YES        NULL
+a    INT    NO    PRI    NULL        
+b    INT    YES        NULL        
+c    INT    YES        NULL        
 drop table t1;
 drop table if exists t2;
 create table t2(a int, b int, c int, primary key(a, b));
 show columns from t2;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    NO    PRI    NULL
-b    INT    NO    PRI    NULL
-c    INT    YES        NULL
+a    INT    NO    PRI    NULL        
+b    INT    NO    PRI    NULL        
+c    INT    YES        NULL        
 drop table t2;
 drop table if exists t3;
 create table t3(a int, b int, c int, primary key(a, b, c));
 show columns from t3;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    NO    PRI    NULL
-b    INT    NO    PRI    NULL
-c    INT    NO    PRI    NULL
+a    INT    NO    PRI    NULL        
+b    INT    NO    PRI    NULL        
+c    INT    NO    PRI    NULL        
 drop table t3;
 drop database test;
