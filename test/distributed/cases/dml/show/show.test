@@ -227,10 +227,10 @@ DROP TABLE show_04;
 DROP DATABASE IF EXISTS show_03;
 CREATE DATABASE show_03;
 USE show_03;
-create function hello() returns int language sql as 'select id from test_table limit 1';
+create function hihi() returns int language sql as 'select id from test_table limit 1';
 
 show FUNCTION status;
-show FUNCTION status LIKE 'hello';
+show FUNCTION status LIKE 'hihi';
 DROP DATABASE show_03;
 
 DROP DATABASE test;
