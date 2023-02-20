@@ -51,7 +51,7 @@ type container struct {
 
 	idx *index.LowCardinalityIndex
 
-	nullSels []int64
+	nullSels []int32
 }
 
 type Argument struct {

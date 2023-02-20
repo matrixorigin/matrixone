@@ -310,7 +310,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	s = newParallelScope(c, s, ss)
 
 	if isRight {
-		channel := make(chan *[]int64)
+		channel := make(chan *[]int32)
 		for i := range s.PreScopes {
 			arg := s.PreScopes[i].Instructions[0].Arg.(*right.Argument)
 			arg.Channel = channel

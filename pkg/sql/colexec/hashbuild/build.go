@@ -42,7 +42,7 @@ func Prepare(proc *process.Process, arg any) error {
 		}
 		ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions))
 		ap.ctr.evecs = make([]evalVector, len(ap.Conditions))
-		ap.ctr.nullSels = make([]int64, 0)
+		ap.ctr.nullSels = make([]int32, 0)
 	}
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
@@ -158,7 +158,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 					continue
 				}
 				if zvals[k] == 0 {
-					ctr.nullSels = append(ctr.nullSels, int64(i+k))
+					ctr.nullSels = append(ctr.nullSels, int32(i+k))
 				}
 			}
 		}
