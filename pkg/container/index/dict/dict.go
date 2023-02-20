@@ -85,7 +85,7 @@ func (d *Dict) InsertBatch(data *vector.Vector) ([]uint16, error) {
 	for i, v := range values {
 		if int(v) > d.unique.Length() {
 			if d.fixed() {
-				err = vector.Append(d.unique, ks.([]uint64)[i], false, d.m)
+				err = vector.AppendFixed(d.unique, ks.([]uint64)[i], false, d.m)
 			} else {
 				err = vector.AppendBytes(d.unique, ks.([][]byte)[i], false, d.m)
 			}
@@ -214,28 +214,28 @@ func (d *Dict) findFixedData(pos int) *vector.Vector {
 		if data == 1 {
 			val = true
 		}
-		return vector.NewConst(d.typ, val, 1, d.m)
+		return vector.NewConstFixed(d.typ, val, 1, d.m)
 	case types.T_int32:
-		return vector.NewConst(d.typ, int32(data), 1, d.m)
+		return vector.NewConstFixed(d.typ, int32(data), 1, d.m)
 	case types.T_int64:
-		return vector.NewConst(d.typ, int64(data), 1, d.m)
+		return vector.NewConstFixed(d.typ, int64(data), 1, d.m)
 	case types.T_uint32:
-		return vector.NewConst(d.typ, uint32(data), 1, d.m)
+		return vector.NewConstFixed(d.typ, uint32(data), 1, d.m)
 	case types.T_uint64:
-		return vector.NewConst(d.typ, uint64(data), 1, d.m)
+		return vector.NewConstFixed(d.typ, uint64(data), 1, d.m)
 	case types.T_float32:
-		return vector.NewConst(d.typ, float32(data), 1, d.m)
+		return vector.NewConstFixed(d.typ, float32(data), 1, d.m)
 	case types.T_float64:
-		return vector.NewConst(d.typ, float64(data), 1, d.m)
+		return vector.NewConstFixed(d.typ, float64(data), 1, d.m)
 	case types.T_decimal64:
 		val := types.DecodeDecimal64(types.EncodeUint64(&data))
-		return vector.NewConst(d.typ, val, 1, d.m)
+		return vector.NewConstFixed(d.typ, val, 1, d.m)
 	case types.T_date:
-		return vector.NewConst(d.typ, types.Date(data), 1, d.m)
+		return vector.NewConstFixed(d.typ, types.Date(data), 1, d.m)
 	case types.T_datetime:
-		return vector.NewConst(d.typ, types.Datetime(data), 1, d.m)
+		return vector.NewConstFixed(d.typ, types.Datetime(data), 1, d.m)
 	case types.T_timestamp:
-		return vector.NewConst(d.typ, types.Timestamp(data), 1, d.m)
+		return vector.NewConstFixed(d.typ, types.Timestamp(data), 1, d.m)
 	}
 	panic("unreachable")
 }

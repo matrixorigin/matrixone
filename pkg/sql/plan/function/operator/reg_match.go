@@ -45,7 +45,7 @@ func generalRegMatch(ivecs []*vector.Vector, proc *process.Process, isReg bool) 
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "The Regular Expression have invalid parameter")
 		}
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	case left.IsConst() && !right.IsConst():
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(rightValues), right.GetNulls())
 		if err != nil {

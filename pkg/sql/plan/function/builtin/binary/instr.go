@@ -41,7 +41,7 @@ func Instr(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, er
 	s1, s2 := vector.MustStrCols(v1), vector.MustStrCols(v2)
 	if v1.IsConst() && v2.IsConst() {
 		str, substr := s1[0], s2[0]
-		ret = vector.NewConst(rtyp, instr.Single(str, substr), v1.Length(), proc.Mp())
+		ret = vector.NewConstFixed(rtyp, instr.Single(str, substr), v1.Length(), proc.Mp())
 		return
 	}
 	ret, err = proc.AllocVectorOfRows(rtyp, maxLen, nil)

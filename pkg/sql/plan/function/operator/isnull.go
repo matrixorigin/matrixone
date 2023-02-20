@@ -26,9 +26,9 @@ func IsNull(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	retType := types.T_bool.ToType()
 	if input.IsConst() {
 		if input.IsConstNull() {
-			return vector.NewConst(retType, true, input.Length(), proc.Mp()), nil
+			return vector.NewConstFixed(retType, true, input.Length(), proc.Mp()), nil
 		} else {
-			return vector.NewConst(retType, false, input.Length(), proc.Mp()), nil
+			return vector.NewConstFixed(retType, false, input.Length(), proc.Mp()), nil
 		}
 	} else {
 		vlen := input.Length()

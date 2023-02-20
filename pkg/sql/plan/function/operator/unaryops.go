@@ -35,7 +35,7 @@ func UnaryTilde[T constraints.Integer](ivecs []*vector.Vector, proc *process.Pro
 		if srcVector.IsConstNull() {
 			return vector.NewConstNull(*srcVector.GetType(), srcVector.Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(*srcVector.GetType(), funcBitInversion(srcValues[0]), srcVector.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(*srcVector.GetType(), funcBitInversion(srcValues[0]), srcVector.Length(), proc.Mp()), nil
 	} else {
 		resVector, err := proc.AllocVectorOfRows(rtyp, len(srcValues), srcVector.GetNulls())
 		if err != nil {
@@ -80,7 +80,7 @@ func UnaryMinus[T constraints.Signed | constraints.Float](ivecs []*vector.Vector
 		}
 		var resValues [1]T
 		neg.NumericNeg(srcValues, resValues[:])
-		return vector.NewConst(*srcVector.GetType(), resValues[0], srcVector.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(*srcVector.GetType(), resValues[0], srcVector.Length(), proc.Mp()), nil
 	} else {
 		resVector, err := proc.AllocVectorOfRows(*srcVector.GetType(), len(srcValues), srcVector.GetNulls())
 		if err != nil {
@@ -102,7 +102,7 @@ func UnaryMinusDecimal64(ivecs []*vector.Vector, proc *process.Process) (*vector
 		}
 		var resValues [1]types.Decimal64
 		neg.Decimal64Neg(srcValues, resValues[:])
-		return vector.NewConst(*srcVector.GetType(), resValues[0], srcVector.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(*srcVector.GetType(), resValues[0], srcVector.Length(), proc.Mp()), nil
 	} else {
 		resVector, err := proc.AllocVectorOfRows(*srcVector.GetType(), len(srcValues), srcVector.GetNulls())
 		if err != nil {
@@ -124,7 +124,7 @@ func UnaryMinusDecimal128(ivecs []*vector.Vector, proc *process.Process) (*vecto
 		}
 		var resValues [1]types.Decimal128
 		neg.Decimal128Neg(srcValues, resValues[:])
-		return vector.NewConst(*srcVector.GetType(), resValues[0], srcVector.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(*srcVector.GetType(), resValues[0], srcVector.Length(), proc.Mp()), nil
 	} else {
 		resVector, err := proc.AllocVectorOfRows(*srcVector.GetType(), len(srcValues), srcVector.GetNulls())
 		if err != nil {

@@ -36,7 +36,7 @@ func math1(ivecs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Ve
 		if origVec.IsConstNull() {
 			return vector.NewConstNull(types.T_float64.ToType(), origVec.Length(), proc.Mp()), nil
 		} else {
-			rvec := vector.NewConst(types.T_float64.ToType(), float64(0), origVec.Length(), proc.Mp())
+			rvec := vector.NewConstFixed(types.T_float64.ToType(), float64(0), origVec.Length(), proc.Mp())
 			if err := fn(origVec, rvec); err != nil {
 				return nil, err
 			}

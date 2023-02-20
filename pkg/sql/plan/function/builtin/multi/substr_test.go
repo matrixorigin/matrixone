@@ -643,9 +643,9 @@ func TestSubStrBlob(t *testing.T) {
 func makeSubStrVectors(src string, start int64, length int64, withLength bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
 	vec[0] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(src), 1, testutil.TestUtilMp)
-	vec[1] = vector.NewConst(types.T_int64.ToType(), start, 1, testutil.TestUtilMp)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), start, 1, testutil.TestUtilMp)
 	if withLength {
-		lvec := vector.NewConst(types.T_int64.ToType(), length, 1, testutil.TestUtilMp)
+		lvec := vector.NewConstFixed(types.T_int64.ToType(), length, 1, testutil.TestUtilMp)
 		vec = append(vec, lvec)
 	}
 	return vec
@@ -655,9 +655,9 @@ func makeSubStrBlobVectors(src []byte, start int64, length int64, withLength boo
 	inputVector := make([]*vector.Vector, 2)
 	inputType := types.New(types.T_blob, 0, 0, 0)
 	inputVector[0] = vector.NewConstBytes(inputType, src, 1, procs.Mp())
-	inputVector[1] = vector.NewConst(types.T_int64.ToType(), start, 1, testutil.TestUtilMp)
+	inputVector[1] = vector.NewConstFixed(types.T_int64.ToType(), start, 1, testutil.TestUtilMp)
 	if withLength {
-		lvec := vector.NewConst(types.T_int64.ToType(), length, 1, testutil.TestUtilMp)
+		lvec := vector.NewConstFixed(types.T_int64.ToType(), length, 1, testutil.TestUtilMp)
 		inputVector = append(inputVector, lvec)
 	}
 	return inputVector

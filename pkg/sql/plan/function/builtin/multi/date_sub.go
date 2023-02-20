@@ -39,7 +39,7 @@ func DateSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConst(rtyp, rval, startVec.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rval, startVec.Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, startVec.Length(), nil)
 		if err != nil {
@@ -104,7 +104,7 @@ func TimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConst(rtyp, rval, startVec.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rval, startVec.Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, startVec.Length(), nil)
 		if err != nil {
@@ -169,7 +169,7 @@ func DatetimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConst(rtyp, rval, startVec.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rval, startVec.Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, startVec.Length(), nil)
 		if err != nil {
@@ -228,7 +228,7 @@ func DateStringSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConst(rtyp, rval, startVec.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rval, startVec.Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, startVec.Length(), nil)
 		if err != nil {
@@ -293,7 +293,7 @@ func TimestampSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConst(rtyp, rval, startVec.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rval, startVec.Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, startVec.Length(), nil)
 		if err != nil {

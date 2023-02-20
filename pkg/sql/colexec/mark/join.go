@@ -155,7 +155,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp]
 			bat.Vecs[rp] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewConst(types.T_bool.ToType(), false, count, proc.Mp())
+			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
 		}
 	}
 	rbat.Zs = bat.Zs

@@ -353,7 +353,7 @@ func makeStringVector(values []string, nsp []uint64, typ types.Type) *vector.Vec
 }
 
 func makeScalar[T types.FixedSizeT](value T, length int, typ types.Type) *vector.Vector {
-	return vector.NewConst(typ, value, length, TestUtilMp)
+	return vector.NewConstFixed(typ, value, length, TestUtilMp)
 }
 
 func makeScalarString(value string, length int, typ types.Type) *vector.Vector {

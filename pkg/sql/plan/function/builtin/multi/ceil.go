@@ -43,7 +43,7 @@ func CeilStr(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		if err != nil {
 			return nil, err
 		}
-		if err := vector.Append(floatvector, floatVal, false, proc.Mp()); err != nil {
+		if err := vector.AppendFixed(floatvector, floatVal, false, proc.Mp()); err != nil {
 			floatvector.Free(proc.Mp())
 			return nil, err
 		}

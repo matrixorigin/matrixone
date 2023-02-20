@@ -28,7 +28,7 @@ func DateToYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(rtyp, ivals[0].Year(), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, ivals[0].Year(), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -48,7 +48,7 @@ func DatetimeToYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(rtyp, ivals[0].Year(), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, ivals[0].Year(), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -70,7 +70,7 @@ func DateStringToYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 		var rvals [1]uint16
 		doDateStringToYear(ivals, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {

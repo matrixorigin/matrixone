@@ -32,7 +32,7 @@ func DateToMonth(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		}
 		var rvals [1]uint8
 		month.DateToMonth(ivals, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -54,7 +54,7 @@ func DatetimeToMonth(ivecs []*vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		var rvals [1]uint8
 		month.DatetimeToMonth(ivals, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -80,7 +80,7 @@ func DateStringToMonth(ivecs []*vector.Vector, proc *process.Process) (*vector.V
 		if nsp.Contains(0) {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		} else {
-			return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+			return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 		}
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())

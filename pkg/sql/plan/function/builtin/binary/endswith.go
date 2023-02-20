@@ -33,7 +33,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	case left.IsConst() && right.IsConst():
 		var rvals [1]uint8
 		endswith.EndsWithAllConst(leftValues, rightValues, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], left.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], left.Length(), proc.Mp()), nil
 	case left.IsConst() && !right.IsConst():
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(rightValues), right.GetNulls())
 		if err != nil {

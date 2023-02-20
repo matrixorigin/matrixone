@@ -32,7 +32,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	case left.IsConst() && right.IsConst():
 		var rvals [1]uint64
 		findinset.FindInSetWithAllConst(leftValues[0], rightValues[0], rvals[:])
-		return vector.NewConst(rtyp, rvals[0], left.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], left.Length(), proc.Mp()), nil
 	case left.IsConst() && !right.IsConst():
 		rlen := len(rightValues)
 		rvec, err := proc.AllocVectorOfRows(rtyp, rlen, right.GetNulls())

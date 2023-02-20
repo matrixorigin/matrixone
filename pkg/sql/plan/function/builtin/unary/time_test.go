@@ -226,25 +226,25 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.NewConst(types.T_int64.ToType(), data, 1, testutil.TestUtilMp)
+			vec[0] = vector.NewConstFixed(types.T_int64.ToType(), data, 1, testutil.TestUtilMp)
 		case types.T_decimal128:
 			data, err := types.ParseStringToDecimal128(str, 34, precision, false)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.NewConst(types.T_int128.ToType(), data, 1, testutil.TestUtilMp)
+			vec[0] = vector.NewConstFixed(types.T_int128.ToType(), data, 1, testutil.TestUtilMp)
 		case types.T_date:
 			data, err := types.ParseDateCast(str)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.NewConst(types.T_date.ToType(), data, 1, testutil.TestUtilMp)
+			vec[0] = vector.NewConstFixed(types.T_date.ToType(), data, 1, testutil.TestUtilMp)
 		case types.T_datetime:
 			data, err := types.ParseDatetime(str, precision)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.NewConst(types.T_date.ToType(), data, 1, testutil.TestUtilMp)
+			vec[0] = vector.NewConstFixed(types.T_date.ToType(), data, 1, testutil.TestUtilMp)
 			vec[0].GetType().Precision = precision
 		case types.T_char, types.T_varchar:
 			vec[0] = vector.NewConstBytes(types.Type{Oid: types.T_varchar, Size: 26}, []byte(str), 1, testutil.TestUtilMp)

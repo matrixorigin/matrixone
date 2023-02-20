@@ -63,16 +63,16 @@ func TestWindowWithNulls(t *testing.T) {
 	v0 := NewVector(types.T_int8.ToType())
 	mp := mpool.MustNewZero()
 
-	_ = Append(v0, int8(0), false, mp)
-	_ = Append(v0, int8(1), false, mp)
-	_ = Append(v0, int8(2), false, mp)
-	_ = Append(v0, int8(-1), true, mp) // v0[3] = null
-	_ = Append(v0, int8(6), false, mp)
-	_ = Append(v0, int8(-1), true, mp) // v0[5] = null
-	_ = Append(v0, int8(-1), true, mp) // v0[6] = null
-	_ = Append(v0, int8(6), false, mp)
-	_ = Append(v0, int8(7), false, mp)
-	_ = Append(v0, int8(8), false, mp)
+	_ = AppendFixed(v0, int8(0), false, mp)
+	_ = AppendFixed(v0, int8(1), false, mp)
+	_ = AppendFixed(v0, int8(2), false, mp)
+	_ = AppendFixed(v0, int8(-1), true, mp) // v0[3] = null
+	_ = AppendFixed(v0, int8(6), false, mp)
+	_ = AppendFixed(v0, int8(-1), true, mp) // v0[5] = null
+	_ = AppendFixed(v0, int8(-1), true, mp) // v0[6] = null
+	_ = AppendFixed(v0, int8(6), false, mp)
+	_ = AppendFixed(v0, int8(7), false, mp)
+	_ = AppendFixed(v0, int8(8), false, mp)
 
 	require.Equal(t, []uint64{3, 5, 6}, v0.GetNulls().Np.ToArray())
 
@@ -89,9 +89,9 @@ func TestWindowWithNulls(t *testing.T) {
 func TestAppend(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVector(types.New(types.T_int8, 0, 0, 0))
-	err := Append(vec, int(0), false, mp)
+	err := AppendFixed(vec, int(0), false, mp)
 	require.NoError(t, err)
-	err = Append(vec, int(0), true, mp)
+	err = AppendFixed(vec, int(0), true, mp)
 	require.NoError(t, err)
 	err = AppendList(vec, []int8{0, 1, 2}, nil, mp)
 	require.NoError(t, err)

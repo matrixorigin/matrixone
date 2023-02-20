@@ -89,7 +89,7 @@ func TestSplitPart(t *testing.T) {
 	// error case
 	vector.AppendStringList(v1, []string{"a,b,c"}, nil, mp)
 	vector.AppendBytes(v2, []byte(","), false, mp)
-	vector.Append(v3, uint32(0), false, mp)
+	vector.AppendFixed(v3, uint32(0), false, mp)
 	_, err = testSplitPart([]*vector.Vector{v1, v2, v3}, proc)
 	require.Error(t, err)
 }

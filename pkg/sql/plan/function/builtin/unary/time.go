@@ -36,7 +36,7 @@ func DatetimeToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		}
 		var rvals [1]types.Time
 		time.DatetimeToTime(ivals, rvals[:], inputPrecision)
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -58,7 +58,7 @@ func DateToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		}
 		var rvals [1]types.Time
 		time.DateToTime(ivals, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -81,7 +81,7 @@ func DateStringToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 		var rvals [1]types.Time
 		_, err := time.DateStringToTime(ivals, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), err
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), err
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -104,7 +104,7 @@ func Int64ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		}
 		var rvals [1]types.Time
 		_, err := time.Int64ToTime(ivals, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), err
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), err
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -127,7 +127,7 @@ func Decimal128ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 		var rvals [1]types.Time
 		_, err := time.Decimal128ToTime(ivals, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), err
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), err
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {

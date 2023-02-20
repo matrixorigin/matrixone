@@ -434,7 +434,7 @@ func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int)
 		if err != nil {
 			return err
 		}
-		vector.Append(container.metaLocBat.Vecs[0], uint16(idx), false, proc.GetMPool())
+		vector.AppendFixed(container.metaLocBat.Vecs[0], uint16(idx), false, proc.GetMPool())
 		vector.AppendBytes(container.metaLocBat.Vecs[1], []byte(metaLoc), false, proc.GetMPool())
 	}
 	// for i := range container.unique_writer {

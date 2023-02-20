@@ -266,25 +266,25 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 			case MO_TIMESTAMP_IDX:
 				vec = vector.NewVector(typ)
 				for k := 0; k < Rows; k++ {
-					err := vector.Append(vec, timestamps[i], false, mp)
+					err := vector.AppendFixed(vec, timestamps[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ACCOUNT_ID_IDX + MO_OFF:
 				vec = vector.NewVector(typ)
 				for k := 0; k < Rows; k++ {
-					err := vector.Append(vec, account, false, mp)
+					err := vector.AppendFixed(vec, account, false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX + MO_OFF:
 				vec = vector.NewVector(typ)
 				for k := 0; k < Rows; k++ {
-					err := vector.Append(vec, databaseIds[i], false, mp)
+					err := vector.AppendFixed(vec, databaseIds[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_RELNAME_IDX + MO_OFF:
 				vec = vector.NewVector(typ)
 				for k := 0; k < Rows; k++ {
-					err := vector.Append(vec, names[i], false, mp)
+					err := vector.AppendFixed(vec, names[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF:
@@ -292,19 +292,19 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 				require.NoError(t, err)
 				vec = vector.NewVector(typ)
 				for k := 0; k < Rows; k++ {
-					err := vector.Append(vec, data, false, mp)
+					err := vector.AppendFixed(vec, data, false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATTHASDEF_IDX + MO_OFF:
 				vec = vector.NewVector(typ)
 				for k := 0; k < Rows; k++ {
-					err := vector.Append(vec, int8(0), false, mp)
+					err := vector.AppendFixed(vec, int8(0), false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX + MO_OFF:
 				vec = vector.NewVector(typ)
 				for k := 0; k < Rows; k++ {
-					err := vector.Append(vec, int8(0), false, mp)
+					err := vector.AppendFixed(vec, int8(0), false, mp)
 					require.NoError(t, err)
 				}
 			default:

@@ -28,7 +28,7 @@ func Empty(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	}
 	ivals := vector.MustStrCols(inputVector)
 	if inputVector.IsConst() {
-		return vector.NewConst(rtyp, len(ivals[0]) == 0, ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, len(ivals[0]) == 0, ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {

@@ -28,7 +28,7 @@ func DateToWeek(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(rtyp, ivals[0].WeekOfYear2(), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, ivals[0].WeekOfYear2(), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -50,7 +50,7 @@ func DatetimeToWeek(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(rtyp, ivals[0].ToDate().WeekOfYear2(), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, ivals[0].ToDate().WeekOfYear2(), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {

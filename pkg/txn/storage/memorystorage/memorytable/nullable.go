@@ -52,5 +52,5 @@ func (n Nullable) AppendVector(
 	if ok {
 		value = []byte(str)
 	}
-	return vector.Append(vec, value, n.IsNull, mp)
+	return vector.AppendAny(vec, value, n.IsNull, mp)
 }

@@ -31,7 +31,7 @@ func DayOfYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 		var rvals [1]uint16
 		dayofyear.GetDayOfYear(ivals, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {

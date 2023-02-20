@@ -41,11 +41,11 @@ func funcIs(vectors []*vector.Vector, proc *process.Process, nullValue bool, eqB
 	input := vectors[0]
 	retType := types.T_bool.ToType()
 	if input.IsConstNull() {
-		return vector.NewConst(retType, nullValue, input.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(retType, nullValue, input.Length(), proc.Mp()), nil
 	}
 	if input.IsConst() {
 		col := vector.MustTCols[bool](input)
-		return vector.NewConst(retType, col[0] == eqBool, input.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(retType, col[0] == eqBool, input.Length(), proc.Mp()), nil
 	} else {
 		vlen := input.Length()
 		rvec, err := proc.AllocVectorOfRows(retType, vlen, nil)

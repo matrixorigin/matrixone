@@ -136,7 +136,7 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 		if input.IsConst() {
 			if !input.IsConstNull() {
 				cols := vector.MustTCols[T](input)
-				r := vector.NewConst(t, cols[0], vecLen, proc.Mp())
+				r := vector.NewConstFixed(t, cols[0], vecLen, proc.Mp())
 				r.GetType().Precision = input.GetType().Precision
 				r.GetType().Width = input.GetType().Width
 				r.GetType().Scale = input.GetType().Scale

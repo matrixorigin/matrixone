@@ -78,7 +78,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if err != nil {
 			return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
 		}
-		return vector.NewConst(rtyp, rvals[0], left.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], left.Length(), proc.Mp()), nil
 	case left.IsConst() && !right.IsConst():
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(rightValues), nil)
 		if err != nil {

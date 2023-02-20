@@ -31,7 +31,7 @@ func BitLengthFunc(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		}
 		var rvals [1]int64
 		bit_length.StrBitLength(ivals, rvals[:])
-		vec := vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp())
+		vec := vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp())
 		return vec, nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())

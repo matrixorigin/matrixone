@@ -28,7 +28,7 @@ func Length(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	}
 	ivals := vector.MustStrCols(inputVector)
 	if inputVector.IsConst() {
-		return vector.NewConst(rtyp, int64(len(ivals[0])), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, int64(len(ivals[0])), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {

@@ -28,5 +28,5 @@ func CurrentTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 	}
 	rtyp := types.Type{Oid: types.T_timestamp, Size: 8, Precision: resultPrecision}
 	resultValue := types.UnixNanoToTimestamp(proc.UnixTime)
-	return vector.NewConst(rtyp, resultValue, 1, proc.Mp()), nil
+	return vector.NewConstFixed(rtyp, resultValue, 1, proc.Mp()), nil
 }

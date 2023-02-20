@@ -132,9 +132,9 @@ func makeDateAddVectors(str string, isConst bool, num int64, unit types.Interval
 
 	date, _ := types.ParseDateCast(str)
 
-	vec[0] = vector.NewConst(types.T_date.ToType(), date, 1, testutil.TestUtilMp)
-	vec[1] = vector.NewConst(types.T_int64.ToType(), num, 1, testutil.TestUtilMp)
-	vec[2] = vector.NewConst(types.T_int64.ToType(), int64(unit), 1, testutil.TestUtilMp)
+	vec[0] = vector.NewConstFixed(types.T_date.ToType(), date, 1, testutil.TestUtilMp)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), num, 1, testutil.TestUtilMp)
+	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), int64(unit), 1, testutil.TestUtilMp)
 	return vec
 }
 
@@ -143,16 +143,16 @@ func makeDatetimeAddVectors(str string, isConst bool, num int64, unit types.Inte
 
 	datetime, _ := types.ParseDatetime(str, 0)
 
-	vec[0] = vector.NewConst(types.T_datetime.ToType(), datetime, 1, testutil.TestUtilMp)
-	vec[1] = vector.NewConst(types.T_int64.ToType(), num, 1, testutil.TestUtilMp)
-	vec[2] = vector.NewConst(types.T_int64.ToType(), int64(unit), 1, testutil.TestUtilMp)
+	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), datetime, 1, testutil.TestUtilMp)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), num, 1, testutil.TestUtilMp)
+	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), int64(unit), 1, testutil.TestUtilMp)
 	return vec
 }
 
 func makeDateStringAddVectors(str string, isConst bool, num int64, unit types.IntervalType) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
 	vec[0] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(str), 1, testutil.TestUtilMp)
-	vec[1] = vector.NewConst(types.T_int64.ToType(), num, 1, testutil.TestUtilMp)
-	vec[2] = vector.NewConst(types.T_int64.ToType(), int64(unit), 1, testutil.TestUtilMp)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), num, 1, testutil.TestUtilMp)
+	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), int64(unit), 1, testutil.TestUtilMp)
 	return vec
 }

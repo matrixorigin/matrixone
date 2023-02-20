@@ -36,7 +36,7 @@ func Oct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, pr
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -64,7 +64,7 @@ func OctFloat[T constraints.Float](ivecs []*vector.Vector, proc *process.Process
 		if err != nil {
 			return nil, moerr.NewInternalError(proc.Ctx, "the input value is out of integer range")
 		}
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {

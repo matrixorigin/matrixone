@@ -192,7 +192,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			}
 			for i, name := range b.Attrs {
 				if name == catalog.Row_ID {
-					if err := vector.Append(b.Vecs[i], types.Rowid(entry.Key), false, mp); err != nil {
+					if err := vector.AppendFixed(b.Vecs[i], types.Rowid(entry.Key), false, mp); err != nil {
 						return nil, err
 					}
 					continue
@@ -247,7 +247,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
-				if err := vector.Append(b.Vecs[i], types.Rowid(dataKey), false, mp); err != nil {
+				if err := vector.AppendFixed(b.Vecs[i], types.Rowid(dataKey), false, mp); err != nil {
 					return nil, err
 				}
 				continue

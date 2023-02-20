@@ -39,7 +39,7 @@ func ToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConst(rtyp, result, ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, result, ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), ivecs[0].GetNulls())
 		if err != nil {

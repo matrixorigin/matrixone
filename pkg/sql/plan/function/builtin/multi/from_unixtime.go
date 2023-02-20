@@ -40,7 +40,7 @@ func FromUnixTimeInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.V
 		var rs [1]types.Datetime
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs[:])
 
-		rvec := vector.NewConst(types.T_datetime.ToType(), rs[0], inVec.Length(), proc.Mp())
+		rvec := vector.NewConstFixed(types.T_datetime.ToType(), rs[0], inVec.Length(), proc.Mp())
 		if times[0] < 0 || times[0] > max_unix_timestamp_int {
 			nulls.Add(rvec.GetNulls(), 0)
 		}
@@ -74,7 +74,7 @@ func FromUnixTimeFloat64(ivecs []*vector.Vector, proc *process.Process) (*vector
 		fromunixtime.UnixToDateTimeWithNsec(proc.SessionInfo.TimeZone, ints, fracs, rs[:])
 
 		t := types.Type{Oid: types.T_datetime, Size: int32(size), Precision: 6}
-		rvec := vector.NewConst(t, rs[0], inVec.Length(), proc.Mp())
+		rvec := vector.NewConstFixed(t, rs[0], inVec.Length(), proc.Mp())
 		nulls.Set(rvec.GetNulls(), inVec.GetNulls())
 		if times[0] < 0 || times[0] > max_unix_timestamp_int {
 			nulls.Add(rvec.GetNulls(), 0)
@@ -221,7 +221,7 @@ func FromUnixTimeUint64(ivecs []*vector.Vector, proc *process.Process) (*vector.
 	if inVec.IsConst() {
 		var rs [1]types.Datetime
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, uint64ToInt64(times), rs[:])
-		rvec := vector.NewConst(types.T_datetime.ToType(), rs[0], inVec.Length(), proc.Mp())
+		rvec := vector.NewConstFixed(types.T_datetime.ToType(), rs[0], inVec.Length(), proc.Mp())
 		nulls.Set(rvec.GetNulls(), inVec.GetNulls())
 
 		if times[0] > max_unix_timestamp_int {

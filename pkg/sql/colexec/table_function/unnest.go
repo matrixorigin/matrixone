@@ -220,14 +220,14 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestPara
 			case "col":
 				err = vector.AppendBytes(vec, []byte(param.ColName), false, proc.Mp())
 			case "seq":
-				err = vector.Append(vec, int32(i), false, proc.Mp())
+				err = vector.AppendFixed(vec, int32(i), false, proc.Mp())
 			case "index":
 				val, ok := ures[i][arg.Attrs[j]]
 				if !ok || val == nil {
-					err = vector.Append(vec, int32(0), true, proc.Mp())
+					err = vector.AppendFixed(vec, int32(0), true, proc.Mp())
 				} else {
 					intVal, _ := strconv.ParseInt(string(val), 10, 32)
-					err = vector.Append(vec, int32(intVal), false, proc.Mp())
+					err = vector.AppendFixed(vec, int32(intVal), false, proc.Mp())
 				}
 			case "key", "path", "value", "this":
 				val, ok := ures[i][arg.Attrs[j]]

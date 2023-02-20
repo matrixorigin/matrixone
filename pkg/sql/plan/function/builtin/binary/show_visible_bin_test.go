@@ -77,6 +77,6 @@ func TestShowVisibleBin(t *testing.T) {
 }
 func makeVec(buf []byte, toCode uint8) []*vector.Vector {
 	vec := vector.NewConstBytes(types.T_varchar.ToType(), buf, 1, testutil.TestUtilMp)
-	vec2 := vector.NewConst(types.T_uint8.ToType(), toCode, 1, testutil.TestUtilMp)
+	vec2 := vector.NewConstFixed(types.T_uint8.ToType(), toCode, 1, testutil.TestUtilMp)
 	return []*vector.Vector{vec, vec2}
 }

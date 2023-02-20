@@ -129,7 +129,7 @@ func TestHex(t *testing.T) {
 			var inVector *vector.Vector
 			if c.inputnum != nil {
 				if c.isScalar {
-					inVector = vector.NewConst(types.T_int64.ToType(), c.inputnum[0], 1, testutil.TestUtilMp)
+					inVector = vector.NewConstFixed(types.T_int64.ToType(), c.inputnum[0], 1, testutil.TestUtilMp)
 				} else {
 					inVector = testutil.MakeInt64Vector(c.inputnum, nil)
 				}

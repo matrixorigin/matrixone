@@ -304,7 +304,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 
 	case types.T_TS:
 		if vec.IsConstNull() {
-			var zero types.Rowid
+			var zero types.TS
 			value = Nullable{
 				IsNull: true,
 				Value:  zero,

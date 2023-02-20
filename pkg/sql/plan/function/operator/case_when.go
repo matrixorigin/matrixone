@@ -186,7 +186,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 				if thenv.IsConstNull() {
 					return vector.NewConstNull(t, l, proc.Mp()), nil
 				} else {
-					r := vector.NewConst(t, thencols[0], l, proc.Mp())
+					r := vector.NewConstFixed(t, thencols[0], l, proc.Mp())
 					r.GetType().Precision = thenv.GetType().Precision
 					r.GetType().Width = thenv.GetType().Width
 					r.GetType().Scale = thenv.GetType().Scale

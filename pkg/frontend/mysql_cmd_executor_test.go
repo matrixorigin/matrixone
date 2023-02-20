@@ -1130,7 +1130,7 @@ func TestDump2File(t *testing.T) {
 			if cnt == 1 {
 				bat := batch.NewWithSize(1)
 				bat.Vecs[0] = vector.NewVector(types.T_int64.ToType())
-				err := vector.Append(bat.Vecs[0], int64(1), false, testutil.TestUtilMp)
+				err := vector.AppendFixed(bat.Vecs[0], int64(1), false, testutil.TestUtilMp)
 				convey.So(err, convey.ShouldBeNil)
 			}
 			return nil, nil

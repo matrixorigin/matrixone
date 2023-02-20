@@ -60,7 +60,7 @@ func CompareOrdered(ivecs []*vector.Vector, proc *process.Process, cfn compareFn
 	}
 
 	if left.IsConst() && right.IsConst() {
-		rvec := vector.NewConst(boolType, false, left.Length(), proc.Mp())
+		rvec := vector.NewConstFixed(boolType, false, left.Length(), proc.Mp())
 		if err := cfn(left, right, rvec); err != nil {
 			return nil, err
 		}
@@ -174,7 +174,7 @@ func NotINGeneral[T compareT](ivecs []*vector.Vector, proc *process.Process) (*v
 			notInMap[right[i]] = true
 		} else {
 			//not in null, return false
-			return vector.NewConst(boolType, false, ivecs[0].Length(), proc.Mp()), nil
+			return vector.NewConstFixed(boolType, false, ivecs[0].Length(), proc.Mp()), nil
 		}
 	}
 	retVec := allocateBoolVector(lenLeft, proc)
@@ -204,7 +204,7 @@ func NotINString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 			inMap[right[i].GetString(area2)] = true
 		} else {
 			//not in null, return false
-			return vector.NewConst(boolType, false, ivecs[0].Length(), proc.Mp()), nil
+			return vector.NewConstFixed(boolType, false, ivecs[0].Length(), proc.Mp()), nil
 		}
 	}
 	retVec := allocateBoolVector(lenLeft, proc)
@@ -304,7 +304,7 @@ func CompareValenaInline(ivecs []*vector.Vector, proc *process.Process) (*vector
 		p1 := col1[0].UnsafePtr()
 		p2 := col2[0].UnsafePtr()
 		ret := *(*[3]int64)(p1) == *(*[3]int64)(p2)
-		return vector.NewConst(boolType, ret, v1.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(boolType, ret, v1.Length(), proc.Mp()), nil
 	}
 
 	length := v1.Length()
@@ -348,7 +348,7 @@ func CompareString(ivecs []*vector.Vector, fn compStringFn, proc *process.Proces
 
 	if v1.IsConst() && v2.IsConst() {
 		col1, col2 := vector.MustBytesCols(v1), vector.MustBytesCols(v2)
-		return vector.NewConst(boolType, fn(col1[0], col2[0], v1.GetType().Width, v2.GetType().Width), v1.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(boolType, fn(col1[0], col2[0], v1.GetType().Width, v2.GetType().Width), v1.Length(), proc.Mp()), nil
 	}
 
 	if v1.IsConst() {
@@ -474,7 +474,7 @@ func CompareUuid(ivecs []*vector.Vector, fn compUuidFn, proc *process.Process) (
 	}
 
 	if v1.IsConst() && v2.IsConst() {
-		vec := vector.NewConst(boolType, fn(col1[0], col2[0]), v1.Length(), proc.Mp())
+		vec := vector.NewConstFixed(boolType, fn(col1[0], col2[0]), v1.Length(), proc.Mp())
 		return vec, nil
 	}
 

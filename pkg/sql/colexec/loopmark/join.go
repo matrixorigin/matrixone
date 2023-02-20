@@ -103,7 +103,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp]
 			bat.Vecs[rp] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewConst(types.T_bool.ToType(), false, count, proc.Mp())
+			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
 		}
 	}
 	rbat.Zs = bat.Zs
@@ -145,11 +145,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 		if hasTrue {
-			vector.Append(rbat.Vecs[markPos], true, false, proc.Mp())
+			vector.AppendFixed(rbat.Vecs[markPos], true, false, proc.Mp())
 		} else if hasNull {
-			vector.Append(rbat.Vecs[markPos], false, true, proc.Mp())
+			vector.AppendFixed(rbat.Vecs[markPos], false, true, proc.Mp())
 		} else {
-			vector.Append(rbat.Vecs[markPos], false, false, proc.Mp())
+			vector.AppendFixed(rbat.Vecs[markPos], false, false, proc.Mp())
 		}
 		vec.Free(proc.Mp())
 	}

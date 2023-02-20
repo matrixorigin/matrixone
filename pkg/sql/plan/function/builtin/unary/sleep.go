@@ -56,7 +56,7 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 			case <-proc.Ctx.Done(): //query aborted
 				result = 1
 			}
-			rs = vector.NewConst(rtyp, result, 1, proc.Mp())
+			rs = vector.NewConstFixed(rtyp, result, 1, proc.Mp())
 			return
 		}
 		rs, err = proc.AllocVectorOfRows(rtyp, length, nil)

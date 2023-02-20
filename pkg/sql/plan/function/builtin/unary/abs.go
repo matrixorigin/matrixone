@@ -32,7 +32,7 @@ func AbsUInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 		var rvals [1]uint64
 		abs.AbsUint64(ivals, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -55,7 +55,7 @@ func AbsInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		}
 		var rvals [1]int64
 		abs.AbsInt64(ivals, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -78,7 +78,7 @@ func AbsFloat64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		}
 		var rvals [1]float64
 		abs.AbsFloat64(ivals, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -100,7 +100,7 @@ func AbsDecimal128(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		}
 		var rvals [1]types.Decimal128
 		abs.AbsDecimal128(ivals, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {

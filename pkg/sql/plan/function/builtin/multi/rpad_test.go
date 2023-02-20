@@ -169,7 +169,7 @@ func TestRpadVarchar(t *testing.T) {
 func makeRpadVectors(src string, length int64, pad string, nils []int) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
 	vec[0] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(src), 1, testutil.TestUtilMp)
-	vec[1] = vector.NewConst(types.T_int64.ToType(), length, 1, testutil.TestUtilMp)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), length, 1, testutil.TestUtilMp)
 	vec[2] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(pad), 1, testutil.TestUtilMp)
 	for i, n := range nils {
 		if n == 0 {

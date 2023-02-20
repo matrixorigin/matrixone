@@ -38,7 +38,7 @@ func Logic(ivecs []*vector.Vector, proc *process.Process, cfn logicFn, op logicT
 	}
 
 	if left.IsConst() && right.IsConst() {
-		vec := vector.NewConst(boolType, false, ivecs[0].Length(), proc.Mp())
+		vec := vector.NewConstFixed(boolType, false, ivecs[0].Length(), proc.Mp())
 		if err := cfn(left, right, vec); err != nil {
 			return nil, err
 		}
@@ -76,7 +76,7 @@ func LogicNot(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		return vector.NewConstNull(boolType, ivecs[0].Length(), proc.Mp()), nil
 	}
 	if v1.IsConst() {
-		vec := vector.NewConst(boolType, false, ivecs[0].Length(), proc.Mp())
+		vec := vector.NewConstFixed(boolType, false, ivecs[0].Length(), proc.Mp())
 		if err := logical.Not(v1, vec); err != nil {
 			return nil, err
 		}

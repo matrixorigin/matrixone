@@ -34,7 +34,7 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	} else if left.IsConst() && right.IsConst() {
 		var rvals [1]int64
 		datediff.DateDiff(leftValues, rightValues, rvals[:])
-		return vector.NewConst(rtyp, rvals[0], left.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, rvals[0], left.Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, left.Length(), nil)
 		if err != nil {

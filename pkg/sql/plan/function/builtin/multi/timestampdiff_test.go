@@ -158,8 +158,8 @@ func makeTimeStampDiffVectors(firstStr, secondStr, unit string) []*vector.Vector
 	firstDate, _ := types.ParseDatetime(firstStr, 0)
 	secondDate, _ := types.ParseDatetime(secondStr, 0)
 
-	vec[1] = vector.NewConst(types.T_datetime.ToType(), firstDate, 1, testutil.TestUtilMp)
-	vec[2] = vector.NewConst(types.T_datetime.ToType(), secondDate, 1, testutil.TestUtilMp)
+	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), firstDate, 1, testutil.TestUtilMp)
+	vec[2] = vector.NewConstFixed(types.T_datetime.ToType(), secondDate, 1, testutil.TestUtilMp)
 	vec[0] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(unit), 1, testutil.TestUtilMp)
 	return vec
 }
@@ -170,8 +170,8 @@ func makeTimeStampDiffReverseVectors(firstStr, secondStr, unit string) []*vector
 	firstDate, _ := types.ParseDatetime(firstStr, 0)
 	secondDate, _ := types.ParseDatetime(secondStr, 0)
 
-	vec[1] = vector.NewConst(types.T_datetime.ToType(), secondDate, 1, testutil.TestUtilMp)
-	vec[2] = vector.NewConst(types.T_datetime.ToType(), firstDate, 1, testutil.TestUtilMp)
+	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), secondDate, 1, testutil.TestUtilMp)
+	vec[2] = vector.NewConstFixed(types.T_datetime.ToType(), firstDate, 1, testutil.TestUtilMp)
 	vec[0] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(unit), 1, testutil.TestUtilMp)
 	return vec
 }

@@ -28,7 +28,7 @@ func DatetimeToHour(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(rtyp, uint8(ivals[0].Hour()), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, uint8(ivals[0].Hour()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), inputVector.GetNulls())
 		if err != nil {
@@ -56,7 +56,7 @@ func TimestampToHour(ivecs []*vector.Vector, proc *process.Process) (*vector.Vec
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(rtyp, uint8(dtvals[0].Hour()), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, uint8(dtvals[0].Hour()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), inputVector.GetNulls())
 		if err != nil {
@@ -81,7 +81,7 @@ func DatetimeToMinute(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(rtyp, uint8(ivals[0].Minute()), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, uint8(ivals[0].Minute()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), inputVector.GetNulls())
 		if err != nil {
@@ -109,7 +109,7 @@ func TimestampToMinute(ivecs []*vector.Vector, proc *process.Process) (*vector.V
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(rtyp, uint8(dtvals[0].Minute()), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, uint8(dtvals[0].Minute()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), inputVector.GetNulls())
 		if err != nil {
@@ -133,7 +133,7 @@ func DatetimeToSecond(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(rtyp, uint8(ivals[0].Sec()), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, uint8(ivals[0].Sec()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), inputVector.GetNulls())
 		if err != nil {
@@ -161,7 +161,7 @@ func TimestampToSecond(ivecs []*vector.Vector, proc *process.Process) (*vector.V
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(rtyp, uint8(dtvals[0].Sec()), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, uint8(dtvals[0].Sec()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), inputVector.GetNulls())
 		if err != nil {

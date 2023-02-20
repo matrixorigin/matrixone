@@ -130,7 +130,7 @@ func makeDateToTimestampVectors(str string, isConst bool) []*vector.Vector {
 
 	date, _ := types.ParseDateCast(str)
 
-	vec[0] = vector.NewConst(types.T_date.ToType(), date, 1, testutil.TestUtilMp)
+	vec[0] = vector.NewConstFixed(types.T_date.ToType(), date, 1, testutil.TestUtilMp)
 	return vec
 }
 
@@ -138,7 +138,7 @@ func makeDatetimeToTimestampVectors(str string, isConst bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 1)
 
 	datetime, _ := types.ParseDatetime(str, 0)
-	vec[0] = vector.NewConst(types.T_datetime.ToType(), datetime, 1, testutil.TestUtilMp)
+	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), datetime, 1, testutil.TestUtilMp)
 
 	return vec
 }

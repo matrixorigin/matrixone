@@ -34,10 +34,10 @@ func Is(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 
 	if lv.IsConst() {
 		if lv.IsConstNull() {
-			return vector.NewConst(rtyp, false, ivecs[0].Length(), proc.Mp()), nil
+			return vector.NewConstFixed(rtyp, false, ivecs[0].Length(), proc.Mp()), nil
 		} else {
 			lefts := vector.MustTCols[bool](lv)
-			return vector.NewConst(rtyp, lefts[0] == right, ivecs[0].Length(), proc.Mp()), nil
+			return vector.NewConstFixed(rtyp, lefts[0] == right, ivecs[0].Length(), proc.Mp()), nil
 		}
 	} else {
 		lefts := vector.MustTCols[bool](lv)

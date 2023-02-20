@@ -58,7 +58,7 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			if types.ValidDate(int32(time.year), time.month, time.day) {
 				resCol := types.DateFromCalendar(int32(time.year), time.month, time.day)
 				vec := vector.NewVector(rtyp)
-				vector.Append(vec, resCol, false, proc.Mp())
+				vector.AppendFixed(vec, resCol, false, proc.Mp())
 				return vec, nil
 			} else {
 				// should be null
@@ -106,7 +106,7 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 			if types.ValidDatetime(int32(time.year), time.month, time.day) && types.ValidTimeInDay(time.hour, time.minute, time.second) {
 				resCol := types.DatetimeFromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
 				vec := vector.NewVector(rtyp)
-				vector.Append(vec, resCol, false, proc.Mp())
+				vector.AppendFixed(vec, resCol, false, proc.Mp())
 				return vec, nil
 			} else {
 				// should be null
@@ -155,7 +155,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
 				resCol := types.TimeFromClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
 				vec := vector.NewVector(rtyp)
-				vector.Append(vec, resCol, false, proc.Mp())
+				vector.AppendFixed(vec, resCol, false, proc.Mp())
 				return vec, nil
 			} else {
 				// should be null

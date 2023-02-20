@@ -343,7 +343,7 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 			toVec = vector.NewVector(*bat.Vecs[idx].GetType())
 			if fromVec.IsConstNull() {
 				for j := 0; j < batLen; j++ {
-					err := vector.Append(toVec, 0, true, proc.Mp())
+					err := vector.AppendFixed(toVec, 0, true, proc.Mp())
 					if err != nil {
 						updateBatch.Clean(proc.Mp())
 						return nil, err

@@ -137,8 +137,8 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if err != nil {
 			return false, err
 		}
-		startVecTmp = vector.NewConst(types.T_datetime.ToType(), start, 1, proc.Mp())
-		endVecTmp = vector.NewConst(types.T_datetime.ToType(), end, 1, proc.Mp())
+		startVecTmp = vector.NewConstFixed(types.T_datetime.ToType(), start, 1, proc.Mp())
+		endVecTmp = vector.NewConstFixed(types.T_datetime.ToType(), end, 1, proc.Mp())
 
 		err = handleDatetime(startVecTmp, endVecTmp, stepVec, true, proc, rbat)
 		if err != nil {
@@ -304,7 +304,7 @@ func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn 
 		if toString {
 			err = vector.AppendBytes(rbat.Vecs[0], []byte(strconv.FormatInt(int64(res[i]), 10)), false, proc.Mp())
 		} else {
-			err = vector.Append(rbat.Vecs[0], res[i], false, proc.Mp())
+			err = vector.AppendFixed(rbat.Vecs[0], res[i], false, proc.Mp())
 		}
 		if err != nil {
 			return err
@@ -336,7 +336,7 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, toString bool, pro
 		if toString {
 			err = vector.AppendBytes(rbat.Vecs[0], []byte(res[i].String2(rbat.Vecs[0].GetType().Precision)), false, proc.Mp())
 		} else {
-			err = vector.Append(rbat.Vecs[0], res[i], false, proc.Mp())
+			err = vector.AppendFixed(rbat.Vecs[0], res[i], false, proc.Mp())
 		}
 		if err != nil {
 			return err
@@ -393,9 +393,9 @@ func tryInt(startStr, endStr, stepStr string, proc *process.Process, rbat *batch
 		return err
 	}
 
-	startVec = vector.NewConst(types.T_int64.ToType(), startInt, 1, proc.Mp())
-	endVec = vector.NewConst(types.T_int64.ToType(), endInt, 1, proc.Mp())
-	stepVec = vector.NewConst(types.T_int64.ToType(), stepInt, 1, proc.Mp())
+	startVec = vector.NewConstFixed(types.T_int64.ToType(), startInt, 1, proc.Mp())
+	endVec = vector.NewConstFixed(types.T_int64.ToType(), endInt, 1, proc.Mp())
+	stepVec = vector.NewConstFixed(types.T_int64.ToType(), stepInt, 1, proc.Mp())
 
 	err = handleInt(startVec, endVec, stepVec, generateInt64, true, proc, rbat)
 	if err != nil {

@@ -51,7 +51,7 @@ func generalMathMulti[T mathMultiT](funName string, ivecs []*vector.Vector, proc
 	if ivecs[0].IsConst() {
 		rs := make([]T, 1)
 		ret_rs := cb(vs, rs, digits)
-		return vector.NewConst(typ, ret_rs[0], ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(typ, ret_rs[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rs := make([]T, len(vs))
 		ret_rs := cb(vs, rs, digits)

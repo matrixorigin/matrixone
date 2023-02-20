@@ -262,7 +262,7 @@ func newResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResu
 }
 
 func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
-	return Append(fr.vec, val, isnull, fr.mp)
+	return AppendFixed(fr.vec, val, isnull, fr.mp)
 }
 
 func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {

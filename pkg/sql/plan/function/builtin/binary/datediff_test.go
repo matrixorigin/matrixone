@@ -110,7 +110,7 @@ func makeDateDiffVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.
 	firstDate, _ := types.ParseDateCast(firstStr)
 	secondDate, _ := types.ParseDateCast(secondStr)
 
-	vec[0] = vector.NewConst(types.T_date.ToType(), firstDate, 1, mp)
-	vec[1] = vector.NewConst(types.T_date.ToType(), secondDate, 1, mp)
+	vec[0] = vector.NewConstFixed(types.T_date.ToType(), firstDate, 1, mp)
+	vec[1] = vector.NewConstFixed(types.T_date.ToType(), secondDate, 1, mp)
 	return vec
 }

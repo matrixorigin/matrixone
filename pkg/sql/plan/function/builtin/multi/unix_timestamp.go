@@ -27,7 +27,7 @@ func UnixTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 	if len(ivecs) == 0 {
 		rs := make([]int64, 1)
 		unixtimestamp.UnixTimestampToInt([]types.Timestamp{types.CurrentTimestamp()}, rs)
-		vec := vector.NewConst(types.T_int64.ToType(), rs[0], 1, proc.Mp())
+		vec := vector.NewConstFixed(types.T_int64.ToType(), rs[0], 1, proc.Mp())
 		return vec, nil
 	}
 
@@ -41,7 +41,7 @@ func UnixTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		var rs [1]int64
 		unixtimestamp.UnixTimestampToInt(times, rs[:])
 		if rs[0] >= 0 {
-			return vector.NewConst(types.T_int64.ToType(), rs[0], inVec.Length(), proc.Mp()), nil
+			return vector.NewConstFixed(types.T_int64.ToType(), rs[0], inVec.Length(), proc.Mp()), nil
 		} else {
 			return vector.NewConstNull(types.T_int64.ToType(), inVec.Length(), proc.Mp()), nil
 		}
@@ -80,7 +80,7 @@ func UnixTimestampVarcharToInt64(ivecs []*vector.Vector, proc *process.Process) 
 		tms := [1]types.Timestamp{MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(0))}
 		unixtimestamp.UnixTimestampToInt(tms[:], rs[:])
 		if rs[0] >= 0 {
-			return vector.NewConst(rtyp, rs[0], inVec.Length(), proc.Mp()), nil
+			return vector.NewConstFixed(rtyp, rs[0], inVec.Length(), proc.Mp()), nil
 		} else {
 			return vector.NewConstNull(rtyp, inVec.Length(), proc.Mp()), nil
 		}
@@ -117,7 +117,7 @@ func UnixTimestampVarcharToFloat64(ivecs []*vector.Vector, proc *process.Process
 		tms := [1]types.Timestamp{MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(0))}
 		unixtimestamp.UnixTimestampToFloat(tms[:], rs[:])
 		if rs[0] >= 0 {
-			vec := vector.NewConst(rtyp, rs[0], inVec.Length(), proc.Mp())
+			vec := vector.NewConstFixed(rtyp, rs[0], inVec.Length(), proc.Mp())
 			return vec, nil
 		} else {
 			return vector.NewConstNull(rtyp, inVec.Length(), proc.Mp()), nil
@@ -159,7 +159,7 @@ func UnixTimestampVarcharToDecimal128(ivecs []*vector.Vector, proc *process.Proc
 		tms := [1]types.Timestamp{MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(0))}
 		unixtimestamp.UnixTimestampToDecimal128(tms[:], rs[:])
 		if rs[0].Ge(Decimal128Zero) {
-			vec := vector.NewConst(rtyp, rs[0], inVec.Length(), proc.Mp())
+			vec := vector.NewConstFixed(rtyp, rs[0], inVec.Length(), proc.Mp())
 			return vec, nil
 		} else {
 			return vector.NewConstNull(rtyp, inVec.Length(), proc.Mp()), nil

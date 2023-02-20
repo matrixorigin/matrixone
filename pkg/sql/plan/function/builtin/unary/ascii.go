@@ -51,7 +51,7 @@ func AsciiInt[T types.Ints](ivecs []*vector.Vector, proc *process.Process) (ret 
 	start := intStartMap[vec.GetType().Oid]
 	if vec.IsConst() {
 		v := vector.MustTCols[T](vec)[0]
-		ret = vector.NewConst(rtyp, ascii.IntSingle(int64(v), start), vec.Length(), proc.Mp())
+		ret = vector.NewConstFixed(rtyp, ascii.IntSingle(int64(v), start), vec.Length(), proc.Mp())
 		return
 	}
 	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())
@@ -79,7 +79,7 @@ func AsciiUint[T types.UInts](ivecs []*vector.Vector, proc *process.Process) (re
 	start := uintStartMap[vec.GetType().Oid]
 	if vec.IsConst() {
 		v := vector.MustTCols[T](vec)[0]
-		ret = vector.NewConst(rtyp, ascii.UintSingle(uint64(v), start), vec.Length(), proc.Mp())
+		ret = vector.NewConstFixed(rtyp, ascii.UintSingle(uint64(v), start), vec.Length(), proc.Mp())
 		return
 	}
 	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())
@@ -106,7 +106,7 @@ func AsciiString(ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vec
 	}
 	if vec.IsConst() {
 		v := vector.MustBytesCols(vec)[0]
-		ret = vector.NewConst(rtyp, ascii.StringSingle(v), vec.Length(), proc.Mp())
+		ret = vector.NewConstFixed(rtyp, ascii.StringSingle(v), vec.Length(), proc.Mp())
 		return
 	}
 	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())

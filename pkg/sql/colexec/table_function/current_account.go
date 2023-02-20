@@ -45,17 +45,17 @@ func getUserName(proc *process.Process) *vector.Vector {
 }
 
 func getAccountId(proc *process.Process) *vector.Vector {
-	vec := vector.NewConst(types.Type{Oid: types.T_uint32}, proc.SessionInfo.AccountId, 1, proc.Mp())
+	vec := vector.NewConstFixed(types.Type{Oid: types.T_uint32}, proc.SessionInfo.AccountId, 1, proc.Mp())
 	return vec
 }
 
 func getRoleId(proc *process.Process) *vector.Vector {
-	vec := vector.NewConst(types.Type{Oid: types.T_uint32}, proc.SessionInfo.RoleId, 1, proc.Mp())
+	vec := vector.NewConstFixed(types.Type{Oid: types.T_uint32}, proc.SessionInfo.RoleId, 1, proc.Mp())
 	return vec
 }
 
 func getUserId(proc *process.Process) *vector.Vector {
-	vec := vector.NewConst(types.Type{Oid: types.T_uint32}, proc.SessionInfo.UserId, 1, proc.Mp())
+	vec := vector.NewConstFixed(types.Type{Oid: types.T_uint32}, proc.SessionInfo.UserId, 1, proc.Mp())
 	return vec
 }
 

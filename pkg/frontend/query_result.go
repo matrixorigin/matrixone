@@ -441,25 +441,25 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	for i, t := range catalog.MetaColTypes {
 		bat.Vecs[i] = vector.NewVector(t)
 	}
-	if err = vector.Append(bat.Vecs[catalog.QUERY_ID_IDX], types.Uuid(m.QueryId), false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.QUERY_ID_IDX], types.Uuid(m.QueryId), false, mp); err != nil {
 		return nil, err
 	}
 	if err = vector.AppendBytes(bat.Vecs[catalog.STATEMENT_IDX], []byte(m.Statement), false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.Append(bat.Vecs[catalog.ACCOUNT_ID_IDX], m.AccountId, false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.ACCOUNT_ID_IDX], m.AccountId, false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.Append(bat.Vecs[catalog.ROLE_ID_IDX], m.RoleId, false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.ROLE_ID_IDX], m.RoleId, false, mp); err != nil {
 		return nil, err
 	}
 	if err = vector.AppendBytes(bat.Vecs[catalog.RESULT_PATH_IDX], []byte(m.ResultPath), false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.Append(bat.Vecs[catalog.CREATE_TIME_IDX], m.CreateTime, false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.CREATE_TIME_IDX], m.CreateTime, false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.Append(bat.Vecs[catalog.RESULT_SIZE_IDX], m.ResultSize, false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.RESULT_SIZE_IDX], m.ResultSize, false, mp); err != nil {
 		return nil, err
 	}
 	if err = vector.AppendBytes(bat.Vecs[catalog.COLUMNS_IDX], []byte(m.Columns), false, mp); err != nil {
@@ -468,10 +468,10 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	if err = vector.AppendBytes(bat.Vecs[catalog.TABLES_IDX], []byte(m.Tables), false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.Append(bat.Vecs[catalog.USER_ID_IDX], m.UserId, false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.USER_ID_IDX], m.UserId, false, mp); err != nil {
 		return nil, err
 	}
-	if err = vector.Append(bat.Vecs[catalog.EXPIRED_TIME_IDX], m.ExpiredTime, false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.EXPIRED_TIME_IDX], m.ExpiredTime, false, mp); err != nil {
 		return nil, err
 	}
 	if err = vector.AppendBytes(bat.Vecs[catalog.PLAN_IDX], []byte(m.Plan), false, mp); err != nil {

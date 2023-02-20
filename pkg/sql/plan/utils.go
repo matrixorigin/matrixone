@@ -1010,7 +1010,7 @@ func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vect
 			exchangeVectors(datas, depth+1, tmpResult, result, mp)
 		} else {
 			for j, val := range tmpResult {
-				vector.Append((*result)[j], val, false, mp)
+				vector.AppendFixed((*result)[j], val, false, mp)
 			}
 		}
 	}

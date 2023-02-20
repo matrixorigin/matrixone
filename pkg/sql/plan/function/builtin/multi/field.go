@@ -45,7 +45,7 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 		//if first vector is null, the return value is 0
 		if firstVector.IsConstNull() {
-			return vector.NewConst(rtyp, uint64(0), ivecs[0].Length(), proc.Mp()), err
+			return vector.NewConstFixed(rtyp, uint64(0), ivecs[0].Length(), proc.Mp()), err
 		}
 
 		//detect index
@@ -58,7 +58,7 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 				if !input.IsConstNull() {
 					cols := vector.MustStrCols(input)
 					if firstValues[0] == cols[0] {
-						return vector.NewConst(rtyp, uint64(i), ivecs[0].Length(), proc.Mp()), err
+						return vector.NewConstFixed(rtyp, uint64(i), ivecs[0].Length(), proc.Mp()), err
 					}
 				}
 			} else {
@@ -160,7 +160,7 @@ func FieldNumber[T number](ivecs []*vector.Vector, proc *process.Process) (*vect
 
 		//if first vector is null, the return value is 0
 		if firstVector.IsConstNull() {
-			return vector.NewConst(returnType, uint64(0), ivecs[0].Length(), proc.Mp()), err
+			return vector.NewConstFixed(returnType, uint64(0), ivecs[0].Length(), proc.Mp()), err
 		}
 
 		//detect index
@@ -173,7 +173,7 @@ func FieldNumber[T number](ivecs []*vector.Vector, proc *process.Process) (*vect
 				if !input.IsConstNull() {
 					cols := vector.MustTCols[T](input)
 					if firstValues[0] == cols[0] {
-						return vector.NewConst(returnType, uint64(i), ivecs[i].Length(), proc.Mp()), err
+						return vector.NewConstFixed(returnType, uint64(i), ivecs[i].Length(), proc.Mp()), err
 					}
 				}
 			} else {

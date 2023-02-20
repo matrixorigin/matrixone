@@ -337,7 +337,7 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
 		for _, v := range vs {
-			if err := vector.Append(vec, v, false, m); err != nil {
+			if err := vector.AppendFixed(vec, v, false, m); err != nil {
 				vec.Free(m)
 				return nil, err
 			}

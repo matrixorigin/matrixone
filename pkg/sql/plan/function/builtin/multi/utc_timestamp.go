@@ -23,6 +23,6 @@ import (
 
 func UTCTimestamp(_ []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtyp := types.T_datetime.ToType()
-	rvec := vector.NewConst(rtyp, get_timestamp.GetUTCTimestamp(), 1, proc.Mp())
+	rvec := vector.NewConstFixed(rtyp, get_timestamp.GetUTCTimestamp(), 1, proc.Mp())
 	return rvec, nil
 }

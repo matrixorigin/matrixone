@@ -57,7 +57,7 @@ func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if err != nil {
 			return nil, err
 		}
-		if err := vector.Append(vec, rows, false, proc.Mp()); err != nil {
+		if err := vector.AppendFixed(vec, rows, false, proc.Mp()); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
 		}
@@ -103,7 +103,7 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		for _, attr := range attrs {
 			size += rows * int64(attr.Type.TypeSize())
 		}
-		if err := vector.Append(vec, size, false, proc.Mp()); err != nil {
+		if err := vector.AppendFixed(vec, size, false, proc.Mp()); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
 		}

@@ -58,7 +58,7 @@ func adapter(ivecs []*vector.Vector,
 		} else if rtyp.IsString() {
 			return vector.NewConstBytes(rtyp, []byte(svals[0]), ivecs[0].Length(), proc.Mp()), nil
 		} else {
-			return vector.NewConst(rtyp, uvals[0], ivecs[0].Length(), proc.Mp()), nil
+			return vector.NewConstFixed(rtyp, uvals[0], ivecs[0].Length(), proc.Mp()), nil
 		}
 	}
 	return nil, moerr.NewInternalError(proc.Ctx, "the parameter is invalid")

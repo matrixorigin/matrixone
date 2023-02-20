@@ -28,7 +28,7 @@ func DateToWeekday(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(rtyp, uint8(ivals[0].DayOfWeek2()), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, uint8(ivals[0].DayOfWeek2()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
@@ -50,7 +50,7 @@ func DatetimeToWeekday(ivecs []*vector.Vector, proc *process.Process) (*vector.V
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConst(rtyp, uint8(ivals[0].DayOfWeek2()), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, uint8(ivals[0].DayOfWeek2()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {

@@ -41,6 +41,6 @@ func CurrentDate(_ []*vector.Vector, proc *process.Process) (rvec *vector.Vector
 	if err != nil {
 		return
 	}
-	rvec = vector.NewConst(rtyp, dateTimes[0].ToDate(), 1, proc.Mp())
+	rvec = vector.NewConstFixed(rtyp, dateTimes[0].ToDate(), 1, proc.Mp())
 	return
 }

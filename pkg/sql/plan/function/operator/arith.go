@@ -50,7 +50,7 @@ func Arith[T1 arithT, T2 arithT](ivecs []*vector.Vector, proc *process.Process, 
 
 	if left.IsConst() && right.IsConst() {
 		var dval T2
-		rvec := vector.NewConst(typ, dval, left.Length(), proc.Mp())
+		rvec := vector.NewConstFixed(typ, dval, left.Length(), proc.Mp())
 		if err := afn(left, right, rvec); err != nil {
 			return nil, err
 		}

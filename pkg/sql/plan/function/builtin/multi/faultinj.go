@@ -24,12 +24,12 @@ import (
 
 func EnableFaultInjection(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	fault.Enable()
-	return vector.NewConst(types.T_bool.ToType(), true, ivecs[0].Length(), proc.Mp()), nil
+	return vector.NewConstFixed(types.T_bool.ToType(), true, ivecs[0].Length(), proc.Mp()), nil
 }
 
 func DisableFaultInjection(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	fault.Disable()
-	return vector.NewConst(types.T_bool.ToType(), true, ivecs[0].Length(), proc.Mp()), nil
+	return vector.NewConstFixed(types.T_bool.ToType(), true, ivecs[0].Length(), proc.Mp()), nil
 }
 
 func AddFaultPoint(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -49,7 +49,7 @@ func AddFaultPoint(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		return nil, err
 	}
 
-	return vector.NewConst(types.T_bool.ToType(), true, ivecs[0].Length(), proc.Mp()), nil
+	return vector.NewConstFixed(types.T_bool.ToType(), true, ivecs[0].Length(), proc.Mp()), nil
 }
 
 func RemoveFaultPoint(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -61,7 +61,7 @@ func RemoveFaultPoint(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 	if err := fault.RemoveFaultPoint(proc.Ctx, name); err != nil {
 		return nil, err
 	}
-	return vector.NewConst(types.T_bool.ToType(), true, ivecs[0].Length(), proc.Mp()), nil
+	return vector.NewConstFixed(types.T_bool.ToType(), true, ivecs[0].Length(), proc.Mp()), nil
 }
 
 func TriggerFaultPoint(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -74,5 +74,5 @@ func TriggerFaultPoint(ivecs []*vector.Vector, proc *process.Process) (*vector.V
 	if !ok {
 		return vector.NewConstNull(types.T_int64.ToType(), ivecs[0].Length(), proc.Mp()), nil
 	}
-	return vector.NewConst(types.T_int64.ToType(), iv, ivecs[0].Length(), proc.Mp()), nil
+	return vector.NewConstFixed(types.T_int64.ToType(), iv, ivecs[0].Length(), proc.Mp()), nil
 }

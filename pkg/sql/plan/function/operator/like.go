@@ -58,7 +58,7 @@ func Like(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConst(rtyp, ok, ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, ok, ivecs[0].Length(), proc.Mp()), nil
 	case lv.IsConst() && !rv.IsConst():
 		rs, err = like.BtConstAndSliceNull(lvs[0], rvs, rv.GetNulls(), rs)
 		if err != nil {
@@ -140,7 +140,7 @@ func ILike(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 		if err != nil {
 			return nil, err
 		}
-		rv := vector.NewConst(rtyp, ok, lv.Length(), proc.Mp())
+		rv := vector.NewConstFixed(rtyp, ok, lv.Length(), proc.Mp())
 		return rv, nil
 	case lv.IsConst() && !rv.IsConst():
 		rs, err = like.BtConstAndSliceNull(lvs[0], rvs, rv.GetNulls(), rs)
