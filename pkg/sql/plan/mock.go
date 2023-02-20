@@ -389,7 +389,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		idxs: []index{
 			{
 				indexName: "",
-				tableName: "__mo_index_unique__412f4fad-77ba-11ed-b347-000c29847904",
+				tableName: catalog.IndexTableNamePrefix + "412f4fad-77ba-11ed-b347-000c29847904",
 				parts:     []string{"ename", "job"},
 				cols: []col{
 					{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
@@ -401,7 +401,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	// index table
-	constraintTestSchema["__mo_index_unique__412f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
+	constraintTestSchema[catalog.IndexTableNamePrefix+"412f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
 		cols: []col{
 			{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
 			{"__mo_index_pri_col", types.T_uint32, true, 32, 0},
@@ -431,7 +431,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		idxs: []index{
 			{
 				indexName: "",
-				tableName: "__mo_index_unique__8e3246dd-7a19-11ed-ba7d-000c29847904",
+				tableName: catalog.IndexTableNamePrefix + "8e3246dd-7a19-11ed-ba7d-000c29847904",
 				parts:     []string{"dname"},
 				cols: []col{
 					{"__mo_index_idx_col", types.T_varchar, true, 15, 0},
@@ -443,7 +443,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	// index table
-	constraintTestSchema["__mo_index_unique__8e3246dd-7a19-11ed-ba7d-000c29847904"] = &Schema{
+	constraintTestSchema[catalog.IndexTableNamePrefix+"8e3246dd-7a19-11ed-ba7d-000c29847904"] = &Schema{
 		cols: []col{
 			{"__mo_index_idx_col", types.T_varchar, true, 15, 0},
 			{"__mo_index_pri_col", types.T_uint32, true, 32, 0},
@@ -502,7 +502,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		idxs: []index{
 			{
 				indexName: "",
-				tableName: "__mo_index_unique__6380d30e-79f8-11ed-9c02-000c29847904",
+				tableName: catalog.IndexTableNamePrefix + "6380d30e-79f8-11ed-9c02-000c29847904",
 				parts:     []string{"empno", "ename"},
 				cols: []col{
 					{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
@@ -513,7 +513,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		outcnt: 14,
 	}
 
-	constraintTestSchema["__mo_index_unique__6380d30e-79f8-11ed-9c02-000c29847904"] = &Schema{
+	constraintTestSchema[catalog.IndexTableNamePrefix+"6380d30e-79f8-11ed-9c02-000c29847904"] = &Schema{
 		cols: []col{
 			{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},

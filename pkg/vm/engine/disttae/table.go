@@ -526,9 +526,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		if err != nil {
 			return nil, err
 		}
-		for i := range rds0 {
-			mrds[i].rds = append(mrds[i].rds, rds0[i])
-		}
+		mrds[i].rds = append(mrds[i].rds, rds0...)
 	}
 	for i := range rds {
 		rds[i] = &mrds[i]
