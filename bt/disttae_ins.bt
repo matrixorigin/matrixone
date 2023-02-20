@@ -1,0 +1,32 @@
+
+// Probe point at insert
+uprobe:../../matrixone/mo-service:*/moprobe.DisttaePartitionInsert {
+    // tag is pass in as first arg, in register ax.
+    $tag = reg("ax");
+    // a dummy, not useful, just as example.
+    $dummy = reg("bx");
+    
+    // print. 
+    // printf("Insert %d, %ld, %ld called.\n", tid, $tag, $dummy);
+
+    // store the timestamp in a map
+    @enter[$tag] = nsecs;
+}
+
+// probe proint at return, in go code we used a defer
+uprobe:../../matrixone/mo-service:*/moprobe.DisttaePartitionInsertRet {
+    $tag = reg("ax");
+    $dummy = reg("bx");
+    // printf("Insert %d, %ld, %lx returned.\n", tid, $tag, $dummy);
+    
+    // if enter has called
+    if (@enter[$tag] != 0) {
+        // add duration in us to a histogram.
+        @stat = hist((nsecs - @enter[$tag]) / 1000);
+        // clear the map for next call. 
+        delete(@enter[$tag]);
+    }
+}
+
+// by default, the @stat will be printed when the script exits.
+

@@ -1,0 +1,30 @@
+
+// Probe point at insert
+uprobe:../../matrixone/mo-service:*/moprobe.GenericProbe1 {
+    // tag is pass in as first arg, in register ax.
+    $tag = reg("ax");
+    // a dummy, not useful, just as example.
+    $v = reg("bx");
+
+    @stat = hist($v);
+    @enter[$tag] = nsecs;
+}
+
+uprobe:../../matrixone/mo-service:*/moprobe.GenericProbe2 {
+    // tag is pass in as first arg, in register ax.
+    $tag = reg("ax");
+    // a dummy, not useful, just as example.
+    $v = reg("bx");
+
+    @mk = hist((nsecs - @enter[$tag]) / 1000);
+    @enter[$tag] = nsecs;
+}
+
+uprobe:../../matrixone/mo-service:*/moprobe.GenericProbe3 {
+    // tag is pass in as first arg, in register ax.
+    $tag = reg("ax");
+    // a dummy, not useful, just as example.
+    $v = reg("bx");
+    @cp = hist((nsecs - @enter[$tag]) / 1000);
+    delete(@enter[$tag]);
+}

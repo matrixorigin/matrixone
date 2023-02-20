@@ -50,6 +50,18 @@
 package moprobe
 
 //go:noinline
+func GenericProbe1(tag, v1 int64) {
+}
+
+//go:noinline
+func GenericProbe2(tag, v1 int64) {
+}
+
+//go:noinline
+func GenericProbe3(tag, v1 int64) {
+}
+
+//go:noinline
 func DisttaePartitionInsert(tag, v1 int64) {
 }
 

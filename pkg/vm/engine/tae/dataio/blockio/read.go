@@ -17,9 +17,11 @@ package blockio
 import (
 	"context"
 	"time"
+	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -191,8 +193,13 @@ func readColumnBatchByMetaloc(
 			bat.AddVector(colNames[i], rowidData)
 		} else {
 			vec := vector.New(colTyps[i])
-			data := make([]byte, len(entry[0].Object.([]byte)))
-			copy(data, entry[0].Object.([]byte))
+			bs := entry[0].Object.([]byte)
+			tag := int64(uintptr(unsafe.Pointer(&bs[0])))
+			moprobe.GenericProbe1(tag, int64(len(bs)))
+			data := make([]byte, len(bs))
+			moprobe.GenericProbe2(tag, 0)
+			copy(data, bs)
+			moprobe.GenericProbe3(tag, 0)
 			err := vec.Read(data)
 			if err != nil {
 				return nil, err

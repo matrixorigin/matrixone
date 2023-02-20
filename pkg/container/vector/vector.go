@@ -1245,9 +1245,14 @@ func (v *Vector) Read(data []byte) error {
 
 	// Read areaLen and area
 	size = types.DecodeUint32(data)
+	data = data[4:]
 	if size != 0 {
-		data = data[4:]
+		// data = data[4:]
 		v.area = data[:size]
+	}
+
+	if len(data) != int(size) {
+		panic(fmt.Sprintf("vec read wasted space %d, %d", len(data), size))
 	}
 	return nil
 }
