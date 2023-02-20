@@ -22,3 +22,4 @@ select current_user_id();
 select current_role_name();
 -- select * from current_account() as t;
 -- @session
+drop account if exists abc;

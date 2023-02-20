@@ -33,7 +33,8 @@ type FileWithChecksum[T FileLike] struct {
 
 const (
 	_ChecksumSize     = crc32.Size
-	_BlockContentSize = 2048 - _ChecksumSize
+	_DefaultBlockSize = 2048
+	_BlockContentSize = _DefaultBlockSize - _ChecksumSize
 	_BlockSize        = _BlockContentSize + _ChecksumSize
 )
 
@@ -60,7 +61,9 @@ func (f *FileWithChecksum[T]) ReadAt(buf []byte, offset int64) (n int, err error
 	for len(buf) > 0 {
 		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
 		var data []byte
-		data, err = f.readBlock(blockOffset)
+		var freeData func()
+		data, freeData, err = f.readBlock(blockOffset)
+		defer freeData()
 		if err != nil && err != io.EOF {
 			// read error
 			return
@@ -92,7 +95,8 @@ func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err erro
 	for len(buf) > 0 {
 
 		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
-		data, err := f.readBlock(blockOffset)
+		data, freeData, err := f.readBlock(blockOffset)
+		defer freeData()
 		if err != nil && err != io.EOF {
 			return 0, err
 		}
@@ -178,13 +182,18 @@ func (f *FileWithChecksum[T]) contentOffsetToBlockOffset(
 	return
 }
 
-func (f *FileWithChecksum[T]) readBlock(offset int64) (data []byte, err error) {
+func (f *FileWithChecksum[T]) readBlock(offset int64) (data []byte, freeData func(), err error) {
 
-	data = make([]byte, f.blockSize)
+	if f.blockSize == _DefaultBlockSize {
+		data, freeData = bytesPoolDefaultBlockSize.Get()
+	} else {
+		data = make([]byte, f.blockSize)
+		freeData = noopPut
+	}
 	n, err := f.underlying.ReadAt(data, offset)
 	data = data[:n]
 	if err != nil && err != io.EOF {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if n < _ChecksumSize {
@@ -197,7 +206,7 @@ func (f *FileWithChecksum[T]) readBlock(offset int64) (data []byte, err error) {
 
 	expectedChecksum := crc32.Checksum(data, crcTable)
 	if checksum != expectedChecksum {
-		return nil, ErrChecksumNotMatch
+		return nil, nil, ErrChecksumNotMatch
 	}
 
 	return
