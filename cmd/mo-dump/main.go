@@ -343,7 +343,7 @@ func convertValue(v any, typ string) string {
 		if (retStr[0] >= '0' && retStr[0] <= '9') || (retStr[0] == '-' && retStr[1] >= '0' && retStr[1] <= '9') {
 			return retStr
 		}
-		return "'" + retStr + "'" // NaN, +Inf, -Inf
+		return "'" + retStr + "'" // NaN, +Inf, -Inf, maybe no hacking need this in the future
 	case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "double", "bool", "boolean", "":
 		// why empty string in column type?
 		// see https://github.com/matrixorigin/matrixone/issues/8050#issuecomment-1431251524
