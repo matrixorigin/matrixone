@@ -323,6 +323,15 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Dispose()
 	})
+	proc := process.New(
+		context.Background(),
+		ses.GetMemPool(),
+		ses.GetTxnHandler().GetTxnClient(),
+		ses.GetTxnHandler().GetTxnOperator(),
+		pu.FileService,
+		pu.GetClusterDetails,
+	)
+	ses.GetTxnCompileCtx().SetProcess(proc)
 	return ses
 }
 
@@ -2273,28 +2282,17 @@ func (tcc *TxnCompilerContext) GetProcess() *process.Process {
 func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
 	proc := tcc.proc
 	// get file size
-	fs := objectio.NewObjectFS(proc.FileService, catalog.QueryResultMetaDir)
-	dirs, err := fs.ListDir(catalog.QueryResultMetaDir)
+	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
+	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
 		return nil, "", err
 	}
-	var size int64 = -1
-	name := catalog.BuildQueryResultMetaName(proc.SessionInfo.Account, uuid)
-	for _, d := range dirs {
-		if d.Name == name {
-			size = d.Size
-		}
-	}
-	if size == -1 {
-		return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
-	}
 	// read meta's meta
-	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
 	reader, err := objectio.NewObjectReader(path, proc.FileService)
 	if err != nil {
 		return nil, "", err
 	}
-	bs, err := reader.ReadAllMeta(proc.Ctx, size, proc.Mp())
+	bs, err := reader.ReadAllMeta(proc.Ctx, e.Size, proc.Mp())
 	if err != nil {
 		return nil, "", err
 	}

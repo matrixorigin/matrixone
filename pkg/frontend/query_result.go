@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"sort"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,14 +36,8 @@ import (
 	"strings"
 )
 
-const queryResultPrefix = "%s_%s_"
-
 func getQueryResultDir() string {
 	return fileservice.JoinPath(defines.SharedFileServiceName, "/query_result")
-}
-
-func getPrefixOfQueryResultFile(accountName, statementId string) string {
-	return fmt.Sprintf(queryResultPrefix, accountName, statementId)
 }
 
 func getPathOfQueryResultFile(fileName string) string {
@@ -296,28 +288,18 @@ func isResultQuery(p *plan.Plan) []string {
 
 func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) error {
 	f := ses.GetParameterUnit().FileService
-	fs := objectio.NewObjectFS(f, catalog.QueryResultMetaDir)
-	dirs, err := fs.ListDir(catalog.QueryResultMetaDir)
-	if err != nil {
-		return err
-	}
 	for _, id := range uuids {
-		var size int64 = -1
-		name := catalog.BuildQueryResultMetaName(ses.GetTenantInfo().GetTenant(), id)
-		for _, d := range dirs {
-			if d.Name == name {
-				size = d.Size
-			}
-		}
-		if size == -1 {
-			return moerr.NewQueryIdNotFound(requestCtx, id)
-		}
+		// var size int64 = -1
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
+		e, err := f.StatFile(requestCtx, path)
+		if err != nil {
+			return err
+		}
 		reader, err := objectio.NewObjectReader(path, f)
 		if err != nil {
 			return err
 		}
-		bs, err := reader.ReadAllMeta(requestCtx, size, ses.mp)
+		bs, err := reader.ReadAllMeta(requestCtx, e.Size, ses.mp)
 		if err != nil {
 			return err
 		}
@@ -648,27 +630,21 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 
 // openResultMeta checks the query result of the queryId exists or not
 func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.ResultColDef, error) {
-	metaFs := objectio.NewObjectFS(ses.GetParameterUnit().FileService, catalog.QueryResultMetaDir)
-	metaFiles, err := metaFs.ListDir(catalog.QueryResultMetaDir)
-	if err != nil {
-		return nil, err
-	}
 	account := ses.GetTenantInfo()
 	if account == nil {
 		return nil, moerr.NewInternalError(ctx, "modump does not work without the account info")
 	}
-	metaName := catalog.BuildQueryResultMetaName(account.GetTenant(), queryId)
-	fileSize := getFileSize(metaFiles, metaName)
-	if fileSize < 0 {
-		return nil, moerr.NewInternalError(ctx, "there is no result file for the query %s", queryId)
+	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
+	e, err := ses.GetParameterUnit().FileService.StatFile(ctx, metaFile)
+	if err != nil {
+		return nil, err
 	}
 	// read meta's meta
-	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
 	reader, err := objectio.NewObjectReader(metaFile, ses.GetParameterUnit().FileService)
 	if err != nil {
 		return nil, err
 	}
-	bs, err := reader.ReadAllMeta(ctx, fileSize, ses.GetMemPool())
+	bs, err := reader.ReadAllMeta(ctx, e.Size, ses.GetMemPool())
 	if err != nil {
 		return nil, err
 	}
@@ -694,53 +670,28 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 
 // getResultFiles lists all result files of queryId
 func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]resultFileInfo, error) {
-	fs := objectio.NewObjectFS(ses.GetParameterUnit().FileService, getQueryResultDir())
-	files, err := fs.ListDir(getQueryResultDir())
+	_, str, err := ses.GetTxnCompileCtx().GetQueryResultMeta(queryId)
 	if err != nil {
 		return nil, err
 	}
-	account := ses.GetTenantInfo()
-	if account == nil {
-		return nil, moerr.NewInternalError(ctx, "modump does not work without the account info")
+	fileList := strings.Split(str, ",")
+	for i := range fileList {
+		fileList[i] = strings.TrimSpace(fileList[i])
 	}
-	prefix := getPrefixOfQueryResultFile(account.GetTenant(), queryId)
-	ret := make([]resultFileInfo, 0, len(files))
-	for _, file := range files {
-		if file.IsDir {
-			continue
+	rti := make([]resultFileInfo, 0, len(fileList))
+	for i, file := range fileList {
+		e, err := ses.GetParameterUnit().FileService.StatFile(ctx, file)
+		if err != nil {
+			return nil, err
 		}
-		if strings.HasPrefix(file.Name, prefix) {
-			if !strings.HasSuffix(file.Name, ".blk") {
-				return nil, moerr.NewInternalError(ctx, "the query result file %s has the invalid name", file.Name)
-			}
-			indexOfLastUnderbar := strings.LastIndexByte(file.Name, '_')
-			if indexOfLastUnderbar == -1 {
-				return nil, moerr.NewInternalError(ctx, "the query result file %s has the invalid name", file.Name)
-			}
-			blockIndexStart := indexOfLastUnderbar + 1
-			blockIndexEnd := len(file.Name) - len(".blk")
-			if blockIndexStart >= blockIndexEnd {
-				return nil, moerr.NewInternalError(ctx, "the query result file %s has the invalid name", file.Name)
-			}
-			blockIndexStr := file.Name[blockIndexStart:blockIndexEnd]
-			blockIndex, err := strconv.ParseInt(blockIndexStr, 10, 64)
-			if err != nil {
-				return nil, err
-			}
-			if blockIndex < 0 {
-				return nil, moerr.NewInternalError(ctx, "the query result file %s has the invalid name", file.Name)
-			}
-			ret = append(ret, resultFileInfo{
-				name:       file.Name,
-				size:       file.Size,
-				blockIndex: blockIndex,
-			})
-		}
+		rti = append(rti, resultFileInfo{
+			name:       e.Name,
+			size:       e.Size,
+			blockIndex: int64(i + 1),
+		})
 	}
-	sort.Slice(ret, func(i, j int) bool {
-		return ret[i].blockIndex < ret[j].blockIndex
-	})
-	return ret, err
+
+	return rti, nil
 }
 
 // openResultFile reads all blocks of the result file
