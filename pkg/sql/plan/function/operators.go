@@ -39,6 +39,20 @@ func initOperators() {
 
 // operators contains the operator function indexed by function id.
 var operators = map[int]Functions{
+	BINARY: {
+		Id:     BINARY,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
+		Layout: CAST_EXPRESSION,
+		Overloads: []Function{
+			{
+				Args: []types.T{
+					types.T_varchar,
+				},
+				ReturnTyp: types.T_binary,
+				Fn:        operator.Binary,
+			},
+		},
+	},
 	ISTRUE: {
 		Id:     ISTRUE,
 		Flag:   plan.Function_PRODUCE_NO_NULL,

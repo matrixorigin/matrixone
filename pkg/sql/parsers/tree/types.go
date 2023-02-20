@@ -334,9 +334,10 @@ var (
 	}}
 
 	TYPE_BINARY = &T{InternalType: InternalType{
-		Family: BinaryFamily,
-		Locale: &emptyLocale,
-		Oid:    uint32(defines.MYSQL_TYPE_BINARY),
+		Family:      BinaryFamily,
+		Locale:      &emptyLocale,
+		DisplayWith: 255,
+		Oid:         uint32(defines.MYSQL_TYPE_BINARY),
 	}}
 
 	TYPE_VARBINARY = &T{InternalType: InternalType{

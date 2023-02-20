@@ -3176,9 +3176,8 @@ func strToStr(
 				}
 				continue
 			}
-			// check the length.
 			if toType.Oid == types.T_binary {
-				rightPadding(v, toType)
+				v = rightPadding(v, toType)
 			}
 			if err := to.AppendStr(v, false); err != nil {
 				return err
