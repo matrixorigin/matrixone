@@ -1299,127 +1299,6 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 	return err
 }
 
-func doLoadData(requestCtx context.Context, ses *Session, proc *process.Process, load *tree.Import) (*LoadResult, error) {
-	var err error
-	var txn TxnOperator
-	var dbHandler engine.Database
-	var tableHandler engine.Relation
-	proto := ses.GetMysqlProtocol()
-
-	logInfof(ses.GetConciseProfile(), "+++++load data")
-	/*
-		TODO:support LOCAL
-	*/
-	if load.Local {
-		return nil, moerr.NewInternalError(requestCtx, "LOCAL is unsupported now")
-	}
-	if load.Param.Tail.Fields == nil || len(load.Param.Tail.Fields.Terminated) == 0 {
-		load.Param.Tail.Fields = &tree.Fields{Terminated: ","}
-	}
-
-	if load.Param.Tail.Fields != nil && load.Param.Tail.Fields.EscapedBy != 0 {
-		return nil, moerr.NewInternalError(requestCtx, "EscapedBy field is unsupported now")
-	}
-
-	/*
-		check file
-	*/
-	exist, isfile, err := PathExists(load.Param.Filepath)
-	if err != nil || !exist {
-		return nil, moerr.NewInternalError(requestCtx, "file %s does exist. err:%v", load.Param.Filepath, err)
-	}
-
-	if !isfile {
-		return nil, moerr.NewInternalError(requestCtx, "file %s is a directory", load.Param.Filepath)
-	}
-
-	/*
-		check database
-	*/
-	loadDb := string(load.Table.Schema())
-	loadTable := string(load.Table.Name())
-	if loadDb == "" {
-		if proto.GetDatabaseName() == "" {
-			return nil, moerr.NewInternalError(requestCtx, "load data need database")
-		}
-
-		//then, it uses the database name in the session
-		loadDb = ses.GetDatabaseName()
-	}
-
-	txnHandler := ses.GetTxnHandler()
-	if ses.InMultiStmtTransactionMode() {
-		return nil, moerr.NewInternalError(requestCtx, "do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
-	}
-	txn, err = txnHandler.GetTxn()
-	if err != nil {
-		return nil, err
-	}
-	dbHandler, err = ses.GetStorage().Database(requestCtx, loadDb, txn)
-	if err != nil {
-		//echo client. no such database
-		return nil, moerr.NewBadDB(requestCtx, loadDb)
-	}
-
-	//change db to the database in the LOAD DATA statement if necessary
-	if loadDb != ses.GetDatabaseName() {
-		oldDB := ses.GetDatabaseName()
-		ses.SetDatabaseName(loadDb)
-		logInfof(ses.GetConciseProfile(), "User %s change database from [%s] to [%s] in LOAD DATA", ses.GetUserName(), oldDB, ses.GetDatabaseName())
-	}
-
-	/*
-		check table
-	*/
-	if ses.IfInitedTempEngine() {
-		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, ses.GetTempTableStorage())
-	}
-	tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
-	if err != nil {
-		txn, err = ses.txnHandler.GetTxn()
-		if err != nil {
-			return nil, err
-		}
-		dbHandler, err = ses.GetStorage().Database(requestCtx, defines.TEMPORARY_DBNAME, txn)
-		if err != nil {
-			return nil, moerr.NewNoSuchTable(requestCtx, loadDb, loadTable)
-		}
-		loadTable = engine.GetTempTableName(loadDb, loadTable)
-		tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
-		if err != nil {
-			//echo client. no such table
-			return nil, moerr.NewNoSuchTable(requestCtx, loadDb, loadTable)
-		}
-		loadDb = defines.TEMPORARY_DBNAME
-		load.Table.ObjectName = tree.Identifier(loadTable)
-	}
-
-	/*
-		execute load data
-	*/
-	return LoadLoop(requestCtx, ses, proc, load, dbHandler, tableHandler, loadDb)
-}
-
-/*
-handle Load DataSource statement
-*/
-func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *process.Process, load *tree.Import) error {
-	ses := mce.GetSession()
-	result, err := doLoadData(requestCtx, ses, proc, load)
-	if err != nil {
-		return err
-	}
-	/*
-		response
-	*/
-	info := moerr.NewLoadInfo(requestCtx, result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
-	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings), 0, int(COM_QUERY), info)
-	if err = ses.GetMysqlProtocol().SendResponse(requestCtx, resp); err != nil {
-		return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
-	}
-	return nil
-}
-
 func doCmdFieldList(requestCtx context.Context, ses *Session, icfl *InternalCmdFieldList) error {
 	dbName := ses.GetDatabaseName()
 	if dbName == "" {
@@ -2855,14 +2734,6 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			dd: st,
 		})
-	case *tree.Import:
-		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&ImportExecutor{
-			statusStmtExecutor: &statusStmtExecutor{
-				base,
-			},
-			i: st,
-		})
 	case *tree.PrepareStmt:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 		ret = (&PrepareStmtExecutor{
@@ -3583,13 +3454,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			// if the droped database is the same as the one in use, database must be reseted to empty.
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetDatabaseName("")
-			}
-		case *tree.Import:
-			fromLoadData = true
-			selfHandle = true
-			err = mce.handleLoadData(requestCtx, proc, st)
-			if err != nil {
-				goto handleFailed
 			}
 		case *tree.PrepareStmt:
 			selfHandle = true
