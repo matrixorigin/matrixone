@@ -35,9 +35,6 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-var AUTO_INCR_TABLE = "%!%mo_increment_columns"
-var AUTO_INCR_TABLE_COLNAME []string = []string{catalog.Row_ID, "name", "offset", "step"}
-
 type AutoIncrParam struct {
 	eg engine.Engine
 	//	rel     engine.Relation
@@ -414,7 +411,7 @@ func getRangeExpr(colName string) *plan.Expr {
 					{
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
-								Name: AUTO_INCR_TABLE_COLNAME[1],
+								Name: catalog.AutoIncrColumnNames[1],
 							},
 						},
 					},
@@ -437,7 +434,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 	var rds []engine.Reader
 	retbat := batch.NewWithSize(1)
 
-	rel, err := GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
+	rel, err := GetNewRelation(param.eg, param.dbName, catalog.AutoIncrTableName, txn, param.ctx)
 	if err != nil {
 		return 0, 0, nil, err
 	}
@@ -473,7 +470,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 	}
 
 	for len(rds) > 0 {
-		bat, err := rds[0].Read(param.ctx, AUTO_INCR_TABLE_COLNAME, expr, param.proc.Mp())
+		bat, err := rds[0].Read(param.ctx, catalog.AutoIncrColumnNames, expr, param.proc.Mp())
 		if err != nil {
 			return 0, 0, nil, moerr.NewInvalidInput(param.ctx, "can not find the auto col")
 		}
@@ -512,12 +509,12 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 }
 
 func updateAutoIncrTable(param *AutoIncrParam, delBat *batch.Batch, curNum uint64, name string, txn client.TxnOperator, mp *mpool.MPool) error {
-	rel, err := GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
+	rel, err := GetNewRelation(param.eg, param.dbName, catalog.AutoIncrTableName, txn, param.ctx)
 	if err != nil {
 		return err
 	}
 
-	err = rel.Delete(param.ctx, delBat, AUTO_INCR_TABLE_COLNAME[0])
+	err = rel.Delete(param.ctx, delBat, catalog.AutoIncrColumnNames[0])
 	if err != nil {
 		delBat.Clean(mp)
 		return err
@@ -536,7 +533,7 @@ func makeAutoIncrBatch(name string, num, step uint64, mp *mpool.MPool) *batch.Ba
 	vec2 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{num}, nil, mp)
 	vec3 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{step}, nil, mp)
 	bat := batch.NewWithSize(3)
-	bat.SetAttributes(AUTO_INCR_TABLE_COLNAME[1:])
+	bat.SetAttributes(catalog.AutoIncrColumnNames[1:])
 	bat.SetVector(0, vec)
 	bat.SetVector(1, vec2)
 	bat.SetVector(2, vec3)
@@ -567,7 +564,7 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 
 	retbat := batch.NewWithSize(1)
 	for len(rds) > 0 {
-		bat, err := rds[0].Read(ctx, AUTO_INCR_TABLE_COLNAME, nil, mp)
+		bat, err := rds[0].Read(ctx, catalog.AutoIncrColumnNames, nil, mp)
 		if err != nil {
 			bat.Clean(mp)
 			return nil, 0
@@ -607,7 +604,7 @@ func CreateAutoIncrTable(e engine.Engine, ctx context.Context, proc *process.Pro
 	if err != nil {
 		return err
 	}
-	if err = dbSource.Create(ctx, AUTO_INCR_TABLE, getAutoIncrTableDef()); err != nil {
+	if err = dbSource.Create(ctx, catalog.AutoIncrTableName, getAutoIncrTableDef()); err != nil {
 		return err
 	}
 	return nil
@@ -634,9 +631,9 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 		// Essentially, temporary table is not an operation of a transaction.
 		// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
 		if dbName == defines.TEMPORARY_DBNAME {
-			rel2, err = db.Relation(ctx, AUTO_INCR_TABLE)
+			rel2, err = db.Relation(ctx, catalog.AutoIncrTableName)
 		} else {
-			rel2, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+			rel2, err = GetNewRelation(eg, dbName, catalog.AutoIncrTableName, txn, ctx)
 		}
 		if err != nil {
 			return err
@@ -666,9 +663,9 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 	// Essentially, temporary table is not an operation of a transaction.
 	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
 	if dbName == defines.TEMPORARY_DBNAME {
-		rel2, err = db.Relation(ctx, AUTO_INCR_TABLE)
+		rel2, err = db.Relation(ctx, catalog.AutoIncrTableName)
 	} else {
-		rel2, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+		rel2, err = GetNewRelation(eg, dbName, catalog.AutoIncrTableName, txn, ctx)
 	}
 
 	if err != nil {
@@ -691,7 +688,7 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 			if bat == nil {
 				return moerr.NewInternalError(ctx, "the deleted batch is nil")
 			}
-			if err = rel2.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
+			if err = rel2.Delete(ctx, bat, catalog.AutoIncrColumnNames[0]); err != nil {
 				bat.Clean(proc.Mp())
 				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
@@ -731,9 +728,9 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 	// Essentially, temporary table is not an operation of a transaction.
 	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
 	if dbName == defines.TEMPORARY_DBNAME {
-		autoRel, err = db.Relation(ctx, AUTO_INCR_TABLE)
+		autoRel, err = db.Relation(ctx, catalog.AutoIncrTableName)
 	} else {
-		autoRel, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+		autoRel, err = GetNewRelation(eg, dbName, catalog.AutoIncrTableName, txn, ctx)
 	}
 
 	if err != nil {
@@ -753,7 +750,7 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 			if bat == nil {
 				return moerr.NewInternalError(ctx, "the deleted batch is nil")
 			}
-			if err = autoRel.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
+			if err = autoRel.Delete(ctx, bat, catalog.AutoIncrColumnNames[0]); err != nil {
 				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
 				}
@@ -801,9 +798,9 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 	// Essentially, temporary table is not an operation of a transaction.
 	// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
 	if dbName == defines.TEMPORARY_DBNAME {
-		autoRel, err = db.Relation(ctx, AUTO_INCR_TABLE)
+		autoRel, err = db.Relation(ctx, catalog.AutoIncrTableName)
 	} else {
-		autoRel, err = GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+		autoRel, err = GetNewRelation(eg, dbName, catalog.AutoIncrTableName, txn, ctx)
 	}
 
 	if err != nil {
@@ -821,7 +818,7 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 			if bat == nil {
 				return moerr.NewInternalError(ctx, "the deleted batch is nil")
 			}
-			if err = autoRel.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
+			if err = autoRel.Delete(ctx, bat, catalog.AutoIncrColumnNames[0]); err != nil {
 				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
 				}
@@ -940,7 +937,7 @@ func getAutoIncrTableDef() []engine.TableDef {
 	*/
 
 	nameAttr := &engine.AttributeDef{Attr: engine.Attribute{
-		Name:    AUTO_INCR_TABLE_COLNAME[1],
+		Name:    catalog.AutoIncrColumnNames[1],
 		Alg:     0,
 		Type:    types.T_varchar.ToType(),
 		Default: &plan.Default{},
@@ -948,7 +945,7 @@ func getAutoIncrTableDef() []engine.TableDef {
 	}}
 
 	numAttr := &engine.AttributeDef{Attr: engine.Attribute{
-		Name:    AUTO_INCR_TABLE_COLNAME[2],
+		Name:    catalog.AutoIncrColumnNames[2],
 		Alg:     0,
 		Type:    types.T_uint64.ToType(),
 		Default: &plan.Default{},
@@ -956,7 +953,7 @@ func getAutoIncrTableDef() []engine.TableDef {
 	}}
 
 	stepAttr := &engine.AttributeDef{Attr: engine.Attribute{
-		Name:    AUTO_INCR_TABLE_COLNAME[3],
+		Name:    catalog.AutoIncrColumnNames[3],
 		Alg:     0,
 		Type:    types.T_uint64.ToType(),
 		Default: &plan.Default{},
@@ -971,8 +968,8 @@ func getAutoIncrTableDef() []engine.TableDef {
 	constrains := &engine.ConstraintDef{Cts: make([]engine.Constraint, 0)}
 	constrains.Cts = append(constrains.Cts, &engine.PrimaryKeyDef{
 		Pkey: &plan.PrimaryKeyDef{
-			Names:       []string{AUTO_INCR_TABLE_COLNAME[1]},
-			PkeyColName: AUTO_INCR_TABLE_COLNAME[1],
+			Names:       []string{catalog.AutoIncrColumnNames[1]},
+			PkeyColName: catalog.AutoIncrColumnNames[1],
 		},
 	})
 	defs = append(defs, constrains)
