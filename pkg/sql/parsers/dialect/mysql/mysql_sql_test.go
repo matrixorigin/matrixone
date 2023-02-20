@@ -774,9 +774,6 @@ var (
 			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} into table db.a",
 		},
 		{
-			input:  "import data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-			output: "import data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 lines",
-		}, {
 			input:  "show tables from test01 where tables_in_test01 like '%t2%'",
 			output: "show tables from test01 where tables_in_test01 like %t2%",
 		}, {

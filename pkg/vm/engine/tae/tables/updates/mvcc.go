@@ -54,11 +54,7 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 	}
 	return node
 }
-func (n *MVCCHandle) Close() {
-	n.deletes.Close()
-	n.appends.Close()
-	n.meta = nil
-}
+
 func (n *MVCCHandle) SetAppendListener(l func(txnif.AppendNode) error) {
 	n.appendListener = l
 }

@@ -92,56 +92,6 @@ func (dde *DropDatabaseExecutor) ExecuteImpl(ctx context.Context, ses *Session) 
 	return dde.statusStmtExecutor.ExecuteImpl(ctx, ses)
 }
 
-type ImportExecutor struct {
-	*statusStmtExecutor
-	i      *tree.Import
-	result *LoadResult
-}
-
-func (ie *ImportExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	var err error
-	ie.result, err = doLoadData(ctx, ses, ie.GetProcess(), ie.i)
-	return err
-}
-
-func (ie *ImportExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
-	var err error
-	result := ie.result
-	info := moerr.NewLoadInfo(ctx, result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
-	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings), 0, int(COM_QUERY), info)
-	if err = ses.GetMysqlProtocol().SendResponse(ctx, resp); err != nil {
-		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
-	}
-	return nil
-}
-
-func (ie *ImportExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
-	stmt := ie.GetAst()
-	tenant := ie.tenantName
-	incStatementCounter(tenant, stmt)
-	if ie.GetStatus() == stmtExecSuccess {
-		logStatementStatus(ctx, ses, stmt, success, nil)
-	} else {
-		incStatementErrorsCounter(tenant, stmt)
-		/*
-			Cases    | set Autocommit = 1/0 | BEGIN statement |
-			---------------------------------------------------
-			Case1      1                       Yes
-			Case2      1                       No
-			Case3      0                       Yes
-			Case4      0                       No
-			---------------------------------------------------
-			update error message in Case1,Case3,Case4.
-		*/
-		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
-			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
-		}
-		logutil.Error(ie.err.Error())
-		logStatementStatus(ctx, ses, stmt, fail, ie.err)
-	}
-	return nil
-}
-
 type PrepareStmtExecutor struct {
 	*statusStmtExecutor
 	ps          *tree.PrepareStmt
