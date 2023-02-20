@@ -6,3 +6,17 @@ create account if not exists tenant_test admin_name = 'root' identified by '111'
 create account tenant_test admin_name = 'root' open comment 'tenant_test';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " open comment 'tenant_test';";
 drop account if exists tenant_test;
+select account_id,relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' order by relname;
+account_id    relname    relkind
+0    %!%mo_increment_columns    
+0    mo_account    r
+0    mo_columns    r
+0    mo_database    r
+0    mo_mysql_compatbility_mode    r
+0    mo_role    r
+0    mo_role_grant    r
+0    mo_role_privs    r
+0    mo_tables    r
+0    mo_user    r
+0    mo_user_defined_function    r
+0    mo_user_grant    r
