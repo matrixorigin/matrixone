@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select * from t1 where a not ilike '%a'",
-		output: "select * from t1 where a not ilike %a",
+		input:  "create table t1 (a int comment '\"123123\\'')",
+		output: "create table t1 (a int comment \"123123'')",
 	}
 )
 
@@ -53,6 +53,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "create table t1 (a int comment '\"123123\\'')",
+		output: "create table t1 (a int comment \"123123'')",
+	}, {
 		input:  "select * from t1 where a not ilike '%a'",
 		output: "select * from t1 where a not ilike %a",
 	}, {
@@ -580,13 +583,13 @@ var (
 		output: "insert into t1 (f1) values (-1)",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=VALUES(a)+VALUES(b), b=VALUES(a)+VALUES(c);",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (values(a) + values(b), values(a) + values(c))",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = values(a) + values(b), b = values(a) + values(c)",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2, b=3;",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (2, 3)",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2, b = 3",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2/2, b=3;",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (2 / 2, 3)",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2 / 2, b = 3",
 	}, {
 		input:  "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
 		output: "insert into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
@@ -612,6 +615,12 @@ var (
 		input: "create table t (a int, b char, check (1 + 1) enforced)",
 	}, {
 		input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+	}, {
+		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+	}, {
+		input:  "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
 		input: "create table t (a int, b char, unique key idx (a, b))",
 	}, {
@@ -1920,6 +1929,30 @@ var (
 		},
 		{
 			input: "select trim(both a from b) from t",
+		},
+		{
+			input:  "LOCK TABLES t READ",
+			output: "Lock Table t READ",
+		},
+		{
+			input:  "LOCK TABLES t READ LOCAL",
+			output: "Lock Table t READ LOCAL",
+		},
+		{
+			input:  "LOCK TABLES t WRITE",
+			output: "Lock Table t WRITE",
+		},
+		{
+			input:  "LOCK TABLES t LOW_PRIORITY WRITE",
+			output: "Lock Table t LOW_PRIORITY WRITE",
+		},
+		{
+			input:  "LOCK TABLES t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
+			output: "Lock Table t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
+		},
+		{
+			input:  "UNLOCK TABLES",
+			output: "UnLock Table",
 		},
 	}
 )

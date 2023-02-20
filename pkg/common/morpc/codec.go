@@ -39,14 +39,16 @@ const (
 )
 
 var (
-	defaultMaxMessageSize = 1024 * 1024 * 100
-	checksumFieldBytes    = 8
-	totalSizeFieldBytes   = 4
-	payloadSizeFieldBytes = 4
+	defaultMaxBodyMessageSize = 1024 * 1024 * 100
+	checksumFieldBytes        = 8
+	totalSizeFieldBytes       = 4
+	payloadSizeFieldBytes     = 4
+
+	approximateHeaderSize = 1024 * 1024 * 10
 )
 
 func GetMessageSize() int {
-	return defaultMaxMessageSize
+	return defaultMaxBodyMessageSize
 }
 
 // WithCodecEnableChecksum enable checksum
@@ -74,9 +76,9 @@ func WithCodecIntegrationHLC(clock clock.Clock) CodecOption {
 func WithCodecMaxBodySize(size int) CodecOption {
 	return func(c *messageCodec) {
 		if size == 0 {
-			size = defaultMaxMessageSize
+			size = defaultMaxBodyMessageSize
 		}
-		c.codec = length.NewWithSize(c.bc, 0, 0, 0, size)
+		c.codec = length.NewWithSize(c.bc, 0, 0, 0, size+approximateHeaderSize)
 		c.bc.maxBodySize = size
 	}
 }
@@ -109,9 +111,12 @@ type messageCodec struct {
 func NewMessageCodec(messageFactory func() Message, options ...CodecOption) Codec {
 	bc := &baseCodec{
 		messageFactory: messageFactory,
-		maxBodySize:    defaultMaxMessageSize,
+		maxBodySize:    defaultMaxBodyMessageSize,
 	}
-	c := &messageCodec{codec: length.NewWithSize(bc, 0, 0, 0, defaultMaxMessageSize), bc: bc}
+	c := &messageCodec{
+		codec: length.NewWithSize(bc, 0, 0, 0, defaultMaxBodyMessageSize+approximateHeaderSize),
+		bc:    bc,
+	}
 	c.AddHeaderCodec(&deadlineContextCodec{})
 	c.AddHeaderCodec(&traceCodec{})
 
@@ -127,6 +132,16 @@ func (c *messageCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 
 func (c *messageCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) error {
 	return c.bc.Encode(data, out, conn)
+}
+
+func (c *messageCodec) Valid(msg Message) error {
+	n := msg.Size()
+	if n >= c.bc.maxBodySize {
+		return moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
+			n,
+			c.bc.maxBodySize)
+	}
+	return nil
 }
 
 func (c *messageCodec) AddHeaderCodec(hc HeaderCodec) {
@@ -254,7 +269,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	}
 
 	// 3.1 message body
-	body, err := c.writeBody(out, msg.Message, totalSize)
+	body, err := c.writeBody(out, msg.Message)
 	if err != nil {
 		discardWritten()
 		return err
@@ -394,21 +409,11 @@ func (c *baseCodec) readCustomHeaders(flag byte, msg *RPCMessage, data []byte, o
 
 func (c *baseCodec) writeBody(
 	out *buf.ByteBuf,
-	msg Message,
-	writtenSize int) ([]byte, error) {
-	maxCanWrite := c.maxBodySize - writtenSize
+	msg Message) ([]byte, error) {
 	size := msg.Size()
 	if size == 0 {
 		return nil, nil
 	}
-
-	if size > maxCanWrite {
-		return nil,
-			moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
-				size+writtenSize,
-				c.maxBodySize)
-	}
-
 	if !c.compressEnabled {
 		index, _ := setWriterIndexAfterGow(out, size)
 		data := out.RawSlice(index, index+size)

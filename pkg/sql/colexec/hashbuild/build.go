@@ -141,10 +141,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				continue
 			}
 			if v > rows {
-				ctr.sels = append(ctr.sels, make([]int64, 0, 8))
+				ctr.sels = append(ctr.sels, make([]int32, 0))
 			}
 			ai := int64(v) - 1
-			ctr.sels[ai] = append(ctr.sels[ai], int64(i+k))
+			ctr.sels[ai] = append(ctr.sels[ai], int32(i+k))
 		}
 	}
 	return nil
@@ -155,7 +155,7 @@ func (ctr *container) indexBuild() error {
 	//      => dictionary = ["a"->1, "b"->2, "c"->3]
 	//      => poses = [1, 2, 1, 3, 2, 3, 1, 1]
 	// sels = [[0, 2, 6, 7], [1, 4], [3, 5]]
-	ctr.sels = make([][]int64, index.MaxLowCardinality)
+	ctr.sels = make([][]int32, index.MaxLowCardinality)
 	poses := vector.MustTCols[uint16](ctr.idx.GetPoses())
 	for k, v := range poses {
 		if v == 0 {
@@ -163,9 +163,9 @@ func (ctr *container) indexBuild() error {
 		}
 		bucket := int(v) - 1
 		if len(ctr.sels[bucket]) == 0 {
-			ctr.sels[bucket] = make([]int64, 0, 64)
+			ctr.sels[bucket] = make([]int32, 0, 64)
 		}
-		ctr.sels[bucket] = append(ctr.sels[bucket], int64(k))
+		ctr.sels[bucket] = append(ctr.sels[bucket], int32(k))
 	}
 	return nil
 }

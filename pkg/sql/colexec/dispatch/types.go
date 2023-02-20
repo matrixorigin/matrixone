@@ -16,48 +16,65 @@ package dispatch
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type WrapperStream struct {
-	Stream morpc.Stream
-	Uuids  []uuid.UUID
+type WrapperClientSession struct {
+	msgId uint64
+	cs    morpc.ClientSession
+	uuid  uuid.UUID
+	// toAddr string
+	doneCh chan struct{}
 }
 type container struct {
-	i       int
-	streams []*WrapperStream
-
-	c []context.Context
-
-	cnts [][]uint
+	// the clientsession info for the channel you want to dispatch
+	remoteReceivers []*WrapperClientSession
+	// sendFunc is the rule you want to send batch
+	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) error
 }
 
 type Argument struct {
-	ctr *container
-	// dispatch batch to each consumer
-	All bool
-	// CrossCN is used to treat dispatch operator as a distributed operator
-	CrossCN bool
+	ctr      *container
+	prepared bool
+	sendCnt  int
 
+	// FuncId means the sendFunc
+	FuncId int
 	// LocalRegs means the local register you need to send to.
 	LocalRegs []*process.WaitRegister
-
 	// RemoteRegs specific the remote reg you need to send to.
-	// RemoteRegs[IBucket].Node.Address == ""
-	RemoteRegs []colexec.WrapperNode
-
-	// streams is the stream which connect local CN with remote CN.
-	SendFunc func(streams []*WrapperStream, bat *batch.Batch, localChans []*process.WaitRegister, ctxs []context.Context, cnts [][]uint, proc *process.Process) error
+	RemoteRegs []colexec.ReceiveInfo
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.CrossCN {
-		CloseStreams(arg.ctr.streams, proc, *arg.ctr)
+	if arg.ctr.remoteReceivers != nil {
+		for _, r := range arg.ctr.remoteReceivers {
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			_ = cancel
+			message := cnclient.AcquireMessage()
+			{
+				message.Id = r.msgId
+				message.Cmd = pipeline.BatchMessage
+				message.Sid = pipeline.MessageEnd
+				message.Uuid = r.uuid[:]
+			}
+			if pipelineFailed {
+				err := moerr.NewInternalErrorNoCtx("pipeline failed")
+				message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
+			}
+			r.cs.Write(timeoutCtx, message)
+			close(r.doneCh)
+		}
+
 	}
 
 	if pipelineFailed {
@@ -79,4 +96,5 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		}
 		close(arg.LocalRegs[i].Ch)
 	}
+
 }

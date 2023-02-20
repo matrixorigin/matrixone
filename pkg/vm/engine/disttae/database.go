@@ -127,7 +127,7 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	}
 	columnLength := len(key.TableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
 	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(key.Id),
-		true, columnLength, false)
+		true, columnLength, true)
 	if err != nil {
 		return nil, err
 	}
@@ -214,13 +214,13 @@ func (db *database) GetDatabaseId(ctx context.Context) string {
 }
 
 func (db *database) Create(ctx context.Context, name string, defs []engine.TableDef) error {
-	comment := getTableComment(defs)
 	accountId, userId, roleId := getAccessInfo(ctx)
 	tableId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}
 	tbl := new(table)
+	tbl.comment = getTableComment(defs)
 	{
 		for _, def := range defs { // copy from tae
 			switch defVal := def.(type) {
@@ -255,7 +255,7 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 	{
 		sql := getSql(ctx)
 		bat, err := genCreateTableTuple(tbl, sql, accountId, userId, roleId, name,
-			tableId, db.databaseId, db.databaseName, comment, db.txn.proc.Mp())
+			tableId, db.databaseId, db.databaseName, db.txn.proc.Mp())
 		if err != nil {
 			return err
 		}

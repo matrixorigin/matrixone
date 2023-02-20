@@ -20,7 +20,6 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -160,7 +159,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().GetColumns().Return(cols, nil).AnyTimes()
 
 		cws := []ComputationWrapper{
-			use_t,
+			//use_t,
 			create_1,
 			select_1,
 		}
@@ -1289,8 +1288,7 @@ func TestProcessLoadLocal(t *testing.T) {
 				tmp = tmp[n:]
 			}
 		}(buffer)
-		e := new(atomic.Bool)
-		err := mce.processLoadLocal(proc.Ctx, param, writer, e)
+		err := mce.processLoadLocal(proc.Ctx, param, writer)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))

@@ -103,6 +103,24 @@ t    1    PRIMARY    1    a    A    0    NULL    NULL    NO            YES    NU
 t    0    b    1    b    A    0    NULL    NULL    YES            YES    NULL
 t    0    c    1    c    A    0    NULL    NULL    YES            YES    NULL
 t    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
+create database db1;
+use db1;
+drop table if exists t;
+create table t(
+a int,
+b int,
+c int,
+primary key(a)
+);
+show indexes from t;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
+t    1    PRIMARY    1    a    A    0    NULL    NULL    NO            YES    NULL
+t    0    b    1    b    A    0    NULL    NULL    YES            YES    NULL
+t    0    c    1    c    A    0    NULL    NULL    YES            YES    NULL
+t    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
+drop database db1;
+drop account acc_idx;
 use information_schema;
 show tables;
 tables_in_information_schema
@@ -455,7 +473,7 @@ drop database if exists test;
 create database test;
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
 configuration
-{"lower_case_table_names": 0, "transaction_ioslation": "SNAPSHOT_ISOLATION"}
+{"version_compatibility": "0.7"}
 drop database test;
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
 null
@@ -463,13 +481,47 @@ drop database if exists test;
 create database test;
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
 configuration
-{"lower_case_table_names": 0, "transaction_ioslation": "SNAPSHOT_ISOLATION"}
-alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 0}';
+{"version_compatibility": "0.7"}
+alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
 configuration
-{"lower_case_table_names": 0, "transaction_isolation": "REPEATABLE-READ"}
-alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 1}';
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
-configuration
-{"lower_case_table_names": 1, "transaction_isolation": "REPEATABLE-READ"}
+{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}
 drop database test;
+drop database if exists test;
+create database test;
+use test;
+select version();
+version()
+0.7
+alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+select version();
+version()
+8.0.30-MatrixOne-v0.7.0
+drop database test;
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+drop database if exists test;
+drop database if exists test1;
+create database test;
+create database test1;
+use test;
+select version();
+version()
+0.7
+alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+select version();
+version()
+8.0.30-MatrixOne-v0.7.0
+use test1;
+select version();
+version()
+0.7
+alter account config abc set mysql_compatbility_mode = '{"version_compatibility": "0.7"}';
+select version();
+version()
+0.7
+use test1;
+select version();
+version()
+0.7
+drop database test;
+drop database test1;

@@ -15,16 +15,16 @@
 package morpc
 
 import (
-	"context"
 	"runtime"
 	"sync"
+	"sync/atomic"
 )
 
 func newFuture(releaseFunc func(f *Future)) *Future {
 	f := &Future{
 		c:           make(chan Message, 1),
 		errC:        make(chan error, 1),
-		writtenC:    make(chan struct{}, 1),
+		writtenC:    make(chan error, 1),
 		releaseFunc: releaseFunc,
 	}
 	f.setFinalizer()
@@ -33,12 +33,13 @@ func newFuture(releaseFunc func(f *Future)) *Future {
 
 // Future is used to obtain response data synchronously.
 type Future struct {
-	id          uint64
-	c           chan Message
-	errC        chan error
-	writtenC    chan struct{}
+	send RPCMessage
+	c    chan Message
+	errC chan error
+	// used to check error for sending message
+	writtenC    chan error
+	sended      atomic.Uint32
 	releaseFunc func(*Future)
-	ctx         context.Context
 	mu          struct {
 		sync.Mutex
 		closed bool
@@ -47,14 +48,12 @@ type Future struct {
 	}
 }
 
-func (f *Future) init(id uint64, ctx context.Context) {
-	if _, ok := ctx.Deadline(); !ok {
+func (f *Future) init(send RPCMessage) {
+	if _, ok := send.Ctx.Deadline(); !ok {
 		panic("context deadline not set")
 	}
-
-	f.id = id
-	f.ctx = ctx
-
+	f.sended.Store(0)
+	f.send = send
 	f.mu.Lock()
 	f.mu.closed = false
 	f.mu.Unlock()
@@ -67,10 +66,12 @@ func (f *Future) Get() (Message, error) {
 	// we have to wait until the message is written, otherwise it will result in the message still
 	// waiting in the send queue after the Get returns, causing concurrent reading and writing on the
 	// request.
-	f.waitWriteCompleted()
+	if err := f.waitSendCompleted(); err != nil {
+		return nil, err
+	}
 	select {
-	case <-f.ctx.Done():
-		return nil, f.ctx.Err()
+	case <-f.send.Ctx.Done():
+		return nil, f.send.Ctx.Err()
 	case resp := <-f.c:
 		return resp, nil
 	case err := <-f.errC:
@@ -90,13 +91,16 @@ func (f *Future) Close() {
 	f.maybeReleaseLocked()
 }
 
-func (f *Future) waitWriteCompleted() {
-	<-f.writtenC
+func (f *Future) waitSendCompleted() error {
+	err := <-f.writtenC
+	return err
 }
 
-func (f *Future) writeCompleted() {
-	f.writtenC <- struct{}{}
-	f.unRef()
+func (f *Future) messageSended(err error) {
+	if f.sended.CompareAndSwap(0, 1) {
+		f.writtenC <- err
+		f.unRef()
+	}
 }
 
 func (f *Future) maybeReleaseLocked() {
@@ -105,12 +109,16 @@ func (f *Future) maybeReleaseLocked() {
 	}
 }
 
+func (f *Future) getSendMessageID() uint64 {
+	return f.send.Message.GetID()
+}
+
 func (f *Future) done(response Message, cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if !f.mu.closed && !f.timeout() {
-		if response.GetID() != f.id {
+		if response.GetID() != f.getSendMessageID() {
 			return
 		}
 		f.mu.cb = cb
@@ -125,7 +133,7 @@ func (f *Future) error(id uint64, err error, cb func()) {
 	defer f.mu.Unlock()
 
 	if !f.mu.closed && !f.timeout() {
-		if id != f.id {
+		if id != f.getSendMessageID() {
 			return
 		}
 		f.mu.cb = cb
@@ -154,18 +162,17 @@ func (f *Future) unRef() {
 }
 
 func (f *Future) reset() {
-	f.id = 0
-	f.ctx = nil
 	select {
 	case <-f.c:
 	default:
 	}
+	f.send = RPCMessage{}
 	f.mu.cb = nil
 }
 
 func (f *Future) timeout() bool {
 	select {
-	case <-f.ctx.Done():
+	case <-f.send.Ctx.Done():
 		return true
 	default:
 		return false

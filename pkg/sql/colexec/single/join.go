@@ -205,7 +205,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			sel := sels[idx]
 			for j, rp := range ap.Result {
 				if rp.Rel != 0 {
-					if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+					if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
 						rbat.Clean(proc.Mp())
 						return err
 					}

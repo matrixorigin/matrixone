@@ -12,22 +12,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package engine
+package fileservice
 
 import (
-	"github.com/stretchr/testify/require"
+	"encoding/binary"
+	"sync"
 	"testing"
 )
 
-func TestConstraintDefMarshalBinary(t *testing.T) {
-	a := &ConstraintDef{}
-	a.Cts = append(a.Cts, &UniqueIndexDef{UniqueIndex: "hello"})
-	a.Cts = append(a.Cts, &SecondaryIndexDef{SecondaryIndex: "world"})
-	data, err := a.MarshalBinary()
-	require.NoError(t, err)
-	b := &ConstraintDef{}
-	err = b.UnmarshalBinary(data)
-	require.NoError(t, err)
-	require.Equal(t, "hello", b.Cts[0].(*UniqueIndexDef).UniqueIndex)
-	require.Equal(t, "world", b.Cts[1].(*SecondaryIndexDef).SecondaryIndex)
+func TestBytesPool(t *testing.T) {
+	pool := NewPool(8, func() any {
+		bs := make([]byte, 8)
+		return &bs
+	})
+
+	wg := new(sync.WaitGroup)
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		i := i
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				bs, put := pool.Get()
+				defer put()
+				binary.PutUvarint(*bs.(*[]byte), uint64(i))
+			}
+		}()
+	}
+	wg.Wait()
+
+}
+
+func BenchmarkBytesPool(b *testing.B) {
+	pool := NewPool(8, func() any {
+		bs := make([]byte, 8)
+		return &bs
+	})
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, put := pool.Get()
+		put()
+	}
 }

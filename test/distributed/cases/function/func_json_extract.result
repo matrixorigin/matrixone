@@ -201,3 +201,21 @@ invalid input: invalid json path '$[last-2 to last-8]'
 select json_extract('[1,2,3]','$[0 to last-8]');
 json_extract([1,2,3], $[0 to last-8])
 null
+select json_extract('{"a":1,"b":2,"c":3}','$.a','$.b');
+json_extract({"a":1,"b":2,"c":3}, $.a, $.b)
+[1, 2]
+select json_extract('{"a":1,"b":2,"c":3}','$.a','$.b','$.c');
+json_extract({"a":1,"b":2,"c":3}, $.a, $.b, $.c)
+[1, 2, 3]
+select json_extract('{"a":1,"b":2,"c":3}','$.c','$.d');
+json_extract({"a":1,"b":2,"c":3}, $.c, $.d)
+[3]
+select json_extract('[0,1,2]', '$[0]', '$[1]');
+json_extract([0,1,2], $[0], $[1])
+[0, 1]
+select json_extract('[0,1,2]', '$[1]', '$[0]');
+json_extract([0,1,2], $[1], $[0])
+[1, 0]
+select json_extract('[0,1,2]', '$[last-1]', '$[0]', '$[2]');
+json_extract([0,1,2], $[last-1], $[0], $[2])
+[1, 0, 2]

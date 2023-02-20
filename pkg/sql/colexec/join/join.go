@@ -53,7 +53,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 			ctr.state = Probe
-
 		case Probe:
 			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
@@ -153,7 +152,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 								return err
 							}
 						} else {
-							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
 								return err
 							}
@@ -169,9 +168,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 							return err
 						}
 					} else {
-						if err := rbat.Vecs[j].Union(ctr.bat.Vecs[rp.Pos], sels, proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
-							return err
+						for _, sel := range sels {
+							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
+								return err
+							}
 						}
 					}
 				}

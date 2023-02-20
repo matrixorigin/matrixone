@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -364,6 +365,28 @@ func (h *Handle) HandleForceCheckpoint(
 	err = h.eng.ForceCheckpoint(ctx,
 		currTs, timeout)
 	return err
+}
+
+func (h *Handle) HandleInspectDN(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req db.InspectDN,
+	resp *db.InspectResp) (err error) {
+	tae := h.eng.GetTAE(context.Background())
+	args, _ := shlex.Split(req.Operation)
+	logutil.Info("Inspect", zap.Strings("args", args))
+	b := &bytes.Buffer{}
+
+	inspectCtx := &inspectContext{
+		db:     tae,
+		acinfo: &req.AccessInfo,
+		args:   args,
+		out:    b,
+		resp:   resp,
+	}
+	RunInspect(inspectCtx)
+	resp.Message = b.String()
+	return nil
 }
 
 func (h *Handle) startLoadJobs(

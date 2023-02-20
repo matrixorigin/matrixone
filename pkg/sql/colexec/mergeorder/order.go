@@ -197,10 +197,6 @@ func (ctr *container) mergeSort2(bat2 *batch.Batch, proc *process.Process) error
 	bat1 := ctr.bat
 	// union bat1 and bat2
 	// do merge sort, get order index list.
-	for i, cmp := range ctr.cmps {
-		cmp.Set(0, bat1.GetVector(ctr.compare0Index[i]))
-		cmp.Set(1, bat2.GetVector(ctr.compare1Index[i]))
-	}
 	s1, s2 := int64(0), int64(bat1.Vecs[0].Length()) // startIndexOfBat1, startIndexOfBat2
 
 	for i := range bat1.Vecs {
@@ -216,6 +212,12 @@ func (ctr *container) mergeSort2(bat2 *batch.Batch, proc *process.Process) error
 		}
 	}
 	bat1.Zs = append(bat1.Zs, bat2.Zs...)
+
+	// set cmp should after union work to avoid memory re-alloc while union.
+	for i, cmp := range ctr.cmps {
+		cmp.Set(0, bat1.GetVector(ctr.compare0Index[i]))
+		cmp.Set(1, bat2.GetVector(ctr.compare1Index[i]))
+	}
 
 	end1, end2 := s2, int64(bat1.Vecs[0].Length())
 	sels := make([]int64, 0, end2)

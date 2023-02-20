@@ -17,11 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
 	"runtime"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -74,56 +74,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// messageHandleHelper a structure records some elements to help handle messages.
-type messageHandleHelper struct {
-	storeEngine       engine.Engine
-	fileService       fileservice.FileService
-	getClusterDetails engine.GetClusterDetailsFunc
-	acquirer          func() morpc.Message
-}
-
-// processHelper a structure records information about source process. and to help
-// rebuild the process in the remote node.
-type processHelper struct {
-	id               string
-	lim              process.Limitation
-	unixTime         int64
-	txnOperator      client.TxnOperator
-	txnClient        client.TxnClient
-	sessionInfo      process.SessionInfo
-	analysisNodeList []int32
-}
-
-// CnServerMessageHandler deal the client message that received at cn-server.
+// CnServerMessageHandler is responsible for processing the cn-client message received at cn-server.
 // the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
-// write back Analysis Information and error info if error occurs to client.
-func CnServerMessageHandler(ctx context.Context, message morpc.Message,
+func CnServerMessageHandler(
+	ctx context.Context,
+	message morpc.Message,
 	cs morpc.ClientSession,
 	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message,
 	getClusterDetails engine.GetClusterDetailsFunc) error {
-	var errData []byte
-	// structure to help handle the message.
-	helper := &messageHandleHelper{
-		storeEngine:       storeEngine,
-		fileService:       fileService,
-		acquirer:          messageAcquirer,
-		getClusterDetails: getClusterDetails,
-	}
-	// decode message and run it, get final analysis information and err info.
-	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
+	// new a receiver to receive message and write back result.
+	receiver := newMessageReceiverOnServer(ctx, message,
+		cs, messageAcquirer, storeEngine, fileService, cli, getClusterDetails)
+
+	// rebuild pipeline to run and send query result back.
+	err := cnMessageHandle(receiver)
 	if err != nil {
-		errData = pipeline.EncodedMessageError(ctx, err)
+		return receiver.sendError(err)
 	}
-	// batch data, not scope
-	if analysis == nil {
-		return nil
-	}
-	backMessage := messageAcquirer().(*pipeline.Message)
-	backMessage.Id = message.GetID()
-	backMessage.Sid = pipeline.MessageEnd
-	backMessage.Err = errData
-	backMessage.Analyse = analysis
-	return cs.Write(ctx, backMessage)
+	return receiver.sendEndMessage()
 }
 
 func fillEngineForInsert(s *Scope, e engine.Engine) {
@@ -137,189 +105,114 @@ func fillEngineForInsert(s *Scope, e engine.Engine) {
 	}
 }
 
-func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper, cli client.TxnClient) (anaData []byte, err error) {
-	var c *Compile
-	var s *Scope
-	var procHelper *processHelper
-
-	m, ok := message.(*pipeline.Message)
-	if !ok {
-		panic("unexpected message type for cn-server")
-	}
-	// it's a Batch
-	if m.IsBatchMessage() {
-		var wg *process.WaitRegister
+// cnMessageHandle deal the received message at cn-server.
+func cnMessageHandle(receiver messageReceiverOnServer) error {
+	switch receiver.messageTyp {
+	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
+		var ch chan process.WrapCs
 		var ok bool
-		opUuid, err := uuid.FromBytes(m.GetUuid())
-		if err != nil {
-			return nil, err
-		}
-
+		opUuid := receiver.messageUuid
 		for {
-			if wg, ok = colexec.Srv.GetRegFromUuidMap(opUuid); !ok {
+			if ch, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
 				runtime.Gosched()
 			} else {
 				break
 			}
 		}
 
-		if m.IsBatchMessageEnd() {
-			requireCnt := m.GetBatchCnt()
-			if requireCnt > 0 {
-				for {
-					// waiting all batch handle done.
-					if colexec.Srv.IsEndStatus(opUuid, requireCnt) {
-						break
-					} else {
-						runtime.Gosched()
-					}
-				}
-			}
-			wg.Ch <- nil
-			close(wg.Ch)
-			colexec.Srv.RemoveUuidFromUuidMap(opUuid)
-
-			return nil, nil
-		} else {
-			// TODO: handle seperate batch
-			mp, err := mpool.NewMPool("cnservice_handle_batch", 0, mpool.NoFixed)
-			if err != nil {
-				return nil, err
-			}
-			bat, err := decodeBatch(mp, m.Data)
-			if err != nil {
-				return nil, err
-			}
-			wg.Ch <- bat
-			colexec.Srv.ReceiveNormalBatch(opUuid)
-			return nil, nil
+		doneCh := make(chan struct{})
+		info := process.WrapCs{
+			MsgId:  receiver.messageId,
+			Uid:    opUuid,
+			Cs:     receiver.clientSession,
+			DoneCh: doneCh,
 		}
-	}
-	// generate Compile-structure to run scope.
-	procHelper, err = generateProcessHelper(m.GetProcInfoData(), cli)
-	if err != nil {
-		return nil, err
-	}
-	c = newCompile(ctx, message, procHelper, messageHelper, cs)
-
-	// decode and run the scope.
-	s, err = decodeScope(m.GetData(), c.proc, true)
-	// remote insert operator need to have engine
-	fillEngineForInsert(s, c.e)
-
-	if err != nil {
-		return nil, err
-	}
-	s = refactorScope(c, c.ctx, s)
-
-	err = s.ParallelRun(c, s.IsRemote)
-	if err != nil {
-		return nil, err
-	}
-	// encode analysis info and return.
-	anas := &pipeline.AnalysisList{
-		List: make([]*plan.AnalyzeInfo, len(c.proc.AnalInfos)),
-	}
-	for i := range anas.List {
-		anas.List[i] = convertToPlanAnalyzeInfo(c.proc.AnalInfos[i])
-	}
-	return anas.Marshal()
-}
-
-const maxMessageSizeToMoRpc = 64 * mpool.MB
-
-// sendBackBatchToCnClient send back the result batch to cn client.
-func sendBackBatchToCnClient(ctx context.Context, b *batch.Batch, messageId uint64, mHelper *messageHandleHelper, cs morpc.ClientSession) error {
-	if b == nil {
+		ch <- info
+		<-doneCh
 		return nil
-	}
-	encodeData, errEncode := types.Encode(b)
-	if errEncode != nil {
-		return errEncode
-	}
 
-	if len(encodeData) <= maxMessageSizeToMoRpc {
-		m := mHelper.acquirer().(*pipeline.Message)
-		m.Id = messageId
-		m.Data = encodeData
-		return cs.Write(ctx, m)
-	}
-	// if data is too large, it should be split into small blocks.
-	start := 0
-	for start < len(encodeData) {
-		end := start + maxMessageSizeToMoRpc
-		sid := pipeline.WaitingNext
-		if end > len(encodeData) {
-			end = len(encodeData)
-			sid = pipeline.BatchEnd
-		}
-		m := mHelper.acquirer().(*pipeline.Message)
-		m.Id = messageId
-		m.Data = encodeData[start:end]
-		m.Sid = uint64(sid)
-		if err := cs.Write(ctx, m); err != nil {
+	case pipeline.PipelineMessage:
+		c := receiver.newCompile()
+
+		// decode and rewrite the scope.
+		// insert operator needs to fill the engine info.
+		s, err := decodeScope(receiver.scopeData, c.proc, true)
+		if err != nil {
 			return err
 		}
-		start = end
+		fillEngineForInsert(s, c.e)
+		s = refactorScope(c, c.ctx, s)
+
+		err = s.ParallelRun(c, s.IsRemote)
+		if err != nil {
+			return err
+		}
+		receiver.finalAnalysisInfo = c.proc.AnalInfos
+		return nil
+
+	default:
+		return moerr.NewInternalError(receiver.ctx, "unknown message type")
 	}
-	return nil
 }
 
 // receiveMessageFromCnServer deal the back message from cn-server.
-func receiveMessageFromCnServer(c *Compile, mChan chan morpc.Message, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
+func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
+	var err error
 	var dataBuffer []byte
+	var sequence uint64
 	for {
-		select {
-		case <-c.ctx.Done():
-			return moerr.NewRPCTimeout(c.ctx)
-		case val = <-mChan:
+		val, err = sender.receiveMessage()
+		if err != nil {
+			return err
 		}
-		if val == nil {
-			return nil
-		}
+
 		m := val.(*pipeline.Message)
 
-		// if message contains the back error info.
-		if err := pipeline.GetMessageErrorInfo(m); err != nil {
-			return err
+		if errInfo, get := m.TryToGetMoErr(); get {
+			return errInfo
 		}
 		if m.IsEndMessage() {
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
-				// get analysis info if it has
 				ana := new(pipeline.AnalysisList)
-				err := ana.Unmarshal(anaData)
-				if err != nil {
+				if err = ana.Unmarshal(anaData); err != nil {
 					return err
 				}
 				mergeAnalyseInfo(c.anal, ana)
 			}
 			return nil
-		} else {
-			if len(dataBuffer) == 0 {
-				dataBuffer = m.Data
-			} else {
-				dataBuffer = append(dataBuffer, m.Data...)
-			}
-			if m.WaitingNextToMerge() {
-				continue
-			}
-			bat, err := decodeBatch(c.proc.Mp(), dataBuffer)
-			if err != nil {
-				return err
-			}
-			nextAnalyze.Network(bat)
-			sendToConnectOperator(nextOperator, bat)
-			dataBuffer = nil
 		}
+		// XXX some order check just for safety ?
+		if sequence != m.Sequence {
+			return moerr.NewInternalErrorNoCtx("Packages passed by morpc are out of order")
+		}
+		sequence++
+
+		dataBuffer = append(dataBuffer, m.Data...)
+		if m.WaitingNextToMerge() {
+			continue
+		}
+		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
+			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
+		}
+
+		bat, err := decodeBatch(c.proc.Mp(), dataBuffer)
+		if err != nil {
+			return err
+		}
+		nextAnalyze.Network(bat)
+		sendToConnectOperator(nextOperator, bat)
+		// XXX maybe we can use dataBuffer = dataBuffer[:0] to do memory reuse.
+		// but it seems that decode batch will do some memory reflect. but not copy.
+		dataBuffer = nil
 	}
 }
 
-// remoteRun sends a scope to remote node for execution, and wait to receive the back message.
-// the back message is always *pipeline.Message but contains three cases.
+// remoteRun sends a scope for remote running and receive the results.
+// the back result message is always *pipeline.Message contains three cases.
 // 1. Message with error information
-// 2. Message with end flag and the result of analysis
+// 2. Message with end flag and analysis result
 // 3. Batch Message with batch data
 func (s *Scope) remoteRun(c *Compile) error {
 	// encode the scope. shouldn't encode the `connector` operator which used to receive the back batch.
@@ -338,43 +231,23 @@ func (s *Scope) remoteRun(c *Compile) error {
 		return errEncodeProc
 	}
 
-	// get the stream-sender
-	streamSender, errStream := cnclient.GetStreamSender(s.NodeInfo.Addr)
-	if errStream != nil {
-		return errStream
+	// new sender and do send work.
+	sender, err := newMessageSenderOnClient(c.ctx, c.addr)
+	if err != nil {
+		return err
 	}
-	defer func(streamSender morpc.Stream) {
-		_ = streamSender.Close()
-	}(streamSender)
-
-	// send encoded message and receive the back message.
-	// TODO: get dead time from config file may suitable.
-	if _, ok := c.ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		c.ctx, cancel = context.WithTimeout(c.ctx, time.Second*10000)
-		_ = cancel
+	err = sender.send(sData, pData, pipeline.PipelineMessage)
+	if err != nil {
+		sender.close()
+		return err
 	}
 
-	message := cnclient.AcquireMessage()
-	{
-		message.Id = streamSender.ID()
-		message.Data = sData
-		message.ProcInfoData = pData
-		message.Cmd = 0
-	}
-
-	errSend := streamSender.Send(c.ctx, message)
-	if errSend != nil {
-		return errSend
-	}
-	messagesReceive, errReceive := streamSender.Receive()
-	if errReceive != nil {
-		return errReceive
-	}
 	nextInstruction := s.Instructions[len(s.Instructions)-1]
 	nextAnalyze := c.proc.GetAnalyze(nextInstruction.Idx)
 	nextArg := nextInstruction.Arg.(*connector.Argument)
-	return receiveMessageFromCnServer(c, messagesReceive, nextAnalyze, nextArg)
+	err = receiveMessageFromCnServer(c, sender, nextAnalyze, nextArg)
+	sender.close()
+	return err
 }
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
@@ -447,33 +320,6 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 	return procInfo.Marshal()
 }
 
-// generateProcessHelper generate the processHelper by encoded process info.
-func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, error) {
-	procInfo := &pipeline.ProcessInfo{}
-	err := procInfo.Unmarshal(data)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &processHelper{
-		id:               procInfo.Id,
-		lim:              convertToProcessLimitation(procInfo.Lim),
-		unixTime:         procInfo.UnixTime,
-		txnClient:        cli,
-		analysisNodeList: procInfo.GetAnalysisNodeList(),
-	}
-	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
-	if err != nil {
-		return nil, err
-	}
-	result.sessionInfo, err = convertToProcessSessionInfo(procInfo.SessionInfo)
-	if err != nil {
-		return nil, err
-	}
-
-	return result, nil
-}
-
 func refactorScope(c *Compile, _ context.Context, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -513,7 +359,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
 	p.IsJoin = s.IsJoin
-	p.UuidsToRegIdx = convertScopeUuids(s)
+	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
 
 	// Plan
 	if ctxId == 1 {
@@ -597,27 +443,29 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	return ctxId, nil
 }
 
-func convertPipelineUuid(p *pipeline.Pipeline) ([]UuidToRegIdx, error) {
-	ret := make([]UuidToRegIdx, len(p.UuidsToRegIdx))
+func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
+	s.RemoteReceivRegInfos = make([]RemoteReceivRegInfo, len(p.UuidsToRegIdx))
 	for i, u := range p.UuidsToRegIdx {
 		uid, err := uuid.FromBytes(u.GetUuid())
 		if err != nil {
-			return nil, moerr.NewInvalidInputNoCtx("decode uuid failed: %s\n", err)
+			return moerr.NewInvalidInputNoCtx("decode uuid failed: %s\n", err)
 		}
-		ret[i] = UuidToRegIdx{
-			Uuid: uid,
-			Idx:  int(u.GetIdx()),
+		s.RemoteReceivRegInfos[i] = RemoteReceivRegInfo{
+			Idx:      int(u.GetIdx()),
+			Uuid:     uid,
+			FromAddr: u.FromAddr,
 		}
 	}
-	return ret, nil
+	return nil
 }
 
-func convertScopeUuids(s *Scope) (ret []*pipeline.UuidToRegIdx) {
-	ret = make([]*pipeline.UuidToRegIdx, len(s.UuidToRegIdx))
-	for i, u := range s.UuidToRegIdx {
+func convertScopeRemoteReceivInfo(s *Scope) (ret []*pipeline.UuidToRegIdx) {
+	ret = make([]*pipeline.UuidToRegIdx, len(s.RemoteReceivRegInfos))
+	for i, u := range s.RemoteReceivRegInfos {
 		ret[i] = &pipeline.UuidToRegIdx{
-			Uuid: u.Uuid[:],
-			Idx:  int32(u.Idx),
+			Idx:      int32(u.Idx),
+			Uuid:     u.Uuid[:],
+			FromAddr: u.FromAddr,
 		}
 	}
 	return ret
@@ -631,17 +479,15 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		ctx.plan = p.Qry
 	}
 
-	uuidToRegIdx, converErr := convertPipelineUuid(p)
-	if converErr != nil {
-		return nil, converErr
-	}
 	s := &Scope{
-		Magic:        int(p.GetPipelineType()),
-		IsEnd:        p.IsEnd,
-		IsJoin:       p.IsJoin,
-		Plan:         ctx.plan,
-		IsRemote:     isRemote,
-		UuidToRegIdx: uuidToRegIdx,
+		Magic:    int(p.GetPipelineType()),
+		IsEnd:    p.IsEnd,
+		IsJoin:   p.IsJoin,
+		Plan:     ctx.plan,
+		IsRemote: isRemote,
+	}
+	if err := convertPipelineUuid(p, s); err != nil {
+		return s, err
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
@@ -673,9 +519,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
-	for _, u := range s.UuidToRegIdx {
-		colexec.Srv.PutRegFromUuidMap(u.Uuid, s.Proc.Reg.MergeReceivers[u.Idx])
-	}
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
@@ -751,11 +594,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Result:    t.Result,
 		}
 	case *dispatch.Argument:
-		in.Dispatch = &pipeline.Dispatch{
-			All:     t.All,
-			CrossCn: t.CrossCN,
-		}
-		in.Dispatch.Connector = make([]*pipeline.Connector, len(t.LocalRegs))
+		in.Dispatch = &pipeline.Dispatch{FuncId: int32(t.FuncId)}
+		in.Dispatch.LocalConnector = make([]*pipeline.Connector, len(t.LocalRegs))
 		for i := range t.LocalRegs {
 			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
 			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
@@ -764,21 +604,18 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 					return ctxId, nil, err
 				}
 			}
-			in.Dispatch.Connector[i] = &pipeline.Connector{
+			in.Dispatch.LocalConnector[i] = &pipeline.Connector{
 				ConnectorIndex: idx,
 				PipelineId:     ctx0.id,
 			}
 		}
-		if t.CrossCN {
+
+		if len(t.RemoteRegs) > 0 {
 			in.Dispatch.RemoteConnector = make([]*pipeline.WrapNode, len(t.RemoteRegs))
 			for i, r := range t.RemoteRegs {
-				udata := make([][]byte, len(r.Uuids))
-				for j, u := range r.Uuids {
-					udata[j] = u[:]
-				}
 				wn := &pipeline.WrapNode{
 					NodeAddr: r.NodeAddr,
-					Uuids:    udata,
+					Uuid:     r.Uuid[:],
 				}
 				in.Dispatch.RemoteConnector[i] = wn
 			}
@@ -1015,31 +852,26 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.Dispatch:
 		t := opr.GetDispatch()
-		regs := make([]*process.WaitRegister, len(t.Connector))
-		for i, cp := range t.Connector {
+		regs := make([]*process.WaitRegister, len(t.LocalConnector))
+		for i, cp := range t.LocalConnector {
 			regs[i] = ctx.root.getRegister(cp.PipelineId, cp.ConnectorIndex)
 		}
-		rrs := make([]colexec.WrapperNode, 0)
-		if t.CrossCn {
+		rrs := make([]colexec.ReceiveInfo, 0)
+		if len(t.RemoteConnector) > 0 {
 			for _, rc := range t.RemoteConnector {
-				n := colexec.WrapperNode{
-					NodeAddr: rc.NodeAddr,
-					Uuids:    make([]uuid.UUID, len(rc.Uuids)),
+				uid, err := uuid.FromBytes(rc.Uuid)
+				if err != nil {
+					return v, err
 				}
-				for j, u := range rc.Uuids {
-					uuid, err := uuid.FromBytes(u)
-					if err != nil {
-						return v, err
-					}
-					n.Uuids[j] = uuid
+				n := colexec.ReceiveInfo{
+					NodeAddr: rc.NodeAddr,
+					Uuid:     uid,
 				}
 				rrs = append(rrs, n)
 			}
 		}
-
 		v.Arg = &dispatch.Argument{
-			All:        t.All,
-			CrossCN:    t.CrossCn,
+			FuncId:     int(t.FuncId),
 			LocalRegs:  regs,
 			RemoteRegs: rrs,
 		}
@@ -1073,6 +905,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Result:     convertToResultPos(t.RelList, t.ColList),
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
+
 	case vm.Limit:
 		v.Arg = &limit.Argument{Limit: opr.Limit}
 	case vm.LoopAnti:
@@ -1259,44 +1092,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	return v, nil
 }
 
-// newCompile generates a new compile for remote run.
-// TODO: give addr to compile?
-func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelper, mHelper *messageHandleHelper, cs morpc.ClientSession) *Compile {
-	// compile is almost surely wanting a small or mid pool.  Later.
-	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
-	if err != nil {
-		panic(err)
-	}
-	proc := process.New(
-		ctx, mp,
-		pHelper.txnClient,
-		pHelper.txnOperator,
-		mHelper.fileService,
-		mHelper.getClusterDetails,
-	)
-	proc.UnixTime = pHelper.unixTime
-	proc.Id = pHelper.id
-	proc.Lim = pHelper.lim
-	proc.SessionInfo = pHelper.sessionInfo
-	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
-	for i := range proc.AnalInfos {
-		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
-	}
-
-	c := &Compile{
-		ctx:  ctx,
-		proc: proc,
-		e:    mHelper.storeEngine,
-		anal: &anaylze{},
-		addr: colexec.CnAddr,
-	}
-
-	c.fill = func(_ any, b *batch.Batch) error {
-		return sendBackBatchToCnClient(ctx, b, message.GetID(), mHelper, cs)
-	}
-	return c
-}
-
 func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 	source := ana.List
 	if len(target.analInfos) != len(source) {
@@ -1460,7 +1255,6 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := new(batch.Batch)
 	//mp := proc.Mp()
 	err := types.Decode(data, bat)
-
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
 		bat.Vecs[i], err = bat.Vecs[i].Dup(mp)

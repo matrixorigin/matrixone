@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 
@@ -28,7 +27,7 @@ import (
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	stmt.Param.Local = stmt.Local
-	if err := checkFileExist(stmt.Param); err != nil {
+	if err := checkFileExist(stmt.Param, ctx); err != nil {
 		return nil, err
 	}
 
@@ -132,11 +131,11 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	return pn, nil
 }
 
-func checkFileExist(param *tree.ExternParam) error {
-	param.Ctx = context.TODO()
+func checkFileExist(param *tree.ExternParam, ctx CompilerContext) error {
 	if param.Local {
 		return nil
 	}
+	param.Ctx = ctx.GetContext()
 	if param.ScanType == tree.S3 {
 		if err := InitS3Param(param); err != nil {
 			return err

@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func NewJoinMap(sels [][]int64, expr *plan.Expr, mp *StrHashMap, hasNull bool, idx *index.LowCardinalityIndex) *JoinMap {
+func NewJoinMap(sels [][]int32, expr *plan.Expr, mp *StrHashMap, hasNull bool, idx *index.LowCardinalityIndex) *JoinMap {
 	cnt := int64(1)
 	return &JoinMap{
 		cnt:     &cnt,
@@ -33,7 +33,7 @@ func NewJoinMap(sels [][]int64, expr *plan.Expr, mp *StrHashMap, hasNull bool, i
 	}
 }
 
-func (jm *JoinMap) Sels() [][]int64 {
+func (jm *JoinMap) Sels() [][]int32 {
 	return jm.sels
 }
 

@@ -37,3 +37,4 @@ current_user_id()
 select current_role_name();
 current_role_name()
 test_role
+drop account if exists abc;

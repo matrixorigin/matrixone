@@ -382,7 +382,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 			e.catalog.AddColumnCnt(-1 * len(table.schema.ColDefs))
 		}
 	}()
-	table.Close()
+	// table.Close()
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(table.String()))
 	e.Lock()

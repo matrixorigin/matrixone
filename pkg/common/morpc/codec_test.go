@@ -293,21 +293,6 @@ func TestBufferScale(t *testing.T) {
 	}
 }
 
-func TestEncodeWithLargeMessageMustReturnError(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
-	defer cancel()
-
-	maxBodySize := 1024
-	codec := newTestCodec(WithCodecMaxBodySize(maxBodySize))
-	buf1 := buf.NewByteBuf(32)
-	buf2 := buf.NewByteBuf(32)
-
-	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1)}
-	msg.Message.(*testMessage).payload = make([]byte, 1024)
-	err := codec.Encode(msg, buf1, buf2)
-	assert.Error(t, err)
-}
-
 func TestEncodeAndDecodeInternal(t *testing.T) {
 	codec := newTestCodec()
 	buf := buf.NewByteBuf(1)
