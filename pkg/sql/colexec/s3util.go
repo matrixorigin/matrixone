@@ -15,6 +15,8 @@
 package colexec
 
 import (
+	"container/heap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,6 +41,7 @@ import (
 )
 
 type WriteS3Container struct {
+	// in fact, len(sortIndex) is 1 at most.
 	sortIndex        []int
 	nameToNullablity map[string]bool
 	pk               map[string]bool
@@ -50,33 +53,44 @@ type WriteS3Container struct {
 	UniqueRels []engine.Relation
 
 	metaLocBat *batch.Batch
+
+	// buffers[i] stands the i-th buffer batch used
+	// for merge sort (corresponding to table_i,table_i could be unique
+	// table or main table)
+	buffers []*batch.Batch
+
+	// tableBatches[i] used to store the batches of table_i
+	// when the batches' size is over 64M, we will use merge
+	// sort, and then write a segment in s3
+	tableBatches [][]*batch.Batch
+
+	// tableBatchSizes are used to record the table_i's batches's
+	// size in tableBatches
+	tableBatchSizes []uint64
 }
 
+const (
+	// when batches's  size of table is over this, we will
+	// trigger write s3
+	WriteS3Threshold uint64 = 64 * mpool.MB
+)
+
 func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
+	unique_nums := 0
+	for _, idx := range tableDef.Indexes {
+		if idx.Unique {
+			unique_nums++
+		}
+	}
+
 	container := &WriteS3Container{
 		sortIndex:        make([]int, 0, 1),
 		pk:               make(map[string]bool),
 		nameToNullablity: make(map[string]bool),
-	}
-
-	// get pk indexes
-	if tableDef.CompositePkey != nil {
-		names := util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)
-		for num, colDef := range tableDef.Cols {
-			for _, name := range names {
-				if colDef.Name == name {
-					container.sortIndex = append(container.sortIndex, num)
-				}
-			}
-		}
-	} else {
-		// Get Single Col pk index
-		for num, colDef := range tableDef.Cols {
-			if colDef.Primary {
-				container.sortIndex = append(container.sortIndex, num)
-				break
-			}
-		}
+		// main table and unique tables
+		buffers:         make([]*batch.Batch, unique_nums+1),
+		tableBatches:    make([][]*batch.Batch, unique_nums+1),
+		tableBatchSizes: make([]uint64, unique_nums+1),
 	}
 
 	// Get CPkey index
@@ -175,13 +189,232 @@ func (container *WriteS3Container) WriteS3CacheBatch(proc *process.Process) erro
 	return nil
 }
 
-func (container *WriteS3Container) WriteS3Batch(bat *batch.Batch, proc *process.Process, idx int) error {
-	bats := reSizeBatch(container, bat, proc, idx)
-	if len(bats) == 0 {
-		proc.SetInputBatch(&batch.Batch{})
-		return nil
+func (container *WriteS3Container) InitBuffers(bat *batch.Batch, idx int) {
+	if container.buffers[idx] == nil {
+		container.buffers[idx] = getNewBatch(bat)
 	}
-	return GetBlockMeta(bats, container, proc, idx)
+}
+
+// the return value can be 1,0,-1
+// 1: the tableBatches[idx] is over threshold
+// 0: the tableBatches[idx] is equal to threshold
+// -1: the tableBatches[idx] is less than threshold
+func (container *WriteS3Container) Put(bat *batch.Batch, idx int) int {
+	container.tableBatchSizes[idx] += uint64(bat.Size())
+	container.tableBatches[idx] = append(container.tableBatches[idx], bat)
+	if container.tableBatchSizes[idx] == WriteS3Threshold {
+		return 0
+	} else if container.tableBatchSizes[idx] > WriteS3Threshold {
+		return 1
+	}
+	return -1
+}
+
+func GetFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T) {
+	for i := range bats {
+		cols = append(cols, vector.GetFixedVectorValues[T](bats[i].Vecs[idx]))
+	}
+	return
+}
+
+func GetStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
+	for i := range bats {
+		cols = append(cols, vector.GetStrVectorValues(bats[i].Vecs[idx]))
+	}
+	return
+}
+
+func GetPos(data any, oid types.T) (int, int) {
+	switch oid {
+	case types.T_bool:
+		return data.(*MixData[bool]).GetPos()
+	case types.T_int8:
+		return data.(*MixData[int8]).GetPos()
+	case types.T_int16:
+		return data.(*MixData[int16]).GetPos()
+	case types.T_int32:
+		return data.(*MixData[int32]).GetPos()
+	case types.T_int64:
+		return data.(*MixData[int64]).GetPos()
+	case types.T_uint8:
+		return data.(*MixData[uint8]).GetPos()
+	case types.T_uint16:
+		return data.(*MixData[uint16]).GetPos()
+	case types.T_uint32:
+		return data.(*MixData[uint32]).GetPos()
+	case types.T_uint64:
+		return data.(*MixData[uint64]).GetPos()
+	case types.T_float32:
+		return data.(*MixData[float32]).GetPos()
+	case types.T_float64:
+		return data.(*MixData[float64]).GetPos()
+	case types.T_date:
+		return data.(*MixData[types.Date]).GetPos()
+	case types.T_datetime:
+		return data.(*MixData[types.Datetime]).GetPos()
+	case types.T_time:
+		return data.(*MixData[types.Time]).GetPos()
+	case types.T_timestamp:
+		return data.(*MixData[types.Timestamp]).GetPos()
+	case types.T_decimal64:
+		return data.(*MixData[types.Decimal64]).GetPos()
+	case types.T_decimal128:
+		return data.(*MixData[types.Decimal128]).GetPos()
+	case types.T_uuid:
+		return data.(*MixData[types.Uuid]).GetPos()
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		return data.(*MixData[string]).GetPos()
+	default:
+		return -1, -1
+	}
+}
+
+// len(sortIndex) is always only one.
+func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process.Process) error {
+	bats := container.tableBatches[idx][:length]
+	left := container.tableBatches[idx][length:]
+	container.tableBatches[idx] = container.tableBatches[idx][:0]
+	container.tableBatches[idx] = append(container.tableBatches[idx], left...)
+	container.tableBatchSizes[idx] = 0
+	for _, bat := range left {
+		container.tableBatchSizes[idx] += uint64(bat.Size())
+	}
+	sortIdx := -1
+	for i := range bats {
+		// sort bats firstly
+		// for main table
+		if idx == 0 && len(container.sortIndex) != 0 {
+			SortByKey(proc, bats[i], container.sortIndex, proc.GetMPool())
+			sortIdx = container.sortIndex[0]
+		}
+	}
+	// just write ahead, no need to sort
+	if sortIdx == -1 {
+		if err := GenerateWriter(container, proc); err != nil {
+			return err
+		}
+		for i := range bats {
+			if err := WriteBlock(container, bats[i], proc); err != nil {
+				return err
+			}
+		}
+		if err := WriteEndBlocks(container, proc, idx); err != nil {
+			return err
+		}
+	} else {
+		var mergeHeap heap.Interface
+		var nulls []*nulls.Nulls
+		var oid types.T
+		for i := 0; i < len(bats); i++ {
+			nulls = append(nulls, bats[i].Vecs[container.sortIndex[0]].Nsp)
+		}
+		pos := container.sortIndex[0]
+		switch bats[0].Vecs[sortIdx].Typ.Oid {
+		case types.T_bool:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewBoolLess(), GetFixedCols[bool](bats, pos), nulls)
+			oid = types.T_bool
+		case types.T_int8:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[int8](), GetFixedCols[int8](bats, pos), nulls)
+			oid = types.T_int8
+		case types.T_int16:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[int16](), GetFixedCols[int16](bats, pos), nulls)
+			oid = types.T_int16
+		case types.T_int32:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[int32](), GetFixedCols[int32](bats, pos), nulls)
+			oid = types.T_int32
+		case types.T_int64:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[int64](), GetFixedCols[int64](bats, pos), nulls)
+			oid = types.T_int64
+		case types.T_uint8:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[uint8](), GetFixedCols[uint8](bats, pos), nulls)
+			oid = types.T_uint8
+		case types.T_uint16:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[uint16](), GetFixedCols[uint16](bats, pos), nulls)
+			oid = types.T_uint16
+		case types.T_uint32:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[uint32](), GetFixedCols[uint32](bats, pos), nulls)
+			oid = types.T_uint32
+		case types.T_uint64:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[uint64](), GetFixedCols[uint64](bats, pos), nulls)
+			oid = types.T_uint64
+		case types.T_float32:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[float32](), GetFixedCols[float32](bats, pos), nulls)
+			oid = types.T_float32
+		case types.T_float64:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[float64](), GetFixedCols[float64](bats, pos), nulls)
+			oid = types.T_float64
+		case types.T_date:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[types.Date](), GetFixedCols[types.Date](bats, pos), nulls)
+			oid = types.T_date
+		case types.T_datetime:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[types.Datetime](), GetFixedCols[types.Datetime](bats, pos), nulls)
+			oid = types.T_datetime
+		case types.T_time:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[types.Time](), GetFixedCols[types.Time](bats, pos), nulls)
+			oid = types.T_time
+		case types.T_timestamp:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[types.Timestamp](), GetFixedCols[types.Timestamp](bats, pos), nulls)
+			oid = types.T_timestamp
+		case types.T_decimal64:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewDecimal64Less(), GetFixedCols[types.Decimal64](bats, pos), nulls)
+			oid = types.T_decimal64
+		case types.T_decimal128:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewDecimal128Less(), GetFixedCols[types.Decimal128](bats, pos), nulls)
+			oid = types.T_decimal128
+		case types.T_uuid:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewUuidCompLess(), GetFixedCols[types.Uuid](bats, pos), nulls)
+			oid = types.T_uuid
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[string](), GetStrCols(bats, pos), nulls)
+			oid = types.T_char
+		}
+		if err := GenerateWriter(container, proc); err != nil {
+			return err
+		}
+		heap.Init(mergeHeap)
+		heap.Push(mergeHeap, nil)
+		lens := 0
+		for mergeHeap.Len() > 0 {
+			batchIndex, rowIndex := GetPos(heap.Pop(mergeHeap), oid)
+			for i := range container.buffers[idx].Vecs {
+				vector.UnionOne(container.buffers[idx].Vecs[i], bats[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
+			}
+			lens++
+			if lens == int(options.DefaultBlockMaxRows) {
+				lens = 0
+				if err := WriteBlock(container, container.buffers[idx], proc); err != nil {
+					return err
+				}
+				container.buffers[idx].Clean(proc.GetMPool())
+			}
+			heap.Push(mergeHeap, nil)
+		}
+		if lens > 0 {
+			if err := WriteBlock(container, container.buffers[idx], proc); err != nil {
+				return err
+			}
+		}
+		if err := WriteEndBlocks(container, proc, idx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// the first pr for cn-write-s3 logic of insert will result this:
+// and now we need to change it, there will be 64Mb data in one seg.
+func (container *WriteS3Container) WriteS3Batch(bat *batch.Batch, proc *process.Process, idx int) error {
+	container.InitBuffers(bat, idx)
+	res := container.Put(bat, idx)
+	switch res {
+	case 1:
+		container.MergeBlock(idx, len(container.tableBatches[idx])-1, proc)
+	case 0:
+		container.MergeBlock(idx, len(container.tableBatches[idx]), proc)
+	case -1:
+		proc.SetInputBatch(&batch.Batch{})
+	}
+	return nil
 }
 
 // After cn writes the data to s3, it will get meta data about the block (aka metaloc) by calling func WriteEndBlocks
@@ -193,7 +426,7 @@ func GetBlockMeta(bats []*batch.Batch, container *WriteS3Container, proc *proces
 			return err
 		}
 		if idx == 0 && len(container.sortIndex) != 0 {
-			SortByPrimaryKey(proc, bats[i], container.sortIndex, proc.GetMPool())
+			SortByKey(proc, bats[i], container.sortIndex, proc.GetMPool())
 		}
 		if bats[i].Length() == 0 {
 			continue
@@ -210,76 +443,6 @@ func GetBlockMeta(bats []*batch.Batch, container *WriteS3Container, proc *proces
 	// vitually, first it will be recieved by output, then transfer it to connector by rpc
 	// metaLocBat.SetZs(metaLocBat.Vecs[0].Length(), proc.GetMPool())
 	return nil
-}
-
-// reSizeBatch will try to set the batch with the length of DefaultBlockMaxRows
-// consider DefaultBlockMaxRows as unit
-// case 1. If the length of bat and cacheBat together is larger than DefaultBlockMaxRows, then split the batch into unit batchs and return, the smaller part store in cacheBat
-// case 2. If the length of bat and cacheBat together is less than DefaultBlockMaxRows, then bat is merged into cacheBat
-// The expected result is : unitBatch1, unitBatch2, ... unitBatchx, the last Batch that batchSize less than DefaultBlockMaxRows
-//
-// limit : one segment has only one block, this limit exists because currently, tae caches blocks in memory (instead of disk) before writing them to s3, which means that if limit 1 is removed, it may cause memory problems
-func reSizeBatch(container *WriteS3Container, bat *batch.Batch, proc *process.Process, batIdx int) (bats []*batch.Batch) {
-	var newBat *batch.Batch
-	var cacheLen uint32
-	if len(container.cacheBat) <= batIdx {
-		container.cacheBat = append(container.cacheBat, nil)
-	}
-	if container.cacheBat[batIdx] != nil {
-		cacheLen = uint32(container.cacheBat[batIdx].Length())
-	}
-	idx := int(cacheLen)
-	cnt := cacheLen + uint32(bat.Length())
-
-	if cnt >= options.DefaultBlockMaxRows { // case 1
-		if container.cacheBat[batIdx] != nil {
-			newBat = container.cacheBat[batIdx]
-			container.cacheBat[batIdx] = nil
-		} else {
-			newBat = getNewBatch(bat)
-		}
-
-		for cnt >= options.DefaultBlockMaxRows {
-			for i := range newBat.Vecs {
-				vector.UnionOne(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
-			}
-			idx++
-			if idx%int(options.DefaultBlockMaxRows) == 0 {
-				newBat.SetZs(int(options.DefaultBlockMaxRows), proc.GetMPool())
-				bats = append(bats, newBat)
-				newBat = getNewBatch(bat)
-				cnt -= options.DefaultBlockMaxRows
-			}
-		}
-	}
-
-	if len(bats) == 0 { // implying the end of this operator, the last Batch that batchSize less than DefaultBlockMaxRows
-		if container.cacheBat[batIdx] == nil {
-			container.cacheBat[batIdx] = getNewBatch(bat)
-		}
-		for i := 0; i < bat.Length(); i++ {
-			for j := range container.cacheBat[batIdx].Vecs {
-				vector.UnionOne(container.cacheBat[batIdx].Vecs[j], bat.Vecs[j], int64(i), proc.GetMPool())
-			}
-		}
-		container.cacheBat[batIdx].SetZs(container.cacheBat[batIdx].Vecs[0].Length(), proc.GetMPool())
-	} else {
-		if cnt > 0 { // the part less than DefaultBlockMaxRows stored in cacheBat
-			if newBat == nil {
-				newBat = getNewBatch(bat)
-			}
-			for cnt > 0 {
-				for i := range newBat.Vecs {
-					vector.UnionOne(newBat.Vecs[i], bat.Vecs[i], int64(idx)-int64(cacheLen), proc.GetMPool())
-				}
-				idx++
-				cnt--
-			}
-			container.cacheBat[batIdx] = newBat
-			container.cacheBat[batIdx].SetZs(container.cacheBat[batIdx].Vecs[0].Length(), proc.GetMPool())
-		}
-	}
-	return
 }
 
 func getNewBatch(bat *batch.Batch) *batch.Batch {
@@ -311,9 +474,9 @@ func GenerateWriter(container *WriteS3Container, proc *process.Process) error {
 }
 
 // referece to pkg/sql/colexec/order/order.go logic
-func SortByPrimaryKey(proc *process.Process, bat *batch.Batch, pkIdx []int, m *mpool.MPool) error {
+func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpool.MPool) error {
 	// Not-Null Check
-	for i := 0; i < len(pkIdx); i++ {
+	for i := 0; i < len(sortIndex); i++ {
 		if nulls.Any(bat.Vecs[i].Nsp) {
 			// return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.InsertCtx.TableDef.Cols[i].GetName()))
 			return moerr.NewConstraintViolation(proc.Ctx, "Primary key can not be null")
@@ -325,21 +488,21 @@ func SortByPrimaryKey(proc *process.Process, bat *batch.Batch, pkIdx []int, m *m
 	for i := 0; i < len(bat.Zs); i++ {
 		sels[i] = int64(i)
 	}
-	ovec := bat.GetVector(int32(pkIdx[0]))
+	ovec := bat.GetVector(int32(sortIndex[0]))
 	if ovec.Typ.IsString() {
 		strCol = vector.GetStrVectorValues(ovec)
 	} else {
 		strCol = nil
 	}
 	sort.Sort(false, false, false, sels, ovec, strCol)
-	if len(pkIdx) == 1 {
+	if len(sortIndex) == 1 {
 		return bat.Shuffle(sels, m)
 	}
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(sels))
-	for i, j := 1, len(pkIdx); i < j; i++ {
+	for i, j := 1, len(sortIndex); i < j; i++ {
 		ps = partition.Partition(sels, ds, ps, ovec)
-		vec := bat.Vecs[pkIdx[i]]
+		vec := bat.Vecs[sortIndex[i]]
 		if vec.Typ.IsString() {
 			strCol = vector.GetStrVectorValues(vec)
 		} else {

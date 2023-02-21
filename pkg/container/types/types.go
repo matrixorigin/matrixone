@@ -85,12 +85,6 @@ const (
 
 type Type struct {
 	Oid T
-	// XXX Dummies.  T is uint8, make it 4 bytes aligned, otherwise, it may contain
-	// garbage data.  In theory these unused garbage should not be a problem, but
-	// it is.  Give it a name will zero fill it ...
-	Charset uint8
-	dummy1  uint8
-	dummy2  uint8
 
 	// Width means max Display width for float and double, char and varchar
 	// todo: need to add new attribute DisplayWidth ?
@@ -206,7 +200,6 @@ func New(oid T, width, scale, precision int32) Type {
 		Scale:     scale,
 		Precision: precision,
 		Size:      int32(TypeSize(oid)),
-		Charset:   CharsetType(oid),
 	}
 }
 

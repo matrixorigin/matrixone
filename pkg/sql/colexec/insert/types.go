@@ -38,7 +38,6 @@ type Argument struct {
 
 type InsertCtx struct {
 	Source       engine.Relation
-	Idx          []int32
 	Ref          *plan.ObjectRef
 	TableDef     *plan.TableDef
 	UniqueSource []engine.Relation

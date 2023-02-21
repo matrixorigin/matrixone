@@ -36,6 +36,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -60,7 +61,7 @@ import (
 )
 
 var (
-	ONE_BATCH_MAX_ROW  = 40000
+	ONE_BATCH_MAX_ROW  = int(options.DefaultBlockMaxRows)
 	S3_PARALLEL_MAXNUM = 10
 )
 
