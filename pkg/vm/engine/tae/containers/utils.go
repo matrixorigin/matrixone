@@ -94,6 +94,50 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 }
 
 func AllocateNewMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*movec.Vector, error) {
+	/*
+		Previous Failed Approaches:
+		1. Similar to UnmarshalToMoVec(): The issue with currentVector.ResetWithData(data) was that the currentVector
+		is not the owner of the data. So when the currentVector is closed, it throws "duplicate mpool.free() invoked".
+
+		2. Similar to CopyToMoVec(): copy() data into new_data without new allocation resulted in  mpool header
+		corruption issue on Append(). When Grow() is invoked, it frees the old memory, which it has no ownership.
+
+		Success Approaches:
+		3.a  Previous DN stdvec: vec.stlvec.ReadBytes(bs, shared = true). It adds `bs` to `vec.buf`.
+		Subsequent Append() will result in a new mpool allocation() for `node` [a].
+		The previous vec.buf will be copied to the new `node` ie buf [b].
+		oldn, which didn't copy the bs, is freed. [c]
+		old vec.buf which had the bs, is now replaced with new buf, so the previous bs is de-referenced.
+
+		Note `buf` points to `newn`. buf (len<=capacity) is a condensed version of node (len == capacity)
+
+		<pre>
+		func (vec *StdVector[T]) tryExpand(capacity int) {
+			newSize := stl.SizeOfMany[T](capacity)
+			vec.capacity = capacity
+			oldn := vec.node
+			newn, err := vec.alloc.Alloc(capacity * stl.Sizeof[T]()) <---------- [a]
+			buf := newn[:0:len(newn)]
+			buf = append(buf, vec.buf...) <------------------------------------- [b]
+			vec.buf = buf
+			vec.node = newn
+			if oldn != nil {
+				vec.alloc.Free(oldn) <------------------------------------------ [c]
+			}
+		}
+		</pre>
+
+		3.b The new DN vector impl. We are using containsFirstCopy flag to mimic this functionality.
+		- For ResetWithData() , Allocated(). When the vector is first set using ResetWithData(),
+		the subsequent Allocated() should return 0.
+		- In the next Append() it should do a new mpool allocation.
+			Side node: On readBytesShared(), the vec.capacity = len(vec.buf) / stl.Sizeof[T]()
+			So subsequent append would result in capacity exceed and result in tryExpand() for mpool allocation.
+		This subsequent Allocated() should return the size of mpool allocated space.
+		- In the Close(), we are clearing downstream vec, which is allocated by the parent vectors mpool.
+		Since every vector has a fresh mpool allocation, we can Free() the DN vector's own downstreamVector upon Close().
+
+	*/
 	var mov *movec.Vector
 	if typ.IsVarlen() {
 		dataByteArr := bs.HeaderBuf()
