@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-type Reader struct {
+type BlockReader struct {
 	reader  objectio.Reader
 	fs      *objectio.ObjectFS
 	key     string
@@ -40,7 +40,7 @@ type Reader struct {
 	readCxt context.Context
 }
 
-func NewReader(cxt context.Context, fs *objectio.ObjectFS, key string) (*Reader, error) {
+func NewReader(cxt context.Context, fs *objectio.ObjectFS, key string) (*BlockReader, error) {
 	meta, err := DecodeMetaLocToMeta(key)
 	if err != nil {
 		return nil, err
@@ -49,7 +49,7 @@ func NewReader(cxt context.Context, fs *objectio.ObjectFS, key string) (*Reader,
 	if err != nil {
 		return nil, err
 	}
-	return &Reader{
+	return &BlockReader{
 		fs:      fs,
 		reader:  reader,
 		key:     key,
@@ -58,7 +58,7 @@ func NewReader(cxt context.Context, fs *objectio.ObjectFS, key string) (*Reader,
 	}, nil
 }
 
-func NewCheckpointReader(cxt context.Context, fs fileservice.FileService, key string) (*Reader, error) {
+func NewCheckpointReader(cxt context.Context, fs fileservice.FileService, key string) (*BlockReader, error) {
 	name, locs, err := DecodeMetaLocToMetas(key)
 	if err != nil {
 		return nil, err
@@ -67,7 +67,7 @@ func NewCheckpointReader(cxt context.Context, fs fileservice.FileService, key st
 	if err != nil {
 		return nil, err
 	}
-	return &Reader{
+	return &BlockReader{
 		fs:      objectio.NewObjectFS(fs, ""),
 		reader:  reader,
 		key:     key,
@@ -77,7 +77,7 @@ func NewCheckpointReader(cxt context.Context, fs fileservice.FileService, key st
 	}, nil
 }
 
-func (r *Reader) BlkColumnByMetaLoadJob(
+func (r *BlockReader) BlkColumnByMetaLoadJob(
 	colTypes []types.Type,
 	colNames []string,
 	nullables []bool,
@@ -93,7 +93,7 @@ func (r *Reader) BlkColumnByMetaLoadJob(
 	return tasks.NewJob(uuid.NewString(), r.readCxt, exec)
 }
 
-func (r *Reader) BlkColumnsByMetaAndIdxLoadJob(
+func (r *BlockReader) BlkColumnsByMetaAndIdxLoadJob(
 	colTypes []types.Type,
 	colNames []string,
 	nullables []bool,
@@ -115,7 +115,7 @@ func (r *Reader) BlkColumnsByMetaAndIdxLoadJob(
 	return tasks.NewJob(uuid.NewString(), r.readCxt, exec)
 }
 
-func (r *Reader) LoadBlkColumnsByMeta(
+func (r *BlockReader) LoadBlkColumnsByMeta(
 	colTypes []types.Type,
 	colNames []string,
 	nullables []bool,
@@ -153,7 +153,7 @@ func (r *Reader) LoadBlkColumnsByMeta(
 	return bat, nil
 }
 
-func (r *Reader) LoadBlkColumnsByMetaAndIdx(
+func (r *BlockReader) LoadBlkColumnsByMetaAndIdx(
 	colTypes []types.Type,
 	colNames []string,
 	nullables []bool,
@@ -188,7 +188,7 @@ func (r *Reader) LoadBlkColumnsByMetaAndIdx(
 	return bat, nil
 }
 
-func (r *Reader) ReadMeta(m *mpool.MPool) (objectio.BlockObject, error) {
+func (r *BlockReader) ReadMeta(m *mpool.MPool) (objectio.BlockObject, error) {
 	extents := make([]objectio.Extent, 1)
 	extents[0] = r.meta.GetLoc()
 	block, err := r.reader.ReadMeta(r.readCxt, extents, m)
@@ -198,12 +198,12 @@ func (r *Reader) ReadMeta(m *mpool.MPool) (objectio.BlockObject, error) {
 	return block[0], err
 }
 
-func (r *Reader) ReadMetas(m *mpool.MPool) ([]objectio.BlockObject, error) {
+func (r *BlockReader) ReadMetas(m *mpool.MPool) ([]objectio.BlockObject, error) {
 	block, err := r.reader.ReadMeta(r.readCxt, r.locs, m)
 	return block, err
 }
 
-func (r *Reader) GetDataObject(idx uint16, m *mpool.MPool) objectio.ColumnObject {
+func (r *BlockReader) GetDataObject(idx uint16, m *mpool.MPool) objectio.ColumnObject {
 	block, err := r.ReadMeta(m)
 	if err != nil {
 		panic(any(err))

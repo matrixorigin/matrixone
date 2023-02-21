@@ -452,7 +452,7 @@ func (data *CheckpointData) WriteTo(
 // TODO:
 // There need a global io pool
 func (data *CheckpointData) ReadFrom(
-	reader *blockio.Reader,
+	reader *blockio.BlockReader,
 	scheduler tasks.JobScheduler,
 	m *mpool.MPool) (err error) {
 	metas, err := reader.ReadMetas(m)
