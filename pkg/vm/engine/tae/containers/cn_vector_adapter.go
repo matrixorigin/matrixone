@@ -620,7 +620,7 @@ func (vec *CnTaeVector[T]) Close() {
 func (vec *CnTaeVector[T]) releaseDownstream() {
 	if vec.downstreamVector != nil && vec.containsFirstCopy {
 		vec.downstreamVector.Free(vec.mpool)
-		vec.downstreamVector = nil
+		//vec.downstreamVector = nil
 	}
 }
 
