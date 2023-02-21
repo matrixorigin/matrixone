@@ -16,16 +16,13 @@ package mpool
 
 import (
 	"sync"
-	"sync/atomic"
 	"testing"
-	"unsafe"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestMPool(t *testing.T) {
-	// Just test a mid sized
-	m, err := NewMPool("test-mpool-small", 0, Small)
+	m, err := NewMPool("test-mpool-small", 0, 0)
 	require.True(t, err == nil, "new mpool failed %v", err)
 
 	nb0 := m.CurrNB()
@@ -33,8 +30,7 @@ func TestMPool(t *testing.T) {
 	nalloc0 := m.Stats().NumAlloc.Load()
 	nfree0 := m.Stats().NumFree.Load()
 
-	// Small has 5 non-zero fixed pool.
-	require.True(t, nalloc0 == 5, "bad nalloc")
+	require.True(t, nalloc0 == 0, "bad nalloc")
 	require.True(t, nfree0 == 0, "bad nfree")
 
 	for i := 1; i <= 10000; i++ {
@@ -60,79 +56,11 @@ func TestMPool(t *testing.T) {
 	// >, because some alloc is absorbed by fixed pool
 	require.True(t, nalloc0+10000*2 > m.Stats().NumAlloc.Load(), "alloc")
 	require.True(t, nalloc0-nfree0 == m.Stats().NumAlloc.Load()-m.Stats().NumFree.Load(), "free")
-	require.True(t, m.FixedPoolStats(0).NumAlloc.Load() > 0, "use 64b pool")
-	require.True(t, m.FixedPoolStats(0).NumGoAlloc.Load() == 0, "use 64b pool")
-	require.True(t, m.FixedPoolStats(6).NumAlloc.Load() == 0, "use 64b pool")
-}
-
-func TestFreelist(t *testing.T) {
-	// Too much for CI
-	t.Skip()
-
-	// a list of ten items
-	type item struct {
-		lastWriter  int32
-		updateCount int64
-	}
-	var items [10]item
-	fl := make_freelist(10)
-	for i := 0; i < 10; i++ {
-		fl.put(unsafe.Pointer(&items[i]))
-	}
-
-	// let 20 threads run for it, each looping 1 million times.
-	type result struct {
-		okCount   int64
-		missCount int64
-	}
-	var results [20]result
-	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		go func(ii int) {
-			defer wg.Done()
-			for j := 0; j < 1000000; j++ {
-				ptr := fl.get()
-				if ptr == nil {
-					results[ii].missCount += 1
-				} else {
-					results[ii].okCount += 1
-					pitem := (*item)(ptr)
-					pitem.lastWriter = int32(ii)
-					// this must be atomic -- the following could possibly
-					// lost an update count.
-					// pitem.updateCount += 1
-					atomic.AddInt64(&pitem.updateCount, 1)
-					fl.put(ptr)
-				}
-			}
-		}(i)
-	}
-	wg.Wait()
-
-	var totalOK1, totalOK2, totalMiss int64
-	for i := 0; i < 10; i++ {
-		require.True(t, items[i].lastWriter >= 0, "bad writer")
-		require.True(t, items[i].lastWriter < 20, "bad writer")
-		totalOK1 += items[i].updateCount
-	}
-
-	for i := 0; i < 20; i++ {
-		require.True(t, results[i].okCount >= 0, "bad result")
-		require.True(t, results[i].okCount < 1000000, "bad result")
-		require.True(t, results[i].missCount >= 0, "bad result")
-		require.True(t, results[i].missCount < 1000000, "bad result")
-		totalOK2 += results[i].okCount
-		totalMiss += results[i].missCount
-	}
-
-	require.True(t, totalOK1 == totalOK2, "wrong ok counter")
-	require.True(t, totalOK2+totalMiss == 20*1000000, "wrong counter")
 }
 
 func TestReportMemUsage(t *testing.T) {
 	// Just test a mid sized
-	m, err := NewMPool("testjson", 0, Small)
+	m, err := NewMPool("testjson", 0, 0)
 	m.EnableDetailRecording()
 
 	require.True(t, err == nil, "new mpool failed %v", err)
@@ -164,7 +92,7 @@ func TestReportMemUsage(t *testing.T) {
 }
 
 func TestMP(t *testing.T) {
-	pool, err := NewMPool("default", 0, Large)
+	pool, err := NewMPool("default", 0, 0)
 	if err != nil {
 		panic(err)
 	}
