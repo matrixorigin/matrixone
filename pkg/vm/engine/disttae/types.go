@@ -105,7 +105,9 @@ type DB struct {
 	metaTables map[string]Partitions
 	tables     map[[2]uint64]Partitions
 
-	cnE        *Engine
+	// a pointer to cn engine for push model.
+	cnE *Engine
+
 	partitions map[[2]uint64]Partitions
 }
 

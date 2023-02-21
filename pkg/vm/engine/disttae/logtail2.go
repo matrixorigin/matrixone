@@ -33,30 +33,26 @@ import (
 )
 
 const (
-	// we check if (txn time <= global log time) in a period of periodToCheckTxnTimestamp
-	// when we open a new transaction.
+	// when starting a new transaction, we check the txn time every periodToCheckTxnTimestamp until
+	// the time is legal (less or equal to cn global log tail time).
+	// If still illegal within maxTimeToNewTransaction, the transaction creation fails.
+	maxTimeToNewTransaction   = 5 * time.Minute
 	periodToCheckTxnTimestamp = 1 * time.Millisecond
 
-	// period to check if table was subscribed succeed when first time to subscribe.
-	periodToCheckTableSubscribeSucceed = 1 * time.Millisecond
-
-	// period to try to reconnect to log tail server if we
-	// reconnect to dn log tail server failed
+	// if cn-log-tail-client does not receive response within time maxTimeToWaitServerResponse.
+	// we assume that client has lost connect to server.
+	// and will reconnect in a period of periodToReconnectDnLogServer.
+	maxTimeToWaitServerResponse  = 10 * time.Second
 	periodToReconnectDnLogServer = 10 * time.Second
 
-	// max wait time to open a new txn.
-	maxTimeToOpenTxn = 5 * time.Minute
-
-	// maxSubscribeRequestPerSecond records how many client request
-	// we supported to subscribe table per second.
+	// max number of subscribe request we allowed per second.
 	maxSubscribeRequestPerSecond = 10000
 
-	// if we hadn't received log tail server response for maxTimeToWaitServerResponse.
-	// we assume that we lost connect, can will reconnect.
-	maxTimeToWaitServerResponse = 10 * time.Second
+	// we check the subscribe status in a period of periodToCheckTableSubscribeSucceed
+	// after subscribe a table first time.
+	periodToCheckTableSubscribeSucceed = 1 * time.Millisecond
 
-	// defaultTimeOutToSubscribeTable
-	// if ctx without a deadline. we will set it as deadline to send a rpc message.
+	// default deadline for context to send a rpc message.
 	defaultTimeOutToSubscribeTable = 2 * time.Minute
 )
 
@@ -113,14 +109,16 @@ func (r *syncLogTailTimestamp) updateTimestamp(newTimestamp timestamp.Timestamp)
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
+	r.Lock()
 	t := r.getTimestamp()
+	r.Unlock()
 	return txnTime.LessEq(t)
 }
 
 func (r *syncLogTailTimestamp) blockUntilTxnTimeIsLegal(
 	ctx context.Context, txnTime timestamp.Timestamp) error {
 	// if block time is too long, return error.
-	maxBlockTime := maxTimeToOpenTxn
+	maxBlockTime := maxTimeToNewTransaction
 	for {
 		if maxBlockTime < 0 {
 			return moerr.NewTxnError(ctx,
@@ -351,11 +349,11 @@ func (e *Engine) StartToReceiveTableLogTail() {
 			e.subscribed.initTableSubscribeRecord()
 			for {
 				if err := e.initTableLogTailSubscriber(); err != nil {
-					logutil.Error("rebuild the cn log tail client failed")
+					logutil.Error("rebuild the cn log tail client failed.")
 					continue
 				}
 				if err := e.connectToLogTailServer(ctx); err == nil {
-					logutil.Info("reconnect to dn log tail server success.")
+					logutil.Info("reconnect to dn log tail server succeed.")
 					break
 				}
 				logutil.Error("reconnect to dn log tail server failed.")
