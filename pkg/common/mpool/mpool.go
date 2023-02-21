@@ -32,7 +32,6 @@ import (
 type MPoolStats struct {
 	NumAlloc      atomic.Int64 // number of allocations
 	NumFree       atomic.Int64 // number of frees
-	NumGoAlloc    atomic.Int64 // number of go runtime alloc
 	NumAllocBytes atomic.Int64 // number of bytes allocated
 	NumFreeBytes  atomic.Int64 // number of bytes freed
 	NumCurrBytes  atomic.Int64 // current number of bytes
@@ -48,7 +47,6 @@ func (s *MPoolStats) Report(tab string) string {
 	ret := ""
 	ret += fmt.Sprintf("%s allocations : %d\n", tab, s.NumAlloc.Load())
 	ret += fmt.Sprintf("%s frees : %d\n", tab, s.NumFree.Load())
-	ret += fmt.Sprintf("%s go runtime allocations : %d\n", tab, s.NumGoAlloc.Load())
 	ret += fmt.Sprintf("%s alloc bytes : %d\n", tab, s.NumAllocBytes.Load())
 	ret += fmt.Sprintf("%s free bytes : %d\n", tab, s.NumFreeBytes.Load())
 	ret += fmt.Sprintf("%s current bytes : %d\n", tab, s.NumCurrBytes.Load())
@@ -63,7 +61,6 @@ func (s *MPoolStats) ReportJson() string {
 	ret := "{"
 	ret += fmt.Sprintf("\"alloc\": %d,", s.NumAlloc.Load())
 	ret += fmt.Sprintf("\"free\": %d,", s.NumFree.Load())
-	ret += fmt.Sprintf("\"goalloc\": %d,", s.NumGoAlloc.Load())
 	ret += fmt.Sprintf("\"allocBytes\": %d,", s.NumAllocBytes.Load())
 	ret += fmt.Sprintf("\"freeBytes\": %d,", s.NumFreeBytes.Load())
 	ret += fmt.Sprintf("\"currBytes\": %d,", s.NumCurrBytes.Load())
@@ -111,8 +108,9 @@ func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 }
 
 const (
-	NumFixedPool = 7
+	NumFixedPool = 5
 	kMemHdrSz    = 16
+	kStripeSize  = 128
 	B            = 1
 	KB           = 1024
 	MB           = 1024 * KB
@@ -121,19 +119,11 @@ const (
 	PB           = 1024 * TB
 )
 
-// Fixed pool configurations.  Number of entries in fixed pool.
-//
-// Small: esp, 0 is a valid value.
-var NoFixed = []int{0, 0, 0, 0, 0, 0, 0}
-var Small = []int{1024, 1024, 1024, 1024, 512, 0, 0}
-var Mid = []int{4096, 4096, 1024, 1024, 1024, 512, 512}
-var Large = []int{32 * 1024, 16 * 1024, 8 * 1024, 4 * 1024, 1024, 1024, 1024}
-
 // Pool emement size
-var PoolElemSize = []int{64, 128, 256, 512, 1024, 2048, 4096}
+var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
 
 // Zeros, enough for largest pool element
-var ZeroSlice = make([]byte, 4096)
+var kZeroSlice = make([]byte, 1024)
 
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
@@ -153,69 +143,101 @@ func (pHdr *memHdr) CheckGuard() bool {
 	return pHdr.guard[0] == 0xDE && pHdr.guard[1] == 0xAD && pHdr.guard[2] == 0xBF
 }
 
+func (pHdr *memHdr) ToSlice(sz, cap int) []byte {
+	ptr := unsafe.Add(unsafe.Pointer(pHdr), kMemHdrSz)
+	bs := unsafe.Slice((*byte)(ptr), cap)
+	return bs[:sz]
+}
+
 // pool for fixed elements.  Note that we preconfigure the pool size.
 // We should consider implement some kind of growing logic.
 type fixedPool struct {
-	eleSz  int
-	eleCnt int
-	stats  MPoolStats
-	buf    []uint64
-	flist  *freelist
+	m      sync.Mutex
+	noLock bool
+	fpIdx  int8
+	poolId int64
+	eleSz  int32
+	// holds buffers allocated, it is not really used in alloc/free
+	// but hold here for bookkeeping.
+	buf   [][]byte
+	flist unsafe.Pointer
 }
 
 // Initaialze a fixed pool
-func (fp *fixedPool) initPool(tag string, poolid int64, idx int, eleCnt int, cap int64) (int64, error) {
+func (fp *fixedPool) initPool(tag string, poolid int64, idx int, noLock bool) {
 	eleSz := PoolElemSize[idx]
+	fp.poolId = poolid
+	fp.fpIdx = int8(idx)
+	fp.noLock = noLock
 	fp.eleSz = eleSz
-	fp.eleCnt = eleCnt
+}
 
-	nb := (kMemHdrSz + eleSz) * eleCnt
-	if nb == 0 {
-		return 0, nil
+func (fp *fixedPool) nextPtr(ptr unsafe.Pointer) unsafe.Pointer {
+	iptr := *(*unsafe.Pointer)(unsafe.Add(ptr, kMemHdrSz))
+	return iptr
+}
+func (fp *fixedPool) setNextPtr(ptr unsafe.Pointer, next unsafe.Pointer) {
+	iptr := (*unsafe.Pointer)(unsafe.Add(ptr, kMemHdrSz))
+	*iptr = next
+}
+
+func (fp *fixedPool) alloc(sz int32) *memHdr {
+	if !fp.noLock {
+		fp.m.Lock()
+		defer fp.m.Unlock()
 	}
 
-	if int64(nb) >= cap {
-		return 0, moerr.NewInternalErrorNoCtx("initPool failed, not enough space %d < %d", nb, cap)
-	}
-
-	// The poll, is considered allocated, so do accouting with global stats.
-	curr := globalStats.RecordAlloc(tag, int64(nb))
-	if curr > GlobalCap() {
-		// OOM, return nb back to globalStats
-		globalStats.RecordFree(tag, int64(nb))
-		return 0, moerr.NewOOMNoCtx()
-	}
-
-	fp.flist = make_freelist(int32(eleCnt))
-
-	// Really allocate buffer, and put hdr of each slot into pool.
-	// nb is always 8x,
-	fp.buf = make([]uint64, nb/8)
-	ptr := unsafe.Pointer(&fp.buf[0])
-
-	for i := 0; i < eleCnt; i++ {
-		offset := (kMemHdrSz + eleSz) * i
-		hdr := unsafe.Add(ptr, offset)
-		pHdr := (*memHdr)(hdr)
-		pHdr.poolId = poolid
-		pHdr.fixedPoolIdx = int8(idx)
-		pHdr.allocSz = -1
+	if fp.flist == nil {
+		buf := make([]byte, kStripeSize*(fp.eleSz+kMemHdrSz))
+		fp.buf = append(fp.buf, buf)
+		// return the first one
+		ret := (unsafe.Pointer)(&buf[0])
+		pHdr := (*memHdr)(ret)
+		pHdr.poolId = fp.poolId
+		pHdr.allocSz = sz
+		pHdr.fixedPoolIdx = fp.fpIdx
 		pHdr.SetGuard()
 
-		fp.flist.put(hdr)
+		ptr := unsafe.Add(ret, fp.eleSz+kMemHdrSz)
+		// and thread the rest
+		for i := 1; i < kStripeSize; i++ {
+			pHdr := (*memHdr)(ptr)
+			pHdr.poolId = fp.poolId
+			pHdr.allocSz = -1
+			pHdr.fixedPoolIdx = fp.fpIdx
+			pHdr.SetGuard()
+			fp.setNextPtr(ptr, fp.flist)
+			fp.flist = ptr
+			ptr = unsafe.Add(ptr, fp.eleSz+kMemHdrSz)
+		}
+		return (*memHdr)(ret)
+	} else {
+		ret := fp.flist
+		fp.flist = fp.nextPtr(fp.flist)
+		pHdr := (*memHdr)(ret)
+		pHdr.allocSz = sz
+		// Zero slice.  Go requires slice to be zeroed.
+		bs := unsafe.Slice((*byte)(unsafe.Add(ret, kMemHdrSz)), fp.eleSz)
+		copy(bs, kZeroSlice)
+		return pHdr
 	}
-	return int64(nb), nil
 }
 
-/*
-func (fp *fixedPool) destroy() {
-	// not necessary, but doing it anyway
-	// original here to maintain stats.  All relavent stats are maintained
-	// in MPool itself.
-	fp.flist.destroy()
-	fp.buf = nil
+func (fp *fixedPool) free(hdr *memHdr) {
+	if hdr.poolId != fp.poolId || hdr.fixedPoolIdx != fp.fpIdx ||
+		hdr.allocSz < 0 || hdr.allocSz > fp.eleSz ||
+		!hdr.CheckGuard() {
+		panic(moerr.NewInternalErrorNoCtx("mpool fixed pool hdr corruption.   Possible double free"))
+	}
+
+	if !fp.noLock {
+		fp.m.Lock()
+		defer fp.m.Unlock()
+	}
+	ptr := unsafe.Pointer(hdr)
+	fp.setNextPtr(ptr, fp.flist)
+	fp.flist = ptr
 }
-*/
 
 type detailInfo struct {
 	cnt, bytes int64
@@ -285,9 +307,26 @@ type MPool struct {
 	tag     string     // user supplied, for debug/inspect
 	cap     int64      // pool capacity
 	stats   MPoolStats // stats
-	pools   [7]fixedPool
-	sels    *sync.Pool // weirdness, keep old API but this should go away.
+	noFixed bool
+	noLock  bool
+	pools   [NumFixedPool]fixedPool
 	details *mpoolDetails
+
+	// To remove: this thing is highly unlikely to be of any good use.
+	sels *sync.Pool
+}
+
+const (
+	NoFixed = 1
+	NoLock  = 2
+)
+
+func (mp *MPool) PutSels(sels []int64) {
+	mp.sels.Put(&sels)
+}
+func (mp *MPool) GetSels() []int64 {
+	ss := mp.sels.Get().(*[]int64)
+	return (*ss)[:0]
 }
 
 func (mp *MPool) EnableDetailRecording() {
@@ -311,28 +350,6 @@ func (mp *MPool) Cap() int64 {
 	return mp.cap
 }
 
-func (mp *MPool) FixedPoolStats(i int) *MPoolStats {
-	if i < 0 || i > NumFixedPool {
-		panic(moerr.NewInternalErrorNoCtx("accessing stats of %d-th fixed pool", i))
-	}
-	return &mp.pools[i].stats
-}
-
-func (mp *MPool) initPool(sz []int) error {
-	var tot int64
-	cap := mp.Cap()
-	for i, cnt := range sz {
-		nb, err := mp.pools[i].initPool(mp.tag, mp.id, i, cnt, cap-tot)
-		if err != nil {
-			return err
-		} else if nb > 0 {
-			mp.stats.RecordAlloc(mp.tag, nb)
-		}
-		tot += nb
-	}
-	return nil
-}
-
 func (mp *MPool) destroy() {
 	if mp.stats.NumAlloc.Load() < mp.stats.NumFree.Load() {
 		logutil.Errorf("mp error: %s", mp.stats.Report(""))
@@ -348,25 +365,8 @@ func (mp *MPool) destroy() {
 		mp.stats.NumCurrBytes.Load())
 }
 
-// For test.
-func MustNewZero() *MPool {
-	return MustNewZeroWithTag("zero_fixed_mp_for_test")
-}
-
-func MustNewZeroWithTag(tag string) *MPool {
-	mp, err := NewMPool(tag, 0, NoFixed)
-	if err != nil {
-		panic(err)
-	}
-	return mp
-}
-
 // New a MPool.   Tag is user supplied, used for debugging/diagnostics.
-func NewMPool(tag string, cap int64, sz []int) (*MPool, error) {
-	if len(sz) != NumFixedPool {
-		return nil, moerr.NewInternalErrorNoCtx("invalid mpool size config")
-	}
-
+func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 	if cap > 0 {
 		// simple sanity check
 		if cap < 1024*1024 {
@@ -382,11 +382,16 @@ func NewMPool(tag string, cap int64, sz []int) (*MPool, error) {
 	mp.id = id
 	mp.tag = tag
 	mp.cap = cap
-	err := mp.initPool(sz)
-	if err != nil {
-		mp.destroy()
-		return nil, err
+
+	mp.noFixed = (flag & NoFixed) != 0
+	mp.noLock = (flag & NoFixed) != 0
+
+	if !mp.noFixed {
+		for i := 0; i < NumFixedPool; i++ {
+			mp.pools[i].initPool(mp.tag, mp.id, i, mp.noLock)
+		}
 	}
+
 	mp.sels = &sync.Pool{
 		New: func() any {
 			ss := make([]int64, 0, 16)
@@ -399,11 +404,28 @@ func NewMPool(tag string, cap int64, sz []int) (*MPool, error) {
 	return &mp, nil
 }
 
+func MustNew(tag string) *MPool {
+	mp, err := NewMPool(tag, 0, 0)
+	if err != nil {
+		panic(err)
+	}
+	return mp
+}
+
+func MustNewZero() *MPool {
+	return MustNew("must_new_zero")
+}
+
+func MustNewNoFixed(tag string) *MPool {
+	mp, err := NewMPool(tag, 0, NoFixed)
+	if err != nil {
+		panic(err)
+	}
+	return mp
+}
+
 func (mp *MPool) Report() string {
 	ret := fmt.Sprintf("    mpool stats: %s", mp.Stats().Report("        "))
-	for i := range mp.pools {
-		ret += fmt.Sprintf("        fixed pool %d stats: %s", i, mp.FixedPoolStats(i).Report("            "))
-	}
 	return ret
 }
 
@@ -413,13 +435,6 @@ func (mp *MPool) ReportJson() string {
 		return fmt.Sprintf("{\"%s\": \"\"}", mp.tag)
 	}
 	ret := fmt.Sprintf("{\"%s\": %s", mp.tag, ss)
-	for i := range mp.pools {
-		ps := mp.FixedPoolStats(i).ReportJson()
-		if ps != "" {
-			ret += fmt.Sprintf(",\n \"Fixed-%d\": %s", i, ps)
-		}
-	}
-
 	if mp.details != nil {
 		ret += `,\n "detailed_alloc": `
 		ret += mp.details.reportJson()
@@ -467,38 +482,11 @@ func GlobalCap() int64 {
 
 func sizeToIdx(size int) int {
 	for i, sz := range PoolElemSize {
-		if int(size) <= sz {
+		if int32(size) <= sz {
 			return i
 		}
 	}
 	return NumFixedPool
-}
-
-func (fp *fixedPool) alloc(sz int) []byte {
-	if fp.eleCnt == 0 {
-		return nil
-	}
-	// We have already done the accounting when we init the fixed pool
-	// so we don't do any global, or mpool level accounting.
-	hdr := fp.flist.get()
-	if hdr != nil {
-		// alloc from fixed pool, record alloc bytes
-		fp.stats.RecordAlloc("", int64(sz))
-	} else {
-		// failure to alloc, record this stats
-		fp.stats.NumGoAlloc.Add(1)
-		return nil
-	}
-
-	pHdr := (*memHdr)(hdr)
-	pHdr.allocSz = int32(sz)
-	bPtr := (*byte)(unsafe.Add(hdr, kMemHdrSz))
-
-	// Keep cap as best as we can
-	bs := unsafe.Slice(bPtr, fp.eleSz)
-	// zero the content
-	copy(bs, ZeroSlice)
-	return bs[:sz]
 }
 
 func (mp *MPool) Alloc(sz int) ([]byte, error) {
@@ -512,15 +500,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 		return nil, nil
 	}
 
-	idx := sizeToIdx(sz)
-	if idx < NumFixedPool {
-		bs := mp.pools[idx].alloc(sz)
-		if bs != nil {
-			return bs, nil
-		}
-	}
-
-	// fallback to go alloc, first, check we are under cap
+	// if global undercap
 	gcurr := globalStats.RecordAlloc("global", int64(sz))
 	if gcurr > GlobalCap() {
 		globalStats.RecordFree("global", int64(sz))
@@ -538,28 +518,23 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 		mp.details.recordAlloc(int64(sz))
 	}
 
+	if !mp.noFixed {
+		idx := sizeToIdx(sz)
+		if idx < NumFixedPool {
+			bs := mp.pools[idx].alloc(int32(sz))
+			return bs.ToSlice(sz, int(mp.pools[idx].eleSz)), nil
+		}
+	}
+
 	// allocate!
-	bs := make([]uint64, (sz+kMemHdrSz+7)/8)
+	bs := make([]byte, sz+kMemHdrSz)
 	hdr := unsafe.Pointer(&bs[0])
 	pHdr := (*memHdr)(hdr)
 	pHdr.poolId = mp.id
 	pHdr.fixedPoolIdx = NumFixedPool
 	pHdr.allocSz = int32(sz)
 	pHdr.SetGuard()
-
-	return unsafe.Slice((*byte)(unsafe.Add(hdr, kMemHdrSz)), sz), nil
-}
-
-func (fp *fixedPool) free(hdr unsafe.Pointer) {
-	pHdr := (*memHdr)(hdr)
-	fp.stats.RecordFree("", int64(pHdr.allocSz))
-
-	if pHdr.allocSz == -1 {
-		// double free.
-		panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
-	}
-	pHdr.allocSz = -1
-	fp.flist.put(hdr)
+	return pHdr.ToSlice(sz, sz), nil
 }
 
 func (mp *MPool) Free(bs []byte) {
@@ -579,18 +554,21 @@ func (mp *MPool) Free(bs []byte) {
 	}
 
 	if pHdr.poolId == mp.id {
+		if pHdr.allocSz == -1 {
+			// double free.
+			panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
+		}
+
+		mp.stats.RecordFree(mp.tag, int64(pHdr.allocSz))
+		globalStats.RecordFree(mp.tag, int64(pHdr.allocSz))
+		if mp.details != nil {
+			mp.details.recordFree(int64(pHdr.allocSz))
+		}
+
 		if pHdr.fixedPoolIdx < NumFixedPool {
-			mp.pools[pHdr.fixedPoolIdx].free(hdr)
+			mp.pools[pHdr.fixedPoolIdx].free(pHdr)
 		} else {
-			if pHdr.allocSz == -1 {
-				// double free.
-				panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
-			}
-			if mp.details != nil {
-				mp.details.recordFree(int64(pHdr.allocSz))
-			}
-			mp.stats.RecordFree(mp.tag, int64(pHdr.allocSz))
-			globalStats.RecordFree(mp.tag, int64(pHdr.allocSz))
+			// non fixed pool just mark it freed
 			pHdr.allocSz = -1
 		}
 	} else {
@@ -692,15 +670,6 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int) ([]byte, error) {
 	}
 	copy(ret[len1:len1+len2], old2)
 	return ret, nil
-}
-
-func (mp *MPool) PutSels(sels []int64) {
-	mp.sels.Put(&sels)
-}
-
-func (mp *MPool) GetSels() []int64 {
-	ss := mp.sels.Get().(*[]int64)
-	return (*ss)[:0]
 }
 
 func (mp *MPool) Increase(nb int64) error {
