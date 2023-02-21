@@ -1514,18 +1514,24 @@ func boolToStr(
 		} else {
 			if v {
 				result := []byte("1")
-				if toType.Oid == types.T_binary {
-					result = rightPadding(result, toType)
+				if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+					add0 := int(toType.Width) - len(result)
+					for ; add0 != 0; add0-- {
+						result = append(result, 0)
+					}
 				}
 				if err := to.AppendStr([]byte("1"), false); err != nil {
 					return err
 				}
 			} else {
 				result := []byte("0")
-				if toType.Oid == types.T_binary {
-					result = rightPadding(result, toType)
+				if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+					add0 := int(toType.Width) - len(result)
+					for ; add0 != 0; add0-- {
+						result = append(result, 0)
+					}
 				}
-				if err := to.AppendStr([]byte("0"), false); err != nil {
+				if err := to.AppendStr(result, false); err != nil {
 					return err
 				}
 			}
@@ -1736,8 +1742,11 @@ func signedToStr[T constraints.Integer](
 			}
 		} else {
 			result := []byte(strconv.FormatInt(int64(v), 10))
-			if toType.Oid == types.T_binary {
-				result = rightPadding(result, toType)
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
 			}
 			if err := to.AppendStr(result, false); err != nil {
 				return err
@@ -1760,8 +1769,11 @@ func unsignedToStr[T constraints.Unsigned](
 			}
 		} else {
 			result := []byte(strconv.FormatUint(uint64(v), 10))
-			if toType.Oid == types.T_binary {
-				result = rightPadding(result, toType)
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
 			}
 			if err := to.AppendStr(result, false); err != nil {
 				return err
@@ -1785,8 +1797,11 @@ func floatToStr[T constraints.Float](
 			}
 		} else {
 			result := []byte(strconv.FormatFloat(float64(v), 'G', -1, bitSize))
-			if toType.Oid == types.T_binary {
-				result = rightPadding(result, toType)
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
 			}
 			if err := to.AppendStr(result, false); err != nil {
 				return err
@@ -2224,8 +2239,11 @@ func dateToStr(
 			}
 		} else {
 			result := []byte(v.String())
-			if toType.Oid == types.T_binary {
-				result = rightPadding(result, toType)
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
 			}
 			if err := to.AppendStr(result, false); err != nil {
 				return err
@@ -2249,8 +2267,11 @@ func datetimeToStr(
 			}
 		} else {
 			result := []byte(v.String2(fromType.Precision))
-			if toType.Oid == types.T_binary {
-				result = rightPadding(result, toType)
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
 			}
 			if err := to.AppendStr(result, false); err != nil {
 				return err
@@ -2275,8 +2296,11 @@ func timestampToStr(
 			}
 		} else {
 			result := []byte(v.String2(zone, fromType.Precision))
-			if toType.Oid == types.T_binary {
-				result = rightPadding(result, toType)
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
 			}
 			if err := to.AppendStr(result, false); err != nil {
 				return err
@@ -2300,8 +2324,11 @@ func timeToStr(
 			}
 		} else {
 			result := []byte(v.String2(fromType.Precision))
-			if toType.Oid == types.T_binary {
-				result = rightPadding(result, toType)
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
 			}
 			if err := to.AppendStr(result, false); err != nil {
 				return err
@@ -2714,8 +2741,11 @@ func decimal64ToStr(
 			}
 		} else {
 			result := []byte(v.ToStringWithScale(fromType.Scale))
-			if toType.Oid == types.T_binary {
-				result = rightPadding(result, toType)
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
 			}
 			if err := to.AppendStr(result, false); err != nil {
 				return err
@@ -2739,8 +2769,11 @@ func decimal128ToStr(
 			}
 		} else {
 			result := []byte(v.ToStringWithScale(fromType.Scale))
-			if toType.Oid == types.T_binary {
-				result = rightPadding(result, toType)
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
 			}
 			if err := to.AppendStr(result, false); err != nil {
 				return err
@@ -3160,8 +3193,11 @@ func strToStr(
 				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
-			if toType.Oid == types.T_binary {
-				v = rightPadding(v, toType)
+			if toType.Oid == types.T_binary && len(v) < int(toType.Width) {
+				add0 := int(toType.Width) - len(v)
+				for ; add0 != 0; add0-- {
+					v = append(v, 0)
+				}
 			}
 			if err := to.AppendStr(v, false); err != nil {
 				return err
@@ -3176,8 +3212,11 @@ func strToStr(
 				}
 				continue
 			}
-			if toType.Oid == types.T_binary {
-				v = rightPadding(v, toType)
+			if toType.Oid == types.T_binary && len(v) < int(toType.Width) {
+				add0 := int(toType.Width) - len(v)
+				for ; add0 != 0; add0-- {
+					v = append(v, 0)
+				}
 			}
 			if err := to.AppendStr(v, false); err != nil {
 				return err
@@ -3200,8 +3239,11 @@ func uuidToStr(
 			}
 		} else {
 			result := []byte(v.ToString())
-			if toType.Oid == types.T_binary {
-				result = rightPadding(result, toType)
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
 			}
 			if err := to.AppendStr([]byte(result), false); err != nil {
 				return err
@@ -3610,14 +3652,4 @@ func appendNulls[T types.FixedSizeT](result vector.FunctionResultWrapper, length
 func convertByteSliceToString(v []byte) string {
 	// s := *(*string)(unsafe.Pointer(&v))
 	return string(v)
-}
-
-func rightPadding(result []byte, toType types.Type) []byte {
-	if len(result) < int(toType.Width) {
-		add0 := int(toType.Width) - len(result)
-		for ; add0 != 0; add0-- {
-			result = append(result, 0)
-		}
-	}
-	return result
 }
