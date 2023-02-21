@@ -22,6 +22,11 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
 
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with: 
+          go-version: '1.20'
+
       - name: Set Variables
         run: |
           cd $GITHUB_WORKSPACE/matrixone
@@ -34,10 +39,6 @@ jobs:
           echo "test_report='test_report.out'" >> $GITHUB_ENV
           echo "coverage_line=75" >> $GITHUB_ENV
 
-      - name: Set up Go
-        uses: actions/setup-go@v3
-        with: 
-          go-version: '1.20'
 
       - name: Set env
         run: |
