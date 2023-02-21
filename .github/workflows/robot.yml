@@ -157,10 +157,11 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           sed -i.bak 's/level = "info"/level = "error"/g'  ./etc/launch-tae-CN-tae-DN/log.toml
-          cd $GITHUB_WORKSPACE/matrixone
           if  [ -d  "./store"  ]; then rm -rf ./store; fi
-          go test -c -tags service_test -cover -covermode=count -coverpkg=./pkg/... ./cmd/mo-service/ -o service_test
-          ./service_test -test.coverprofile=${{ env.raw_bvt_coverage }} -launch ./etc/launch-tae-multi-CN-tae-DN/launch.toml &>service.log &
+          GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(go version)' -X 'main.BranchName=$(git rev-parse --abbrev-ref HEAD)' -X 'main.CommitID=$(git rev-parse HEAD)' -X 'main.BuildTime=$(date)' -X 'main.Version=$(git describe --always --tags $(git rev-list --tags --max-count=1))'"
+          export GOCOVERDIR=$GITHUB_WORKSPACE/matrixone
+          go build -cover "$GOLDFLAGS" -o mo-service ./cmd/mo-service/
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch-tae-CN-tae-DN
           
       - name: Start BVT Test
         if: ${{ env.Job-Status }} == 2
@@ -175,9 +176,7 @@ jobs:
         timeout-minutes: 10
         run: |
           cd $GITHUB_WORKSPACE/matrixone
-          ps aux|grep 'service_test' | grep -v 'grep' | awk '{print $2}'
-          ps aux|grep 'service_test' | grep -v 'grep' | awk '{print $2}' | xargs kill -s SIGINT
-          sleep 300
+          go tool covdata textfmt -i="$GITHUB_WORKSPACE/matrixone" -o ${{ env.raw_bvt_coverage }}
           cat ${{ env.raw_bvt_coverage }} | grep -v ${{ env.bvt_excluded_pkg }} > ${{ env.bvt_coverage }}
           echo "bvt_coverage finished"
           go tool cover -o ${{ env.bvt_html_coverage }} -html=${{ env.bvt_coverage }}
