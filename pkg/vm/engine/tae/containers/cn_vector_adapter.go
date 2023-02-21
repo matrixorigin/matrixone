@@ -84,6 +84,9 @@ func (vec *CnTaeVector[T]) Get(i int) any {
 }
 
 func (vec *CnTaeVector[T]) Length() int {
+	if vec.downstreamVector == nil {
+		return 0
+	}
 	return vec.downstreamVector.Length()
 }
 
@@ -620,9 +623,9 @@ func (vec *CnTaeVector[T]) Close() {
 }
 
 func (vec *CnTaeVector[T]) releaseDownstream() {
-	if vec.downstreamVector != nil && vec.isOwner {
+	if vec.downstreamVector != nil && vec.Allocated() > 0 {
 		vec.downstreamVector.Free(vec.mpool)
-		//vec.downstreamVector = nil (Similar to Prev DN impl)
+		vec.downstreamVector = nil
 	}
 }
 
