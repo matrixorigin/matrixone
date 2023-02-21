@@ -41,15 +41,17 @@ type CnTaeVector[T any] struct {
 	// Used in Append()
 	mpool *mpool.MPool
 
-	// containsFirstCopy is used for ResetWithData() , Allocated() & Close()
-	// a. When ResetWithData(bytes) is called, this vector is not the FirstCopy of the data.
-	// b. When this.Append(newData) is called, then it becomes the owner of newData, ie now it contains FirstCopy data.
-	// c. When Close() is called, we only release from the mpool memory, if it containsFirstCopy. If it is not a FirstCopy,
-	//    it is a readonly/sharedMemory copy, which is not the owner of the vec.downstream.data. So we don't clear it.
-	// Rule:
+	// isOwner is used for ResetWithData() , Allocated() & Close()
+	// According to the prev DN Vector implementation
+	// a. When ResetWithData(bytes) is called, this vector is not the Owner of the data.
+	// b. When this.Append(newData) is called, then it becomes the owner of newData.
+	// c. When Close() is called, we only release from the mpool memory, if it isOwner. If it is not an Owner,
+	//    the data is a shared copy. So we don't clear it.
+	//
+	// Rules:
 	// 1. When we immediately call Allocated() after ResetWithData(), we should return Zero.
 	// 2. If there is any Append() after ResetWithData(), we should return the vec.downstream.Size()
-	containsFirstCopy bool
+	isOwner bool
 }
 
 func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeVector[T] {
@@ -72,7 +74,7 @@ func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTa
 		alloc = common.DefaultAllocator
 	}
 	vec.mpool = alloc
-	vec.containsFirstCopy = false
+	vec.isOwner = false
 
 	return &vec
 }
@@ -93,7 +95,7 @@ func (vec *CnTaeVector[T]) Append(v any) {
 		_ = vec.downstreamVector.Append(v, false, vec.mpool)
 	}
 
-	vec.containsFirstCopy = true
+	vec.isOwner = true
 }
 
 func (vec *CnTaeVector[T]) AppendMany(vs ...any) {
@@ -618,15 +620,15 @@ func (vec *CnTaeVector[T]) Close() {
 }
 
 func (vec *CnTaeVector[T]) releaseDownstream() {
-	if vec.downstreamVector != nil && vec.containsFirstCopy {
+	if vec.downstreamVector != nil && vec.isOwner {
 		vec.downstreamVector.Free(vec.mpool)
-		//vec.downstreamVector = nil
+		//vec.downstreamVector = nil (Similar to Prev DN impl)
 	}
 }
 
 func (vec *CnTaeVector[T]) Allocated() int {
 
-	if !vec.containsFirstCopy {
+	if !vec.isOwner {
 		return 0
 	}
 
