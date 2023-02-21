@@ -295,7 +295,7 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 					return LEX_ERROR, ""
 				}
 				s.inc()
-				return ID, s.buf[start : s.Pos-1]
+				return QUOTE_ID, s.buf[start : s.Pos-1]
 			}
 
 			var buf strings.Builder
@@ -341,7 +341,7 @@ func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder) (int, string) 
 		}
 		s.inc()
 	}
-	return ID, buf.String()
+	return QUOTE_ID, buf.String()
 }
 
 // scanCommentTypeBlock scans a '/*' delimited comment;
@@ -528,13 +528,13 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
-		return keywordID, lower
+		return keywordID, keywordName
 	}
 	// dual must always be case-insensitive
 	if lower == "dual" {
-		return ID, lower
+		return ID, keywordName
 	}
-	return ID, lower
+	return ID, keywordName
 }
 
 func (s *Scanner) scanBitLiteral() (int, string) {
