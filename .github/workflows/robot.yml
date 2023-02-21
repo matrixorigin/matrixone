@@ -177,7 +177,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           go tool covdata textfmt -i="$GITHUB_WORKSPACE/matrixone" -o ${{ env.raw_bvt_coverage }}
-          cat ${{ env.raw_bvt_coverage }} | grep -v '${{ env.bvt_excluded_pkg }}|yaccpar' > ${{ env.bvt_coverage }}
+          cat ${{ env.raw_bvt_coverage }} | grep -v '${{ env.bvt_excluded_pkg }}' | grep -v 'yaccpar' > ${{ env.bvt_coverage }}
           echo "bvt_coverage finished"
           go tool cover -o ${{ env.bvt_html_coverage }} -html=${{ env.bvt_coverage }}
           echo "bvt_html_coverage finished"
