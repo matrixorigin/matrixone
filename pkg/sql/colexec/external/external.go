@@ -568,6 +568,8 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	var bat *batch.Batch
 	var err error
 	var cnt int
+	_, span := trace.Start(ctx, "ScanCsvFile")
+	defer span.End()
 	if param.plh == nil {
 		param.IgnoreLine = param.IgnoreLineTag
 		param.plh, err = GetSimdcsvReader(param, proc)
