@@ -50,7 +50,6 @@ type container struct {
 	mp *hashmap.JoinMap
 
 	matched_sels []int32
-
 }
 
 type Argument struct {
