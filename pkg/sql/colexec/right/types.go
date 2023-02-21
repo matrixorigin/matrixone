@@ -51,7 +51,6 @@ type container struct {
 
 	matched_sels []int32
 
-	sum int
 }
 
 type Argument struct {
