@@ -93,26 +93,36 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	return
 }
 
-func AllocateNewMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (mov *movec.Vector) {
+func AllocateNewMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*movec.Vector, error) {
+	var mov *movec.Vector
 	if typ.IsVarlen() {
 		dataByteArr := bs.HeaderBuf()
-		// TODO: Ignoring error. Is it safe?
-		dataAllocated, _ := pool.Alloc(len(dataByteArr))
+
+		dataAllocated, err := pool.Alloc(len(dataByteArr))
+		if err != nil {
+			return nil, err
+		}
 		copy(dataAllocated, dataByteArr)
 
 		areaByteArr := bs.StorageBuf()
-		areaAllocated, _ := pool.Alloc(len(areaByteArr))
+		areaAllocated, err := pool.Alloc(len(areaByteArr))
+		if err != nil {
+			return nil, err
+		}
 		copy(areaAllocated, areaByteArr)
 
 		mov = movec.NewWithDataAndArea(typ, dataAllocated, areaAllocated)
 	} else {
 
 		dataByteArr := bs.StorageBuf()
-		dataAllocated, _ := pool.Alloc(len(dataByteArr))
+		dataAllocated, err := pool.Alloc(len(dataByteArr))
+		if err != nil {
+			return nil, err
+		}
 		copy(dataAllocated, dataByteArr)
 		mov = movec.NewWithData(typ, dataAllocated)
 	}
-	return
+	return mov, nil
 }
 
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
