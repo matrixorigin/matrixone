@@ -177,7 +177,7 @@ jobs:
           cd $GITHUB_WORKSPACE/matrixone
           ps aux|grep 'service_test' | grep -v 'grep' | awk '{print $2}'
           ps aux|grep 'service_test' | grep -v 'grep' | awk '{print $2}' | xargs kill -s SIGINT
-          sleep 120
+          sleep 300
           cat ${{ env.raw_bvt_coverage }} | grep -v ${{ env.bvt_excluded_pkg }} > ${{ env.bvt_coverage }}
           echo "bvt_coverage finished"
           go tool cover -o ${{ env.bvt_html_coverage }} -html=${{ env.bvt_coverage }}
