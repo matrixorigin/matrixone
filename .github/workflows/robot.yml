@@ -41,8 +41,8 @@ jobs:
         if: contains(github.event.issue.labels.*.name, 'kind/bug')
         uses: guguducken/milestone-add-action@check_mill_exist
         with:
-          github-token: ${{ secrets.TOKEN_ACTION }}
-          version-prefix: "v0.8.0"
+          action-token: ${{ secrets.TOKEN_ACTION }}
+          milestone: "v0.8.0"
 
   check-bvt-issue:
     if: github.event.action == 'closed'
