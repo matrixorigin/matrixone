@@ -619,7 +619,7 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 }
 
 func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader objectio.Reader) (*batch.Batch, error) {
-	_, span := trace.Start(ctx, "getBatchFromZonemapFile")
+	ctx, span := trace.Start(ctx, "getBatchFromZonemapFile")
 	defer span.End()
 	bat := makeBatch(param, 0, proc.Mp())
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
