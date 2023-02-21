@@ -228,7 +228,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
 		txn, err = handler.GetTxn()
 		if err != nil {
-			logutil.Errorf("RecordStatement. error:%v", err)
+			logErrorf(ses.GetConciseProfile(), "RecordStatement. error:%v", err)
 		} else {
 			copy(txnID[:], txn.Txn().ID)
 		}
@@ -303,7 +303,7 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
 			txn, err = handler.GetTxn()
 			if err != nil {
-				logutil.Errorf("RecordStatementTxnID. error:%v", err)
+				logErrorf(ses.GetConciseProfile(), "RecordStatementTxnID. error:%v", err)
 			} else {
 				stm.SetTxnID(txn.Txn().ID)
 			}
@@ -328,6 +328,7 @@ var _ outputPool = &outputQueue{}
 var _ outputPool = &fakeOutputQueue{}
 
 type outputQueue struct {
+	ses          *Session
 	ctx          context.Context
 	proto        MysqlProtocol
 	mrs          *MysqlResultSet
@@ -336,74 +337,93 @@ type outputQueue struct {
 	ep           *ExportParam
 	lineStr      []byte
 	showStmtType ShowStatementType
-
-	getEmptyRowTime time.Duration
-	flushTime       time.Duration
 }
 
-func (o *outputQueue) resetLineStr() {
-	o.lineStr = o.lineStr[:0]
+func (oq *outputQueue) resetLineStr() {
+	oq.lineStr = oq.lineStr[:0]
 }
 
-func NewOutputQueue(ctx context.Context, proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *ExportParam, showStatementType ShowStatementType) *outputQueue {
+func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *MysqlResultSet, ep *ExportParam) *outputQueue {
+	const countOfResultSet = 1
+	if ctx == nil {
+		ctx = ses.GetRequestContext()
+	}
+	if mrs == nil {
+		//Create a new temporary result set per pipeline thread.
+		mrs = &MysqlResultSet{}
+		//Warning: Don't change ResultColumns in this.
+		//Reference the shared ResultColumns of the session among multi-thread.
+		sesMrs := ses.GetMysqlResultSet()
+		mrs.Columns = sesMrs.Columns
+		mrs.Name2Index = sesMrs.Name2Index
+
+		//group row
+		mrs.Data = make([][]interface{}, countOfResultSet)
+		for i := 0; i < countOfResultSet; i++ {
+			mrs.Data[i] = make([]interface{}, columnCount)
+		}
+	}
+
+	if ep == nil {
+		ep = ses.GetExportParam()
+	}
+
 	return &outputQueue{
 		ctx:          ctx,
-		proto:        proto,
+		ses:          ses,
+		proto:        ses.GetMysqlProtocol(),
 		mrs:          mrs,
 		rowIdx:       0,
-		length:       length,
+		length:       uint64(countOfResultSet),
 		ep:           ep,
-		showStmtType: showStatementType,
+		showStmtType: ses.GetShowStmtType(),
 	}
 }
 
-func (o *outputQueue) reset() {
-	o.getEmptyRowTime = 0
-	o.flushTime = 0
-}
+func (oq *outputQueue) reset() {}
 
 /*
-getEmptyRow returns a empty space for filling data.
+getEmptyRow returns an empty space for filling data.
 If there is no space, it flushes the data into the protocol
 and returns an empty space then.
 */
-func (o *outputQueue) getEmptyRow() ([]interface{}, error) {
-	if o.rowIdx >= o.length {
-		if err := o.flush(); err != nil {
+func (oq *outputQueue) getEmptyRow() ([]interface{}, error) {
+	if oq.rowIdx >= oq.length {
+		if err := oq.flush(); err != nil {
 			return nil, err
 		}
 	}
 
-	row := o.mrs.Data[o.rowIdx]
-	o.rowIdx++
+	row := oq.mrs.Data[oq.rowIdx]
+	oq.rowIdx++
 	return row, nil
 }
 
 /*
 flush will force the data flushed into the protocol.
 */
-func (o *outputQueue) flush() error {
-	if o.rowIdx <= 0 {
+func (oq *outputQueue) flush() error {
+	if oq.rowIdx <= 0 {
 		return nil
 	}
-	if o.ep.Outfile {
-		if err := exportDataToCSVFile(o); err != nil {
-			logutil.Errorf("export to csv file error %v", err)
+	if oq.ep.Outfile {
+		if err := exportDataToCSVFile(oq); err != nil {
+			logErrorf(oq.ses.GetConciseProfile(), "export to csv file error %v", err)
 			return err
 		}
 	} else {
 		//send group of row
-		if o.showStmtType == ShowColumns || o.showStmtType == ShowTableStatus {
-			o.rowIdx = 0
+		if oq.showStmtType == ShowColumns || oq.showStmtType == ShowTableStatus {
+			oq.rowIdx = 0
 			return nil
 		}
 
-		if err := o.proto.SendResultSetTextBatchRowSpeedup(o.mrs, o.rowIdx); err != nil {
-			logutil.Errorf("flush error %v", err)
+		if err := oq.proto.SendResultSetTextBatchRowSpeedup(oq.mrs, oq.rowIdx); err != nil {
+			logErrorf(oq.ses.GetConciseProfile(), "flush error %v", err)
 			return err
 		}
 	}
-	o.rowIdx = 0
+	oq.rowIdx = 0
 	return nil
 }
 
@@ -598,11 +618,9 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 
 /*
 extract the data from the pipeline.
-obj: routine obj
-TODO:Add error
+obj: session
 Warning: The pipeline is the multi-thread environment. The getDataFromPipeline will
-
-	access the shared data. Be careful when it writes the shared data.
+access the shared data. Be careful when it writes the shared data.
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
@@ -622,47 +640,20 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	}
 
 	begin := time.Now()
-
 	proto := ses.GetMysqlProtocol()
 	proto.ResetStatistics()
 
-	//Create a new temporary resultset per pipeline thread.
-	mrs := &MysqlResultSet{}
-	//Warning: Don't change ResultColumns in this.
-	//Reference the shared ResultColumns of the session among multi-thread.
-	sesMrs := ses.GetMysqlResultSet()
-	mrs.Columns = sesMrs.Columns
-	mrs.Name2Index = sesMrs.Name2Index
-
-	begin3 := time.Now()
-	countOfResultSet := 1
-	//group row
-	mrs.Data = make([][]interface{}, countOfResultSet)
-	for i := 0; i < countOfResultSet; i++ {
-		mrs.Data[i] = make([]interface{}, len(bat.Vecs))
-	}
-	allocateOutBufferTime := time.Since(begin3)
-
-	oq := NewOutputQueue(ses.GetRequestContext(), proto, mrs, uint64(countOfResultSet), ses.GetExportParam(), ses.GetShowStmtType())
-	oq.reset()
-
+	oq := NewOutputQueue(ses.GetRequestContext(), ses, len(bat.Vecs), nil, nil)
 	row2colTime := time.Duration(0)
-
 	procBatchBegin := time.Now()
-
 	n := vector.Length(bat.Vecs[0])
-
 	requestCtx := ses.GetRequestContext()
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
 			select {
 			case <-requestCtx.Done():
-				{
-					return nil
-				}
+				return nil
 			default:
-				{
-				}
 			}
 		}
 
@@ -680,8 +671,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		}
 	}
 
-	//logutil.Debugf("row group -+> %v ", oq.getData())
-
 	err := oq.flush()
 	if err != nil {
 		return err
@@ -693,19 +682,13 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		"time of getDataFromPipeline : %s \n"+
 		"processBatchTime %v \n"+
 		"row2colTime %v \n"+
-		"allocateOutBufferTime %v \n"+
-		"outputQueue.flushTime %v \n"+
-		"processBatchTime - row2colTime - allocateOutbufferTime - flushTime %v \n"+
-		"restTime(=tTime - row2colTime - allocateOutBufferTime) %v \n"+
+		"restTime(=totalTime - row2colTime) %v \n"+
 		"protoStats %s",
 		n,
 		tTime,
 		procBatchTime,
 		row2colTime,
-		allocateOutBufferTime,
-		oq.flushTime,
-		procBatchTime-row2colTime-allocateOutBufferTime-oq.flushTime,
-		tTime-row2colTime-allocateOutBufferTime,
+		tTime-row2colTime,
 		proto.GetStats())
 
 	return nil
@@ -1314,127 +1297,6 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 		return moerr.NewInternalError(ses.GetRequestContext(), "routine send response failed. error:%v ", err)
 	}
 	return err
-}
-
-func doLoadData(requestCtx context.Context, ses *Session, proc *process.Process, load *tree.Import) (*LoadResult, error) {
-	var err error
-	var txn TxnOperator
-	var dbHandler engine.Database
-	var tableHandler engine.Relation
-	proto := ses.GetMysqlProtocol()
-
-	logInfof(ses.GetConciseProfile(), "+++++load data")
-	/*
-		TODO:support LOCAL
-	*/
-	if load.Local {
-		return nil, moerr.NewInternalError(requestCtx, "LOCAL is unsupported now")
-	}
-	if load.Param.Tail.Fields == nil || len(load.Param.Tail.Fields.Terminated) == 0 {
-		load.Param.Tail.Fields = &tree.Fields{Terminated: ","}
-	}
-
-	if load.Param.Tail.Fields != nil && load.Param.Tail.Fields.EscapedBy != 0 {
-		return nil, moerr.NewInternalError(requestCtx, "EscapedBy field is unsupported now")
-	}
-
-	/*
-		check file
-	*/
-	exist, isfile, err := PathExists(load.Param.Filepath)
-	if err != nil || !exist {
-		return nil, moerr.NewInternalError(requestCtx, "file %s does exist. err:%v", load.Param.Filepath, err)
-	}
-
-	if !isfile {
-		return nil, moerr.NewInternalError(requestCtx, "file %s is a directory", load.Param.Filepath)
-	}
-
-	/*
-		check database
-	*/
-	loadDb := string(load.Table.Schema())
-	loadTable := string(load.Table.Name())
-	if loadDb == "" {
-		if proto.GetDatabaseName() == "" {
-			return nil, moerr.NewInternalError(requestCtx, "load data need database")
-		}
-
-		//then, it uses the database name in the session
-		loadDb = ses.GetDatabaseName()
-	}
-
-	txnHandler := ses.GetTxnHandler()
-	if ses.InMultiStmtTransactionMode() {
-		return nil, moerr.NewInternalError(requestCtx, "do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
-	}
-	txn, err = txnHandler.GetTxn()
-	if err != nil {
-		return nil, err
-	}
-	dbHandler, err = ses.GetStorage().Database(requestCtx, loadDb, txn)
-	if err != nil {
-		//echo client. no such database
-		return nil, moerr.NewBadDB(requestCtx, loadDb)
-	}
-
-	//change db to the database in the LOAD DATA statement if necessary
-	if loadDb != ses.GetDatabaseName() {
-		oldDB := ses.GetDatabaseName()
-		ses.SetDatabaseName(loadDb)
-		logInfof(ses.GetConciseProfile(), "User %s change database from [%s] to [%s] in LOAD DATA", ses.GetUserName(), oldDB, ses.GetDatabaseName())
-	}
-
-	/*
-		check table
-	*/
-	if ses.IfInitedTempEngine() {
-		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, ses.GetTempTableStorage())
-	}
-	tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
-	if err != nil {
-		txn, err = ses.txnHandler.GetTxn()
-		if err != nil {
-			return nil, err
-		}
-		dbHandler, err = ses.GetStorage().Database(requestCtx, defines.TEMPORARY_DBNAME, txn)
-		if err != nil {
-			return nil, moerr.NewNoSuchTable(requestCtx, loadDb, loadTable)
-		}
-		loadTable = engine.GetTempTableName(loadDb, loadTable)
-		tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
-		if err != nil {
-			//echo client. no such table
-			return nil, moerr.NewNoSuchTable(requestCtx, loadDb, loadTable)
-		}
-		loadDb = defines.TEMPORARY_DBNAME
-		load.Table.ObjectName = tree.Identifier(loadTable)
-	}
-
-	/*
-		execute load data
-	*/
-	return LoadLoop(requestCtx, ses, proc, load, dbHandler, tableHandler, loadDb)
-}
-
-/*
-handle Load DataSource statement
-*/
-func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *process.Process, load *tree.Import) error {
-	ses := mce.GetSession()
-	result, err := doLoadData(requestCtx, ses, proc, load)
-	if err != nil {
-		return err
-	}
-	/*
-		response
-	*/
-	info := moerr.NewLoadInfo(requestCtx, result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
-	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings), 0, int(COM_QUERY), info)
-	if err = ses.GetMysqlProtocol().SendResponse(requestCtx, resp); err != nil {
-		return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
-	}
-	return nil
 }
 
 func doCmdFieldList(requestCtx context.Context, ses *Session, icfl *InternalCmdFieldList) error {
@@ -2872,14 +2734,6 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			dd: st,
 		})
-	case *tree.Import:
-		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&ImportExecutor{
-			statusStmtExecutor: &statusStmtExecutor{
-				base,
-			},
-			i: st,
-		})
 	case *tree.PrepareStmt:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 		ret = (&PrepareStmtExecutor{
@@ -3601,13 +3455,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetDatabaseName("")
 			}
-		case *tree.Import:
-			fromLoadData = true
-			selfHandle = true
-			err = mce.handleLoadData(requestCtx, proc, st)
-			if err != nil {
-				goto handleFailed
-			}
 		case *tree.PrepareStmt:
 			selfHandle = true
 			prepareStmt, err = mce.handlePrepareStmt(requestCtx, st)
@@ -3878,8 +3725,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			for _, c := range columns {
 				mysqlc := c.(Column)
 				mrs.AddColumn(mysqlc)
-
-				//logutil.Infof("doComQuery col name %v type %v ",col.Name(),col.ColumnType())
 				/*
 					mysql COM_QUERY response: send the column definition per column
 				*/

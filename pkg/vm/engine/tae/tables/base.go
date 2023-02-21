@@ -81,9 +81,7 @@ func newBaseBlock(
 }
 
 func (blk *baseBlock) Close() {
-	blk.meta = nil
-	blk.mvcc.Close()
-	blk.mvcc = nil
+	// TODO
 }
 
 func (blk *baseBlock) PinNode() *Node {
