@@ -788,15 +788,18 @@ func TestShow(t *testing.T) {
 		"show create table tpch.nation",
 		"show databases",
 		"show databases like '%d'",
-		"show databases where `Database` = '11'",
-		"show databases where `Database` = '11' or `Database` = 'ddd'",
+		"show databases where `database` = '11'",
+		"show databases where `database` = '11' or `database` = 'ddd'",
 		"show tables",
 		"show tables from tpch",
 		"show tables like '%dd'",
-		"show tables from tpch where `Tables_in_tpch` = 'aa' or `Tables_in_tpch` like '%dd'",
+		"show tables from tpch where `tables_in_tpch` = 'aa' or `tables_in_tpch` like '%dd'",
 		"show columns from nation",
+		"show full columns from nation",
 		"show columns from nation from tpch",
-		"show columns from nation where `Field` like '%ff' or `Type` = 1 or `Null` = 0",
+		"show full columns from nation from tpch",
+		"show columns from nation where `field` like '%ff' or `type` = 1 or `null` = 0",
+		"show full columns from nation where `field` like '%ff' or `type` = 1 or `null` = 0",
 		"show create view v1",
 		"show create table v1",
 		"show table_number",
@@ -823,8 +826,11 @@ func TestShow(t *testing.T) {
 		"show tables from tpch22222",                           //database not exist
 		"show tables from tpch where Tables_in_tpch222 = 'aa'", //column not exist
 		"show columns from nation_ddddd",                       //table not exist
-		"show columns from nation_ddddd from tpch",             //table not exist
-		"show columns from nation where `Field22` like '%ff'",  //column not exist
+		"show full columns from nation_ddddd",
+		"show columns from nation_ddddd from tpch", //table not exist
+		"show full columns from nation_ddddd from tpch",
+		"show columns from nation where `Field22` like '%ff'", //column not exist
+		"show full columns from nation where `Field22` like '%ff'",
 		"show index from tpch.dddd",
 		"show table_number from tpch222",
 		"show column_number from nation222",

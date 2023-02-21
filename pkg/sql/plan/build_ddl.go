@@ -44,7 +44,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
 	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
 		cols[idx] = &plan.ColDef{
-			Name: query.Headings[idx],
+			Name: strings.ToLower(query.Headings[idx]),
 			Alg:  plan.CompressType_Lz4,
 			Typ:  expr.Typ,
 			Default: &plan.Default{

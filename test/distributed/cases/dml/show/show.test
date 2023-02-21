@@ -27,7 +27,7 @@ show tables from test01;
 show columns from t1;
 show full columns from t1;
 show full columns from t1 like '%';
-show full columns from t1 where `Field`='id';
+show full columns from t1 where Field ='id';
 drop database if exists test01;
 
 -- @case
