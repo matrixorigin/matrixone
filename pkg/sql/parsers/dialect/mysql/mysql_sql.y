@@ -23,6 +23,7 @@ import (
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/util"
     "github.com/matrixorigin/matrixone/pkg/defines"
+    "github.com/matrixorigin/matrixone/pkg/common/id"
 )
 %}
 
@@ -201,6 +202,7 @@ import (
     tableLock tree.TableLock
     tableLocks []tree.TableLock
     tableLockType tree.TableLockType
+    cstr *id.CStr
 }
 
 %token LEX_ERROR
@@ -220,7 +222,7 @@ import (
 %right <str> '('
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
-%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
+%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID
 %token <item> INTEGRAL HEX BIT_LITERAL FLOAT
 %token <str>  HEXNUM
 %token <str> NULL TRUE FALSE
@@ -461,12 +463,13 @@ import (
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params
-%type <str> sql_id charset_keyword db_name db_name_opt
+%type <str> charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
-%type <str> reserved_keyword non_reserved_keyword
-%type <str> equal_opt reserved_sql_id reserved_table_id
-%type <str> as_name_opt as_opt_id table_id id_or_var name_string ident
-%type <str> database_id table_alias explain_sym prepare_sym deallocate_sym stmt_name reset_sym
+%type <str> non_reserved_keyword
+%type <str> equal_opt
+%type <str> as_opt_id name_string
+%type <cstr> ident as_name_opt
+%type <str> table_alias explain_sym prepare_sym deallocate_sym stmt_name reset_sym
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
@@ -497,7 +500,7 @@ import (
 %type <indexOption> index_option_list index_option
 %type <roles> role_spec_list using_roles_opt
 %type <role> role_spec
-%type <str> role_name
+%type <cstr> role_name
 %type <usernameRecord> user_name
 %type <user> user_spec drop_user_spec user_spec_with_identified
 %type <users> user_spec_list drop_user_spec_list user_spec_list_of_create_user
@@ -732,20 +735,20 @@ statement_id_opt:
 }
 
 mo_dump_stmt:
-    MODUMP DATABASE database_id INTO STRING max_file_size_opt
+    MODUMP DATABASE ident INTO STRING max_file_size_opt
     {
 	$$ = &tree.MoDump{
 	    DumpDatabase: true,
-	    Database: tree.Identifier($3),
+	    Database: tree.Identifier($3.ToLowerForConfig()),
 	    OutFile: $5,
 	    MaxFileSize: int64($6),
 	}
     }
-|   MODUMP DATABASE database_id TABLES table_name_list INTO STRING max_file_size_opt
+|   MODUMP DATABASE ident TABLES table_name_list INTO STRING max_file_size_opt
     {
 	$$ = &tree.MoDump{
 	    DumpDatabase: true,
-	    Database: tree.Identifier($3),
+	    Database: tree.Identifier($3.ToLowerForConfig()),
 	    Tables: $5,
 	    OutFile: $7,
 	    MaxFileSize: int64($8),
@@ -849,15 +852,15 @@ parallel_opt:
 normal_ident:
     ident
     {
-        $$ = tree.SetUnresolvedName($1)
+        $$ = tree.SetUnresolvedName($1.ToLowerForConfig())
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1, $3)
+        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig())
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1, $3, $5)
+        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig(), $5.ToLowerForConfig())
     }
 
 columns_or_variable_list_opt:
@@ -1237,26 +1240,26 @@ priv_level:
             Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
         }
     }
-|   ID '.' '*'
+|   ident '.' '*'
     {
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
-            DbName: $1,
+            DbName: $1.ToLowerForConfig(),
         }
     }
-|   ID '.' ID
+|   ident '.' ident
     {
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
-            DbName: $1,
-            TabName: $3,
+            DbName: $1.ToLowerForConfig(),
+            TabName: $3.ToLowerForConfig(),
         }
     }
-|   ID
+|   ident
     {
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE,
-            TabName: $1,
+            TabName: $1.ToLowerForConfig(),
         }
     }
 
@@ -1714,21 +1717,21 @@ var_assignment:
 |   NAMES charset_name
     {
         $$ = &tree.VarAssignmentExpr{
-            Name: $1,
+            Name: strings.ToLower($1),
             Value: tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char),
         }
     }
 |   NAMES charset_name COLLATE DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
-            Name: $1,
+            Name: strings.ToLower($1),
             Value: tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char),
         }
     }
 |   NAMES charset_name COLLATE name_string
     {
         $$ = &tree.VarAssignmentExpr{
-            Name: $1,
+            Name: strings.ToLower($1),
             Value: tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char),
             Reserved: tree.NewNumValWithType(constant.MakeString($4), $4, false, tree.P_char),
         }
@@ -1736,21 +1739,21 @@ var_assignment:
 |   NAMES DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
-            Name: $1,
+            Name: strings.ToLower($1),
             Value: &tree.DefaultVal{},
         }
     }
 |   charset_keyword charset_name
     {
         $$ = &tree.VarAssignmentExpr{
-            Name: $1,
+            Name: strings.ToLower($1),
             Value: tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char),
         }
     }
 |   charset_keyword DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
-            Name: $1,
+            Name: strings.ToLower($1),
             Value: &tree.DefaultVal{},
         }
     }
@@ -1781,9 +1784,12 @@ equal_or_assignment:
 
 var_name:
     ident
+    {
+    	$$ = $1.ToLowerForConfig()
+    }
 |   ident '.' ident
     {
-        $$ = $1 + "." + $3
+        $$ = $1.ToLowerForConfig() + "." + $3.ToLowerForConfig()
     }
 
 var_name_list:
@@ -1883,7 +1889,7 @@ use_stmt:
     {
         $$ = &tree.Use{
             SecondaryRole: false,
-            Name: $2,
+            Name: $2.ToLowerForConfig(),
         }
     }
 |   USE
@@ -2411,14 +2417,14 @@ show_grants_stmt:
     {
         $$ = &tree.ShowGrants{ShowGrantType: tree.GrantForUser}
     }
-|    SHOW GRANTS FOR user_name using_roles_opt
+|   SHOW GRANTS FOR user_name using_roles_opt
     {
         $$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5, ShowGrantType: tree.GrantForUser}
     }
-|    SHOW GRANTS FOR ROLE role_name
+|   SHOW GRANTS FOR ROLE ident
     {
         s := &tree.ShowGrants{}
-        roles := []*tree.Role{tree.NewRole($5)}
+        roles := []*tree.Role{tree.NewRole($5.ToLowerForConfig())}
         s.Roles = roles
         s.ShowGrantType = tree.GrantForRole
         $$ = s
@@ -2543,8 +2549,8 @@ show_index_stmt:
     }
 |	SHOW extended_opt index_kwd from_or_in ident from_or_in ident where_expression_opt
      {
-     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7), ExplicitSchema: true}
-         tbl := tree.NewTableName(tree.Identifier($5), prefix)
+     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7.ToLowerForConfig()), ExplicitSchema: true}
+         tbl := tree.NewTableName(tree.Identifier($5.ToLowerForConfig()), prefix)
          $$ = &tree.ShowIndex{
              TableName: *tbl,
              Where: $8,
@@ -2693,9 +2699,9 @@ database_name_opt:
     {
         $$ = ""
     }
-|   from_or_in database_id
+|   from_or_in ident
     {
-        $$ = $2
+        $$ = $2.ToLowerForConfig()
     }
 
 table_column_name:
@@ -2739,28 +2745,31 @@ show_create_stmt:
 table_name_unresolved:
     ident
     {
-        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1})
+        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.ToLowerForConfig()})
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3, $1})
+        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.ToLowerForConfig(), $1.ToLowerForConfig()})
     }
 
 db_name:
     ident
+    {
+    	$$ = $1.ToLowerForConfig()
+    }
 
 unresolved_object_name:
     ident
     {
-        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1})
+        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.ToLowerForConfig()})
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3, $1})
+        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.ToLowerForConfig(), $1.ToLowerForConfig()})
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(3, [3]string{$5, $3, $1})
+        $$ = tree.SetUnresolvedObjectName(3, [3]string{$5.ToLowerForConfig(), $3.ToLowerForConfig(), $1.ToLowerForConfig()})
     }
 
 truncate_table_stmt:
@@ -2837,7 +2846,7 @@ drop_index_stmt:
     DROP INDEX exists_opt ident ON table_name
     {
         $$ = &tree.DropIndex{
-            Name: tree.Identifier($4),
+            Name: tree.Identifier($4.ToLowerForConfig()),
             TableName: *$6,
             IfExists: $3,
         }
@@ -2856,9 +2865,9 @@ drop_view_stmt:
     }
 
 drop_database_stmt:
-    DROP DATABASE exists_opt database_id
+    DROP DATABASE exists_opt ident
     {
-        $$ = &tree.DropDatabase{Name: tree.Identifier($4), IfExists: $3}
+        $$ = &tree.DropDatabase{Name: tree.Identifier($4.ToLowerForConfig()), IfExists: $3}
     }
 
 drop_prepare_stmt:
@@ -2944,12 +2953,12 @@ table_name_opt_wild:
     ident wild_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.ToLowerForConfig()), prefix)
     }
 |    ident '.' ident wild_opt
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLowerForConfig()), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier($3.ToLowerForConfig()), prefix)
     }
 
 wild_opt:
@@ -3179,11 +3188,11 @@ insert_column_list:
 insert_column:
     ident
     {
-        $$ = $1
+        $$ = $1.ToLowerForConfig()
     }
 |   ident '.' ident
     {
-        $$ = $3
+        $$ = $3.ToLowerForConfig()
     }
 
 values_list:
@@ -3241,11 +3250,11 @@ partition_clause_opt:
 partition_id_list:
     ident
     {
-        $$ = tree.IdentifierList{tree.Identifier($1)}
+        $$ = tree.IdentifierList{tree.Identifier($1.ToLowerForConfig())}
     }
 |   partition_id_list ',' ident
     {
-        $$ = append($1 , tree.Identifier($3))
+        $$ = append($1 , tree.Identifier($3.ToLowerForConfig()))
     }
 
 into_table_name:
@@ -3379,11 +3388,11 @@ force_quote_list:
     ident
     {
         $$ = make([]string, 0, 4)
-        $$ = append($$, $1)
+        $$ = append($$, $1.ToLowerForConfig())
     }
 |   force_quote_list ',' ident
     {
-        $$ = append($1, $3)
+        $$ = append($1, $3.ToLowerForConfig())
     }
 
 select_stmt:
@@ -3449,7 +3458,7 @@ common_table_expr:
     ident column_list_opt AS '(' stmt ')'
     {
         $$ = &tree.CTE{
-            Name: &tree.AliasClause{Alias: tree.Identifier($1), Cols: $2},
+            Name: &tree.AliasClause{Alias: tree.Identifier($1.ToLowerForConfig()), Cols: $2},
             Stmt: $5,
         }
     }
@@ -3737,8 +3746,17 @@ simple_select_clause:
 
 select_option_opt:
     SQL_SMALL_RESULT
-|    SQL_BIG_RESULT
-|    SQL_BUFFER_RESULT
+    {
+    	$$ = strings.ToLower($1)
+    }
+|	SQL_BIG_RESULT
+	{
+       $$ = strings.ToLower($1)
+    }
+|   SQL_BUFFER_RESULT
+	{
+    	$$ = strings.ToLower($1)
+    }
 
 distinct_opt:
     {
@@ -3801,15 +3819,16 @@ select_expression:
     }
 |   expression as_name_opt
     {
-        $$ = tree.SelectExpr{Expr: $1, As: tree.UnrestrictedIdentifier($2)}
+    	$2.SetConfig(0)
+        $$ = tree.SelectExpr{Expr: $1, As: $2}
     }
 |   ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($1)}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($1.ToLowerForConfig())}
     }
 |   ident '.' ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($3, $1)}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($3.ToLowerForConfig(), $1.ToLowerForConfig())}
     }
 
 from_opt:
@@ -4005,11 +4024,11 @@ join_condition:
 column_list:
     ident
     {
-        $$ = tree.IdentifierList{tree.Identifier($1)}
+        $$ = tree.IdentifierList{tree.Identifier($1.ToLowerForConfig())}
     }
 |   column_list ',' ident
     {
-        $$ = append($1, tree.Identifier($3))
+        $$ = append($1, tree.Identifier($3.ToLowerForConfig()))
     }
 
 table_factor:
@@ -4054,7 +4073,7 @@ table_subquery:
 table_function:
     ident '(' expression_list_opt ')'
     {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
+        name := tree.SetUnresolvedName(strings.ToLower($1.ToLowerForConfig()))
         $$ = &tree.TableFunction{
        	    Func: &tree.FuncExpr{
         	Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -4139,11 +4158,11 @@ index_name_list:
 	}
 |	ident
 	{
-		$$ = []string{$1}
+		$$ = []string{$1.ToLowerForConfig()}
 	}
 |	index_name_list ',' ident
 	{
-		$$ = append($1, $3)
+		$$ = append($1, $3.ToLowerForConfig())
 	}
 |	PRIMARY
 	{
@@ -4168,12 +4187,15 @@ as_opt_id:
     }
 
 table_alias:
-    table_id
+    ident
+    {
+    	$$ = $1.ToLowerForConfig()
+    }
 |   STRING
 
 as_name_opt:
     {
-        $$ = ""
+        $$ = id.NewCStr("", false)
     }
 |   ident
     {
@@ -4183,30 +4205,30 @@ as_name_opt:
     {
         $$ = $2
     }
-|    STRING
+|   STRING
     {
-        $$ = $1
+        $$ = id.NewCStr($1, true)
     }
 |   AS STRING
     {
-        $$ = $2
+        $$ = id.NewCStr($2, true)
     }
 
 stmt_name:
     ident
+    {
+    	$$ = $1.ToLowerForConfig()
+    }
 
-database_id:
-    id_or_var
-|   non_reserved_keyword
+//table_id:
+//    id_or_var
+//|   non_reserved_keyword
 
-table_id:
-    id_or_var
-|   non_reserved_keyword
-
-id_or_var:
-    ID
-|   AT_ID
-|   AT_AT_ID
+//id_or_var:
+//    ID
+//|	QUOTE_ID
+//|   AT_ID
+//|   AT_AT_ID
 
 create_stmt:
     create_ddl_stmt
@@ -4235,13 +4257,13 @@ create_extension_stmt:
 extension_lang:
     ident
     {
-        $$ = $1
+        $$ = $1.ToLowerForConfig()
     }
 
 extension_name:
     ident
     {
-        $$ = $1
+        $$ = $1.ToLowerForConfig()
     }
 
 
@@ -4261,12 +4283,12 @@ func_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewFuncName(tree.Identifier($1), prefix)
+        $$ = tree.NewFuncName(tree.Identifier($1.ToLowerForConfig()), prefix)
     }
 |   ident '.' ident
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1), ExplicitSchema: true}
-        $$ = tree.NewFuncName(tree.Identifier($3), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLowerForConfig()), ExplicitSchema: true}
+        $$ = tree.NewFuncName(tree.Identifier($3.ToLowerForConfig()), prefix)
     }
 
 func_args_list_opt:
@@ -4308,7 +4330,7 @@ func_arg_decl:
 func_lang:
     ident
     {
-        $$ = $1
+        $$ = $1.ToLowerForConfig()
     }
 
 func_return:
@@ -4343,7 +4365,7 @@ create_account_stmt:
 account_name:
     ident
     {
-    	$$ = $1
+    	$$ = $1.ToLowerForConfig()
     }
 
 account_auth_option:
@@ -4363,7 +4385,7 @@ account_admin_name:
     }
 |	ident
 	{
-		$$ = $1
+		$$ = $1.ToLowerForConfig()
 	}
 
 account_identified:
@@ -4436,9 +4458,9 @@ create_user_stmt:
     }
 
 account_role_name:
-    ID
+    ident
     {
-    $$ = $1
+   		$$ = $1.ToLowerForConfig()
     }
 
 user_comment_or_attribute_opt:
@@ -4647,6 +4669,9 @@ user_identified:
 
 name_string:
     ident
+    {
+    	$$ = $1.ToLowerForConfig()
+    }
 |   STRING
 
 create_role_stmt:
@@ -4671,7 +4696,7 @@ role_spec_list:
 role_spec:
     role_name
     {
-        $$ = &tree.Role{UserName: $1}
+        $$ = &tree.Role{UserName: $1.ToLowerForConfig()}
     }
 //|   name_string '@' name_string
 //    {
@@ -4684,7 +4709,17 @@ role_spec:
 
 role_name:
     ID
+	{
+		$$ = id.NewCStr($1, false)
+    }
+|   QUOTE_ID
+	{
+		$$ = id.NewCStr($1, true)
+    }
 |   STRING
+	{
+    	$$ = id.NewCStr($1, false)
+    }
 
 index_prefix:
     {
@@ -4704,7 +4739,7 @@ index_prefix:
     }
 
 create_index_stmt:
-    CREATE index_prefix INDEX id_or_var using_opt ON table_name '(' index_column_list ')' index_option_list
+    CREATE index_prefix INDEX ident using_opt ON table_name '(' index_column_list ')' index_option_list
     {
         var io *tree.IndexOption = nil
         if $11 == nil && $5 != tree.INDEX_TYPE_INVALID {
@@ -4714,7 +4749,7 @@ create_index_stmt:
             io.IType = $5
         }
         $$ = &tree.CreateIndex{
-            Name: tree.Identifier($4),
+            Name: tree.Identifier($4.ToLowerForConfig()),
             Table: *$7,
             IndexCat: $2,
             KeyParts: $9,
@@ -4757,9 +4792,9 @@ index_option:
     {
         $$ = &tree.IndexOption{Comment: $2}
     }
-|   WITH PARSER id_or_var
+|   WITH PARSER ident
     {
-        $$ = &tree.IndexOption{ParserName: $3}
+        $$ = &tree.IndexOption{ParserName: $3.ToLowerForConfig()}
     }
 |   VISIBLE
     {
@@ -4817,7 +4852,7 @@ create_database_stmt:
     {
         $$ = &tree.CreateDatabase{
             IfNotExists: $3,
-            Name: tree.Identifier($4),
+            Name: tree.Identifier($4.ToLowerForConfig()),
             CreateOptions: $5,
         }
     }
@@ -5054,19 +5089,19 @@ partition_list:
     }
 
 partition:
-    PARTITION ID values_opt sub_partition_list_opt
+    PARTITION ident values_opt sub_partition_list_opt
     {
         $$ = &tree.Partition{
-            Name: tree.Identifier($2),
+            Name: tree.Identifier($2.ToLowerForConfig()),
             Values: $3,
             Options: nil,
             Subs: $4,
         }
     }
-|   PARTITION ID values_opt partition_option_list sub_partition_list_opt
+|   PARTITION ident values_opt partition_option_list sub_partition_list_opt
     {
         $$ = &tree.Partition{
-            Name: tree.Identifier($2),
+            Name: tree.Identifier($2.ToLowerForConfig()),
             Values: $3,
             Options: $4,
             Subs: $5,
@@ -5093,17 +5128,17 @@ sub_partition_list:
     }
 
 sub_partition:
-    SUBPARTITION ID
+    SUBPARTITION ident
     {
         $$ = &tree.SubPartition{
-            Name: tree.Identifier($2),
+            Name: tree.Identifier($2.ToLowerForConfig()),
             Options: nil,
         }
     }
-|   SUBPARTITION ID partition_option_list
+|   SUBPARTITION ident partition_option_list
     {
         $$ = &tree.SubPartition{
-            Name: tree.Identifier($2),
+            Name: tree.Identifier($2.ToLowerForConfig()),
             Options: $3,
         }
     }
@@ -5378,7 +5413,7 @@ table_option:
     }
 |   TABLESPACE equal_opt ident storage_opt
     {
-        $$= tree.NewTableOptionTablespace($3, $4)
+        $$= tree.NewTableOptionTablespace($3.ToLowerForConfig(), $4)
     }
 |   UNION equal_opt '(' table_name_list ')'
     {
@@ -5470,12 +5505,12 @@ table_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.ToLowerForConfig()), prefix)
     }
 |   ident '.' ident
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLowerForConfig()), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier($3.ToLowerForConfig()), prefix)
     }
 
 table_elem_list_opt:
@@ -5626,7 +5661,7 @@ index_name_and_type_opt:
 |    ident TYPE index_type
     {
         $$ = make([]string, 2)
-        $$[0] = $1
+        $$[0] = $1.ToLowerForConfig()
         $$[1] = $3
     }
 
@@ -5642,6 +5677,9 @@ index_name:
         $$ = ""
     }
 |    ident
+	{
+		$$ = $1.ToLowerForConfig()
+	}
 
 column_def:
     column_name column_type column_attribute_list_opt
@@ -5652,34 +5690,47 @@ column_def:
 column_name_unresolved:
     ident
     {
-        $$ = tree.SetUnresolvedName($1)
+        $$ = tree.SetUnresolvedName($1.ToLowerForConfig())
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1, $3)
+        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig())
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1, $3, $5)
+        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig(), $5.ToLowerForConfig())
     }
 
 ident:
     ID
+    {
+		$$ = id.NewCStr($1, false)
+    }
+|	QUOTE_ID
+	{
+    	$$ = id.NewCStr($1, true)
+    }
 |   not_keyword
+	{
+    	$$ = id.NewCStr($1, false)
+    }
 |   non_reserved_keyword
+	{
+    	$$ = id.NewCStr($1, false)
+    }
 
 column_name:
     ident
     {
-        $$ = tree.SetUnresolvedName($1)
+        $$ = tree.SetUnresolvedName($1.ToLowerForConfig())
     }
-|   ident '.' reserved_sql_id
+|   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1, $3)
+        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig())
     }
-|   ident '.' reserved_table_id '.' reserved_sql_id
+|   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1, $3, $5)
+        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig(), $5.ToLowerForConfig())
     }
 
 column_attribute_list_opt:
@@ -5799,7 +5850,7 @@ constraint_keyword:
     }
 |   CONSTRAINT ident
     {
-        $$ = $2
+        $$ = $2.ToLowerForConfig()
     }
 
 references_def:
@@ -6605,7 +6656,8 @@ function_call_generic:
 |   EXTRACT '(' time_unit FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
-        timeUinit := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        str := strings.ToLower($3)
+        timeUinit := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{timeUinit, $5},
@@ -6653,7 +6705,8 @@ function_call_generic:
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         arg0 := tree.NewNumValWithType(constant.MakeInt64(2), "2", false, tree.P_int64)
-        arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        str := strings.ToLower($3)
+        arg1 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
         arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -6664,7 +6717,8 @@ function_call_generic:
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         arg0 := tree.NewNumValWithType(constant.MakeInt64(3), "3", false, tree.P_int64)
-        arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        str := strings.ToLower($3)
+        arg1 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{arg0, arg1, $4, $6},
@@ -6683,13 +6737,13 @@ function_call_generic:
 
 trim_direction:
     BOTH
-|    LEADING
-|    TRAILING
+|   LEADING
+|   TRAILING
 
 substr_option:
     SUBSTRING
-|    SUBSTR
-|    MID
+|   SUBSTR
+|   MID
 
 time_unit:
     time_stamp_unit
@@ -6755,7 +6809,8 @@ function_call_nonkeyword:
 |	TIMESTAMPDIFF '(' time_stamp_unit ',' expression ',' expression ')'
 	{
         name := tree.SetUnresolvedName(strings.ToLower($1))
-        arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        str := strings.ToLower($3)
+        arg1 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
 		$$ =  &tree.FuncExpr{
              Func: tree.FuncName2ResolvableFunctionReference(name),
              Exprs: tree.Exprs{arg1, $5, $7},
@@ -6947,8 +7002,9 @@ name_confict:
 interval_expr:
     INTERVAL expression time_unit
     {
-         name := tree.SetUnresolvedName("interval")
-        arg2 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        name := tree.SetUnresolvedName("interval")
+        str := strings.ToLower($3)
+        arg2 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$2, arg2},
@@ -8053,195 +8109,195 @@ equal_opt:
         $$ = string($1)
     }
 
-sql_id:
-    id_or_var
-|   non_reserved_keyword
+//sql_id:
+//    id_or_var
+//|   non_reserved_keyword
 
-reserved_sql_id:
-    sql_id
-|   reserved_keyword
+//reserved_sql_id:
+//    sql_id
+//|   reserved_keyword
 
-reserved_table_id:
-    table_id
-|   reserved_keyword
+//reserved_table_id:
+//    table_id
+//|   reserved_keyword
 
-reserved_keyword:
-    ADD
-|   ALL
-|   AND
-|   AS
-|   ASC
-|   ASCII
-|   AUTO_INCREMENT
-|   BETWEEN
-|   BINARY
-|   BY
-|   CASE
-|   CHAR
-|   COLLATE
-|   COLLATION
-|   CONVERT
-|   COALESCE
-|   CREATE
-|   CROSS
-|   CURRENT_DATE
-|   CURRENT_ROLE
-|   CURRENT_USER
-|   CURRENT_TIME
-|   CURRENT_TIMESTAMP
-|   CIPHER
-|   SAN
-|   SSL
-|   SUBJECT
-|   DATABASE
-|   DATABASES
-|   DEFAULT
-|   DELETE
-|   DESC
-|   DESCRIBE
-|   DISTINCT
-|   DISTINCTROW
-|   DIV
-|   DROP
-|   ELSE
-|   END
-|   ESCAPE
-|   EXISTS
-|   EXPLAIN
-|   FALSE
-|   FIRST
-|   FOR
-|   FORCE
-|   FROM
-|   GROUP
-|   HAVING
-|   HOUR
-|   IDENTIFIED
-|   IF
-|   IGNORE
-|   IN
-|   INFILE
-|   INDEX
-|   INNER
-|   INSERT
-|   INTERVAL
-|   INTO
-|   IS
-|   ISSUER
-|   JOIN
-|   KEY
-|   LAST
-|   LEFT
-|   LIKE
-|	ILIKE
-|   LIMIT
-|   LOCALTIME
-|   LOCALTIMESTAMP
-|   LOCK
-|   LOAD
-|   IMPORT
-|   MATCH
-|   MAXVALUE
-|   MOD
-|   MICROSECOND
-|   MINUTE
-|   NATURAL
-|   NOT
-|   NONE
-|   NULL
-|   NULLS
-|   ON
-|   OR
-|   ORDER
-|   OUTER
-|   REGEXP
-|   RENAME
-|   REPLACE
-|   RIGHT
-|   REQUIRE
-|   REPEAT
-|   ROW_COUNT
-|    REFERENCES
-|   RECURSIVE
-|   REVERSE
-|   SCHEMA
-|   SCHEMAS
-|   SELECT
-|   SECOND
-|   SEPARATOR
-|   SET
-|   SHOW
-|   STRAIGHT_JOIN
-|   TABLE
-|   THEN
-|   TO
-|   TRUE
-|   TRUNCATE
-|   UNION
-|   UNIQUE
-|   UPDATE
-|   USE
-|   USING
-|   UTC_DATE
-|   UTC_TIME
-|   UTC_TIMESTAMP
-|   VALUES
-|   WHEN
-|   WHERE
-|   WEEK
-|   WITH
-|   TERMINATED
-|   OPTIONALLY
-|   ENCLOSED
-|   ESCAPED
-|   STARTING
-|   LINES
-|   ROWS
-|   INT1
-|   INT2
-|   INT3
-|   INT4
-|   INT8
-|   CHECK
-|    CONSTRAINT
-|   PRIMARY
-|   FULLTEXT
-|   FOREIGN
-|    ROW
-|   OUTFILE
-|    SQL_SMALL_RESULT
-|    SQL_BIG_RESULT
-|    LEADING
-|    TRAILING
-|   CHARACTER
-|    LOW_PRIORITY
-|    HIGH_PRIORITY
-|    DELAYED
-|   PARTITION
-|    QUICK
-|   EXCEPT
-|   ADMIN_NAME
-|   RANDOM
-|   SUSPEND
-|   REUSE
-|   CURRENT
-|   OPTIONAL
-|   FAILED_LOGIN_ATTEMPTS
-|   PASSWORD_LOCK_TIME
-|   UNBOUNDED
-|   SECONDARY
-|   DECLARE
-|   MODUMP
-|   OVER
-|   PRECEDING
-|   FOLLOWING
-|   GROUPS
-|   LOCKS
-|   TABLE_NUMBER
-|   COLUMN_NUMBER
-|   TABLE_VALUES
-|   RETURNS
-|   MYSQL_COMPATBILITY_MODE
+//reserved_keyword:
+//    ADD
+//|   ALL
+//|   AND
+//|   AS
+//|   ASC
+//|   ASCII
+//|   AUTO_INCREMENT
+//|   BETWEEN
+//|   BINARY
+//|   BY
+//|   CASE
+//|   CHAR
+//|   COLLATE
+//|   COLLATION
+//|   CONVERT
+//|   COALESCE
+//|   CREATE
+//|   CROSS
+//|   CURRENT_DATE
+//|   CURRENT_ROLE
+//|   CURRENT_USER
+//|   CURRENT_TIME
+//|   CURRENT_TIMESTAMP
+//|   CIPHER
+//|   SAN
+//|   SSL
+//|   SUBJECT
+//|   DATABASE
+//|   DATABASES
+//|   DEFAULT
+//|   DELETE
+//|   DESC
+//|   DESCRIBE
+//|   DISTINCT
+//|   DISTINCTROW
+//|   DIV
+//|   DROP
+//|   ELSE
+//|   END
+//|   ESCAPE
+//|   EXISTS
+//|   EXPLAIN
+//|   FALSE
+//|   FIRST
+//|   FOR
+//|   FORCE
+//|   FROM
+//|   GROUP
+//|   HAVING
+//|   HOUR
+//|   IDENTIFIED
+//|   IF
+//|   IGNORE
+//|   IN
+//|   INFILE
+//|   INDEX
+//|   INNER
+//|   INSERT
+//|   INTERVAL
+//|   INTO
+//|   IS
+//|   ISSUER
+//|   JOIN
+//|   KEY
+//|   LAST
+//|   LEFT
+//|   LIKE
+//|	ILIKE
+//|   LIMIT
+//|   LOCALTIME
+//|   LOCALTIMESTAMP
+//|   LOCK
+//|   LOAD
+//|   IMPORT
+//|   MATCH
+//|   MAXVALUE
+//|   MOD
+//|   MICROSECOND
+//|   MINUTE
+//|   NATURAL
+//|   NOT
+//|   NONE
+//|   NULL
+//|   NULLS
+//|   ON
+//|   OR
+//|   ORDER
+//|   OUTER
+//|   REGEXP
+//|   RENAME
+//|   REPLACE
+//|   RIGHT
+//|   REQUIRE
+//|   REPEAT
+//|   ROW_COUNT
+//|    REFERENCES
+//|   RECURSIVE
+//|   REVERSE
+//|   SCHEMA
+//|   SCHEMAS
+//|   SELECT
+//|   SECOND
+//|   SEPARATOR
+//|   SET
+//|   SHOW
+//|   STRAIGHT_JOIN
+//|   TABLE
+//|   THEN
+//|   TO
+//|   TRUE
+//|   TRUNCATE
+//|   UNION
+//|   UNIQUE
+//|   UPDATE
+//|   USE
+//|   USING
+//|   UTC_DATE
+//|   UTC_TIME
+//|   UTC_TIMESTAMP
+//|   VALUES
+//|   WHEN
+//|   WHERE
+//|   WEEK
+//|   WITH
+//|   TERMINATED
+//|   OPTIONALLY
+//|   ENCLOSED
+//|   ESCAPED
+//|   STARTING
+//|   LINES
+//|   ROWS
+//|   INT1
+//|   INT2
+//|   INT3
+//|   INT4
+//|   INT8
+//|   CHECK
+//|    CONSTRAINT
+//|   PRIMARY
+//|   FULLTEXT
+//|   FOREIGN
+//|    ROW
+//|   OUTFILE
+//|    SQL_SMALL_RESULT
+//|    SQL_BIG_RESULT
+//|    LEADING
+//|    TRAILING
+//|   CHARACTER
+//|    LOW_PRIORITY
+//|    HIGH_PRIORITY
+//|    DELAYED
+//|   PARTITION
+//|    QUICK
+//|   EXCEPT
+//|   ADMIN_NAME
+//|   RANDOM
+//|   SUSPEND
+//|   REUSE
+//|   CURRENT
+//|   OPTIONAL
+//|   FAILED_LOGIN_ATTEMPTS
+//|   PASSWORD_LOCK_TIME
+//|   UNBOUNDED
+//|   SECONDARY
+//|   DECLARE
+//|   MODUMP
+//|   OVER
+//|   PRECEDING
+//|   FOLLOWING
+//|   GROUPS
+//|   LOCKS
+//|   TABLE_NUMBER
+//|   COLUMN_NUMBER
+//|   TABLE_VALUES
+//|   RETURNS
+//|   MYSQL_COMPATBILITY_MODE
 
 non_reserved_keyword:
     ACCOUNT

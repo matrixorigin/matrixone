@@ -1221,13 +1221,15 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 
 			colName := fmt.Sprintf("column_%d", i) // like MySQL
+			as := tree.NewCStr(colName, false)
+			as.SetConfig(0)
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: &tree.UnresolvedName{
 					NumParts: 1,
 					Star:     false,
 					Parts:    [4]string{colName, "", "", ""},
 				},
-				As: tree.UnrestrictedIdentifier(colName),
+				As: as,
 			})
 			ctx.headings = append(ctx.headings, colName)
 			tableDef.Cols[i] = &plan.ColDef{
@@ -1280,8 +1282,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					selectList = append(selectList, cols...)
 					ctx.headings = append(ctx.headings, names...)
 				} else {
-					if len(selectExpr.As) > 0 {
-						ctx.headings = append(ctx.headings, string(selectExpr.As))
+					if selectExpr.As != nil && !selectExpr.As.Empty() {
+						ctx.headings = append(ctx.headings, string(selectExpr.As.Origin()))
 					} else {
 						ctx.headings = append(ctx.headings, expr.Parts[0])
 					}
@@ -1301,8 +1303,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					expr.ValType = tree.P_nulltext
 				}
 
-				if len(selectExpr.As) > 0 {
-					ctx.headings = append(ctx.headings, string(selectExpr.As))
+				if selectExpr.As != nil && !selectExpr.As.Empty() {
+					ctx.headings = append(ctx.headings, string(selectExpr.As.Origin()))
 				} else {
 					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
 				}
@@ -1315,8 +1317,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					As:   selectExpr.As,
 				})
 			default:
-				if len(selectExpr.As) > 0 {
-					ctx.headings = append(ctx.headings, string(selectExpr.As))
+				if selectExpr.As != nil && !selectExpr.As.Empty() {
+					ctx.headings = append(ctx.headings, string(selectExpr.As.Origin()))
 				} else {
 					for {
 						if parenExpr, ok := expr.(*tree.ParenExpr); ok {
@@ -1421,9 +1423,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = tree.String(astExpr, dialect.MYSQL)
 
-		alias := string(selectExpr.As)
-		if len(alias) > 0 {
-			ctx.aliasMap[alias] = int32(len(ctx.projects))
+		if selectExpr.As != nil && !selectExpr.As.Empty() {
+			ctx.aliasMap[selectExpr.As.ToLower()] = int32(len(ctx.projects))
 		}
 		ctx.projects = append(ctx.projects, expr)
 	}
@@ -2045,7 +2046,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			if i < len(alias.Cols) {
 				cols[i] = string(alias.Cols[i])
 			} else {
-				cols[i] = col
+				cols[i] = strings.ToLower(col)
 			}
 			types[i] = projects[i].Typ
 
