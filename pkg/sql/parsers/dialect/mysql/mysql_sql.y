@@ -23,7 +23,6 @@ import (
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/util"
     "github.com/matrixorigin/matrixone/pkg/defines"
-    "github.com/matrixorigin/matrixone/pkg/common/id"
 )
 %}
 
