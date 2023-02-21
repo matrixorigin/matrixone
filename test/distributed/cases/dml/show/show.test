@@ -192,7 +192,6 @@ CREATE TABLE show_01(sname varchar(30),id int);
 show INDEX FROM show_01;
 DROP TABLE show_01;
 
-
 -- @suite
 -- @setup
 DROP TABLE IF EXISTS show_02;
@@ -223,21 +222,15 @@ CREATE INDEX b ON show_04(b);
 show INDEX FROM show_04;
 DROP TABLE show_04;
 
--- SHOW FUNCTION STATUS [like_or_where]
--- @bvt:issue#7367
+-- @bvt:issue#8086
 DROP DATABASE IF EXISTS show_03;
+CREATE DATABASE show_03;
 USE show_03;
-delimiter $$
-CREATE FUNCTION myfun(ia int,ib int) returns int
-BEGIN
-RETURN ia + ib;
-end
-$$
-delimiter;
+create function hihi() returns int language sql as 'select id from test_table limit 1';
 
 show FUNCTION status;
-show FUNCTION status LIKE 'pattern';
-show FUNCTION status where db = 'show_03';
+show FUNCTION status LIKE 'hihi';
+DROP DATABASE show_03;
 -- @bvt:issue
 
 DROP DATABASE test;
