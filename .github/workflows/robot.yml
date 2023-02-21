@@ -156,6 +156,7 @@ jobs:
         timeout-minutes: 10
         run: |
           cd $GITHUB_WORKSPACE/matrixone
+          make clean && make config && make cgo
           sed -i.bak 's/level = "info"/level = "error"/g'  ./etc/launch-tae-CN-tae-DN/log.toml
           if  [ -d  "./store"  ]; then rm -rf ./store; fi
           GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(go version)' -X 'main.BranchName=$(git rev-parse --abbrev-ref HEAD)' -X 'main.CommitID=$(git rev-parse HEAD)' -X 'main.BuildTime=$(date)' -X 'main.Version=$(git describe --always --tags $(git rev-list --tags --max-count=1))'"
