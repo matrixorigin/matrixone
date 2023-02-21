@@ -41,9 +41,11 @@ type CnTaeVector[T any] struct {
 	// Used in Append()
 	mpool *mpool.MPool
 
-	// containsFirstCopy is used for ResetWithData() & Allocated()
-	// When ResetWithData(bytes) is called, this vector is not the FirstCopy of the data.
-	// When this.Append(newData) is called, then it becomes the owner of newData, ie now it contains FirstCopy data.
+	// containsFirstCopy is used for ResetWithData() , Allocated() & Close()
+	// a. When ResetWithData(bytes) is called, this vector is not the FirstCopy of the data.
+	// b. When this.Append(newData) is called, then it becomes the owner of newData, ie now it contains FirstCopy data.
+	// c. When Close() is called, we only release from the mpool memory, if it containsFirstCopy. If it is not a FirstCopy,
+	//    it is a readonly/sharedMemory copy, which is not the owner of the vec.downstream.data. So we don't clear it.
 	// Rule:
 	// 1. When we immediately call Allocated() after ResetWithData(), we should return Zero.
 	// 2. If there is any Append() after ResetWithData(), we should return the vec.downstream.Size()
@@ -616,7 +618,7 @@ func (vec *CnTaeVector[T]) Close() {
 }
 
 func (vec *CnTaeVector[T]) releaseDownstream() {
-	if vec.downstreamVector != nil {
+	if vec.downstreamVector != nil && vec.containsFirstCopy {
 		vec.downstreamVector.Free(vec.mpool)
 		vec.downstreamVector = nil
 	}
@@ -648,7 +650,12 @@ func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 		cnNulls.Add(newNulls, nulls.ToArray()...)
 	}
 
-	newDownstream := AllocateNewMoVecFromBytes(vec.GetType(), bs, vec.GetAllocator())
+	newDownstream, err := AllocateNewMoVecFromBytes(vec.GetType(), bs, vec.GetAllocator())
+	if err != nil {
+		//TODO: check if this is ok?
+		panic(err)
+	}
+
 	if vec.Nullable() {
 		newDownstream.Nsp = newNulls
 	}
