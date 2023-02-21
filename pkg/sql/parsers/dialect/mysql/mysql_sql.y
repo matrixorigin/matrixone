@@ -201,7 +201,7 @@ import (
     tableLock tree.TableLock
     tableLocks []tree.TableLock
     tableLockType tree.TableLockType
-    cstr *id.CStr
+    cstr *tree.CStr
 }
 
 %token LEX_ERROR
@@ -4194,7 +4194,7 @@ table_alias:
 
 as_name_opt:
     {
-        $$ = id.NewCStr("", false)
+        $$ = tree.NewCStr("", false)
     }
 |   ident
     {
@@ -4206,11 +4206,11 @@ as_name_opt:
     }
 |   STRING
     {
-        $$ = id.NewCStr($1, true)
+        $$ = tree.NewCStr($1, true)
     }
 |   AS STRING
     {
-        $$ = id.NewCStr($2, true)
+        $$ = tree.NewCStr($2, true)
     }
 
 stmt_name:
@@ -4709,15 +4709,15 @@ role_spec:
 role_name:
     ID
 	{
-		$$ = id.NewCStr($1, false)
+		$$ = tree.NewCStr($1, false)
     }
 |   QUOTE_ID
 	{
-		$$ = id.NewCStr($1, true)
+		$$ = tree.NewCStr($1, true)
     }
 |   STRING
 	{
-    	$$ = id.NewCStr($1, false)
+    	$$ = tree.NewCStr($1, false)
     }
 
 index_prefix:
@@ -4817,7 +4817,7 @@ index_column_list:
 index_column:
     column_name length_opt asc_desc_opt
     {
-        // Order is parsed but just ignored as MySQL did.
+        // Order is parsed but just ignored as MySQL dtree.
         $$ = &tree.KeyPart{ColName: $1, Length: int($2), Direction: $3}
     }
 |   '(' expression ')' asc_desc_opt
@@ -5703,19 +5703,19 @@ column_name_unresolved:
 ident:
     ID
     {
-		$$ = id.NewCStr($1, false)
+		$$ = tree.NewCStr($1, false)
     }
 |	QUOTE_ID
 	{
-    	$$ = id.NewCStr($1, true)
+    	$$ = tree.NewCStr($1, true)
     }
 |   not_keyword
 	{
-    	$$ = id.NewCStr($1, false)
+    	$$ = tree.NewCStr($1, false)
     }
 |   non_reserved_keyword
 	{
-    	$$ = id.NewCStr($1, false)
+    	$$ = tree.NewCStr($1, false)
     }
 
 column_name:
