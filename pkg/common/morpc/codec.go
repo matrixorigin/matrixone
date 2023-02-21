@@ -325,12 +325,15 @@ func (c *baseCodec) uncompress(src []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		// the following line of code needs to free dst if it returns an error, but dst
+		// has been reassigned
+		old := dst
 		dst, err = uncompress(src, dst)
 		if err == nil {
 			return dst, nil
 		}
 
-		c.pool.Free(dst)
+		c.pool.Free(old)
 		if err != lz4.ErrInvalidSourceShortBuffer {
 			return nil, err
 		}
@@ -450,7 +453,13 @@ func (c *baseCodec) writeBody(
 	return out.RawSlice(out.GetReadIndex()+index, out.GetWriteIndex()), nil
 }
 
-func (c *baseCodec) readMessage(flag byte, data []byte, offset int, expectChecksum uint64, payloadSize int, msg *RPCMessage) error {
+func (c *baseCodec) readMessage(
+	flag byte,
+	data []byte,
+	offset int,
+	expectChecksum uint64,
+	payloadSize int,
+	msg *RPCMessage) error {
 	if offset == len(data) {
 		return nil
 	}
@@ -476,8 +485,12 @@ func (c *baseCodec) readMessage(flag byte, data []byte, offset int, expectChecks
 			if err != nil {
 				return err
 			}
+			// we cannot free dstPayload here as it will be set to the result for subsequent
+			// modules.
+			// TODO: We currently use copy to avoid memory leaks in mpool, but this introduces
+			// a memory allocation overhead that will need to be optimized away.
 			defer c.pool.Free(dstPayload)
-			payload = dstPayload
+			payload = clone(dstPayload)
 		}
 	}
 
@@ -632,4 +645,10 @@ func setWriterIndexAfterGow(out *buf.ByteBuf, n int) (int, int) {
 	out.Grow(n)
 	out.SetWriteIndex(out.GetReadIndex() + offset + n)
 	return out.GetReadIndex() + offset, offset
+}
+
+func clone(src []byte) []byte {
+	v := make([]byte, len(src))
+	copy(v, src)
+	return v
 }

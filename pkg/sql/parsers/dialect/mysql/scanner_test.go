@@ -28,19 +28,19 @@ func TestLiteralID(t *testing.T) {
 		out string
 	}{{
 		in:  "`aa`",
-		id:  ID,
+		id:  QUOTE_ID,
 		out: "aa",
 	}, {
 		in:  "```a```",
-		id:  ID,
+		id:  QUOTE_ID,
 		out: "`a`",
 	}, {
 		in:  "`a``b`",
-		id:  ID,
+		id:  QUOTE_ID,
 		out: "a`b",
 	}, {
 		in:  "`a``b`c",
-		id:  ID,
+		id:  QUOTE_ID,
 		out: "a`b",
 	}, {
 		in:  "`a``b",
@@ -54,6 +54,14 @@ func TestLiteralID(t *testing.T) {
 		in:  "``",
 		id:  LEX_ERROR,
 		out: "",
+	}, {
+		in:  "```a``b``",
+		id:  LEX_ERROR,
+		out: "`a`b`",
+	}, {
+		in:  "```",
+		id:  LEX_ERROR,
+		out: "`",
 	}}
 
 	for _, tcase := range testcases {
