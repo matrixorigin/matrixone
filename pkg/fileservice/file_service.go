@@ -45,6 +45,10 @@ type FileService interface {
 	// Delete deletes multi file
 	// returns ErrFileNotFound if requested file not found
 	Delete(ctx context.Context, filePaths ...string) error
+
+	// Stat returns infomations about a file
+	// returns ErrFileNotFound if requested file not found
+	StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 }
 
 type IOVector struct {
@@ -53,6 +57,7 @@ type IOVector struct {
 	// service name is optional, if omitted, the receiver FileService will use the default name of the service
 	// file name parts are separated by '/'
 	// valid characters in file name: 0-9 a-z A-Z / ! - _ . * ' ( )
+	// and all printable non-ASCII characters
 	// example:
 	// s3:a/b/c S3:a/b/c represents the same file 'a/b/c' located in 'S3' service
 	FilePath string

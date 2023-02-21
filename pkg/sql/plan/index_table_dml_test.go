@@ -45,7 +45,7 @@ func TestSingleSQLQuery(t *testing.T) {
 
 	sql := "update emp, (select deptno from dept) as tx set emp.sal = 3333 where tx.deptno = emp.empno"
 
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -55,7 +55,7 @@ func TestSingleSQLQuery(t *testing.T) {
 
 // Single column unique index
 func TestSingleTableDeleteSQL(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(true)
 
 	sqls := []string{
 		"DELETE FROM emp where sal > 2000",
@@ -74,7 +74,7 @@ func TestSingleTableDeleteSQL(t *testing.T) {
 
 // Composite unique index
 func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(true)
 
 	sqls := []string{
 		"delete from employees where sal > 2000",
@@ -94,7 +94,7 @@ func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {
 
 // Single column unique index
 func TestMultiTableDeleteSQL(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(true)
 	sqls := []string{
 		"delete emp,dept from emp ,dept where emp.deptno = dept.deptno and emp.deptno = 10",
 		"delete emp,dept from emp ,dept where emp.deptno = dept.deptno and sal > 2000",
@@ -113,7 +113,7 @@ func TestMultiTableDeleteSQL(t *testing.T) {
 
 // Delete without index table
 func TestWithoutIndexTableDeleteSQL(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(true)
 
 	sqls := []string{
 		"delete from nation",
@@ -128,7 +128,7 @@ func TestWithoutIndexTableDeleteSQL(t *testing.T) {
 }
 
 func TestSingleTableUpdate(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(true)
 
 	sqls := []string{
 		"update dept set dname = 'XXX' where deptno = 10",
@@ -145,7 +145,7 @@ func TestSingleTableUpdate(t *testing.T) {
 }
 
 func TestSingleTableWithAliasUpdate(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(true)
 
 	sqls := []string{
 		"update emp t1 set t1.sal = t1.sal + 500, t1.comm = 1200 where t1.deptno = 10",
@@ -165,7 +165,7 @@ func TestSingleTableWithAliasUpdate(t *testing.T) {
 }
 
 func TestMultiTableUpdate(t *testing.T) {
-	mock := NewMockOptimizer()
+	mock := NewMockOptimizer(true)
 
 	sqls := []string{
 		//1.-----------------

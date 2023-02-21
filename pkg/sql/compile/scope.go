@@ -16,14 +16,20 @@ package compile
 
 import (
 	"context"
-	"strings"
+	"hash/crc32"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -71,6 +77,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 func (s *Scope) MergeRun(c *Compile) error {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	errChan := make(chan error, len(s.PreScopes))
+
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
 		case Normal:
@@ -115,17 +122,46 @@ func (s *Scope) MergeRun(c *Compile) error {
 			}(s.PreScopes[i])
 		}
 	}
+	var errReceiveChan chan error
+	if len(s.RemoteReceivRegInfos) > 0 {
+		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
+		s.notifyAndReceiveFromRemote(errReceiveChan)
+	}
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
 	}
 	// check sub-goroutine's error
-	for i := 0; i < len(s.PreScopes); i++ {
-		if err := <-errChan; err != nil {
-			return err
+	if errReceiveChan == nil {
+		// check sub-goroutine's error
+		for i := 0; i < len(s.PreScopes); i++ {
+			if err := <-errChan; err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	slen := len(s.PreScopes)
+	rlen := len(s.RemoteReceivRegInfos)
+	for {
+		select {
+		case err := <-errChan:
+			if err != nil {
+				return err
+			}
+			slen--
+		case err := <-errReceiveChan:
+			if err != nil {
+				return err
+			}
+			rlen--
+		}
+
+		if slen == 0 && rlen == 0 {
+			return nil
 		}
 	}
-	return nil
 }
 
 // RemoteRun send the scope to a remote node for execution.
@@ -133,11 +169,12 @@ func (s *Scope) MergeRun(c *Compile) error {
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		len(c.addr) == 0 || strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+		len(c.addr) == 0 || isCurrentCN(s.NodeInfo.Addr, c.addr) {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
 	err := s.remoteRun(c)
+
 	// tell connect operator that it's over
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
 	arg.Free(s.Proc, err != nil)
@@ -216,6 +253,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				RelationName: s.DataSource.RelationName,
 				Attributes:   s.DataSource.Attributes,
 			},
+			NodeInfo: s.NodeInfo,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
@@ -227,7 +265,7 @@ func (s *Scope) PushdownRun(c *Compile) error {
 	var end bool // exist flag
 	var err error
 
-	reg := srv.GetConnector(s.DataSource.PushdownId)
+	reg := colexec.Srv.GetConnector(s.DataSource.PushdownId)
 	for {
 		bat := <-reg.Ch
 		if bat == nil {
@@ -258,7 +296,8 @@ func (s *Scope) JoinRun(c *Compile) error {
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
-			Magic: Merge,
+			Magic:    Merge,
+			NodeInfo: s.NodeInfo,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
@@ -402,6 +441,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 		}
 		s.Instructions[0] = vm.Instruction{
 			Op:  vm.Merge,
+			Idx: s.Instructions[0].Idx, // TODO: remove it
 			Arg: &merge.Argument{},
 		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
@@ -431,7 +471,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			ss[i].appendInstruction(vm.Instruction{
 				Op: vm.Connector,
 				Arg: &connector.Argument{
-					Reg: s.Proc.Reg.MergeReceivers[i],
+					Reg: s.Proc.Reg.MergeReceivers[j],
 				},
 			})
 			j++
@@ -485,6 +525,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 			Addr: srcScope.NodeInfo.Addr,
 			Data: make([][]byte, len(srcScope.NodeInfo.Data)),
 		},
+		RemoteReceivRegInfos: srcScope.RemoteReceivRegInfos,
 	}
 
 	// copy node.Data
@@ -542,4 +583,101 @@ func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
 		targetScope.Instructions[i] = dupInstruction(&srcScope.Instructions[i], regMap)
 	}
 	return nil
+}
+
+func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
+	for _, rr := range s.RemoteReceivRegInfos {
+		go func(info RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
+			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
+			if errStream != nil {
+				reg.Ch <- nil
+				errChan <- errStream
+				return
+			}
+			defer func(streamSender morpc.Stream) {
+				close(reg.Ch)
+				_ = streamSender.Close()
+			}(streamSender)
+
+			c, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			_ = cancel
+			message := cnclient.AcquireMessage()
+			{
+				message.Id = streamSender.ID()
+				message.Cmd = pbpipeline.PrepareDoneNotifyMessage
+				message.Uuid = info.Uuid[:]
+			}
+			if errSend := streamSender.Send(c, message); errSend != nil {
+				reg.Ch <- nil
+				errChan <- errSend
+				return
+			}
+
+			messagesReceive, errReceive := streamSender.Receive()
+			if errReceive != nil {
+				reg.Ch <- nil
+				errChan <- errReceive
+				return
+			}
+
+			if err := receiveMsgAndForward(c, messagesReceive, reg.Ch, mp); err != nil {
+				reg.Ch <- nil
+				errChan <- err
+				return
+			}
+			reg.Ch <- nil
+			errChan <- nil
+		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], s.Proc.GetMPool())
+	}
+
+	return nil
+}
+
+func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, forwardCh chan *batch.Batch, mp *mpool.MPool) error {
+	var val morpc.Message
+	var dataBuffer []byte
+	var ok bool
+	for {
+		select {
+		case <-ctx.Done():
+			return moerr.NewRPCTimeout(ctx)
+		case val, ok = <-receiveCh:
+		}
+
+		if val == nil || !ok {
+			return moerr.NewStreamClosedNoCtx()
+		}
+
+		m, ok := val.(*pbpipeline.Message)
+		if !ok {
+			panic("unexpected message type for cn-server")
+		}
+
+		// receive an end message from remote
+		if err := pbpipeline.GetMessageErrorInfo(m); err != nil {
+			return err
+		}
+
+		// end message
+		if m.IsEndMessage() {
+			return nil
+		}
+
+		// normal receive
+		dataBuffer = append(dataBuffer, m.Data...)
+		switch m.GetSid() {
+		case pbpipeline.BatchWaitingNext:
+			continue
+		case pbpipeline.BatchEnd:
+			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
+				return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
+			}
+			bat, err := decodeBatch(mp, dataBuffer)
+			if err != nil {
+				return err
+			}
+			forwardCh <- bat
+			dataBuffer = nil
+		}
+	}
 }

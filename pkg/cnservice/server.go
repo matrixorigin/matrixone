@@ -104,13 +104,16 @@ func NewService(
 	srv.pu = pu
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
-		morpc.NewMessageCodec(srv.acquireMessage),
+		morpc.NewMessageCodec(srv.acquireMessage,
+			morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize))),
 		morpc.WithServerLogger(srv.logger),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
 				m := v.(morpc.RPCMessage)
-				srv.releaseMessage(m.Message.(*pipeline.Message))
+				if !m.InternalMessage() {
+					srv.releaseMessage(m.Message.(*pipeline.Message))
+				}
 			}),
 		),
 		morpc.WithServerDisableAutoCancelContext())

@@ -184,8 +184,10 @@ func NewLogtailServer(
 		morpc.WithServerLogger(s.logger.RawLogger()),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
-				m := v.(morpc.RPCMessage)
-				s.pool.segments.Release(m.Message.(*LogtailResponseSegment))
+				msg := v.(morpc.RPCMessage)
+				if !msg.InternalMessage() {
+					s.pool.segments.Release(msg.Message.(*LogtailResponseSegment))
+				}
 			}),
 		),
 	)
@@ -265,13 +267,8 @@ func (s *LogtailServer) onSubscription(
 		return nil
 	}
 
-	timeout := s.cfg.ResponseSendTimeout
-	if deadline, ok := sendCtx.Deadline(); ok {
-		timeout = time.Until(deadline)
-	}
-
 	sub := subscription{
-		timeout: timeout,
+		timeout: ContextTimeout(sendCtx, s.cfg.ResponseSendTimeout),
 		tableID: tableID,
 		req:     req,
 		session: session,

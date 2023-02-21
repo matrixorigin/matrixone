@@ -18,34 +18,35 @@ import "github.com/matrixorigin/matrixone/pkg/vm/process"
 
 const (
 	Top = iota
-	Join
-	Semi
-	Left
 	Limit
-	Merge //5
 	Order
-	Group  //7
-	Output //8
+	Group
+	Output
 	Offset
 	Product
 	Restrict
 	Dispatch
-	Connector  //13
-	Projection //14
-	Anti
-	Single //16
-	Mark
+	Connector
+	Projection
 
+	Join
 	LoopJoin
+	Left
 	LoopLeft
-	LoopSemi
-	LoopAnti
+	Single
 	LoopSingle
+	Semi
+	LoopSemi
+	Anti
+	LoopAnti
+	Mark
+	LoopMark
 
+	Merge
 	MergeTop
 	MergeLimit
 	MergeOrder
-	MergeGroup //26
+	MergeGroup
 	MergeOffset
 
 	Deletion
@@ -60,7 +61,9 @@ const (
 	HashBuild
 
 	TableFunction
-
+	// MergeBlock is used to recieve S3 block metLoc Info, and write
+	// them to S3
+	MergeBlock
 	// LastInstructionOp is not a true operator and must set at last.
 	// It was used by unit testing to ensure that
 	// all functions related to instructions can reach 100% coverage.

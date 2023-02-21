@@ -186,6 +186,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			return err
 		}
 		task.toSegEntry = toSegEntry.GetMeta().(*catalog.SegmentEntry)
+		task.toSegEntry.SetSorted()
 		task.createdSegs = append(task.createdSegs, task.toSegEntry)
 	} else {
 		if toSegEntry, err = task.rel.GetSegment(task.toSegEntry.GetID()); err != nil {

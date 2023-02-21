@@ -300,21 +300,21 @@ insert into t2 values ('a1'),('a2');
 with qn as (SELECT s1 FROM t2)
 select s1, s1 = ANY (select * from qn) from t1;
 s1	s1 = ANY (select * from qn)
-a1	1
-a2	1
-a3	0
+a1	true
+a2	true
+a3	false
 with qn as (SELECT s1 FROM t2)
 select s1, s1 < ANY (select * from qn) from t1;
 s1	s1 < ANY (select * from qn)
-a1	1
-a2	0
-a3	0
+a1	true
+a2	false
+a3	false
 with qn as (SELECT s1 FROM t2)
 select s1, s1 = ANY (select * from qn) from t1;
 s1	s1 = ANY (select * from qn)
-a1	1
-a2	1
-a3	0
+a1	true
+a2	true
+a3	false
 drop table if exists t1;
 drop table if exists t2;
 DROP TABLE IF EXISTS t3;

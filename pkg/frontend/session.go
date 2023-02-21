@@ -206,6 +206,21 @@ type Session struct {
 	expiredTime time.Time
 
 	planCache *planCache
+
+	autoIncrCaches defines.AutoIncrCaches
+}
+
+// The update version. Four function.
+func (ses *Session) SetAutoIncrCaches(autocaches defines.AutoIncrCaches) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.autoIncrCaches = autocaches
+}
+
+func (ses *Session) GetAutoIncrCaches() defines.AutoIncrCaches {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.autoIncrCaches
 }
 
 const saveQueryIdCnt = 10
@@ -224,6 +239,7 @@ func (ses *Session) Dispose() {
 		mpool.DeleteMPool(mp)
 		ses.SetMemPool(mp)
 	}
+	ses.cleanCache()
 }
 
 type errInfo struct {
@@ -307,6 +323,15 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Dispose()
 	})
+	proc := process.New(
+		context.Background(),
+		ses.GetMemPool(),
+		ses.GetTxnHandler().GetTxnClient(),
+		ses.GetTxnHandler().GetTxnOperator(),
+		pu.FileService,
+		pu.GetClusterDetails,
+	)
+	ses.GetTxnCompileCtx().SetProcess(proc)
 	return ses
 }
 
@@ -317,9 +342,10 @@ type BackgroundSession struct {
 }
 
 // NewBackgroundSession generates an independent background session executing the sql
-func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
+func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables, autoincrcaches defines.AutoIncrCaches) *BackgroundSession {
 	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false)
 	ses.SetOutputCallback(fakeDataSetFetcher)
+	ses.SetAutoIncrCaches(autoincrcaches)
 	if stmt := motrace.StatementFromContext(ctx); stmt != nil {
 		logutil.Infof("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
 	}
@@ -373,7 +399,7 @@ func (ses *Session) IsBackgroundSession() bool {
 	return ses.isBackgroundSession
 }
 
-func (ses *Session) cachePlan(sql string, stmts []*tree.Statement, plans []*plan.Plan) {
+func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.planCache.cache(sql, stmts, plans)
@@ -532,7 +558,7 @@ func (ses *Session) InvalidatePrivilegeCache() {
 
 // GetBackgroundExec generates a background executor
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
-	return NewBackgroundHandler(ctx, ses.GetMemPool(), ses.GetParameterUnit())
+	return NewBackgroundHandler(ctx, ses.GetMemPool(), ses.GetParameterUnit(), ses.autoIncrCaches)
 }
 
 func (ses *Session) GetIsInternal() bool {
@@ -1299,7 +1325,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	pu := ses.GetParameterUnit()
 	mp := ses.GetMemPool()
 	logDebugf(sessionProfile, "check tenant %s exists", tenant)
-	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, mp, pu, sqlForCheckTenant)
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, mp, pu, sqlForCheckTenant, ses.GetAutoIncrCaches())
 	if err != nil {
 		return nil, err
 	}
@@ -1332,7 +1358,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	logDebugf(sessionProfile, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
-	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser)
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser, ses.GetAutoIncrCaches())
 	if err != nil {
 		return nil, err
 	}
@@ -1375,7 +1401,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		logDebugf(sessionProfile, "check default role of user %s.", tenant)
 		//step4 : check role exists or not
 		sqlForCheckRoleExists := getSqlForRoleIdOfRole(tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists, ses.GetAutoIncrCaches())
 		if err != nil {
 			return nil, err
 		}
@@ -1387,7 +1413,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		logDebugf(sessionProfile, "check granted role of user %s.", tenant)
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser, ses.GetAutoIncrCaches())
 		if err != nil {
 			return nil, err
 		}
@@ -1405,7 +1431,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		logDebugf(sessionProfile, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sql)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sql, ses.GetAutoIncrCaches())
 		if err != nil {
 			return nil, err
 		}
@@ -1682,9 +1708,10 @@ func (th *TxnHandler) GetStorage() engine.Engine {
 }
 
 func (th *TxnHandler) GetTxn() (TxnOperator, error) {
-	err := th.GetSession().TxnStart()
+	ses := th.GetSession()
+	err := ses.TxnStart()
 	if err != nil {
-		logutil.Errorf("GetTxn. error:%v", err)
+		logErrorf(ses.GetConciseProfile(), "GetTxn. error:%v", err)
 		return nil, err
 	}
 	return th.GetTxnOperator(), nil
@@ -1707,12 +1734,28 @@ const (
 )
 
 type TxnCompilerContext struct {
-	dbName     string
-	QryTyp     QueryType
-	txnHandler *TxnHandler
-	ses        *Session
-	proc       *process.Process
-	mu         sync.Mutex
+	dbName               string
+	QryTyp               QueryType
+	txnHandler           *TxnHandler
+	ses                  *Session
+	proc                 *process.Process
+	buildAlterView       bool
+	dbOfView, nameOfView string
+	mu                   sync.Mutex
+}
+
+func (tcc *TxnCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tcc.buildAlterView = yesOrNo
+	tcc.dbOfView = dbName
+	tcc.nameOfView = viewName
+}
+
+func (tcc *TxnCompilerContext) GetBuildingAlterView() (bool, string, string) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.buildAlterView, tcc.dbOfView, tcc.nameOfView
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
@@ -1826,11 +1869,11 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (con
 		return nil, nil, err
 	}
 
-	tableNames, err := db.Relations(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
+	// tableNames, err := db.Relations(ctx)
+	// if err != nil {
+	// 	return nil, nil, err
+	// }
+	// logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
 	table, err := db.Relation(ctx, tableName)
@@ -1910,8 +1953,11 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var properties []*plan2.Property
 	var TableType, Createsql string
 	var CompositePkey *plan2.ColDef = nil
+	var partitionInfo *plan2.PartitionByDef
 	var viewSql *plan2.ViewDef
 	var foreignKeys []*plan2.ForeignKeyDef
+	var primarykey *plan2.PrimaryKeyDef
+	var indexes []*plan2.IndexDef
 	var refChildTbls []uint64
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -1968,32 +2014,14 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		} else if c, ok := def.(*engine.ConstraintDef); ok {
 			for _, ct := range c.Cts {
 				switch k := ct.(type) {
-				case *engine.UniqueIndexDef:
-					u := &plan.UniqueIndexDef{}
-					err = u.UnMarshalUniqueIndexDef(([]byte)(k.UniqueIndex))
-					if err != nil {
-						return nil, nil
-					}
-					defs = append(defs, &plan.TableDef_DefType{
-						Def: &plan.TableDef_DefType_UIdx{
-							UIdx: u,
-						},
-					})
-				case *engine.SecondaryIndexDef:
-					s := &plan.SecondaryIndexDef{}
-					err = s.UnMarshalSecondaryIndexDef(([]byte)(k.SecondaryIndex))
-					if err != nil {
-						return nil, nil
-					}
-					defs = append(defs, &plan.TableDef_DefType{
-						Def: &plan.TableDef_DefType_SIdx{
-							SIdx: s,
-						},
-					})
+				case *engine.IndexDef:
+					indexes = k.Indexes
 				case *engine.ForeignKeyDef:
 					foreignKeys = k.Fkeys
 				case *engine.RefChildTableDef:
 					refChildTbls = k.Tables
+				case *engine.PrimaryKeyDef:
+					primarykey = k.Pkey
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
@@ -2002,16 +2030,12 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Value: commnetDef.Comment,
 			})
 		} else if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			p := &plan2.PartitionInfo{}
+			p := &plan2.PartitionByDef{}
 			err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
 			if err != nil {
 				return nil, nil
 			}
-			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_Partition{
-					Partition: p,
-				},
-			})
+			partitionInfo = p
 		}
 	}
 	if len(properties) > 0 {
@@ -2047,6 +2071,10 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		SchemaName: dbName,
 		ObjName:    tableName,
 	}
+	originCols := make([]*plan2.ColDef, len(cols))
+	for i, col := range cols {
+		originCols[i] = plan2.DeepCopyColDef(col)
+	}
 
 	tableDef := &plan2.TableDef{
 		TblId:         tableId,
@@ -2055,11 +2083,15 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		Defs:          defs,
 		TableType:     TableType,
 		Createsql:     Createsql,
+		Pkey:          primarykey,
 		CompositePkey: CompositePkey,
 		ViewSql:       viewSql,
+		Partition:     partitionInfo,
 		Fkeys:         foreignKeys,
 		RefChildTbls:  refChildTbls,
 		ClusterBy:     clusterByDef,
+		OriginCols:    originCols,
+		Indexes:       indexes,
 	}
 	return obj, tableDef
 }
@@ -2222,7 +2254,7 @@ func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {
-	stats = new(plan2.Stats)
+
 	dbName := obj.GetSchemaName()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
@@ -2237,14 +2269,8 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	blockNum, rows, err := table.FilteredStats(ctx, e)
-	if err != nil {
-		return
-	}
-	stats.Cost = float64(rows)
-	stats.Outcnt = stats.Cost * plan2.DeduceSelectivity(e)
-	stats.BlockNum = blockNum
-	return
+	stats, _ = table.Stats(ctx, e)
+	return stats
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
@@ -2256,28 +2282,17 @@ func (tcc *TxnCompilerContext) GetProcess() *process.Process {
 func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
 	proc := tcc.proc
 	// get file size
-	fs := objectio.NewObjectFS(proc.FileService, catalog.QueryResultMetaDir)
-	dirs, err := fs.ListDir(catalog.QueryResultMetaDir)
+	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
+	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
 		return nil, "", err
 	}
-	var size int64 = -1
-	name := catalog.BuildQueryResultMetaName(proc.SessionInfo.Account, uuid)
-	for _, d := range dirs {
-		if d.Name == name {
-			size = d.Size
-		}
-	}
-	if size == -1 {
-		return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
-	}
 	// read meta's meta
-	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
 	reader, err := objectio.NewObjectReader(path, proc.FileService)
 	if err != nil {
 		return nil, "", err
 	}
-	bs, err := reader.ReadAllMeta(proc.Ctx, size, proc.Mp())
+	bs, err := reader.ReadAllMeta(proc.Ctx, e.Size, proc.Mp())
 	if err != nil {
 		return nil, "", err
 	}
@@ -2357,8 +2372,8 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string) ([]ExecResult, error) {
-	bh := NewBackgroundHandler(ctx, mp, pu)
+func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string, autoIncrCaches defines.AutoIncrCaches) ([]ExecResult, error) {
+	bh := NewBackgroundHandler(ctx, mp, pu, autoIncrCaches)
 	defer bh.Close()
 	logutil.Debugf("background exec sql:%v", sql)
 	err := bh.Exec(ctx, sql)
@@ -2388,10 +2403,10 @@ type BackgroundHandler struct {
 	ses *BackgroundSession
 }
 
-var NewBackgroundHandler = func(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit) BackgroundExec {
+var NewBackgroundHandler = func(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, autoincrcaches defines.AutoIncrCaches) BackgroundExec {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(ctx, mp, pu, GSysVariables),
+		ses: NewBackgroundSession(ctx, mp, pu, GSysVariables, autoincrcaches),
 	}
 	return bh
 }

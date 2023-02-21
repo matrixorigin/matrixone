@@ -18,12 +18,12 @@ import (
 	"context"
 	goErrors "errors"
 	"fmt"
-	"io"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"time"
 
 	"github.com/lni/dragonboat/v4/logger"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -50,23 +50,26 @@ type dummyStringWriter struct{}
 func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
 	return fmt.Printf("dummyStringWriter: %s\n", s)
 }
+func (w *dummyStringWriter) WriteRow(row *table.Row) error {
+	fmt.Printf("dummyStringWriter: %v\n", row.ToStrings())
+	return nil
+}
+func (w *dummyStringWriter) GetContent() string          { return "" }
+func (w *dummyStringWriter) FlushAndClose() (int, error) { return 0, nil }
 
-var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName, motrace.WriteFactoryConfig) io.StringWriter {
+var dummyFSWriterFactory = func(context.Context, string, *table.Table, time.Time) table.RowWriter {
 	return &dummyStringWriter{}
 }
 
-func bootstrap(ctx context.Context) (context.Context, error) {
+func bootstrap(ctx context.Context) error {
 	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", DisableStore: false})
+	SV := config.ObservabilityParameters{}
+	SV.SetDefaultValues("v0.6.0")
 	// init trace/log/error framework & BatchProcessor
-	return motrace.Init(ctx,
-		motrace.WithMOVersion("v0.6.0"),
+	return motrace.InitWithConfig(ctx,
+		&SV,
 		// nodeType like CN/DN/LogService; id maybe in config.
 		motrace.WithNode("node_uuid", trace.NodeTypeStandalone),
-		// config[enableTrace], default: true
-		motrace.EnableTracer(true),
-		// config[traceBatchProcessor], distributed node should use "FileService" in system_vars_config.toml
-		// "FileService" is not implement yet
-		motrace.WithBatchProcessMode("FileService"),
 		// WithFSWriterFactory for config[traceBatchProcessor] = "FileService"
 		motrace.WithFSWriterFactory(dummyFSWriterFactory),
 		// WithSQLExecutor for config[traceBatchProcessor] = "InternalExecutor"
@@ -231,11 +234,12 @@ func shutdown(ctx context.Context) {
 func main() {
 	ctx := context.Background()
 
-	// rootCtx should be root Context of Server running, you can get it also by trace.DefaultContext()
-	rootCtx, err := bootstrap(ctx)
+	// rootCtx should be root Context of Server running, you can get it also by motrace.DefaultContext()
+	err := bootstrap(ctx)
 	if err != nil {
 		panic(err)
 	}
+	rootCtx := motrace.DefaultContext()
 	// show rootCtx in zap.logger format
 	logutil.Info("root ctx", trace.ContextField(rootCtx))
 	logutil.Info("default ctx", trace.ContextField(motrace.DefaultContext()))

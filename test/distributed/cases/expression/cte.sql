@@ -234,14 +234,12 @@ create table t1 (s1 char(5), index s1(s1));
 create table t2 (s1 char(5), index s1(s1));
 insert into t1 values ('a1'),('a2'),('a3');
 insert into t2 values ('a1'),('a2');
--- @bvt:issue#3312
 with qn as (SELECT s1 FROM t2)
 select s1, s1 = ANY (select * from qn) from t1;
 with qn as (SELECT s1 FROM t2)
 select s1, s1 < ANY (select * from qn) from t1;
 with qn as (SELECT s1 FROM t2)
 select s1, s1 = ANY (select * from qn) from t1;
--- @bvt:issue
 
 drop table if exists t1;
 drop table if exists t2;

@@ -308,7 +308,10 @@ func (cmd *EntryCommand) WriteTo(w io.Writer) (n int64, err error) {
 		if err = binary.Write(w, binary.BigEndian, cmd.Segment.state); err != nil {
 			return
 		}
-		n += 8 + 8 + 1
+		if err = binary.Write(w, binary.BigEndian, cmd.Segment.sorted); err != nil {
+			return
+		}
+		n += 8 + 8 + 1 + 1
 		var n2 int64
 		n2, err = cmd.entry.WriteOneNodeTo(w)
 		if err != nil {
@@ -418,6 +421,11 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += 1
+		var sorted bool
+		if err = binary.Read(r, binary.BigEndian, &sorted); err != nil {
+			return
+		}
+		n += 1
 		if sn, err = cmd.entry.ReadOneNodeFrom(r); err != nil {
 			return
 		}
@@ -425,6 +433,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		cmd.Segment = NewReplaySegmentEntry()
 		cmd.Segment.MetaBaseEntry = cmd.entry.(*MetaBaseEntry)
 		cmd.Segment.state = state
+		cmd.Segment.sorted = sorted
 	case CmdUpdateBlock:
 		entry := NewReplayMetaBaseEntry()
 		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {

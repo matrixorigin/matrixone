@@ -142,7 +142,10 @@ func NewService(
 	codec := morpc.NewMessageCodec(mf, codecOpts...)
 	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
-			respPool.Put(i.(morpc.RPCMessage).Message)
+			msg := i.(morpc.RPCMessage)
+			if !msg.InternalMessage() {
+				respPool.Put(msg.Message)
+			}
 		})),
 		morpc.WithServerLogger(service.runtime.Logger().RawLogger()),
 	)

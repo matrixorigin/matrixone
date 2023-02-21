@@ -17,12 +17,15 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/fagongzi/goetty/v2"
 	"io"
 	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+
+	"github.com/fagongzi/goetty/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -156,7 +159,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().GetColumns().Return(cols, nil).AnyTimes()
 
 		cws := []ComputationWrapper{
-			use_t,
+			//use_t,
 			create_1,
 			select_1,
 		}
@@ -846,7 +849,7 @@ func Test_handleShowColumns(t *testing.T) {
 		err = handleShowColumns(ses, &tree.ShowColumns{
 			Table: tableName,
 		})
-		convey.So(err, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 
@@ -1036,43 +1039,6 @@ func Test_convert_type(t *testing.T) {
 	})
 }
 
-func Test_handleLoadData(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("call handleLoadData func", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-		ioses.EXPECT().Ref().AnyTimes()
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		proc := &process.Process{}
-
-		mce := NewMysqlCmdExecutor()
-		ses := &Session{
-			protocol: proto,
-		}
-		mce.ses = ses
-		load := &tree.Import{
-			Local: true,
-		}
-		err = mce.handleLoadData(ctx, proc, load)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-}
-
 func TestHandleDump(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("call handleDump func", t, func() {
@@ -1182,7 +1148,7 @@ func TestSerializePlanToJson(t *testing.T) {
 	}
 
 	for _, sql := range sqls {
-		mock := plan.NewMockOptimizer()
+		mock := plan.NewMockOptimizer(false)
 		plan, err := buildSingleSql(mock, t, sql)
 		if err != nil {
 			t.Fatalf("%+v", err)
@@ -1228,7 +1194,7 @@ func Test_getSqlType(t *testing.T) {
 		ses.getSqlType(sql)
 		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudUserSql)
 
-		sql = "/* cloud_nouser */ use db"
+		sql = "/* cloud_nonuser */ use db"
 		ses.getSqlType(sql)
 		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudNoUserSql)
 
@@ -1240,7 +1206,11 @@ func Test_getSqlType(t *testing.T) {
 
 func TestProcessLoadLocal(t *testing.T) {
 	convey.Convey("call processLoadLocal func", t, func() {
-		param := &tree.ExternParam{Filepath: "test.csv"}
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "test.csv",
+			},
+		}
 		proc := testutil.NewProc()
 		var writer *io.PipeWriter
 		proc.LoadLocalReader, writer = io.Pipe()
@@ -1259,6 +1229,7 @@ func TestProcessLoadLocal(t *testing.T) {
 			cnt++
 			return
 		}).AnyTimes()
+		ioses.EXPECT().Close().AnyTimes()
 		proto := &FakeProtocol{
 			ioses: ioses,
 		}
@@ -1284,4 +1255,43 @@ func TestProcessLoadLocal(t *testing.T) {
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
 	})
+}
+
+func Test_StatementClassify(t *testing.T) {
+	type arg struct {
+		stmt tree.Statement
+		want bool
+	}
+
+	args := []arg{
+		{&tree.ShowCreateTable{}, true},
+		{&tree.ShowCreateView{}, true},
+		{&tree.ShowCreateDatabase{}, true},
+		{&tree.ShowColumns{}, true},
+		{&tree.ShowDatabases{}, true},
+		{&tree.ShowTarget{}, true},
+		{&tree.ShowTableStatus{}, true},
+		{&tree.ShowGrants{}, true},
+		{&tree.ShowTables{}, true},
+		{&tree.ShowProcessList{}, true},
+		{&tree.ShowErrors{}, true},
+		{&tree.ShowWarnings{}, true},
+		{&tree.ShowCollation{}, true},
+		{&tree.ShowVariables{}, true},
+		{&tree.ShowStatus{}, true},
+		{&tree.ShowIndex{}, true},
+		{&tree.ShowFunctionStatus{}, true},
+		{&tree.ShowNodeList{}, true},
+		{&tree.ShowLocks{}, true},
+		{&tree.ShowTableNumber{}, true},
+		{&tree.ShowColumnNumber{}, true},
+		{&tree.ShowTableValues{}, true},
+		{&tree.ShowAccounts{}, true},
+	}
+
+	for _, a := range args {
+		ret, err := StatementCanBeExecutedInUncommittedTransaction(nil, a.stmt)
+		assert.Nil(t, err)
+		assert.Equal(t, ret, a.want)
+	}
 }

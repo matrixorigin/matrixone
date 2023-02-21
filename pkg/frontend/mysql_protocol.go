@@ -227,7 +227,6 @@ type rowHandler struct {
 	untilBytesInOutbufToFlush int
 	//the count of the flush
 	flushCount int
-	enableLog  bool
 }
 
 /*
@@ -370,7 +369,18 @@ func (mp *MysqlProtocolImpl) ResetStatistics() {
 }
 
 func (mp *MysqlProtocolImpl) Quit() {
+	mp.m.Lock()
+	defer mp.m.Unlock()
 	mp.ProtocolImpl.Quit()
+	if mp.strconvBuffer != nil {
+		mp.strconvBuffer = nil
+	}
+	if mp.lenEncBuffer != nil {
+		mp.lenEncBuffer = nil
+	}
+	if mp.binaryNullBuffer != nil {
+		mp.binaryNullBuffer = nil
+	}
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
@@ -2150,18 +2160,11 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 
 // open a new row of the resultset
 func (mp *MysqlProtocolImpl) openRow(_ []byte) error {
-	if mp.enableLog {
-		logutil.Info("openRow")
-	}
 	return mp.openPacket()
 }
 
 // close a finished row of the resultset
 func (mp *MysqlProtocolImpl) closeRow(_ []byte) error {
-	if mp.enableLog {
-		logutil.Info("closeRow")
-	}
-
 	err := mp.closePacket(true)
 	if err != nil {
 		return err
@@ -2176,10 +2179,6 @@ func (mp *MysqlProtocolImpl) closeRow(_ []byte) error {
 
 // flushOutBuffer the data in the outbuf into the network
 func (mp *MysqlProtocolImpl) flushOutBuffer() error {
-	if mp.enableLog {
-		logutil.Info("flush")
-	}
-
 	if mp.bytesInOutBuffer >= mp.untilBytesInOutbufToFlush {
 		mp.flushCount++
 		mp.writeBytes += uint64(mp.bytesInOutBuffer)
@@ -2195,10 +2194,6 @@ func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 
 // open a new mysql protocol packet
 func (mp *MysqlProtocolImpl) openPacket() error {
-	if mp.enableLog {
-		logutil.Info("openPacket")
-	}
-
 	outbuf := mp.tcpConn.OutBuf()
 	n := 4
 	outbuf.Grow(n)
@@ -2207,17 +2202,11 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 	writeIdx += n
 	mp.bytesInOutBuffer += n
 	outbuf.SetWriteIndex(writeIdx)
-	if mp.enableLog {
-		logutil.Infof("openPacket curWriteIdx %d", outbuf.GetWriteIndex())
-	}
 	return nil
 }
 
 // fill the packet with data
 func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
-	if mp.enableLog {
-		logutil.Infof("fillPacket len %d", len(elems))
-	}
 	outbuf := mp.tcpConn.OutBuf()
 	n := len(elems)
 	i := 0
@@ -2247,9 +2236,6 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 		writeIdx += curLen
 		mp.bytesInOutBuffer += curLen
 		outbuf.SetWriteIndex(writeIdx)
-		if mp.enableLog {
-			logutil.Infof("fillPacket curWriteIdx %d", outbuf.GetWriteIndex())
-		}
 
 		//> 16MB, split it
 		curDataLen = outbuf.GetWriteIndex() - mp.beginWriteIndex - HeaderLengthOfTheProtocol
@@ -2271,17 +2257,11 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 
 // close a mysql protocol packet
 func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
-	if mp.enableLog {
-		logutil.Info("closePacket")
-	}
 	if !mp.isInPacket() {
 		return nil
 	}
 	outbuf := mp.tcpConn.OutBuf()
 	payLoadLen := outbuf.GetWriteIndex() - mp.beginWriteIndex - 4
-	if mp.enableLog {
-		logutil.Infof("closePacket curWriteIdx %d", outbuf.GetWriteIndex())
-	}
 	if payLoadLen < 0 || payLoadLen > int(MaxPayloadSize) {
 		return moerr.NewInternalError(mp.ses.requestCtx, "invalid payload len :%d curWriteIdx %d beginWriteIdx %d ",
 			payLoadLen, outbuf.GetWriteIndex(), mp.beginWriteIndex)
@@ -2573,7 +2553,8 @@ Reference to :mysql 8.0.23 mysys/crypt_genhash_impl.cc generate_user_salt(char*,
 */
 func generate_salt(n int) []byte {
 	buf := make([]byte, n)
-	rand.Read(buf)
+	r := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
+	r.Read(buf)
 	for i := 0; i < n; i++ {
 		buf[i] &= 0x7f
 		if buf[i] == 0 || buf[i] == '$' {
@@ -2584,7 +2565,6 @@ func generate_salt(n int) []byte {
 }
 
 func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
-	rand.Seed(time.Now().UTC().UnixNano())
 	salt := generate_salt(20)
 	mysql := &MysqlProtocolImpl{
 		ProtocolImpl: ProtocolImpl{
@@ -2602,7 +2582,6 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 			beginWriteIndex:           0,
 			bytesInOutBuffer:          0,
 			untilBytesInOutbufToFlush: maxBytesToFlush * 1024,
-			enableLog:                 false,
 		},
 		SV: SV,
 	}

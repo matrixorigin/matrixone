@@ -64,3 +64,12 @@ insert into t1 values(1, 'aaaa'),(2, 'bbbbbb'),(3, 'cccccccc');
 create view v1 as select (case when a>1 then 'NO' else 'YES' end) as IS_NULLABLE from t1;
 desc v1;
 drop view v1;
+
+drop database if exists test;
+create database test;
+use test;
+drop table if exists t1;
+create table t1(a int);
+create view v1 as select * from t1;
+SELECT relname, rel_createsql,relkind FROM mo_catalog.mo_tables WHERE reldatabase='test' order by relname;
+drop database test;

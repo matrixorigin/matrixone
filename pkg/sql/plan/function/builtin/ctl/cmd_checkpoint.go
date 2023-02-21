@@ -15,8 +15,12 @@
 package ctl
 
 import (
+	"time"
+
 	"github.com/fagongzi/util/protoc"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -27,7 +31,18 @@ func handleCheckpoint() handleFunc {
 			return nil, nil
 		},
 		func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
-			return nil, nil
+			flushDuration := time.Duration(0)
+			var err error
+			if parameter != "" {
+				flushDuration, err = time.ParseDuration(parameter)
+				if err != nil {
+					return nil, err
+				}
+			}
+			payload, err := types.Encode((db.Checkpoint{
+				FlushDuration: flushDuration,
+			}))
+			return payload, err
 		},
 		func(data []byte) (interface{}, error) {
 			resp := pb.DNStringResponse{}

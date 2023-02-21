@@ -29,6 +29,7 @@ const (
 	JoinSideLeft            = 1 << iota
 	JoinSideRight           = 1 << iota
 	JoinSideBoth            = JoinSideLeft | JoinSideRight
+	JoinSideMark            = 1 << iota
 	JoinSideCorrelated      = 1 << iota
 )
 
@@ -49,19 +50,16 @@ type Type = plan.Type
 type Plan_Query = plan.Plan_Query
 type Property = plan.Property
 type TableDef_DefType_Properties = plan.TableDef_DefType_Properties
-type TableDef_DefType_Partition = plan.TableDef_DefType_Partition
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
-type PartitionInfo = plan.PartitionInfo
-type TableDef_DefType_UIdx = plan.TableDef_DefType_UIdx
-type TableDef_DefType_SIdx = plan.TableDef_DefType_SIdx
-type UniqueIndexDef = plan.UniqueIndexDef
+type PartitionByDef = plan.PartitionByDef
 type ClusterByDef = plan.ClusterByDef
-type SecondaryIndexDef = plan.SecondaryIndexDef
 type OrderBySpec = plan.OrderBySpec
 type CreateTable_FkColName = plan.CreateTable_FkColName
 type ForeignKeyDef = plan.ForeignKeyDef
 type ClusterTable = plan.ClusterTable
+type PrimaryKeyDef = plan.PrimaryKeyDef
+type IndexDef = plan.IndexDef
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -93,6 +91,10 @@ type CompilerContext interface {
 	GetProcess() *process.Process
 
 	GetQueryResultMeta(uuid string) ([]*ColDef, string, error)
+	SetBuildingAlterView(yesOrNo bool, dbName, viewName string)
+	// is building the alter view or not
+	// return: yes or no, dbName, viewName
+	GetBuildingAlterView() (bool, string, string)
 }
 
 type Optimizer interface {

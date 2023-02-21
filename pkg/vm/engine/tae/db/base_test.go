@@ -16,10 +16,11 @@ package db
 
 import (
 	"errors"
-	checkpoint2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"sync"
 	"testing"
 	"time"
+
+	checkpoint2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -114,11 +115,6 @@ func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
 }
 func (e *testEngine) getRelationWithTxn(txn txnif.AsyncTxn) (rel handle.Relation) {
 	return getRelationWithTxn(e.t, txn, defaultTestDB, e.schema.Name)
-}
-
-func (e *testEngine) checkpointCatalog() {
-	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(e.DB.TxnMgr.StatMaxCommitTS())
-	assert.NoError(e.t, err)
 }
 
 func (e *testEngine) compactBlocks(skipConflict bool) {

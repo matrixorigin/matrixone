@@ -15,6 +15,8 @@
 package catalog
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -30,10 +32,21 @@ const (
 	IndexTableIndexColName   = "__mo_index_idx_col"
 	IndexTablePrimaryColName = "__mo_index_pri_col"
 	ExternalFilePath         = "__mo_filepath"
+	IndexTableNamePrefix     = "__mo_index_unique__"
+	AutoIncrTableName        = "%!%mo_increment_columns"
 )
+
+var AutoIncrColumnNames = []string{Row_ID, "name", "offset", "step"}
 
 func ContainExternalHidenCol(col string) bool {
 	return col == ExternalFilePath
+}
+
+func IsHiddenTable(name string) bool {
+	if strings.HasPrefix(name, IndexTableNamePrefix) {
+		return true
+	}
+	return strings.EqualFold(name, AutoIncrTableName)
 }
 
 const (
@@ -104,13 +117,14 @@ const (
 	SystemColAttr_Update          = "attr_update"
 	SystemColAttr_IsClusterBy     = "attr_is_clusterby"
 
-	BlockMeta_ID         = "block_id"
-	BlockMeta_EntryState = "entry_state"
-	BlockMeta_Sorted     = "sorted"
-	BlockMeta_MetaLoc    = "meta_loc"
-	BlockMeta_DeltaLoc   = "delta_loc"
-	BlockMeta_CommitTs   = "committs"
-	BlockMeta_SegmentID  = "segment_id"
+	BlockMeta_ID              = "block_id"
+	BlockMeta_EntryState      = "entry_state"
+	BlockMeta_Sorted          = "sorted"
+	BlockMeta_MetaLoc         = "%!%mo__meta_loc"
+	BlockMeta_DeltaLoc        = "delta_loc"
+	BlockMeta_CommitTs        = "committs"
+	BlockMeta_SegmentID       = "segment_id"
+	BlockMeta_TableIdx_Insert = "%!%mo__meta_tbl_index" // mark which table this metaLoc belongs to
 
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
@@ -424,6 +438,7 @@ type Meta struct {
 	ExpiredTime types.Timestamp
 	Plan        string
 	Ast         string
+	ColumnMap   string
 }
 
 var (
@@ -441,6 +456,7 @@ var (
 		types.New(types.T_timestamp, 0, 0, 0), // expired_time
 		types.New(types.T_text, 0, 0, 0),      // Plan
 		types.New(types.T_text, 0, 0, 0),      // Ast
+		types.New(types.T_text, 0, 0, 0),      // ColumnMap
 	}
 
 	MetaColNames = []string{
@@ -457,6 +473,7 @@ var (
 		"expired_time",
 		"plan",
 		"Ast",
+		"ColumnMap",
 	}
 )
 
@@ -474,4 +491,5 @@ const (
 	EXPIRED_TIME_IDX = 10
 	PLAN_IDX         = 11
 	AST_IDX          = 12
+	COLUMN_MAP_IDX   = 13
 )

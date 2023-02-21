@@ -15,48 +15,72 @@
 package dispatch
 
 import (
+	"context"
+	"time"
+
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type WrapperStream struct {
-	Stream morpc.Stream
-	Uuid   uuid.UUID
+type WrapperClientSession struct {
+	msgId uint64
+	cs    morpc.ClientSession
+	uuid  uuid.UUID
+	// toAddr string
+	doneCh chan struct{}
 }
 type container struct {
-	i       int
-	streams []*WrapperStream
+	// the clientsession info for the channel you want to dispatch
+	remoteReceivers []*WrapperClientSession
+	// sendFunc is the rule you want to send batch
+	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) error
 }
 
 type Argument struct {
-	ctr  *container
-	All  bool // dispatch batch to each consumer
-	Regs []*process.WaitRegister
+	ctr      *container
+	prepared bool
+	sendCnt  int
 
-	// crossCN is used to treat dispatch operator as a distributed operator
-	crossCN bool
-	// nodes[IBucket].Node.Address == ""
-	nodes      []colexec.WrapperNode
-	localIndex uint64
-	// streams is the stream which connect local CN with remote CN, so
-	// but streams[localIndex] is nil, because you need to send batch locally
-	// by localChan
-	sendFunc func(streams []*WrapperStream, localIndex uint64, bat *batch.Batch, localChan *process.WaitRegister, proc *process.Process) error
+	// FuncId means the sendFunc
+	FuncId int
+	// LocalRegs means the local register you need to send to.
+	LocalRegs []*process.WaitRegister
+	// RemoteRegs specific the remote reg you need to send to.
+	RemoteRegs []colexec.ReceiveInfo
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.crossCN {
-		arg.FreeCrossCN(proc, pipelineFailed)
-		return
+	if arg.ctr.remoteReceivers != nil {
+		for _, r := range arg.ctr.remoteReceivers {
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			_ = cancel
+			message := cnclient.AcquireMessage()
+			{
+				message.Id = r.msgId
+				message.Cmd = pipeline.BatchMessage
+				message.Sid = pipeline.MessageEnd
+				message.Uuid = r.uuid[:]
+			}
+			if pipelineFailed {
+				err := moerr.NewInternalErrorNoCtx("pipeline failed")
+				message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
+			}
+			r.cs.Write(timeoutCtx, message)
+			close(r.doneCh)
+		}
+
 	}
 
 	if pipelineFailed {
-		for i := range arg.Regs {
-			for len(arg.Regs[i].Ch) > 0 {
-				bat := <-arg.Regs[i].Ch
+		for i := range arg.LocalRegs {
+			for len(arg.LocalRegs[i].Ch) > 0 {
+				bat := <-arg.LocalRegs[i].Ch
 				if bat == nil {
 					break
 				}
@@ -65,40 +89,12 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		}
 	}
 
-	for i := range arg.Regs {
+	for i := range arg.LocalRegs {
 		select {
-		case <-arg.Regs[i].Ctx.Done():
-		case arg.Regs[i].Ch <- nil:
+		case <-arg.LocalRegs[i].Ctx.Done():
+		case arg.LocalRegs[i].Ch <- nil:
 		}
-		close(arg.Regs[i].Ch)
-	}
-}
-
-func (arg *Argument) FreeCrossCN(proc *process.Process, pipelineFailed bool) {
-	// closeStreams will send nil to reciever and close streams
-	// but it won't send nil to localChan, because when pipelineFailed,
-	// and our chan buffer size is only one, if we send a nil,it will result dead lock.
-	CloseStreams(arg.ctr.streams, arg.localIndex, proc)
-	if pipelineFailed {
-		for len(arg.Regs[arg.localIndex].Ch) > 0 {
-			bat := <-arg.Regs[arg.localIndex].Ch
-			if bat == nil {
-				break
-			}
-			bat.Clean(proc.Mp())
-		}
+		close(arg.LocalRegs[i].Ch)
 	}
 
-	for i := range arg.Regs {
-		// only localChan need to send nil, other chans will never be used,
-		// so ignore them
-		if i == int(arg.localIndex) {
-			select {
-			case <-arg.Regs[i].Ctx.Done():
-			case arg.Regs[i].Ch <- nil:
-			}
-		}
-		// every chan need to close no matter whether it will be used
-		close(arg.Regs[i].Ch)
-	}
 }

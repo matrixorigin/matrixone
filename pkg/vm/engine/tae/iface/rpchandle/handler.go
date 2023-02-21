@@ -16,6 +16,7 @@ package rpchandle
 
 import (
 	"context"
+
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -79,7 +80,14 @@ type Handler interface {
 	HandleForceCheckpoint(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req db.FlushTable,
+		req db.Checkpoint,
 		resp *apipb.SyncLogTailResp,
+	) error
+
+	HandleInspectDN(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req db.InspectDN,
+		resp *db.InspectResp,
 	) error
 }

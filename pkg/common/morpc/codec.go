@@ -28,21 +28,27 @@ import (
 	"github.com/pierrec/lz4/v4"
 )
 
-var (
-	flagHashPayload      byte = 1
-	flagChecksumEnabled  byte = 2
-	flagHasCustomHeader  byte = 4
-	flagCompressEnabled  byte = 8
-	flagStreamingMessage byte = 16
+const (
+	flagHashPayload byte = 1 << iota
+	flagChecksumEnabled
+	flagHasCustomHeader
+	flagCompressEnabled
+	flagStreamingMessage
+	flagPing
+	flagPong
+)
 
-	defaultMaxMessageSize = 1024 * 1024 * 100
-	checksumFieldBytes    = 8
-	totalSizeFieldBytes   = 4
-	payloadSizeFieldBytes = 4
+var (
+	defaultMaxBodyMessageSize = 1024 * 1024 * 100
+	checksumFieldBytes        = 8
+	totalSizeFieldBytes       = 4
+	payloadSizeFieldBytes     = 4
+
+	approximateHeaderSize = 1024 * 1024 * 10
 )
 
 func GetMessageSize() int {
-	return defaultMaxMessageSize
+	return defaultMaxBodyMessageSize
 }
 
 // WithCodecEnableChecksum enable checksum
@@ -70,9 +76,9 @@ func WithCodecIntegrationHLC(clock clock.Clock) CodecOption {
 func WithCodecMaxBodySize(size int) CodecOption {
 	return func(c *messageCodec) {
 		if size == 0 {
-			size = defaultMaxMessageSize
+			size = defaultMaxBodyMessageSize
 		}
-		c.codec = length.NewWithSize(c.bc, 0, 0, 0, size)
+		c.codec = length.NewWithSize(c.bc, 0, 0, 0, size+approximateHeaderSize)
 		c.bc.maxBodySize = size
 	}
 }
@@ -105,9 +111,12 @@ type messageCodec struct {
 func NewMessageCodec(messageFactory func() Message, options ...CodecOption) Codec {
 	bc := &baseCodec{
 		messageFactory: messageFactory,
-		maxBodySize:    defaultMaxMessageSize,
+		maxBodySize:    defaultMaxBodyMessageSize,
 	}
-	c := &messageCodec{codec: length.NewWithSize(bc, 0, 0, 0, defaultMaxMessageSize), bc: bc}
+	c := &messageCodec{
+		codec: length.NewWithSize(bc, 0, 0, 0, defaultMaxBodyMessageSize+approximateHeaderSize),
+		bc:    bc,
+	}
 	c.AddHeaderCodec(&deadlineContextCodec{})
 	c.AddHeaderCodec(&traceCodec{})
 
@@ -125,6 +134,16 @@ func (c *messageCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer
 	return c.bc.Encode(data, out, conn)
 }
 
+func (c *messageCodec) Valid(msg Message) error {
+	n := msg.Size()
+	if n >= c.bc.maxBodySize {
+		return moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
+			n,
+			c.bc.maxBodySize)
+	}
+	return nil
+}
+
 func (c *messageCodec) AddHeaderCodec(hc HeaderCodec) {
 	c.bc.headerCodecs = append(c.bc.headerCodecs, hc)
 }
@@ -140,12 +159,12 @@ type baseCodec struct {
 }
 
 func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
-	msg := RPCMessage{Message: c.messageFactory()}
+	msg := RPCMessage{}
 	offset := 0
 	data := getDecodeData(in)
 
 	// 2.1
-	flag, n := readFlag(data, offset)
+	flag, n := c.readFlag(&msg, data, offset)
 	offset += n
 
 	// 2.2
@@ -250,7 +269,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	}
 
 	// 3.1 message body
-	body, err := c.writeBody(out, msg.Message, totalSize)
+	body, err := c.writeBody(out, msg.Message)
 	if err != nil {
 		discardWritten()
 		return err
@@ -306,12 +325,15 @@ func (c *baseCodec) uncompress(src []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		// the following line of code needs to free dst if it returns an error, but dst
+		// has been reassigned
+		old := dst
 		dst, err = uncompress(src, dst)
 		if err == nil {
 			return dst, nil
 		}
 
-		c.pool.Free(dst)
+		c.pool.Free(old)
 		if err != lz4.ErrInvalidSourceShortBuffer {
 			return nil, err
 		}
@@ -347,6 +369,11 @@ func (c *baseCodec) getFlag(msg RPCMessage) byte {
 	}
 	if msg.stream {
 		flag |= flagStreamingMessage
+	}
+	if msg.internal {
+		if m, ok := msg.Message.(*flagOnlyMessage); ok {
+			flag |= m.flag
+		}
 	}
 	return flag
 }
@@ -385,17 +412,11 @@ func (c *baseCodec) readCustomHeaders(flag byte, msg *RPCMessage, data []byte, o
 
 func (c *baseCodec) writeBody(
 	out *buf.ByteBuf,
-	msg Message,
-	writtenSize int) ([]byte, error) {
-	maxCanWrite := c.maxBodySize - writtenSize
+	msg Message) ([]byte, error) {
 	size := msg.Size()
-	if size > maxCanWrite {
-		return nil,
-			moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
-				size+writtenSize,
-				c.maxBodySize)
+	if size == 0 {
+		return nil, nil
 	}
-
 	if !c.compressEnabled {
 		index, _ := setWriterIndexAfterGow(out, size)
 		data := out.RawSlice(index, index+size)
@@ -432,7 +453,17 @@ func (c *baseCodec) writeBody(
 	return out.RawSlice(out.GetReadIndex()+index, out.GetWriteIndex()), nil
 }
 
-func (c *baseCodec) readMessage(flag byte, data []byte, offset int, expectChecksum uint64, payloadSize int, msg *RPCMessage) error {
+func (c *baseCodec) readMessage(
+	flag byte,
+	data []byte,
+	offset int,
+	expectChecksum uint64,
+	payloadSize int,
+	msg *RPCMessage) error {
+	if offset == len(data) {
+		return nil
+	}
+
 	body := data[offset : len(data)-payloadSize]
 	payload := data[len(data)-payloadSize:]
 	if flag&flagChecksumEnabled != 0 {
@@ -454,8 +485,12 @@ func (c *baseCodec) readMessage(flag byte, data []byte, offset int, expectChecks
 			if err != nil {
 				return err
 			}
+			// we cannot free dstPayload here as it will be set to the result for subsequent
+			// modules.
+			// TODO: We currently use copy to avoid memory leaks in mpool, but this introduces
+			// a memory allocation overhead that will need to be optimized away.
 			defer c.pool.Free(dstPayload)
-			payload = dstPayload
+			payload = clone(dstPayload)
 		}
 	}
 
@@ -543,8 +578,18 @@ func getDecodeData(in *buf.ByteBuf) []byte {
 	return in.RawSlice(in.GetReadIndex(), in.GetMarkIndex())
 }
 
-func readFlag(data []byte, offset int) (byte, int) {
-	return data[offset], 1
+func (c *baseCodec) readFlag(msg *RPCMessage, data []byte, offset int) (byte, int) {
+	flag := data[offset]
+	if flag&flagPing != 0 {
+		msg.Message = &flagOnlyMessage{flag: flagPing}
+		msg.internal = true
+	} else if flag&flagPong != 0 {
+		msg.Message = &flagOnlyMessage{flag: flagPong}
+		msg.internal = true
+	} else {
+		msg.Message = c.messageFactory()
+	}
+	return flag, 1
 }
 
 func readChecksum(flag byte, data []byte, offset int) (uint64, int) {
@@ -600,4 +645,10 @@ func setWriterIndexAfterGow(out *buf.ByteBuf, n int) (int, int) {
 	out.Grow(n)
 	out.SetWriteIndex(out.GetReadIndex() + offset + n)
 	return out.GetReadIndex() + offset, offset
+}
+
+func clone(src []byte) []byte {
+	v := make([]byte, len(src))
+	copy(v, src)
+	return v
 }

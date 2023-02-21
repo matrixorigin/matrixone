@@ -2,7 +2,7 @@ service-type = "CN"
 data-dir = "./mo-data"
 
 [log]
-level = "debug"
+level = "info"
 format = "console"
 max-size = 512
 
@@ -43,3 +43,4 @@ type = "distributed-tae"
 
 [cn.frontend]
 port = 16002
+unix-socket = "/tmp/mysql2.sock"

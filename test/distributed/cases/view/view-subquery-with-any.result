@@ -106,23 +106,41 @@ create table t2 (s1 char(5));
 insert into t1 values ('a1'),('a2'),('a3');
 insert into t2 values ('a1'),('a2');
 select s1, s1 = ANY (SELECT s1 FROM t2) from t1;
-[unknown result because it is related to issue#3312]
+s1    s1 = any (select s1 from t2)
+a1    true
+a2    true
+a3    false
 select s1, s1 < ANY (SELECT s1 FROM t2) from t1;
-[unknown result because it is related to issue#3312]
+s1    s1 < any (select s1 from t2)
+a1    true
+a2    false
+a3    false
 select s1, s1 = ANY (SELECT s1 FROM t2) from t1;
-[unknown result because it is related to issue#3312]
+s1    s1 = any (select s1 from t2)
+a1    true
+a2    true
+a3    false
 create view v1 as select s1, s1 = ANY (SELECT s1 FROM t2) from t1;
-[unknown result because it is related to issue#3312]
 create view v2 as select s1, s1 < ANY (SELECT s1 FROM t2) from t1;
-[unknown result because it is related to issue#3312]
 create view v3 as select s1, s1 = ANY (SELECT s1 FROM t2) from t1;
-[unknown result because it is related to issue#3312]
 select * from v1;
-[unknown result because it is related to issue#3312]
+s1    s1 = any (select s1 from t2)
+a1    true
+a2    true
+a3    false
 select * from v2;
-[unknown result because it is related to issue#3312]
+s1    s1 < any (select s1 from t2)
+a1    true
+a2    false
+a3    false
 select * from v3;
-[unknown result because it is related to issue#3312]
+s1    s1 = any (select s1 from t2)
+a1    true
+a2    true
+a3    false
+drop view v1;
+drop view v2;
+drop view v3;
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
@@ -474,33 +492,33 @@ s1
 1
 create view v1 as select * from t1 where (s1 < any (select s1 from t1));
 select * from t1 where not (s1 < any (select s1 from t1));
-[unknown result because it is related to issue#3312]
+s1
+2
 create view v2 as select * from t1 where not (s1 < any (select s1 from t1));
-[unknown result because it is related to issue#3312]
 select * from t1 where (s1+1 = ANY (select s1 from t1));
 s1
 1
 select * from t1 where NOT(s1+1 = ANY (select s1 from t1));
-"ANY" subquery as non-root expression is not yet implemented
+s1
+2
 create view v3 as select * from t1 where (s1+1 = ANY (select s1 from t1));
 create view v4 as select * from t1 where NOT(s1+1 = ANY (select s1 from t1));
-"ANY" subquery as non-root expression is not yet implemented
 select * from v1;
 s1
 1
 select * from v2;
-SQL parser error: table "v2" does not exist
+s1
+2
 select * from v3;
 s1
 1
 select * from v4;
-SQL parser error: table "v4" does not exist
+s1
+2
 drop view v1;
 drop view v2;
-invalid view 'view-subquery-with-any.v2'
 drop view v3;
 drop view v4;
-invalid view 'view-subquery-with-any.v4'
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 CREATE TABLE t1 (s1 CHAR(1));
@@ -517,37 +535,37 @@ DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 create table t1 (a integer, b integer);
 select (select * from t1) = (select 1,2);
-[unknown result because it is related to issue#3312]
+[unknown result because it is related to issue#7691]
 select (select 1,2) = (select * from t1);
-[unknown result because it is related to issue#3312]
+[unknown result because it is related to issue#7691]
 select  (1,2) = ANY (select * from t1);
-[unknown result because it is related to issue#3312]
+(1, 2) = any (select * from t1)
+false
 select  (1,2) != ALL (select * from t1);
-[unknown result because it is related to issue#3312]
+(1, 2) != all (select * from t1)
+true
 create view v1 as select (select * from t1) = (select 1,2);
-[unknown result because it is related to issue#3312]
+[unknown result because it is related to issue#7691]
 create view v2 as select (select 1,2) = (select * from t1);
-[unknown result because it is related to issue#3312]
+[unknown result because it is related to issue#7691]
 create view v3 as select  (1,2) = ANY (select * from t1);
-[unknown result because it is related to issue#3312]
 create view v4 as select  (1,2) != ALL (select * from t1);
-[unknown result because it is related to issue#3312]
 select * from v1;
-[unknown result because it is related to issue#3312]
+[unknown result because it is related to issue#7691]
 select * from v2;
-[unknown result because it is related to issue#3312]
+[unknown result because it is related to issue#7691]
 select * from v3;
-[unknown result because it is related to issue#3312]
+(1, 2) = any (select * from t1)
+false
 select * from v4;
-[unknown result because it is related to issue#3312]
+(1, 2) != all (select * from t1)
+true
 drop view v1;
-[unknown result because it is related to issue#3312]
+[unknown result because it is related to issue#7691]
 drop view v2;
-[unknown result because it is related to issue#3312]
+[unknown result because it is related to issue#7691]
 drop view v3;
-[unknown result because it is related to issue#3312]
 drop view v4;
-[unknown result because it is related to issue#3312]
 DROP TABLE IF EXISTS t1;
 select 1 from dual where 1 < any (select 2);
 1
@@ -938,61 +956,61 @@ create table t1 (a int);
 insert into t1 values (1),(2),(3);
 update t1 set a=NULL where a=2;
 select 1 > ANY (SELECT * from t1);
-[unknown result because it is related to issue#3312]
+1 > any (select * from t1)
+null
 select 10 > ANY (SELECT * from t1);
-[unknown result because it is related to issue#3312]
+10 > any (select * from t1)
+true
 create view v1 as select 1 > ANY (SELECT * from t1);
-[unknown result because it is related to issue#3312]
 create view v2 as select 10 > ANY (SELECT * from t1);
-[unknown result because it is related to issue#3312]
 select * from v1;
-[unknown result because it is related to issue#3312]
+1 > any (select * from t1)
+null
 select * from v2;
-[unknown result because it is related to issue#3312]
+10 > any (select * from t1)
+true
 drop view v1;
-[unknown result because it is related to issue#3312]
 drop view v2;
-[unknown result because it is related to issue#3312]
 DROP TABLE IF EXISTS t1;
 create table t1 (a varchar(20));
 insert into t1 values ('A'),('BC'),('DEF');
 update t1 set a=NULL where a='BC';
 select 'A' > ANY (SELECT * from t1);
-[unknown result because it is related to issue#3312]
+A > any (select * from t1)
+null
 select 'XYZS' > ANY (SELECT * from t1);
-[unknown result because it is related to issue#3312]
+XYZS > any (select * from t1)
+true
 create view v1 as select 'A' > ANY (SELECT * from t1);
-[unknown result because it is related to issue#3312]
 create view v2 as select 'XYZS' > ANY (SELECT * from t1);
-[unknown result because it is related to issue#3312]
 select * from v1;
-[unknown result because it is related to issue#3312]
+A > any (select * from t1)
+null
 select * from v2;
-[unknown result because it is related to issue#3312]
+XYZS > any (select * from t1)
+true
 drop view v1;
-[unknown result because it is related to issue#3312]
 drop view v2;
-[unknown result because it is related to issue#3312]
 DROP TABLE IF EXISTS t1;
 create table t1 (a float);
 insert into t1 values (1.5),(2.5),(3.5);
 update t1 set a=NULL where a=2.5;
 select 1.5 > ANY (SELECT * from t1);
-[unknown result because it is related to issue#3312]
+1.5 > any (select * from t1)
+null
 select 10.5 > ANY (SELECT * from t1);
-[unknown result because it is related to issue#3312]
+10.5 > any (select * from t1)
+true
 create view v1 as select 1.5 > ANY (SELECT * from t1);
-[unknown result because it is related to issue#3312]
 create view v2 as select 10.5 > ANY (SELECT * from t1);
-[unknown result because it is related to issue#3312]
 select * from v1;
-[unknown result because it is related to issue#3312]
+1.5 > any (select * from t1)
+null
 select * from v2;
-[unknown result because it is related to issue#3312]
+10.5 > any (select * from t1)
+true
 drop view v1;
-[unknown result because it is related to issue#3312]
 drop view v2;
-[unknown result because it is related to issue#3312]
 DROP TABLE IF EXISTS t1;
 create table t1 (s1 int);
 insert into t1 values (1),(null);
@@ -1000,17 +1018,14 @@ select * from t1 where s1 < all (select s1 from t1);
 s1
 create view v1 as select * from t1 where s1 < all (select s1 from t1);
 select * from t1 where s1 < all (select s1 from t1);
-[unknown result because it is related to issue#3312]
+s1
 create view v2 as select * from t1 where s1 < all (select s1 from t1);
-[unknown result because it is related to issue#3312]
 select * from v1;
-[unknown result because it is related to issue#3312]
+s1
 select * from v2;
-[unknown result because it is related to issue#3312]
+s1
 drop view v1;
-[unknown result because it is related to issue#3312]
 drop view v2;
-[unknown result because it is related to issue#3312]
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1( a INT );
 INSERT INTO t1 VALUES (1),(2);
@@ -1025,11 +1040,11 @@ SELECT * FROM t1 WHERE a = ANY ( SELECT 1 UNION SELECT 1 UNION SELECT 1 );
 a
 1
 create view v1 as SELECT * FROM t1 WHERE a = ANY ( SELECT 1 UNION ( SELECT 1 UNION SELECT 1 ) );
-table v1 already exists
 create view v2 as SELECT * FROM t1 WHERE a = ANY ( ( SELECT 1 UNION SELECT 1 )  UNION SELECT 1 );
 create view v3 as SELECT * FROM t1 WHERE a = ANY ( SELECT 1 UNION SELECT 1 UNION SELECT 1 );
 select * from v1;
-invalid input: column s1 does not exist
+a
+1
 select * from v2;
 a
 1

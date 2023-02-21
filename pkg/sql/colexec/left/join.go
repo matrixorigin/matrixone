@@ -197,7 +197,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 							return err
 						}
 					} else {
-						if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+						if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
 							rbat.Clean(proc.Mp())
 							return err
 						}

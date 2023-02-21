@@ -2302,6 +2302,41 @@ var operators = map[int]Functions{
 		},
 	},
 
+	ILIKE: {
+		Id:     ILIKE,
+		Flag:   plan.Function_STRICT,
+		Layout: BINARY_LOGICAL_OPERATOR,
+		Overloads: []Function{
+			{
+				Index: 0,
+				Args: []types.T{
+					types.T_char,
+					types.T_char,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.ILike,
+			},
+			{
+				Index: 1,
+				Args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.ILike,
+			},
+			{
+				Index: 2,
+				Args: []types.T{
+					types.T_text,
+					types.T_text,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.ILike,
+			},
+		},
+	},
+
 	BETWEEN: {
 		Id:          BETWEEN,
 		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,

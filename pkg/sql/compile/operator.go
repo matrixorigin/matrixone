@@ -17,58 +17,59 @@ package compile
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -158,6 +159,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.LoopSingle:
 		t := sourceIns.Arg.(*loopsingle.Argument)
 		res.Arg = &loopsingle.Argument{
+			Result: t.Result,
+			Cond:   t.Cond,
+			Typs:   t.Typs,
+		}
+	case vm.LoopMark:
+		t := sourceIns.Arg.(*loopmark.Argument)
+		res.Arg = &loopmark.Argument{
 			Result: t.Result,
 			Cond:   t.Cond,
 			Typs:   t.Typs,
@@ -284,30 +292,36 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.HashBuild:
 		t := sourceIns.Arg.(*hashbuild.Argument)
 		res.Arg = &hashbuild.Argument{
-			NeedHashMap: t.NeedHashMap,
-			NeedExpr:    t.NeedExpr,
-			Ibucket:     t.Ibucket,
-			Nbucket:     t.Nbucket,
-			Typs:        t.Typs,
-			Conditions:  t.Conditions,
+			NeedHashMap:    t.NeedHashMap,
+			NeedExpr:       t.NeedExpr,
+			NeedSelectList: t.NeedSelectList,
+			Ibucket:        t.Ibucket,
+			Nbucket:        t.Nbucket,
+			Typs:           t.Typs,
+			Conditions:     t.Conditions,
 		}
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
 		res.Arg = &external.Argument{
 			Es: &external.ExternalParam{
-				Attrs:         t.Es.Attrs,
-				Cols:          t.Es.Cols,
-				Name2ColIndex: t.Es.Name2ColIndex,
-				CreateSql:     t.Es.CreateSql,
-				FileList:      t.Es.FileList,
-				Filter:        t.Es.Filter,
-				Fileparam: &external.ExternalFileparam{
-					End:       t.Es.Fileparam.End,
-					FileCnt:   t.Es.Fileparam.FileCnt,
-					FileFin:   t.Es.Fileparam.FileFin,
-					FileIndex: t.Es.Fileparam.FileIndex,
+				ExParamConst: external.ExParamConst{
+					Attrs:         t.Es.Attrs,
+					Cols:          t.Es.Cols,
+					Name2ColIndex: t.Es.Name2ColIndex,
+					CreateSql:     t.Es.CreateSql,
+					FileList:      t.Es.FileList,
+					OriginCols:    t.Es.OriginCols,
+					Extern:        t.Es.Extern,
 				},
-				Extern: t.Es.Extern,
+				ExParam: external.ExParam{
+					Filter: t.Es.Filter,
+					Fileparam: &external.ExFileparam{
+						End:       t.Es.Fileparam.End,
+						FileCnt:   t.Es.Fileparam.FileCnt,
+						FileFin:   t.Es.Fileparam.FileFin,
+						FileIndex: t.Es.Fileparam.FileIndex,
+					},
+				},
 			},
 		}
 	case vm.Connector:
@@ -325,16 +339,43 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		if regMap != nil {
 			sourceArg := sourceIns.Arg.(*dispatch.Argument)
 			arg := &dispatch.Argument{
-				All:  sourceArg.All,
-				Regs: make([]*process.WaitRegister, len(sourceArg.Regs)),
+				FuncId:     sourceArg.FuncId,
+				LocalRegs:  make([]*process.WaitRegister, len(sourceArg.LocalRegs)),
+				RemoteRegs: make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs)),
 			}
-			for j := range arg.Regs {
-				sourceReg := sourceArg.Regs[j]
-				if arg.Regs[j], ok = regMap[sourceReg]; !ok {
+			for j := range arg.LocalRegs {
+				sourceReg := sourceArg.LocalRegs[j]
+				if arg.LocalRegs[j], ok = regMap[sourceReg]; !ok {
 					panic("nonexistent wait register")
 				}
 			}
+			for j := range arg.RemoteRegs {
+				arg.RemoteRegs[j] = sourceArg.RemoteRegs[j]
+			}
 			res.Arg = arg
+		}
+	case vm.Insert:
+		t := sourceIns.Arg.(*insert.Argument)
+		res.Arg = &insert.Argument{
+			Ts: t.Ts,
+			// TargetTable:          t.TargetTable,
+			// TargetColDefs:        t.TargetColDefs,
+			Affected: t.Affected,
+			Engine:   t.Engine,
+			// DB:                   t.DB,
+			// TableID:              t.TableID,
+			// CPkeyColDef:          t.CPkeyColDef,
+			// DBName:               t.DBName,
+			// TableName:            t.TableName,
+			// UniqueIndexTables:    t.UniqueIndexTables,
+			// UniqueIndexDef:       t.UniqueIndexDef,
+			// SecondaryIndexTables: t.SecondaryIndexTables,
+			// SecondaryIndexDef:    t.SecondaryIndexDef,
+			// ClusterTable:         t.ClusterTable,
+			// ClusterByDef:         t.ClusterByDef,
+			IsRemote:  t.IsRemote,
+			InsertCtx: t.InsertCtx,
+			// HasAutoCol:           t.HasAutoCol,
 		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -349,250 +390,209 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 }
 
 func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
-	count := len(n.DeleteTablesCtx)
-	ds := make([]*deletion.DeleteCtx, count)
-	for i := 0; i < count; i++ {
-		var dbSource engine.Database
-		var relation engine.Relation
-		var err error
-		var isTemp bool
-		var tblName string
-		var dbName string
-		dbSource, err = eg.Database(proc.Ctx, n.DeleteTablesCtx[i].DbName, proc.TxnOperator)
-		if err != nil {
-			return nil, err
-		}
-		relation, err = dbSource.Relation(proc.Ctx, n.DeleteTablesCtx[i].TblName)
-		if err != nil {
-			var e error
-			dbSource, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-			if e != nil {
+	oldCtx := n.DeleteCtx
+	delCtx := &deletion.DeleteCtx{
+		DelSource: make([]engine.Relation, len(oldCtx.Ref)),
+		DelRef:    oldCtx.Ref,
+
+		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
+		IdxIdx:    oldCtx.IdxIdx,
+
+		OnRestrictIdx: oldCtx.OnRestrictIdx,
+
+		OnCascadeIdx:    oldCtx.OnCascadeIdx,
+		OnCascadeSource: make([]engine.Relation, len(oldCtx.OnCascadeRef)),
+
+		OnSetSource:       make([]engine.Relation, len(oldCtx.OnSetRef)),
+		OnSetUniqueSource: make([][]engine.Relation, len(oldCtx.Ref)),
+		OnSetIdx:          make([][]int32, len(oldCtx.OnSetIdx)),
+		OnSetTableDef:     oldCtx.OnSetDef,
+		OnSetRef:          oldCtx.OnSetRef,
+		OnSetUpdateCol:    make([]map[string]int32, len(oldCtx.OnSetUpdateCol)),
+
+		CanTruncate: oldCtx.CanTruncate,
+	}
+
+	if delCtx.CanTruncate {
+		for i, ref := range oldCtx.Ref {
+			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
+			if err != nil {
 				return nil, err
 			}
-
-			relation, e = dbSource.Relation(proc.Ctx, engine.GetTempTableName(n.DeleteTablesCtx[i].DbName, n.DeleteTablesCtx[i].TblName))
-			if e != nil {
+			delCtx.DelSource[i] = rel
+		}
+	} else {
+		for i, list := range oldCtx.OnSetIdx {
+			delCtx.OnSetIdx[i] = make([]int32, len(list.List))
+			for j, id := range list.List {
+				delCtx.OnSetIdx[i][j] = int32(id)
+			}
+		}
+		for i, ref := range oldCtx.Ref {
+			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
+			if err != nil {
 				return nil, err
 			}
-			isTemp = true
+			delCtx.DelSource[i] = rel
 		}
-
-		if isTemp {
-			dbName = defines.TEMPORARY_DBNAME
-			tblName = engine.GetTempTableName(n.DeleteTablesCtx[i].DbName, n.DeleteTablesCtx[i].TblName)
-		} else {
-			dbName = n.DeleteTablesCtx[i].DbName
-			tblName = n.DeleteTablesCtx[i].TblName
+		for i, ref := range oldCtx.IdxRef {
+			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
+			if err != nil {
+				return nil, err
+			}
+			delCtx.IdxSource[i] = rel
 		}
-
-		ds[i] = &deletion.DeleteCtx{
-			TableSource:        relation,
-			TableName:          tblName,
-			DbName:             dbName,
-			UseDeleteKey:       n.DeleteTablesCtx[i].UseDeleteKey,
-			CanTruncate:        n.DeleteTablesCtx[i].CanTruncate,
-			ColIndex:           n.DeleteTablesCtx[i].ColIndex,
-			IsIndexTableDelete: n.DeleteTablesCtx[i].IsIndexTableDelete,
+		for i, ref := range oldCtx.OnCascadeRef {
+			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
+			if err != nil {
+				return nil, err
+			}
+			delCtx.OnCascadeSource[i] = rel
+		}
+		for i, ref := range oldCtx.OnSetRef {
+			rel, uniqueRels, err := getRel(proc.Ctx, proc, eg, ref, oldCtx.OnSetDef[i])
+			if err != nil {
+				return nil, err
+			}
+			delCtx.OnSetSource[i] = rel
+			delCtx.OnSetUniqueSource[i] = uniqueRels
+		}
+		for i, idxMap := range oldCtx.OnSetUpdateCol {
+			delCtx.OnSetUpdateCol[i] = idxMap.Map
 		}
 	}
 
 	return &deletion.Argument{
-		DeleteCtxs: ds,
+		DeleteCtx: delCtx,
+		Engine:    eg,
 	}, nil
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
-	var db engine.Database
-	var relation engine.Relation
-	var err error
-	var isTemp bool
+	oldCtx := n.InsertCtx
 	ctx := proc.Ctx
-	if n.GetClusterTable().GetIsClusterTable() {
+	if oldCtx.GetClusterTable().GetIsClusterTable() {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
-	db, err = eg.Database(ctx, n.ObjRef.SchemaName, proc.TxnOperator)
+	newCtx := &insert.InsertCtx{
+		Idx:      oldCtx.Idx,
+		Ref:      oldCtx.Ref,
+		TableDef: oldCtx.TableDef,
+
+		ParentIdx:    oldCtx.ParentIdx,
+		ClusterTable: oldCtx.ClusterTable,
+	}
+
+	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
 	if err != nil {
 		return nil, err
 	}
-	relation, err = db.Relation(ctx, n.TableDef.Name)
-	if err != nil {
-		var e error
-		db, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-		if e != nil {
-			return nil, err
-		}
-
-		relation, e = db.Relation(proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
-		if e != nil {
-			return nil, err
-		}
-		isTemp = true
-	}
-	uniqueIndexTables := make([]engine.Relation, 0)
-	secondaryIndexTables := make([]engine.Relation, 0)
-	uDef, sDef := buildIndexDefs(n.TableDef.Defs)
-	if uDef != nil {
-		for i := range uDef.TableNames {
-			var indexTable engine.Relation
-			var err error
-			if uDef.TableExists[i] {
-				if isTemp {
-					indexTable, err = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, uDef.TableNames[i]))
-				} else {
-					indexTable, err = db.Relation(ctx, uDef.TableNames[i])
-				}
-				if err != nil {
-					return nil, err
-				}
-				uniqueIndexTables = append(uniqueIndexTables, indexTable)
-			}
-		}
-	}
-	if sDef != nil {
-		for i := range sDef.TableNames {
-			var indexTable engine.Relation
-			var err error
-			if sDef.TableExists[i] {
-				if isTemp {
-					indexTable, err = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, sDef.TableNames[i]))
-				} else {
-					indexTable, err = db.Relation(ctx, sDef.TableNames[i])
-				}
-				if err != nil {
-					return nil, err
-				}
-				secondaryIndexTables = append(secondaryIndexTables, indexTable)
-			}
-		}
-	}
-
-	var dbName string
-	var tblName string
-	if isTemp {
-		dbName = defines.TEMPORARY_DBNAME
-		tblName = engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name)
-	} else {
-		dbName = n.ObjRef.SchemaName
-		tblName = n.TableDef.Name
-	}
-
-	hasAutoCol := false
-	for i := 0; i < len(n.TableDef.Cols); i++ {
-		if n.TableDef.Cols[i].Typ.AutoIncr {
-			hasAutoCol = true
-			break
-		}
-	}
+	newCtx.Source = originRel
+	newCtx.UniqueSource = indexRels
 
 	return &insert.Argument{
-		TargetTable:          relation,
-		TargetColDefs:        n.TableDef.Cols,
-		Engine:               eg,
-		DB:                   db,
-		TableID:              relation.GetTableID(proc.Ctx),
-		DBName:               dbName,
-		TableName:            tblName,
-		CPkeyColDef:          n.TableDef.CompositePkey,
-		UniqueIndexTables:    uniqueIndexTables,
-		UniqueIndexDef:       uDef,
-		SecondaryIndexTables: secondaryIndexTables,
-		SecondaryIndexDef:    sDef,
-		ClusterByDef:         n.TableDef.ClusterBy,
-		ClusterTable:         n.GetClusterTable(),
-		HasAutoCol:           hasAutoCol,
+		InsertCtx: newCtx,
+		Engine:    eg,
 	}, nil
 }
 
 func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
-	updateCtxs := make([]*update.UpdateCtx, len(n.UpdateCtxs))
-	tableIDs := make([]uint64, len(n.UpdateCtxs))
-	dbs := make([]engine.Database, len(n.UpdateCtxs))
-	dbNames := make([]string, len(n.UpdateCtxs))
-	tblNames := make([]string, len(n.UpdateCtxs))
-	hasAtuoCol := make([]bool, len(n.UpdateCtxs))
-	for i, updateCtx := range n.UpdateCtxs {
-		var dbSource engine.Database
-		var relation engine.Relation
-		var err error
-		var isTemp bool
-		dbSource, err = eg.Database(proc.Ctx, updateCtx.DbName, proc.TxnOperator)
+	oldCtx := n.UpdateCtx
+	updateCtx := &update.UpdateCtx{
+		Source:       make([]engine.Relation, len(oldCtx.Ref)),
+		Idxs:         make([][]int32, len(oldCtx.Idx)),
+		TableDefs:    oldCtx.TableDefs,
+		Ref:          oldCtx.Ref,
+		UpdateCol:    make([]map[string]int32, len(oldCtx.UpdateCol)),
+		UniqueSource: make([][]engine.Relation, len(oldCtx.Ref)),
+
+		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
+		IdxIdx:    oldCtx.IdxIdx,
+
+		OnRestrictIdx: oldCtx.OnRestrictIdx,
+
+		OnCascadeIdx:          make([][]int32, len(oldCtx.OnCascadeIdx)),
+		OnCascadeSource:       make([]engine.Relation, len(oldCtx.OnCascadeRef)),
+		OnCascadeUniqueSource: make([][]engine.Relation, len(oldCtx.OnCascadeRef)),
+		OnCascadeRef:          oldCtx.OnCascadeRef,
+		OnCascadeTableDef:     oldCtx.OnCascadeDef,
+		OnCascadeUpdateCol:    make([]map[string]int32, len(oldCtx.OnCascadeUpdateCol)),
+
+		OnSetSource:       make([]engine.Relation, len(oldCtx.OnSetRef)),
+		OnSetUniqueSource: make([][]engine.Relation, len(oldCtx.OnSetRef)),
+		OnSetIdx:          make([][]int32, len(oldCtx.OnSetIdx)),
+		OnSetRef:          oldCtx.OnSetRef,
+		OnSetTableDef:     oldCtx.OnSetDef,
+		OnSetUpdateCol:    make([]map[string]int32, len(oldCtx.OnSetUpdateCol)),
+
+		ParentIdx: make([]map[string]int32, len(oldCtx.ParentIdx)),
+	}
+
+	for i, idxMap := range oldCtx.UpdateCol {
+		updateCtx.UpdateCol[i] = idxMap.Map
+	}
+	for i, list := range oldCtx.Idx {
+		updateCtx.Idxs[i] = make([]int32, len(list.List))
+		for j, id := range list.List {
+			updateCtx.Idxs[i][j] = int32(id)
+		}
+	}
+	for i, list := range oldCtx.OnSetIdx {
+		updateCtx.OnSetIdx[i] = make([]int32, len(list.List))
+		for j, id := range list.List {
+			updateCtx.OnSetIdx[i][j] = int32(id)
+		}
+	}
+	for i, list := range oldCtx.OnCascadeIdx {
+		updateCtx.OnCascadeIdx[i] = make([]int32, len(list.List))
+		for j, id := range list.List {
+			updateCtx.OnCascadeIdx[i][j] = int32(id)
+		}
+	}
+	for i, ref := range oldCtx.Ref {
+		rel, uniqueRels, err := getRel(proc.Ctx, proc, eg, ref, oldCtx.TableDefs[i])
 		if err != nil {
 			return nil, err
 		}
-		relation, err = dbSource.Relation(proc.Ctx, updateCtx.TblName)
-		dbs[i] = dbSource
+		updateCtx.Source[i] = rel
+		updateCtx.UniqueSource[i] = uniqueRels
+	}
+	for i, ref := range oldCtx.IdxRef {
+		rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
 		if err != nil {
-			var e error
-			dbSource, e = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-			if e != nil {
-				return nil, err
-			}
-			relation, e = dbSource.Relation(proc.Ctx, engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName))
-			if e != nil {
-				return nil, err
-			}
-			isTemp = true
+			return nil, err
 		}
-		tableIDs[i] = relation.GetTableID(proc.Ctx)
-
-		if isTemp {
-			dbNames[i] = defines.TEMPORARY_DBNAME
-			tblNames[i] = engine.GetTempTableName(updateCtx.DbName, updateCtx.TblName)
-		} else {
-			dbNames[i] = updateCtx.DbName
-			tblNames[i] = updateCtx.TblName
+		updateCtx.IdxSource[i] = rel
+	}
+	for i, ref := range oldCtx.OnCascadeRef {
+		rel, uniqueRels, err := getRel(proc.Ctx, proc, eg, ref, oldCtx.OnCascadeDef[i])
+		if err != nil {
+			return nil, err
 		}
-		tableIDs[i] = relation.GetTableID(proc.Ctx)
-
-		colNames := make([]string, 0, len(updateCtx.UpdateCols))
-		for _, col := range updateCtx.UpdateCols {
-			colNames = append(colNames, col.Name)
+		updateCtx.OnCascadeSource[i] = rel
+		updateCtx.OnCascadeUniqueSource[i] = uniqueRels
+	}
+	for i, ref := range oldCtx.OnSetRef {
+		rel, uniqueRels, err := getRel(proc.Ctx, proc, eg, ref, oldCtx.OnSetDef[i])
+		if err != nil {
+			return nil, err
 		}
-
-		updateCtxs[i] = &update.UpdateCtx{
-			HideKey:            updateCtx.HideKey,
-			HideKeyIdx:         updateCtx.HideKeyIdx,
-			UpdateAttrs:        colNames,
-			OtherAttrs:         updateCtx.OtherAttrs,
-			OrderAttrs:         updateCtx.OrderAttrs,
-			TableSource:        relation,
-			CPkeyColDef:        updateCtx.CompositePkey,
-			IsIndexTableUpdate: updateCtx.IsIndexTableUpdate,
-			IndexParts:         updateCtx.IndexParts,
-			ClusterByDef:       updateCtx.ClusterByDef,
-		}
-
-		if !updateCtx.IsIndexTableUpdate {
-			if len(updateCtx.UniqueIndexPos) > 0 {
-				for _, pos := range updateCtx.UniqueIndexPos {
-					updateCtxs[i].UniqueIndexPos = append(updateCtxs[i].UniqueIndexPos, int(pos))
-				}
-			}
-
-			if len(updateCtx.SecondaryIndexPos) > 0 {
-				for _, pos := range updateCtx.SecondaryIndexPos {
-					updateCtxs[i].SecondaryIndexPos = append(updateCtxs[i].SecondaryIndexPos, int(pos))
-				}
-			}
-		}
-		for j := 0; j < len(n.TableDefVec[i].Cols); j++ {
-			if n.TableDefVec[i].Cols[j].Typ.AutoIncr {
-				hasAtuoCol[i] = true
-				break
-			}
-		}
-
+		updateCtx.OnSetSource[i] = rel
+		updateCtx.OnSetUniqueSource[i] = uniqueRels
+	}
+	for i, idxMap := range oldCtx.OnCascadeUpdateCol {
+		updateCtx.OnCascadeUpdateCol[i] = idxMap.Map
+	}
+	for i, idxMap := range oldCtx.OnSetUpdateCol {
+		updateCtx.OnSetUpdateCol[i] = idxMap.Map
+	}
+	for i, idxMap := range oldCtx.ParentIdx {
+		updateCtx.ParentIdx[i] = idxMap.Map
 	}
 
 	return &update.Argument{
-		UpdateCtxs:  updateCtxs,
-		Engine:      eg,
-		DB:          dbs,
-		TableID:     tableIDs,
-		DBName:      dbNames,
-		TblName:     tblNames,
-		TableDefVec: n.TableDefVec,
-		HasAutoCol:  hasAtuoCol,
+		UpdateCtx: updateCtx,
+		Engine:    eg,
 	}, nil
 }
 
@@ -602,25 +602,32 @@ func constructProjection(n *plan.Node) *projection.Argument {
 	}
 }
 
-func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string) *external.Argument {
+func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset [][2]int) *external.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
 	return &external.Argument{
 		Es: &external.ExternalParam{
-			Attrs:         attrs,
-			Cols:          n.TableDef.Cols,
-			Extern:        param,
-			Name2ColIndex: n.TableDef.Name2ColIndex,
-			CreateSql:     n.TableDef.Createsql,
-			Ctx:           ctx,
-			FileList:      fileList,
-			Fileparam:     new(external.ExternalFileparam),
-			Filter: &external.FilterParam{
-				FilterExpr: colexec.RewriteFilterExprList(n.FilterList),
+			ExParamConst: external.ExParamConst{
+				Attrs:         attrs,
+				Cols:          n.TableDef.Cols,
+				Extern:        param,
+				Name2ColIndex: n.TableDef.Name2ColIndex,
+				FileOffset:    fileOffset,
+				CreateSql:     n.TableDef.Createsql,
+				Ctx:           ctx,
+				FileList:      fileList,
+				FileSize:      FileSize,
+				OriginCols:    n.TableDef.OriginCols,
+				ClusterTable:  n.GetClusterTable(),
 			},
-			ClusterTable: n.GetClusterTable(),
+			ExParam: external.ExParam{
+				Fileparam: new(external.ExFileparam),
+				Filter: &external.FilterParam{
+					FilterExpr: colexec.RewriteFilterExprList(n.FilterList),
+				},
+			},
 		},
 	}
 }
@@ -731,14 +738,18 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	}
 }
 
-func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onList []*plan.Expr) *mark.Argument {
+/*
+func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
-		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "mark result '%s'", expr))
+		if rel == 0 {
+			result[i] = pos
+		} else if rel == -1 {
+			result[i] = -1
+		} else {
+			panic(moerr.NewNYI(proc.Ctx, "loop mark result '%s'", expr))
 		}
-		result[i] = pos
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &mark.Argument{
@@ -746,11 +757,10 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onLis
 		Result:     result,
 		Cond:       cond,
 		Conditions: constructJoinConditions(conds, proc),
-		OnList:     onList,
+		OnList:     n.OnList,
 	}
 }
-
-var _ = constructMark
+*/
 
 func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
 	return &order.Argument{
@@ -860,10 +870,63 @@ func constructIntersect(n *plan.Node, proc *process.Process, ibucket, nbucket in
 	}
 }
 
-func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argument {
+func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Argument {
 	arg := new(dispatch.Argument)
-	arg.All = all
-	arg.Regs = regs
+	arg.LocalRegs = regs
+	if all {
+		arg.FuncId = dispatch.SendToAllLocalFunc
+	} else {
+		arg.FuncId = dispatch.SendToAnyLocalFunc
+	}
+
+	return arg
+}
+
+// ShuffleJoinDispatch is a cross-cn dispath
+// and it will send same batch to all register
+func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
+	arg := new(dispatch.Argument)
+
+	scopeLen := len(ss)
+	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
+	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
+
+	hasRemote := false
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
+
+		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
+			strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+			// Local reg.
+			// Put them into arg.LocalRegs
+			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
+		} else {
+			// Remote reg.
+			// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
+			hasRemote = true
+			newUuid := uuid.New()
+
+			arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
+				Uuid:     newUuid,
+				NodeAddr: s.NodeInfo.Addr,
+			})
+
+			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
+				Idx:      idx,
+				Uuid:     newUuid,
+				FromAddr: currentCNAddr,
+			})
+		}
+	}
+
+	if hasRemote {
+		arg.FuncId = dispatch.SendToAllFunc
+	} else {
+		arg.FuncId = dispatch.SendToAllLocalFunc
+	}
+
 	return arg
 }
 
@@ -975,6 +1038,25 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
+func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *loopmark.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr, proc)
+		if rel == 0 {
+			result[i] = pos
+		} else if rel == -1 {
+			result[i] = -1
+		} else {
+			panic(moerr.NewNYI(proc.Ctx, "loop mark result '%s'", expr))
+		}
+	}
+	return &loopmark.Argument{
+		Typs:   typs,
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
+
 func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Argument {
 	switch in.Op {
 	case vm.Anti:
@@ -987,23 +1069,26 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 	case vm.Mark:
 		arg := in.Arg.(*mark.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
+			NeedHashMap:    true,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+			Conditions:     arg.Conditions[1],
 		}
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
+			NeedHashMap:    true,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+			Conditions:     arg.Conditions[1],
 		}
 	case vm.Left:
 		arg := in.Arg.(*left.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
+			NeedHashMap:    true,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+			Conditions:     arg.Conditions[1],
 		}
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
@@ -1015,45 +1100,59 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 	case vm.Single:
 		arg := in.Arg.(*single.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
+			NeedHashMap:    true,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+			Conditions:     arg.Conditions[1],
 		}
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopJoin:
 		arg := in.Arg.(*loopjoin.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopLeft:
 		arg := in.Arg.(*loopleft.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopSemi:
 		arg := in.Arg.(*loopsemi.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopSingle:
 		arg := in.Arg.(*loopsingle.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+		}
+	case vm.LoopMark:
+		arg := in.Arg.(*loopmark.Argument)
+		return &hashbuild.Argument{
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 
 	default:
@@ -1208,16 +1307,68 @@ func exprRelPos(expr *plan.Expr) int32 {
 	return -1
 }
 
-func buildIndexDefs(defs []*plan.TableDef_DefType) (*plan.UniqueIndexDef, *plan.SecondaryIndexDef) {
-	var uIdxDef *plan.UniqueIndexDef = nil
-	var sIdxDef *plan.SecondaryIndexDef = nil
-	for _, def := range defs {
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_UIdx); ok {
-			uIdxDef = idxDef.UIdx
+// Get the 'engine.Relation' of the table by using 'ObjectRef' and 'TableDef', if 'TableDef' is nil, the relations of its index table will not be obtained
+// the first return value is Relation of the original table
+// the second return value is Relations of index tables
+func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef, tableDef *plan.TableDef) (engine.Relation, []engine.Relation, error) {
+	var dbSource engine.Database
+	var relation engine.Relation
+	var err error
+	var isTemp bool
+	oldDbName := ref.SchemaName
+	if ref.SchemaName != "" {
+		dbSource, err = eg.Database(ctx, ref.SchemaName, proc.TxnOperator)
+		if err != nil {
+			return nil, nil, err
 		}
-		if idxDef, ok := def.Def.(*plan.TableDef_DefType_SIdx); ok {
-			sIdxDef = idxDef.SIdx
+		relation, err = dbSource.Relation(ctx, ref.ObjName)
+		if err == nil {
+			isTemp = false
+		} else {
+			dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+			if err != nil {
+				return nil, nil, err
+			}
+			newObjeName := engine.GetTempTableName(ref.SchemaName, ref.ObjName)
+			newSchemaName := defines.TEMPORARY_DBNAME
+			ref.SchemaName = newSchemaName
+			ref.ObjName = newObjeName
+			relation, err = dbSource.Relation(ctx, newObjeName)
+			if err != nil {
+				return nil, nil, err
+			}
+			isTemp = true
+		}
+	} else {
+		_, _, relation, err = eg.GetRelationById(ctx, proc.TxnOperator, uint64(ref.Obj))
+		if err != nil {
+			return nil, nil, err
 		}
 	}
-	return uIdxDef, sIdxDef
+
+	var uniqueIndexTables []engine.Relation
+	if tableDef != nil {
+		uniqueIndexTables = make([]engine.Relation, 0)
+		if tableDef.Indexes != nil {
+			for _, indexdef := range tableDef.Indexes {
+				if indexdef.Unique {
+					var indexTable engine.Relation
+					if indexdef.TableExist {
+						if isTemp {
+							indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, indexdef.IndexTableName))
+						} else {
+							indexTable, err = dbSource.Relation(ctx, indexdef.IndexTableName)
+						}
+						if err != nil {
+							return nil, nil, err
+						}
+						uniqueIndexTables = append(uniqueIndexTables, indexTable)
+					}
+				} else {
+					continue
+				}
+			}
+		}
+	}
+	return relation, uniqueIndexTables, err
 }

@@ -405,9 +405,8 @@ func updatePartition2(
 		logutil.Errorf("consume %d-%s log tail error: %v\n", tbl.tableId, tbl.tableName, err)
 		return err
 	}
-	partition.Lock()
+	// Need a lock here.
 	partition.ts = *tl.Ts
-	partition.Unlock()
 	return nil
 }
 

@@ -158,16 +158,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		tblId := newRelation.GetTableID(c.ctx)
 
-		// for now ColumnId is equal ColumnIndex, and we have a bug to UpdateConstraint after created immediately
-		// so i comment these codes. if you want to remove these code, let @ouyuanning known.
 		newTableDef, err := newRelation.TableDefs(c.ctx)
 		if err != nil {
 			return err
 		}
 		var colNameToId = make(map[string]uint64)
+		var oldCt *engine.ConstraintDef
 		for _, def := range newTableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
 				colNameToId[attr.Attr.Name] = attr.Attr.ID
+			}
+			if ct, ok := def.(*engine.ConstraintDef); ok {
+				oldCt = ct
 			}
 		}
 		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
@@ -186,7 +188,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			newFkeys[i] = newDef
 		}
-		newCt, err := makeNewCreateConstraint(nil, &engine.ForeignKeyDef{
+		// remove old fk settings
+		newCt, err := makeNewCreateConstraint(oldCt, &engine.ForeignKeyDef{
 			Fkeys: newFkeys,
 		})
 		if err != nil {
@@ -213,16 +216,23 @@ func (s *Scope) CreateTable(c *Compile) error {
 				return err
 			}
 			var oldCt *engine.ConstraintDef
+			var oldRefChildDef *engine.RefChildTableDef
 			for _, def := range fkTableDef {
 				if ct, ok := def.(*engine.ConstraintDef); ok {
 					oldCt = ct
+					for _, ct := range oldCt.Cts {
+						if old, ok := ct.(*engine.RefChildTableDef); ok {
+							oldRefChildDef = old
+						}
+					}
 					break
 				}
 			}
-			newRefChildDef := &engine.RefChildTableDef{
-				Tables: []uint64{tblId},
+			if oldRefChildDef == nil {
+				oldRefChildDef = &engine.RefChildTableDef{}
 			}
-			newCt, err := makeNewCreateConstraint(oldCt, newRefChildDef)
+			oldRefChildDef.Tables = append(oldRefChildDef.Tables, tblId)
+			newCt, err := makeNewCreateConstraint(oldCt, oldRefChildDef)
 			if err != nil {
 				return err
 			}
@@ -378,10 +388,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 
 	// TODO: implement by insert ... select ...
 	// insert data into index table
-	switch t := qry.GetIndex().GetTableDef().Defs[0].Def.(type) {
-	case *plan.TableDef_DefType_UIdx:
-		targetAttrs := getIndexColsFromOriginTable(tblDefs, t.UIdx.Fields[0].Parts)
-
+	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
+	if indexDef.Unique {
+		targetAttrs := getIndexColsFromOriginTable(tblDefs, indexDef.Parts)
 		ret, err := r.Ranges(c.ctx, nil)
 		if err != nil {
 			return err
@@ -400,8 +409,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		}
 
 		if bat != nil {
-			indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, t.UIdx.Fields[0].Parts, qry.OriginTablePrimaryKey, c.proc)
-			indexR, err := d.Relation(c.ctx, t.UIdx.TableNames[0])
+			indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, indexDef.Parts, qry.OriginTablePrimaryKey, c.proc)
+			indexR, err := d.Relation(c.ctx, indexDef.IndexTableName)
 			if err != nil {
 				return err
 			}
@@ -462,79 +471,25 @@ func (s *Scope) DropIndex(c *Compile) error {
 	return nil
 }
 
-// TODO:
-// func makeNewUpdateConstraint()
 func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engine.ConstraintDef, error) {
 	// must fount dropName because of being checked in plan
-	for j, ct := range oldCt.Cts {
-		switch c := ct.(type) {
+	for i, ct := range oldCt.Cts {
+		switch def := ct.(type) {
 		case *engine.ForeignKeyDef:
-			ok := false
-			var def *engine.ForeignKeyDef
-			for _, ct := range oldCt.Cts {
-				if def, ok = ct.(*engine.ForeignKeyDef); ok {
-					for idx, fkDef := range def.Fkeys {
-						if fkDef.Name == dropName {
-							def.Fkeys = append(def.Fkeys[:idx], def.Fkeys[idx+1:]...)
-							break
-						}
-					}
+			for idx, fkDef := range def.Fkeys {
+				if fkDef.Name == dropName {
+					def.Fkeys = append(def.Fkeys[:idx], def.Fkeys[idx+1:]...)
+					oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
+					oldCt.Cts = append(oldCt.Cts, def)
 					break
 				}
 			}
-			if !ok {
-				oldCt.Cts = append(oldCt.Cts, c)
-			}
-
-		case *engine.UniqueIndexDef:
-			u := &plan.UniqueIndexDef{}
-			err := u.UnMarshalUniqueIndexDef(([]byte)(c.UniqueIndex))
-			if err != nil {
-				return nil, err
-			}
-			for i, name := range u.IndexNames {
-				if dropName == name {
-					// If all indexes of a table are not defined in plan.UniqueIndexDef, the code will be much simpler
-					u.IndexNames = append(u.IndexNames[:i], u.IndexNames[i+1:]...)
-					u.TableNames = append(u.TableNames[:i], u.TableNames[i+1:]...)
-					u.Fields = append(u.Fields[:i], u.Fields[i+1:]...)
-					u.TableExists = append(u.TableExists[:i], u.TableExists[i+1:]...)
-					u.Comments = append(u.Comments[:i], u.Comments[i+1:]...)
-
-					oldCt.Cts = append(oldCt.Cts[:j], oldCt.Cts[j+1:]...)
-					b, err := u.MarshalUniqueIndexDef()
-					if err != nil {
-						return nil, err
-					}
-					oldCt.Cts = append(oldCt.Cts, &engine.UniqueIndexDef{
-						UniqueIndex: string(b),
-					})
-					break
-				}
-			}
-		case *engine.SecondaryIndexDef:
-			u := &plan.SecondaryIndexDef{}
-			err := u.UnMarshalSecondaryIndexDef(([]byte)(c.SecondaryIndex))
-			if err != nil {
-				return nil, err
-			}
-			for i, name := range u.IndexNames {
-				if dropName == name {
-					// If all indexes of a table are not defined in plan.UniqueIndexDef, the code will be much simpler
-					u.IndexNames = append(u.IndexNames[:i], u.IndexNames[i+1:]...)
-					u.TableNames = append(u.TableNames[:i], u.TableNames[i+1:]...)
-					u.Fields = append(u.Fields[:i], u.Fields[i+1:]...)
-					u.TableExists = append(u.TableExists[:i], u.TableExists[i+1:]...)
-					u.Comments = append(u.Comments[:i], u.Comments[i+1:]...)
-
-					oldCt.Cts = append(oldCt.Cts[:j], oldCt.Cts[j+1:]...)
-					b, err := u.MarshalSecondaryIndexDef()
-					if err != nil {
-						return nil, err
-					}
-					oldCt.Cts = append(oldCt.Cts, &engine.SecondaryIndexDef{
-						SecondaryIndex: string(b),
-					})
+		case *engine.IndexDef:
+			for idx, index := range def.Indexes {
+				if index.IndexName == dropName {
+					def.Indexes = append(def.Indexes[:idx], def.Indexes[idx+1:]...)
+					oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
+					oldCt.Cts = append(oldCt.Cts, def)
 					break
 				}
 			}
@@ -553,11 +508,10 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 	switch t := c.(type) {
 	case *engine.ForeignKeyDef:
 		ok := false
-		var def *engine.ForeignKeyDef
-		for _, ct := range oldCt.Cts {
-			if def, ok = ct.(*engine.ForeignKeyDef); ok {
-				// i don't see any clause to change FK. only add or drop. so
-				def.Fkeys = append(def.Fkeys, t.Fkeys...)
+		for i, ct := range oldCt.Cts {
+			if _, ok = ct.(*engine.ForeignKeyDef); ok {
+				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
+				oldCt.Cts = append(oldCt.Cts, t)
 				break
 			}
 		}
@@ -567,91 +521,105 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 
 	case *engine.RefChildTableDef:
 		ok := false
-		var def *engine.RefChildTableDef
-		for _, ct := range oldCt.Cts {
-			if def, ok = ct.(*engine.RefChildTableDef); ok {
-				def.Tables = append(def.Tables, t.Tables...)
-				break
-			}
-		}
-		if !ok {
-			oldCt.Cts = append(oldCt.Cts, c)
-		}
-
-	case *engine.UniqueIndexDef:
-		d := &plan.UniqueIndexDef{}
-		err := d.UnMarshalUniqueIndexDef([]byte(t.UniqueIndex))
-		if err != nil {
-			return nil, err
-		}
-
-		ok := false
-		var idx *engine.UniqueIndexDef
 		for i, ct := range oldCt.Cts {
-			if idx, ok = ct.(*engine.UniqueIndexDef); ok {
-				u := &plan.UniqueIndexDef{}
-				err := u.UnMarshalUniqueIndexDef([]byte(idx.UniqueIndex))
-				if err != nil {
-					return nil, err
-				}
-				u.IndexNames = append(u.IndexNames, d.IndexNames[0])
-				u.TableNames = append(u.TableNames, d.TableNames[0])
-				u.TableExists = append(u.TableExists, d.TableExists[0])
-				u.Fields = append(u.Fields, d.Fields[0])
-				u.Comments = append(u.Comments, d.Comments[0])
-
+			if _, ok = ct.(*engine.RefChildTableDef); ok {
 				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-
-				bytes, err := u.MarshalUniqueIndexDef()
-				if err != nil {
-					return nil, err
-				}
-				oldCt.Cts = append(oldCt.Cts, &engine.UniqueIndexDef{
-					UniqueIndex: string(bytes),
-				})
+				oldCt.Cts = append(oldCt.Cts, t)
 				break
 			}
 		}
 		if !ok {
 			oldCt.Cts = append(oldCt.Cts, c)
 		}
-	case *engine.SecondaryIndexDef:
-		d := &plan.SecondaryIndexDef{}
-		err := d.UnMarshalSecondaryIndexDef([]byte(t.SecondaryIndex))
-		if err != nil {
-			return nil, err
-		}
-
+	case *engine.IndexDef:
 		ok := false
-		var idx *engine.SecondaryIndexDef
+		var indexdef *engine.IndexDef
 		for i, ct := range oldCt.Cts {
-			if idx, ok = ct.(*engine.SecondaryIndexDef); ok {
-				u := &plan.SecondaryIndexDef{}
-				err := u.UnMarshalSecondaryIndexDef([]byte(idx.SecondaryIndex))
-				if err != nil {
-					return nil, err
-				}
-				u.IndexNames = append(u.IndexNames, d.IndexNames[0])
-				u.TableNames = append(u.TableNames, d.TableNames[0])
-				u.TableExists = append(u.TableExists, d.TableExists[0])
-				u.Fields = append(u.Fields, d.Fields[0])
-				u.Comments = append(u.Comments, d.Comments[0])
-
+			if indexdef, ok = ct.(*engine.IndexDef); ok {
+				indexdef.Indexes = append(indexdef.Indexes, t.Indexes[0])
 				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-
-				bytes, err := u.MarshalSecondaryIndexDef()
-				if err != nil {
-					return nil, err
-				}
-				oldCt.Cts = append(oldCt.Cts, &engine.SecondaryIndexDef{
-					SecondaryIndex: string(bytes),
-				})
+				oldCt.Cts = append(oldCt.Cts, indexdef)
 				break
 			}
 		}
 		if !ok {
 			oldCt.Cts = append(oldCt.Cts, c)
 		}
+
+		//case *engine.UniqueIndexDef:
+		//	d := &plan.UniqueIndexDef{}
+		//	err := d.UnMarshalUniqueIndexDef([]byte(t.UniqueIndex))
+		//	if err != nil {
+		//		return nil, err
+		//	}
+		//
+		//	ok := false
+		//	var idx *engine.UniqueIndexDef
+		//	for i, ct := range oldCt.Cts {
+		//		if idx, ok = ct.(*engine.UniqueIndexDef); ok {
+		//			u := &plan.UniqueIndexDef{}
+		//			err := u.UnMarshalUniqueIndexDef([]byte(idx.UniqueIndex))
+		//			if err != nil {
+		//				return nil, err
+		//			}
+		//			u.IndexNames = append(u.IndexNames, d.IndexNames[0])
+		//			u.TableNames = append(u.TableNames, d.TableNames[0])
+		//			u.TableExists = append(u.TableExists, d.TableExists[0])
+		//			u.Fields = append(u.Fields, d.Fields[0])
+		//			u.Comments = append(u.Comments, d.Comments[0])
+		//
+		//			oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
+		//
+		//			bytes, err := u.MarshalUniqueIndexDef()
+		//			if err != nil {
+		//				return nil, err
+		//			}
+		//			oldCt.Cts = append(oldCt.Cts, &engine.UniqueIndexDef{
+		//				UniqueIndex: string(bytes),
+		//			})
+		//			break
+		//		}
+		//	}
+		//	if !ok {
+		//		oldCt.Cts = append(oldCt.Cts, c)
+		//	}
+		//case *engine.SecondaryIndexDef:
+		//	d := &plan.SecondaryIndexDef{}
+		//	err := d.UnMarshalSecondaryIndexDef([]byte(t.SecondaryIndex))
+		//	if err != nil {
+		//		return nil, err
+		//	}
+		//
+		//	ok := false
+		//	var idx *engine.SecondaryIndexDef
+		//	for i, ct := range oldCt.Cts {
+		//		if idx, ok = ct.(*engine.SecondaryIndexDef); ok {
+		//			u := &plan.SecondaryIndexDef{}
+		//			err := u.UnMarshalSecondaryIndexDef([]byte(idx.SecondaryIndex))
+		//			if err != nil {
+		//				return nil, err
+		//			}
+		//			u.IndexNames = append(u.IndexNames, d.IndexNames[0])
+		//			u.TableNames = append(u.TableNames, d.TableNames[0])
+		//			u.TableExists = append(u.TableExists, d.TableExists[0])
+		//			u.Fields = append(u.Fields, d.Fields[0])
+		//			u.Comments = append(u.Comments, d.Comments[0])
+		//
+		//			oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
+		//
+		//			bytes, err := u.MarshalSecondaryIndexDef()
+		//			if err != nil {
+		//				return nil, err
+		//			}
+		//			oldCt.Cts = append(oldCt.Cts, &engine.SecondaryIndexDef{
+		//				SecondaryIndex: string(bytes),
+		//			})
+		//			break
+		//		}
+		//	}
+		//	if !ok {
+		//		oldCt.Cts = append(oldCt.Cts, c)
+		//	}
 	}
 	return oldCt, nil
 }
@@ -869,10 +837,6 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	c := new(engine.ConstraintDef)
 	for _, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
-		case *plan.TableDef_DefType_Pk:
-			exeDefs = append(exeDefs, &engine.PrimaryIndexDef{
-				Names: defVal.Pk.GetNames(),
-			})
 		case *plan.TableDef_DefType_Properties:
 			properties := make([]engine.Property, len(defVal.Properties.GetProperties()))
 			for i, p := range defVal.Properties.GetProperties() {
@@ -884,31 +848,48 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 			exeDefs = append(exeDefs, &engine.PropertiesDef{
 				Properties: properties,
 			})
-		case *plan.TableDef_DefType_Partition:
-			bytes, err := defVal.Partition.MarshalPartitionInfo()
-			if err != nil {
-				return nil, err
-			}
-			exeDefs = append(exeDefs, &engine.PartitionDef{
-				Partition: string(bytes),
-			})
-		case *plan.TableDef_DefType_UIdx:
-			bytes, err := defVal.UIdx.MarshalUniqueIndexDef()
-			if err != nil {
-				return nil, err
-			}
-			c.Cts = append(c.Cts, &engine.UniqueIndexDef{
-				UniqueIndex: string(bytes),
-			})
-		case *plan.TableDef_DefType_SIdx:
-			bytes, err := defVal.SIdx.MarshalSecondaryIndexDef()
-			if err != nil {
-				return nil, err
-			}
-			c.Cts = append(c.Cts, &engine.SecondaryIndexDef{
-				SecondaryIndex: string(bytes),
-			})
+			//case *plan.TableDef_DefType_UIdx:
+			//	bytes, err := defVal.UIdx.MarshalUniqueIndexDef()
+			//	if err != nil {
+			//		return nil, err
+			//	}
+			//	c.Cts = append(c.Cts, &engine.UniqueIndexDef{
+			//		UniqueIndex: string(bytes),
+			//	})
+			//case *plan.TableDef_DefType_SIdx:
+			//	bytes, err := defVal.SIdx.MarshalSecondaryIndexDef()
+			//	if err != nil {
+			//		return nil, err
+			//	}
+			//	c.Cts = append(c.Cts, &engine.SecondaryIndexDef{
+			//		SecondaryIndex: string(bytes),
+			//	})
 		}
+	}
+
+	if tableDef.Indexes != nil {
+		c.Cts = append(c.Cts, &engine.IndexDef{
+			Indexes: tableDef.Indexes,
+		})
+
+		//bytes, err := tableDef.Index.Marshal()
+		//if err != nil {
+		//	return nil, err
+		//}
+		//
+		//c.Cts = append(c.Cts, &engine.IndexesDef{
+		//	Indexes: string(bytes),
+		//})
+	}
+
+	if tableDef.Partition != nil {
+		bytes, err := tableDef.Partition.MarshalPartitionInfo()
+		if err != nil {
+			return nil, err
+		}
+		exeDefs = append(exeDefs, &engine.PartitionDef{
+			Partition: string(bytes),
+		})
 	}
 
 	if tableDef.ViewSql != nil {
@@ -920,6 +901,12 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	if len(tableDef.Fkeys) > 0 {
 		c.Cts = append(c.Cts, &engine.ForeignKeyDef{
 			Fkeys: tableDef.Fkeys,
+		})
+	}
+
+	if tableDef.Pkey != nil {
+		c.Cts = append(c.Cts, &engine.PrimaryKeyDef{
+			Pkey: tableDef.Pkey,
 		})
 	}
 
@@ -978,19 +965,16 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 // Get the required columns of the index table from the original table
 func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []string) []string {
 	colNameMap := make(map[string]int)
-	for _, def := range tblDefs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Primary {
-				colNameMap[attr.Attr.Name] = 1
-				break
+	for _, tbldef := range tblDefs {
+		if constraintDef, ok := tbldef.(*engine.ConstraintDef); ok {
+			for _, ct := range constraintDef.Cts {
+				if pk, ok2 := ct.(*engine.PrimaryKeyDef); ok2 {
+					for _, name := range pk.Pkey.Names {
+						colNameMap[name] = 1
+					}
+					break
+				}
 			}
-		} else if cpk, ok := def.(*engine.PrimaryIndexDef); ok {
-			for _, name := range cpk.Names {
-				colNameMap[name] = 1
-			}
-			break
-		} else {
-			continue
 		}
 	}
 

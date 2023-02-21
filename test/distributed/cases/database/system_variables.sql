@@ -67,6 +67,22 @@ create table t(
 );
 show indexes from t;
 
+create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
+-- @session:id=1&user=acc_idx:root&password=123456
+create database db1;
+use db1;
+drop table if exists t;
+create table t(
+                  a int,
+                  b int,
+                  c int,
+                  primary key(a)
+);
+show indexes from t;
+drop database db1;
+-- @session
+drop account acc_idx;
+
 
 -- Support More System Views
 use information_schema;
@@ -159,8 +175,34 @@ select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name
 drop database if exists test;
 create database test;
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
-alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 0}';
-select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
-alter database test set mysql_compatbility_mode = '{"transaction_isolation": "REPEATABLE-READ", "lower_case_table_names": 1}';
+alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select `configuration` from mo_catalog.mo_mysql_compatbility_mode where dat_name ="test";
 drop database test;
+
+drop database if exists test;
+create database test;
+use test;
+select version();
+alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+select version();
+drop database test;
+
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+-- @session:id=2&user=abc:admin&password=123456
+drop database if exists test;
+drop database if exists test1;
+create database test;
+create database test1;
+use test;
+select version();
+alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+select version();
+use test1;
+select version();
+alter account config abc set mysql_compatbility_mode = '{"version_compatibility": "0.7"}';
+select version();
+use test1;
+select version();
+drop database test;
+drop database test1;
+-- @session

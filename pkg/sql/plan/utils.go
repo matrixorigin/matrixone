@@ -15,8 +15,11 @@
 package plan
 
 import (
+	"container/list"
 	"context"
+	"encoding/csv"
 	"math"
+	"path"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -26,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -122,11 +126,11 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side int8) {
+func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			side |= getJoinSide(arg, leftTags, rightTags)
+			side |= getJoinSide(arg, leftTags, rightTags, markTag)
 		}
 
 	case *plan.Expr_Col:
@@ -134,6 +138,8 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side 
 			side = JoinSideLeft
 		} else if _, ok := rightTags[exprImpl.Col.RelPos]; ok {
 			side = JoinSideRight
+		} else if exprImpl.Col.RelPos == markTag {
+			side = JoinSideMark
 		}
 
 	case *plan.Expr_Corr:
@@ -416,6 +422,114 @@ func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan
 	return expr
 }
 
+// deduction of new predicates. for example join on a=b where b=1, then a=1 can be deduced
+func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
+	var newFilters []*plan.Expr
+	for _, onPred := range onList {
+		ret, col1, col2 := checkOnPred(onPred)
+		if !ret {
+			continue
+		}
+		for _, filter := range filters {
+			ret, col := CheckFilter(filter)
+			if ret && col != nil {
+				newExpr := DeepCopyExpr(filter)
+				if substituteMatchColumn(newExpr, col1, col2) {
+					newFilters = append(newFilters, newExpr)
+				}
+			}
+		}
+	}
+	return newFilters
+}
+
+// for predicate deduction, filter must be like func(col)>1 , or (col=1) or (col=2)
+// and only 1 colRef is allowd in the filter
+func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "=", ">", "<", ">=", "<=":
+			switch exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				return CheckFilter(exprImpl.F.Args[0])
+			default:
+				return false, nil
+			}
+		default:
+			var col *ColRef
+			for _, arg := range exprImpl.F.Args {
+				ret, c := CheckFilter(arg)
+				if !ret {
+					return false, nil
+				} else if c != nil {
+					if col != nil {
+						if col.RelPos != c.RelPos || col.ColPos != c.ColPos {
+							return false, nil
+						}
+					} else {
+						col = c
+					}
+				}
+			}
+			return true, col
+		}
+	case *plan.Expr_Col:
+		return true, exprImpl.Col
+	}
+	return false, nil
+}
+
+func substituteMatchColumn(expr *plan.Expr, onPredCol1, onPredCol2 *ColRef) bool {
+	var ret bool
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		colName := exprImpl.Col.String()
+		if colName == onPredCol1.String() {
+			exprImpl.Col.RelPos = onPredCol2.RelPos
+			exprImpl.Col.ColPos = onPredCol2.ColPos
+			exprImpl.Col.Name = onPredCol2.Name
+			return true
+		} else if colName == onPredCol2.String() {
+			exprImpl.Col.RelPos = onPredCol1.RelPos
+			exprImpl.Col.ColPos = onPredCol1.ColPos
+			exprImpl.Col.Name = onPredCol1.Name
+			return true
+		}
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if substituteMatchColumn(arg, onPredCol1, onPredCol2) {
+				ret = true
+			}
+		}
+	}
+	return ret
+}
+
+func checkOnPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
+	//onPred must be equality, children must be column name
+	switch onPredImpl := onPred.Expr.(type) {
+	case *plan.Expr_F:
+		if onPredImpl.F.Func.ObjName != "=" {
+			return false, nil, nil
+		}
+		args := onPredImpl.F.Args
+		var col1, col2 *ColRef
+		switch child1 := args[0].Expr.(type) {
+		case *plan.Expr_Col:
+			col1 = child1.Col
+		}
+		switch child2 := args[1].Expr.(type) {
+		case *plan.Expr_Col:
+			col2 = child2.Col
+		}
+		if col1 != nil && col2 != nil {
+			return true, col1, col2
+		}
+	}
+	return false, nil, nil
+}
+
 func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	var exprs []*plan.Expr
 	switch exprImpl := expr.Expr.(type) {
@@ -593,192 +707,6 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 		}
 	}
 	return nil
-}
-
-func DeduceSelectivity(expr *plan.Expr) float64 {
-	if expr == nil {
-		return 1
-	}
-	var sel float64
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		funcName := exprImpl.F.Func.ObjName
-		switch funcName {
-		case "=":
-			return 0.01
-		case "and":
-			sel = math.Min(DeduceSelectivity(exprImpl.F.Args[0]), DeduceSelectivity(exprImpl.F.Args[1]))
-			return sel
-		case "or":
-			sel1 := DeduceSelectivity(exprImpl.F.Args[0])
-			sel2 := DeduceSelectivity(exprImpl.F.Args[1])
-			sel = math.Max(sel1, sel2)
-			if sel < 0.1 {
-				return sel * 1.05
-			} else {
-				return 1 - (1-sel1)*(1-sel2)
-			}
-		default:
-			return 0.33
-		}
-	}
-	return 1
-}
-
-func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
-	node := builder.qry.Nodes[nodeID]
-	if recursive {
-		if len(node.Children) > 0 {
-			for _, child := range node.Children {
-				ReCalcNodeStats(child, builder, recursive)
-			}
-		}
-	}
-
-	var leftStats, rightStats, childStats *Stats
-	if len(node.Children) == 1 {
-		childStats = builder.qry.Nodes[node.Children[0]].Stats
-	} else if len(node.Children) == 2 {
-		leftStats = builder.qry.Nodes[node.Children[0]].Stats
-		rightStats = builder.qry.Nodes[node.Children[1]].Stats
-	}
-
-	switch node.NodeType {
-	case plan.Node_JOIN:
-		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
-		switch node.JoinType {
-		case plan.Node_INNER:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
-				outcnt *= 0.1
-			}
-			node.Stats = &plan.Stats{
-				Outcnt:      outcnt,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-			}
-
-		case plan.Node_LEFT:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
-				outcnt *= 0.1
-				outcnt += leftStats.Outcnt
-			}
-			node.Stats = &plan.Stats{
-				Outcnt:      outcnt,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-			}
-
-		case plan.Node_RIGHT:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
-				outcnt *= 0.1
-				outcnt += rightStats.Outcnt
-			}
-			node.Stats = &plan.Stats{
-				Outcnt:      outcnt,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-			}
-
-		case plan.Node_OUTER:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
-				outcnt *= 0.1
-				outcnt += leftStats.Outcnt + rightStats.Outcnt
-			}
-			node.Stats = &plan.Stats{
-				Outcnt:      outcnt,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-			}
-
-		case plan.Node_SEMI, plan.Node_ANTI:
-			node.Stats = &plan.Stats{
-				Outcnt:      leftStats.Outcnt * .7,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-			}
-
-		case plan.Node_SINGLE, plan.Node_MARK:
-			node.Stats = &plan.Stats{
-				Outcnt:      leftStats.Outcnt,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-			}
-		}
-
-	case plan.Node_AGG:
-		if len(node.GroupBy) > 0 {
-			node.Stats = &plan.Stats{
-				Outcnt:      childStats.Outcnt * 0.1,
-				Cost:        childStats.Outcnt,
-				HashmapSize: childStats.Outcnt,
-			}
-		} else {
-			node.Stats = &plan.Stats{
-				Outcnt: 1,
-				Cost:   childStats.Cost,
-			}
-		}
-
-	case plan.Node_UNION:
-		node.Stats = &plan.Stats{
-			Outcnt:      (leftStats.Outcnt + rightStats.Outcnt) * 0.7,
-			Cost:        leftStats.Outcnt + rightStats.Outcnt,
-			HashmapSize: rightStats.Outcnt,
-		}
-	case plan.Node_UNION_ALL:
-		node.Stats = &plan.Stats{
-			Outcnt: leftStats.Outcnt + rightStats.Outcnt,
-			Cost:   leftStats.Outcnt + rightStats.Outcnt,
-		}
-	case plan.Node_INTERSECT:
-		node.Stats = &plan.Stats{
-			Outcnt:      math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.5,
-			Cost:        leftStats.Outcnt + rightStats.Outcnt,
-			HashmapSize: rightStats.Outcnt,
-		}
-	case plan.Node_INTERSECT_ALL:
-		node.Stats = &plan.Stats{
-			Outcnt:      math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.7,
-			Cost:        leftStats.Outcnt + rightStats.Outcnt,
-			HashmapSize: rightStats.Outcnt,
-		}
-	case plan.Node_MINUS:
-		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
-		node.Stats = &plan.Stats{
-			Outcnt:      minus * 0.5,
-			Cost:        leftStats.Outcnt + rightStats.Outcnt,
-			HashmapSize: rightStats.Outcnt,
-		}
-	case plan.Node_MINUS_ALL:
-		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
-		node.Stats = &plan.Stats{
-			Outcnt:      minus * 0.7,
-			Cost:        leftStats.Outcnt + rightStats.Outcnt,
-			HashmapSize: rightStats.Outcnt,
-		}
-
-	case plan.Node_TABLE_SCAN:
-		if node.ObjRef != nil {
-			node.Stats = builder.compCtx.Stats(node.ObjRef, HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess()))
-		}
-
-	default:
-		if len(node.Children) > 0 {
-			node.Stats = &plan.Stats{
-				Outcnt: childStats.Outcnt,
-				Cost:   childStats.Outcnt,
-			}
-		} else if node.Stats == nil {
-			node.Stats = &plan.Stats{
-				Outcnt: 1000,
-				Cost:   1000000,
-			}
-		}
-	}
 }
 
 func containsParamRef(expr *plan.Expr) bool {
@@ -1210,4 +1138,172 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		return false
 	}
 
+}
+
+func InitInfileParam(param *tree.ExternParam) error {
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "filepath":
+			param.Filepath = param.Option[i+1]
+		case "compression":
+			param.CompressType = param.Option[i+1]
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+		default:
+			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+		}
+	}
+	if len(param.Filepath) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the filepath must be specified")
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
+	}
+	return nil
+}
+
+func InitS3Param(param *tree.ExternParam) error {
+	param.S3Param = &tree.S3Parameter{}
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "endpoint":
+			param.S3Param.Endpoint = param.Option[i+1]
+		case "region":
+			param.S3Param.Region = param.Option[i+1]
+		case "access_key_id":
+			param.S3Param.APIKey = param.Option[i+1]
+		case "secret_access_key":
+			param.S3Param.APISecret = param.Option[i+1]
+		case "bucket":
+			param.S3Param.Bucket = param.Option[i+1]
+		case "filepath":
+			param.Filepath = param.Option[i+1]
+		case "compression":
+			param.CompressType = param.Option[i+1]
+		case "provider":
+			param.S3Param.Provider = param.Option[i+1]
+		case "role_arn":
+			param.S3Param.RoleArn = param.Option[i+1]
+		case "external_id":
+			param.S3Param.ExternalId = param.Option[i+1]
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+
+		default:
+			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+		}
+	}
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
+	}
+	return nil
+}
+
+func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
+	if param.ScanType == tree.S3 {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
+			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
+		if param.S3Param.Provider == "minio" {
+			opts = append(opts, "is-minio=true")
+		}
+		if err = w.Write(opts); err != nil {
+			return nil, "", err
+		}
+		w.Flush()
+		return fileservice.GetForETL(nil, fileservice.JoinPath(buf.String(), prefix))
+	}
+	return fileservice.GetForETL(param.FileService, prefix)
+}
+
+// ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
+func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
+	filePath := strings.TrimSpace(param.Filepath)
+	if strings.HasPrefix(filePath, "etl:") {
+		filePath = path.Clean(filePath)
+	} else {
+		filePath = path.Clean("/" + filePath)
+	}
+
+	sep := "/"
+	pathDir := strings.Split(filePath, sep)
+	l := list.New()
+	l2 := list.New()
+	if pathDir[0] == "" {
+		l.PushBack(sep)
+	} else {
+		l.PushBack(pathDir[0])
+	}
+
+	for i := 1; i < len(pathDir); i++ {
+		length := l.Len()
+		for j := 0; j < length; j++ {
+			prefix := l.Front().Value.(string)
+			fs, readPath, err := GetForETLWithType(param, prefix)
+			if err != nil {
+				return nil, nil, err
+			}
+			entries, err := fs.List(param.Ctx, readPath)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, entry := range entries {
+				if !entry.IsDir && i+1 != len(pathDir) {
+					continue
+				}
+				if entry.IsDir && i+1 == len(pathDir) {
+					continue
+				}
+				matched, err := path.Match(pathDir[i], entry.Name)
+				if err != nil {
+					return nil, nil, err
+				}
+				if !matched {
+					continue
+				}
+				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
+				if !entry.IsDir {
+					l2.PushBack(entry.Size)
+				}
+			}
+			l.Remove(l.Front())
+		}
+	}
+	len := l.Len()
+	for j := 0; j < len; j++ {
+		fileList = append(fileList, l.Front().Value.(string))
+		l.Remove(l.Front())
+		fileSize = append(fileSize, l2.Front().Value.(int64))
+		l2.Remove(l2.Front())
+	}
+	return fileList, fileSize, err
 }

@@ -16,10 +16,14 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -79,21 +83,23 @@ type Limitation struct {
 
 // SessionInfo session information
 type SessionInfo struct {
-	Account        string
-	User           string
-	Host           string
-	Role           string
-	ConnectionID   uint64
-	AccountId      uint32
-	RoleId         uint32
-	UserId         uint32
-	LastInsertID   uint64
-	Database       string
-	Version        string
-	TimeZone       *time.Location
-	StorageEngine  engine.Engine
-	QueryId        []string
-	ResultColTypes []types.Type
+	Account           string
+	User              string
+	Host              string
+	Role              string
+	ConnectionID      uint64
+	AccountId         uint32
+	RoleId            uint32
+	UserId            uint32
+	LastInsertID      uint64
+	Database          string
+	Version           string
+	TimeZone          *time.Location
+	StorageEngine     engine.Engine
+	QueryId           []string
+	ResultColTypes    []types.Type
+	AutoIncrCaches    defines.AutoIncrCaches
+	AutoIncrCacheSize uint64
 }
 
 // AnalyzeInfo  analyze information for query
@@ -162,7 +168,16 @@ type Process struct {
 
 	LastInsertID *uint64
 
-	LoadLocalReader io.Reader
+	LoadLocalReader *io.PipeReader
+
+	DispatchNotifyCh chan WrapCs
+}
+
+type WrapCs struct {
+	MsgId  uint64
+	Uid    uuid.UUID
+	Cs     morpc.ClientSession
+	DoneCh chan struct{}
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

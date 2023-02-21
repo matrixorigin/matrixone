@@ -107,7 +107,7 @@ c    d
 1    1
 2    2
 delete from test_11 where c = 1;
-invalid input: delete has no table def
+no such table isolation.test_11
 select * from test_11;
 SQL parser error: table "test_11" does not exist
 Insert into test_11 values(1,1);

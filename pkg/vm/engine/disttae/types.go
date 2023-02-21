@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -104,19 +105,22 @@ type DB struct {
 	metaTables map[string]Partitions
 	tables     map[[2]uint64]Partitions
 
-	cnE *Engine
+	cnE        *Engine
+	partitions map[[2]uint64]Partitions
 }
 
 type Partitions []*Partition
 
 // a partition corresponds to a dn
 type Partition struct {
-	sync.RWMutex
+	lock chan struct{}
 	// multi-version data of logtail, implemented with reusee's memengine
 	data             *memtable.Table[RowID, DataValue, *DataRow]
 	columnsIndexDefs []ColumnsIndexDef
 	// last updated timestamp
 	ts timestamp.Timestamp
+	// used for block read in PartitionReader
+	txn *Transaction
 }
 
 // Transaction represents a transaction
@@ -128,7 +132,9 @@ type Transaction struct {
 	// db       *DB
 	// blockId starts at 0 and keeps incrementing,
 	// this is used to name the file on s3 and then give it to tae to use
-	blockId uint64
+	// not-used now
+	// blockId uint64
+
 	// use for solving halloween problem
 	statementId uint64
 	// local timestamp for workspace operations
@@ -141,7 +147,7 @@ type Transaction struct {
 	// writes cache stores any writes done by txn
 	// every statement is an element
 	writes    [][]Entry
-	workspace *memtable.Table[RowID, *workspaceRow, *workspaceRow]
+	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
 	dnStores  []DNStore
 	proc      *process.Process
 
@@ -156,6 +162,8 @@ type Transaction struct {
 	tableMap *sync.Map
 	// use to cache database
 	databaseMap *sync.Map
+	// use to cache created table
+	createMap *sync.Map
 }
 
 // Entry represents a delete/insert
@@ -167,8 +175,6 @@ type Entry struct {
 	databaseName string
 	// blockName for s3 file
 	fileName string
-	// blockId for s3 file
-	blockId uint64
 	// update or delete tuples
 	bat     *batch.Batch
 	dnStore DNStore

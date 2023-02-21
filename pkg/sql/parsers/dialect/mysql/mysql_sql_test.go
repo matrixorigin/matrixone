@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select connection_id()",
-		output: "select connection_id()",
+		input:  "create table t1 (a int comment '\"123123\\'')",
+		output: "create table t1 (a int comment \"123123'')",
 	}
 )
 
@@ -53,6 +53,15 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "create table t1 (a int comment '\"123123\\'')",
+		output: "create table t1 (a int comment \"123123'')",
+	}, {
+		input:  "select * from t1 where a not ilike '%a'",
+		output: "select * from t1 where a not ilike %a",
+	}, {
+		input:  "select * from t1 where a ilike '%a'",
+		output: "select * from t1 where a ilike %a",
+	}, {
 		input:  "select * from result_scan(query_id)",
 		output: "select * from result_scan(query_id)",
 	}, {
@@ -291,7 +300,7 @@ var (
 		output: "set timestamp = unix_timestamp(2011-07-31 10:00:00)",
 	}, {
 		input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
-		output: "select ltrim(a), rtrim(a), trim(both, , a), trim(both,  , a)",
+		output: "select ltrim(a), rtrim(a), trim(both  from a), trim(both   from a)",
 	}, {
 		input:  "select rpad('hello', -18446744073709551616, '1');",
 		output: "select rpad(hello, -18446744073709551616, 1)",
@@ -342,7 +351,7 @@ var (
 		output: "select space(-18446744073709551616)",
 	}, {
 		input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
-		output: "select ltrim(a), rtrim(a), trim(both, , a), trim(both,  , a)",
+		output: "select ltrim(a), rtrim(a), trim(both  from a), trim(both   from a)",
 	}, {
 		input:  "SELECT (rpad(1.0, 2048,1)) IS NOT FALSE;",
 		output: "select (rpad(1.0, 2048, 1)) is not false",
@@ -574,13 +583,13 @@ var (
 		output: "insert into t1 (f1) values (-1)",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=VALUES(a)+VALUES(b), b=VALUES(a)+VALUES(c);",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (values(a) + values(b), values(a) + values(c))",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = values(a) + values(b), b = values(a) + values(c)",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2, b=3;",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (2, 3)",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2, b = 3",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2/2, b=3;",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (2 / 2, 3)",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2 / 2, b = 3",
 	}, {
 		input:  "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
 		output: "insert into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
@@ -606,6 +615,12 @@ var (
 		input: "create table t (a int, b char, check (1 + 1) enforced)",
 	}, {
 		input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+	}, {
+		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+	}, {
+		input:  "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
+		output: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
 		input: "create table t (a int, b char, unique key idx (a, b))",
 	}, {
@@ -759,9 +774,6 @@ var (
 			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} into table db.a",
 		},
 		{
-			input:  "import data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-			output: "import data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 lines",
-		}, {
 			input:  "show tables from test01 where tables_in_test01 like '%t2%'",
 			output: "show tables from test01 where tables_in_test01 like %t2%",
 		}, {
@@ -1898,6 +1910,46 @@ var (
 		{
 			input:  "create table test (`col` varchar(255) DEFAULT b'0')",
 			output: "create table test (col varchar(255) default 0)",
+		},
+		{
+			input:  "select trim(a)",
+			output: "select trim(a)",
+		},
+		{
+			input: "select trim(a from a)",
+		},
+		{
+			input: "select trim(leading a from b)",
+		},
+		{
+			input: "select trim(trailing b from a)",
+		},
+		{
+			input: "select trim(both a from b) from t",
+		},
+		{
+			input:  "LOCK TABLES t READ",
+			output: "Lock Table t READ",
+		},
+		{
+			input:  "LOCK TABLES t READ LOCAL",
+			output: "Lock Table t READ LOCAL",
+		},
+		{
+			input:  "LOCK TABLES t WRITE",
+			output: "Lock Table t WRITE",
+		},
+		{
+			input:  "LOCK TABLES t LOW_PRIORITY WRITE",
+			output: "Lock Table t LOW_PRIORITY WRITE",
+		},
+		{
+			input:  "LOCK TABLES t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
+			output: "Lock Table t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
+		},
+		{
+			input:  "UNLOCK TABLES",
+			output: "UnLock Table",
 		},
 	}
 )

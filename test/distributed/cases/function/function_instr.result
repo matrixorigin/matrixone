@@ -1,0 +1,362 @@
+SELECT INSTR('ejwnqke','wn');
+instr(ejwnqke, wn)
+3
+SELECT INSTR('wn','ejwnqke');
+instr(wn, ejwnqke)
+0
+SELECT INSTR('hvjdke3qj','a');
+instr(hvjdke3qj, a)
+0
+SELECT INSTR('今天是晴天ok.are yioeore;wmv','晴天');
+instr(今天是晴天ok.are yioeore;wmv, 晴天)
+4
+SELECT INSTR('ewhihjreiwhvrejw8344332￥#……@#@￥#@￥DSCSVRERGEWvefw','');
+instr(ewhihjreiwhvrejw8344332￥#……@#@￥#@￥DSCSVRERGEWvefw, )
+1
+SELECT INSTR('edhjw 38902&A**',' ');
+instr(edhjw 38902&A**,  )
+6
+SELECT INSTR('reuwYHWJMQ781///-+++','fe3232');
+instr(reuwYHWJMQ781///-+++, fe3232)
+0
+SELECT INSTR('','');
+instr(, )
+1
+SELECT INSTR('','ehwj32');
+instr(, ehwj32)
+0
+SELECT INSTR('251625%$#@*(ejf2f32f','');
+instr(251625%$#@*(ejf2f32f, )
+1
+SELECT INSTR(NULL,'ewqe');
+instr(null, ewqe)
+null
+SELECT INSTR('24e8w7/*37289',NULL);
+instr(24e8w7/*37289, null)
+null
+SELECT INSTR(NULL,NULL);
+instr(null, null)
+null
+DROP TABLE IF EXISTS instr_01;
+CREATE TABLE instr_01(id int,
+str1 CHAR,
+str2 VARCHAR(30),
+PRIMARY KEY(id));
+INSERT INTO instr_01 VALUES(1, 'a', 'dhehw');
+INSERT INTO instr_01 VALUES(2, '2', '372890932');
+INSERT INTO instr_01 VALUES(3, '*', 'fejkj4kl332342');
+INSERT INTO instr_01 VALUES(4, '-', ' 4ej348324*&&^*&*--++');
+INSERT INTO instr_01 VALUES(5, '.', '3h2h3kj2*()____  ))() ');
+INSERT INTO instr_01 VALUES(6, '', NULL);
+INSERT INTO instr_01 VALUES(7, NULL, '');
+INSERT INTO instr_01 VALUES(8, NULL, NULL);
+SELECT INSTR(str2,str1) FROM instr_01;
+instr(str2, str1)
+0
+3
+0
+18
+0
+null
+null
+null
+SELECT INSTR(str2,'') FROM instr_01 WHERE str2 IS NOT NULL;
+instr(str2, )
+1
+1
+1
+1
+1
+1
+SELECT INSTR('',str1) FROM instr_01;
+instr(, str1)
+0
+0
+0
+0
+0
+1
+null
+null
+SELECT INSTR(NULL, str2) FROM instr_01;
+instr(null, str2)
+null
+null
+null
+null
+null
+null
+null
+null
+SELECT INSTR(str1, NULL) FROM instr_01;
+instr(str1, null)
+null
+null
+null
+null
+null
+null
+null
+null
+SELECT * FROM instr_01 WHERE instr(str2,'qke') = 5;
+id    str1    str2
+SELECT id,str1,str2 FROM instr_01 WHERE instr(str2, '32') = NULL;
+id    str1    str2
+SELECT * FROM instr_01 WHERE id = (SELECT id FROM instr_01 WHERE instr(str2,'qke') = 5);
+id    str1    str2
+SELECT(SELECT str2 FROM instr_01 WHERE instr(str1,'a') = 1),id FROM instr_01;
+(select str2 from instr_01 where instr(str1, a) = 1)    id
+dhehw    1
+dhehw    2
+dhehw    3
+dhehw    4
+dhehw    5
+dhehw    6
+dhehw    7
+dhehw    8
+SELECT id ,str1, str2 FROM instr_01 WHERE id = (SELECT id FROM instr_01 WHERE instr(str2,'aaa') = NULL);
+id    str1    str2
+SELECT concat_ws('-',INSTR(str2,str1),INSTR('abc','a')) FROM instr_01;
+concat_ws(-, instr(str2, str1), instr(abc, a))
+0-1
+3-1
+0-1
+18-1
+0-1
+1
+1
+1
+SELECT find_in_set(INSTR(str2,str1),'hdkewqjfew-') FROM instr_01 WHERE id = 4;
+find_in_set(instr(str2, str1), hdkewqjfew-)
+0
+SELECT oct(INSTR(str2,str1)) FROM instr_01 WHERE id = 4;
+oct(instr(str2, str1))
+22
+SELECT empty(instr(str2,str1)) FROM instr_01;
+empty(instr(str2, str1))
+0
+0
+0
+0
+0
+null
+null
+null
+SELECT LENGTH(INSTR(str2,str1)) FROM instr_01;
+length(instr(str2, str1))
+1
+1
+1
+2
+1
+null
+null
+null
+SELECT INSTR(LTRIM(str2),'*&&^*&') FROM instr_01 WHERE id = 4;
+instr(ltrim(str2), *&&^*&)
+10
+SELECT INSTR(RTRIM(str2),'()____  )') FROM instr_01 WHERE str1 = '.';
+instr(rtrim(str2), ()____  ))
+10
+SELECT LPAD(INSTR(str2, str1), 10, '-') FROM instr_01;
+lpad(instr(str2, str1), 10, -)
+---------0
+---------3
+---------0
+--------18
+---------0
+null
+null
+null
+SELECT RPAD(INSTR(str2, 3), 5, '***') FROM instr_01;
+rpad(instr(str2, 3), 5, ***)
+0****
+1****
+9****
+5****
+1****
+null
+0****
+null
+SELECT substring(instr(str1,'a'),'321421') FROM instr_01;
+substring(instr(str1, a), 321421)
+
+
+
+
+
+
+null
+null
+SELECT INSTR(REVERSE(str2), ' ') FROM instr_01;
+instr(reverse(str2),  )
+0
+0
+0
+21
+1
+null
+0
+null
+SELECT bin(INSTR(str1, 'a')) FROM instr_01 WHERE id = 1;
+bin(instr(str1, a))
+1
+SELECT hex(INSTR(str2, 'w')) FROM instr_01 WHERE id = 1;
+hex(instr(str2, w))
+5
+DROP TABLE IF EXISTS instr_02;
+CREATE TABLE instr_02(id int,
+str1 mediumtext,
+str2 VARCHAR(30) NOT NULL);
+INSERT INTO instr_02 VALUES(1, '今天是很美好的一天 Today is a wonderful day!!!', '美好');
+INSERT INTO instr_02 VALUES(2, '4**-1+83982j4mfkerwvuh43oij3f42j4iuu32oi4ejf32j432YUDINWKJ<DJ>>A>欢迎使用mo','');
+INSERT INTO instr_02 VALUES(3, '', 'gchjewqhedjw');
+INSERT INTO instr_02 VALUES(4, '', '');
+INSERT INTO instr_02 VALUES(5, NULL,'abcd');
+INSERT INTO instr_02 VALUES(6, '   ewfew3324   ed_+_+  ', 'ew');
+SELECT * FROM instr_02 WHERE INSTR(str1,str2) = 5;
+id    str1    str2
+1    今天是很美好的一天 Today is a wonderful day!!!    美好
+SELECT INSTR(str1, str2) FROM instr_02;
+instr(str1, str2)
+5
+1
+0
+1
+null
+4
+SELECT INSTR(str2, str1) FROM instr_02;
+instr(str2, str1)
+0
+0
+1
+1
+null
+0
+SELECT * FROM instr_02 WHERE id = (SELECT id FROM instr_02 WHERE INSTR(str1,'+8') = 6);
+id    str1    str2
+2    4**-1+83982j4mfkerwvuh43oij3f42j4iuu32oi4ejf32j432YUDINWKJ<DJ>>A>欢迎使用mo    
+SELECT(SELECT str2 FROM instr_02 WHERE instr(str1,'a') = 1),id FROM instr_02;
+(select str2 from instr_02 where instr(str1, a) = 1)    id
+null    1
+null    2
+null    3
+null    4
+null    5
+null    6
+SELECT concat_ws('-',INSTR(str2,str1),INSTR('abc','a')) FROM instr_02;
+concat_ws(-, instr(str2, str1), instr(abc, a))
+0-1
+0-1
+1-1
+1-1
+1
+0-1
+SELECT find_in_set(INSTR(str2,str1),'hdkewqjfew-') FROM instr_02 WHERE id = 4;
+find_in_set(instr(str2, str1), hdkewqjfew-)
+0
+SELECT oct(INSTR(str2,str1)) FROM instr_02 WHERE id = 4;
+oct(instr(str2, str1))
+1
+SELECT empty(instr(str2,str1)) FROM instr_02;
+empty(instr(str2, str1))
+0
+0
+0
+0
+null
+0
+SELECT LENGTH(INSTR(str2,str1)) FROM instr_02;
+length(instr(str2, str1))
+1
+1
+1
+1
+null
+1
+SELECT INSTR(LTRIM(str1),'ed_+_+') FROM instr_02 WHERE id = 6;
+instr(ltrim(str1), ed_+_+)
+13
+SELECT INSTR(RTRIM(str1),'3324') FROM instr_02 WHERE id = 6;
+instr(rtrim(str1), 3324)
+9
+SELECT LPAD(INSTR(str2, str1), 6, 'abc') FROM instr_02;
+lpad(instr(str2, str1), 6, abc)
+abcab0
+abcab0
+abcab1
+abcab1
+null
+abcab0
+SELECT RPAD(INSTR(str2, 3), 5, '') FROM instr_02;
+rpad(instr(str2, 3), 5, )
+
+
+
+
+
+
+SELECT INSTR(substring(str2, 1, 6), 'cd') FROM instr_02 WHERE id = 5;
+instr(substring(str2, 1, 6), cd)
+3
+SELECT INSTR(REVERSE(str1), '用使') FROM instr_02 WHERE id = 2;
+instr(reverse(str1), 用使)
+3
+SELECT bin(INSTR(str2, 'd')) FROM instr_02 WHERE id = 3;
+bin(instr(str2, d))
+1010
+SELECT hex(INSTR(str1, 'ed')) FROM instr_02 WHERE id = 6;
+hex(instr(str1, ed))
+10
+DROP TABLE IF EXISTS instr_03;
+DROP TABLE IF EXISTS instr_04;
+CREATE TABLE instr_03(
+id int,
+d1 CHAR,
+str1 VARCHAR(50),
+primary key (id));
+CREATE TABLE instr_04(
+id int,
+str1 mediumtext NOT NULL,
+primary key (id));
+INSERT INTO instr_03 VALUES(1, 'a', 'zheshimeihaodeyitian,这是美好的一天');
+INSERT INTO instr_03 VALUES(2, '*', '明天更美好ehwqknjcw*^*qk67329&&*');
+INSERT INTO instr_03 VALUES(3, NULL, 'ewgu278wd-+ABNJDSK');
+INSERT INTO instr_03 VALUES(4, '', NULL);
+INSERT INTO instr_04 VALUES(1, '盼望着,盼望着,东风来了,春天的脚步近了。 一切都像刚睡醒的样子,欣欣然张开了眼。山朗润起来了,水涨 起来了,太阳的脸红起来了。 小草偷偷地从土里钻出来，Choose to Be Alone on Purpose Here we are, all by ourselves, all 22 million of us by recent count, alone in our rooms');
+INSERT INTO instr_04 VALUES(2, 'zheshimeihaodeyitian,这是美好的一天');
+INSERT INTO instr_04 VALUES(3, 'ewgu278wd-+ABNJDSK');
+INSERT INTO instr_04 VALUES(4, 'hey32983..........,,');
+SELECT * FROM instr_03 WHERE id = (SELECT id FROM instr_04 WHERE INSTR(str1,'u27'));
+id    d1    str1
+3    null    ewgu278wd-+ABNJDSK
+SELECT instr_03.id AS id_3,instr_03.id AS id_4 FROM instr_03,instr_04 WHERE INSTR(instr_03.str1,'shi') = INSTR(instr_04.str1,'美好');
+id_3    id_4
+2    2
+2    2
+2    2
+3    3
+3    3
+3    3
+SELECT instr_03.str1 AS str1_3,instr_03.str1 FROM instr_03,instr_04 WHERE INSTR(instr_03.str1,'meihao') = INSTR(instr_04.str1,'meihao');
+str1_3    str1
+zheshimeihaodeyitian,这是美好的一天    zheshimeihaodeyitian,这是美好的一天
+明天更美好ehwqknjcw*^*qk67329&&*    明天更美好ehwqknjcw*^*qk67329&&*
+明天更美好ehwqknjcw*^*qk67329&&*    明天更美好ehwqknjcw*^*qk67329&&*
+明天更美好ehwqknjcw*^*qk67329&&*    明天更美好ehwqknjcw*^*qk67329&&*
+ewgu278wd-+ABNJDSK    ewgu278wd-+ABNJDSK
+ewgu278wd-+ABNJDSK    ewgu278wd-+ABNJDSK
+ewgu278wd-+ABNJDSK    ewgu278wd-+ABNJDSK
+SELECT INSTR(instr_03.str1, 'ABNJDSK') FROM instr_03,instr_04 WHERE instr_03.str1 = instr_04.str1;
+instr(instr_03.str1, ABNJDSK)
+0
+12
+SELECT * FROM instr_03 WHERE str1 = (SELECT str1 FROM instr_04 WHERE INSTR(str1,'ABNJDSK') = 12);
+id    d1    str1
+3    null    ewgu278wd-+ABNJDSK
+SELECT INSTR(instr_03.str1, 'zheshi')AS tmp, instr_04.str1 AS temp FROM instr_03 join instr_04 ON instr_03.str1 = instr_04.str1;
+tmp    temp
+1    zheshimeihaodeyitian,这是美好的一天
+0    ewgu278wd-+ABNJDSK
+SELECT instr_03.id AS id_3,instr_04.id AS id_4 FROM instr_03 left join instr_04 ON instr_03;
+invalid input: column instr_03 does not exist

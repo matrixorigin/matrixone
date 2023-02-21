@@ -88,9 +88,10 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 	var rids []uint64
 
 	key := &TableItem{
+		AccountId:  accountId,
 		DatabaseId: databaseId,
 	}
-	mp := make(map[string]uint8)
+	mp := make(map[uint64]uint8)
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
 		if item.AccountId != accountId {
 			return false
@@ -101,8 +102,8 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 		if item.Ts.Greater(ts) {
 			return true
 		}
-		if _, ok := mp[item.Name]; !ok {
-			mp[item.Name] = 0
+		if _, ok := mp[item.Id]; !ok {
+			mp[item.Id] = 0
 			if !item.deleted {
 				rs = append(rs, item.Name)
 				rids = append(rids, item.Id)

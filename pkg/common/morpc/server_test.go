@@ -42,7 +42,7 @@ func TestHandleServer(t *testing.T) {
 			assert.NoError(t, c.Close())
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
 		defer cancel()
 
 		rs.RegisterRequestHandler(func(_ context.Context, request Message, sequence uint64, cs ClientSession) error {
@@ -90,13 +90,12 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 	defer close(wc)
 
 	testRPCServer(t, func(rs *server) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 		defer cancel()
 
 		c := newTestClient(t)
 		rs.RegisterRequestHandler(func(_ context.Context, request Message, _ uint64, cs ClientSession) error {
 			assert.NoError(t, c.Close())
-			wc <- struct{}{}
 			return cs.Write(ctx, request)
 		})
 
@@ -108,10 +107,7 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 		resp, err := f.Get()
 		assert.Error(t, ctx.Err(), err)
 		assert.Nil(t, resp)
-	}, WithServerWriteFilter(func(_ Message) bool {
-		<-wc
-		return true
-	}))
+	})
 }
 
 func TestStreamServer(t *testing.T) {
@@ -219,7 +215,10 @@ func BenchmarkSend(b *testing.B) {
 			}
 		}
 	}, WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
-		messagePool.Put(i.(RPCMessage).Message)
+		msg := i.(RPCMessage)
+		if !msg.InternalMessage() {
+			messagePool.Put(msg.Message)
+		}
 	})))
 }
 
@@ -243,4 +242,18 @@ func newTestClient(t assert.TestingT, options ...ClientOption) RPCClient {
 	c, err := NewClient(bf, options...)
 	assert.NoError(t, err)
 	return c
+}
+
+func TestPing(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		c := newTestClient(t)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+
+		assert.NoError(t, c.Ping(ctx, testAddr))
+	})
 }

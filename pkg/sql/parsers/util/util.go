@@ -14,17 +14,20 @@
 
 package util
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
-func GetUint64(num interface{}) uint64 {
-	switch v := num.(type) {
-	case int64:
-		return uint64(v)
-	case uint64:
-		return v
-	}
-	return 0
-}
+//func GetUint64(num interface{}) uint64 {
+//	switch v := num.(type) {
+//	case int64:
+//		return uint64(v)
+//	case uint64:
+//		return v
+//	}
+//	return 0
+//}
 
 func GetInt64(num interface{}) (int64, string) {
 	switch v := num.(type) {
@@ -32,4 +35,15 @@ func GetInt64(num interface{}) (int64, string) {
 		return v, ""
 	}
 	return -1, fmt.Sprintf("%d is out of range int64", num)
+}
+
+func DealCommentString(str string) string {
+	buf := new(strings.Builder)
+	for _, ch := range str {
+		if ch == '\'' {
+			buf.WriteRune('\'')
+		}
+		buf.WriteRune(ch)
+	}
+	return buf.String()
 }

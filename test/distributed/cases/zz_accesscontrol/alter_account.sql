@@ -10,7 +10,7 @@ alter account abc admin_name='admin'  IDENTIFIED BY 'yyyy_34lifel';
 -- @session:id=1&user=abc:admin&password=yyyy_34lifel
 select user_name,authentication_string from mo_catalog.mo_user;
 -- @session
-alter account abc admin_name='admin'  IDENTIFIED BY 'abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff` admin_name `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffffdddddd';
+alter account abc admin_name='admin'  IDENTIFIED BY 'abcddddddfsfafaffsefsfsefljofiseosfjosissssssssssssssssssssssssssssssssssssssssssssssssssssssssssss';
 -- @session:id=1&user=abc:admin&password=abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff` admin_name `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffffdddddd
 select user_name,authentication_string from mo_catalog.mo_user;
 show databases;
@@ -105,12 +105,12 @@ create account if not exists testsuspend ADMIN_NAME 'admin' IDENTIFIED BY '12345
 select user_name, authentication_string from mo_catalog.mo_user;
 -- @session
 alter account testsuspend suspend;
-select account_name,status from mo_catalog.mo_account;
+select account_name,status from mo_catalog.mo_account order by account_name;
 alter account testsuspend OPEN;
-select account_name,status from mo_catalog.mo_account;
+select account_name,status from mo_catalog.mo_account order by account_name;
 --suspend status alter ADMIN_NAME/comment,drop account
 alter account testsuspend suspend;
-select account_name,status from mo_catalog.mo_account;
+select account_name,status from mo_catalog.mo_account order by account_name;
 alter account testsuspend ADMIN_NAME 'admin' IDENTIFIED BY '1234567890';
 alter account testsuspend comment 'aaaaaaa';
 select account_name,status,comments from mo_catalog.mo_account where account_name='testsuspend';

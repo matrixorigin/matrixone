@@ -94,7 +94,7 @@ func (sm *SessionManager) ListSession() []*Session {
 
 // message describes response to be sent.
 type message struct {
-	sendCtx  context.Context
+	timeout  time.Duration
 	response *LogtailResponse
 }
 
@@ -214,7 +214,10 @@ func NewSession(
 
 				sendFunc := func() error {
 					defer ss.responses.Release(msg.response)
-					return ss.stream.write(msg.sendCtx, msg.response)
+
+					ctx, cancel := context.WithTimeout(ss.sessionCtx, msg.timeout)
+					defer cancel()
+					return ss.stream.write(ctx, msg.response)
 				}
 
 				if err := sendFunc(); err != nil {
@@ -380,7 +383,7 @@ func (ss *Session) SendResponse(
 			ss.logger.Error("fail to close poision morpc client session", zap.Error(err))
 		}
 		return moerr.NewStreamClosedNoCtx()
-	case ss.sendChan <- message{sendCtx: sendCtx, response: response}:
+	case ss.sendChan <- message{timeout: ContextTimeout(sendCtx, ss.sendTimeout), response: response}:
 		return nil
 	}
 }

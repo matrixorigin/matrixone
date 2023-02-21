@@ -40,5 +40,6 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		}
 		bat.Clean(proc.Mp())
 	}
+
 	return false, nil
 }

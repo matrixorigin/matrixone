@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -23,9 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var SerialWithCompacted = serialWithCompacted
+var CompactSingleIndexCol = compactSingleIndexCol
+var CompactPrimaryCol = compactPrimaryCol
 
 func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 	var name string
@@ -41,10 +45,6 @@ func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 	}
 	name += id.String()
 	return name, nil
-}
-
-func JudgeIsCompositeIndexColumn(f *plan.Field) bool {
-	return len(f.Parts) > 1
 }
 
 func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, originTablePrimaryKey string, proc *process.Process) (*batch.Batch, int) {

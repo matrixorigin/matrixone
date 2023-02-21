@@ -365,6 +365,7 @@ message ScheduleCommand {
   ConfigChange      ConfigChange    = 4;
   ShutdownStore     ShutdownStore   = 5;
   CreateTaskService CreateTaskService = 6;
+  DeleteCNStore     DeleteCNStore     = 7;
 }
 
 // CreateTaskService start task service at current node
@@ -373,6 +374,11 @@ message CreateTaskService {
   TaskTableUser User         = 1 [(gogoproto.nullable) = false];
   // TaskDatabase task framework database.
   string        TaskDatabase = 2;
+}
+
+// DeleteCNStore deletes CN store from CNState to save hakeeper's memory.
+message DeleteCNStore {
+  string StoreID = 1;
 }
 
 message CommandBatch {
