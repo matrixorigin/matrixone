@@ -406,7 +406,9 @@ func updatePartition2(
 		return err
 	}
 	// Need a lock here.
+	<-partition.lock
 	partition.ts = *tl.Ts
+	partition.lock <- struct{}{}
 	return nil
 }
 
