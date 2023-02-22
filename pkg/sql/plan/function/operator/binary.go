@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// Cast as binary but no right-padding.
+// Cast to binary but no right-padding.
 func Binary(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstv := vs[0]
 	resultVector, err := proc.AllocVectorOfRows(types.T_binary.ToType(), 0, nil)

@@ -19,7 +19,6 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"math/rand"
@@ -1902,22 +1901,14 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			} else {
 				buffer = mp.appendUint64(buffer, math.Float64bits(value))
 			}
+
+		// Binary/varbinary will be sent out as blob type.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
 			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
 				data = mp.appendStringLenEnc(data, value)
-			}
-		case defines.MYSQL_TYPE_BINARY, defines.MYSQL_TYPE_VARBINARY:
-			// Make hexadecimal output.
-			if value, err2 := mrs.GetValue(ctx, rowIdx, i); err2 != nil {
-				return nil, err2
-			} else {
-				hexhead := "0x"
-				res := hex.EncodeToString(value.([]byte))
-				res = hexhead + res
-				data = mp.appendStringLenEnc(data, res)
 			}
 		// TODO: some type, we use string now. someday need fix it
 		case defines.MYSQL_TYPE_DECIMAL:
@@ -2074,22 +2065,13 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 					data = mp.appendStringLenEncOfInt64(data, value)
 				}
 			}
+		// Binary/varbinary will be sent out as blob type.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEnc(data, value)
-			}
-		case defines.MYSQL_TYPE_BINARY, defines.MYSQL_TYPE_VARBINARY:
-			// Make hexadecimal output.
-			if value, err2 := mrs.GetValue(ctx, r, i); err2 != nil {
-				return nil, err2
-			} else {
-				hexhead := "0x"
-				res := hex.EncodeToString(value.([]byte))
-				res = hexhead + res
-				data = mp.appendStringLenEnc(data, res)
 			}
 		case defines.MYSQL_TYPE_DATE:
 			if value, err2 := mrs.GetValue(ctx, r, i); err2 != nil {

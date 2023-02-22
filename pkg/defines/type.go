@@ -46,8 +46,10 @@ const (
 	MYSQL_TYPE_DATETIME2   MysqlType = 0x12 /**< Internal to MySQL. Not used in protocol */
 	MYSQL_TYPE_TIME2       MysqlType = 0x13 /**< Internal to MySQL. Not used in protocol */
 	MYSQL_TYPE_TYPED_ARRAY MysqlType = 0x14 /**< Used for replication only */
-	MYSQL_TYPE_BINARY      MysqlType = 0x15
-	MYSQL_TYPE_VARBINARY   MysqlType = 0x16
+
+	// Not real mysql types.
+	MYSQL_TYPE_BINARY    MysqlType = 0x15
+	MYSQL_TYPE_VARBINARY MysqlType = 0x16
 
 	MYSQL_TYPE_TEXT        MysqlType = 241 // add text to distinct blob and blob
 	MYSQL_TYPE_INVALID     MysqlType = 242
