@@ -314,7 +314,7 @@ func GenerateWriter(container *WriteS3Container, proc *process.Process) error {
 func SortByPrimaryKey(proc *process.Process, bat *batch.Batch, pkIdx []int, m *mpool.MPool) error {
 	// Not-Null Check
 	for i := 0; i < len(pkIdx); i++ {
-		if nulls.Any(bat.Vecs[i].Nsp) {
+		if nulls.Any(bat.Vecs[pkIdx[i]].Nsp) {
 			// return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.InsertCtx.TableDef.Cols[i].GetName()))
 			return moerr.NewConstraintViolation(proc.Ctx, "Primary key can not be null")
 		}
