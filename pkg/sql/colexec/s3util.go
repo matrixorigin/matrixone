@@ -46,9 +46,8 @@ type WriteS3Container struct {
 	nameToNullablity map[string]bool
 	pk               map[string]bool
 
-	writer   objectio.Writer
-	lengths  []uint64
-	cacheBat []*batch.Batch
+	writer  objectio.Writer
+	lengths []uint64
 
 	UniqueRels []engine.Relation
 
@@ -175,16 +174,12 @@ func (container *WriteS3Container) WriteEnd(proc *process.Process) {
 }
 
 func (container *WriteS3Container) WriteS3CacheBatch(proc *process.Process) error {
-	if len(container.cacheBat) > 0 {
-		for i, bat := range container.cacheBat {
-			if bat != nil {
-				err := GetBlockMeta([]*batch.Batch{bat}, container, proc, i)
-				if err != nil {
-					return err
-				}
+	for i := range container.tableBatches {
+		if container.tableBatchSizes[i] > 0 {
+			if err := container.MergeBlock(i, len(container.tableBatches[i]), proc); err != nil {
+				return err
 			}
 		}
-		container.WriteEnd(proc)
 	}
 	return nil
 }
