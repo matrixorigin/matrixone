@@ -44,7 +44,7 @@ func Concat_ws(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 			}
 			inputCleaned = append(inputCleaned, ivecs[i])
 		}
-		separator := ivecs[0].String()
+		separator := ivecs[0].GetString(0)
 		if AllConst {
 			return concatWsWithConstSeparatorAllConst(inputCleaned, separator, proc.Mp())
 		}

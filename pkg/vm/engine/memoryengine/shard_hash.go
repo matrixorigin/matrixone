@@ -604,8 +604,5 @@ func appendNullableValueToVector(vec *vector.Vector, value Nullable, mp *mpool.M
 	if ok {
 		value.Value = []byte(str)
 	}
-	vector.AppendFixed(vec, value.Value, false, mp)
-	if value.IsNull {
-		vec.GetNulls().Set(uint64(vec.Length() - 1))
-	}
+	vector.AppendAny(vec, value.Value, value.IsNull, mp)
 }

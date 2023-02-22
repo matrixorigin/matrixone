@@ -1236,7 +1236,7 @@ func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tre
 					if j != 0 {
 						buf.WriteString(", ")
 					}
-					buf.WriteString(rbat.GetVector(int32(j)).String())
+					buf.WriteString(rbat.GetVector(int32(j)).GetString(i))
 				}
 				buf.WriteString(")")
 			}

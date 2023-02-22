@@ -17,7 +17,6 @@ package vector
 import (
 	"context"
 	"strings"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -160,7 +159,7 @@ func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
 		IsConst:  vec.IsConst(),
 		Len:      uint32(vec.length),
 		Type:     TypeToProtoType(vec.typ),
-		Data:     (*(*[]byte)(unsafe.Pointer(&vec.col)))[:vec.length*sz],
+		Data:     vec.data[:vec.length*sz],
 	}, nil
 }
 
@@ -179,7 +178,8 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	if err := rvec.nsp.Read(vec.Nsp); err != nil {
 		return nil, err
 	}
-	*(*[]byte)(unsafe.Pointer(&rvec.col)) = vec.Data
+	rvec.data = vec.Data
+	rvec.setupColFromData()
 	return rvec, nil
 }
 

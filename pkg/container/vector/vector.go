@@ -689,7 +689,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		return AppendFixed(v, MustTCols[float64](w)[sel], false, mp)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		ws := MustTCols[types.Varlena](w)
-		return AppendBytes(v, ws[sel].GetByteSlice(v.area), false, mp)
+		return AppendBytes(v, ws[sel].GetByteSlice(w.area), false, mp)
 	case types.T_date:
 		return AppendFixed(v, MustTCols[types.Date](w)[sel], false, mp)
 	case types.T_datetime:
@@ -748,7 +748,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 		return AppendMultiFixed(v, MustTCols[float64](w)[sel], false, cnt, mp)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		ws := MustTCols[types.Varlena](w)
-		return AppendMultiBytes(v, ws[sel].GetByteSlice(v.area), false, cnt, mp)
+		return AppendMultiBytes(v, ws[sel].GetByteSlice(w.area), false, cnt, mp)
 	case types.T_date:
 		return AppendMultiFixed(v, MustTCols[types.Date](w)[sel], false, cnt, mp)
 	case types.T_datetime:

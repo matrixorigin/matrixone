@@ -422,7 +422,7 @@ func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 	case types.T_float64:
 		return vector.MustTCols[float64](vec)[0], nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
-		return vec.String(), nil
+		return vec.GetString(0), nil
 	case types.T_decimal64:
 		val := vector.MustTCols[types.Decimal64](vec)[0]
 		return val.String(), nil

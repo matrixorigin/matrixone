@@ -691,6 +691,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Expr:    t.Cond,
 			Types:   convertToPlanTypes(t.Typs),
 		}
+	case *loopmark.Argument:
+		in.MarkJoin = &pipeline.MarkJoin{
+			Expr:   t.Cond,
+			Types:  convertToPlanTypes(t.Typs),
+			Result: t.Result,
+		}
 	case *offset.Argument:
 		in.Offset = t.Offset
 	case *order.Argument:

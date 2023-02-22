@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
@@ -105,6 +106,7 @@ func TestInstructionSerializationCover(t *testing.T) {
 		{instruction: vm.Instruction{Op: vm.IntersectAll, Arg: &intersectall.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.HashBuild, Arg: &hashbuild.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.TableFunction, Arg: &table_function.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.MergeBlock, Arg: &mergeblock.Argument{}}, ignore: true},
 	}
 	{
 		typeReached := make([]int, vm.LastInstructionOp)

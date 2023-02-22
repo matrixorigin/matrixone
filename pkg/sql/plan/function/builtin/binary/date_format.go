@@ -90,7 +90,7 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	}
 
 	// get the format string.
-	formatMask := string(formatVector.String())
+	formatMask := string(formatVector.GetString(0))
 
 	if dateVector.IsConst() {
 		// XXX Null handling maybe broken.

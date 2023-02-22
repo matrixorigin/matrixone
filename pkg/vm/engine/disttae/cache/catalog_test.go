@@ -284,7 +284,7 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 			case catalog.MO_COLUMNS_ATT_RELNAME_IDX + MO_OFF:
 				vec = vector.NewVector(typ)
 				for k := 0; k < Rows; k++ {
-					err := vector.AppendFixed(vec, names[i], false, mp)
+					err := vector.AppendBytes(vec, names[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF:
@@ -292,7 +292,7 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 				require.NoError(t, err)
 				vec = vector.NewVector(typ)
 				for k := 0; k < Rows; k++ {
-					err := vector.AppendFixed(vec, data, false, mp)
+					err := vector.AppendBytes(vec, data, false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATTHASDEF_IDX + MO_OFF:

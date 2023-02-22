@@ -392,7 +392,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 func constructValueScanBatch(ctx context.Context, proc *process.Process, node *plan.Node) (*batch.Batch, error) {
 	if node == nil || node.TableDef == nil { // like : select 1, 2
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewConstNull(types.Type{Oid: types.T_int64}, 1, proc.Mp())
+		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
 		bat.InitZsOne(1)
 		return bat, nil
 	}
@@ -590,7 +590,7 @@ func (c *Compile) ConstructScope() *Scope {
 	ds.Proc.LoadTag = true
 	bat := batch.NewWithSize(1)
 	{
-		bat.Vecs[0] = vector.NewConstNull(types.Type{Oid: types.T_int64}, 1, c.proc.Mp())
+		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
 		bat.InitZsOne(1)
 	}
 	ds.DataSource = &Source{Bat: bat}
@@ -1734,7 +1734,7 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 			return nil, err
 		}
 		if tmp.IsConstNull() {
-			vector.AppendFixed(vec, vector.GetInitConstVal(typ), true, proc.Mp())
+			vector.AppendFixed(vec, 0, true, proc.Mp())
 			continue
 		}
 		switch typ.Oid {
@@ -1761,7 +1761,7 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		case types.T_float64:
 			vector.AppendFixed(vec, vector.MustTCols[float64](tmp)[0], false, proc.Mp())
 		case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
-			vector.AppendBytes(vec, vector.MustBytesCols(tmp)[0], false, proc.Mp())
+			vector.AppendBytes(vec, tmp.GetBytes(0), false, proc.Mp())
 		case types.T_date:
 			vector.AppendFixed(vec, vector.MustTCols[types.Date](tmp)[0], false, proc.Mp())
 		case types.T_datetime:

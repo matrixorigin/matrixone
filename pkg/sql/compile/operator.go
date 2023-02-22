@@ -804,7 +804,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 			if len(f.F.Args) > 1 {
 				// vec is separator
 				vec, _ := colexec.EvalExpr(constBat, proc, f.F.Args[len(f.F.Args)-1])
-				sepa := vec.String()
+				sepa := vec.GetString(0)
 				multiaggs[lenMultiAggs] = group_concat.Argument{
 					Dist:      distinct,
 					GroupExpr: f.F.Args[:len(f.F.Args)-1],

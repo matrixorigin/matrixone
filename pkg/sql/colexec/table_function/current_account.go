@@ -30,33 +30,27 @@ func currentAccountPrepare(proc *process.Process, arg *Argument) error {
 }
 
 func getAccountName(proc *process.Process) *vector.Vector {
-	vec := vector.NewConstBytes(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}, []byte(proc.SessionInfo.Account), 1, proc.Mp())
-	return vec
+	return vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.SessionInfo.Account), 1, proc.Mp())
 }
 
 func getRoleName(proc *process.Process) *vector.Vector {
-	vec := vector.NewConstBytes(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}, []byte(proc.SessionInfo.Role), 1, proc.Mp())
-	return vec
+	return vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.SessionInfo.Role), 1, proc.Mp())
 }
 
 func getUserName(proc *process.Process) *vector.Vector {
-	vec := vector.NewConstBytes(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}, []byte(proc.SessionInfo.User), 1, proc.Mp())
-	return vec
+	return vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.SessionInfo.User), 1, proc.Mp())
 }
 
 func getAccountId(proc *process.Process) *vector.Vector {
-	vec := vector.NewConstFixed(types.Type{Oid: types.T_uint32}, proc.SessionInfo.AccountId, 1, proc.Mp())
-	return vec
+	return vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.AccountId, 1, proc.Mp())
 }
 
 func getRoleId(proc *process.Process) *vector.Vector {
-	vec := vector.NewConstFixed(types.Type{Oid: types.T_uint32}, proc.SessionInfo.RoleId, 1, proc.Mp())
-	return vec
+	return vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.RoleId, 1, proc.Mp())
 }
 
 func getUserId(proc *process.Process) *vector.Vector {
-	vec := vector.NewConstFixed(types.Type{Oid: types.T_uint32}, proc.SessionInfo.UserId, 1, proc.Mp())
-	return vec
+	return vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.UserId, 1, proc.Mp())
 }
 
 func currentAccountCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
