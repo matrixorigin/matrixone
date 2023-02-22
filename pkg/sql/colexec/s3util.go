@@ -374,7 +374,8 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 				if err := WriteBlock(container, container.buffers[idx], proc); err != nil {
 					return err
 				}
-				container.buffers[idx].Clean(proc.GetMPool())
+				// force clean
+				container.buffers[idx].CleanOnlyData(proc.GetMPool())
 			}
 			heap.Push(mergeHeap, nil)
 		}

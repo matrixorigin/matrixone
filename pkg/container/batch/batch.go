@@ -255,6 +255,26 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	bat.Vecs = nil
 }
 
+func (bat *Batch) CleanOnlyData(m *mpool.MPool) {
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(m)
+			if vec.IsLowCardinality() {
+				vec.Index().(*index.LowCardinalityIndex).Free()
+			}
+		}
+	}
+	for _, agg := range bat.Aggs {
+		if agg != nil {
+			agg.Free(m)
+		}
+	}
+	if len(bat.Zs) != 0 {
+		m.PutSels(bat.Zs)
+		bat.Zs = nil
+	}
+}
+
 func (bat *Batch) String() string {
 	var buf bytes.Buffer
 
