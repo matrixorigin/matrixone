@@ -196,7 +196,6 @@ func (container *WriteS3Container) InitBuffers(bat *batch.Batch, idx int) {
 // 0: the tableBatches[idx] is equal to threshold
 // -1: the tableBatches[idx] is less than threshold
 func (container *WriteS3Container) Put(bat *batch.Batch, idx int) int {
-	bat.AddCnt(1)
 	container.tableBatchSizes[idx] += uint64(bat.Size())
 	container.tableBatches[idx] = append(container.tableBatches[idx], bat)
 	if container.tableBatchSizes[idx] == WriteS3Threshold {
@@ -394,10 +393,6 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 		if err := WriteEndBlocks(container, proc, idx); err != nil {
 			return err
 		}
-	}
-	for i := range bats {
-		bats[i].SubCnt(1)
-		bats[i].Clean(proc.GetMPool())
 	}
 	return nil
 }

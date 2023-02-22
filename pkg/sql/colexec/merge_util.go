@@ -48,8 +48,8 @@ type MergeHeap[T any] struct {
 	nulls []*nulls.Nulls
 }
 
-func NewMergeHeap[T any](size int, compLess func([]T, int64, int64) bool, cols [][]T, nulls []*nulls.Nulls) *MergeHeap[T] {
-	return &MergeHeap[T]{
+func NewMergeHeap[T any](size int, compLess func([]T, int64, int64) bool, cols [][]T, nulls []*nulls.Nulls) (mergeHeap *MergeHeap[T]) {
+	mergeHeap = &MergeHeap[T]{
 		datas:    make([]*MixData[T], size),
 		size:     0,
 		cmpLess:  compLess,
@@ -57,6 +57,8 @@ func NewMergeHeap[T any](size int, compLess func([]T, int64, int64) bool, cols [
 		pointers: make([]int, size),
 		nulls:    nulls,
 	}
+	mergeHeap.datas = mergeHeap.datas[:0]
+	return
 }
 
 func (mergeHeap *MergeHeap[T]) Len() int {
