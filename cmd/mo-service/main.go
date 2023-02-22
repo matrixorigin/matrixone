@@ -70,6 +70,10 @@ func main() {
 	if *allocsProfilePathFlag != "" {
 		defer writeAllocsProfile()
 	}
+	if *fileServiceProfilePathFlag != "" {
+		stop := startFileServiceProfile()
+		defer stop()
+	}
 	if *httpListenAddr != "" {
 		go func() {
 			http.ListenAndServe(*httpListenAddr, nil)
