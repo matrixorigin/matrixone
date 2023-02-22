@@ -205,14 +205,14 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			"catalog-gc",
 			opts.CatalogCfg.GCInterval,
 			func(ctx context.Context) error {
-				// if opts.CatalogCfg.DisableGC {
-				// 	return nil
-				// }
-				// consumed := db.DiskCleaner.GetMaxConsumed()
-				// if consumed == nil {
-				// 	return nil
-				// }
-				// db.Catalog.GCByTS(ctx, consumed.GetEnd())
+				if opts.CatalogCfg.DisableGC {
+					return nil
+				}
+				consumed := db.DiskCleaner.GetMaxConsumed()
+				if consumed == nil {
+					return nil
+				}
+				db.Catalog.GCByTS(ctx, consumed.GetEnd())
 				return nil
 			}),
 		gc.WithCronJob(

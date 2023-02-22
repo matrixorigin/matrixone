@@ -87,7 +87,7 @@ func TestEncodeAndDecodeWithChecksum(t *testing.T) {
 }
 
 func TestEncodeAndDecodeWithCompress(t *testing.T) {
-	p, err := mpool.NewMPool("test", 0, mpool.Small)
+	p, err := mpool.NewMPool("test", 0, 0)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
@@ -108,7 +108,13 @@ func TestEncodeAndDecodeWithCompress(t *testing.T) {
 }
 
 func TestEncodeAndDecodeWithCompressAndHasPayload(t *testing.T) {
-	p, err := mpool.NewMPool("test", 0, mpool.Small)
+	// XXX Zhang Xu
+	//
+	// in codec, readMessage, dstPayload is freed c.pool.Free(dstPayload)
+	// but it is returned again in SetPayloadField
+	// We have to enable the NoFixed flag so that mpool Free does not
+	// really destroy the memory.
+	p, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
