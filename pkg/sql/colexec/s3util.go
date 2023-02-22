@@ -268,13 +268,6 @@ func GetPos(data any, oid types.T) (int, int) {
 // len(sortIndex) is always only one.
 func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process.Process) error {
 	bats := container.tableBatches[idx][:length]
-	left := container.tableBatches[idx][length:]
-	container.tableBatches[idx] = container.tableBatches[idx][:0]
-	container.tableBatches[idx] = append(container.tableBatches[idx], left...)
-	container.tableBatchSizes[idx] = 0
-	for _, bat := range left {
-		container.tableBatchSizes[idx] += uint64(bat.Size())
-	}
 	sortIdx := -1
 	for i := range bats {
 		// sort bats firstly
@@ -394,6 +387,12 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 			return err
 		}
 	}
+	left := container.tableBatches[idx][length:]
+	container.tableBatches[idx] = left
+	container.tableBatchSizes[idx] = 0
+	for _, bat := range left {
+		container.tableBatchSizes[idx] += uint64(bat.Size())
+	}
 	return nil
 }
 
@@ -410,34 +409,6 @@ func (container *WriteS3Container) WriteS3Batch(bat *batch.Batch, proc *process.
 	case -1:
 		proc.SetInputBatch(&batch.Batch{})
 	}
-	return nil
-}
-
-// After cn writes the data to s3, it will get meta data about the block (aka metaloc) by calling func WriteEndBlocks
-// and cn needs to pass it to dn for conflict detection
-// Except for the case of writing s3 directly, cn doesn't need to sense how dn is labeling the blocks on s3
-func GetBlockMeta(bats []*batch.Batch, container *WriteS3Container, proc *process.Process, idx int) error {
-	for i := range bats {
-		if err := GenerateWriter(container, proc); err != nil {
-			return err
-		}
-		if idx == 0 && len(container.sortIndex) != 0 {
-			SortByKey(proc, bats[i], container.sortIndex, proc.GetMPool())
-		}
-		if bats[i].Length() == 0 {
-			continue
-		}
-		if err := WriteBlock(container, bats[i], proc); err != nil {
-			return err
-		}
-		if err := WriteEndBlocks(container, proc, idx); err != nil {
-			return err
-		}
-	}
-
-	// send it to connector operator.
-	// vitually, first it will be recieved by output, then transfer it to connector by rpc
-	// metaLocBat.SetZs(metaLocBat.Vecs[0].Length(), proc.GetMPool())
 	return nil
 }
 
@@ -590,7 +561,7 @@ func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int)
 	}
 	for j := range blocks {
 		metaLoc, err := blockio.EncodeMetaLocWithObject(
-			blocks[0].GetExtent(),
+			blocks[j].GetExtent(),
 			uint32(container.lengths[j]),
 			blocks,
 		)
