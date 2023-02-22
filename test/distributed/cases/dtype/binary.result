@@ -1,26 +1,17 @@
 drop table if exists t1;
-create table t1(a binary(3));
+create table t1(a binary(2));
 insert into t1 values("6");
-insert into t1 values("6 ");
+insert into t1 values("66");
 insert into t1 values("6");
-select * from t1;
+select * from t1 where a != '6\0';
 a
-0x360000
-0x362000
-0x360000
+66
 insert into t1 values("65");
-select * from t1 order by a;
-a
-0x360000
-0x360000
-0x362000
-0x363500
 select * from t1 where a > '6 ';
 a
-0x362000
-0x363500
+65
+66
 select * from t1 where a = '6';
 a
-select * from t1 where a = '6 \0';
+select * from t1 where a = '6 ';
 a
-0x362000
