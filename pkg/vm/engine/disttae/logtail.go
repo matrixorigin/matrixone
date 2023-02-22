@@ -32,11 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
-var _ = updatePartition
+var _ = updatePartitionOfPull
 var _ = genSyncLogTailReq
 
-// updatePartition the old method of log tail pull model.
-func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
+// updatePartitionOfPull the old method of log tail pull model.
+func updatePartitionOfPull(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	ctx context.Context, op client.TxnOperator, db *DB,
 	mvcc MVCC, dn DNStore, req api.SyncLogTailReq) error {
 	reqs, err := genLogTailReq(dn, req)

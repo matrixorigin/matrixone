@@ -250,7 +250,7 @@ func (e *Engine) connectToLogTailServer(
 func (e *Engine) tryToGetTableLogTail(
 	ctx context.Context,
 	dbId, tblId uint64) error {
-	// subscribe table if it's never subscribed.
+	// subscribe table if it has never been subscribed.
 	// and poll to check if we receive the log.
 	if !e.subscribed.getTableSubscribe(dbId, tblId) {
 		if err := e.subscriber.subscribeTable(ctx,
@@ -278,8 +278,7 @@ func (e *Engine) StartToReceiveTableLogTail() {
 		return response{r: ltR, err: err}
 	}
 	// set up a background routine to receive table log.
-	// if fail to connect log tail server.
-	// it should reconnect.
+	// if lost connection with log tail server. it should reconnect.
 	go func() {
 		ctx := context.TODO()
 		for {
@@ -301,46 +300,52 @@ func (e *Engine) StartToReceiveTableLogTail() {
 
 				resp := <-ch
 				if resp.err != nil {
-					// get a rpc err from log tail server. and should reconnect soon.
+					// decoded error or rpc err. should reconnect soon.
 					logutil.Error(
 						fmt.Sprintf("receive a error from dn log tail server, err is %s",
 							resp.err.Error()))
 					reconect = true
-				} else {
-					subscriber := e.subscriber
-					switch {
-					case resp.r.GetSubscribeResponse() != nil:
-						lt := resp.r.GetSubscribeResponse().GetLogtail()
-						logTs := lt.GetTs()
-						if err := updatePartition2(ctx, subscriber.dnNodeID, e, &lt, *logTs); err != nil {
+					break
+				}
+
+				subscriber := e.subscriber
+				switch {
+				case resp.r.GetSubscribeResponse() != nil:
+					logTail := resp.r.GetSubscribeResponse().GetLogtail()
+					logTs := logTail.GetTs()
+					if err := updatePartitionOfPush(ctx, subscriber.dnNodeID, e, &logTail, *logTs); err != nil {
+						logutil.Errorf("update partition failed. err is %s", err)
+						reconect = true
+						break
+					}
+					tbl := logTail.GetTable()
+					e.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
+					e.receiveLogTailTime.updateTimestamp(*logTs)
+
+				case resp.r.GetUpdateResponse() != nil:
+					logLists := resp.r.GetUpdateResponse().GetLogtailList()
+					to := resp.r.GetUpdateResponse().GetTo()
+
+					// the purpose of sorting is to put log of mo.db, mo.table, mo.column first.
+					// ensure the consistency with the pull process.
+					logList(logLists).Sort()
+
+					for _, l := range logLists {
+						if err := updatePartitionOfPush(ctx, subscriber.dnNodeID, e, &l, *l.Ts); err != nil {
 							logutil.Errorf("update partition failed. err is %s", err)
 							reconect = true
 							break
 						}
-						tbl := lt.GetTable()
-						e.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
-						e.receiveLogTailTime.updateTimestamp(*logTs)
-
-					case resp.r.GetUpdateResponse() != nil:
-						logLists := resp.r.GetUpdateResponse().GetLogtailList()
-						to := resp.r.GetUpdateResponse().GetTo()
-
-						logList(logLists).Sort()
-						for _, l := range logLists {
-							if err := updatePartition2(ctx, subscriber.dnNodeID, e, &l, *l.Ts); err != nil {
-								logutil.Errorf("update partition failed. err is %s", err)
-								reconect = true
-								break
-							}
-						}
-						e.receiveLogTailTime.updateTimestamp(*to)
-
-					default:
-						// errResponse and unSubscribeResponse.
-						// we have no need to handle these now.
-						//case resp.r.GetError() != nil:
-						//case resp.r.GetUnsubscribeResponse() != nil:
 					}
+					if !reconect {
+						e.receiveLogTailTime.updateTimestamp(*to)
+					}
+
+				default:
+					// errResponse and unSubscribeResponse.
+					// we have no need to handle these now.
+					//case resp.r.GetError() != nil:
+					//case resp.r.GetUnsubscribeResponse() != nil:
 				}
 			}
 
@@ -363,7 +368,8 @@ func (e *Engine) StartToReceiveTableLogTail() {
 	}()
 }
 
-func updatePartition2(
+// updatePartitionOfPush is the partition update method of log tail push model.
+func updatePartitionOfPush(
 	ctx context.Context,
 	dnId int,
 	e *Engine, tl *logtail.TableLogtail, _ timestamp.Timestamp) (err error) {
@@ -398,7 +404,7 @@ func updatePartition2(
 		constraint:   key.Constraint,
 	}
 
-	if err = consumeLogTail2(ctx,
+	if err = consumeLogTailOfPush(ctx,
 		dnId, tbl, e.db, partition, tl); err != nil {
 		logutil.Errorf("consume %d-%s log tail error: %v\n", tbl.tableId, tbl.tableName, err)
 		return err
@@ -410,7 +416,7 @@ func updatePartition2(
 	return nil
 }
 
-func consumeLogTail2(
+func consumeLogTailOfPush(
 	ctx context.Context,
 	idx int, tbl *table,
 	db *DB, mvcc MVCC, lt *logtail.TableLogtail) (err error) {

@@ -298,7 +298,11 @@ func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
 	return parts
 }
 
-func (db *DB) Update(ctx context.Context, dnList []DNStore, tbl *table, op client.TxnOperator,
+func (db *DB) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
+	return db.cnE.tryToGetTableLogTail(ctx, databaseId, tableId)
+}
+
+func (db *DB) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *table, op client.TxnOperator,
 	primaryIdx int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	db.Lock()
 	parts, ok := db.partitions[[2]uint64{databaseId, tableId}]
@@ -325,7 +329,7 @@ func (db *DB) Update(ctx context.Context, dnList []DNStore, tbl *table, op clien
 			return ctx.Err()
 		}
 
-		if err := updatePartition(
+		if err := updatePartitionOfPull(
 			i, primaryIdx, tbl, ts, ctx, op, db, part, dn,
 			genSyncLogTailReq(part.ts, ts, databaseId, tableId),
 		); err != nil {
