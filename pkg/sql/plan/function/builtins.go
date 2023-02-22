@@ -3139,4 +3139,28 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+
+	VALUES: {
+		Id:     VALUES,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) != 1 {
+				if operator.IfTypeCastSupported(inputs[0], inputs[1]) {
+					return 0, nil
+				}
+			}
+			return wrongFunctionParameters, nil
+		},
+		Overloads: []Function{
+			{
+				Index:           0,
+				UseNewFramework: true,
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewFn: unary.Values,
+			},
+		},
+	},
 }

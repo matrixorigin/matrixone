@@ -292,6 +292,9 @@ const (
 
 	MO_LOG_DATE // parse date from string, like __mo_filepath
 
+	// be used: insert into t1 values(1,1) on duplicate key update a=values(a)+a+1
+	VALUES
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -506,6 +509,7 @@ var functionIdRegister = map[string]int32{
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
 	"trim":                           TRIM,
 	"mo_log_date":                    MO_LOG_DATE,
+	"values":                         VALUES,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

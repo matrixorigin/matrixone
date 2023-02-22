@@ -475,9 +475,11 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
 	newCtx := &insert.InsertCtx{
-		Idx:      oldCtx.Idx,
 		Ref:      oldCtx.Ref,
 		TableDef: oldCtx.TableDef,
+
+		OnDuplicateIdx:  oldCtx.OnDuplicateIdx,
+		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
 
 		ParentIdx:    oldCtx.ParentIdx,
 		ClusterTable: oldCtx.ClusterTable,

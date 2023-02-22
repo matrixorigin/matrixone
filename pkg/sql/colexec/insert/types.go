@@ -38,10 +38,12 @@ type Argument struct {
 
 type InsertCtx struct {
 	Source       engine.Relation
-	Idx          []int32
 	Ref          *plan.ObjectRef
 	TableDef     *plan.TableDef
 	UniqueSource []engine.Relation
+
+	OnDuplicateIdx  []int32
+	OnDuplicateExpr map[string]*plan.Expr
 
 	ParentIdx map[string]int32
 

@@ -70,7 +70,7 @@ message Insert{
   bool IsRemote     = 2;
 
   // InsertCtx
-  repeated int32 idx              = 3;
+  repeated int32 on_duplicate     = 3;
   plan.ObjectRef ref              = 4;
   plan.TableDef table_def         = 5;
   repeated int32 idx_idx          = 6;

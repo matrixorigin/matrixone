@@ -38,7 +38,8 @@ type dmlSelectInfo struct {
 	rootId         int32
 	derivedTableId int32
 
-	onDuplicate []int32
+	onDuplicateIdx  []int32
+	onDuplicateExpr map[string]*Expr
 
 	onIdx    []int32 //remove these row
 	onIdxTbl []*ObjectRef
@@ -567,38 +568,22 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// if insert with on duplicate key . need append a join node
 	// create table t1 (a int primary key, b int unique key, c int);
 	// insert into t1 values (1,1,3),(2,2,3) on duplicate key update a=a+1, b=b-2;
-	// rewrite to : select _t.*, t1.row_id, t1.a+1, t1.b-2，c from
+	// rewrite to : select _t.*, t1.row_id, t1.a, t1.b，c from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
 	if len(stmt.OnDuplicateUpdate) > 0 {
+
 		rightTableDef := DeepCopyTableDef(tableDef)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
 		hiddenCol := builder.compCtx.GetHideKeyDef(tableObjRef.SchemaName, tableObjRef.ObjName)
 		rightTableDef.Cols = append(rightTableDef.Cols, hiddenCol)
 		rightTableDef.Name2ColIndex = map[string]int32{}
-		uniqueCols := make(map[string]int)
 		for i, col := range rightTableDef.Cols {
 			rightTableDef.Name2ColIndex[col.Name] = int32(i)
-			if col.Primary {
-				uniqueCols[col.Name] = i
-			}
 		}
-		if rightTableDef.Pkey != nil {
-			for _, colName := range rightTableDef.Pkey.Names {
-				uniqueCols[colName] = int(rightTableDef.Name2ColIndex[colName])
-			}
-		}
-		for _, index := range rightTableDef.Indexes {
-			if index.Unique {
-				if len(index.Parts) == 1 {
-					colName := index.Parts[0]
-					uniqueCols[colName] = int(rightTableDef.Name2ColIndex[colName])
-				}
-			}
-		}
+		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
 
 		// if table have unique columns, we do the rewrite. if not, do nothing(do not throw error)
 		if len(uniqueCols) > 0 {
-
 			joinCtx := NewBindContext(builder, bindCtx)
 			rightCtx := NewBindContext(builder, joinCtx)
 			rightId := builder.appendNode(&plan.Node{
@@ -619,11 +604,12 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 			var defExpr *Expr
 			idxs := make([]int32, len(rightTableDef.Cols))
+			updateExprs := make(map[string]*Expr)
 			for i, col := range rightTableDef.Cols {
-				idxs[i] = int32(i)
 				info.idx = info.idx + 1
+				idxs[i] = info.idx
 				if updateExpr, exists := updateCols[col.Name]; exists {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+					binder := NewUpdateBinder(builder.GetContext(), nil, nil, rightTableDef.Cols)
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
 						defExpr, err = getDefaultExpr(builder.GetContext(), col)
 						if err != nil {
@@ -634,53 +620,65 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 						if err != nil {
 							return err
 						}
-						// todo: replace values expr
 					}
 					defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
 					if err != nil {
 						return err
 					}
-					info.projectList = append(info.projectList, defExpr)
-				} else {
-					info.projectList = append(info.projectList, &plan.Expr{
-						Typ: col.Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: rightTag,
-								ColPos: int32(i),
-							},
-						},
-					})
+					updateExprs[col.Name] = defExpr
 				}
+				info.projectList = append(info.projectList, &plan.Expr{
+					Typ: col.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: rightTag,
+							ColPos: int32(i),
+						},
+					},
+				})
 			}
 
 			// get join condition
 			var joinConds *Expr
 			joinIdx := 0
-			for _, colIdx := range uniqueCols {
-				col := rightTableDef.Cols[colIdx]
-				leftExpr := &Expr{
-					Typ: col.Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: baseNodeTag,
-							ColPos: int32(colIdx),
+			for _, uniqueColMap := range uniqueCols {
+				var condExpr *Expr
+				var condIdx int = 0
+				for _, colIdx := range uniqueColMap {
+					col := rightTableDef.Cols[colIdx]
+					leftExpr := &Expr{
+						Typ: col.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: baseNodeTag,
+								ColPos: int32(colIdx),
+							},
 						},
-					},
-				}
-				rightExpr := &plan.Expr{
-					Typ: col.Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: rightTag,
-							ColPos: int32(colIdx),
+					}
+					rightExpr := &plan.Expr{
+						Typ: col.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: rightTag,
+								ColPos: int32(colIdx),
+							},
 						},
-					},
+					}
+					eqExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+					if err != nil {
+						return err
+					}
+					if condIdx == 0 {
+						condExpr = eqExpr
+					} else {
+						condExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, condExpr})
+						if err != nil {
+							return err
+						}
+					}
+					condIdx++
 				}
-				condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
-				if err != nil {
-					return err
-				}
+
 				if joinIdx == 0 {
 					joinConds = condExpr
 				} else {
@@ -706,7 +704,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			}, joinCtx)
 			bindCtx.binder = NewTableBinder(builder, bindCtx)
 			info.rootId = newRootId
-			info.onDuplicate = idxs
+			info.onDuplicateIdx = idxs
+			info.onDuplicateExpr = updateExprs
 		}
 
 	}
