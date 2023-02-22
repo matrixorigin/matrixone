@@ -70,10 +70,16 @@ func (m *MemCache) Read(
 			vector.Entries[i].ObjectSize = size
 			vector.Entries[i].done = true
 			numHit++
+			m.cacheHit()
 		}
 	}
 
 	return
+}
+
+//go:noinline
+func (m *MemCache) cacheHit() {
+	profileAddSample()
 }
 
 func (m *MemCache) Update(
