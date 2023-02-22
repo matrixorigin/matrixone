@@ -1019,9 +1019,14 @@ func genMetaTableName(id uint64) string {
 	return fmt.Sprintf("_%v_meta", id)
 }
 
+var metaTableMatchRegexp *regexp.Regexp
+
+func init() {
+	metaTableMatchRegexp, _ = regexp.Compile(`\_\d+\_meta`)
+}
+
 func isMetaTable(name string) bool {
-	ok, _ := regexp.MatchString(`\_\d+\_meta`, name)
-	return ok
+	return metaTableMatchRegexp.MatchString(name)
 }
 
 func genBlockMetas(
