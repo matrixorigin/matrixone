@@ -322,3 +322,11 @@ func (bat *Batch) InitZsOne(len int) {
 		bat.Zs[i]++
 	}
 }
+
+func (bat *Batch) AddCnt(cnt int) {
+	atomic.AddInt64(&bat.Cnt, int64(cnt))
+}
+
+func (bat *Batch) SubCnt(cnt int) {
+	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
+}
