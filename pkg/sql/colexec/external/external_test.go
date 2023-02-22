@@ -830,7 +830,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, got1, err := filterByAccountAndFilename(tt.args.node, tt.args.proc, tt.args.fileList, tt.args.fileSize)
+			got, got1, err := filterByAccountAndFilename(context.TODO(), tt.args.node, tt.args.proc, tt.args.fileList, tt.args.fileSize)
 			require.Nil(t, err)
 			require.Equal(t, tt.want, got)
 			require.Equal(t, tt.want1, got1)

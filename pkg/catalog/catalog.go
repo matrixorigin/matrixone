@@ -424,11 +424,3 @@ func BuildQueryResultPath(accountName, statementId string, blockIdx int) string 
 func BuildQueryResultMetaPath(accountName, statementId string) string {
 	return fmt.Sprintf(QueryResultMetaPath, accountName, statementId)
 }
-
-func BuildQueryResultMetaName(accountName, statementId string) string {
-	return fmt.Sprintf(QueryResultMetaName, accountName, statementId)
-}
-
-func BuildQueryResultName(accountName, statementId string, blockIdx int) string {
-	return fmt.Sprintf(QueryResultName, accountName, statementId, blockIdx)
-}

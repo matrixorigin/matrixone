@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -110,6 +111,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 		TenantID: sysAccountID,
 	}
 	ses.SetTenantInfo(tenant)
+	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 
 	//three columns
 	typs := []types.Type{

@@ -84,58 +84,12 @@ func Min(a int, b int) int {
 	}
 }
 
-func MinInt64(a int64, b int64) int64 {
-	if a < b {
-		return a
-	} else {
-		return b
-	}
-}
-
-func MinUint64(a uint64, b uint64) uint64 {
-	if a < b {
-		return a
-	} else {
-		return b
-	}
-}
-
 func Max(a int, b int) int {
 	if a < b {
 		return b
 	} else {
 		return a
 	}
-}
-
-func MaxInt64(a int64, b int64) int64 {
-	if a < b {
-		return b
-	} else {
-		return a
-	}
-}
-
-func MaxUint64(a uint64, b uint64) uint64 {
-	if a < b {
-		return b
-	} else {
-		return a
-	}
-}
-
-type Uint64List []uint64
-
-func (ul Uint64List) Len() int {
-	return len(ul)
-}
-
-func (ul Uint64List) Less(i, j int) bool {
-	return ul[i] < ul[j]
-}
-
-func (ul Uint64List) Swap(i, j int) {
-	ul[i], ul[j] = ul[j], ul[i]
 }
 
 // GetRoutineId gets the routine id
@@ -147,57 +101,6 @@ func GetRoutineId() uint64 {
 	id, _ := strconv.ParseUint(string(data), 10, 64)
 	return id
 }
-
-type DebugCounter struct {
-	length  int
-	counter []uint64
-	Cf      CloseFlag
-}
-
-func NewDebugCounter(l int) *DebugCounter {
-	return &DebugCounter{
-		length:  l,
-		counter: make([]uint64, l),
-	}
-}
-
-func (dc *DebugCounter) Add(i int, v uint64) {
-	atomic.AddUint64(&dc.counter[i], v)
-}
-
-func (dc *DebugCounter) Set(i int, v uint64) {
-	atomic.StoreUint64(&dc.counter[i], v)
-}
-
-func (dc *DebugCounter) Get(i int) uint64 {
-	return atomic.LoadUint64(&dc.counter[i])
-}
-
-func (dc *DebugCounter) Len() int {
-	return dc.length
-}
-
-func (dc *DebugCounter) DCRoutine() {
-	dc.Cf.Open()
-
-	for dc.Cf.IsOpened() {
-		for i := 0; i < dc.length; i++ {
-			if i != 0 && i%8 == 0 {
-				logutil.Infof("")
-			}
-			v := dc.Get(i)
-			logutil.Infof("[%4d %4d]", i, v)
-			dc.Set(i, 0)
-		}
-		logutil.Infof("")
-		time.Sleep(5 * time.Second)
-	}
-}
-
-const (
-	TIMEOUT_TYPE_SECOND int = iota
-	TIMEOUT_TYPE_MILLISECOND
-)
 
 type Timeout struct {
 	//last record of the time
