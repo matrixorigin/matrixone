@@ -109,9 +109,7 @@ func (r *syncLogTailTimestamp) updateTimestamp(newTimestamp timestamp.Timestamp)
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
-	r.Lock()
 	t := r.getTimestamp()
-	r.Unlock()
 	return txnTime.LessEq(t)
 }
 
