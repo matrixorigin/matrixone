@@ -485,26 +485,46 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	}
 }
 
+//func dupScopeList(ss []*Scope) []*Scope {
+//rs := make([]*Scope, len(ss))
+//for i := range rs {
+//rs[i] = dupScope(ss[i])
+//}
+//return rs
+//}
+
+//func dupScope(s *Scope) *Scope {
+//regMap := make(map[*process.WaitRegister]*process.WaitRegister)
+
+//newScope, err := copyScope(s, regMap)
+//if err != nil {
+//return nil
+//}
+//err = fillInstructionsByCopyScope(newScope, s, regMap)
+//if err != nil {
+//return nil
+//}
+//return newScope
+//}
+
 func dupScopeList(ss []*Scope) []*Scope {
 	rs := make([]*Scope, len(ss))
-	for i := range rs {
-		rs[i] = dupScope(ss[i])
+	regMap := make(map[*process.WaitRegister]*process.WaitRegister)
+	var err error
+	for i := range ss {
+		rs[i], err = copyScope(ss[i], regMap)
+		if err != nil {
+			return nil
+		}
+	}
+
+	for i := range ss {
+		err = fillInstructionsByCopyScope(rs[i], ss[i], regMap)
+		if err != nil {
+			return nil
+		}
 	}
 	return rs
-}
-
-func dupScope(s *Scope) *Scope {
-	regMap := make(map[*process.WaitRegister]*process.WaitRegister)
-
-	newScope, err := copyScope(s, regMap)
-	if err != nil {
-		return nil
-	}
-	err = fillInstructionsByCopyScope(newScope, s, regMap)
-	if err != nil {
-		return nil
-	}
-	return newScope
 }
 
 func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRegister) (*Scope, error) {
@@ -553,7 +573,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 		}
 	}
 
-	newScope.Proc = process.NewFromProc(srcScope.Proc, srcScope.Proc.Ctx, len(srcScope.PreScopes))
+	newScope.Proc = process.NewFromProc(srcScope.Proc, srcScope.Proc.Ctx, len(srcScope.Proc.Reg.MergeReceivers))
 	for i := range srcScope.Proc.Reg.MergeReceivers {
 		regMap[srcScope.Proc.Reg.MergeReceivers[i]] = newScope.Proc.Reg.MergeReceivers[i]
 	}
