@@ -116,13 +116,34 @@ type LockService interface {
 type LockTableAllocator interface {
 	// Get get the original LockTable data corresponding to a Table. If there is no
 	// corresponding binding, then the CN binding of the current request will be used.
-	Get(tableID uint64, cn string) pb.LockTable
+	Get(serviceID string, tableID uint64) pb.LockTable
 	// Keepalive once a cn is bound to a Table, a heartbeat needs to be sent periodically
 	// to keep the binding in place. If no heartbeat is sent for a long period of time
 	// to maintain the binding, the binding will become invalid.
-	Keepalive(pb.LockTable) bool
+	Keepalive(serviceID string) bool
 	// Valid check for changes in the binding relationship of a specific locktable.
 	Valid(locks []pb.LockTable) bool
+}
+
+// LockTableKeeper is used to keep a heartbeat with the LockTableAllocator to keep the
+// LockTable bind.
+type LockTableKeeper interface {
+	// Add add a new LockTable to keepalive.
+	Add(pb.LockTable)
+	// Changed lock table bind changed notify, if a lock table bind changed, all related
+	// transactions must be abort
+	Changed() chan pb.LockTable
+	// Close close the keeper
+	Close() error
+}
+
+// KeepaliveSender is used to send keepalive message to LockTableAllocator.
+type KeepaliveSender interface {
+	// Keep send locktables keepalive messages, if lockTable version changed, the return
+	// []pb.LockTable will include these.
+	Keep(context.Context, []pb.LockTable) ([]pb.LockTable, error)
+	// Close close the sender
+	Close() error
 }
 
 // LockOptions options for lock

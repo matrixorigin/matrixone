@@ -25,9 +25,11 @@ option (gogoproto.goproto_enum_prefix_all) = true;
 // LockTable describes which CN manages a Table's Locks.
 message LockTable {
   // Table table id
-  uint64 Table   = 1;
-  // CN cn node id, A cn node will only run one instance of LockService
-  string CN      = 2;
+  uint64 Table     = 1;
+  // ServiceID lock service id, a cn node will only run one instance of LockService
+  string ServiceID = 2;
   // Version will incr if CN-Table bind changed.
-  uint64 Version = 3;
+  uint64 Version   = 3;
+  // Valid false if the service is disabled, and no new service bind this table
+  bool   Valid     = 4;
 }
