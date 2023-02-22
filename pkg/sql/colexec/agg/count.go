@@ -15,6 +15,7 @@
 package agg
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -55,6 +56,26 @@ func (c *Count[T1]) Fill(_ int64, _ T1, v int64, z int64, _ bool, hasNull bool) 
 		}
 	}
 	return v + z, false
+}
+
+func (c *Count[T1]) BatchFill(rs, _ any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
+	resultVs := rs.([]int64)
+	// count(*) will count the null
+	if c.IsStar || !nsp.Any() {
+		for i := int64(0); i < count; i++ {
+			if vps[i] != 0 {
+				resultVs[vps[i]-1] += zs[i+start]
+			}
+		}
+	} else {
+		for i := int64(0); i < count; i++ {
+			index := uint64(i + start)
+			if !nsp.Contains(index) && vps[i] != 0 {
+				resultVs[vps[i]-1] += zs[index]
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Count[T1]) MarshalBinary() ([]byte, error) {
