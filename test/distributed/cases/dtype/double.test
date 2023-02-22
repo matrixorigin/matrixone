@@ -98,12 +98,12 @@ CREATE TABLE t_double(id double(30,1));
 INSERT INTO t_double VALUES (1.19),(1.11), (2);
 SELECT id, id >= 1.1 FROM t_double;
 SELECT id, 1.1 <= id FROM t_double;
--- @bvt:issue#3366
+
 SELECT id, id = 1.1 FROM t_double;
 SELECT id, 1.1 = id FROM t_double;
 SELECT * from t_double WHERE id = 1.1;
 SELECT * from t_double WHERE id = 1.1e0;
--- @bvt:issue
+
 
 SELECT * from t_double WHERE id = '1.1';
 SELECT * from t_double WHERE id = '1.1e0';
