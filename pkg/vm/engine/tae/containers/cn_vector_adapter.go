@@ -88,8 +88,6 @@ func (vec *CnTaeVector[T]) Append(v any) {
 	} else {
 		_ = vec.downstreamVector.Append(v, false, vec.mpool)
 	}
-
-	vec.isOwner = true
 }
 
 func (vec *CnTaeVector[T]) AppendMany(vs ...any) {
