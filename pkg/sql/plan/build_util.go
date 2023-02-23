@@ -407,16 +407,18 @@ func judgeUnixTimestampReturnType(timestr string) types.T {
 }
 
 // Get the primary key name of the table
-func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
-	for _, col := range cols {
-		if col.Name != catalog.Row_ID && col.Primary {
-			return col.Name
-		}
-
+func getTablePriKeyName(priKeyDef *plan.PrimaryKeyDef) string {
+	if priKeyDef == nil {
+		return ""
+	} else {
+		return priKeyDef.PkeyColName
 	}
+}
 
-	if cPkeyCol != nil {
-		return cPkeyCol.Name
+// Check whether the table column name is an internal key
+func checkTableColumnNameValid(name string) bool {
+	if name == catalog.Row_ID || name == catalog.CPrimaryKeyColName {
+		return false
 	}
-	return ""
+	return true
 }

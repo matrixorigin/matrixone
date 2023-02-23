@@ -334,7 +334,7 @@ show INDEX FROM show_02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
 show_02    0    h1    1    h1    A    0    NULL    NULL    NO            YES    NULL
 show_02    0    u1    1    u1    A    0    NULL    NULL    NO            YES    NULL
-show_02    1    PRIMARY    1    __mo_cpkey_002h1002u1    A    0    NULL    NULL    NO            YES    NULL
+show_02    1    PRIMARY    1    __mo_cpkey_col    A    0    NULL    NULL    NO            YES    NULL
 show_02    0    __mo_rowid    1    __mo_rowid    A    0    NULL    NULL    NO        Physical address    NO    NULL
 DROP TABLE show_02;
 DROP TABLE IF EXISTS show_03;

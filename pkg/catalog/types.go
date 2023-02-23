@@ -28,6 +28,8 @@ const (
 	PrefixPriColName     = "__mo_cpkey_"
 	PrefixCBColName      = "__mo_cbkey_"
 	PrefixIndexTableName = "__mo_index_"
+	// Compound primary key column name, which is a hidden column
+	CPrimaryKeyColName = "__mo_cpkey_col"
 	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
 	IndexTableIndexColName   = "__mo_index_idx_col"
 	IndexTablePrimaryColName = "__mo_index_pri_col"
