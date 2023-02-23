@@ -38,7 +38,6 @@ const (
 	EnumFamily
 	SetFamily
 	UuidFamily
-	BinaryFamily
 
 	//test
 	BlobFamily
@@ -334,15 +333,15 @@ var (
 	}}
 
 	TYPE_BINARY = &T{InternalType: InternalType{
-		Family: BinaryFamily,
+		Family: StringFamily,
 		Locale: &emptyLocale,
-		Oid:    uint32(defines.MYSQL_TYPE_BINARY),
+		Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
 	}}
 
 	TYPE_VARBINARY = &T{InternalType: InternalType{
-		Family: BinaryFamily,
+		Family: StringFamily,
 		Locale: &emptyLocale,
-		Oid:    uint32(defines.MYSQL_TYPE_VARBINARY),
+		Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
 	}}
 
 	TYPE_BIT = &T{InternalType: InternalType{

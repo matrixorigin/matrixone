@@ -15,8 +15,9 @@
 package agg
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type BitAnd[T1 types.Ints | types.UInts | types.Floats] struct {

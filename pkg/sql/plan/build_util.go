@@ -91,47 +91,41 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
 			}
 			return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
-		case defines.MYSQL_TYPE_BINARY:
-			width := n.InternalType.DisplayWith
-			if width == -1 {
-				width = 1
-			}
-			if width > types.MaxBinaryLen {
-				return nil, moerr.NewOutOfRange(ctx, "binary", " typeLen is over the MaxBinaryLen: %v", types.MaxBinaryLen)
-			}
-			return &plan.Type{Id: int32(types.T_binary), Size: 24, Width: width}, nil
-		case defines.MYSQL_TYPE_VARBINARY:
-			width := n.InternalType.DisplayWith
-			if width == -1 {
-				return nil, moerr.NewSyntaxError(ctx, "Should assign width to varbinary type")
-			}
-			if width > types.MaxVarBinaryLen {
-				return nil, moerr.NewOutOfRange(ctx, "binary", "typeLen is over the MaxVarBinaryLen: %v", types.MaxVarBinaryLen)
-			}
-			return &plan.Type{Id: int32(types.T_varbinary), Size: 24, Width: width}, nil
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
 			width := n.InternalType.DisplayWith
 			// for char type,if we didn't specify the length,
 			// the default width should be 1, and for varchar,it's
 			// the defaultMaxLength
+			// Should always specify length to varbinary.
 			fstr := strings.ToLower(n.InternalType.FamilyString)
 			if width == -1 {
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
-				if fstr == "char" {
+				if fstr == "char" || fstr == "binary" {
 					width = 1
 				} else {
 					width = types.MaxVarcharLen
 				}
+
+				if fstr == "varbianry" {
+					return nil, moerr.NewSyntaxError(ctx, "Should specify width to varbinary type")
+				}
 			}
-			if fstr == "char" && width > types.MaxCharLen {
-				return nil, moerr.NewOutOfRange(ctx, "char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
-			} else if fstr == "varchar" && width > types.MaxVarcharLen {
-				return nil, moerr.NewOutOfRange(ctx, "varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+
+			if (fstr == "char" || fstr == "binary") && width > types.MaxCharLen {
+				return nil, moerr.NewOutOfRange(ctx, "%v", " typeLen is over the MaxCharLen: %v", fstr, types.MaxCharLen)
+			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
+				return nil, moerr.NewOutOfRange(ctx, "%v", " typeLen is over the MaxVarcharLen: %v", fstr, types.MaxVarcharLen)
 			}
-			if fstr == "char" { // type char
+			switch fstr {
+			case "char":
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
+			case "binary":
+				return &plan.Type{Id: int32(types.T_binary), Size: 24, Width: width}, nil
+			case "varchar":
+				return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
 			}
-			return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
+			// varbinary
+			return &plan.Type{Id: int32(types.T_varbinary), Size: 24, Width: width}, nil
 		case defines.MYSQL_TYPE_DATE:
 			return &plan.Type{Id: int32(types.T_date), Size: 4}, nil
 		case defines.MYSQL_TYPE_TIME:

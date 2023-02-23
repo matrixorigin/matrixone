@@ -191,6 +191,18 @@ var aggregates = map[int]Functions{
 				ReturnTyp:     types.T_time,
 				AggregateInfo: agg.AggregateMax,
 			},
+			{
+				Index:         22,
+				Args:          []types.T{types.T_binary},
+				ReturnTyp:     types.T_binary,
+				AggregateInfo: agg.AggregateMax,
+			},
+			{
+				Index:         23,
+				Args:          []types.T{types.T_varbinary},
+				ReturnTyp:     types.T_varbinary,
+				AggregateInfo: agg.AggregateMax,
+			},
 		},
 	},
 	MIN: {
@@ -327,6 +339,18 @@ var aggregates = map[int]Functions{
 				Index:         21,
 				Args:          []types.T{types.T_time},
 				ReturnTyp:     types.T_time,
+				AggregateInfo: agg.AggregateMin,
+			},
+			{
+				Index:         22,
+				Args:          []types.T{types.T_binary},
+				ReturnTyp:     types.T_binary,
+				AggregateInfo: agg.AggregateMin,
+			},
+			{
+				Index:         23,
+				Args:          []types.T{types.T_varbinary},
+				ReturnTyp:     types.T_varbinary,
 				AggregateInfo: agg.AggregateMin,
 			},
 		},
@@ -552,7 +576,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
+				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) && !operator.IsBinary(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
 				_, err := agg.ReturnType(agg.AggregateBitAnd, types.Type{Oid: inputs[0]})
@@ -568,6 +592,16 @@ var aggregates = map[int]Functions{
 				ReturnTyp:     types.T_uint64,
 				AggregateInfo: agg.AggregateBitAnd,
 			},
+			{
+				Index:         1,
+				ReturnTyp:     types.T_binary,
+				AggregateInfo: agg.AggregateBitAnd,
+			},
+			{
+				Index:         2,
+				ReturnTyp:     types.T_varbinary,
+				AggregateInfo: agg.AggregateBitAnd,
+			},
 		},
 	},
 	BIT_OR: {
@@ -579,7 +613,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
+				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) && !operator.IsBinary(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
 				_, err := agg.ReturnType(agg.AggregateBitOr, types.Type{Oid: inputs[0]})
@@ -595,6 +629,16 @@ var aggregates = map[int]Functions{
 				ReturnTyp:     types.T_uint64,
 				AggregateInfo: agg.AggregateBitOr,
 			},
+			{
+				Index:         1,
+				ReturnTyp:     types.T_binary,
+				AggregateInfo: agg.AggregateBitOr,
+			},
+			{
+				Index:         2,
+				ReturnTyp:     types.T_varbinary,
+				AggregateInfo: agg.AggregateBitOr,
+			},
 		},
 	},
 	BIT_XOR: {
@@ -606,7 +650,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
+				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) && !operator.IsBinary(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
 				_, err := agg.ReturnType(agg.AggregateBitXor, types.Type{Oid: inputs[0]})
@@ -620,6 +664,16 @@ var aggregates = map[int]Functions{
 			{
 				Index:         0,
 				ReturnTyp:     types.T_uint64,
+				AggregateInfo: agg.AggregateBitXor,
+			},
+			{
+				Index:         1,
+				ReturnTyp:     types.T_binary,
+				AggregateInfo: agg.AggregateBitXor,
+			},
+			{
+				Index:         2,
+				ReturnTyp:     types.T_varbinary,
 				AggregateInfo: agg.AggregateBitXor,
 			},
 		},

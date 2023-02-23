@@ -47,10 +47,6 @@ const (
 	MYSQL_TYPE_TIME2       MysqlType = 0x13 /**< Internal to MySQL. Not used in protocol */
 	MYSQL_TYPE_TYPED_ARRAY MysqlType = 0x14 /**< Used for replication only */
 
-	// Not real mysql types.
-	MYSQL_TYPE_BINARY    MysqlType = 0x15
-	MYSQL_TYPE_VARBINARY MysqlType = 0x16
-
 	MYSQL_TYPE_TEXT        MysqlType = 241 // add text to distinct blob and blob
 	MYSQL_TYPE_INVALID     MysqlType = 242
 	MYSQL_TYPE_UUID        MysqlType = 243
@@ -86,8 +82,7 @@ func (typ *MysqlType) GetLength(width int32) uint32 {
 		return 32
 	case MYSQL_TYPE_DOUBLE:
 		return 64
-	case MYSQL_TYPE_VARCHAR, MYSQL_TYPE_STRING,
-		MYSQL_TYPE_BINARY, MYSQL_TYPE_VARBINARY, MYSQL_TYPE_BLOB, MYSQL_TYPE_TEXT:
+	case MYSQL_TYPE_VARCHAR, MYSQL_TYPE_STRING, MYSQL_TYPE_BLOB, MYSQL_TYPE_TEXT:
 		return uint32(width) * 3
 	case MYSQL_TYPE_DATE:
 		return 64

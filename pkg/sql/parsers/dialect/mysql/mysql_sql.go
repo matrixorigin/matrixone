@@ -14807,10 +14807,10 @@ yydefault:
 			locale := ""
 			yyLOCAL = &tree.T{
 				InternalType: tree.InternalType{
-					Family:       tree.BinaryFamily,
+					Family:       tree.StringFamily,
 					FamilyString: yyDollar[1].str,
 					Locale:       &locale,
-					Oid:          uint32(defines.MYSQL_TYPE_BINARY),
+					Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
 					DisplayWith:  yyDollar[2].lengthOptUnion(),
 				},
 			}
@@ -16859,10 +16859,10 @@ yydefault:
 			locale := ""
 			yyLOCAL = &tree.T{
 				InternalType: tree.InternalType{
-					Family:       tree.BinaryFamily,
+					Family:       tree.StringFamily,
 					FamilyString: yyDollar[1].str,
 					Locale:       &locale,
-					Oid:          uint32(defines.MYSQL_TYPE_BINARY),
+					Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
 					DisplayWith:  yyDollar[2].lengthOptUnion(),
 				},
 			}
@@ -16876,11 +16876,11 @@ yydefault:
 			locale := ""
 			yyLOCAL = &tree.T{
 				InternalType: tree.InternalType{
-					Family:       tree.BinaryFamily,
+					Family:       tree.StringFamily,
 					Locale:       &locale,
 					FamilyString: yyDollar[1].str,
 					DisplayWith:  yyDollar[2].lengthOptUnion(),
-					Oid:          uint32(defines.MYSQL_TYPE_VARBINARY),
+					Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
 				},
 			}
 		}

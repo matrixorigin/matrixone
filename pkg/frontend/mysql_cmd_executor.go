@@ -2179,6 +2179,12 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 		setColFlag(c)
 		setColLength(c, col.Typ.Width)
 		setCharacter(c)
+
+		// For binary/varbinary with mysql_type_varchar.Change the charset.
+		if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
+			c.SetCharset(0x3f)
+		}
+
 		c.SetDecimal(uint8(col.Typ.Scale))
 		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
@@ -4542,9 +4548,9 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_varchar:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_binary:
-		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_varbinary:
-		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_date:
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:

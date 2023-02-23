@@ -6214,10 +6214,10 @@ mysql_cast_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-                Family: tree.BinaryFamily,
+                Family: tree.StringFamily,
                 FamilyString: $1,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_BINARY),
+                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
                 DisplayWith: $2,
             },
         }
@@ -7761,10 +7761,10 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-                Family: tree.BinaryFamily,
+                Family: tree.StringFamily,
                 FamilyString: $1,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_BINARY),
+                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
                 DisplayWith: $2,
             },
         }
@@ -7774,11 +7774,11 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-                Family: tree.BinaryFamily,
+                Family: tree.StringFamily,
                 Locale: &locale,
                 FamilyString: $1,
                 DisplayWith: $2,
-                Oid:    uint32(defines.MYSQL_TYPE_VARBINARY),
+                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
             },
         }
     }
