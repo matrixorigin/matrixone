@@ -134,7 +134,7 @@ func ToOrdered(v any) any {
 	case types.Timestamp:
 		return Int(v)
 	case types.Decimal64:
-		if v >= 0 {
+		if v>>63 == 0 {
 			return Decimal{uint64(v), 0}
 		}
 		return Decimal{uint64(v), ^uint64(0)}

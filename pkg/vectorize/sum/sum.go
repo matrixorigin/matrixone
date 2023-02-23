@@ -22,9 +22,6 @@ package sum
 import "C"
 
 import (
-	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
@@ -110,28 +107,57 @@ func floatSumSels[T constraints.Float](xs []T, sels []int64) T {
 }
 
 func Decimal64Sum(rs, vs []types.Decimal64, start int64, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
-	rc := C.Decimal64_VecSum((*C.int64_t)(unsafe.Pointer(&rs[0])), (*C.int64_t)(unsafe.Pointer(&vs[0])),
-		(C.int64_t)(start), (C.int64_t)(count), (*C.uint64_t)(&vps[0]), (*C.int64_t)(&zs[0]), (*C.uint64_t)(nulls.Ptr(nsp)))
-	if rc != 0 {
-		return moerr.NewOutOfRangeNoCtx("decimal64", "decimal SUM")
+	for i := int64(0); i < count; i++ {
+		if vps[i] == 0 {
+			continue
+		}
+		ret, _, err := vs[i+start].Mul(types.Decimal64(zs[i+start]), 0, 0)
+		if err != nil {
+			return err
+		}
+		rs[vps[i]-1], _, err = rs[vps[i]-1].Add(ret, 0, 0)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func Decimal64Sum128(rs []types.Decimal128, vs []types.Decimal64, start int64, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
-	rc := C.Decimal64_VecSumToDecimal128((*C.int64_t)(unsafe.Pointer(&rs[0])), (*C.int64_t)(unsafe.Pointer(&vs[0])),
-		(C.int64_t)(start), (C.int64_t)(count), (*C.uint64_t)(&vps[0]), (*C.int64_t)(&zs[0]), (*C.uint64_t)(nulls.Ptr(nsp)))
-	if rc != 0 {
-		return moerr.NewOutOfRangeNoCtx("decimal128", "decimal SUM")
+	err := error(nil)
+	for i := int64(0); i < count; i++ {
+		if vps[i] == 0 {
+			continue
+		}
+		dec := types.Decimal128{B0_63: uint64(vs[i+start]), B64_127: 0}
+		if dec.B0_63>>63 != 0 {
+			dec.B64_127 = ^dec.B64_127
+		}
+		dec, _, err = dec.Mul(types.Decimal128{B0_63: uint64(zs[i+start]), B64_127: 0}, 0, 0)
+		if err != nil {
+			return err
+		}
+		rs[vps[i]-1], _, err = rs[vps[i]-1].Add(dec, 0, 0)
+		if err != nil {
+			return err
+		}
 	}
-	return nil
+	return err
 }
 
 func Decimal128Sum(rs, vs []types.Decimal128, start int64, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
-	rc := C.Decimal128_VecSum((*C.int64_t)(unsafe.Pointer(&rs[0])), (*C.int64_t)(unsafe.Pointer(&vs[0])),
-		(C.int64_t)(start), (C.int64_t)(count), (*C.uint64_t)(&vps[0]), (*C.int64_t)(&zs[0]), (*C.uint64_t)(nulls.Ptr(nsp)))
-	if rc != 0 {
-		return moerr.NewOutOfRangeNoCtx("decimal128", "decimal SUM")
+	for i := int64(0); i < count; i++ {
+		if vps[i] == 0 {
+			continue
+		}
+		ret, _, err := vs[i+start].Mul(types.Decimal128{B0_63: uint64(zs[i+start]), B64_127: 0}, 0, 0)
+		if err != nil {
+			return err
+		}
+		rs[vps[i]-1], _, err = rs[vps[i]-1].Add(ret, 0, 0)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

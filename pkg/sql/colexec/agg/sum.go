@@ -46,7 +46,7 @@ func SumReturnType(typs []types.Type) types.Type {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		return types.New(types.T_uint64, 0, 0, 0)
 	case types.T_decimal64:
-		return types.New(types.T_decimal128, 0, typs[0].Scale, 18)
+		return types.New(types.T_decimal64, 0, typs[0].Scale, 18)
 	case types.T_decimal128:
 		return types.New(types.T_decimal128, 0, typs[0].Scale, 38)
 	}

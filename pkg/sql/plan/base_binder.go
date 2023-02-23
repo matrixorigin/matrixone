@@ -1208,9 +1208,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 			},
 			Typ: &plan.Type{
 				Id:          int32(types.T_decimal128),
-				Width:       34,
+				Width:       38,
 				Scale:       scale,
-				Precision:   34,
+				Precision:   38,
 				NotNullable: true,
 			},
 		}, nil

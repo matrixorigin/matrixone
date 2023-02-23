@@ -88,13 +88,8 @@ func (ts Timestamp) UnixToFloat() float64 {
 	return float64(int64(ts)-unixEpochSecs) / microSecsPerSec
 }
 
-func (ts Timestamp) UnixToDecimal128() (Decimal128, error) {
-	a, err := ParseDecimal128(fmt.Sprintf("%d", int64(ts)-unixEpochSecs), 38, 6)
-	if err != nil {
-		return a, err
-	}
-	a, _, _ = a.Div(Decimal128{microSecsPerSec, 0}, 6, 0)
-	return a, nil
+func (ts Timestamp) UnixToDecimal128() (Decimal64, error) {
+	return Decimal64(int64(ts) - unixEpochSecs), nil
 }
 
 // this scaleTable stores the corresponding microseconds value for a precision

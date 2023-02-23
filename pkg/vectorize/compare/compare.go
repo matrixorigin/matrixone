@@ -128,22 +128,46 @@ func Decimal64VecEq(xs, ys, rs *vector.Vector) error {
 	n := len(rt)
 	m := ys.Typ.Scale - xs.Typ.Scale
 	if xs.IsScalar() {
-		x, _ := xt[0].Scale(m)
-		for i := 0; i < n; i++ {
-			rt[i] = (x == yt[i])
+		if m >= 0 {
+			x, _ := xt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (x == yt[i])
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[0] == y)
+			}
 		}
 		return nil
 	}
 	if ys.IsScalar() {
-		y, _ := yt[0].Scale(-m)
-		for i := 0; i < n; i++ {
-			rt[i] = (y == xt[i])
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(-m)
+				rt[i] = (x == yt[0])
+			}
+
+		} else {
+			y, _ := yt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (xt[i] == y)
+			}
 		}
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x == yt[i])
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(m)
+				rt[i] = (x == yt[i])
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[i] == y)
+			}
+		}
 	}
 	return nil
 }
@@ -155,22 +179,46 @@ func Decimal128VecEq(xs, ys, rs *vector.Vector) error {
 	n := len(rt)
 	m := ys.Typ.Scale - xs.Typ.Scale
 	if xs.IsScalar() {
-		x, _ := xt[0].Scale(m)
-		for i := 0; i < n; i++ {
-			rt[i] = (x == yt[i])
+		if m >= 0 {
+			x, _ := xt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (x == yt[i])
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[0] == y)
+			}
 		}
 		return nil
 	}
 	if ys.IsScalar() {
-		y, _ := yt[0].Scale(-m)
-		for i := 0; i < n; i++ {
-			rt[i] = (y == xt[i])
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(-m)
+				rt[i] = (x == yt[0])
+			}
+
+		} else {
+			y, _ := yt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (xt[i] == y)
+			}
 		}
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x == yt[i])
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(m)
+				rt[i] = (x == yt[i])
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[i] == y)
+			}
+		}
 	}
 	return nil
 }
@@ -182,22 +230,46 @@ func Decimal64VecNe(xs, ys, rs *vector.Vector) error {
 	n := len(rt)
 	m := ys.Typ.Scale - xs.Typ.Scale
 	if xs.IsScalar() {
-		x, _ := xt[0].Scale(m)
-		for i := 0; i < n; i++ {
-			rt[i] = (x != yt[i])
+		if m >= 0 {
+			x, _ := xt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (x != yt[i])
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[0] != y)
+			}
 		}
 		return nil
 	}
 	if ys.IsScalar() {
-		y, _ := yt[0].Scale(-m)
-		for i := 0; i < n; i++ {
-			rt[i] = (y != xt[i])
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(-m)
+				rt[i] = (x != yt[0])
+			}
+
+		} else {
+			y, _ := yt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (xt[i] != y)
+			}
 		}
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x != yt[i])
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(m)
+				rt[i] = (x != yt[i])
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[i] != y)
+			}
+		}
 	}
 	return nil
 }
@@ -209,22 +281,46 @@ func Decimal128VecNe(xs, ys, rs *vector.Vector) error {
 	n := len(rt)
 	m := ys.Typ.Scale - xs.Typ.Scale
 	if xs.IsScalar() {
-		x, _ := xt[0].Scale(m)
-		for i := 0; i < n; i++ {
-			rt[i] = (x != yt[i])
+		if m >= 0 {
+			x, _ := xt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (x != yt[i])
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[0] != y)
+			}
 		}
 		return nil
 	}
 	if ys.IsScalar() {
-		y, _ := yt[0].Scale(-m)
-		for i := 0; i < n; i++ {
-			rt[i] = (y != xt[i])
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(-m)
+				rt[i] = (x != yt[0])
+			}
+
+		} else {
+			y, _ := yt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (xt[i] != y)
+			}
 		}
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x != yt[i])
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(m)
+				rt[i] = (x != yt[i])
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[i] != y)
+			}
+		}
 	}
 	return nil
 }
@@ -236,22 +332,46 @@ func Decimal64VecGt(xs, ys, rs *vector.Vector) error {
 	n := len(rt)
 	m := ys.Typ.Scale - xs.Typ.Scale
 	if xs.IsScalar() {
-		x, _ := xt[0].Scale(m)
-		for i := 0; i < n; i++ {
-			rt[i] = (x.Compare(yt[i]) > 0)
+		if m >= 0 {
+			x, _ := xt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (x.Compare(yt[i]) > 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[0].Compare(y) > 0)
+			}
 		}
 		return nil
 	}
 	if ys.IsScalar() {
-		y, _ := yt[0].Scale(-m)
-		for i := 0; i < n; i++ {
-			rt[i] = (y.Compare(xt[i]) > 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(-m)
+				rt[i] = (x.Compare(yt[0]) > 0)
+			}
+
+		} else {
+			y, _ := yt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (xt[i].Compare(y) > 0)
+			}
 		}
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x.Compare(yt[i]) > 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(m)
+				rt[i] = (x.Compare(yt[i]) > 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[i].Compare(y) > 0)
+			}
+		}
 	}
 	return nil
 }
@@ -263,26 +383,46 @@ func Decimal128VecGt(xs, ys, rs *vector.Vector) error {
 	n := len(rt)
 	m := ys.Typ.Scale - xs.Typ.Scale
 	if xs.IsScalar() {
-		x, _ := xt[0].Scale(m)
-		for i := 0; i < n; i++ {
-			rt[i] = (x.Compare(yt[i]) > 0)
+		if m >= 0 {
+			x, _ := xt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (x.Compare(yt[i]) > 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[0].Compare(y) > 0)
+			}
 		}
 		return nil
 	}
 	if ys.IsScalar() {
-		y, _ := yt[0].Scale(-m)
-		for i := 0; i < n; i++ {
-			rt[i] = (y.Compare(xt[i]) > 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(-m)
+				rt[i] = (x.Compare(yt[0]) > 0)
+			}
+
+		} else {
+			y, _ := yt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (xt[i].Compare(y) > 0)
+			}
 		}
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x.Compare(yt[i]) > 0)
-	}
-	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x.Compare(yt[i]) > 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(m)
+				rt[i] = (x.Compare(yt[i]) > 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[i].Compare(y) > 0)
+			}
+		}
 	}
 	return nil
 }
@@ -294,22 +434,46 @@ func Decimal64VecGe(xs, ys, rs *vector.Vector) error {
 	n := len(rt)
 	m := ys.Typ.Scale - xs.Typ.Scale
 	if xs.IsScalar() {
-		x, _ := xt[0].Scale(m)
-		for i := 0; i < n; i++ {
-			rt[i] = (x.Compare(yt[i]) >= 0)
+		if m >= 0 {
+			x, _ := xt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (x.Compare(yt[i]) >= 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[0].Compare(y) >= 0)
+			}
 		}
 		return nil
 	}
 	if ys.IsScalar() {
-		y, _ := yt[0].Scale(-m)
-		for i := 0; i < n; i++ {
-			rt[i] = (y.Compare(xt[i]) >= 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(-m)
+				rt[i] = (x.Compare(yt[0]) >= 0)
+			}
+
+		} else {
+			y, _ := yt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (xt[i].Compare(y) >= 0)
+			}
 		}
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x.Compare(yt[i]) >= 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(m)
+				rt[i] = (x.Compare(yt[i]) >= 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[i].Compare(y) >= 0)
+			}
+		}
 	}
 	return nil
 }
@@ -321,22 +485,46 @@ func Decimal128VecGe(xs, ys, rs *vector.Vector) error {
 	n := len(rt)
 	m := ys.Typ.Scale - xs.Typ.Scale
 	if xs.IsScalar() {
-		x, _ := xt[0].Scale(m)
-		for i := 0; i < n; i++ {
-			rt[i] = (x.Compare(yt[i]) >= 0)
+		if m >= 0 {
+			x, _ := xt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (x.Compare(yt[i]) >= 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[0].Compare(y) >= 0)
+			}
 		}
 		return nil
 	}
 	if ys.IsScalar() {
-		y, _ := yt[0].Scale(-m)
-		for i := 0; i < n; i++ {
-			rt[i] = (y.Compare(xt[i]) >= 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(-m)
+				rt[i] = (x.Compare(yt[0]) >= 0)
+			}
+
+		} else {
+			y, _ := yt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (xt[i].Compare(y) >= 0)
+			}
 		}
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x.Compare(yt[i]) >= 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(m)
+				rt[i] = (x.Compare(yt[i]) >= 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[i].Compare(y) >= 0)
+			}
+		}
 	}
 	return nil
 }
@@ -348,22 +536,46 @@ func Decimal64VecLt(xs, ys, rs *vector.Vector) error {
 	n := len(rt)
 	m := ys.Typ.Scale - xs.Typ.Scale
 	if xs.IsScalar() {
-		x, _ := xt[0].Scale(m)
-		for i := 0; i < n; i++ {
-			rt[i] = (x.Compare(yt[i]) < 0)
+		if m >= 0 {
+			x, _ := xt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (x.Compare(yt[i]) < 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[0].Compare(y) < 0)
+			}
 		}
 		return nil
 	}
 	if ys.IsScalar() {
-		y, _ := yt[0].Scale(-m)
-		for i := 0; i < n; i++ {
-			rt[i] = (y.Compare(xt[i]) < 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(-m)
+				rt[i] = (x.Compare(yt[0]) < 0)
+			}
+
+		} else {
+			y, _ := yt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (xt[i].Compare(y) < 0)
+			}
 		}
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x.Compare(yt[i]) < 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(m)
+				rt[i] = (x.Compare(yt[i]) < 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[i].Compare(y) < 0)
+			}
+		}
 	}
 	return nil
 }
@@ -375,22 +587,46 @@ func Decimal128VecLt(xs, ys, rs *vector.Vector) error {
 	n := len(rt)
 	m := ys.Typ.Scale - xs.Typ.Scale
 	if xs.IsScalar() {
-		x, _ := xt[0].Scale(m)
-		for i := 0; i < n; i++ {
-			rt[i] = (x.Compare(yt[i]) < 0)
+		if m >= 0 {
+			x, _ := xt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (x.Compare(yt[i]) < 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[0].Compare(y) < 0)
+			}
 		}
 		return nil
 	}
 	if ys.IsScalar() {
-		y, _ := yt[0].Scale(-m)
-		for i := 0; i < n; i++ {
-			rt[i] = (y.Compare(xt[i]) < 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(-m)
+				rt[i] = (x.Compare(yt[0]) < 0)
+			}
+
+		} else {
+			y, _ := yt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (xt[i].Compare(y) < 0)
+			}
 		}
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x.Compare(yt[i]) < 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(m)
+				rt[i] = (x.Compare(yt[i]) < 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[i].Compare(y) < 0)
+			}
+		}
 	}
 	return nil
 }
@@ -402,22 +638,46 @@ func Decimal64VecLe(xs, ys, rs *vector.Vector) error {
 	n := len(rt)
 	m := ys.Typ.Scale - xs.Typ.Scale
 	if xs.IsScalar() {
-		x, _ := xt[0].Scale(m)
-		for i := 0; i < n; i++ {
-			rt[i] = (x.Compare(yt[i]) <= 0)
+		if m >= 0 {
+			x, _ := xt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (x.Compare(yt[i]) <= 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[0].Compare(y) <= 0)
+			}
 		}
 		return nil
 	}
 	if ys.IsScalar() {
-		y, _ := yt[0].Scale(-m)
-		for i := 0; i < n; i++ {
-			rt[i] = (y.Compare(xt[i]) <= 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(-m)
+				rt[i] = (x.Compare(yt[0]) <= 0)
+			}
+
+		} else {
+			y, _ := yt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (xt[i].Compare(y) <= 0)
+			}
 		}
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x.Compare(yt[i]) <= 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(m)
+				rt[i] = (x.Compare(yt[i]) <= 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[i].Compare(y) <= 0)
+			}
+		}
 	}
 	return nil
 }
@@ -429,22 +689,46 @@ func Decimal128VecLe(xs, ys, rs *vector.Vector) error {
 	n := len(rt)
 	m := ys.Typ.Scale - xs.Typ.Scale
 	if xs.IsScalar() {
-		x, _ := xt[0].Scale(m)
-		for i := 0; i < n; i++ {
-			rt[i] = (x.Compare(yt[i]) <= 0)
+		if m >= 0 {
+			x, _ := xt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (x.Compare(yt[i]) <= 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[0].Compare(y) <= 0)
+			}
 		}
 		return nil
 	}
 	if ys.IsScalar() {
-		y, _ := yt[0].Scale(-m)
-		for i := 0; i < n; i++ {
-			rt[i] = (y.Compare(xt[i]) <= 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(-m)
+				rt[i] = (x.Compare(yt[0]) <= 0)
+			}
+
+		} else {
+			y, _ := yt[0].Scale(m)
+			for i := 0; i < n; i++ {
+				rt[i] = (xt[i].Compare(y) <= 0)
+			}
 		}
 		return nil
 	}
 	for i := 0; i < n; i++ {
-		x, _ := xt[i].Scale(m)
-		rt[i] = (x.Compare(yt[i]) <= 0)
+		if m >= 0 {
+			for i := 0; i < n; i++ {
+				x, _ := xt[i].Scale(m)
+				rt[i] = (x.Compare(yt[i]) <= 0)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				y, _ := yt[i].Scale(-m)
+				rt[i] = (xt[i].Compare(y) <= 0)
+			}
+		}
 	}
 	return nil
 }
