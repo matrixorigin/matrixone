@@ -15499,7 +15499,7 @@ yydefault:
 		var yyLOCAL *tree.FuncExpr
 //line mysql_sql.y:6727
 		{
-			column := tree.NewNumValWithType(constant.MakeString(yyDollar[3].str), yyDollar[3].str, false, tree.P_char)
+			column := tree.SetUnresolvedName(strings.ToLower(yyDollar[3].str))
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:  tree.FuncName2ResolvableFunctionReference(name),

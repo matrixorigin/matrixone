@@ -3146,11 +3146,9 @@ var builtins = map[int]Functions{
 		Layout: STANDARD_FUNCTION,
 		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
 			if len(inputs) != 1 {
-				if operator.IfTypeCastSupported(inputs[0], inputs[1]) {
-					return 0, nil
-				}
+				return wrongFunctionParameters, nil
 			}
-			return wrongFunctionParameters, nil
+			return 0, nil
 		},
 		Overloads: []Function{
 			{

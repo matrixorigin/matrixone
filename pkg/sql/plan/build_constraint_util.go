@@ -574,13 +574,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 		rightTableDef := DeepCopyTableDef(tableDef)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
+		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
 		hiddenCol := builder.compCtx.GetHideKeyDef(tableObjRef.SchemaName, tableObjRef.ObjName)
 		rightTableDef.Cols = append(rightTableDef.Cols, hiddenCol)
 		rightTableDef.Name2ColIndex = map[string]int32{}
 		for i, col := range rightTableDef.Cols {
 			rightTableDef.Name2ColIndex[col.Name] = int32(i)
 		}
-		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
 
 		// if table have unique columns, we do the rewrite. if not, do nothing(do not throw error)
 		if len(uniqueCols) > 0 {

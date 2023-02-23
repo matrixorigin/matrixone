@@ -1313,14 +1313,6 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 // return : []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
 func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
 	uniqueCols := make([]map[string]int, 0, len(tableDef.Cols))
-	for i, col := range tableDef.Cols {
-		if col.Primary {
-			pkMap := make(map[string]int)
-			pkMap[col.Name] = i
-			uniqueCols = append(uniqueCols, pkMap)
-		}
-	}
-
 	if tableDef.Pkey != nil {
 		pkMap := make(map[string]int)
 		for _, colName := range tableDef.Pkey.Names {
