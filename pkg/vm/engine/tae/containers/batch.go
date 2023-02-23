@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
 )
 
 func NewBatch() *Batch {
@@ -190,7 +189,8 @@ func (bat *Batch) Equals(o *Batch) bool {
 func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 	var tmpn int64
-	buffer := containers.NewVector[[]byte]()
+	//TODO: Is T_varchar correct?
+	buffer := MakeVector(types.T_varchar.ToType(), false)
 	defer buffer.Close()
 	// 1. Vector cnt
 	// if nr, err = w.Write(types.EncodeFixed(uint16(len(bat.Vecs)))); err != nil {
@@ -241,24 +241,25 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 
 func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	var tmpn int64
-	buffer := containers.NewVector[[]byte]()
+	//TODO: Is T_varchar correct?
+	buffer := MakeVector(types.T_varchar.ToType(), false)
 	defer buffer.Close()
 	if tmpn, err = buffer.ReadFrom(r); err != nil {
 		return
 	}
 	n += tmpn
 	pos := 0
-	buf := buffer.Get(pos)
+	buf := buffer.Get(pos).([]byte)
 	pos++
 	cnt := types.DecodeFixed[uint16](buf)
 	vecTypes := make([]types.Type, cnt)
 	bat.Attrs = make([]string, cnt)
 	for i := 0; i < int(cnt); i++ {
-		buf = buffer.Get(pos)
+		buf = buffer.Get(pos).([]byte)
 		pos++
 		bat.Attrs[i] = string(buf)
 		bat.nameidx[bat.Attrs[i]] = i
-		buf = buffer.Get(pos)
+		buf = buffer.Get(pos).([]byte)
 		vecTypes[i] = types.DecodeType(buf)
 		pos++
 	}
