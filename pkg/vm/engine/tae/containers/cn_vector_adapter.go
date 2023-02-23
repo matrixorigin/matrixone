@@ -587,6 +587,8 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 
 	cloned := NewCnTaeVector[T](vec.GetType(), vec.Nullable(), opts)
 
+	/* Approach 1: Deep Copy downstreamVector for VarLen.
+
 	clonedTaeVector, _ := cnVector.Dup(vec.downstreamVector, vec.GetAllocator())
 	defer clonedTaeVector.Free(vec.GetAllocator())
 
@@ -601,6 +603,16 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 			val := GetNonNullValue(clonedTaeVector, uint32(i))
 			cloned.Append(val)
 		}
+	}
+	*/
+
+	op := func(v any, _ int) error {
+		cloned.Append(v)
+		return nil
+	}
+	err := vec.ForeachWindow(offset, length, op, nil)
+	if err != nil {
+		return nil
 	}
 
 	return cloned
