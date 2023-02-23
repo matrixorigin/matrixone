@@ -45,7 +45,7 @@ type vector[T any] struct {
 }
 
 func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *vector[T] {
-	vec := vector[T]{
+	vec := &vector[T]{
 		downstreamVector: cnVector.New(typ),
 		isNullable:       nullable,
 	}
@@ -68,7 +68,7 @@ func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *vector[T]
 	// So far no mpool allocation. So isOwner defaults to false.
 	vec.isOwner = false
 
-	return &vec
+	return vec
 }
 
 func (vec *vector[T]) Get(i int) any {
