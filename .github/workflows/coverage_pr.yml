@@ -2,7 +2,7 @@ name: PR Unit Test Coverage
 on:
   pull_request_target:
     types: [opened, synchronize]
-    branches: [main, "[0-9]+.[0-9]+.[0-9]+"]
+    branches: [main, '[0-9]+.[0-9]+.[0-9]+']
 
 concurrency:
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          fetch-depth: "3"
+          fetch-depth: '3'
           path: ./matrixone
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
@@ -25,7 +25,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v3
         with:
-          go-version: "1.20"
+          go-version: '1.20'
 
       - name: Set Variables
         run: |
@@ -79,8 +79,8 @@ jobs:
         if: ${{ steps.ut-pr.outputs.paths != '' }}
         uses: actions/setup-java@v3
         with:
-          java-version: "8"
-          distribution: "adopt"
+          java-version: '8'
+          distribution: 'adopt'
           architecture: x64
 
       - name: Start Test Service
