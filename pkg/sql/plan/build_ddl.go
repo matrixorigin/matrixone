@@ -396,6 +396,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				return err
 			}
 
+			if !checkTableColumnNameValid(def.Name.Parts[0]) {
+				return moerr.NewInvalidInput(ctx.GetContext(), "table column name '%s' is illegal and conflicts with internal keyword", def.Name.Parts[0])
+			}
+
 			colType.AutoIncr = auto_incr
 			col := &ColDef{
 				Name:     def.Name.Parts[0],
@@ -575,12 +579,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	pkeyName := ""
 	if len(primaryKeys) > 0 {
-		pKeyParts := make([]*ColDef, len(primaryKeys))
-		for i, primaryKey := range primaryKeys {
-			if coldef, ok := colMap[primaryKey]; !ok {
+		for _, primaryKey := range primaryKeys {
+			if _, ok := colMap[primaryKey]; !ok {
 				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", primaryKey)
-			} else {
-				pKeyParts[i] = coldef
 			}
 		}
 		if len(primaryKeys) == 1 {
@@ -596,7 +597,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 			}
 		} else {
-			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
+			//pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
+			pkeyName = catalog.CPrimaryKeyColName
 			colDef := &ColDef{
 				Name: pkeyName,
 				Alg:  plan.CompressType_Lz4,
@@ -1144,7 +1146,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// index.TableDef.Defs store info of index need to be modified
 	// index.IndexTables store index table need to be created
-	oriPriKeyName := GetTablePriKeyName(tableDef.Cols, tableDef.CompositePkey)
+	oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 	createIndex.OriginTablePrimaryKey = oriPriKeyName
 
 	index := &plan.CreateTable{TableDef: &TableDef{}}
