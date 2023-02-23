@@ -22,6 +22,11 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
 
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with: 
+          go-version: '1.20'
+
       - name: Set Variables
         run: |
           cd $GITHUB_WORKSPACE/matrixone
@@ -34,10 +39,6 @@ jobs:
           echo "test_report='test_report.out'" >> $GITHUB_ENV
           echo "coverage_line=75" >> $GITHUB_ENV
 
-      - name: Set up Go
-        uses: actions/setup-go@v3
-        with: 
-          go-version: '1.20'
 
       - name: Set env
         run: |
@@ -106,12 +107,11 @@ jobs:
         if: ${{ steps.ut-pr.outputs.paths != '' }}
         run: |
           cd $GITHUB_WORKSPACE/matrixone
-          echo "--------------------coverage start--------------------"
           go tool covdata textfmt -i="$GITHUB_WORKSPACE/matrixone" -o ${{ env.raw_bvt_coverage }}
           cat ${{ env.raw_bvt_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" > ${{ env.raw_bvt_coverage_temp }}
           cat ${{ env.raw_ut_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" > ${{ env.raw_ut_coverage_temp }}
           awk -F '[ ]+' 'FNR==NR{arr[$1,$2]=$3;next}{if(arr[$1,$2]==0 && $3>=1){arr[$1,$2]=1}}END{for(i in arr){split(i,ind,SUBSEP);printf("%s %s %s\n",ind[1],ind[2],arr[i])};}' ${{ env.raw_ut_coverage_temp }} ${{ env.raw_bvt_coverage_temp }} > ${{ env.all_coervage }}
+          if [[ ! -s ${{ env.all_coverage }} ]]; then echo 'The files modified in this PR do not involve functions'; exit 0; fi
           awk -F '[:, ]+' '{all[$1]+=$4;hit[$1]+=0;if($5>0) hit[$1]+=$4;}END{for(i in all) print(i,all[i],hit[i],hit[i]/all[i]*100)}' ${{ env.all_coervage }} > ${{ env.test_report }}
           awk 'BEGIN{flag=1}{if($4<${{ env.coverage_line }}){flag=0;print("error: the code coverage of "$1" is "$4"% which is below ${{ env.coverage_line }}%");} else { print("info: the code coverage of "$1" is "$4"% which is up to ${{ env.coverage_line }}%") }}END{if(flag==0) {exit 1;}}' ${{ env.test_report }}
           rm -rf ${{ env.raw_ut_coverage }} ${{ env.test_report }} ${{ env.raw_bvt_coverage_temp }} ${{ env.raw_bvt_coverage }} ${{ env.all_coervage }}
-          echo "--------------------coverage finished--------------------"
