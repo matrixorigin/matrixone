@@ -85,6 +85,7 @@ const (
 
 type Type struct {
 	Oid T
+
 	// XXX Dummies.  T is uint8, make it 4 bytes aligned, otherwise, it may contain
 	// garbage data.  In theory these unused garbage should not be a problem, but
 	// it is.  Give it a name will zero fill it ...
