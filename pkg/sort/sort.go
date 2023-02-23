@@ -31,6 +31,26 @@ const (
 type xorshift uint64
 type sortedHint int // hint for pdqsort when choosing the pivot
 
+func NewBoolLess() func([]bool, int64, int64) bool {
+	return boolLess[bool]
+}
+
+func NewDecimal64Less() func(data []types.Decimal64, i, j int64) bool {
+	return decimal64Less
+}
+
+func NewDecimal128Less() func(data []types.Decimal128, i, j int64) bool {
+	return decimal128Less
+}
+
+func NewUuidCompLess() func(data []types.Uuid, i, j int64) bool {
+	return uuidLess
+}
+
+func NewGenericCompLess[T types.OrderedT]() func([]T, int64, int64) bool {
+	return genericLess[T]
+}
+
 func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol []string) {
 	if hasNull {
 		sz := len(os)
