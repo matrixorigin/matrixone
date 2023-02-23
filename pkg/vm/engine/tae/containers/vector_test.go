@@ -62,7 +62,7 @@ func TestVector1(t *testing.T) {
 	assert.Equal(t, int32(32), vec.Get(1).(int32))
 	assert.Equal(t, int32(1), vec.Get(2).(int32))
 	assert.Equal(t, int32(100), vec.Get(3).(int32))
-	vec2 := NewCnTaeVector[int32](types.T_int32.ToType(), false)
+	vec2 := NewVector[int32](types.T_int32.ToType(), false)
 	vec2.Extend(vec)
 	assert.Equal(t, 4, vec2.Length())
 	assert.Equal(t, int32(12), vec2.Get(0).(int32))

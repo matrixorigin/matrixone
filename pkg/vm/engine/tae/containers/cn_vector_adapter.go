@@ -44,7 +44,7 @@ type CnTaeVector[T any] struct {
 	isOwner bool
 }
 
-func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeVector[T] {
+func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeVector[T] {
 	vec := CnTaeVector[T]{
 		downstreamVector: cnVector.New(typ),
 		isNullable:       nullable,
@@ -585,7 +585,7 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 		opts.Allocator = allocator[0]
 	}
 
-	cloned := NewCnTaeVector[T](vec.GetType(), vec.Nullable(), opts)
+	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
 
 	/* Approach 1: Deep Copy downstreamVector for VarLen.
 

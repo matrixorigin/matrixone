@@ -21,49 +21,49 @@ import (
 func MakeVector(typ types.Type, nullable bool, opts ...Options) (vec Vector) {
 	switch typ.Oid {
 	case types.T_any:
-		vec = NewCnTaeVector[any](typ, nullable, opts...)
+		vec = NewVector[any](typ, nullable, opts...)
 	case types.T_bool:
-		vec = NewCnTaeVector[bool](typ, nullable, opts...)
+		vec = NewVector[bool](typ, nullable, opts...)
 	case types.T_int8:
-		vec = NewCnTaeVector[int8](typ, nullable, opts...)
+		vec = NewVector[int8](typ, nullable, opts...)
 	case types.T_int16:
-		vec = NewCnTaeVector[int16](typ, nullable, opts...)
+		vec = NewVector[int16](typ, nullable, opts...)
 	case types.T_int32:
-		vec = NewCnTaeVector[int32](typ, nullable, opts...)
+		vec = NewVector[int32](typ, nullable, opts...)
 	case types.T_int64:
-		vec = NewCnTaeVector[int64](typ, nullable, opts...)
+		vec = NewVector[int64](typ, nullable, opts...)
 	case types.T_uint8:
-		vec = NewCnTaeVector[uint8](typ, nullable, opts...)
+		vec = NewVector[uint8](typ, nullable, opts...)
 	case types.T_uint16:
-		vec = NewCnTaeVector[uint16](typ, nullable, opts...)
+		vec = NewVector[uint16](typ, nullable, opts...)
 	case types.T_uint32:
-		vec = NewCnTaeVector[uint32](typ, nullable, opts...)
+		vec = NewVector[uint32](typ, nullable, opts...)
 	case types.T_uint64:
-		vec = NewCnTaeVector[uint64](typ, nullable, opts...)
+		vec = NewVector[uint64](typ, nullable, opts...)
 	case types.T_decimal64:
-		vec = NewCnTaeVector[types.Decimal64](typ, nullable, opts...)
+		vec = NewVector[types.Decimal64](typ, nullable, opts...)
 	case types.T_decimal128:
-		vec = NewCnTaeVector[types.Decimal128](typ, nullable, opts...)
+		vec = NewVector[types.Decimal128](typ, nullable, opts...)
 	case types.T_uuid:
-		vec = NewCnTaeVector[types.Uuid](typ, nullable, opts...)
+		vec = NewVector[types.Uuid](typ, nullable, opts...)
 	case types.T_float32:
-		vec = NewCnTaeVector[float32](typ, nullable, opts...)
+		vec = NewVector[float32](typ, nullable, opts...)
 	case types.T_float64:
-		vec = NewCnTaeVector[float64](typ, nullable, opts...)
+		vec = NewVector[float64](typ, nullable, opts...)
 	case types.T_date:
-		vec = NewCnTaeVector[types.Date](typ, nullable, opts...)
+		vec = NewVector[types.Date](typ, nullable, opts...)
 	case types.T_timestamp:
-		vec = NewCnTaeVector[types.Timestamp](typ, nullable, opts...)
+		vec = NewVector[types.Timestamp](typ, nullable, opts...)
 	case types.T_datetime:
-		vec = NewCnTaeVector[types.Datetime](typ, nullable, opts...)
+		vec = NewVector[types.Datetime](typ, nullable, opts...)
 	case types.T_time:
-		vec = NewCnTaeVector[types.Time](typ, nullable, opts...)
+		vec = NewVector[types.Time](typ, nullable, opts...)
 	case types.T_TS:
-		vec = NewCnTaeVector[types.TS](typ, nullable, opts...)
+		vec = NewVector[types.TS](typ, nullable, opts...)
 	case types.T_Rowid:
-		vec = NewCnTaeVector[types.Rowid](typ, nullable, opts...)
+		vec = NewVector[types.Rowid](typ, nullable, opts...)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
-		vec = NewCnTaeVector[[]byte](typ, nullable, opts...)
+		vec = NewVector[[]byte](typ, nullable, opts...)
 	default:
 		panic("not support")
 	}
