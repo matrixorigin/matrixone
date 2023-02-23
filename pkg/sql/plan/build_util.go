@@ -112,9 +112,9 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 			}
 
 			if (fstr == "char" || fstr == "binary") && width > types.MaxCharLen {
-				return nil, moerr.NewOutOfRange(ctx, "%v", " typeLen is over the MaxCharLen: %v", fstr, types.MaxCharLen)
+				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
-				return nil, moerr.NewOutOfRange(ctx, "%v", " typeLen is over the MaxVarcharLen: %v", fstr, types.MaxVarcharLen)
+				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			switch fstr {
 			case "char":
