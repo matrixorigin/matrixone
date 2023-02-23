@@ -2977,6 +2977,96 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	INTERNAL_CHAR_LENGTH: {
+		Id:     INTERNAL_CHAR_LENGTH,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.InternalCharLength,
+			},
+		},
+	},
+	INTERNAL_CHAR_SIZE: {
+		Id:     INTERNAL_CHAR_SIZE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.InternalCharSize,
+			},
+		},
+	},
+	INTERNAL_NUMERIC_PRECISION: {
+		Id:     INTERNAL_NUMERIC_PRECISION,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.InternalNumericPrecision,
+			},
+		},
+	},
+	INTERNAL_NUMERIC_SCALE: {
+		Id:     INTERNAL_NUMERIC_SCALE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.InternalNumericScale,
+			},
+		},
+	},
+	INTERNAL_DATETIME_PRECISION: {
+		Id:     INTERNAL_DATETIME_PRECISION,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.InternalDatetimePrecision,
+			},
+		},
+	},
+	INTERNAL_COLUMN_CHARACTER_SET: {
+		Id:     INTERNAL_COLUMN_CHARACTER_SET,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              ctl.InternalColumnCharacterSet,
+			},
+		},
+	},
 	CURRENT_ACCOUNT_ID: {
 		Id:     CURRENT_ACCOUNT_ID,
 		Flag:   plan.Function_STRICT,

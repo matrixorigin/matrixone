@@ -292,6 +292,17 @@ const (
 
 	MO_LOG_DATE // parse date from string, like __mo_filepath
 
+	INTERNAL_CHAR_LENGTH //
+	INTERNAL_CHAR_SIZE   //
+	//internal_numeric_precision
+	//internal_numeric_scale
+	//internal_datetime_precision
+	//internal_column_character_set
+	INTERNAL_NUMERIC_PRECISION
+	INTERNAL_NUMERIC_SCALE
+	INTERNAL_DATETIME_PRECISION
+	INTERNAL_COLUMN_CHARACTER_SET
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -506,6 +517,12 @@ var functionIdRegister = map[string]int32{
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
 	"trim":                           TRIM,
 	"mo_log_date":                    MO_LOG_DATE,
+	"internal_char_length":           INTERNAL_CHAR_LENGTH,
+	"internal_char_size":             INTERNAL_CHAR_SIZE,
+	"internal_numeric_precision":     INTERNAL_NUMERIC_PRECISION,
+	"internal_numeric_scale":         INTERNAL_NUMERIC_SCALE,
+	"internal_datetime_precision":    INTERNAL_DATETIME_PRECISION,
+	"internal_column_character_set":  INTERNAL_COLUMN_CHARACTER_SET,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
