@@ -623,7 +623,7 @@ func (vec *CnTaeVector[T]) Close() {
 }
 
 func (vec *CnTaeVector[T]) releaseDownstream() {
-	if vec.downstreamVector != nil && vec.Allocated() > 0 {
+	if vec.downstreamVector != nil && vec.isOwner {
 		vec.downstreamVector.Free(vec.mpool)
 		vec.downstreamVector = nil
 	}
