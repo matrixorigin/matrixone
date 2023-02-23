@@ -557,9 +557,7 @@ func (vec *CnTaeVector[T]) tryPromoting() {
 		newDownstream, _ := NewDeepCopyMoVecFromBytes(vec.GetType(), src, vec.GetAllocator())
 		newDownstream.Nsp = vec.downstreamVector.Nsp.Clone()
 
-		vec.releaseDownstream()
 		vec.downstreamVector = newDownstream
-
 		vec.isOwner = true
 	}
 }
