@@ -112,7 +112,7 @@ type LockService interface {
 // During the [Txn-Lock, Txn-Commit] time period, if the binding between LockTable
 // and LockService changes, we need to be able to detect it and get the transaction
 // rolled back, because the Lock acquired by this transaction is not valid and cannot
-// resolve W-W, R-W conflicts.
+// resolve W-W conflicts.
 type LockTableAllocator interface {
 	// Get get the original LockTable data corresponding to a Table. If there is no
 	// corresponding binding, then the CN binding of the current request will be used.
@@ -122,11 +122,13 @@ type LockTableAllocator interface {
 	// to maintain the binding, the binding will become invalid.
 	Keepalive(serviceID string) bool
 	// Valid check for changes in the binding relationship of a specific locktable.
-	Valid(locks []pb.LockTable) bool
+	Valid(binds []pb.LockTable) bool
+	// Close close the lock table allocator
+	Close() error
 }
 
 // LockTableKeeper is used to keep a heartbeat with the LockTableAllocator to keep the
-// LockTable bind.
+// LockTable bind. And get the changed info of LockTable and LockService bind.
 type LockTableKeeper interface {
 	// Add add a new LockTable to keepalive.
 	Add(pb.LockTable)

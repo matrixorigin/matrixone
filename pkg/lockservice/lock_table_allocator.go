@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"go.uber.org/zap"
@@ -35,6 +36,28 @@ type lockTableAllocator struct {
 		services   map[string]*serviceBinds
 		lockTables map[uint64]pb.LockTable
 	}
+}
+
+// NewLockTableAllocator create a memory based lock table allocator.
+func NewLockTableAllocator(timeout time.Duration) LockTableAllocator {
+	if timeout == 0 {
+		panic("invalid lock table bind timeout")
+	}
+
+	logger := runtime.ProcessLevelRuntime().Logger()
+	tag := "lock-table-allocator"
+	la := &lockTableAllocator{
+		logger: logger.Named(tag),
+		stoper: stopper.NewStopper(tag,
+			stopper.WithLogger(logger.RawLogger().Named(tag))),
+		timeout: timeout,
+	}
+	la.mu.lockTables = make(map[uint64]pb.LockTable, 10240)
+	la.mu.services = make(map[string]*serviceBinds)
+	if err := la.stoper.RunTask(la.checkInvalidBinds); err != nil {
+		panic(err)
+	}
+	return la
 }
 
 func (l *lockTableAllocator) Get(
@@ -56,8 +79,49 @@ func (l *lockTableAllocator) Keepalive(serviceID string) bool {
 	return b.active()
 }
 
-func (l *lockTableAllocator) disableService(b *serviceBinds) {
-	b.disable()
+func (l *lockTableAllocator) Valid(binds []pb.LockTable) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for _, b := range binds {
+		if !b.Valid {
+			panic("BUG")
+		}
+		current, ok := l.mu.lockTables[b.Table]
+		if !ok ||
+			current.Changed(b) {
+			if l.logger.Enabled(zap.DebugLevel) {
+				l.logger.Debug("table and service bind changed",
+					zap.String("current", current.DebugString()),
+					zap.String("received", b.DebugString()))
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func (l *lockTableAllocator) Close() error {
+	l.stoper.Stop()
+	l.logger.Debug("lock service allocator closed")
+	return nil
+}
+
+func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// we can't just delete the LockTable's effectiveness binding directly, we
+	// need to keep the binding version.
+	for table := range b.tables {
+		if old, ok := l.mu.lockTables[table]; ok &&
+			old.ServiceID == b.serviceID {
+			old.Valid = false
+			l.mu.lockTables[table] = old
+		}
+	}
+	// service need deleted, because this service may never restart
+	delete(l.mu.services, b.serviceID)
+	l.logger.Debug("lock service disabled",
+		zap.String("service", b.serviceID))
 }
 
 func (l *lockTableAllocator) getServiceBinds(serviceID string) *serviceBinds {
@@ -66,7 +130,7 @@ func (l *lockTableAllocator) getServiceBinds(serviceID string) *serviceBinds {
 	return l.mu.services[serviceID]
 }
 
-func (l *lockTableAllocator) getTimeoutService(now time.Time) []*serviceBinds {
+func (l *lockTableAllocator) getTimeoutBinds(now time.Time) []*serviceBinds {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
@@ -93,7 +157,7 @@ func (l *lockTableAllocator) registerService(
 	l.mu.services[serviceID] = b
 
 	if l.logger.Enabled(zap.DebugLevel) {
-		l.logger.Debug("lock service registed",
+		l.logger.Debug("lock service registered",
 			zap.String("service", serviceID))
 	}
 	return b
@@ -104,39 +168,73 @@ func (l *lockTableAllocator) registerBind(
 	tableID uint64) pb.LockTable {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	b, ok := l.mu.lockTables[tableID]
-	if ok {
-		if b.Valid {
-			return b
-		}
 
-		// the service and table's bind is invalid, rebind here
-		b.ServiceID = binds.serviceID
-		b.Version++
-		b.Valid =
+	if old, ok := l.mu.lockTables[tableID]; ok {
+		return l.tryRebindLocked(binds, old, tableID)
+	}
+	return l.createBindLocked(binds, tableID)
+}
+
+func (l *lockTableAllocator) tryRebindLocked(
+	binds *serviceBinds,
+	old pb.LockTable,
+	tableID uint64) pb.LockTable {
+	// find a valid table and service bind
+	if old.Valid {
+		return old
+	}
+	// reaches here, it means that the original table and service bindings have
+	// been invalidated, and the current service has also been invalidated, so
+	// there is no need for any re-bind operation here, and the invalid bind
+	// information is directly returned to the service.
+	if !binds.bind(tableID) {
+		return old
 	}
 
-	if !ok {
-		if binds.bind(tableID) {
-			b = pb.LockTable{Table: tableID, ServiceID: binds.serviceID, Version: 1}
-			l.mu.lockTables[tableID] = b
-		}
+	// current service get the bind
+	old.ServiceID = binds.serviceID
+	old.Version++
+	old.Valid = true
+	l.mu.lockTables[tableID] = old
+	return old
+}
+
+func (l *lockTableAllocator) createBindLocked(
+	binds *serviceBinds,
+	tableID uint64) pb.LockTable {
+	// current service is invalid
+	if !binds.bind(tableID) {
+		return pb.LockTable{}
 	}
+
+	// create new table and service bind
+	b := pb.LockTable{
+		Table:     tableID,
+		ServiceID: binds.serviceID,
+		Version:   1,
+		Valid:     true,
+	}
+	l.mu.lockTables[tableID] = b
 	return b
 }
 
-func (l *lockTableAllocator) checkTimeoutService(ctx context.Context) {
+func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 	timer := time.NewTimer(l.timeout)
 	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			l.logger.Debug("check lock service invalid task stopped")
 			return
 		case <-timer.C:
-			timeoutServices := l.getTimeoutService(time.Now())
-			for _, b := range timeoutServices {
-				l.disableService(b)
+			timeoutBinds := l.getTimeoutBinds(time.Now())
+			l.logger.Debug("get timeout services",
+				zap.Int("count", len(timeoutBinds)))
+			for _, b := range timeoutBinds {
+				b.disable()
+				l.disableTableBinds(b)
 			}
+			timer.Reset(l.timeout)
 		}
 	}
 }

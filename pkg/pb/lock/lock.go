@@ -20,7 +20,8 @@ import (
 
 // Changed returns true if LockTable bind changed
 func (m LockTable) Changed(v LockTable) bool {
-	return m.Version != v.Version
+	return m.Version != v.Version ||
+		m.ServiceID != v.ServiceID
 }
 
 // DebugString returns the debug string

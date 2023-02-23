@@ -46,15 +46,18 @@ func NewLockTableKeeper(
 	sender KeepaliveSender,
 	interval time.Duration) LockTableKeeper {
 	logger := runtime.ProcessLevelRuntime().Logger()
+	tag := "lock-table-keeper"
 	s := &lockTableKeeper{
-		logger:   logger,
+		logger:   logger.Named(tag),
 		sender:   sender,
 		changedC: make(chan pb.LockTable, 1024),
-		stopper: stopper.NewStopper("lock-table-keeper",
-			stopper.WithLogger(logger.RawLogger().Named("lock-table-keeper"))),
+		stopper: stopper.NewStopper(tag,
+			stopper.WithLogger(logger.RawLogger().Named(tag))),
 	}
 	s.mu.lockTables = make(map[uint64]pb.LockTable)
-	s.stopper.RunTask(s.send)
+	if err := s.stopper.RunTask(s.send); err != nil {
+		panic(err)
+	}
 	return s
 }
 
