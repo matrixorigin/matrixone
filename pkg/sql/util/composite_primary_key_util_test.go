@@ -15,8 +15,10 @@
 package util
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"math"
 	"math/rand"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -29,31 +31,140 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSimpleCompositePrimaryKey(t *testing.T) {
+func TestJudgeIsCompositeClusterByColumn(t *testing.T) {
 	tests := []struct {
-		args []string
+		name string
+		args string
+		want bool
 	}{
 		{
-			args: []string{"a", "b", "c"},
+			name: "test01",
+			args: "__mo_cbkey_005empno005ename",
+			want: true,
+		},
+		{
+			name: "test02",
+			args: "__mo_cbkey_005ename003sal",
+			want: true,
+		},
+		{
+			name: "test03",
+			args: "__mo_cpkey_005ename003sal",
+			want: false,
 		},
 	}
-	for _, test := range tests {
-		args := test.args
-		cKeyName := BuildCompositePrimaryKeyColumnName(args)
-		s := SplitCompositePrimaryKeyColumnName(cKeyName)
-		require.Equal(t, len(args), len(s))
-		for i := range s {
-			require.Equal(t, args[i], s[i])
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := JudgeIsCompositeClusterByColumn(tt.args); got != tt.want {
+				t.Errorf("JudgeIsCompositeClusterByColumn() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildCompositeClusterByColumnName(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "test01",
+			args: []string{"empno", "ename"},
+			want: "__mo_cbkey_005empno005ename",
+		},
+		{
+			name: "test02",
+			args: []string{"empno", "sal"},
+			want: "__mo_cbkey_005empno003sal",
+		},
+		{
+			name: "test03",
+			args: []string{"ename", "sal"},
+			want: "__mo_cbkey_005ename003sal",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := BuildCompositeClusterByColumnName(tt.args); got != tt.want {
+				t.Errorf("BuildCompositeClusterByColumnName() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSplitCompositeClusterByColumnName(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		want []string
+	}{
+		{
+			name: "test01",
+			args: "__mo_cbkey_005empno005ename",
+			want: []string{"empno", "ename"},
+		},
+		{
+			name: "test02",
+			args: "__mo_cbkey_005empno003sal",
+			want: []string{"empno", "sal"},
+		},
+		{
+			name: "test03",
+			args: "__mo_cbkey_005ename003sal",
+			want: []string{"ename", "sal"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SplitCompositeClusterByColumnName(tt.args); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("SplitCompositeClusterByColumnName() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetClusterByColumnOrder(t *testing.T) {
+	tests := []struct {
+		name    string
+		cbName  string
+		colName string
+		want    int
+	}{
+		{
+			name:    "test01",
+			cbName:  "sal",
+			colName: "ename",
+			want:    -1,
+		},
+		{
+			name:    "test02",
+			cbName:  "sal",
+			colName: "__mo_cbkey_003sal005empno",
+			want:    -1,
+		},
+		{
+			name:    "test03",
+			cbName:  "sal",
+			colName: "sal",
+			want:    0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := GetClusterByColumnOrder(tt.cbName, tt.colName); got != tt.want {
+				t.Errorf("GetClusterByColumnOrder() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
 func TestFillCompositePKeyBatch(t *testing.T) {
 	var proc = testutil.NewProc()
-	columnSi := 10
+	columnSize := 10
 	rowCount := 10
-	bat, col, valueCount := MakeBatch(columnSi, rowCount, proc.Mp())
-	err := FillCompositePKeyBatch(bat, col, proc)
+	bat, pkeyDef, valueCount := MakeBatch(columnSize, rowCount, proc.Mp())
+	err := FillCompositeKeyBatch(bat, catalog.CPrimaryKeyColName, pkeyDef.Names, proc)
 	require.Equal(t, err, nil)
 	bs := vector.GetBytesVectorValues(bat.Vecs[len(bat.Vecs)-1])
 	tuples := make([]types.Tuple, 0)
@@ -62,46 +173,43 @@ func TestFillCompositePKeyBatch(t *testing.T) {
 		require.Equal(t, err, nil)
 		tuples = append(tuples, tuple)
 	}
-	names := SplitCompositePrimaryKeyColumnName(col.Name)
-	for i := 0; i < rowCount*len(names); i++ {
-		num, _ := strconv.Atoi(names[i/rowCount])
-		require.Equal(t, tuples[i%rowCount][i/rowCount], valueCount[num*rowCount+i%rowCount])
+
+	for i := 0; i < rowCount; i++ {
+		for j, name := range pkeyDef.Names {
+			element := tuples[i][j]
+			idx, _ := strconv.Atoi(name)
+			value := valueCount[[2]int{i, idx}]
+			require.Equal(t, element, value)
+		}
 	}
 }
 
-func MakeBatch(columnSi int, rowCount int, mp *mpool.MPool) (*batch.Batch, *plan.ColDef, map[int]interface{}) {
-	idx := columnSi
-	attrs := make([]string, 0, idx)
+func MakeBatch(columnSize int, rowCount int, mp *mpool.MPool) (*batch.Batch, *plan.PrimaryKeyDef, map[[2]int]interface{}) {
+	attrs := make([]string, 0, columnSize)
 
-	for i := 0; i < idx; i++ {
+	for i := 0; i < columnSize; i++ {
 		attrs = append(attrs, strconv.Itoa(i))
 	}
 
 	var keys []string
-	for i := 0; i < idx; i++ {
+	for i := 0; i < columnSize; i++ {
 		x := rand.Intn(2)
 		if x == 0 {
 			keys = append(keys, strconv.Itoa(i))
 		}
 	}
-	cPkeyName := BuildCompositePrimaryKeyColumnName(keys)
-	attrs = append(attrs, cPkeyName)
-
 	bat := batch.New(true, attrs)
-
-	valueCount := make(map[int]interface{})
-
-	for i := 0; i < idx; i++ {
+	valueCount := make(map[[2]int]interface{})
+	for i := 0; i < columnSize; i++ {
 		bat.Vecs[i] = vector.New(types.Type{Oid: randType()})
-		randInsertValues(bat.Vecs[i], bat.Vecs[i].Typ.Oid, rowCount, valueCount, i*rowCount, mp)
+		randInsertValues(bat.Vecs[i], bat.Vecs[i].Typ.Oid, rowCount, valueCount, i, mp)
 	}
 
-	bat.Vecs[idx] = vector.New(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
-
-	colDef := &plan.ColDef{
-		Name: cPkeyName,
+	primaryKeyDef := &plan.PrimaryKeyDef{
+		PkeyColName: catalog.CPrimaryKeyColName,
+		Names:       keys,
 	}
-	return bat, colDef, valueCount
+	return bat, primaryKeyDef, valueCount
 }
 
 func randType() types.T {
@@ -146,17 +254,17 @@ func randType() types.T {
 	return vt
 }
 
-func randInsertValues(v *vector.Vector, t types.T, rowCount int, valueCount map[int]interface{}, valueBegin int, mp *mpool.MPool) {
+func randInsertValues(v *vector.Vector, t types.T, rowCount int, valueCount map[[2]int]interface{}, columnIndex int, mp *mpool.MPool) {
 	switch t {
 	case types.T_bool:
 		vs := make([]bool, rowCount)
 		for i := 0; i < rowCount; i++ {
 			if i < rowCount/2 {
 				vs[i] = true
-				valueCount[valueBegin+i] = true
+				valueCount[[2]int{i, columnIndex}] = true
 			} else {
 				vs[i] = false
-				valueCount[valueBegin+i] = false
+				valueCount[[2]int{i, columnIndex}] = false
 			}
 		}
 		vector.AppendFixed(v, vs, mp)
@@ -164,119 +272,119 @@ func randInsertValues(v *vector.Vector, t types.T, rowCount int, valueCount map[
 		vs := make([]int8, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randPositiveInt8()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_int16:
 		vs := make([]int16, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randPositiveInt16()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_int32:
 		vs := make([]int32, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randPositiveInt32()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_int64:
 		vs := make([]int64, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randPositiveInt64()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_uint8:
 		vs := make([]uint8, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randUint8()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_uint16:
 		vs := make([]uint16, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randUint16()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_uint32:
 		vs := make([]uint32, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randUint32()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_uint64:
 		vs := make([]uint64, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randUint64()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_date:
 		vs := make([]types.Date, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randDate()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_time:
 		vs := make([]types.Time, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randTime()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_datetime:
 		vs := make([]types.Datetime, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randDatetime()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_timestamp:
 		vs := make([]types.Timestamp, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randTimestamp()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_float32:
 		vs := make([]float32, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = rand.Float32()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_float64:
 		vs := make([]float64, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = rand.Float64()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_decimal64:
 		vs := make([]types.Decimal64, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randDecimal64()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_decimal128:
 		vs := make([]types.Decimal128, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randDecimal128()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
 	case types.T_varchar:
 		vs := make([][]byte, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randStringType()
-			valueCount[valueBegin+i] = vs[i]
+			valueCount[[2]int{i, columnIndex}] = vs[i]
 		}
 		vector.AppendBytes(v, vs, mp)
 	}
