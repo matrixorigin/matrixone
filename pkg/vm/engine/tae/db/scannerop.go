@@ -336,7 +336,9 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 	}
 	task, err := s.db.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 	if err != nil {
-		logutil.Infof("[Mergeblocks] Schedule errinfo=%v", err)
+		if err != tasks.ErrScheduleScopeConflict {
+			logutil.Infof("[Mergeblocks] Schedule error info=%v", err)
+		}
 	} else {
 		// record big merge
 		if len(scopes) > constHeapCapacity/3 {
@@ -383,7 +385,9 @@ func (s *MergeTaskBuilder) PreExecute() error {
 func (s *MergeTaskBuilder) PostExecute() error {
 	s.trySchedMergeTask()
 	s.resetForTable(0)
-	logutil.Infof("Mergeblocks current big active task: %d", atomic.LoadInt32(&s.limiter.activeMergeCount))
+	if cnt := atomic.LoadInt32(&s.limiter.activeMergeCount); cnt > 0 {
+		logutil.Infof("Mergeblocks current big active task: %d", cnt)
+	}
 	return nil
 }
 
