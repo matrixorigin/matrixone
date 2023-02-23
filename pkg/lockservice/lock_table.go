@@ -21,8 +21,8 @@ import (
 	"sync"
 )
 
-// a lockTable instance manages the locks on a table
-type lockTable struct {
+// a localLockTable instance manages the locks on a table
+type localLockTable struct {
 	tableID  uint64
 	detector *detector
 
@@ -32,15 +32,15 @@ type lockTable struct {
 	}
 }
 
-func newLockTable(
+func newLocalLockTable(
 	tableID uint64,
-	detector *detector) *lockTable {
-	l := &lockTable{tableID: tableID, detector: detector}
+	detector *detector) lockTable {
+	l := &localLockTable{tableID: tableID, detector: detector}
 	l.mu.store = newBtreeBasedStorage()
 	return l
 }
 
-func (l *lockTable) lock(
+func (l *localLockTable) lock(
 	ctx context.Context,
 	txn *activeTxn,
 	rows [][]byte,
@@ -58,7 +58,7 @@ func (l *lockTable) lock(
 	}
 }
 
-func (l *lockTable) unlock(ls *cowSlice) {
+func (l *localLockTable) unlock(ctx context.Context, ls *cowSlice) error {
 	locks := ls.slice()
 	defer locks.unref()
 
@@ -73,15 +73,16 @@ func (l *lockTable) unlock(ls *cowSlice) {
 		}
 		return true
 	})
+	return nil
 }
 
-func (l *lockTable) getLock(key []byte) (Lock, bool) {
+func (l *localLockTable) getLock(ctx context.Context, key []byte) (Lock, bool) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.mu.store.Get(key)
 }
 
-func (l *lockTable) doAcquireLock(
+func (l *localLockTable) doAcquireLock(
 	txn *activeTxn,
 	waiter *waiter,
 	rows [][]byte,
@@ -102,7 +103,7 @@ func (l *lockTable) doAcquireLock(
 	}
 }
 
-func (l *lockTable) acquireRowLockLocked(
+func (l *localLockTable) acquireRowLockLocked(
 	txn *activeTxn,
 	w *waiter,
 	row []byte,
@@ -118,7 +119,7 @@ func (l *lockTable) acquireRowLockLocked(
 	return true
 }
 
-func (l *lockTable) acquireRangeLockLocked(
+func (l *localLockTable) acquireRangeLockLocked(
 	txn *activeTxn,
 	w *waiter,
 	start, end []byte,
@@ -138,7 +139,7 @@ func (l *lockTable) acquireRangeLockLocked(
 	return true
 }
 
-func (l *lockTable) addRowLockLocked(
+func (l *localLockTable) addRowLockLocked(
 	txn *activeTxn,
 	row []byte,
 	waiter *waiter,
@@ -152,7 +153,7 @@ func (l *lockTable) addRowLockLocked(
 	l.mu.store.Add(row, lock)
 }
 
-func (l *lockTable) addRangeLockLocked(
+func (l *localLockTable) addRangeLockLocked(
 	txn *activeTxn,
 	start, end []byte,
 	waiter *waiter,
@@ -168,7 +169,7 @@ func (l *lockTable) addRangeLockLocked(
 	l.mu.store.Add(end, endLock)
 }
 
-func (l *lockTable) handleLockConflict(txn *activeTxn, w *waiter, conflictWith Lock) {
+func (l *localLockTable) handleLockConflict(txn *activeTxn, w *waiter, conflictWith Lock) {
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
 	txn.setBlocked(w)
