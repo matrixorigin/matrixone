@@ -146,6 +146,8 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 	default:
 	}
 
+	profileAddSample()
+
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
@@ -249,6 +251,8 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 	if vector.allDone() {
 		return nil
 	}
+
+	profileAddSample()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
@@ -413,6 +417,8 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 	default:
 	}
 
+	profileAddSample()
+
 	path, err := ParsePathAtService(dirPath, l.name)
 	if err != nil {
 		return nil, err
@@ -472,6 +478,8 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 	default:
 	}
 
+	profileAddSample()
+
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
@@ -504,6 +512,8 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 		return ctx.Err()
 	default:
 	}
+
+	profileAddSample()
 
 	for _, filePath := range filePaths {
 		if err := l.deleteSingle(ctx, filePath); err != nil {
@@ -650,6 +660,8 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 		return ctx.Err()
 	default:
 	}
+
+	profileAddSample()
 
 	// write
 	for _, entry := range entries {

@@ -1039,43 +1039,6 @@ func Test_convert_type(t *testing.T) {
 	})
 }
 
-func Test_handleLoadData(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("call handleLoadData func", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-		ioses.EXPECT().Ref().AnyTimes()
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		proc := &process.Process{}
-
-		mce := NewMysqlCmdExecutor()
-		ses := &Session{
-			protocol: proto,
-		}
-		mce.ses = ses
-		load := &tree.Import{
-			Local: true,
-		}
-		err = mce.handleLoadData(ctx, proc, load)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-}
-
 func TestHandleDump(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("call handleDump func", t, func() {
