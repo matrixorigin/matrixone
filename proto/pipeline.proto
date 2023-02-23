@@ -70,12 +70,13 @@ message Insert{
   bool IsRemote     = 2;
 
   // InsertCtx
-  repeated int32 on_duplicate     = 3;
-  plan.ObjectRef ref              = 4;
-  plan.TableDef table_def         = 5;
-  repeated int32 idx_idx          = 6;
-  map<string, int32> parent_idx   = 7;
-  plan.ClusterTable ClusterTable  = 8;
+  repeated int32 on_duplicate_idx           = 3;
+  map<string, plan.Expr> on_duplicate_expr  = 4;
+  plan.ObjectRef ref              = 5;
+  plan.TableDef table_def         = 6;
+  repeated int32 idx_idx          = 7;
+  map<string, int32> parent_idx   = 8;
+  plan.ClusterTable ClusterTable  = 9;
 }
 
 message Join {

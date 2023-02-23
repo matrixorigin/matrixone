@@ -567,13 +567,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			IsRemote:     t.IsRemote,
-			Affected:     t.Affected,
-			Ref:          t.InsertCtx.Ref,
-			TableDef:     t.InsertCtx.TableDef,
-			OnDuplicate:  t.InsertCtx.OnDuplicateIdx,
-			ClusterTable: t.InsertCtx.ClusterTable,
-			ParentIdx:    t.InsertCtx.ParentIdx,
+			IsRemote:        t.IsRemote,
+			Affected:        t.Affected,
+			Ref:             t.InsertCtx.Ref,
+			TableDef:        t.InsertCtx.TableDef,
+			OnDuplicateIdx:  t.InsertCtx.OnDuplicateIdx,
+			OnDuplicateExpr: t.InsertCtx.OnDuplicateExpr,
+			ClusterTable:    t.InsertCtx.ClusterTable,
+			ParentIdx:       t.InsertCtx.ParentIdx,
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
@@ -823,7 +824,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Affected: t.Affected,
 			IsRemote: t.IsRemote,
 			InsertCtx: &insert.InsertCtx{
-				OnDuplicateIdx: t.OnDuplicate,
+				OnDuplicateIdx: t.OnDuplicateIdx,
 				Ref:            t.Ref,
 				TableDef:       t.TableDef,
 				ParentIdx:      t.ParentIdx,
