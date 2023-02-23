@@ -127,7 +127,7 @@ func TestS3FS(t *testing.T) {
 		assert.True(t, len(entries) > 0)
 	})
 
-	t.Run("caching file service", func(t *testing.T) {
+	t.Run("mem caching file service", func(t *testing.T) {
 		cacheDir := t.TempDir()
 		testCachingFileService(t, func() CachingFileService {
 			fs, err := NewS3FS(
@@ -137,6 +137,24 @@ func TestS3FS(t *testing.T) {
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				128*1024,
+				-1,
+				cacheDir,
+			)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
+	t.Run("disk caching file service", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		testCachingFileService(t, func() CachingFileService {
+			fs, err := NewS3FS(
+				"",
+				"s3",
+				config.Endpoint,
+				config.Bucket,
+				time.Now().Format("2006-01-02.15:04:05.000000"),
+				-1,
 				128*1024,
 				cacheDir,
 			)
