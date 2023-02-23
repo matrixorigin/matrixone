@@ -542,8 +542,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 						Precision:   col.Precision,
 						Scale:       col.Scale,
 					},
-					Name:  col.Name,
-					Pkidx: 1,
+					Name:    col.Name,
+					Primary: idx == 0,
+					Pkidx:   1,
 					Default: &plan.Default{
 						NullAbility: col.Nullable,
 					},
@@ -570,7 +571,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 
 			if table.idxs != nil {
-
 				for i, idx := range table.idxs {
 					indexdef := &plan.IndexDef{
 						IndexName:      idx.indexName,

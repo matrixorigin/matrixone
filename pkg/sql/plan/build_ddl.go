@@ -579,12 +579,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	pkeyName := ""
 	if len(primaryKeys) > 0 {
-		pKeyParts := make([]*ColDef, len(primaryKeys))
-		for i, primaryKey := range primaryKeys {
-			if coldef, ok := colMap[primaryKey]; !ok {
+		for _, primaryKey := range primaryKeys {
+			if _, ok := colMap[primaryKey]; !ok {
 				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", primaryKey)
-			} else {
-				pKeyParts[i] = coldef
 			}
 		}
 		if len(primaryKeys) == 1 {
