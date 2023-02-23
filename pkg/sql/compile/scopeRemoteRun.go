@@ -580,7 +580,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			// HasAutoCol:     t.HasAutoCol,
 			Ref:          t.InsertCtx.Ref,
 			TableDef:     t.InsertCtx.TableDef,
-			Idx:          t.InsertCtx.Idx,
 			ClusterTable: t.InsertCtx.ClusterTable,
 			ParentIdx:    t.InsertCtx.ParentIdx,
 		}
@@ -832,7 +831,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Affected: t.Affected,
 			IsRemote: t.IsRemote,
 			InsertCtx: &insert.InsertCtx{
-				Idx:          t.Idx,
 				Ref:          t.Ref,
 				TableDef:     t.TableDef,
 				ParentIdx:    t.ParentIdx,

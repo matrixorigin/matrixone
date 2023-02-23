@@ -60,9 +60,6 @@ type Vector struct {
 	// TODO: check whether isBin should be changed into array/bitmap
 	// now we assumpt that it can only be true in the case of only one data in vector
 	isBin bool
-
-	// idx for low cardinality scenario.
-	idx any
 }
 
 func (v *Vector) SetIsBin(isBin bool) {
@@ -97,18 +94,6 @@ func (v *Vector) IsOriginal() bool {
 
 func (v *Vector) SetOriginal(status bool) {
 	v.original = status
-}
-
-func (v *Vector) IsLowCardinality() bool {
-	return v.idx != nil
-}
-
-func (v *Vector) Index() any {
-	return v.idx
-}
-
-func (v *Vector) SetIndex(idx any) {
-	v.idx = idx
 }
 
 func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
@@ -705,6 +690,15 @@ func (v *Vector) Free(m *mpool.MPool) {
 	v.data = nil
 	v.area = nil
 	v.colFromData()
+}
+
+func (v *Vector) CleanOnlyData() {
+	if v.data != nil {
+		v.data = v.data[:0]
+	}
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
 }
 
 func (v *Vector) FreeOriginal(m *mpool.MPool) {
