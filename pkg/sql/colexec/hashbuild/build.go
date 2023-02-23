@@ -190,13 +190,6 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 			analyze.Alloc(int64(vec.Size()))
 		}
 
-		// 1. multiple equivalent conditions are not considered currently
-		// 2. do not want the condition to be an expression
-		if len(conds) == 1 && !ctr.evecs[i].needFree {
-			if idx, ok := ctr.vecs[i].Index().(*index.LowCardinalityIndex); ok {
-				ctr.idx = idx.Dup()
-			}
-		}
 	}
 	return nil
 }
