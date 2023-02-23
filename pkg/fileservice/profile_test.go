@@ -15,24 +15,34 @@
 package fileservice
 
 import (
-	"os"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestProfile(t *testing.T) {
-	t.Skip()
-	out, err := os.Create("prof")
-	assert.Nil(t, err)
-	defer out.Close()
-	stop := StartProfile(out)
+	stop := StartProfile(io.Discard)
 	defer stop()
-
 	testFileService(t, func(name string) FileService {
 		dir := t.TempDir()
 		fs, err := NewLocalFS(name, dir, -1)
 		assert.Nil(t, err)
 		return fs
 	})
+}
+
+func BenchmarkNoProfileAddSample(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		profileAddSample()
+	}
+}
+
+func BenchmarkProfileAddSample(b *testing.B) {
+	stop := StartProfile(io.Discard)
+	defer stop()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		profileAddSample()
+	}
 }
