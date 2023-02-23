@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"math"
 	"math/rand"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -29,6 +30,134 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestJudgeIsCompositeClusterByColumn(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		want bool
+	}{
+		{
+			name: "test01",
+			args: "__mo_cbkey_005empno005ename",
+			want: true,
+		},
+		{
+			name: "test02",
+			args: "__mo_cbkey_005ename003sal",
+			want: true,
+		},
+		{
+			name: "test03",
+			args: "__mo_cpkey_005ename003sal",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := JudgeIsCompositeClusterByColumn(tt.args); got != tt.want {
+				t.Errorf("JudgeIsCompositeClusterByColumn() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildCompositeClusterByColumnName(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "test01",
+			args: []string{"empno", "ename"},
+			want: "__mo_cbkey_005empno005ename",
+		},
+		{
+			name: "test02",
+			args: []string{"empno", "sal"},
+			want: "__mo_cbkey_005empno003sal",
+		},
+		{
+			name: "test03",
+			args: []string{"ename", "sal"},
+			want: "__mo_cbkey_005ename003sal",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := BuildCompositeClusterByColumnName(tt.args); got != tt.want {
+				t.Errorf("BuildCompositeClusterByColumnName() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSplitCompositeClusterByColumnName(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		want []string
+	}{
+		{
+			name: "test01",
+			args: "__mo_cbkey_005empno005ename",
+			want: []string{"empno", "ename"},
+		},
+		{
+			name: "test02",
+			args: "__mo_cbkey_005empno003sal",
+			want: []string{"empno", "sal"},
+		},
+		{
+			name: "test03",
+			args: "__mo_cbkey_005ename003sal",
+			want: []string{"ename", "sal"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SplitCompositeClusterByColumnName(tt.args); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("SplitCompositeClusterByColumnName() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetClusterByColumnOrder(t *testing.T) {
+	tests := []struct {
+		name    string
+		cbName  string
+		colName string
+		want    int
+	}{
+		{
+			name:    "test01",
+			cbName:  "sal",
+			colName: "ename",
+			want:    -1,
+		},
+		{
+			name:    "test02",
+			cbName:  "sal",
+			colName: "__mo_cbkey_003sal005empno",
+			want:    -1,
+		},
+		{
+			name:    "test03",
+			cbName:  "sal",
+			colName: "sal",
+			want:    0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := GetClusterByColumnOrder(tt.cbName, tt.colName); got != tt.want {
+				t.Errorf("GetClusterByColumnOrder() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestFillCompositePKeyBatch(t *testing.T) {
 	var proc = testutil.NewProc()
