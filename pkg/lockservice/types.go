@@ -16,6 +16,8 @@ package lockservice
 
 import (
 	"context"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
 // Granularity row granularity, single row or row range
@@ -95,6 +97,54 @@ type LockService interface {
 	// Unlock release all locks associated with the transaction.
 	Unlock(txnID []byte) error
 	// Close close the lock service.
+	Close() error
+}
+
+// LockTableAllocator is used to managing the binding relationship between
+// LockTable and LockService, and check the validity of the binding held by
+// the transaction when the transaction is committed.
+//
+// A LockTable will only be bound by a LockService, and once the binding
+// relationship between a LockTable and a LockService changes, the binding
+// version will also change. Once a LockService goes offline (crash or network
+// partition), the LockTable is bound to another LockService.
+//
+// During the [Txn-Lock, Txn-Commit] time period, if the binding between LockTable
+// and LockService changes, we need to be able to detect it and get the transaction
+// rolled back, because the Lock acquired by this transaction is not valid and cannot
+// resolve W-W conflicts.
+type LockTableAllocator interface {
+	// Get get the original LockTable data corresponding to a Table. If there is no
+	// corresponding binding, then the CN binding of the current request will be used.
+	Get(serviceID string, tableID uint64) pb.LockTable
+	// Keepalive once a cn is bound to a Table, a heartbeat needs to be sent periodically
+	// to keep the binding in place. If no heartbeat is sent for a long period of time
+	// to maintain the binding, the binding will become invalid.
+	Keepalive(serviceID string) bool
+	// Valid check for changes in the binding relationship of a specific locktable.
+	Valid(binds []pb.LockTable) bool
+	// Close close the lock table allocator
+	Close() error
+}
+
+// LockTableKeeper is used to keep a heartbeat with the LockTableAllocator to keep the
+// LockTable bind. And get the changed info of LockTable and LockService bind.
+type LockTableKeeper interface {
+	// Add add a new LockTable to keepalive.
+	Add(pb.LockTable)
+	// Changed lock table bind changed notify, if a lock table bind changed, all related
+	// transactions must be abort
+	Changed() chan pb.LockTable
+	// Close close the keeper
+	Close() error
+}
+
+// KeepaliveSender is used to send keepalive message to LockTableAllocator.
+type KeepaliveSender interface {
+	// Keep send locktables keepalive messages, if lockTable version changed, the return
+	// []pb.LockTable will include these.
+	Keep(context.Context, []pb.LockTable) ([]pb.LockTable, error)
+	// Close close the sender
 	Close() error
 }
 

@@ -27,15 +27,21 @@ func StartProfile(w io.Writer) (stop func()) {
 	id := atomic.AddInt64(&nextProfilerID, 1)
 	profiler := newProfiler()
 	state.profilers[id] = profiler
+	profiling.Store(true)
 	profileChan <- state
 	return func() {
 		state := <-profileChan
 		profiler := state.profilers[id]
 		delete(state.profilers, id)
+		if len(state.profilers) == 0 {
+			profiling.Store(false)
+		}
 		profileChan <- state
 		profiler.profile.Write(w)
 	}
 }
+
+var profiling atomic.Bool
 
 var nextProfilerID int64
 
@@ -53,17 +59,21 @@ var profileChan = func() chan *profileState {
 }()
 
 func profileAddSample() {
+	if !profiling.Load() {
+		return
+	}
 	state := <-profileChan
 	for _, profiler := range state.profilers {
-		profiler.addSample()
+		profiler.addSample(1)
 	}
 	profileChan <- state
 }
 
 type profiler struct {
 	profile        *profile.Profile
-	functionIDs    map[uint64]bool
+	functions      map[string]*profile.Function
 	nextLocationID uint64
+	nextFunctionID uint64
 }
 
 func newProfiler() *profiler {
@@ -76,56 +86,57 @@ func newProfiler() *profiler {
 				},
 			},
 		},
-		functionIDs: make(map[uint64]bool),
+		functions: make(map[string]*profile.Function),
 	}
 }
 
-func (p *profiler) getFunction(function *runtime.Func, pc uintptr) *profile.Function {
-	file, line := function.FileLine(pc)
-	id := uint64(function.Entry())
+func (p *profiler) getFunction(frame runtime.Frame) *profile.Function {
+	if fn, ok := p.functions[frame.Function]; ok {
+		return fn
+	}
+	p.nextFunctionID++
 	fn := &profile.Function{
-		ID:        id,
-		Name:      function.Name(),
-		Filename:  file,
-		StartLine: int64(line),
+		ID:   p.nextFunctionID,
+		Name: frame.Function,
 	}
-	if _, ok := p.functionIDs[id]; !ok {
-		p.profile.Function = append(p.profile.Function, fn)
-		p.functionIDs[id] = true
+	if frame.Func != nil {
+		file, line := frame.Func.FileLine(frame.Func.Entry())
+		fn.Filename = file
+		fn.StartLine = int64(line)
 	}
+	p.functions[frame.Function] = fn
+	p.profile.Function = append(p.profile.Function, fn)
 	return fn
 }
 
 func (p *profiler) getLocation(frame runtime.Frame) *profile.Location {
+	line := profile.Line{
+		Function: p.getFunction(frame),
+		Line:     int64(frame.Line),
+	}
 	p.nextLocationID++
 	loc := &profile.Location{
-		ID: p.nextLocationID,
-		Line: []profile.Line{
-			{
-				Function: p.getFunction(frame.Func, frame.PC),
-				Line:     int64(frame.Line),
-			},
-		},
+		ID:   p.nextLocationID,
+		Line: []profile.Line{line},
 	}
 	p.profile.Location = append(p.profile.Location, loc)
 	return loc
 }
 
-func (p *profiler) addSample() {
-	p.nextLocationID++
+func (p *profiler) addSample(skip int) {
 	sample := &profile.Sample{
 		Value: []int64{
 			1,
 		},
 	}
 
-	pcs := make([]uintptr, 1024)
-	pcs = pcs[:runtime.Callers(2, pcs)]
+	pcs, put := pcsPool.Get()
+	defer put()
+	pcs = pcs[:runtime.Callers(2+skip, pcs)]
 	frames := runtime.CallersFrames(pcs)
 	for {
 		frame, more := frames.Next()
-		if frame.Func == nil {
-			// inline
+		if frame.Function == "" {
 			continue
 		}
 		location := p.getLocation(frame)
@@ -138,3 +149,10 @@ func (p *profiler) addSample() {
 
 	p.profile.Sample = append(p.profile.Sample, sample)
 }
+
+var pcsPool = NewPool(
+	1024,
+	func() []uintptr {
+		return make([]uintptr, 128)
+	},
+)
