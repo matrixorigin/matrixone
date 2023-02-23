@@ -32,25 +32,15 @@ import (
 type CnTaeVector[T any] struct {
 	downstreamVector *cnVector.Vector
 
-	// Below 2 attributes,ie isNullable & mpool, are specific to "Previous DN TAE Vector" implementation
-
-	// Used in Equals(). Note: We can't use cnVector.Nsp.Np to replace this flag, as this information
-	// will be lost in Marshalling/UnMarshalling. It is also used in CloneWithBuffer()
+	// isNullable mainly used in Equals() & CloneWithBuffer(). Note:
+	//1. We can't use cnVector.Nsp.Np to replace this flag, as this information will be lost in Marshalling/UnMarshalling.
+	//2. It is also used in CloneWithBuffer() to avoid Data Race caused by using HasNull()
 	isNullable bool
 
 	// Used in Append()
 	mpool *mpool.MPool
 
-	// isOwner is used for ResetWithData() , Allocated() & Close()
-	// According to the prev DN Vector implementation
-	// a. When ResetWithData(bytes) is called, this vector is not the Owner of the data.
-	// b. When this.Append(newData) is called, then it becomes the owner of newData.
-	// c. When Close() is called, we only release from the mpool memory, if it isOwner. If it is not an Owner,
-	//    the data is a shared copy. So we don't clear it.
-	//
-	// Rules:
-	// 1. When we immediately call Allocated() after ResetWithData(), we should return Zero.
-	// 2. If there is any Append() after ResetWithData(), we should return the vec.downstream.Size()
+	// isOwner is used to implement the SharedMemory Logic from the previous DN vector implementation.
 	isOwner bool
 }
 
@@ -74,6 +64,8 @@ func NewCnTaeVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTa
 		alloc = common.DefaultAllocator
 	}
 	vec.mpool = alloc
+
+	// So far no mpool allocation. So isOwner defaults to false.
 	vec.isOwner = false
 
 	return &vec
@@ -84,21 +76,18 @@ func (vec *CnTaeVector[T]) Get(i int) any {
 }
 
 func (vec *CnTaeVector[T]) Length() int {
-	if vec.downstreamVector == nil {
-		return 0
-	}
 	return vec.downstreamVector.Length()
 }
 
 func (vec *CnTaeVector[T]) Append(v any) {
+	vec.tryPromoting()
+
 	_, isNull := v.(types.Null)
 	if isNull {
 		_ = vec.downstreamVector.Append(types.DefaultVal[T](), true, vec.mpool)
 	} else {
 		_ = vec.downstreamVector.Append(v, false, vec.mpool)
 	}
-
-	vec.isOwner = true
 }
 
 func (vec *CnTaeVector[T]) AppendMany(vs ...any) {
@@ -132,17 +121,6 @@ func (vec *CnTaeVector[T]) GetType() types.Type {
 	return vec.downstreamVector.GetType()
 }
 
-func (vec *CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
-	var sels []int64
-	vecLen := uint32(vec.Length())
-	for i := uint32(0); i < vecLen; i++ {
-		if !deletes.Contains(i) {
-			sels = append(sels, int64(i))
-		}
-	}
-	cnVector.Shrink(vec.downstreamVector, sels)
-}
-
 func (vec *CnTaeVector[T]) String() string {
 	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Capacity(), vec.Allocated())
 
@@ -169,21 +147,6 @@ func (vec *CnTaeVector[T]) String() string {
 
 func (vec *CnTaeVector[T]) Extend(src Vector) {
 	vec.ExtendWithOffset(src, 0, src.Length())
-}
-
-func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
-
-	if srcLen <= 0 {
-		return
-	}
-
-	// The downstream vector, ie CN vector needs isNull as argument.
-	// So, we can't directly call cn_vector.Append() without parsing the data.
-	// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
-	// it into the current CnVectorAdapter via this function.
-	for i := srcOff; i < srcOff+srcLen; i++ {
-		vec.Append(src.Get(i))
-	}
 }
 
 func (vec *CnTaeVector[T]) Update(i int, v any) {
@@ -313,71 +276,6 @@ func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
-	opts := Options{}
-	if len(allocator) == 0 {
-		opts.Allocator = vec.GetAllocator()
-	} else {
-		opts.Allocator = allocator[0]
-	}
-
-	/**** Alternate Approach 1.
-
-
-	// Create a new NewCnTaeVector
-	clonedTaeVector := NewCnTaeVector[T](vec.GetType(), vec.Nullable(), opts)
-
-	// Clone current Nsp
-	clonedNsp := vec.downstreamVector.Nsp.Clone()
-
-	// Create DownStreamVector.Window() using clonedNsp
-	for i := offset; i < offset+length; i++ {
-		isNull := clonedNsp.Contains(uint64(i))
-
-		if isNull {
-			_ = clonedTaeVector.downstreamVector.Append(types.DefaultVal[T](), true, vec.mpool)
-		} else {
-			val := GetNonNullValue(vec.downstreamVector, uint32(i))
-			_ = clonedTaeVector.downstreamVector.Append(val, false, vec.mpool)
-		}
-	}
-
-	clonedTaeVector.isOriginal = true
-
-	*/
-
-	/**** Alternate Approach 2.
-	Using cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
-	Problem: It doesn't apply window on the `downstream.data` and `downstream.area`.
-	When vec.Close() is called, it tries to clear the whole vec.data, and end up returning
-	"panic: internal error: mp header corruption".
-	If  cnVector.Window() updates the vec.data, then we should be able to use it directly here.
-
-	Code:
-		cloned.isAllocatedFromMpool = true
-		// Create a duplicate of the downstream CN vector
-		vecDup, _ := cnVector.Dup(vec.downstreamVector, opts.Allocator)
-		// Attach that downstream duplicate to the window and perform window action.
-		// The result is subset of downstream vector.
-		cloned.downstreamVector = cnVector.Window(vecDup, offset, offset+length, cloned.downstreamVector)
-
-	*/
-
-	// Create a new NewCnTaeVector
-	cloned := NewCnTaeVector[T](vec.GetType(), vec.Nullable(), opts)
-
-	op := func(v any, _ int) error {
-		cloned.Append(v)
-		return nil
-	}
-	err := vec.ForeachWindow(offset, length, op, nil)
-	if err != nil {
-		return nil
-	}
-
-	return cloned
-}
-
 func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
 
 	// In DN Vector, we are using SharedReference for Window.
@@ -421,6 +319,14 @@ func (vec *CnTaeVector[T]) SlicePtr() unsafe.Pointer {
 
 func (vec *CnTaeVector[T]) AppendNoNulls(s any) {
 	panic("Soon Deprecated")
+}
+
+func (vec *CnTaeVector[T]) Reset() {
+	panic("Soon Deprecated")
+}
+
+func (vec *CnTaeVector[T]) Capacity() int {
+	return vec.Length()
 }
 
 // TODO: --- We can remove below function as they are only used in Testcases.
@@ -603,68 +509,123 @@ func (vec *CnTaeVector[T]) PPString(num int) string {
 	return w.String()
 }
 
-//TODO: --- Pretty sure the below functions works. But need some validation
-
-func (vec *CnTaeVector[T]) Reset() {
-	if vec.Length() == 0 {
-		return
-	}
-
-	if vec.Nullable() {
-		cnNulls.Reset(vec.downstreamVector.Nsp)
-		//NOTE: We are not resetting the isNullable.
-	}
-
-	cnVector.Reset(vec.downstreamVector)
-}
+//TODO: --- Need advise on the below functions
 
 func (vec *CnTaeVector[T]) Close() {
 	vec.releaseDownstream()
 }
 
 func (vec *CnTaeVector[T]) releaseDownstream() {
-	if vec.downstreamVector != nil && vec.isOwner {
+	if vec.isOwner {
 		vec.downstreamVector.Free(vec.mpool)
-		vec.downstreamVector = nil
+		vec.isOwner = false
 	}
 }
 
 func (vec *CnTaeVector[T]) Allocated() int {
-
 	if !vec.isOwner {
 		return 0
 	}
-
 	return vec.downstreamVector.Size()
-}
-
-// TODO: --- I am not sure, if the below functions will work as expected
-
-func (vec *CnTaeVector[T]) Capacity() int {
-	// TODO: Can we use Length() instead of Capacity?
-	// TODO: Not used much. Can we remove?
-
-	// TODO: Capacity should be based on a number and not based on the Length. Fix it later.
-	return vec.Length()
 }
 
 func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 
-	newNulls := cnNulls.NewWithSize(0)
-	if nulls != nil && !nulls.IsEmpty() {
-		cnNulls.Add(newNulls, nulls.ToArray()...)
-	}
-
-	newDownstream, err := AllocateNewMoVecFromBytes(vec.GetType(), bs, vec.GetAllocator())
-	if err != nil {
-		//TODO: check if this is ok?
-		panic(err)
-	}
+	newDownstream := NewShallowCopyMoVecFromBytes(vec.GetType(), bs)
 
 	if vec.Nullable() {
+		//TODO: We can avoid cloning NSP when nulls is changed to a regular bitmap
+		newNulls := cnNulls.NewWithSize(0)
+		if nulls != nil && !nulls.IsEmpty() {
+			cnNulls.Add(newNulls, nulls.ToArray()...)
+		}
+
 		newDownstream.Nsp = newNulls
 	}
 
 	vec.releaseDownstream()
 	vec.downstreamVector = newDownstream
+}
+
+// When a new Append() is happening on a SharedMemory vector, we allocate the data[] from the mpool.
+func (vec *CnTaeVector[T]) tryPromoting() {
+
+	if !vec.isOwner {
+		src := vec.Bytes()
+
+		// deep copy
+		newDownstream, _ := NewDeepCopyMoVecFromBytes(vec.GetType(), src, vec.GetAllocator())
+		newDownstream.Nsp = vec.downstreamVector.Nsp.Clone()
+
+		vec.downstreamVector = newDownstream
+		vec.isOwner = true
+	}
+}
+
+func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+
+	if srcLen <= 0 {
+		return
+	}
+
+	// The downstream vector, ie CN vector needs isNull as argument.
+	// So, we can't directly call cn_vector.Append() without parsing the data.
+	// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
+	// it into the current CnVectorAdapter via this function.
+	for i := srcOff; i < srcOff+srcLen; i++ {
+		vec.Append(src.Get(i))
+	}
+}
+
+func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
+	opts := Options{}
+	if len(allocator) == 0 {
+		opts.Allocator = vec.GetAllocator()
+	} else {
+		opts.Allocator = allocator[0]
+	}
+
+	cloned := NewCnTaeVector[T](vec.GetType(), vec.Nullable(), opts)
+
+	/* Approach 1: Deep Copy downstreamVector for VarLen.
+
+	clonedTaeVector, _ := cnVector.Dup(vec.downstreamVector, vec.GetAllocator())
+	defer clonedTaeVector.Free(vec.GetAllocator())
+
+	clonedNsp := vec.downstreamVector.Nsp.Clone()
+
+	for i := offset; i < offset+length; i++ {
+		isNull := clonedNsp.Contains(uint64(i))
+
+		if isNull {
+			cloned.Append(types.Null{})
+		} else {
+			val := GetNonNullValue(clonedTaeVector, uint32(i))
+			cloned.Append(val)
+		}
+	}
+	*/
+
+	op := func(v any, _ int) error {
+		cloned.Append(v)
+		return nil
+	}
+	err := vec.ForeachWindow(offset, length, op, nil)
+	if err != nil {
+		return nil
+	}
+
+	return cloned
+}
+
+func (vec *CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
+	// TODO: Not doing tryPromoting()
+	var sels []int64
+	vecLen := uint32(vec.Length())
+	for i := uint32(0); i < vecLen; i++ {
+		if !deletes.Contains(i) {
+			sels = append(sels, int64(i))
+		}
+	}
+	cnVector.Shrink(vec.downstreamVector, sels)
 }

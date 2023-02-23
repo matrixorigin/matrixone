@@ -79,11 +79,7 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool
 func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	bs := vec.Bytes()
 
-	if vec.GetType().IsVarlen() {
-		mov, _ = movec.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
-	} else {
-		mov = movec.NewOriginalWithData(vec.GetType(), bs.StorageBuf(), &nulls.Nulls{})
-	}
+	mov = NewShallowCopyMoVecFromBytes(vec.GetType(), bs)
 	if vec.HasNull() {
 		mov.Nsp.Np = bitmap.New(vec.Length())
 		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
@@ -93,54 +89,17 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	return
 }
 
-func AllocateNewMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*movec.Vector, error) {
-	/*
-		Previous Failed Approaches:
-		1. Similar to UnmarshalToMoVec(): The issue with currentVector.ResetWithData(data) was that the currentVector
-		is not the owner of the data. So when the currentVector is closed, it throws "duplicate mpool.free() invoked".
+func NewShallowCopyMoVecFromBytes(typ types.Type, bs *Bytes) (mov *movec.Vector) {
+	if typ.IsVarlen() {
+		mov = movec.NewWithDataAndArea(typ, bs.HeaderBuf(), bs.StorageBuf())
+	} else {
+		mov = movec.NewWithData(typ, bs.StorageBuf())
+	}
+	return mov
+}
 
-		2. Similar to CopyToMoVec(): copy() data into new_data without new allocation resulted in  mpool header
-		corruption issue on Append(). When Grow() is invoked, it frees the old memory, which it has no ownership.
+func NewDeepCopyMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*movec.Vector, error) {
 
-		Success Approaches:
-		3.a  Previous DN stdvec uses vec.stlvec.ReadBytes(bs, shared = true). It only adds `bs` to `vec.buf`.
-		Subsequent Append() will result in a new mpool allocation() for `node` [a].
-		The previous vec.buf will be copied to the new `node` ie buf [b].
-		oldn, which didn't copy the bs data, is freed. [c]
-		old vec.buf which had the bs, is now replaced with new buf, so the previous bs is de-referenced.
-
-		Note `buf` points to `newn`. buf (len<=capacity) is a condensed version of node (len == capacity)
-
-		<pre>
-		func (vec *StdVector[T]) tryExpand(capacity int) {
-			newSize := stl.SizeOfMany[T](capacity)
-			vec.capacity = capacity
-			oldn := vec.node
-			newn, err := vec.alloc.Alloc(capacity * stl.Sizeof[T]()) <---------- [a]
-			buf := newn[:0:len(newn)]
-			buf = append(buf, vec.buf...) <------------------------------------- [b]
-			vec.buf = buf
-			vec.node = newn
-			if oldn != nil {
-				vec.alloc.Free(oldn) <------------------------------------------ [c]
-			}
-		}
-		</pre>
-
-		3.b The new DN vector impl. We are using isOwner flag to mimic this functionality.
-		- For ResetWithData() , Allocated(). When the vector is first set using ResetWithData(),
-		the subsequent Allocated() should return 0.
-		- In the next Append() it should do a new mpool allocation.
-			Side node: In prev DN vec's readBytesShared(), the vec.capacity = len(vec.buf) / stl.Sizeof[T]()
-			So subsequent append would result in capacity exceed and result in tryExpand() for mpool allocation.
-		Now any subsequent Allocated() should return the size of mpool allocated space.
-		- In the case of Close(), we are clearing downstream vec, which is allocated by the parent vectors mpool.
-		Since every vector has a fresh mpool allocation, we can Free() the DN vector's own downstreamVector upon Close().
-		TODO: There is a problem with the latest mpool. Now when we do Free() it is clearing the src downstreamVector
-		data[] and area[] aswel;. Don't have a solid testcase for this scenario.
-		But this is the reason why TestReplay10() failed.
-
-	*/
 	var mov *movec.Vector
 	if typ.IsVarlen() {
 		dataByteArr := bs.HeaderBuf()
@@ -167,6 +126,7 @@ func AllocateNewMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*m
 			return nil, err
 		}
 		copy(dataAllocated, dataByteArr)
+
 		mov = movec.NewWithData(typ, dataAllocated)
 	}
 	return mov, nil
