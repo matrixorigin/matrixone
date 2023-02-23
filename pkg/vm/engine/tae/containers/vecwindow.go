@@ -52,24 +52,24 @@ func (win *windowBase) ReadFromFile(common.IVFile, *bytes.Buffer) error {
 func (win *windowBase) Reset()                                  { panic("cannot modify window") }
 func (win *windowBase) ResetWithData(*Bytes, *roaring64.Bitmap) { panic("cannot modify window") }
 
-type CnTaeVectorWindow[T any] struct {
+type vectorWindow[T any] struct {
 	*windowBase
 	ref *CnTaeVector[T]
 }
 
-func (win *CnTaeVectorWindow[T]) Nullable() bool {
+func (win *vectorWindow[T]) Nullable() bool {
 	return win.ref.Nullable()
 }
 
-func (win *CnTaeVectorWindow[T]) IsNull(i int) bool {
+func (win *vectorWindow[T]) IsNull(i int) bool {
 	return win.ref.IsNull(i + win.offset)
 }
 
-func (win *CnTaeVectorWindow[T]) HasNull() bool {
+func (win *vectorWindow[T]) HasNull() bool {
 	return win.ref.HasNull()
 }
 
-func (win *CnTaeVectorWindow[T]) NullMask() *roaring64.Bitmap {
+func (win *vectorWindow[T]) NullMask() *roaring64.Bitmap {
 	mask := win.ref.NullMask()
 	if win.offset == 0 || mask == nil {
 		return mask
@@ -77,54 +77,54 @@ func (win *CnTaeVectorWindow[T]) NullMask() *roaring64.Bitmap {
 	return common.BM64Window(mask, win.offset, win.offset+win.length)
 }
 
-func (win *CnTaeVectorWindow[T]) Bytes() *Bytes {
+func (win *vectorWindow[T]) Bytes() *Bytes {
 	bs := win.ref.Bytes()
 	bs = bs.Window(win.offset, win.length)
 	return bs
 }
 
-func (win *CnTaeVectorWindow[T]) Slice() any {
+func (win *vectorWindow[T]) Slice() any {
 	return win.ref.Slice().([]T)[win.offset : win.offset+win.length]
 }
 
-func (win *CnTaeVectorWindow[T]) Get(i int) any {
+func (win *vectorWindow[T]) Get(i int) any {
 	return win.ref.Get(i + win.offset)
 }
 
-func (win *CnTaeVectorWindow[T]) GetAllocator() *mpool.MPool {
+func (win *vectorWindow[T]) GetAllocator() *mpool.MPool {
 	return win.ref.GetAllocator()
 }
 
-func (win *CnTaeVectorWindow[T]) GetType() types.Type {
+func (win *vectorWindow[T]) GetType() types.Type {
 	return win.ref.GetType()
 }
 
-func (win *CnTaeVectorWindow[T]) String() string {
+func (win *vectorWindow[T]) String() string {
 	s := fmt.Sprintf("[Window[%d,%d)];%s", win.offset, win.offset+win.length, win.ref.String())
 	return s
 }
 
-func (win *CnTaeVectorWindow[T]) PPString(num int) string {
+func (win *vectorWindow[T]) PPString(num int) string {
 	s := fmt.Sprintf("[Window[%d,%d)];%s", win.offset, win.offset+win.length, win.ref.PPString(num))
 	return s
 }
 
-func (win *CnTaeVectorWindow[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
+func (win *vectorWindow[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 	return win.ref.forEachWindowWithBias(0, win.length, op, sels, win.offset)
 }
 
-func (win *CnTaeVectorWindow[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error {
+func (win *vectorWindow[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error {
 	if offset+length > win.length {
 		panic("bad param")
 	}
 	return win.ref.forEachWindowWithBias(offset, length, op, sels, win.offset)
 }
 
-func (win *CnTaeVectorWindow[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
+func (win *vectorWindow[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
 	return win.ref.CloneWindow(win.offset, win.length)
 }
 
-func (win *CnTaeVectorWindow[T]) Equals(o Vector) bool {
+func (win *vectorWindow[T]) Equals(o Vector) bool {
 
 	if win.Length() != o.Length() {
 		return false
@@ -186,11 +186,11 @@ func (win *CnTaeVectorWindow[T]) Equals(o Vector) bool {
 	return true
 
 }
-func (win *CnTaeVectorWindow[T]) Window(offset, length int) Vector {
+func (win *vectorWindow[T]) Window(offset, length int) Vector {
 	if offset+length > win.length {
 		panic("bad window param")
 	}
-	return &CnTaeVectorWindow[T]{
+	return &vectorWindow[T]{
 		ref: win.ref,
 		windowBase: &windowBase{
 			offset: offset + win.offset,
@@ -199,18 +199,18 @@ func (win *CnTaeVectorWindow[T]) Window(offset, length int) Vector {
 	}
 }
 
-func (win *CnTaeVectorWindow[T]) WriteTo(w io.Writer) (int64, error) {
+func (win *vectorWindow[T]) WriteTo(w io.Writer) (int64, error) {
 	panic("not implemented")
 }
 
-func (win *CnTaeVectorWindow[T]) GetView() VectorView {
+func (win *vectorWindow[T]) GetView() VectorView {
 	panic("Soon Deprecated")
 }
-func (win *CnTaeVectorWindow[T]) Data() []byte {
+func (win *vectorWindow[T]) Data() []byte {
 	panic("Soon Deprecated")
 }
 
-func (win *CnTaeVectorWindow[T]) SlicePtr() unsafe.Pointer {
+func (win *vectorWindow[T]) SlicePtr() unsafe.Pointer {
 	slice := win.ref.Slice().([]T)[win.offset : win.offset+win.length]
 	return unsafe.Pointer(&slice[0])
 }

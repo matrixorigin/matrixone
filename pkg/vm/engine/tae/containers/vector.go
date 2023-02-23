@@ -280,8 +280,8 @@ func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
 
 	// In DN Vector, we are using SharedReference for Window.
 	// In CN Vector, we are creating a new Clone for Window.
-	// So inorder to retain the nature of DN vector, we had use CnTaeVectorWindow Adapter.
-	return &CnTaeVectorWindow[T]{
+	// So inorder to retain the nature of DN vector, we had use vectorWindow Adapter.
+	return &vectorWindow[T]{
 		ref: vec,
 		windowBase: &windowBase{
 			offset: offset,
