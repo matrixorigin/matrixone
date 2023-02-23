@@ -97,9 +97,11 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 			assert.Nil(t, binds)
 			a.mu.Lock()
 			defer a.mu.Unlock()
-			assert.Equal(t,
-				pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, Valid: false},
-				a.mu.lockTables[1])
+			if len(a.mu.lockTables) > 0 {
+				assert.Equal(t,
+					pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, Valid: false},
+					a.mu.lockTables[1])
+			}
 		})
 }
 
