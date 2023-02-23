@@ -29,7 +29,7 @@ import (
 	"unsafe"
 )
 
-type CnTaeVector[T any] struct {
+type vector[T any] struct {
 	downstreamVector *cnVector.Vector
 
 	// isNullable mainly used in Equals() & CloneWithBuffer(). Note:
@@ -44,8 +44,8 @@ type CnTaeVector[T any] struct {
 	isOwner bool
 }
 
-func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeVector[T] {
-	vec := CnTaeVector[T]{
+func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *vector[T] {
+	vec := vector[T]{
 		downstreamVector: cnVector.New(typ),
 		isNullable:       nullable,
 	}
@@ -71,15 +71,15 @@ func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *CnTaeVect
 	return &vec
 }
 
-func (vec *CnTaeVector[T]) Get(i int) any {
+func (vec *vector[T]) Get(i int) any {
 	return GetValue(vec.downstreamVector, uint32(i))
 }
 
-func (vec *CnTaeVector[T]) Length() int {
+func (vec *vector[T]) Length() int {
 	return vec.downstreamVector.Length()
 }
 
-func (vec *CnTaeVector[T]) Append(v any) {
+func (vec *vector[T]) Append(v any) {
 	vec.tryPromoting()
 
 	_, isNull := v.(types.Null)
@@ -90,25 +90,25 @@ func (vec *CnTaeVector[T]) Append(v any) {
 	}
 }
 
-func (vec *CnTaeVector[T]) AppendMany(vs ...any) {
+func (vec *vector[T]) AppendMany(vs ...any) {
 	for _, v := range vs {
 		vec.Append(v)
 	}
 }
 
-func (vec *CnTaeVector[T]) Nullable() bool {
+func (vec *vector[T]) Nullable() bool {
 	return vec.isNullable
 }
 
-func (vec *CnTaeVector[T]) GetAllocator() *mpool.MPool {
+func (vec *vector[T]) GetAllocator() *mpool.MPool {
 	return vec.mpool
 }
 
-func (vec *CnTaeVector[T]) IsNull(i int) bool {
+func (vec *vector[T]) IsNull(i int) bool {
 	return vec.downstreamVector.GetNulls() != nil && vec.downstreamVector.GetNulls().Contains(uint64(i))
 }
 
-func (vec *CnTaeVector[T]) NullMask() *roaring64.Bitmap {
+func (vec *vector[T]) NullMask() *roaring64.Bitmap {
 	if input := vec.downstreamVector.GetNulls().Np; input != nil {
 		np := roaring64.New()
 		np.AddMany(input.ToArray())
@@ -117,11 +117,11 @@ func (vec *CnTaeVector[T]) NullMask() *roaring64.Bitmap {
 	return nil
 }
 
-func (vec *CnTaeVector[T]) GetType() types.Type {
+func (vec *vector[T]) GetType() types.Type {
 	return vec.downstreamVector.GetType()
 }
 
-func (vec *CnTaeVector[T]) String() string {
+func (vec *vector[T]) String() string {
 	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Capacity(), vec.Allocated())
 
 	end := 100
@@ -145,27 +145,27 @@ func (vec *CnTaeVector[T]) String() string {
 	return s
 }
 
-func (vec *CnTaeVector[T]) Extend(src Vector) {
+func (vec *vector[T]) Extend(src Vector) {
 	vec.ExtendWithOffset(src, 0, src.Length())
 }
 
-func (vec *CnTaeVector[T]) Update(i int, v any) {
+func (vec *vector[T]) Update(i int, v any) {
 	UpdateValue(vec.downstreamVector, uint32(i), v)
 }
 
-func (vec *CnTaeVector[T]) Slice() any {
+func (vec *vector[T]) Slice() any {
 	return vec.downstreamVector.Col
 }
 
-func (vec *CnTaeVector[T]) Bytes() *Bytes {
+func (vec *vector[T]) Bytes() *Bytes {
 	return MoVecToBytes(vec.downstreamVector)
 }
 
-func (vec *CnTaeVector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
+func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 	return vec.ForeachWindow(0, vec.Length(), op, sels)
 }
 
-func (vec *CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
+func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 
 	// 1. Nullable Flag
@@ -187,7 +187,7 @@ func (vec *CnTaeVector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
+func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	// Nullable Flag [1 byte]
 	isNullable := make([]byte, 1)
 	if _, err = r.Read(isNullable); err != nil {
@@ -276,7 +276,7 @@ func (vec *CnTaeVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
+func (vec *vector[T]) Window(offset, length int) Vector {
 
 	// In DN Vector, we are using SharedReference for Window.
 	// In CN Vector, we are creating a new Clone for Window.
@@ -290,53 +290,53 @@ func (vec *CnTaeVector[T]) Window(offset, length int) Vector {
 	}
 }
 
-func (vec *CnTaeVector[T]) HasNull() bool {
+func (vec *vector[T]) HasNull() bool {
 	return vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Any()
 }
 
 // TODO: --- We can remove below functions as they don't have any usage
 
-func (vec *CnTaeVector[T]) IsView() bool {
+func (vec *vector[T]) IsView() bool {
 	panic("Soon Deprecated")
 }
 
-func (vec *CnTaeVector[T]) GetView() VectorView {
+func (vec *vector[T]) GetView() VectorView {
 	panic("Soon Deprecated")
 }
 
-func (vec *CnTaeVector[T]) DataWindow(offset, length int) []byte {
+func (vec *vector[T]) DataWindow(offset, length int) []byte {
 	panic("Soon Deprecated")
 }
 
-func (vec *CnTaeVector[T]) Data() []byte {
+func (vec *vector[T]) Data() []byte {
 	panic("Soon Deprecated")
 }
 
-func (vec *CnTaeVector[T]) SlicePtr() unsafe.Pointer {
+func (vec *vector[T]) SlicePtr() unsafe.Pointer {
 	slice := vec.Slice().([]T)
 	return unsafe.Pointer(&slice[0])
 }
 
-func (vec *CnTaeVector[T]) AppendNoNulls(s any) {
+func (vec *vector[T]) AppendNoNulls(s any) {
 	panic("Soon Deprecated")
 }
 
-func (vec *CnTaeVector[T]) Reset() {
+func (vec *vector[T]) Reset() {
 	panic("Soon Deprecated")
 }
 
-func (vec *CnTaeVector[T]) Capacity() int {
+func (vec *vector[T]) Capacity() int {
 	return vec.Length()
 }
 
 // TODO: --- We can remove below function as they are only used in Testcases.
 
-func (vec *CnTaeVector[T]) Delete(delRowId int) {
+func (vec *vector[T]) Delete(delRowId int) {
 	deletes := roaring.BitmapOf(uint32(delRowId))
 	vec.Compact(deletes)
 }
 
-func (vec *CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
+func (vec *vector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
 	stat := f.Stat()
 	var n []byte
 	var buf []byte
@@ -384,7 +384,7 @@ func (vec *CnTaeVector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (
 
 // TODO: --- Below Functions Can be implemented in CN Vector.
 
-func (vec *CnTaeVector[T]) Equals(o Vector) bool {
+func (vec *vector[T]) Equals(o Vector) bool {
 
 	if vec.Length() != o.Length() {
 		return false
@@ -446,12 +446,12 @@ func (vec *CnTaeVector[T]) Equals(o Vector) bool {
 	return true
 }
 
-func (vec *CnTaeVector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 	err = vec.forEachWindowWithBias(offset, length, op, sels, 0)
 	return
 }
 
-func (vec *CnTaeVector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int) (err error) {
+func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int) (err error) {
 	if sels == nil || sels.IsEmpty() {
 		for i := offset; i < offset+length; i++ {
 			elem := vec.Get(i + bias)
@@ -478,7 +478,7 @@ func (vec *CnTaeVector[T]) forEachWindowWithBias(offset, length int, op ItOp, se
 	return
 }
 
-func (vec *CnTaeVector[T]) PPString(num int) string {
+func (vec *vector[T]) PPString(num int) string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("[T=%s][Len=%d][Data=(", vec.GetType().String(), vec.Length()))
 	limit := vec.Length()
@@ -511,25 +511,25 @@ func (vec *CnTaeVector[T]) PPString(num int) string {
 
 //TODO: --- Need advise on the below functions
 
-func (vec *CnTaeVector[T]) Close() {
+func (vec *vector[T]) Close() {
 	vec.releaseDownstream()
 }
 
-func (vec *CnTaeVector[T]) releaseDownstream() {
+func (vec *vector[T]) releaseDownstream() {
 	if vec.isOwner {
 		vec.downstreamVector.Free(vec.mpool)
 		vec.isOwner = false
 	}
 }
 
-func (vec *CnTaeVector[T]) Allocated() int {
+func (vec *vector[T]) Allocated() int {
 	if !vec.isOwner {
 		return 0
 	}
 	return vec.downstreamVector.Size()
 }
 
-func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
+func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 
 	newDownstream := NewShallowCopyMoVecFromBytes(vec.GetType(), bs)
 
@@ -548,7 +548,7 @@ func (vec *CnTaeVector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 }
 
 // When a new Append() is happening on a SharedMemory vector, we allocate the data[] from the mpool.
-func (vec *CnTaeVector[T]) tryPromoting() {
+func (vec *vector[T]) tryPromoting() {
 
 	if !vec.isOwner {
 		src := vec.Bytes()
@@ -562,7 +562,7 @@ func (vec *CnTaeVector[T]) tryPromoting() {
 	}
 }
 
-func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 
 	if srcLen <= 0 {
 		return
@@ -577,7 +577,7 @@ func (vec *CnTaeVector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	}
 }
 
-func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
+func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
 	opts := Options{}
 	if len(allocator) == 0 {
 		opts.Allocator = vec.GetAllocator()
@@ -618,7 +618,7 @@ func (vec *CnTaeVector[T]) CloneWindow(offset, length int, allocator ...*mpool.M
 	return cloned
 }
 
-func (vec *CnTaeVector[T]) Compact(deletes *roaring.Bitmap) {
+func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	// TODO: Not doing tryPromoting()
 	var sels []int64
 	vecLen := uint32(vec.Length())

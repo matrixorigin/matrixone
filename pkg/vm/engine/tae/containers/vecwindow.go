@@ -54,7 +54,7 @@ func (win *windowBase) ResetWithData(*Bytes, *roaring64.Bitmap) { panic("cannot 
 
 type vectorWindow[T any] struct {
 	*windowBase
-	ref *CnTaeVector[T]
+	ref *vector[T]
 }
 
 func (win *vectorWindow[T]) Nullable() bool {
