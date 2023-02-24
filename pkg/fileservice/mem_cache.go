@@ -77,7 +77,6 @@ func (m *MemCache) Read(
 	return
 }
 
-//go:noinline
 func (m *MemCache) cacheHit() {
 	profileAddSample()
 }
