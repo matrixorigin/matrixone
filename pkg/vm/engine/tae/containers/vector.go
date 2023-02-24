@@ -586,7 +586,7 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 	}
 
 	/*
-		// Approach 1: Deep Copy downstreamVector
+		// Approach 1.a: Deep Copy downstreamVector & insert records to DN vector using Append()
 		// Problem: Data Race TestCRUD()
 		cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
 		clonedTaeVector, _ := cnVector.Dup(vec.downstreamVector, vec.GetAllocator())
@@ -606,7 +606,54 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 		}
 		return cloned
 
-		// Approach 2: ForEach Window
+		// Approach 1.b: Deep Copy downstreamVector & create CN-vector window using for-loop
+		cloned.releaseDownstream()
+
+		clonedMoVec, _ := cnVector.Dup(vec.downstreamVector, vec.GetAllocator())
+		defer clonedMoVec.Free(vec.GetAllocator())
+
+		newMoVec := cnVector.New(vec.GetType())
+
+		for i := offset; i < offset+length; i++ {
+			isNull := clonedMoVec.Nsp.Contains(uint64(i))
+
+			if isNull {
+				_ = newMoVec.Append(types.DefaultVal[T](), true, vec.GetAllocator())
+			} else {
+				val := GetNonNullValue(clonedMoVec, uint32(i))
+				_ = newMoVec.Append(val, false, vec.GetAllocator())
+			}
+		}
+
+		// Approach 1.c:  Deep Copy downstreamVector & create CN Vector Window using Window()
+		// Problem: panic: internal error: mp header corruption in TestTxn6()
+
+		clone, _ := cnVector.Dup(vec.downstreamVector, vec.GetAllocator())
+
+		window := cnVector.New(vec.GetType())
+		window = cnVector.Window(clone, offset, offset+length, window)
+
+		result := NewVector[T](vec.GetType(), vec.Nullable(), opts)
+		result.downstreamVector = window
+		result.isOwner = true
+
+		return result
+
+		cloned.downstreamVector = newMoVec
+		cloned.isOwner = true
+
+		// Approach 1.d: Deep Copy downstreamVector + CN Shrink
+		// Problem: Data Race TestCRUD()
+		clonedTaeVector, _ := cnVector.Dup(vec.downstreamVector, vec.GetAllocator())
+		var sels []int64
+		for i := int64(offset); i < int64(offset)+int64(length); i++ {
+			sels = append(sels, i)
+		}
+		cnVector.Shrink(clonedTaeVector, sels)
+		cloned.downstreamVector = clonedTaeVector
+		cloned.isOwner = true
+
+		// Approach 2: ForEach Window from DN Vector
 		// Problem: Data Race TestCRUD()
 		cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
 		op := func(v any, _ int) error {
@@ -619,7 +666,7 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 		}
 		return cloned
 
-		// Approach 3: Deep copy DN vector
+		// Approach 3: Deep copy DN vector using ResetWithData
 		// Problem: Data Race TestCRUD()
 		window := NewVector[T](vec.GetType(), vec.Nullable(), opts)
 		window.ResetWithData(vec.Bytes(), vec.NullMask())
@@ -636,55 +683,36 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 			return nil
 		}
 
-		// Approach 4: CN Vector Window()
-		// Problem: panic: internal error: mp header corruption in TestTxn6()
-
-		clone, _ := cnVector.Dup(vec.downstreamVector, vec.GetAllocator())
-
-		window := cnVector.New(vec.GetType())
-		window = cnVector.Window(clone, offset, offset+length, window)
-
-		result := NewVector[T](vec.GetType(), vec.Nullable(), opts)
-		result.downstreamVector = window
-		result.isOwner = true
-
-		return result
-
-		// Approach 5: CN Dup + CN Shrink
-		// Problem: Data Race TestCRUD()
-		clonedTaeVector, _ := cnVector.Dup(vec.downstreamVector, vec.GetAllocator())
-		var sels []int64
-		for i := int64(offset); i < int64(offset)+int64(length); i++ {
-			sels = append(sels, i)
-		}
-		cnVector.Shrink(clonedTaeVector, sels)
-		cloned.downstreamVector = clonedTaeVector
-		cloned.isOwner = true
-
 		Main Problem: data-race issue in
 		1. cnVector.Dup()
 		2. ForEach Allocate( Get(i) )
 	*/
 
 	cloned := NewVector[T](vec.GetType(), vec.Nullable(), opts)
+
 	if vec.GetType().IsVarlen() {
 		//TODO: Data Race problem for VarLen
+
+		cloned.releaseDownstream()
 
 		clonedMoVec, _ := cnVector.Dup(vec.downstreamVector, vec.GetAllocator())
 		defer clonedMoVec.Free(vec.GetAllocator())
 
-		clonedMoNsp := vec.downstreamVector.Nsp.Clone()
+		newMoVec := cnVector.New(vec.GetType())
 
 		for i := offset; i < offset+length; i++ {
-			isNull := clonedMoNsp.Contains(uint64(i))
+			isNull := clonedMoVec.Nsp.Contains(uint64(i))
 
 			if isNull {
-				cloned.Append(types.Null{})
+				_ = newMoVec.Append(types.DefaultVal[T](), true, vec.GetAllocator())
 			} else {
 				val := GetNonNullValue(clonedMoVec, uint32(i))
-				cloned.Append(val)
+				_ = newMoVec.Append(val, false, vec.GetAllocator())
 			}
 		}
+
+		cloned.downstreamVector = newMoVec
+		cloned.isOwner = true
 	} else {
 
 		op := func(v any, _ int) error {
