@@ -39,10 +39,10 @@ jobs:
 
       - name: Issue Add  Milestone
         if: contains(github.event.issue.labels.*.name, 'kind/bug')
-        uses: cgetc/automatically-set-milestone-to-issue@v0.1.2
+        uses: guguducken/milestone-add-action@check_mill_exist
         with:
-          github-token: ${{ secrets.TOKEN_ACTION }}
-          version-prefix: "v0.7.0"
+          action-token: ${{ secrets.TOKEN_ACTION }}
+          milestone: "v0.8.0"
 
   check-bvt-issue:
     if: github.event.action == 'closed'
@@ -104,25 +104,25 @@ jobs:
           path: ./matrixone
 
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v3
         with:
-          go-version: 1.19
+          go-version: '1.20'
 
-      - name: Build MatrixOne
-        run: |
-          cd $GITHUB_WORKSPACE/matrixone && make clean && make build
+      # - name: Build MatrixOne
+      #   run: |
+      #     cd $GITHUB_WORKSPACE/matrixone && make clean && make build
 
-      - name: Static Code Analysis
-        continue-on-error: true
-        run: |
-          cd $GITHUB_WORKSPACE/matrixone
-          make install-static-check-tools
-          make static-check &>lint.out
+      # - name: Static Code Analysis
+      #   continue-on-error: true
+      #   run: |
+      #     cd $GITHUB_WORKSPACE/matrixone
+      #     make install-static-check-tools
+      #     make static-check &>lint.out
           
-      - name: count sca failed files
-        run: |
-          cd $GITHUB_WORKSPACE/matrixone
-          echo "FAILED_FILES_NUM=$(cat lint.out | grep -E '^pkg|^cmd' | awk -F ".go" '{if(NF>=2) {print $1}}' | sort -u | wc -l)" >> $GITHUB_ENV
+      # - name: count sca failed files
+      #   run: |
+      #     cd $GITHUB_WORKSPACE/matrixone
+      #     echo "FAILED_FILES_NUM=$(cat lint.out | grep -E '^pkg|^cmd' | awk -F ".go" '{if(NF>=2) {print $1}}' | sort -u | wc -l)" >> $GITHUB_ENV
 
       - name: Set Variables
         run: |
@@ -156,16 +156,19 @@ jobs:
         timeout-minutes: 10
         run: |
           cd $GITHUB_WORKSPACE/matrixone
+          make clean && make config && make cgo
+          sed -i.bak 's/level = "info"/level = "error"/g'  ./etc/launch-tae-CN-tae-DN/log.toml
           if  [ -d  "./store"  ]; then rm -rf ./store; fi
-          go test -c -tags service_test -cover -covermode=count -coverpkg=./pkg/... ./cmd/mo-service/ -o service_test
-          ./service_test -test.coverprofile=${{ env.raw_bvt_coverage }} -launch ./etc/launch-tae-multi-CN-tae-DN/launch.toml &>service.log &
+          GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(go version)' -X 'main.BranchName=$(git rev-parse --abbrev-ref HEAD)' -X 'main.CommitID=$(git rev-parse HEAD)' -X 'main.BuildTime=$(date)' -X 'main.Version=$(git describe --always --tags $(git rev-list --tags --max-count=1))'"
+          export GOCOVERDIR=$GITHUB_WORKSPACE/matrixone
+          go build -cover "$GOLDFLAGS" -o mo-service ./cmd/mo-service/
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch-tae-CN-tae-DN
           
       - name: Start BVT Test
         if: ${{ env.Job-Status }} == 2
         id: bvt_on_pr_version
         continue-on-error: true
         run: |
-          sleep 300s
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases 2>&1
 
@@ -173,10 +176,8 @@ jobs:
         timeout-minutes: 10
         run: |
           cd $GITHUB_WORKSPACE/matrixone
-          ps aux|grep 'service_test' | grep -v 'grep' | awk '{print $2}'
-          ps aux|grep 'service_test' | grep -v 'grep' | awk '{print $2}' | xargs kill -s SIGINT
-          sleep 60
-          cat ${{ env.raw_bvt_coverage }} | grep -v ${{ env.bvt_excluded_pkg }} > ${{ env.bvt_coverage }}
+          go tool covdata textfmt -i="$GITHUB_WORKSPACE/matrixone" -o ${{ env.raw_bvt_coverage }}
+          cat ${{ env.raw_bvt_coverage }} | grep -v '${{ env.bvt_excluded_pkg }}' | grep -v 'yaccpar' > ${{ env.bvt_coverage }}
           echo "bvt_coverage finished"
           go tool cover -o ${{ env.bvt_html_coverage }} -html=${{ env.bvt_coverage }}
           echo "bvt_html_coverage finished"
@@ -235,7 +236,8 @@ jobs:
           fi
           done
           cat bvt_tmp.txt | sort -k 1 -k 2n >> coverage_report.txt
-          zip -r code_quality_reports.zip ${{ env.bvt_html_coverage }} ${{ env.ut_html_coverage }} coverage_report.txt lint.out UT-Report.out
+          # zip -r code_quality_reports.zip ${{ env.bvt_html_coverage }} ${{ env.ut_html_coverage }} coverage_report.txt lint.out UT-Report.out
+          zip -r code_quality_reports.zip ${{ env.bvt_html_coverage }} ${{ env.ut_html_coverage }} coverage_report.txt UT-Report.out
 
       - name: Generate Notice Content
         run: |
