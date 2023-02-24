@@ -15,14 +15,18 @@
 package agg
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type BitOr[T1 types.Ints | types.UInts | types.Floats] struct {
 }
 
-func BitOrReturnType(_ []types.Type) types.Type {
+func BitOrReturnType(typs []types.Type) types.Type {
+	if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary {
+		return typs[0]
+	}
 	return types.New(types.T_uint64, 0, 0, 0)
 }
 
@@ -76,5 +80,55 @@ func (bo *BitOr[T1]) MarshalBinary() ([]byte, error) {
 }
 
 func (bo *BitOr[T1]) UnmarshalBinary(data []byte) error {
+	return nil
+}
+
+type BitOrBinary struct {
+}
+
+func NewBitOrBinary() *BitOrBinary {
+	return &BitOrBinary{}
+}
+
+func (bab *BitOrBinary) Grows(_ int) {
+}
+
+func (bab *BitOrBinary) Eval(vs [][]byte) [][]byte {
+	return vs
+}
+
+func (bab *BitOrBinary) Merge(gNum1, gNum2 int64, v1, v2 []byte, empty1, empty2 bool, _ any) ([]byte, bool) {
+	if empty1 {
+		return v2, empty2
+	}
+	if empty2 {
+		return v1, empty1
+	}
+
+	result := make([]byte, len(v1))
+	types.BitOr(result, v1, v2)
+
+	return result, false
+}
+
+func (bab *BitOrBinary) Fill(gNum int64, v1, v2 []byte, _ int64, isNew, isNull bool) ([]byte, bool) {
+	if isNull {
+		return v2, isNew
+	}
+	if isNew {
+		return v1, !isNew
+	}
+
+	result := make([]byte, len(v1))
+	types.BitOr(result, v1, v2)
+
+	return result, false
+}
+
+func (bab *BitOrBinary) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (bab *BitOrBinary) UnmarshalBinary(data []byte) error {
 	return nil
 }

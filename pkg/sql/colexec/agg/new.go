@@ -539,6 +539,12 @@ func newBitOr(typ types.Type, dist bool) Agg[any] {
 		return newGenericBitOr[float32](typ, dist)
 	case types.T_float64:
 		return newGenericBitOr[float64](typ, dist)
+	case types.T_binary, types.T_varbinary:
+		aggPriv := NewBitOrBinary()
+		if dist {
+			return NewUnaryDistAgg(AggregateBitOr, aggPriv, false, typ, BitOrReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateBitOr, aggPriv, false, typ, BitOrReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for bitor", typ))
 }
@@ -565,6 +571,13 @@ func newBitXor(typ types.Type, dist bool) Agg[any] {
 		return newGenericBitXor[float32](typ, dist)
 	case types.T_float64:
 		return newGenericBitXor[float64](typ, dist)
+	case types.T_binary, types.T_varbinary:
+		aggPriv := NewBitXorBinary()
+		if dist {
+			return NewUnaryDistAgg(AggregateBitXor, aggPriv, false, typ, BitXorReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateBitXor, aggPriv, false, typ, BitXorReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for bitxor", typ))
 }
@@ -591,6 +604,12 @@ func newBitAnd(typ types.Type, dist bool) Agg[any] {
 		return newGenericBitAnd[float32](typ, dist)
 	case types.T_float64:
 		return newGenericBitAnd[float64](typ, dist)
+	case types.T_binary, types.T_varbinary:
+		aggPriv := NewBitAndBinary()
+		if dist {
+			return NewUnaryDistAgg(AggregateBitAnd, aggPriv, false, typ, BitAndReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateBitAnd, aggPriv, false, typ, BitAndReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for bitand", typ))
 }

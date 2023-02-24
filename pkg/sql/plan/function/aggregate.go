@@ -588,18 +588,11 @@ var aggregates = map[int]Functions{
 		},
 		Overloads: []Function{
 			{
-				Index:         0,
-				ReturnTyp:     types.T_uint64,
-				AggregateInfo: agg.AggregateBitAnd,
-			},
-			{
-				Index:         1,
-				ReturnTyp:     types.T_binary,
-				AggregateInfo: agg.AggregateBitAnd,
-			},
-			{
-				Index:         2,
-				ReturnTyp:     types.T_varbinary,
+				Index: 0,
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					t, _ := agg.ReturnType(agg.AggregateBitAnd, parameters[0])
+					return t
+				},
 				AggregateInfo: agg.AggregateBitAnd,
 			},
 		},
@@ -625,18 +618,11 @@ var aggregates = map[int]Functions{
 		},
 		Overloads: []Function{
 			{
-				Index:         0,
-				ReturnTyp:     types.T_uint64,
-				AggregateInfo: agg.AggregateBitOr,
-			},
-			{
-				Index:         1,
-				ReturnTyp:     types.T_binary,
-				AggregateInfo: agg.AggregateBitOr,
-			},
-			{
-				Index:         2,
-				ReturnTyp:     types.T_varbinary,
+				Index: 0,
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					t, _ := agg.ReturnType(agg.AggregateBitOr, parameters[0])
+					return t
+				},
 				AggregateInfo: agg.AggregateBitOr,
 			},
 		},
@@ -662,18 +648,11 @@ var aggregates = map[int]Functions{
 		},
 		Overloads: []Function{
 			{
-				Index:         0,
-				ReturnTyp:     types.T_uint64,
-				AggregateInfo: agg.AggregateBitXor,
-			},
-			{
-				Index:         1,
-				ReturnTyp:     types.T_binary,
-				AggregateInfo: agg.AggregateBitXor,
-			},
-			{
-				Index:         2,
-				ReturnTyp:     types.T_varbinary,
+				Index: 0,
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					t, _ := agg.ReturnType(agg.AggregateBitXor, parameters[0])
+					return t
+				},
 				AggregateInfo: agg.AggregateBitXor,
 			},
 		},
