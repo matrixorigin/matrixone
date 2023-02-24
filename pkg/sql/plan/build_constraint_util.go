@@ -568,7 +568,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// if insert with on duplicate key . need append a join node
 	// create table t1 (a int primary key, b int unique key, c int);
 	// insert into t1 values (1,1,3),(2,2,3) on duplicate key update a=a+1, b=b-2;
-	// rewrite to : select _t.*, t1.row_id, t1.a, t1.b，c from
+	// rewrite to : select _t.*, t1.a, t1.b，c, t1.row_id from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
 	if len(stmt.OnDuplicateUpdate) > 0 {
 
@@ -584,6 +584,10 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 		// if table have unique columns, we do the rewrite. if not, do nothing(do not throw error)
 		if len(uniqueCols) > 0 {
+			if len(uniqueCols) > 1 {
+				return moerr.NewNYI(builder.GetContext(), "one unique constraint supported for on duplicate key clause now.")
+			}
+
 			joinCtx := NewBindContext(builder, bindCtx)
 			rightCtx := NewBindContext(builder, joinCtx)
 			rightId := builder.appendNode(&plan.Node{
