@@ -43,6 +43,8 @@ type bufferHolder struct {
 	name string
 	// buffer is instance of batchpipe.ItemBuffer with its own elimination algorithm(like LRU, LFU)
 	buffer batchpipe.ItemBuffer[batchpipe.HasName, any]
+	// bufferPool
+	bufferPool *sync.Pool
 	// signal send signal to Collector
 	signal bufferSignalFunc // see awakeBufferFactory
 	// impl NewItemBatchHandler
@@ -56,14 +58,17 @@ type bufferHolder struct {
 type bufferSignalFunc func(*bufferHolder)
 
 func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.PipeImpl, signal bufferSignalFunc) *bufferHolder {
-	buffer := impl.NewItemBuffer(name.GetName())
 	b := &bufferHolder{
 		ctx:    ctx,
 		name:   name.GetName(),
-		buffer: buffer,
 		signal: signal,
 		impl:   impl,
 	}
+	b.bufferPool = &sync.Pool{}
+	b.bufferPool.New = func() interface{} {
+		return b.impl.NewItemBuffer(b.name)
+	}
+	b.buffer = b.bufferPool.Get().(batchpipe.ItemBuffer[batchpipe.HasName, any])
 	b.mux.Lock()
 	defer b.mux.Unlock()
 	b.trigger = time.AfterFunc(time.Hour, func() {})
@@ -105,6 +110,7 @@ type bufferGenerateReq struct {
 
 func (r *bufferGenerateReq) handle(buf *bytes.Buffer) (exportReq, error) {
 	batch := r.buffer.GetBatch(r.b.ctx, buf)
+	defer r.b.bufferPool.Put(r.buffer)
 	return &bufferExportReq{
 		batch: batch,
 		b:     r.b,
@@ -139,7 +145,7 @@ func (b *bufferHolder) getGenerateReq() generateReq {
 		buffer: b.buffer,
 		b:      b,
 	}
-	b.buffer = b.impl.NewItemBuffer(b.name)
+	b.buffer = b.bufferPool.Get().(batchpipe.ItemBuffer[batchpipe.HasName, any])
 	b.resetTrigger()
 	return req
 }
