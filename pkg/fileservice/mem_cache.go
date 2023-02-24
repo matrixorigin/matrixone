@@ -24,12 +24,20 @@ import (
 type MemCache struct {
 	lru   *LRU
 	stats *CacheStats
+	ch    chan func()
 }
 
 func NewMemCache(capacity int64) *MemCache {
+	ch := make(chan func(), 65536)
+	go func() {
+		for fn := range ch {
+			fn()
+		}
+	}()
 	return &MemCache{
 		lru:   NewLRU(capacity),
 		stats: new(CacheStats),
+		ch:    ch,
 	}
 }
 
@@ -84,6 +92,7 @@ func (m *MemCache) cacheHit() {
 func (m *MemCache) Update(
 	ctx context.Context,
 	vector *IOVector,
+	async bool,
 ) error {
 	for _, entry := range vector.Entries {
 		if entry.Object == nil {
@@ -94,7 +103,15 @@ func (m *MemCache) Update(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		m.lru.Set(key, entry.Object, entry.ObjectSize)
+		if async {
+			obj := entry.Object // copy from loop variable
+			objSize := entry.ObjectSize
+			m.ch <- func() {
+				m.lru.Set(key, obj, objSize)
+			}
+		} else {
+			m.lru.Set(key, entry.Object, entry.ObjectSize)
+		}
 	}
 	return nil
 }
