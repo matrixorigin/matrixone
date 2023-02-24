@@ -29,6 +29,11 @@ import (
 	"unsafe"
 )
 
+// DN vector is different from CN vector by
+// 1. Nulls  - DN uses types.Nulls{}. It also uses isNullable.
+// 2. Window - DN uses sharedmemory Window
+// 3. Mpool  - DN stores mpool reference within the vector
+// 4. SharedMemory Logic - DN ResetWithData() doesn't allocate mpool memory unless Append() is called.
 type vector[T any] struct {
 	downstreamVector *cnVector.Vector
 
