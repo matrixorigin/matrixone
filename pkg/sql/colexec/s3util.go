@@ -15,8 +15,6 @@
 package colexec
 
 import (
-	"container/heap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -220,51 +218,6 @@ func GetStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
 	return
 }
 
-func GetPos(data any, oid types.T) (int, int) {
-	switch oid {
-	case types.T_bool:
-		return data.(*MixData[bool]).GetPos()
-	case types.T_int8:
-		return data.(*MixData[int8]).GetPos()
-	case types.T_int16:
-		return data.(*MixData[int16]).GetPos()
-	case types.T_int32:
-		return data.(*MixData[int32]).GetPos()
-	case types.T_int64:
-		return data.(*MixData[int64]).GetPos()
-	case types.T_uint8:
-		return data.(*MixData[uint8]).GetPos()
-	case types.T_uint16:
-		return data.(*MixData[uint16]).GetPos()
-	case types.T_uint32:
-		return data.(*MixData[uint32]).GetPos()
-	case types.T_uint64:
-		return data.(*MixData[uint64]).GetPos()
-	case types.T_float32:
-		return data.(*MixData[float32]).GetPos()
-	case types.T_float64:
-		return data.(*MixData[float64]).GetPos()
-	case types.T_date:
-		return data.(*MixData[types.Date]).GetPos()
-	case types.T_datetime:
-		return data.(*MixData[types.Datetime]).GetPos()
-	case types.T_time:
-		return data.(*MixData[types.Time]).GetPos()
-	case types.T_timestamp:
-		return data.(*MixData[types.Timestamp]).GetPos()
-	case types.T_decimal64:
-		return data.(*MixData[types.Decimal64]).GetPos()
-	case types.T_decimal128:
-		return data.(*MixData[types.Decimal128]).GetPos()
-	case types.T_uuid:
-		return data.(*MixData[types.Uuid]).GetPos()
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		return data.(*MixData[string]).GetPos()
-	default:
-		return -1, -1
-	}
-}
-
 // len(sortIndex) is always only one.
 func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process.Process) error {
 	bats := container.tableBatches[idx][:length]
@@ -291,80 +244,61 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 			return err
 		}
 	} else {
-		var mergeHeap heap.Interface
+		var merge MergeInterface
 		var nulls []*nulls.Nulls
-		var oid types.T
 		for i := 0; i < len(bats); i++ {
 			nulls = append(nulls, bats[i].Vecs[container.sortIndex[0]].Nsp)
 		}
 		pos := container.sortIndex[0]
 		switch bats[0].Vecs[sortIdx].Typ.Oid {
 		case types.T_bool:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewBoolLess(), GetFixedCols[bool](bats, pos), nulls)
-			oid = types.T_bool
+			merge = NewMerge(len(bats), sort.NewBoolLess(), GetFixedCols[bool](bats, pos), nulls)
 		case types.T_int8:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[int8](), GetFixedCols[int8](bats, pos), nulls)
-			oid = types.T_int8
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[int8](), GetFixedCols[int8](bats, pos), nulls)
 		case types.T_int16:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[int16](), GetFixedCols[int16](bats, pos), nulls)
-			oid = types.T_int16
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[int16](), GetFixedCols[int16](bats, pos), nulls)
 		case types.T_int32:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[int32](), GetFixedCols[int32](bats, pos), nulls)
-			oid = types.T_int32
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[int32](), GetFixedCols[int32](bats, pos), nulls)
 		case types.T_int64:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[int64](), GetFixedCols[int64](bats, pos), nulls)
-			oid = types.T_int64
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[int64](), GetFixedCols[int64](bats, pos), nulls)
 		case types.T_uint8:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[uint8](), GetFixedCols[uint8](bats, pos), nulls)
-			oid = types.T_uint8
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint8](), GetFixedCols[uint8](bats, pos), nulls)
 		case types.T_uint16:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[uint16](), GetFixedCols[uint16](bats, pos), nulls)
-			oid = types.T_uint16
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint16](), GetFixedCols[uint16](bats, pos), nulls)
 		case types.T_uint32:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[uint32](), GetFixedCols[uint32](bats, pos), nulls)
-			oid = types.T_uint32
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint32](), GetFixedCols[uint32](bats, pos), nulls)
 		case types.T_uint64:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[uint64](), GetFixedCols[uint64](bats, pos), nulls)
-			oid = types.T_uint64
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint64](), GetFixedCols[uint64](bats, pos), nulls)
 		case types.T_float32:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[float32](), GetFixedCols[float32](bats, pos), nulls)
-			oid = types.T_float32
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[float32](), GetFixedCols[float32](bats, pos), nulls)
 		case types.T_float64:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[float64](), GetFixedCols[float64](bats, pos), nulls)
-			oid = types.T_float64
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[float64](), GetFixedCols[float64](bats, pos), nulls)
 		case types.T_date:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[types.Date](), GetFixedCols[types.Date](bats, pos), nulls)
-			oid = types.T_date
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Date](), GetFixedCols[types.Date](bats, pos), nulls)
 		case types.T_datetime:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[types.Datetime](), GetFixedCols[types.Datetime](bats, pos), nulls)
-			oid = types.T_datetime
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Datetime](), GetFixedCols[types.Datetime](bats, pos), nulls)
 		case types.T_time:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[types.Time](), GetFixedCols[types.Time](bats, pos), nulls)
-			oid = types.T_time
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Time](), GetFixedCols[types.Time](bats, pos), nulls)
 		case types.T_timestamp:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[types.Timestamp](), GetFixedCols[types.Timestamp](bats, pos), nulls)
-			oid = types.T_timestamp
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Timestamp](), GetFixedCols[types.Timestamp](bats, pos), nulls)
 		case types.T_decimal64:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewDecimal64Less(), GetFixedCols[types.Decimal64](bats, pos), nulls)
-			oid = types.T_decimal64
+			merge = NewMerge(len(bats), sort.NewDecimal64Less(), GetFixedCols[types.Decimal64](bats, pos), nulls)
 		case types.T_decimal128:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewDecimal128Less(), GetFixedCols[types.Decimal128](bats, pos), nulls)
-			oid = types.T_decimal128
+			merge = NewMerge(len(bats), sort.NewDecimal128Less(), GetFixedCols[types.Decimal128](bats, pos), nulls)
 		case types.T_uuid:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewUuidCompLess(), GetFixedCols[types.Uuid](bats, pos), nulls)
-			oid = types.T_uuid
+			merge = NewMerge(len(bats), sort.NewUuidCompLess(), GetFixedCols[types.Uuid](bats, pos), nulls)
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-			mergeHeap = NewMergeHeap(len(bats), sort.NewGenericCompLess[string](), GetStrCols(bats, pos), nulls)
-			oid = types.T_char
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[string](), GetStrCols(bats, pos), nulls)
 		}
 		if err := GenerateWriter(container, proc); err != nil {
 			return err
 		}
-		heap.Init(mergeHeap)
-		heap.Push(mergeHeap, nil)
 		lens := 0
-		for mergeHeap.Len() > 0 {
-			batchIndex, rowIndex := GetPos(heap.Pop(mergeHeap), oid)
+		size := len(bats)
+		var batchIndex int
+		var rowIndex int
+		for size > 0 {
+			batchIndex, rowIndex, size = merge.GetNextPos()
 			for i := range container.buffers[idx].Vecs {
 				vector.UnionOne(container.buffers[idx].Vecs[i], bats[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
 			}
@@ -377,7 +311,6 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 				// force clean
 				container.buffers[idx].CleanOnlyData()
 			}
-			heap.Push(mergeHeap, nil)
 		}
 		if lens > 0 {
 			if err := WriteBlock(container, container.buffers[idx], proc); err != nil {
