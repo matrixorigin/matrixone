@@ -48,16 +48,16 @@ func TestClose(t *testing.T) {
 	id := []byte("t1")
 	fsp := newFixedSlicePool(2)
 	txn := newActiveTxn(id, string(id), fsp)
-	tables := map[uint64]*lockTable{
-		1: newLockTable(1, nil),
-		2: newLockTable(2, nil),
+	tables := map[uint64]lockTable{
+		1: newLocalLockTable(1, nil),
+		2: newLocalLockTable(2, nil),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
 	assert.NoError(t, tables[1].lock(ctx, txn, [][]byte{[]byte("k1")}, LockOptions{}))
 	assert.NoError(t, tables[2].lock(ctx, txn, [][]byte{[]byte("k2")}, LockOptions{}))
 
-	lockTableFunc := func(table uint64) *lockTable {
+	lockTableFunc := func(table uint64) lockTable {
 		return tables[table]
 	}
 	txn.close(lockTableFunc)
@@ -65,6 +65,6 @@ func TestClose(t *testing.T) {
 	assert.Empty(t, txn.txnKey)
 	assert.Nil(t, txn.blockedWaiter)
 	assert.Empty(t, txn.holdLocks)
-	assert.Equal(t, 0, tables[1].mu.store.Len())
-	assert.Equal(t, 0, tables[2].mu.store.Len())
+	assert.Equal(t, 0, tables[1].(*localLockTable).mu.store.Len())
+	assert.Equal(t, 0, tables[2].(*localLockTable).mu.store.Len())
 }
