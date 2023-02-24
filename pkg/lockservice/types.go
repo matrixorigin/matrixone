@@ -100,6 +100,31 @@ type LockService interface {
 	Close() error
 }
 
+// lockTable is used to manage all locks of a Table. LockTable can be local or remote, as determined
+// by LockTableAllocator.
+//
+// A LockService instance contains multiple LockTables (either local or remote), and forLockService holder
+// does not know which LockTable is local and which is remote, these details are fully implemented inside
+// the LockService.
+//
+// TODO(fagongzi): If a Table has multiple partitions, then these Partitions are inside the LockTable and
+// all operations can be parallel.
+type lockTable interface {
+	// lock attempts to add a lock to some data in a Table, either as a range or as a single lock set. Return
+	// nil means that the locking was successful. Transaction need to be abort if any error returned.
+	//
+	// Possible errors returned:
+	// 1. ErrDeadlockDetectorClosed, indicates that the current transaction has triggered a deadlock.
+	// 2. ErrLockTableNotMatch, indicates that the LockTable binding relationship has changed.
+	// 3. Other known errors.
+	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions) error
+	// Unlock release a set of locks, it will keep retrying until the context times out when it encounters an
+	// error.
+	unlock(ctx context.Context, ls *cowSlice) error
+	// getLock get a lock, it will keep retrying until the context times out when it encounters an error.
+	getLock(ctx context.Context, key []byte) (Lock, bool)
+}
+
 // LockTableAllocator is used to managing the binding relationship between
 // LockTable and LockService, and check the validity of the binding held by
 // the transaction when the transaction is committed.
