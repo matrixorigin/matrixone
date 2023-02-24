@@ -222,6 +222,14 @@ func (ctr *container) mergeSort2(bat2 *batch.Batch, proc *process.Process) error
 	end1, end2 := s2, int64(bat1.Vecs[0].Length())
 	sels := make([]int64, 0, end2)
 
+	// set up cmp must happen after vector.UnionBatch.  UnionBatch may grow the vector
+	// in bat1, which could cause a realloc.  Depending on mpool has fixed pool, the old
+	// vector maybe destroyed, cmp then set a garbage vector.
+	for i, cmp := range ctr.cmps {
+		cmp.Set(0, bat1.GetVector(ctr.compare0Index[i]))
+		cmp.Set(1, bat2.GetVector(ctr.compare1Index[i]))
+	}
+
 	for s1 < end1 && s2 < end2 {
 		i := s1
 		j := s2 - end1

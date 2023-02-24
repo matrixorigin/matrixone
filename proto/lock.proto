@@ -1,0 +1,35 @@
+/* 
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+package lock; 
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/lock";
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
+option (gogoproto.goproto_enum_prefix_all) = true;
+
+// LockTable describes which CN manages a Table's Locks.
+message LockTable {
+  // Table table id
+  uint64 Table     = 1;
+  // ServiceID lock service id, a cn node will only run one instance of LockService
+  string ServiceID = 2;
+  // Version will incr if CN-Table bind changed.
+  uint64 Version   = 3;
+  // Valid false if the service is disabled, and no new service bind this table
+  bool   Valid     = 4;
+}
