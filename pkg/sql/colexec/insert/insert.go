@@ -253,10 +253,8 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			if !newBatch.Vecs[rowIdIdx].Nsp.Contains(0) {
 				oldRowId := vector.MustTCols[types.Rowid](insertBatch.Vecs[rowIdIdx])[oldConflictIdx]
 				newRowId := vector.MustTCols[types.Rowid](newBatch.Vecs[rowIdIdx])[0]
-				for bIdx, bVal := range oldRowId {
-					if bVal != newRowId[bIdx] {
-						return nil, moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
-					}
+				if !bytes.Equal(oldRowId[:], newRowId[:]) {
+					return nil, moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
 				}
 			}
 
