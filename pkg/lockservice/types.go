@@ -20,36 +20,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
-// Granularity row granularity, single row or row range
-type Granularity int
-
-const (
-	// Row single row
-	Row Granularity = iota
-	// Range row range mode
-	Range
-)
-
-// LockMode exclusive or shared lock
-type LockMode int
-
-const (
-	// Exclusive mode
-	Exclusive LockMode = iota
-	// Shared mode
-	Shared
-)
-
-// WaitPolicy waiting strategy if lock conflicts are encountered when locking.
-type WaitPolicy int
-
-const (
-	// Wait waiting for conflicting locks to be released
-	Wait WaitPolicy = iota
-	// FastFail return fail if lock conflicts are encountered
-	FastFail
-)
-
 // LockStorage the store that holds the locks, a storage instance is corresponding to
 // all the locks of a table. The LockStorage no need to be thread-safe.
 //
@@ -173,12 +143,29 @@ type KeepaliveSender interface {
 	Close() error
 }
 
-// LockOptions options for lock
-type LockOptions struct {
-	granularity Granularity
-	mode        LockMode
-	policy      WaitPolicy
+// Client is used to send lock table operations to other service.
+type Client interface {
+	// Send send request to other lock service, and wait for a response synchronously.
+	Send(context.Context, *pb.Request) (*pb.Response, error)
+	// Close close the client
+	Close() error
 }
+
+// RequestHandleFunc request handle func
+type RequestHandleFunc func(context.Context, *pb.Request, *pb.Response) error
+
+// Server receives and processes requests from Client.
+type Server interface {
+	// Start start the txn server
+	Start() error
+	// Close the txn server
+	Close() error
+	// RegisterMethodHandler register txn request handler func
+	RegisterMethodHandler(pb.Method, RequestHandleFunc)
+}
+
+// LockOptions options for lock
+type LockOptions = pb.LockOptions
 
 // Lock stores specific lock information. Since there are a large number of lock objects
 // in the LockStorage at runtime, this object has been specially designed to save memory

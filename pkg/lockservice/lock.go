@@ -14,6 +14,8 @@
 
 package lockservice
 
+import pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+
 const (
 	flagLockRow byte = 1 << iota
 	flagLockRangeStart
@@ -22,19 +24,19 @@ const (
 	flagLockSharedMode
 )
 
-func newRangeLock(txnID []byte, mode LockMode) (Lock, Lock) {
+func newRangeLock(txnID []byte, mode pb.LockMode) (Lock, Lock) {
 	l := newLock(txnID, mode)
 	return l.toRangeStartLock(), l.toRangeEndLock()
 }
 
-func newRowLock(txnID []byte, mode LockMode) Lock {
+func newRowLock(txnID []byte, mode pb.LockMode) Lock {
 	l := newLock(txnID, mode)
 	return l.toRowLock()
 }
 
-func newLock(txnID []byte, mode LockMode) Lock {
+func newLock(txnID []byte, mode pb.LockMode) Lock {
 	l := Lock{txnID: txnID}
-	if mode == Exclusive {
+	if mode == pb.LockMode_Exclusive {
 		l.value |= flagLockExclusiveMode
 	} else {
 		l.value |= flagLockSharedMode
@@ -73,9 +75,9 @@ func (l Lock) isLockRangeEnd() bool {
 	return l.value&flagLockRangeEnd != 0
 }
 
-func (l Lock) getLockMode() LockMode {
+func (l Lock) getLockMode() pb.LockMode {
 	if l.value&flagLockExclusiveMode != 0 {
-		return Exclusive
+		return pb.LockMode_Exclusive
 	}
-	return Shared
+	return pb.LockMode_Shared
 }

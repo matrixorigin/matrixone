@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,9 +33,9 @@ func TestRowLock(t *testing.T) {
 	l := NewLockService()
 	ctx := context.Background()
 	option := LockOptions{
-		granularity: Row,
-		mode:        Exclusive,
-		policy:      Wait,
+		Granularity: pb.Granularity_Row,
+		Mode:        pb.LockMode_Exclusive,
+		Policy:      pb.WaitPolicy_Wait,
 	}
 	acquired := false
 
@@ -63,9 +64,9 @@ func TestMultipleRowLocks(t *testing.T) {
 	l := NewLockService()
 	ctx := context.Background()
 	option := LockOptions{
-		granularity: Row,
-		mode:        Exclusive,
-		policy:      Wait,
+		Granularity: pb.Granularity_Row,
+		Mode:        pb.LockMode_Exclusive,
+		Policy:      pb.WaitPolicy_Wait,
 	}
 	iter := 0
 	sum := 10000
@@ -89,7 +90,11 @@ func TestMultipleRowLocks(t *testing.T) {
 func TestCtxCancelWhileWaiting(t *testing.T) {
 	l := NewLockService()
 	ctx, cancel := context.WithCancel(context.Background())
-	option := LockOptions{Row, Exclusive, Wait}
+	option := pb.LockOptions{
+		Granularity: pb.Granularity_Row,
+		Mode:        pb.LockMode_Exclusive,
+		Policy:      pb.WaitPolicy_Wait,
+	}
 	var wg sync.WaitGroup
 	wg.Add(1)
 	err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
@@ -116,9 +121,9 @@ func TestDeadLock(t *testing.T) {
 	row2 := []byte{2}
 	row3 := []byte{3}
 
-	mustAddTestLock(t, ctx, l, txn1, [][]byte{row1}, Row)
-	mustAddTestLock(t, ctx, l, txn2, [][]byte{row2}, Row)
-	mustAddTestLock(t, ctx, l, txn3, [][]byte{row3}, Row)
+	mustAddTestLock(t, ctx, l, txn1, [][]byte{row1}, pb.Granularity_Row)
+	mustAddTestLock(t, ctx, l, txn2, [][]byte{row2}, pb.Granularity_Row)
+	mustAddTestLock(t, ctx, l, txn3, [][]byte{row3}, pb.Granularity_Row)
 
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -126,17 +131,20 @@ func TestDeadLock(t *testing.T) {
 	deadLockCounter := atomic.Uint32{}
 	go func() {
 		defer wg.Done()
-		maybeAddTestLockWithDeadlock(t, ctx, l, txn1, [][]byte{row2}, Row, &deadLockCounter, maxDeadLockCount)
+		maybeAddTestLockWithDeadlock(t, ctx, l, txn1, [][]byte{row2},
+			pb.Granularity_Row, &deadLockCounter, maxDeadLockCount)
 		require.NoError(t, l.Unlock(txn1))
 	}()
 	go func() {
 		defer wg.Done()
-		maybeAddTestLockWithDeadlock(t, ctx, l, txn2, [][]byte{row3}, Row, &deadLockCounter, maxDeadLockCount)
+		maybeAddTestLockWithDeadlock(t, ctx, l, txn2, [][]byte{row3},
+			pb.Granularity_Row, &deadLockCounter, maxDeadLockCount)
 		require.NoError(t, l.Unlock(txn2))
 	}()
 	go func() {
 		defer wg.Done()
-		maybeAddTestLockWithDeadlock(t, ctx, l, txn3, [][]byte{row1}, Row, &deadLockCounter, maxDeadLockCount)
+		maybeAddTestLockWithDeadlock(t, ctx, l, txn3, [][]byte{row1},
+			pb.Granularity_Row, &deadLockCounter, maxDeadLockCount)
 		require.NoError(t, l.Unlock(txn3))
 	}()
 	wg.Wait()
@@ -154,9 +162,9 @@ func TestDeadLockWithRange(t *testing.T) {
 	row2 := []byte{3, 4}
 	row3 := []byte{5, 6}
 
-	mustAddTestLock(t, ctx, l, txn1, [][]byte{row1}, Range)
-	mustAddTestLock(t, ctx, l, txn2, [][]byte{row2}, Range)
-	mustAddTestLock(t, ctx, l, txn3, [][]byte{row3}, Range)
+	mustAddTestLock(t, ctx, l, txn1, [][]byte{row1}, pb.Granularity_Range)
+	mustAddTestLock(t, ctx, l, txn2, [][]byte{row2}, pb.Granularity_Range)
+	mustAddTestLock(t, ctx, l, txn3, [][]byte{row3}, pb.Granularity_Range)
 
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -164,17 +172,20 @@ func TestDeadLockWithRange(t *testing.T) {
 	var deadLockCounter atomic.Uint32
 	go func() {
 		defer wg.Done()
-		maybeAddTestLockWithDeadlock(t, ctx, l, txn1, [][]byte{row2}, Range, &deadLockCounter, maxDeadLockCount)
+		maybeAddTestLockWithDeadlock(t, ctx, l, txn1, [][]byte{row2},
+			pb.Granularity_Range, &deadLockCounter, maxDeadLockCount)
 		require.NoError(t, l.Unlock(txn1))
 	}()
 	go func() {
 		defer wg.Done()
-		maybeAddTestLockWithDeadlock(t, ctx, l, txn2, [][]byte{row3}, Range, &deadLockCounter, maxDeadLockCount)
+		maybeAddTestLockWithDeadlock(t, ctx, l, txn2, [][]byte{row3},
+			pb.Granularity_Range, &deadLockCounter, maxDeadLockCount)
 		require.NoError(t, l.Unlock(txn2))
 	}()
 	go func() {
 		defer wg.Done()
-		maybeAddTestLockWithDeadlock(t, ctx, l, txn3, [][]byte{row1}, Range, &deadLockCounter, maxDeadLockCount)
+		maybeAddTestLockWithDeadlock(t, ctx, l, txn3, [][]byte{row1},
+			pb.Granularity_Range, &deadLockCounter, maxDeadLockCount)
 		require.NoError(t, l.Unlock(txn3))
 	}()
 	wg.Wait()
@@ -185,7 +196,7 @@ func mustAddTestLock(t *testing.T,
 	l *service,
 	txnID []byte,
 	lock [][]byte,
-	granularity Granularity) {
+	granularity pb.Granularity) {
 	maybeAddTestLockWithDeadlock(t,
 		ctx,
 		l,
@@ -201,14 +212,14 @@ func maybeAddTestLockWithDeadlock(t *testing.T,
 	l *service,
 	txnID []byte,
 	lock [][]byte,
-	granularity Granularity,
+	granularity pb.Granularity,
 	deadLockCount *atomic.Uint32,
 	maxDeadLockCount uint32) {
 	t.Logf("%s try lock %+v", string(txnID), lock)
 	err := l.Lock(ctx, 1, lock, txnID, LockOptions{
-		granularity: Row,
-		mode:        Exclusive,
-		policy:      Wait,
+		Granularity: pb.Granularity_Row,
+		Mode:        pb.LockMode_Exclusive,
+		Policy:      pb.WaitPolicy_Wait,
 	})
 	if err == ErrDeadlockDetectorClosed {
 		t.Logf("%s lock %+v, found dead lock", string(txnID), lock)
@@ -223,9 +234,9 @@ func TestRangeLock(t *testing.T) {
 	l := NewLockService()
 	ctx := context.Background()
 	option := LockOptions{
-		granularity: Range,
-		mode:        Exclusive,
-		policy:      Wait,
+		Granularity: pb.Granularity_Row,
+		Mode:        pb.LockMode_Exclusive,
+		Policy:      pb.WaitPolicy_Wait,
 	}
 	acquired := false
 
@@ -254,9 +265,9 @@ func TestMultipleRangeLocks(t *testing.T) {
 	l := NewLockService()
 	ctx := context.Background()
 	option := LockOptions{
-		granularity: Range,
-		mode:        Exclusive,
-		policy:      Wait,
+		Granularity: pb.Granularity_Row,
+		Mode:        pb.LockMode_Exclusive,
+		Policy:      pb.WaitPolicy_Wait,
 	}
 
 	sum := 100
@@ -285,9 +296,9 @@ func BenchmarkMultipleRowLock(b *testing.B) {
 		l := NewLockService()
 		ctx := context.Background()
 		option := LockOptions{
-			granularity: Row,
-			mode:        Exclusive,
-			policy:      Wait,
+			Granularity: pb.Granularity_Row,
+			Mode:        pb.LockMode_Exclusive,
+			Policy:      pb.WaitPolicy_Wait,
 		}
 		iter := 0
 

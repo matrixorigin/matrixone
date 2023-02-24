@@ -22,6 +22,31 @@ import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = true;
 
+// Granularity row granularity, single row or row range
+enum Granularity {
+  Row   = 0;
+  Range = 1;
+}
+
+// LockMode lock mode
+enum LockMode {
+  Exclusive = 0;
+  Shared    = 1;
+}
+
+// WaitPolicy wait policy
+enum WaitPolicy {
+  Wait     = 0;
+  FastFail = 1;
+}
+
+// LockOptions lock options
+message LockOptions {
+  Granularity Granularity = 1;
+  LockMode    Mode        = 2;
+  WaitPolicy  policy      = 3;
+}
+
 // LockTable describes which CN manages a Table's Locks.
 message LockTable {
   // Table table id
@@ -32,4 +57,49 @@ message LockTable {
   uint64 Version   = 3;
   // Valid false if the service is disabled, and no new service bind this table
   bool   Valid     = 4;
+}
+
+// Method lock table operations
+enum Method {
+  // Lock lock
+  Lock    = 0;
+  // Write transaction write
+  Unlock  = 1;
+}
+
+// Request is used to send a request for a LockTable related operation to another 
+// service.
+message Request {
+  // RequestID request id
+  uint64       RequestID = 1;
+  // Method request type
+  Method       Method    = 2;
+  // Lock lock request
+  LockRequest  Lock      = 3 [(gogoproto.nullable) = false];
+}
+
+// Response response
+message Response {
+    // RequestID corresponding request id
+    uint64       RequestID = 1;
+    // Error we use this field to send moerr from service to another cn. Set with 
+    // moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
+    bytes        Error     = 2;
+    // LockResponse lock response
+    LockResponse Lock      = 3;
+}
+
+// LockRequest lock request
+message LockRequest {
+  bytes           TxnID     = 1;
+  repeated  bytes Rows      = 2;
+  // LockTable lock target table
+  LockTable       LockTable = 3;
+  // LockOptions lock options
+  LockOptions     Options   = 4;
+}
+
+// LockResponse lock response
+message LockResponse {
+
 }

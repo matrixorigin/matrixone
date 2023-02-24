@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -102,9 +103,9 @@ func runDeadlock(t *testing.T, row1, row2 rowToLock) {
 	l := NewLockService()
 	ctx := context.Background()
 	option := LockOptions{
-		granularity: Row,
-		mode:        Exclusive,
-		policy:      Wait,
+		Granularity: pb.Granularity_Row,
+		Mode:        pb.LockMode_Exclusive,
+		Policy:      pb.WaitPolicy_Wait,
 	}
 
 	err := l.Lock(context.Background(), row1.tableID, [][]byte{row1.row}, txnA, option)

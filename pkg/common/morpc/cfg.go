@@ -12,25 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rpc
+package morpc
 
 import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"go.uber.org/zap"
 )
 
 var (
-	defaultMaxConnections  = 400
-	defaultMaxIdleDuration = time.Minute
-	defaultSendQueueSize   = 10240
-	defaultBufferSize      = 1024
+	defaultMaxConnections        = 400
+	defaultMaxIdleDuration       = time.Minute
+	defaultSendQueueSize         = 10240
+	defaultBufferSize            = 1024
+	defaultPayloadCopyBufferSize = 16 * 1024
 )
 
-// Config txn sender config
+// Config rpc client config
 type Config struct {
 	// MaxConnections maximum number of connections to communicate with each DNStore.
 	// Default is 400.
@@ -50,13 +51,23 @@ type Config struct {
 	WriteBufferSize toml.ByteSize `toml:"write-buffer-size"`
 	// ReadBufferSize buffer size for read messages per connection. Default is 1kb
 	ReadBufferSize toml.ByteSize `toml:"read-buffer-size"`
-	// MaxMessageSize max size for read messages from dn. Default is 10M
+	// MaxMessageSize max message size for rpc. Default is 100M
 	MaxMessageSize toml.ByteSize `toml:"max-message-size"`
+	// PayloadCopyBufferSize buffer size for copy payload to socket. Default is 16kb
+	PayloadCopyBufferSize toml.ByteSize `toml:"payload-copy-buffer-size"`
 	// EnableCompress enable compress message
 	EnableCompress bool `toml:"enable-compress"`
+
+	// BackendOptions extra backend options
+	BackendOptions []BackendOption `toml:"-"`
+	// ClientOptions extra client options
+	ClientOptions []ClientOption `toml:"-"`
+	// CodecOptions extra codec options
+	CodecOptions []CodecOption `toml:"-"`
 }
 
-func (c *Config) adjust() {
+// Adjust adjust config, fill default value
+func (c *Config) Adjust() {
 	if c.MaxConnections == 0 {
 		c.MaxConnections = defaultMaxConnections
 	}
@@ -75,23 +86,57 @@ func (c *Config) adjust() {
 	if c.MaxIdleDuration.Duration == 0 {
 		c.MaxIdleDuration.Duration = defaultMaxIdleDuration
 	}
-}
-
-func (c Config) getBackendOptions(logger *zap.Logger) []morpc.BackendOption {
-	return []morpc.BackendOption{
-		morpc.WithBackendLogger(logger),
-		morpc.WithBackendBusyBufferSize(c.BusyQueueSize),
-		morpc.WithBackendBufferSize(c.SendQueueSize),
-		morpc.WithBackendGoettyOptions(goetty.WithSessionRWBUfferSize(int(c.ReadBufferSize),
-			int(c.WriteBufferSize))),
+	if c.PayloadCopyBufferSize == 0 {
+		c.PayloadCopyBufferSize = toml.ByteSize(defaultPayloadCopyBufferSize)
 	}
 }
 
-func (c Config) getClientOptions(logger *zap.Logger) []morpc.ClientOption {
-	return []morpc.ClientOption{
-		morpc.WithClientLogger(logger),
-		morpc.WithClientMaxBackendPerHost(c.MaxConnections),
-		morpc.WithClientMaxBackendMaxIdleDuration(c.MaxIdleDuration.Duration),
-		morpc.WithClientTag("txn-rpc-sender"),
+// NewClient create client from config
+func (c Config) NewClient(
+	tag string,
+	logger *zap.Logger,
+	responseFactory func() Message) (RPCClient, error) {
+	var codecOpts []CodecOption
+	codecOpts = append(codecOpts,
+		WithCodecEnableChecksum(),
+		WithCodecPayloadCopyBufferSize(int(c.PayloadCopyBufferSize)),
+		WithCodecMaxBodySize(int(c.MaxMessageSize)))
+	codecOpts = append(codecOpts, c.CodecOptions...)
+	if c.EnableCompress {
+		mp, err := mpool.NewMPool(tag, 0, mpool.NoFixed)
+		if err != nil {
+			return nil, err
+		}
+		codecOpts = append(codecOpts, WithCodecEnableCompress(mp))
 	}
+
+	codec := NewMessageCodec(
+		responseFactory,
+		codecOpts...)
+	bf := NewGoettyBasedBackendFactory(codec, c.getBackendOptions(logger.Named(tag))...)
+	return NewClient(bf, c.getClientOptions(tag, logger.Named(tag))...)
+}
+
+func (c Config) getBackendOptions(logger *zap.Logger) []BackendOption {
+	var opts []BackendOption
+	opts = append(opts,
+		WithBackendLogger(logger),
+		WithBackendBusyBufferSize(c.BusyQueueSize),
+		WithBackendBufferSize(c.SendQueueSize),
+		WithBackendGoettyOptions(goetty.WithSessionRWBUfferSize(
+			int(c.ReadBufferSize),
+			int(c.WriteBufferSize))))
+	opts = append(opts, c.BackendOptions...)
+	return opts
+}
+
+func (c Config) getClientOptions(tag string, logger *zap.Logger) []ClientOption {
+	var opts []ClientOption
+	opts = append(opts,
+		WithClientLogger(logger),
+		WithClientMaxBackendPerHost(c.MaxConnections),
+		WithClientMaxBackendMaxIdleDuration(c.MaxIdleDuration.Duration),
+		WithClientTag(tag))
+	opts = append(opts, c.ClientOptions...)
+	return opts
 }

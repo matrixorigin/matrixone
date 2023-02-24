@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
 // a localLockTable instance manages the locks on a table
@@ -90,14 +92,14 @@ func (l *localLockTable) doAcquireLock(
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	switch opts.granularity {
-	case Row:
-		return l.acquireRowLockLocked(txn, waiter, rows[0], opts.mode)
-	case Range:
+	switch opts.Granularity {
+	case pb.Granularity_Row:
+		return l.acquireRowLockLocked(txn, waiter, rows[0], opts.Mode)
+	case pb.Granularity_Range:
 		if len(rows) != 2 {
 			panic("invalid range lock")
 		}
-		return l.acquireRangeLockLocked(txn, waiter, rows[0], rows[1], opts.mode)
+		return l.acquireRangeLockLocked(txn, waiter, rows[0], rows[1], opts.Mode)
 	default:
 		panic(fmt.Sprintf("not support lock granularity %d", opts))
 	}
@@ -107,7 +109,7 @@ func (l *localLockTable) acquireRowLockLocked(
 	txn *activeTxn,
 	w *waiter,
 	row []byte,
-	mode LockMode) bool {
+	mode pb.LockMode) bool {
 	key, lock, ok := l.mu.store.Seek(row)
 	if ok &&
 		(bytes.Equal(key, row) ||
@@ -123,7 +125,7 @@ func (l *localLockTable) acquireRangeLockLocked(
 	txn *activeTxn,
 	w *waiter,
 	start, end []byte,
-	mode LockMode) bool {
+	mode pb.LockMode) bool {
 	if bytes.Compare(start, end) >= 0 {
 		panic(fmt.Sprintf("lock error: start[%v] is greater than end[%v]",
 			start, end))
@@ -143,7 +145,7 @@ func (l *localLockTable) addRowLockLocked(
 	txn *activeTxn,
 	row []byte,
 	waiter *waiter,
-	mode LockMode) {
+	mode pb.LockMode) {
 	lock := newRowLock(txn.txnID, mode)
 	lock.waiter = waiter
 
@@ -157,7 +159,7 @@ func (l *localLockTable) addRangeLockLocked(
 	txn *activeTxn,
 	start, end []byte,
 	waiter *waiter,
-	mode LockMode) {
+	mode pb.LockMode) {
 	startLock, endLock := newRangeLock(txn.txnID, mode)
 	startLock.waiter = waiter
 	endLock.waiter = waiter
