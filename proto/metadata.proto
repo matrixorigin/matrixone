@@ -103,3 +103,30 @@ message CNStore {
   // Role CN role
   CNRole Role  = 2;
 }
+
+// CNService cn service metadata
+message CNService {
+  // ServiceID service ID
+  string ServiceID              = 1;
+  // LockServiceAddress is used to provide lock service
+  string LockServiceAddress     = 2;
+  // PipelineServiceAddress is used to provide distributed pipeline service
+  string PipelineServiceAddress = 3;
+  // SQLAddress is used to provide SQL input.
+  string SQLAddress             = 4;
+  // Labels lables on service
+  map<string,string> Labels     = 5 [(gogoproto.nullable) = false];
+}
+
+// DNService dn service metadata
+message DNService {
+  // ServiceID service ID
+  string ServiceID              = 1;
+  // TxnServiceAddress is used to provide txn service
+  string TxnServiceAddress      = 2;
+  // Shards DN shards on service
+  repeated DNShard Shards       = 3 [(gogoproto.nullable) = false];
+  // Labels lables on service
+  map<string,string> Labels     = 4 [(gogoproto.nullable) = false];
+}
+
