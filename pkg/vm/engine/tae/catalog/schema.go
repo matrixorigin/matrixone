@@ -388,8 +388,12 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		isAutoIncrement := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsAutoIncrement)).Get(offset).(int8)
 		def.AutoIncrement = i82bool(isAutoIncrement)
 		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))
-		def.OnUpdate = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
-		def.Default = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
+		buf := bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
+		def.OnUpdate = make([]byte, len(buf))
+		copy(def.OnUpdate, buf)
+		buf = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
+		def.Default = make([]byte, len(buf))
+		copy(def.Default, buf)
 		def.Idx = int(bat.GetVectorByName((pkgcatalog.SystemColAttr_Num)).Get(offset).(int32)) - 1
 		s.NameIndex[def.Name] = def.Idx
 		s.ColDefs = append(s.ColDefs, def)
