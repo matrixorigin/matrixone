@@ -18,12 +18,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	morun "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -31,6 +35,10 @@ import (
 )
 
 const defaultQueueSize = 1310720 // queue mem cost = 10MB
+
+const LoggerNameMOCollector = "MOCollector"
+
+var TotalBufferCnt atomic.Int32
 
 // bufferHolder hold ItemBuffer content, handle buffer's new/flush/reset/reminder(base on timer) operations.
 // work like:
@@ -45,6 +53,9 @@ type bufferHolder struct {
 	buffer batchpipe.ItemBuffer[batchpipe.HasName, any]
 	// bufferPool
 	bufferPool *sync.Pool
+	bufferCnt  atomic.Int32
+	// reminder
+	reminder batchpipe.Reminder
 	// signal send signal to Collector
 	signal bufferSignalFunc // see awakeBufferFactory
 	// impl NewItemBatchHandler
@@ -65,10 +76,12 @@ func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.P
 		impl:   impl,
 	}
 	b.bufferPool = &sync.Pool{}
+	b.bufferCnt.Swap(0)
 	b.bufferPool.New = func() interface{} {
 		return b.impl.NewItemBuffer(b.name)
 	}
-	b.buffer = b.bufferPool.Get().(batchpipe.ItemBuffer[batchpipe.HasName, any])
+	b.buffer = b.getBuffer()
+	b.reminder = b.buffer.(batchpipe.Reminder)
 	b.mux.Lock()
 	defer b.mux.Unlock()
 	b.trigger = time.AfterFunc(time.Hour, func() {})
@@ -79,9 +92,8 @@ func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.P
 func (b *bufferHolder) Start() {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	reminder := b.buffer.(batchpipe.Reminder)
 	b.trigger.Stop()
-	b.trigger = time.AfterFunc(reminder.RemindNextAfter(), func() {
+	b.trigger = time.AfterFunc(b.reminder.RemindNextAfter(), func() {
 		if b.mux.TryLock() {
 			b.mux.Unlock()
 		}
@@ -89,9 +101,28 @@ func (b *bufferHolder) Start() {
 	})
 }
 
+func (b *bufferHolder) getBuffer() batchpipe.ItemBuffer[batchpipe.HasName, any] {
+	TotalBufferCnt.Add(1)
+	b.bufferCnt.Add(1)
+	buffer := b.bufferPool.Get().(batchpipe.ItemBuffer[batchpipe.HasName, any])
+	logutil.Debugf("new buffer for %s, cnt: %d, using: %d", b.name, b.bufferCnt.Load(), TotalBufferCnt.Load())
+	return buffer
+}
+
+func (b *bufferHolder) putBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, any]) {
+	buffer.Reset()
+	b.bufferPool.Put(buffer)
+	TotalBufferCnt.Add(-1)
+	b.bufferCnt.Add(-1)
+	logutil.Debugf("release buffer for %s, cnt: %d, using: %d", b.name, b.bufferCnt.Load(), TotalBufferCnt.Load())
+}
+
 // Add call buffer.Add(), while bufferHolder is NOT readonly
 func (b *bufferHolder) Add(item batchpipe.HasName) {
 	b.mux.Lock()
+	if b.buffer == nil {
+		b.buffer = b.getBuffer()
+	}
 	buf := b.buffer
 	buf.Add(item)
 	b.mux.Unlock()
@@ -110,7 +141,7 @@ type bufferGenerateReq struct {
 
 func (r *bufferGenerateReq) handle(buf *bytes.Buffer) (exportReq, error) {
 	batch := r.buffer.GetBatch(r.b.ctx, buf)
-	defer r.b.bufferPool.Put(r.buffer)
+	r.b.putBuffer(r.buffer)
 	return &bufferExportReq{
 		batch: batch,
 		b:     r.b,
@@ -138,15 +169,20 @@ func (r *bufferExportReq) handle() error {
 
 func (r *bufferExportReq) callback(err error) {}
 
+// getGenerateReq get req to do generate logic
+// return nil, if b.buffer is nil
 func (b *bufferHolder) getGenerateReq() generateReq {
 	b.mux.Lock()
 	defer b.mux.Unlock()
+	defer b.resetTrigger()
+	if b.buffer == nil {
+		return nil
+	}
 	req := &bufferGenerateReq{
 		buffer: b.buffer,
 		b:      b,
 	}
-	b.buffer = b.bufferPool.Get().(batchpipe.ItemBuffer[batchpipe.HasName, any])
-	b.resetTrigger()
+	b.buffer = nil
 	return req
 }
 
@@ -158,7 +194,7 @@ func (b *bufferHolder) StopTrigger() bool {
 }
 
 func (b *bufferHolder) resetTrigger() {
-	b.trigger.Reset(b.buffer.(batchpipe.Reminder).RemindNextAfter())
+	b.trigger.Reset(b.reminder.RemindNextAfter())
 }
 
 var _ motrace.BatchProcessor = (*MOCollector)(nil)
@@ -166,7 +202,8 @@ var _ motrace.BatchProcessor = (*MOCollector)(nil)
 // MOCollector handle all bufferPipe
 type MOCollector struct {
 	motrace.BatchProcessor
-	ctx context.Context
+	ctx    context.Context
+	logger *log.MOLogger
 
 	// mux control all changes on buffers
 	mux sync.RWMutex
@@ -185,6 +222,8 @@ type MOCollector struct {
 	// pipeImplHolder hold implement
 	pipeImplHolder *PipeImplHolder
 
+	statsInterval time.Duration // WithStatsInterval
+
 	// flow control
 	started  uint32
 	stopOnce sync.Once
@@ -197,6 +236,7 @@ type MOCollectorOption func(*MOCollector)
 func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector {
 	c := &MOCollector{
 		ctx:            ctx,
+		logger:         morun.ProcessLevelRuntime().Logger().Named(LoggerNameMOCollector),
 		buffers:        make(map[string]*bufferHolder),
 		awakeCollect:   make(chan batchpipe.HasName, defaultQueueSize),
 		awakeGenerate:  make(chan generateReq, 16),
@@ -206,6 +246,7 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 		generatorCnt:   runtime.NumCPU(),
 		exporterCnt:    runtime.NumCPU(),
 		pipeImplHolder: newPipeImplHolder(),
+		statsInterval:  time.Minute,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -221,6 +262,16 @@ func WithGeneratorCnt(cnt int) MOCollectorOption {
 }
 func WithExporterCnt(cnt int) MOCollectorOption {
 	return MOCollectorOption(func(c *MOCollector) { c.exporterCnt = cnt })
+}
+
+func WithStatsInterval(i time.Duration) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.statsInterval = i })
+}
+
+func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) {
+		c.statsInterval = cfg.ShowStatsInterval.Duration
+	})
 }
 
 func (c *MOCollector) initCnt() {
@@ -276,6 +327,8 @@ func (c *MOCollector) Start() bool {
 		c.stopWait.Add(1)
 		go c.doExport(i)
 	}
+	c.stopWait.Add(1)
+	go c.showStats()
 	return true
 }
 
@@ -332,7 +385,9 @@ type exportReq interface {
 var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
 		req := holder.getGenerateReq()
-		c.awakeGenerate <- req
+		if req != nil {
+			c.awakeGenerate <- req
+		}
 	}
 }
 
@@ -385,6 +440,27 @@ loop:
 	logutil.Debugf("doExport %dth: Done.", idx)
 }
 
+func (c *MOCollector) showStats() {
+	defer c.stopWait.Done()
+	c.logger.Debug("start showStats")
+
+loop:
+	for {
+		select {
+		case <-time.After(c.statsInterval):
+			fields := make([]zap.Field, 0, 16)
+			fields = append(fields, zap.Int32("TotalBufferCnt", TotalBufferCnt.Load()))
+			for _, b := range c.buffers {
+				fields = append(fields, zap.Int32(fmt.Sprintf("%sBufferCnt", b.name), b.bufferCnt.Load()))
+			}
+			c.logger.Info("stats", fields...)
+		case <-c.stopCh:
+			break loop
+		}
+	}
+	c.logger.Debug("showStats Done.")
+}
+
 func (c *MOCollector) Stop(graceful bool) error {
 	var err error
 	var buf = new(bytes.Buffer)
@@ -401,8 +477,9 @@ func (c *MOCollector) Stop(graceful bool) error {
 		close(c.stopCh)
 		c.stopWait.Wait()
 		for _, buffer := range c.buffers {
-			generate := buffer.getGenerateReq()
-			if export, err := generate.handle(buf); err != nil {
+			if generate := buffer.getGenerateReq(); generate == nil {
+				continue
+			} else if export, err := generate.handle(buf); err != nil {
 				generate.callback(err)
 			} else if err = export.handle(); err != nil {
 				export.callback(err)

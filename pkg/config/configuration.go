@@ -139,6 +139,9 @@ var (
 
 	// defaultMergedExtension default: tae. Support val in [csv, tae]
 	defaultMergedExtension = "tae"
+
+	// defaultOBShowStatsInterval default: 1min
+	defaultOBShowStatsInterval = time.Minute
 )
 
 // FrontendParameters of the frontend
@@ -520,9 +523,13 @@ type ObservabilityParameters struct {
 
 	// MergedExtension default: tae. Support val in [csv, tae]
 	MergedExtension string `toml:"mergedExtension"`
+
+	OBCollectorConfig
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
+	op.OBCollectorConfig.SetDefaultValues()
+
 	op.MoVersion = version
 
 	if op.Host == "" {
@@ -571,6 +578,16 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.MergedExtension == "" {
 		op.MergedExtension = defaultMergedExtension
+	}
+}
+
+type OBCollectorConfig struct {
+	ShowStatsInterval toml.Duration `toml:"showStatsInterval"`
+}
+
+func (c *OBCollectorConfig) SetDefaultValues() {
+	if c.ShowStatsInterval.Duration == 0 {
+		c.ShowStatsInterval.Duration = defaultOBShowStatsInterval
 	}
 }
 
