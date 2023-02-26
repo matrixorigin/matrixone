@@ -14,7 +14,15 @@
 
 package colexec
 
-import "github.com/matrixorigin/matrixone/pkg/container/nulls"
+import (
+	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+)
+
+type MergeInterface interface {
+	GetNextPos() (int, int, int)
+}
 
 type MixData[T any] struct {
 	data     *T
@@ -23,14 +31,10 @@ type MixData[T any] struct {
 	rowIndex int
 }
 
-func (mixData *MixData[T]) GetPos() (int, int) {
-	return mixData.batIndex, mixData.rowIndex
-}
-
 // we will sort by primary key or
 // clusterby key, so we just need one
 // vector of every batch.
-type MergeHeap[T any] struct {
+type Merge[T any] struct {
 	datas []*MixData[T]
 	// the number of bacthes
 	size    uint64
@@ -48,10 +52,10 @@ type MergeHeap[T any] struct {
 	nulls []*nulls.Nulls
 }
 
-func NewMergeHeap[T any](size int, compLess func([]T, int64, int64) bool, cols [][]T, nulls []*nulls.Nulls) (mergeHeap *MergeHeap[T]) {
-	mergeHeap = &MergeHeap[T]{
+func NewMerge[T any](size int, compLess func([]T, int64, int64) bool, cols [][]T, nulls []*nulls.Nulls) (mergeHeap *Merge[T]) {
+	mergeHeap = &Merge[T]{
 		datas:    make([]*MixData[T], size),
-		size:     0,
+		size:     uint64(size),
 		cmpLess:  compLess,
 		cols:     cols,
 		pointers: make([]int, size),
@@ -61,11 +65,28 @@ func NewMergeHeap[T any](size int, compLess func([]T, int64, int64) bool, cols [
 	return
 }
 
-func (mergeHeap *MergeHeap[T]) Len() int {
+func (mergeHeap *Merge[T]) GetNextPos() (batchIndex, rowIndex, size int) {
+	mergeHeap.datas = mergeHeap.datas[:0]
+	mergeHeap.pushNext()
+	sort.Slice(mergeHeap.datas, func(i, j int) bool {
+		return mergeHeap.Less(i, j)
+	})
+	batchIndex = mergeHeap.datas[0].batIndex
+	rowIndex = mergeHeap.datas[0].rowIndex
+	mergeHeap.pointers[batchIndex]++
+	if mergeHeap.pointers[batchIndex] >= len(mergeHeap.cols[batchIndex]) {
+		mergeHeap.pointers[batchIndex] = -1
+		mergeHeap.size--
+	}
+	size = int(mergeHeap.size)
+	return
+}
+
+func (mergeHeap *Merge[T]) Len() int {
 	return int(mergeHeap.size)
 }
 
-func (mergeHeap *MergeHeap[T]) Less(i, j int) bool {
+func (mergeHeap *Merge[T]) Less(i, j int) bool {
 	if mergeHeap.datas[i].isNull {
 		return true
 	}
@@ -75,11 +96,7 @@ func (mergeHeap *MergeHeap[T]) Less(i, j int) bool {
 	return mergeHeap.cmpLess([]T{*mergeHeap.datas[i].data, *mergeHeap.datas[j].data}, 0, 1)
 }
 
-func (mergeHeap *MergeHeap[T]) Swap(i, j int) {
-	mergeHeap.datas[i], mergeHeap.datas[j] = mergeHeap.datas[j], mergeHeap.datas[i]
-}
-
-func (mergeHeap *MergeHeap[T]) pushNext() {
+func (mergeHeap *Merge[T]) pushNext() {
 	for i := 0; i < len(mergeHeap.pointers); i++ {
 		if mergeHeap.pointers[i] != -1 {
 			mergeHeap.datas = append(mergeHeap.datas, &MixData[T]{
@@ -88,97 +105,6 @@ func (mergeHeap *MergeHeap[T]) pushNext() {
 				batIndex: i,
 				rowIndex: mergeHeap.pointers[i],
 			})
-			mergeHeap.pointers[i]++
-			mergeHeap.size++
-			if mergeHeap.pointers[i] >= len(mergeHeap.cols[i]) {
-				mergeHeap.pointers[i] = -1
-			}
 		}
 	}
 }
-
-// x is always nil
-// the data is generated in the mergeheap's inernal
-func (mergeHeap *MergeHeap[T]) Push(x interface{}) {
-	mergeHeap.pushNext()
-}
-
-func (mergeHeap *MergeHeap[T]) Pop() (res interface{}) {
-	res = mergeHeap.datas[mergeHeap.size-1]
-	mergeHeap.datas = mergeHeap.datas[0 : mergeHeap.size-1]
-	mergeHeap.size--
-	return
-}
-
-// MergeHeap will take null first rule
-// type MergeHeap[T any] struct {
-// 	cmpLess func([]T, int64, int64) bool
-// 	datas   []MixData[T]
-// 	size    uint64
-// }
-
-// func NewMergeHeap[T any](cap_size uint64, cmp func([]T, int64, int64) bool) *MergeHeap[T] {
-// 	return &MergeHeap[T]{
-// 		cmpLess: cmp,
-// 		datas:   make([]MixData[T], cap_size+1),
-// 		size:    0,
-// 	}
-// }
-
-// func (heap *MergeHeap[T]) Push(data *T, isNull bool, batchIndex int, rowIndex int) {
-// 	heap.datas[heap.size+1] = MixData[T]{
-// 		isNull:   isNull,
-// 		data:     data,
-// 		batIndex: batchIndex,
-// 		rowIndex: rowIndex,
-// 	}
-// 	heap.size++
-// 	heap.up(int(heap.size))
-// }
-
-// func (heap *MergeHeap[T]) Pop() (batchIndex int, rowIndex int) {
-// 	if heap.size < 1 {
-// 		return -1, -1
-// 	}
-// 	batchIndex = heap.datas[1].batIndex
-// 	rowIndex = heap.datas[1].rowIndex
-// 	heap.datas[1], heap.datas[heap.size] = heap.datas[heap.size], heap.datas[1]
-// 	heap.size--
-// 	heap.down(1)
-// 	return
-// }
-
-// func (heap *MergeHeap[T]) compLess(i, j int) bool {
-// 	if heap.datas[i].isNull {
-// 		return true
-// 	}
-// 	if heap.datas[j].isNull {
-// 		return false
-// 	}
-// 	return heap.cmpLess([]T{*heap.datas[i].data, *heap.datas[j].data}, 0, 1)
-// }
-
-// func (heap *MergeHeap[T]) down(i int) {
-// 	t := i
-// 	if i*2 <= int(heap.size) && heap.compLess(i*2, t) {
-// 		t = i * 2
-// 	}
-// 	if i*2+1 <= int(heap.size) && heap.compLess(i*2+1, t) {
-// 		t = i*2 + 1
-// 	}
-// 	if t != i {
-// 		heap.datas[t], heap.datas[i] = heap.datas[i], heap.datas[t]
-// 		heap.down(t)
-// 	}
-// }
-
-// func (heap *MergeHeap[T]) up(i int) {
-// 	t := i
-// 	if i/2 >= 1 && heap.compLess(t, i/2) {
-// 		t = i / 2
-// 	}
-// 	if t != i {
-// 		heap.datas[t], heap.datas[i] = heap.datas[i], heap.datas[t]
-// 		heap.up(t)
-// 	}
-// }
