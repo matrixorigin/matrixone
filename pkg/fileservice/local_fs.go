@@ -40,7 +40,8 @@ type LocalFS struct {
 	sync.RWMutex
 	dirFiles map[string]*os.File
 
-	memCache *MemCache
+	memCache    *MemCache
+	asyncUpdate bool
 }
 
 var _ FileService = new(LocalFS)
@@ -100,9 +101,10 @@ func NewLocalFS(
 	}
 
 	fs := &LocalFS{
-		name:     name,
-		rootPath: rootPath,
-		dirFiles: make(map[string]*os.File),
+		name:        name,
+		rootPath:    rootPath,
+		dirFiles:    make(map[string]*os.File),
+		asyncUpdate: true,
 	}
 	if memCacheCapacity > 0 {
 		fs.memCache = NewMemCache(memCacheCapacity)
@@ -236,7 +238,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			if err != nil {
 				return
 			}
-			err = l.memCache.Update(ctx, vector)
+			err = l.memCache.Update(ctx, vector, l.asyncUpdate)
 		}()
 	}
 
@@ -728,6 +730,10 @@ func (l *LocalFS) CacheStats() *CacheStats {
 		return l.memCache.CacheStats()
 	}
 	return nil
+}
+
+func (l *LocalFS) SetAsyncUpdate(b bool) {
+	l.asyncUpdate = b
 }
 
 func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
