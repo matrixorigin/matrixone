@@ -1,10 +1,10 @@
 name: PR Unit Test Coverage
 on:
   pull_request_target:
-    types: [ opened, synchronize ]
-    branches: [ main,'[0-9]+.[0-9]+.[0-9]+' ]
+    types: [opened, synchronize]
+    branches: [main, '[0-9]+.[0-9]+.[0-9]+']
 
-concurrency: 
+concurrency:
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
   cancel-in-progress: true
 
@@ -24,7 +24,7 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@v3
-        with: 
+        with:
           go-version: '1.20'
 
       - name: Set Variables
@@ -35,10 +35,9 @@ jobs:
           echo "raw_bvt_coverage='bvt_coverage.raw'" >> $GITHUB_ENV
           echo "raw_bvt_coverage_temp='bvt_coverage_temp.raw'" >> $GITHUB_ENV
           echo "raw_ut_coverage_temp='ut_coverage_temp.raw'" >> $GITHUB_ENV
-          echo "all_coervage='all_coverage.raw'" >> $GITHUB_ENV
+          echo "all_coverage='all_coverage.raw'" >> $GITHUB_ENV
           echo "test_report='test_report.out'" >> $GITHUB_ENV
           echo "coverage_line=75" >> $GITHUB_ENV
-
 
       - name: Set env
         run: |
@@ -47,15 +46,15 @@ jobs:
           echo "apikey=${{ secrets.S3APIKEY }}" >> $GITHUB_ENV
           echo "apisecret=${{ secrets.S3APISECRET }}" >> $GITHUB_ENV
           echo "bucket=${{ secrets.S3BUCKET }}" >> $GITHUB_ENV
-          
+
       - name: Get Changed Paths
         uses: guguducken/change-paths-action@v0.0.7
-        id: ut-pr 
+        id: ut-pr
         with:
           github-token: ${{ secrets.TOKEN_ACTION }}
           ignore: "/,etc/,optools/,LICENSES/,cgo/,cmd/,docs/,proto/,test/,.github/,pkg/pb/"
           source-path: ${{ env.test_scope }}
-      
+
       - name: Start PR Unit Test
         if: ${{ steps.ut-pr.outputs.paths != '' }}
         timeout-minutes: 60
@@ -75,7 +74,7 @@ jobs:
           repository: matrixorigin/mo-tester
           path: ./mo-tester
           ref: main
-      
+
       - name: Set up JDK 8 for x64
         if: ${{ steps.ut-pr.outputs.paths != '' }}
         uses: actions/setup-java@v3
@@ -94,7 +93,7 @@ jobs:
           export GOCOVERDIR=$GITHUB_WORKSPACE/matrixone
           go build -cover "$GOLDFLAGS" -o mo-service ./cmd/mo-service/
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch-tae-CN-tae-DN
-      
+
       - name: Start PR BVT Test
         if: ${{ steps.ut-pr.outputs.paths != '' }}
         id: bvt_on_pr_version
@@ -108,10 +107,9 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           go tool covdata textfmt -i="$GITHUB_WORKSPACE/matrixone" -o ${{ env.raw_bvt_coverage }}
-          cat ${{ env.raw_bvt_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" > ${{ env.raw_bvt_coverage_temp }}
-          cat ${{ env.raw_ut_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" > ${{ env.raw_ut_coverage_temp }}
-          awk -F '[ ]+' 'FNR==NR{arr[$1,$2]=$3;next}{if(arr[$1,$2]==0 && $3>=1){arr[$1,$2]=1}}END{for(i in arr){split(i,ind,SUBSEP);printf("%s %s %s\n",ind[1],ind[2],arr[i])};}' ${{ env.raw_ut_coverage_temp }} ${{ env.raw_bvt_coverage_temp }} > ${{ env.all_coervage }}
-          if [[ ! -s ${{ env.all_coverage }} ]]; then echo 'The files modified in this PR do not involve functions'; exit 0; fi
-          awk -F '[:, ]+' '{all[$1]+=$4;hit[$1]+=0;if($5>0) hit[$1]+=$4;}END{for(i in all) print(i,all[i],hit[i],hit[i]/all[i]*100)}' ${{ env.all_coervage }} > ${{ env.test_report }}
+          cat ${{ env.raw_bvt_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" | tee ${{ env.raw_bvt_coverage_temp }} > /dev/null
+          cat ${{ env.raw_ut_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" | tee ${{ env.raw_ut_coverage_temp }} > /dev/null
+          awk -F '[ ]+' 'FNR==NR{arr[$1,$2]=$3;next}{if(arr[$1,$2]==0 && $3>=1){arr[$1,$2]=1}}END{for(i in arr){split(i,ind,SUBSEP);printf("%s %s %s\n",ind[1],ind[2],arr[i])};}' ${{ env.raw_ut_coverage_temp }} ${{ env.raw_bvt_coverage_temp }} | tee ${{ env.all_coverage }} > /dev/null
+          awk -F '[:, ]+' '{all[$1]+=$4;hit[$1]+=0;if($5>0) hit[$1]+=$4;}END{for(i in all) print(i,all[i],hit[i],hit[i]/all[i]*100)}' ${{ env.all_coverage }} | tee ${{ env.test_report }} > /dev/null
           awk 'BEGIN{flag=1}{if($4<${{ env.coverage_line }}){flag=0;print("error: the code coverage of "$1" is "$4"% which is below ${{ env.coverage_line }}%");} else { print("info: the code coverage of "$1" is "$4"% which is up to ${{ env.coverage_line }}%") }}END{if(flag==0) {exit 1;}}' ${{ env.test_report }}
-          rm -rf ${{ env.raw_ut_coverage }} ${{ env.test_report }} ${{ env.raw_bvt_coverage_temp }} ${{ env.raw_bvt_coverage }} ${{ env.all_coervage }}
+          rm -rf ${{ env.raw_ut_coverage }} ${{ env.raw_ut_coverage_temp }} ${{ env.test_report }} ${{ env.raw_bvt_coverage_temp }} ${{ env.raw_bvt_coverage }} ${{ env.all_coverage }}
