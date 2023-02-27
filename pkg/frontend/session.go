@@ -60,8 +60,7 @@ type ShowStatementType int
 
 const (
 	NotShowStatement ShowStatementType = 0
-	ShowColumns      ShowStatementType = 1
-	ShowTableStatus  ShowStatementType = 2
+	ShowTableStatus  ShowStatementType = 1
 )
 
 type TxnHandler struct {
@@ -2282,6 +2281,9 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
 	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
+		}
 		return nil, "", err
 	}
 	// read meta's meta

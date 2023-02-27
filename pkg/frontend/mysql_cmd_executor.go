@@ -32,7 +32,6 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -53,7 +52,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -408,7 +406,7 @@ func (oq *outputQueue) flush() error {
 		}
 	} else {
 		//send group of row
-		if oq.showStmtType == ShowColumns || oq.showStmtType == ShowTableStatus {
+		if oq.showStmtType == ShowTableStatus {
 			oq.rowIdx = 0
 			return nil
 		}
@@ -442,143 +440,6 @@ func (foq *fakeOutputQueue) getEmptyRow() ([]interface{}, error) {
 }
 
 func (foq *fakeOutputQueue) flush() error {
-	return nil
-}
-
-const (
-	primaryKeyPos = 25
-)
-
-/*
-handle show columns from table in plan2 and tae
-*/
-func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
-	data := ses.GetData()
-	mrs := ses.GetMysqlResultSet()
-	dbName := stmt.Table.GetDBName()
-	if len(dbName) == 0 {
-		dbName = ses.GetDatabaseName()
-	}
-
-	tableName := string(stmt.Table.ToTableName().ObjectName)
-	ctx := ses.GetTxnCompileCtx()
-	_, tableDef := ctx.Resolve(dbName, tableName)
-	if tableDef == nil {
-		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tableName)
-	}
-
-	colNameToColContent := make(map[string][]interface{})
-	for _, d := range data {
-		colName := string(d[0].([]byte))
-		if colName == catalog.Row_ID {
-			continue
-		}
-		//the non-sys account skips the column account_id of the cluster table
-		if util.IsClusterTableAttribute(colName) &&
-			isClusterTable(dbName, tableName) &&
-			ses.GetTenantInfo() != nil &&
-			!ses.GetTenantInfo().IsSysTenant() {
-			continue
-		}
-
-		if len(d) == 7 {
-			row := make([]interface{}, 7)
-			row[0] = colName
-			typ := &types.Type{}
-			data := d[1].([]uint8)
-			if err := types.Decode(data, typ); err != nil {
-				return err
-			}
-			row[1] = typ.DescString()
-			row[2] = d[2]
-			row[3] = d[3]
-			if value, ok := row[3].([]uint8); ok {
-				if len(value) != 0 {
-					row[2] = "NO"
-				}
-			}
-			def := &plan.Default{}
-			defaultData := d[4].([]uint8)
-			if string(defaultData) == "" {
-				row[4] = "NULL"
-			} else {
-				if err := types.Decode(defaultData, def); err != nil {
-					return err
-				}
-				originString := def.GetOriginString()
-				switch originString {
-				case "uuid()":
-					row[4] = "UUID"
-				case "current_timestamp()":
-					row[4] = "CURRENT_TIMESTAMP"
-				case "now()":
-					row[4] = "CURRENT_TIMESTAMP"
-				case "":
-					row[4] = "NULL"
-				default:
-					row[4] = originString
-				}
-			}
-
-			row[5] = ""
-			row[6] = d[6]
-			colNameToColContent[colName] = row
-		} else {
-			row := make([]interface{}, 9)
-			row[0] = colName
-			typ := &types.Type{}
-			data := d[1].([]uint8)
-			if err := types.Decode(data, typ); err != nil {
-				return err
-			}
-			row[1] = typ.DescString()
-			row[2] = "NULL"
-			row[3] = d[3]
-			row[4] = d[4]
-			if value, ok := row[4].([]uint8); ok {
-				if len(value) != 0 {
-					row[3] = "NO"
-				}
-			}
-			def := &plan.Default{}
-			defaultData := d[5].([]uint8)
-			if string(defaultData) == "" {
-				row[5] = "NULL"
-			} else {
-				if err := types.Decode(defaultData, def); err != nil {
-					return err
-				}
-				originString := def.GetOriginString()
-				switch originString {
-				case "uuid()":
-					row[5] = "UUID"
-				case "current_timestamp()":
-					row[5] = "CURRENT_TIMESTAMP"
-				case "now()":
-					row[5] = "CURRENT_TIMESTAMP"
-				case "":
-					row[5] = "NULL"
-				default:
-					row[5] = originString
-				}
-			}
-
-			row[6] = ""
-			row[7] = d[7]
-			row[8] = d[8]
-			colNameToColContent[colName] = row
-		}
-	}
-	for _, col := range tableDef.Cols {
-		if row, ok := colNameToColContent[col.Name]; ok {
-			mrs.AddRow(row)
-		}
-
-	}
-	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
-		logErrorf(ses.GetConciseProfile(), "handleShowColumns error %v", err)
-		return err
-	}
 	return nil
 }
 
@@ -659,7 +520,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		if oq.showStmtType == ShowColumns || oq.showStmtType == ShowTableStatus {
+		if oq.showStmtType == ShowTableStatus {
 			row2 := make([]interface{}, len(row))
 			copy(row2, row)
 			ses.AppendData(row2)
@@ -2251,9 +2112,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.plan = newPlan
 		// reset some special stmt for execute statement
 		switch cwft.stmt.(type) {
-		case *tree.ShowColumns:
-			cwft.ses.SetShowStmtType(ShowColumns)
-			cwft.ses.SetData(nil)
 		case *tree.ShowTableStatus:
 			cwft.ses.showStmtType = ShowTableStatus
 			cwft.ses.SetData(nil)
@@ -3518,9 +3376,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			default:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 			}
-		case *tree.ShowColumns:
-			ses.SetShowStmtType(ShowColumns)
-			ses.SetData(nil)
 		case *tree.ShowTableStatus:
 			ses.SetShowStmtType(ShowTableStatus)
 			ses.SetData(nil)
@@ -3754,10 +3609,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 
 			switch ses.GetShowStmtType() {
-			case ShowColumns:
-				if err = handleShowColumns(ses, statement.(*tree.ShowColumns)); err != nil {
-					goto handleFailed
-				}
 			case ShowTableStatus:
 				if err = handleShowTableStatus(ses, statement.(*tree.ShowTableStatus), proc); err != nil {
 					goto handleFailed
