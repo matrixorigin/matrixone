@@ -717,17 +717,24 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		args[idx] = expr
 	}
 
-	return bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+	if b.builder != nil {
+		return bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+	} else {
+		return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
+	}
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
 	retExpr, err := bindFuncExprImplByPlanExpr(ctx, name, args)
-	if err == nil {
-		bat := batch.NewWithSize(0)
-		bat.Zs = []int64{1}
-		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(retExpr), proc)
-		if tmpexpr != nil {
-			retExpr = tmpexpr
+	switch name {
+	case "+", "-", "*", "/":
+		if err == nil && proc != nil {
+			bat := batch.NewWithSize(0)
+			bat.Zs = []int64{1}
+			tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(retExpr), proc)
+			if tmpexpr != nil {
+				retExpr = tmpexpr
+			}
 		}
 	}
 	return retExpr, err
