@@ -117,7 +117,6 @@ func (d *DiskCache) Read(
 	return nil
 }
 
-//go:noinline
 func (d *DiskCache) cacheHit() {
 	profileAddSample()
 }
