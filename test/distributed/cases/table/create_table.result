@@ -122,22 +122,22 @@ Table    Create Table
 test06    CREATE TABLE `test06` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\n`c` VARCHAR(10) DEFAULT NULL\n) CLUSTER BY (`b`, `a`, `c`)
 desc test01;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    YES        NULL
-b    INT    YES        NULL
+a    INT(32)    YES        null
+b    INT(32)    YES        null
 desc test02;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    YES        NULL
-b    INT    YES        NULL
+a    INT(32)    YES        null
+b    INT(32)    YES        null
 desc test04;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    YES        NULL
-b    INT    YES        NULL
-c    VARCHAR(10)    YES        NULL
+a    INT(32)    YES        null
+b    INT(32)    YES        null
+c    VARCHAR(10)    YES        null
 desc test06;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    YES        NULL
-b    INT    YES        NULL
-c    VARCHAR(10)    YES        NULL
+a    INT(32)    YES        null
+b    INT(32)    YES        null
+c    VARCHAR(10)    YES        null
 drop table test01;
 drop table test02;
 drop table test04;
@@ -167,8 +167,8 @@ description varchar(20) not null,
 price decimal(9,2) not null);
 desc products;
 Field    Type    Null    Key    Default    Extra    Comment
-pid    INT    NO        NULL
-pname    VARCHAR(50)    NO        NULL
-description    VARCHAR(20)    NO        NULL
-price    DECIMAL(9,2)    NO        NULL
+description    VARCHAR(20)    NO        null
+pid    INT(32)    NO        null
+pname    VARCHAR(50)    NO        null
+price    DECIMAL64(9)    NO        null
 drop table products;

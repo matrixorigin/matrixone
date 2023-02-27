@@ -60,8 +60,7 @@ type ShowStatementType int
 
 const (
 	NotShowStatement ShowStatementType = 0
-	ShowColumns      ShowStatementType = 1
-	ShowTableStatus  ShowStatementType = 2
+	ShowTableStatus  ShowStatementType = 1
 )
 
 type TxnHandler struct {
