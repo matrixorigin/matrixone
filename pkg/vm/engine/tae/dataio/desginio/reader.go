@@ -16,7 +16,7 @@ package desginio
 
 import (
 	"context"
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -24,17 +24,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 type DataReader struct {
 	reader objectio.Reader
 	fs     fileservice.FileService
+	extent objectio.Extent
 	name   string
 }
 
-func NewDataReader(service fileservice.FileService, name string) (dataio.Reader, error) {
+func NewDataReader(service fileservice.FileService, key string) (dataio.Reader, error) {
+	name, _, extent, _ := dataio.DecodeLocation(key)
 	reader, err := objectio.NewObjectReader(name, service)
 	if err != nil {
 		return nil, err
@@ -42,26 +43,29 @@ func NewDataReader(service fileservice.FileService, name string) (dataio.Reader,
 	return &DataReader{
 		reader: reader,
 		fs:     service,
+		extent: extent,
 		name:   name,
 	}, nil
 }
 
 func (r *DataReader) LoadColumns(ctx context.Context, idxs []uint16,
-	extent objectio.Extent, m *mpool.MPool) (*batch.Batch, error) {
-	bat := batch.NewWithSize(len(idxs))
-	return bat, nil
+	ids []uint32, m *mpool.MPool) ([]*batch.Batch, error) {
+	//bat := batch.NewWithSize(len(idxs))
+	return nil, nil
 }
 
 func (r *DataReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
-	extent objectio.Extent, m *mpool.MPool) ([]*index.ZoneMap, error) {
-	idx := index.NewZoneMap(types.Type{})
-	return []*index.ZoneMap{idx}, nil
+	ids []uint32, m *mpool.MPool) ([][]*index.ZoneMap, error) {
+	return nil, nil
+}
+func (r *DataReader) LoadAllZoneMaps(ctx context.Context, idxs []uint16, m *mpool.MPool) ([][]*index.ZoneMap, error) {
+	return nil, nil
 }
 
 func (r *DataReader) LoadBloomFilter(ctx context.Context, idx uint16,
-	extent objectio.Extent, m *mpool.MPool) (index.StaticFilter, error) {
+	ids []uint32, m *mpool.MPool) ([]index.StaticFilter, error) {
 	bf, _ := index.NewBinaryFuseFilter(nil)
-	return bf, nil
+	return []index.StaticFilter{bf}, nil
 }
 
 func (r *DataReader) LoadMeta(ctx context.Context, extent objectio.Extent, m *mpool.MPool) (objectio.BlockObject, error) {
@@ -74,12 +78,12 @@ func (r *DataReader) LoadAllMetas(ctx context.Context, extent objectio.Extent, m
 	return block, nil
 }
 
-func (r *DataReader) LoadAllData(ctx context.Context, extent objectio.Extent, m *mpool.MPool) ([]*batch.Batch, error) {
+func (r *DataReader) LoadAllData(ctx context.Context, idxs []uint16, m *mpool.MPool) ([]*batch.Batch, error) {
 	bat := batch.NewWithSize(10)
 	return []*batch.Batch{bat}, nil
 }
 
-func (r *DataReader) LoadColumnsByTS(ctx context.Context, idxs []uint16, info *pkgcatalog.BlockInfo,
+func (r *DataReader) LoadColumnsByTS(ctx context.Context, idxs []uint16, info catalog.BlockInfo,
 	ts timestamp.Timestamp, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(idxs))
 	return bat, nil

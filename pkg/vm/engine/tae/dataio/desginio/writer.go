@@ -127,7 +127,7 @@ func (w *DataWriter) WriteBlockAndZoneMap(batch *batch.Batch, idxs []uint16) (ob
 	return block, nil
 }
 
-func (w *DataWriter) Sync(ctx context.Context) ([]objectio.BlockObject, error) {
+func (w *DataWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error) {
 	blocks, err := w.writer.WriteEnd(ctx)
-	return blocks, err
+	return blocks, blocks[0].GetExtent(), err
 }

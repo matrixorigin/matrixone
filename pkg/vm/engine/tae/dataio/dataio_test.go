@@ -57,7 +57,7 @@ func TestDataIO(t *testing.T) {
 	_, err = writer.WriteBatch(bat)
 	_, err = writer.WriteBatch(bat)
 	_, err = writer.WriteBatch(bat)
-	blocks, err := writer.Sync(context.Background())
+	blocks, _, err := writer.Sync(context.Background())
 	writer = nil
 	blocks[0].GetExtent()
 	reader, _ := desginio.NewDataReader(service, name)

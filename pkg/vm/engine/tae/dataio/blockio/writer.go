@@ -16,38 +16,100 @@ package blockio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-type Writer struct {
-	writer   objectio.Writer
-	fs       *objectio.ObjectFS
-	writeCxt context.Context
+type BlockWriter struct {
+	writer  objectio.Writer
+	isSetPK bool
+	pk      uint16
 }
 
-func NewWriter(ctx context.Context, fs *objectio.ObjectFS, name string) *Writer {
-	writer, err := objectio.NewObjectWriter(name, fs.Service)
+func NewBlockWriter(fs fileservice.FileService, name string) (dataio.Writer, error) {
+	writer, err := objectio.NewObjectWriter(name, fs)
 	if err != nil {
-		panic(any(err))
+		return nil, err
 	}
-	return &Writer{
-		fs:       fs,
-		writer:   writer,
-		writeCxt: ctx,
-	}
+	return &BlockWriter{
+		writer:  writer,
+		isSetPK: false,
+	}, nil
 }
 
-func (w *Writer) WriteBlock(columns *containers.Batch) (block objectio.BlockObject, err error) {
+func (w *BlockWriter) SetPrimaryKey(idx uint16) {
+	w.isSetPK = true
+	w.pk = idx
+}
+
+func (w *BlockWriter) WriteBlock(columns *containers.Batch) (block objectio.BlockObject, err error) {
 	bat := batch.New(true, columns.Attrs)
 	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
 	block, err = w.writer.Write(bat)
 	return
 }
 
-func (w *Writer) WriteBlockAndZoneMap(batch *batch.Batch, idxs []uint16) (objectio.BlockObject, error) {
+func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, error) {
+	block, err := w.writer.Write(batch)
+	if err != nil {
+		return nil, err
+	}
+	for i, vec := range batch.Vecs {
+		columnData := containers.NewVectorWithSharedMemory(vec, true)
+		zm := index.NewZoneMap(vec.Typ)
+		ctx := new(index.KeysCtx)
+		ctx.Keys = columnData
+		ctx.Count = vec.Length()
+		defer ctx.Keys.Close()
+		err := zm.BatchUpdate(ctx)
+		if err != nil {
+			return nil, err
+		}
+		buf, err := zm.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		zoneMap, err := objectio.NewZoneMap(uint16(i), buf)
+		if err != nil {
+			return nil, err
+		}
+		w.writer.WriteIndex(block, zoneMap)
+		if !w.isSetPK || uint16(i) != w.pk {
+			continue
+		}
+		// create bloomfilter
+		sf, err := index.NewBinaryFuseFilter(columnData)
+		if err != nil {
+			return nil, err
+		}
+		bf, err := sf.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		bloomFilter := objectio.NewBloomFilter(uint16(i), compress.Lz4, bf)
+		if err != nil {
+			return nil, err
+		}
+		w.writer.WriteIndex(block, bloomFilter)
+	}
+	return block, nil
+}
+
+func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.BlockObject, error) {
+	return w.writer.Write(batch)
+}
+
+func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error) {
+	blocks, err := w.writer.WriteEnd(ctx)
+	return blocks, blocks[0].GetExtent(), err
+}
+
+func (w *BlockWriter) WriteBlockAndZoneMap(batch *batch.Batch, idxs []uint16) (objectio.BlockObject, error) {
 	block, err := w.writer.Write(batch)
 	if err != nil {
 		return nil, err
@@ -75,19 +137,4 @@ func (w *Writer) WriteBlockAndZoneMap(batch *batch.Batch, idxs []uint16) (object
 		w.writer.WriteIndex(block, zoneMap)
 	}
 	return block, nil
-}
-
-func (w *Writer) Sync() ([]objectio.BlockObject, error) {
-	blocks, err := w.writer.WriteEnd(w.writeCxt)
-	return blocks, err
-}
-
-func (w *Writer) WriteIndex(
-	block objectio.BlockObject,
-	index objectio.IndexData) (err error) {
-	return w.writer.WriteIndex(block, index)
-}
-
-func (w *Writer) GetWriter() objectio.Writer {
-	return w.writer
 }
