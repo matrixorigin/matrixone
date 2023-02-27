@@ -156,7 +156,7 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -222,7 +222,7 @@ func Test_createTablesInMoCatalog(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -256,7 +256,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -306,7 +306,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -354,7 +354,7 @@ func Test_checkUserExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -397,7 +397,7 @@ func Test_initFunction(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -458,7 +458,7 @@ func Test_initUser(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -522,7 +522,7 @@ func Test_initRole(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -5520,7 +5520,7 @@ func Test_doDropFunction(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -6595,7 +6595,7 @@ func Test_genRevokeCases(t *testing.T) {
 }
 
 func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)

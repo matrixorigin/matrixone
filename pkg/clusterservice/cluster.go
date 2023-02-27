@@ -28,6 +28,41 @@ import (
 	"go.uber.org/zap"
 )
 
+// GetMOCluster get mo cluster from process level runtime
+func GetMOCluster() MOCluster {
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ClusterService)
+	if !ok {
+		panic("no mocluster service")
+	}
+	return v.(MOCluster)
+}
+
+// Option options for create cluster
+type Option func(*cluster)
+
+// WithServices set init cn and dn services
+func WithServices(
+	cnServices []metadata.CNService,
+	dnServices []metadata.DNService) Option {
+	return func(c *cluster) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for _, s := range dnServices {
+			c.mu.dnServices[s.ServiceID] = s
+		}
+		for _, s := range cnServices {
+			c.mu.cnServices[s.ServiceID] = s
+		}
+	}
+}
+
+// WithDisableRefresh disable refresh from hakeeper
+func WithDisableRefresh() Option {
+	return func(c *cluster) {
+		c.options.disableRefresh = true
+	}
+}
+
 type cluster struct {
 	logger          *log.MOLogger
 	stopper         *stopper.Stopper
@@ -41,6 +76,9 @@ type cluster struct {
 		cnServices map[string]metadata.CNService
 		dnServices map[string]metadata.DNService
 	}
+	options struct {
+		disableRefresh bool
+	}
 }
 
 // NewMOCluster create a MOCluter by HAKeeperClient. MoCluster synchronizes
@@ -50,7 +88,8 @@ type cluster struct {
 // TODO(fagongzi): extend hakeeper to support event-driven original message changes
 func NewMOCluster(
 	client logservice.ClusterHAKeeperClient,
-	refreshInterval time.Duration) MOCluster {
+	refreshInterval time.Duration,
+	opts ...Option) MOCluster {
 	logger := runtime.ProcessLevelRuntime().Logger().Named("mo-cluster")
 	c := &cluster{
 		logger:          logger,
@@ -62,8 +101,16 @@ func NewMOCluster(
 	}
 	c.mu.cnServices = make(map[string]metadata.CNService, 1024)
 	c.mu.dnServices = make(map[string]metadata.DNService, 1024)
-	if err := c.stopper.RunTask(c.refreshTask); err != nil {
-		panic(err)
+
+	for _, opt := range opts {
+		opt(c)
+	}
+	if !c.options.disableRefresh {
+		if err := c.stopper.RunTask(c.refreshTask); err != nil {
+			panic(err)
+		}
+	} else {
+		close(c.readyC)
 	}
 	return c
 }
