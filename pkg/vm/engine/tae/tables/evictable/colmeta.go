@@ -79,11 +79,7 @@ func (n *ColumnMetaNode) onLoad() {
 		panic(err)
 	}
 	data := zmData.(*objectio.ZoneMap)
-	n.Zonemap = index.NewZoneMap(n.typ)
-	err = n.Zonemap.Unmarshal(data.GetData())
-	if err != nil {
-		panic(err)
-	}
+	n.Zonemap = data.GetData().(*index.ZoneMap)
 }
 
 func (n *ColumnMetaNode) onUnLoad() {
