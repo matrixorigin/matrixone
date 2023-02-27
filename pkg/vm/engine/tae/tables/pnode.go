@@ -16,12 +16,11 @@ package tables
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
-
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	indexwrapper2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
@@ -30,8 +29,8 @@ var _ NodeT = (*persistedNode)(nil)
 type persistedNode struct {
 	common.RefHelper
 	block   *baseBlock
-	pkIndex indexwrapper.Index
-	indexes map[int]indexwrapper.Index
+	pkIndex indexwrapper2.Index
+	indexes map[int]indexwrapper2.Index
 }
 
 func newPersistedNode(block *baseBlock) *persistedNode {
@@ -54,14 +53,14 @@ func (node *persistedNode) close() {
 }
 
 func (node *persistedNode) init() {
-	node.indexes = make(map[int]indexwrapper.Index)
+	node.indexes = make(map[int]indexwrapper2.Index)
 	schema := node.block.meta.GetSchema()
 	pkIdx := -1
 	if schema.HasPK() {
 		pkIdx = schema.GetSingleSortKeyIdx()
 	}
 	for i := range schema.ColDefs {
-		index := indexwrapper.NewImmutableIndex()
+		index := indexwrapper2.NewImmutableIndex()
 		if err := index.ReadFrom(
 			node.block.bufMgr,
 			node.block.fs,

@@ -16,12 +16,13 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	indexwrapper2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -61,41 +62,34 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 	}
 	for i, vec := range batch.Vecs {
 		columnData := containers.NewVectorWithSharedMemory(vec, true)
-		zm := index.NewZoneMap(vec.Typ)
-		ctx := new(index.KeysCtx)
-		ctx.Keys = columnData
-		ctx.Count = vec.Length()
-		defer ctx.Keys.Close()
-		err := zm.BatchUpdate(ctx)
+		zmPos := 0
+		zoneMapWriter := indexwrapper2.NewZMWriter()
+		if err = zoneMapWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(zmPos)); err != nil {
+			return nil, err
+		}
+		err = zoneMapWriter.AddValues(columnData)
 		if err != nil {
 			return nil, err
 		}
-		buf, err := zm.Marshal()
+		_, err = zoneMapWriter.Finalize()
 		if err != nil {
 			return nil, err
 		}
-		zoneMap, err := objectio.NewZoneMap(uint16(i), buf)
-		if err != nil {
-			return nil, err
-		}
-		w.writer.WriteIndex(block, zoneMap)
-		if !w.isSetPK || uint16(i) != w.pk {
+		if !w.isSetPK {
 			continue
 		}
-		// create bloomfilter
-		sf, err := index.NewBinaryFuseFilter(columnData)
+		bfPos := 1
+		bfWriter := indexwrapper2.NewBFWriter()
+		if err = bfWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(bfPos)); err != nil {
+			return nil, err
+		}
+		if err = bfWriter.AddValues(columnData); err != nil {
+			return nil, err
+		}
+		_, err = bfWriter.Finalize()
 		if err != nil {
 			return nil, err
 		}
-		bf, err := sf.Marshal()
-		if err != nil {
-			return nil, err
-		}
-		bloomFilter := objectio.NewBloomFilter(uint16(i), compress.Lz4, bf)
-		if err != nil {
-			return nil, err
-		}
-		w.writer.WriteIndex(block, bloomFilter)
 	}
 	return block, nil
 }

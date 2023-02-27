@@ -16,22 +16,21 @@ package jobs
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	indexwrapper2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
 )
 
-func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef *catalog.ColDef, columnData containers.Vector, isPk, isSorted bool) (metas []indexwrapper.IndexMeta, err error) {
+func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef *catalog.ColDef, columnData containers.Vector, isPk, isSorted bool) (metas []indexwrapper2.IndexMeta, err error) {
 	zmPos := 0
 
-	zoneMapWriter := indexwrapper.NewZMWriter()
+	zoneMapWriter := indexwrapper2.NewZMWriter()
 	if err = zoneMapWriter.Init(writer, block, common.Plain, uint16(colDef.Idx), uint16(zmPos)); err != nil {
 		return
 	}
@@ -58,7 +57,7 @@ func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef
 	}
 
 	bfPos := 1
-	bfWriter := indexwrapper.NewBFWriter()
+	bfWriter := indexwrapper2.NewBFWriter()
 	if err = bfWriter.Init(writer, block, common.Plain, uint16(colDef.Idx), uint16(bfPos)); err != nil {
 		return
 	}
@@ -74,7 +73,7 @@ func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef
 }
 
 func BuildBlockIndex(writer objectio.Writer, block objectio.BlockObject, schema *catalog.Schema, columnsData *containers.Batch, isSorted bool) (err error) {
-	blkMetas := indexwrapper.NewEmptyIndicesMeta()
+	blkMetas := indexwrapper2.NewEmptyIndicesMeta()
 	pkIdx := -10086
 	if schema.HasPK() {
 		pkIdx = schema.GetSingleSortKey().Idx

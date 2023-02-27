@@ -33,8 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	indexwrapper2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -392,7 +392,7 @@ func getIndexDataFromVec(block objectio.BlockObject, writer objectio.Writer,
 	var err error
 	columnData := containers.NewVectorWithSharedMemory(vec, nullAbliaty)
 	zmPos := 0
-	zoneMapWriter := indexwrapper.NewZMWriter()
+	zoneMapWriter := indexwrapper2.NewZMWriter()
 	if err = zoneMapWriter.Init(writer, block, common.Plain, idx, uint16(zmPos)); err != nil {
 		return err
 	}
@@ -408,7 +408,7 @@ func getIndexDataFromVec(block objectio.BlockObject, writer objectio.Writer,
 		return nil
 	}
 	bfPos := 1
-	bfWriter := indexwrapper.NewBFWriter()
+	bfWriter := indexwrapper2.NewBFWriter()
 	if err = bfWriter.Init(writer, block, common.Plain, idx, uint16(bfPos)); err != nil {
 		return err
 	}

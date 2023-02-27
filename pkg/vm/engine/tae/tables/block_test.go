@@ -15,7 +15,7 @@
 package tables
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"

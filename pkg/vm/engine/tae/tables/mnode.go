@@ -16,14 +16,13 @@ package tables
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
-
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	indexwrapper2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
@@ -37,9 +36,9 @@ type memoryNode struct {
 	prefix []byte
 
 	//index for primary key : Art tree + ZoneMap.
-	pkIndex indexwrapper.Index
+	pkIndex indexwrapper2.Index
 	//index for non-primary key : ZoneMap.
-	indexes map[int]indexwrapper.Index
+	indexes map[int]indexwrapper2.Index
 }
 
 func newMemoryNode(block *baseBlock) *memoryNode {
@@ -61,16 +60,16 @@ func newMemoryNode(block *baseBlock) *memoryNode {
 }
 
 func (node *memoryNode) initIndexes(schema *catalog.Schema) {
-	node.indexes = make(map[int]indexwrapper.Index)
+	node.indexes = make(map[int]indexwrapper2.Index)
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
 		}
 		if def.IsPrimary() {
-			node.indexes[def.Idx] = indexwrapper.NewPkMutableIndex(def.Type)
+			node.indexes[def.Idx] = indexwrapper2.NewPkMutableIndex(def.Type)
 			node.pkIndex = node.indexes[def.Idx]
 		} else {
-			node.indexes[def.Idx] = indexwrapper.NewMutableIndex(def.Type)
+			node.indexes[def.Idx] = indexwrapper2.NewMutableIndex(def.Type)
 		}
 	}
 }
