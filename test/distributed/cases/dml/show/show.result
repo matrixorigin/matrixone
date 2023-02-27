@@ -18,22 +18,22 @@ t1
 t2
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT    NO        NULL        
-str    CHAR(10)    YES        NULL        
-name    VARCHAR(10)    YES        NULL        
+id    INT(32)    NO        null
+name    VARCHAR(10)    YES        null
+str    CHAR(10)    YES        null        
 show full columns from t1;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT    NULL    NO        NULL        select,insert,update,references    
-str    CHAR(10)    NULL    YES        NULL        select,insert,update,references    
-name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references    
+id    INT(32)    null    NO        null        select,insert,update,references
+name    VARCHAR(10)    null    YES        null        select,insert,update,references
+str    CHAR(10)    null    YES        null        select,insert,update,references
 show full columns from t1 like '%';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT    NULL    NO        NULL        select,insert,update,references    
-str    CHAR(10)    NULL    YES        NULL        select,insert,update,references
-name    VARCHAR(10)    NULL    YES        NULL        select,insert,update,references    
+id    INT(32)    null    NO        null        select,insert,update,references
+name    VARCHAR(10)    null    YES        null        select,insert,update,references
+str    CHAR(10)    null    YES        null        select,insert,update,references    
 show full columns from t1 where Field ='id';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT    NULL    NO        NULL        select,insert,update,references    
+id    INT(32)    null    NO        null        select,insert,update,references    
 drop database if exists test01;
 show charset;
 Charset    Description    Default collation    Maxlen
@@ -45,10 +45,10 @@ create database test01;
 use test01;
 show columns from test02.t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    TINYINT    YES        NULL        
-b    SMALLINT    YES        NULL        
-c    INT    YES        NULL        
-d    BIGINT    YES        NULL        
+a    TINYINT(8)    YES        null
+b    SMALLINT(16)    YES        null
+c    INT(32)    YES        null
+d    BIGINT(64)    YES        null
 create database if not exists db11111111111;
 show table status from db11111111111;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment
@@ -381,24 +381,24 @@ drop table if exists t1;
 create table t1(a int, b int, c int, primary key(a));
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    NO    PRI    NULL        
-b    INT    YES        NULL        
-c    INT    YES        NULL        
+a    INT(32)    NO    PRI    null
+b    INT(32)    YES        null
+c    INT(32)    YES        null
 drop table t1;
 drop table if exists t2;
 create table t2(a int, b int, c int, primary key(a, b));
 show columns from t2;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    NO    PRI    NULL        
-b    INT    NO    PRI    NULL        
-c    INT    YES        NULL        
+a    INT(32)    NO    PRI    null
+b    INT(32)    NO    PRI    null
+c    INT(32)    YES        null
 drop table t2;
 drop table if exists t3;
 create table t3(a int, b int, c int, primary key(a, b, c));
 show columns from t3;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    NO    PRI    NULL        
-b    INT    NO    PRI    NULL        
-c    INT    NO    PRI    NULL        
+a    INT(32)    NO    PRI    null
+b    INT(32)    NO    PRI    null
+c    INT(32)    NO    PRI    null        
 drop table t3;
 drop database test;

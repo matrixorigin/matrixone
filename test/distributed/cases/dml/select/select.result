@@ -377,8 +377,8 @@ create table if not exists t1(a int auto_increment);
 select * from t1;
 a
 show columns from t1;
-Field    Type    Null    Key    Default    Comment
-a    INT    YES        NULL
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null
 drop table if exists t1;
 create table if not exists t1(a bigint auto_increment);
 select * from t1;

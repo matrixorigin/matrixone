@@ -17,6 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"io"
+	"testing"
+
 	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
@@ -35,8 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
-	"io"
-	"testing"
 )
 
 func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
@@ -50,7 +51,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	var err error
 	var testPool *mpool.MPool
 	//parameter
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	assert.Nil(t, err)
 	pu.SV.SaveQueryResult = "on"

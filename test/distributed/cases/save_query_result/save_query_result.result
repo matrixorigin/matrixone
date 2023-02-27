@@ -2412,3 +2412,14 @@ select * from result_scan(last_query_id()) as u;
 no configure: save query result
 set global save_query_result = on;
 set global save_query_result = off;
+
+set global save_query_result = on;
+drop table if exists t1;
+create table t1(a int);
+show columns from t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null
+select * from result_scan(last_query_id()) as t;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null
+set global save_query_result = off;
