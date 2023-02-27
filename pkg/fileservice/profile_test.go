@@ -22,7 +22,7 @@ import (
 )
 
 func TestProfile(t *testing.T) {
-	stop := StartProfile(io.Discard)
+	stop := FSProfileHandler.StartProfile(io.Discard)
 	defer stop()
 	testFileService(t, func(name string) FileService {
 		dir := t.TempDir()
@@ -34,15 +34,15 @@ func TestProfile(t *testing.T) {
 
 func BenchmarkNoProfileAddSample(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		profileAddSample()
+		FSProfileHandler.AddSample()
 	}
 }
 
 func BenchmarkProfileAddSample(b *testing.B) {
-	stop := StartProfile(io.Discard)
+	stop := FSProfileHandler.StartProfile(io.Discard)
 	defer stop()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		profileAddSample()
+		FSProfileHandler.AddSample()
 	}
 }

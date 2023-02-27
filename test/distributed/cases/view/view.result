@@ -8,9 +8,9 @@ a	b
 insert into t1 values (1, 11), (2, 22), (3, 33);
 insert into t2 values (1, "aa"), (2, "bb");
 show columns from v1;
-Field	Type	Null	Key	Default	Comment
-a	INT	YES		NULL	
-b	INT	YES		NULL
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null
+b    INT(32)    YES        null
 select * from v1 where a > 1;
 a	b
 2	22
