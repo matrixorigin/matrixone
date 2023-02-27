@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ctl
+package inside
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -111,7 +111,7 @@ func getTypeCharLength(typ types.Type) (bool, int32) {
 // 'internal_char_size' function operator
 func getTypeCharSize(typ types.Type) (bool, int32) {
 	if types.IsString(typ.Oid) {
-		return true, typ.Size
+		return true, typ.Size * typ.Width
 	} else {
 		return false, -1
 	}
