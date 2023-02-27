@@ -25,9 +25,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -90,7 +88,7 @@ func startFileServiceProfile() func() {
 	if err != nil {
 		panic(err)
 	}
-	stop := fileservice.StartProfile(f)
+	stop := fileservice.FSProfileHandler.StartProfile(f)
 	logutil.Infof("File service profiling enabled, writing to %s", filePath)
 	return func() {
 		stop()
@@ -262,23 +260,7 @@ func init() {
 	})
 
 	// file service profile
-	http.HandleFunc("/debug/fs/", func(w http.ResponseWriter, req *http.Request) {
-
-		secStr := req.URL.Query().Get("seconds")
-		sec, err := strconv.Atoi(secStr)
-		if err != nil || sec > 3600*24 {
-			sec = 30
-		}
-
-		stop := fileservice.StartProfile(w)
-		defer stop()
-
-		select {
-		case <-req.Context().Done():
-		case <-time.After(time.Second * time.Duration(sec)):
-		}
-
-	})
+	http.Handle("/debug/fs/", fileservice.FSProfileHandler)
 
 }
 
