@@ -17,7 +17,6 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"reflect"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -41,7 +40,6 @@ type Vector struct {
 	class int
 	// type represent the type of column
 	typ types.Type
-	nsp *nulls.Nulls // nulls list
 
 	// data of fixed length element, in case of varlen, the Varlena
 	col  any
@@ -53,10 +51,7 @@ type Vector struct {
 	capacity int
 	length   int
 
-	// tag for distinguish '0x00..' and 0x... and 0x... is binary
-	// TODO: check whether isBin should be changed into array/bitmap
-	// now we assumpt that it can only be true in the case of only one data in vector
-	isBin bool
+	nsp *nulls.Nulls // nulls list
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
@@ -65,14 +60,6 @@ func (v *Vector) UnsafeGetRawData() []byte {
 		length = v.length
 	}
 	return v.data[:length*v.typ.TypeSize()]
-}
-
-func (v *Vector) SetIsBin(isBin bool) {
-	v.isBin = isBin
-}
-
-func (v *Vector) GetIsBin() bool {
-	return v.isBin
 }
 
 func (v *Vector) Length() int {
@@ -267,13 +254,13 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 	var buf bytes.Buffer
 
 	buf.WriteByte(uint8(v.class))
-	{ // write length
-		length := int64(v.length)
-		buf.Write(types.EncodeInt64(&length))
-	}
 	{ // write type
 		data := types.EncodeType(&v.typ)
 		buf.Write(data)
+	}
+	{ // write length
+		length := int64(v.length)
+		buf.Write(types.EncodeInt64(&length))
 	}
 	{ // write nspLen, nsp
 		data, err := v.nsp.Show()
@@ -286,38 +273,39 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 			buf.Write(data)
 		}
 	}
-	{ // write colLen, col
-		data := v.data
-		length := uint32(v.length * v.typ.TypeSize())
-		if len(data[:length]) > 0 {
-			buf.Write(data[:length])
+	if !v.IsConstNull() {
+		{ // write colLen, col
+			length := v.typ.TypeSize()
+			if !v.IsConst() {
+				length *= v.length
+			}
+			if len(v.data) > 0 {
+				buf.Write(v.data[:length])
+			}
 		}
-	}
-	{ // write areaLen, area
-		length := uint32(len(v.area))
-		buf.Write(types.EncodeUint32(&length))
-		if len(v.area) > 0 {
-			buf.Write(v.area)
+		{ // write areaLen, area
+			length := uint32(len(v.area))
+			buf.Write(types.EncodeUint32(&length))
+			if len(v.area) > 0 {
+				buf.Write(v.area)
+			}
 		}
 	}
 	return buf.Bytes(), nil
 }
 
 func (v *Vector) UnmarshalBinary(data []byte) error {
-	if v.col == nil {
-		v.col = new(reflect.SliceHeader)
-	}
 	{ // read class
 		v.class = int(data[0])
 		data = data[1:]
 	}
-	{ // read length
-		v.length = int(types.DecodeInt64(data[:8]))
-		data = data[8:]
-	}
 	{ // read typ
 		v.typ = types.DecodeType(data[:types.TSize])
 		data = data[types.TSize:]
+	}
+	{ // read length
+		v.length = int(types.DecodeInt64(data[:8]))
+		data = data[8:]
 	}
 	{ // read nsp
 		v.nsp = &nulls.Nulls{}
@@ -330,23 +318,28 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 			data = data[size:]
 		}
 	}
-	{ // read col
-		length := v.length * v.typ.TypeSize()
-		if length > 0 {
-			v.data = make([]byte, length)
-			copy(v.data, data[:length])
-			v.setupColFromData()
-			data = data[length:]
+	if !v.IsConstNull() {
+		{ // read col
+			length := v.typ.TypeSize()
+			if !v.IsConst() {
+				length *= v.length
+			}
+			if length > 0 {
+				v.data = make([]byte, length)
+				copy(v.data, data[:length])
+				v.setupColFromData()
+				data = data[length:]
+			}
 		}
-	}
-	{ // read area
-		length := types.DecodeUint32(data)
-		data = data[4:]
-		if length > 0 {
-			ndata := make([]byte, length)
-			copy(ndata, data[:length])
-			v.area = ndata
-			//data = data[:length]
+		{ // read area
+			length := types.DecodeUint32(data)
+			data = data[4:]
+			if length > 0 {
+				ndata := make([]byte, length)
+				copy(ndata, data[:length])
+				v.area = ndata
+				//data = data[:length]
+			}
 		}
 	}
 	return nil
@@ -354,20 +347,17 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 
 func (v *Vector) UnmarshalBinaryWithMpool(data []byte, mp *mpool.MPool) error {
 	var err error
-	if v.col == nil {
-		v.col = new(reflect.SliceHeader)
-	}
 	{ // read class
 		v.class = int(data[0])
 		data = data[1:]
 	}
-	{ // read length
-		v.length = int(types.DecodeInt64(data[:8]))
-		data = data[8:]
-	}
 	{ // read typ
 		v.typ = types.DecodeType(data[:types.TSize])
 		data = data[types.TSize:]
+	}
+	{ // read length
+		v.length = int(types.DecodeInt64(data[:8]))
+		data = data[8:]
 	}
 	{ // read nsp
 		v.nsp = &nulls.Nulls{}
@@ -381,7 +371,10 @@ func (v *Vector) UnmarshalBinaryWithMpool(data []byte, mp *mpool.MPool) error {
 		}
 	}
 	{ // read col
-		length := v.length * v.typ.TypeSize()
+		length := v.typ.TypeSize()
+		if !v.IsConst() {
+			length *= v.length
+		}
 		if length > 0 {
 			v.data, err = mp.Alloc(length)
 			if err != nil {
@@ -495,7 +488,6 @@ func (v *Vector) Dup(m *mpool.MPool) (*Vector, error) {
 		typ:    v.typ,
 		nsp:    v.nsp.Clone(),
 		length: v.length,
-		isBin:  v.isBin,
 	}
 
 	if v.IsConst() {
@@ -784,14 +776,8 @@ func (v *Vector) Union(w *Vector, sel []int64, mp *mpool.MPool) error {
 	return err
 }
 
-func UnionNull(v, _ *Vector, m *mpool.MPool) error {
-	if v.GetType().IsTuple() {
-		panic(moerr.NewInternalErrorNoCtx("unionnull of tuple vector"))
-	}
-
-	pos := uint64(v.Length() - 1)
-	nulls.Add(v.GetNulls(), pos)
-	return nil
+func UnionNull(v, _ *Vector, m *mpool.MPool) (err error) {
+	return AppendFixed(v, 0, true, m)
 }
 
 func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPool) (err error) {
@@ -981,7 +967,7 @@ func AppendMultiFixed[T any](vec *Vector, vals T, isNull bool, cnt int, m *mpool
 	if m == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
-	return appendMulti(vec, vals, isNull, cnt, m)
+	return appendMultiFixed(vec, vals, isNull, cnt, m)
 }
 
 func AppendMultiBytes(vec *Vector, vals []byte, isNull bool, cnt int, m *mpool.MPool) error {
@@ -1051,8 +1037,8 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, m *mpool.MPool) error 
 	}
 }
 
-func appendMulti[T any](vec *Vector, val T, isNull bool, cnt int, m *mpool.MPool) error {
-	if err := extend(vec, 1, m); err != nil {
+func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, m *mpool.MPool) error {
+	if err := extend(vec, cnt, m); err != nil {
 		return err
 	}
 	length := vec.length
@@ -1071,7 +1057,7 @@ func appendMulti[T any](vec *Vector, val T, isNull bool, cnt int, m *mpool.MPool
 func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, m *mpool.MPool) error {
 	var err error
 	var va types.Varlena
-	if err = extend(vec, 1, m); err != nil {
+	if err = extend(vec, cnt, m); err != nil {
 		return err
 	}
 	length := vec.length

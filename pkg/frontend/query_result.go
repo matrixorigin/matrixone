@@ -582,7 +582,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 			//read every column
 			for colIndex, entry := range ioVector.Entries {
 				tmpBatch.Vecs[colIndex] = vector.NewVector(typs[colIndex])
-				err = tmpBatch.Vecs[colIndex].UnmarshalBinary(entry.Object.([]byte))
+				err = tmpBatch.Vecs[colIndex].UnmarshalBinaryWithMpool(entry.Object.([]byte), ses.GetMemPool())
 				if err != nil {
 					return err
 				}
@@ -656,7 +656,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	}
 	vec := vector.NewVector(catalog.MetaColTypes[catalog.COLUMNS_IDX])
 	defer vec.Free(ses.GetMemPool())
-	if err = vec.UnmarshalBinary(iov.Entries[0].Object.([]byte)); err != nil {
+	if err = vec.UnmarshalBinaryWithMpool(iov.Entries[0].Object.([]byte), ses.GetMemPool()); err != nil {
 		return nil, err
 	}
 	def := vector.MustStrCols(vec)[0]

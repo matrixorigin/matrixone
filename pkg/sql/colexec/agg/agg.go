@@ -173,13 +173,20 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 		}
 		return nil
 	}
+	inc := 1
+	vi := start
+	if vec.IsConst() {
+		inc = 0
+		vi = 0
+	}
 	for i := range os {
 		hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
 		if vps[i] == 0 {
 			continue
 		}
 		j := vps[i] - 1
-		a.vs[j], a.es[j] = a.fill(int64(j), vs[int64(i)+start], a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+		a.vs[j], a.es[j] = a.fill(int64(j), vs[vi], a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+		vi += int64(inc)
 	}
 	return nil
 }

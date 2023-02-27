@@ -22,15 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIsBin(t *testing.T) {
-	mp := mpool.MustNewZero()
-	vec := NewVector(types.New(types.T_int8, 0, 0, 0))
-	vec.SetIsBin(true)
-	require.Equal(t, true, vec.GetIsBin())
-	vec.Free(mp)
-	require.Equal(t, int64(0), mp.CurrNB())
-}
-
 func TestLength(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVector(types.New(types.T_int8, 0, 0, 0))

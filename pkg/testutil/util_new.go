@@ -303,7 +303,7 @@ func NewJsonVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []string) *
 	for i := 0; i < n; i++ {
 		json, _ := types.ParseStringToByteJson(`{"a":1}`)
 		jbytes, _ := json.Marshal()
-		if err := vector.AppendFixed(vec, jbytes, false, m); err != nil {
+		if err := vector.AppendBytes(vec, jbytes, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

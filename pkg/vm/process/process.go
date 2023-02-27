@@ -162,43 +162,6 @@ func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Null
 	return vec, nil
 }
 
-/*
-func (proc *Process) AllocScalarVector(typ types.Type) *vector.Vector {
-	vec := vector.New(vector.CONSTANT, typ)
-	return vec
-}
-
-func (proc *Process) AllocScalarNullVector(typ types.Type) *vector.Vector {
-	vec := vector.New(vector.CONSTANT, typ)
-	nulls.Add(vec.GetNulls(), 0)
-	return vec
-}
-
-func (proc *Process) AllocConstNullVector(typ types.Type) *vector.Vector {
-	vec := vector.New(vector.CONSTANT, typ)
-	nulls.Add(vec.GetNulls(), 0)
-	return vec
-}
-
-func (proc *Process) AllocBoolScalarVector(v bool) *vector.Vector {
-	typ := types.T_bool.ToType()
-	vec := proc.AllocScalarVector(typ)
-	bvec := make([]bool, 1)
-	bvec[0] = v
-	vec.SetLength(1)
-	return vec
-}
-
-func (proc *Process) AllocInt64ScalarVector(v int64) *vector.Vector {
-	typ := types.T_int64.ToType()
-	vec := proc.AllocScalarVector(typ)
-	ivec := make([]int64, 1)
-	ivec[0] = v
-	vec.SetLength(1)
-	return vec
-}
-*/
-
 func (proc *Process) WithSpanContext(sc trace.SpanContext) {
 	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)
 }

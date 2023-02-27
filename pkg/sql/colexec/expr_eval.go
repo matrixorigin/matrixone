@@ -141,7 +141,7 @@ func getConstVecInList(ctx context.Context, proc *process.Process, exprs []*plan
 			default:
 				return nil, moerr.NewNYI(ctx, fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
-			vec.SetIsBin(t.C.IsBin)
+			//vec.SetIsBin(t.C.IsBin)
 		}
 	}
 	return vec, nil
@@ -206,7 +206,6 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 			return nil, moerr.NewNYI(ctx, fmt.Sprintf("const expression %v", t.C.GetValue()))
 		}
 	}
-	vec.SetIsBin(t.C.IsBin)
 	return vec, nil
 }
 

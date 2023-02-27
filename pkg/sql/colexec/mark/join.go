@@ -169,12 +169,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	markVec := vector.NewVector(types.T_bool.ToType())
-	markVec.PreExtend(bat.Length(), proc.Mp())
+	markVec, err := proc.AllocVectorOfRows(types.T_bool.ToType(), bat.Length(), nil)
+	if err != nil {
+		return err
+	}
 	ctr.markVals = vector.MustTCols[bool](markVec)
 	ctr.markNulls = nulls.NewWithSize(bat.Length())
 	ctr.cleanEvalVectors(proc.Mp())
-	if err := ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc, anal); err != nil {
+	if err = ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc, anal); err != nil {
 		rbat.Clean(proc.Mp())
 		return err
 	}

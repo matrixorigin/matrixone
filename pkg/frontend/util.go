@@ -544,7 +544,7 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 			return nil, err
 		}
 		for j := 0; j < len(rs); j++ {
-			err = vector.AppendFixed(rbat.Vecs[i], []byte(rs[j]), false, mp)
+			err = vector.AppendBytes(rbat.Vecs[i], []byte(rs[j]), false, mp)
 			if err != nil {
 				return nil, err
 			}

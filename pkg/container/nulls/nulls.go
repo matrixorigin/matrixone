@@ -259,7 +259,7 @@ func (n *Nulls) Contains(row uint64) bool {
 }
 
 func (n *Nulls) Show() ([]byte, error) {
-	if n.Np == nil {
+	if n == nil || n.Np == nil {
 		return nil, nil
 	}
 	return n.Np.Marshal(), nil

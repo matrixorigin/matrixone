@@ -2647,7 +2647,7 @@ func strToSigned[T constraints.Signed](
 	length int) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.GetSourceVector().GetIsBin()
+	isBinary := false //from.GetSourceVector().GetIsBin()
 
 	var result T
 	for i = 0; i < l; i++ {
@@ -2697,7 +2697,7 @@ func strToUnsigned[T constraints.Unsigned](
 	length int) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.GetSourceVector().GetIsBin()
+	isBinary := false //from.GetSourceVector().GetIsBin()
 
 	var val uint64
 	var tErr error
@@ -2739,7 +2739,7 @@ func strToFloat[T constraints.Float](
 	length int) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.GetSourceVector().GetIsBin()
+	isBinary := false //from.GetSourceVector().GetIsBin()
 
 	var result T
 	var tErr error
@@ -2787,7 +2787,7 @@ func strToDecimal64(
 	var l = uint64(length)
 	var dft types.Decimal64
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
+	isb := false //from.GetSourceVector().GetIsBin()
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -2817,7 +2817,7 @@ func strToDecimal128(
 	var l = uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
+	isb := false //from.GetSourceVector().GetIsBin()
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
