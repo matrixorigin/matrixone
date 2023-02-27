@@ -311,10 +311,10 @@ var (
 			"if(relkind = 'v', NULL, 0) AS TABLE_ROWS," +
 			"if(relkind = 'v', NULL, 0) AS AVG_ROW_LENGTH," +
 			"if(relkind = 'v', NULL, 0) AS DATA_LENGTH," +
-			"if(relkind = 'v', NULL,0) AS MAX_DATA_LENGTH," +
-			"if(relkind = 'v', NULL,0)  AS INDEX_LENGTH," +
+			"if(relkind = 'v', NULL, 0) AS MAX_DATA_LENGTH," +
+			"if(relkind = 'v', NULL, 0) AS INDEX_LENGTH," +
 			"if(relkind = 'v', NULL, 0) AS DATA_FREE," +
-			"0 AS `AUTO_INCREMENT`," +
+			"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`," +
 			"created_time AS CREATE_TIME," +
 			"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME," +
 			"if(relkind = 'v', NULL, created_time) AS CHECK_TIME," +

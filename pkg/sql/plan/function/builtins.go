@@ -3077,7 +3077,7 @@ var builtins = map[int]Functions{
 			{
 				Index:           0,
 				Args:            []types.T{types.T_varchar, types.T_varchar},
-				ReturnTyp:       types.T_int64,
+				ReturnTyp:       types.T_uint64,
 				Volatile:        true,
 				RealTimeRelated: true,
 				Fn:              inside.InternalAutoIncrement,

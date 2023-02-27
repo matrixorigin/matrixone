@@ -15,6 +15,8 @@
 package inside
 
 import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,19 +26,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// internal_auto_increment
+// InternalAutoIncrement is the internal system function Implementation of 'internal_auto_increment',
+// 'internal_auto_increment' is used to obtain the current auto_increment column value of the table under the specified database
 func InternalAutoIncrement(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rowCount := vector.Length(vectors[0])
 	resultType := types.T_uint64.ToType()
-
-	resVector, err := proc.AllocVectorOfRows(resultType, int64(rowCount), vectors[1].Nsp)
-	if err != nil {
-		return nil, err
+	isAllConst := true
+	for i := range vectors {
+		if vectors[i].IsScalarNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		} else if !vectors[i].IsScalar() {
+			isAllConst = false
+		}
 	}
-	resValues := vector.MustTCols[uint64](resVector)
-
-	dbs := vector.MustStrCols(vectors[0])
-	tables := vector.MustStrCols(vectors[1])
 
 	eng := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	// New returns a TxnOperator to handle read and write operation for a transaction.
@@ -49,34 +50,90 @@ func InternalAutoIncrement(vectors []*vector.Vector, proc *process.Process) (*ve
 		return nil, err
 	}
 	defer eng.Rollback(proc.Ctx, txnOperator)
-	for i := 0; i < rowCount; i++ {
-		database, err := eng.Database(proc.Ctx, dbs[i], txnOperator)
+	if isAllConst {
+		resVector := proc.AllocScalarVector(resultType)
+		dbName := vectors[0].GetString(0)
+		database, err := eng.Database(proc.Ctx, dbName, txnOperator)
 		if err != nil {
-			return nil, err
+			return nil, moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
 		}
-		relation, err := database.Relation(proc.Ctx, tables[i])
+		tableName := vectors[1].GetString(0)
+		relation, err := database.Relation(proc.Ctx, tableName)
 		if err != nil {
-			return nil, err
+			return nil, moerr.NewInvalidInput(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)
 		}
-		//tableId := relation.GetTableID(proc.Ctx)
+		tableId := relation.GetTableID(proc.Ctx)
 		engineDefs, err := relation.TableDefs(proc.Ctx)
 		if err != nil {
 			return nil, err
 		}
-		hasAntoIncr, autoIncrCol := getTableAutoIncrCol(engineDefs, tables[i])
+		hasAntoIncr, autoIncrCol := getTableAutoIncrCol(engineDefs, tableName)
 		if hasAntoIncr {
-			autoIncrement, err := GetCurrentAutoIncrement(eng, proc, autoIncrCol, dbs[i], tables[i])
+			colname := fmt.Sprintf("%d_%s", tableId, autoIncrCol.Name)
+			autoIncrement, err := getCurrentAutoIncrement(eng, proc, colname, dbName, tableName)
 			if err != nil {
 				return nil, err // or return 0, nil
 			}
-			resValues = append(resValues, autoIncrement)
+			resVector.Append(autoIncrement, false, proc.Mp())
 		} else {
-			nulls.Add(resVector.Nsp, uint64(i))
+			resVector.Append(uint64(0), true, proc.Mp())
 		}
+		return resVector, nil
+	} else {
+		rowCount := vector.Length(vectors[0])
+		resVector, err := proc.AllocVectorOfRows(resultType, int64(rowCount), vectors[1].Nsp)
+		if err != nil {
+			return nil, err
+		}
+		resValues := vector.MustTCols[uint64](resVector)
+
+		dbs := vector.MustStrCols(vectors[0])
+		tables := vector.MustStrCols(vectors[1])
+		for i := 0; i < rowCount; i++ {
+			var dbName string
+			if vectors[0].IsScalar() {
+				dbName = vectors[0].GetString(0)
+			} else {
+				dbName = dbs[i]
+			}
+			database, err := eng.Database(proc.Ctx, dbName, txnOperator)
+			if err != nil {
+				return nil, moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
+			}
+
+			var tableName string
+			if vectors[1].IsScalar() {
+				tableName = vectors[1].GetString(0)
+			} else {
+				tableName = tables[i]
+			}
+			relation, err := database.Relation(proc.Ctx, tableName)
+			if err != nil {
+				return nil, moerr.NewInvalidInput(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)
+			}
+			tableId := relation.GetTableID(proc.Ctx)
+			engineDefs, err := relation.TableDefs(proc.Ctx)
+			if err != nil {
+				return nil, err
+			}
+			hasAntoIncr, autoIncrCol := getTableAutoIncrCol(engineDefs, tableName)
+			if hasAntoIncr {
+				colname := fmt.Sprintf("%d_%s", tableId, autoIncrCol.Name)
+				autoIncrement, err := getCurrentAutoIncrement(eng, proc, colname, dbName, tableName)
+				if err != nil {
+					return nil, err // or return 0, nil
+				}
+				resValues[i] = autoIncrement
+			} else {
+				nulls.Add(resVector.Nsp, uint64(i))
+			}
+		}
+		return resVector, nil
 	}
-	return resVector, nil
 }
 
+// If the table contains auto_increment column, return true and get auto_increment column definition of the table.
+// If there is no auto_increment column, return false
 func getTableAutoIncrCol(engineDefs []engine.TableDef, tableName string) (bool, *plan.ColDef) {
 	if engineDefs != nil {
 		for _, def := range engineDefs {

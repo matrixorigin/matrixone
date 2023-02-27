@@ -26,11 +26,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func GetCurrentAutoIncrement(e engine.Engine, proc *process.Process, colDef *plan.ColDef, dbName, tblName string) (uint64, error) {
-	return getCurrentOneCache(dbName, tblName, colDef.Name, e, proc)
+func getCurrentAutoIncrement(e engine.Engine, proc *process.Process, colName string, dbName, tblName string) (uint64, error) {
+	autoIncrCaches := proc.SessionInfo.AutoIncrCaches
+	autoIncrCaches.Mu.Lock()
+	defer autoIncrCaches.Mu.Unlock()
+	if autoincrcache, ok := autoIncrCaches.AutoIncrCaches[colName]; ok {
+		return autoincrcache.CurNum, nil
+	} else {
+		// Not cached yet or the cache is ran out.
+		// Need new txn for read from the table.
+		return getCurrAutoIncrWithTxn(dbName, tblName, colName, e, proc)
+	}
 }
 
-func getCurrentOneCache(dbName, tblName, colName string, eg engine.Engine, proc *process.Process) (uint64, error) {
+func getCurrAutoIncrWithTxn(dbName, tblName, colName string, eg engine.Engine, proc *process.Process) (uint64, error) {
 	var err error
 	loopCnt := 0
 loop:
@@ -38,16 +47,16 @@ loop:
 	if loopCnt >= 100 {
 		return 0, err
 	}
-	txn, err := NewTxn(eg, proc, proc.Ctx)
+	txn, err := newTxn(eg, proc, proc.Ctx)
 	if err != nil {
 		goto loop
 	}
 	var autoIncrValue uint64
 	if autoIncrValue, err = getTableAutoIncrValue(dbName, colName, eg, txn, proc); err != nil {
-		RolllbackTxn(eg, txn, proc.Ctx)
+		rolllbackTxn(eg, txn, proc.Ctx)
 		goto loop
 	}
-	if err = CommitTxn(eg, txn, proc.Ctx); err != nil {
+	if err = commitTxn(eg, txn, proc.Ctx); err != nil {
 		goto loop
 	}
 	return autoIncrValue, nil
@@ -120,7 +129,7 @@ func getTableAutoIncrValue(dbName string, colName string, eg engine.Engine, txn 
 	return 0, nil
 }
 
-func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
+func newTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
 	if proc.TxnClient == nil {
 		return nil, moerr.NewInternalError(ctx, "must set txn client")
 	}
@@ -137,7 +146,7 @@ func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn c
 	return txn, nil
 }
 
-func RolllbackTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) error {
+func rolllbackTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) error {
 	if txn == nil {
 		return nil
 	}
@@ -157,7 +166,7 @@ func RolllbackTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context)
 	return err
 }
 
-func CommitTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) error {
+func commitTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) error {
 	if txn == nil {
 		return nil
 	}
@@ -170,7 +179,7 @@ func CommitTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) er
 	)
 	defer cancel()
 	if err := eg.Commit(ctx, txn); err != nil {
-		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
+		if err2 := rolllbackTxn(eg, txn, ctx); err2 != nil {
 			logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
 		}
 		return err
@@ -180,6 +189,7 @@ func CommitTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) er
 	return err
 }
 
+// build equal expression for auto_increment column
 func getRangeExpr(colName string) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_F{

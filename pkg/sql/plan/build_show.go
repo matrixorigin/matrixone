@@ -406,10 +406,10 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
 		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "##########"+catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", accountClause)
+			dbName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", accountClause)
 	} else {
 		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'",
-			dbName, tableType, MO_CATALOG_DB_NAME, dbName, "##########"+catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%")
+			dbName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%")
 	}
 
 	if stmt.Where != nil {
