@@ -330,6 +330,8 @@ func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
 				Typ: e.Typ,
 			}
 		}
+	case *Expr:
+		expr = DeepCopyExpr(val)
 	case types.Decimal64, types.Decimal128:
 		err = moerr.NewNYI(r.getContext(), "decimal var")
 	default:

@@ -318,3 +318,13 @@ select * from t1;
 a    b    c
 1    22    3
 drop table t1;
+CREATE TABLE numbers(pk INTEGER PRIMARY KEY, ui BIGINT UNSIGNED, si BIGINT);
+INSERT INTO numbers VALUES (0, 0, -9223372036854775808), (1, 18446744073709551615, 9223372036854775807);
+SELECT * FROM numbers WHERE ui=-9223372036854775808;
+pk    ui    si
+SET @si_min = -9223372036854775808;
+PREPARE s1 FROM 'SELECT * FROM numbers WHERE ui=?';
+EXECUTE s1 USING @si_min;
+pk    ui    si
+DEALLOCATE PREPARE s1;
+drop table numbers;
