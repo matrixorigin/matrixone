@@ -14,21 +14,35 @@
 
 package fileservice
 
-// CachingFileService is an extension to the FileService
-type CachingFileService interface {
-	FileService
+import "testing"
 
-	// FlushCache flushes cache
-	FlushCache()
-
-	// SetAsyncUpdate sets cache update operation to async mode
-	SetAsyncUpdate(bool)
-
-	// CacheStats returns cache statistics
-	CacheStats() *CacheStats
+func BenchmarkLRUSet(b *testing.B) {
+	const capacity = 1024
+	l := NewLRU(capacity)
+	for i := 0; i < b.N; i++ {
+		l.Set(i%capacity, i, 1)
+	}
 }
 
-type CacheStats struct {
-	NumRead int64
-	NumHit  int64
+func BenchmarkLRUParallelSet(b *testing.B) {
+	const capacity = 1024
+	l := NewLRU(capacity)
+	b.RunParallel(func(pb *testing.PB) {
+		for i := 0; pb.Next(); i++ {
+			l.Set(i%capacity, i, 1)
+		}
+	})
+}
+
+func BenchmarkLRUParallelSetOrGet(b *testing.B) {
+	const capacity = 1024
+	l := NewLRU(capacity)
+	b.RunParallel(func(pb *testing.PB) {
+		for i := 0; pb.Next(); i++ {
+			l.Set(i%capacity, i, 1)
+			if i%2 == 0 {
+				l.Get(i % capacity)
+			}
+		}
+	})
 }
