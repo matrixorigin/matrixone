@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go/constant"
 	"strings"
 
@@ -715,7 +717,20 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		args[idx] = expr
 	}
 
-	return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
+	return bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+}
+
+func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
+	retExpr, err := bindFuncExprImplByPlanExpr(ctx, name, args)
+	if err == nil {
+		bat := batch.NewWithSize(0)
+		bat.Zs = []int64{1}
+		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(retExpr), proc)
+		if tmpexpr != nil {
+			retExpr = tmpexpr
+		}
+	}
+	return retExpr, err
 }
 
 func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
