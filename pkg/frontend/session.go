@@ -2284,6 +2284,9 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
 	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
+		}
 		return nil, "", err
 	}
 	// read meta's meta
