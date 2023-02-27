@@ -20,6 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
+//TODO in-memory bytes cache
+
 type CacheKey struct {
 	Path   string
 	Offset int64
@@ -40,6 +42,7 @@ type Cache interface {
 	Update(
 		ctx context.Context,
 		vector *IOVector,
+		async bool,
 	) error
 	Flush()
 	CacheStats() *CacheStats

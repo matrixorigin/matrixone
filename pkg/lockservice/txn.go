@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"bytes"
+	"context"
 	"sync"
 )
 
@@ -62,13 +63,14 @@ func (txn *activeTxn) lockAdded(
 	txn.holdLocks[table] = newCowSlice(txn.fsp, locks)
 }
 
-func (txn *activeTxn) close(lockTableFunc func(uint64) *lockTable) {
+func (txn *activeTxn) close(lockTableFunc func(uint64) lockTable) {
 	txn.Lock()
 	defer txn.Unlock()
 
 	for table, cs := range txn.holdLocks {
 		l := lockTableFunc(table)
-		l.unlock(cs)
+		// TODO(fagongzi): use a deadline context, and retry if has a error
+		l.unlock(context.TODO(), cs)
 		cs.close()
 		delete(txn.holdLocks, table)
 	}
@@ -101,7 +103,7 @@ func (txn *activeTxn) abort(txnID []byte) {
 func (txn *activeTxn) fetchWhoWaitingMe(
 	txnID []byte,
 	waiters *waiters,
-	lockTableFunc func(uint64) *lockTable) bool {
+	lockTableFunc func(uint64) lockTable) bool {
 	txn.RLock()
 	defer txn.RUnlock()
 
@@ -114,7 +116,8 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 		locks := cs.slice()
 		hasDeadLock := false
 		locks.iter(func(lockKey []byte) bool {
-			if lock, ok := l.getLock(lockKey); ok {
+			// TODO(fagongzi): use a deadline context, and retry if has a error
+			if lock, ok := l.getLock(context.TODO(), lockKey); ok {
 				lock.waiter.waiters.iter(func(id []byte) bool {
 					if !waiters.add(id) {
 						hasDeadLock = true
