@@ -14,21 +14,24 @@
 
 package fileservice
 
-// CachingFileService is an extension to the FileService
-type CachingFileService interface {
-	FileService
-
-	// FlushCache flushes cache
-	FlushCache()
-
-	// SetAsyncUpdate sets cache update operation to async mode
-	SetAsyncUpdate(bool)
-
-	// CacheStats returns cache statistics
-	CacheStats() *CacheStats
+type Releasable interface {
+	Release()
 }
 
-type CacheStats struct {
-	NumRead int64
-	NumHit  int64
+type ReleasableValue[T any] struct {
+	Value       T
+	releaseFunc func()
 }
+
+func (r ReleasableValue[T]) Release() {
+	r.releaseFunc()
+}
+
+func NewReleasable[T any](v T, releaseFunc func()) ReleasableValue[T] {
+	return ReleasableValue[T]{
+		Value:       v,
+		releaseFunc: releaseFunc,
+	}
+}
+
+var _ Releasable = NewReleasable(42, func() {})

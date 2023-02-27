@@ -14,21 +14,21 @@
 
 package fileservice
 
-// CachingFileService is an extension to the FileService
-type CachingFileService interface {
-	FileService
+import (
+	"testing"
 
-	// FlushCache flushes cache
-	FlushCache()
+	"github.com/stretchr/testify/assert"
+)
 
-	// SetAsyncUpdate sets cache update operation to async mode
-	SetAsyncUpdate(bool)
+func TestReleasable(t *testing.T) {
+	l := NewLRU(1)
+	n := 0
 
-	// CacheStats returns cache statistics
-	CacheStats() *CacheStats
-}
+	r := NewReleasable(1, func() {
+		n++
+	})
+	l.Set(1, r, 1)
 
-type CacheStats struct {
-	NumRead int64
-	NumHit  int64
+	l.Set(2, 42, 1)
+	assert.Equal(t, 1, n)
 }
