@@ -15,6 +15,7 @@
 package indexwrapper
 
 import (
+	"context"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -22,14 +23,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/evictable"
 )
 
 type BfReader struct {
-	bfKey     string
-	mgr       base.INodeManager
-	bfFacotry evictable.EvictableNodeFactory
+	bfKey  string
+	idx    uint16
+	reader *blockio.Reader
+	typ    types.Type
 }
 
 func newBfReader(
@@ -39,46 +41,39 @@ func newBfReader(
 	mgr base.INodeManager,
 	fs *objectio.ObjectFS,
 ) *BfReader {
-	metaKey := evictable.EncodeColMetaKey(id.Idx, metaloc)
-	bfKey := evictable.EncodeColBfKey(id.Idx, metaloc)
+	reader, _ := blockio.NewReader(context.Background(), fs, metaloc)
 
 	return &BfReader{
-		mgr:   mgr,
-		bfKey: bfKey,
-		bfFacotry: func() (base.INode, error) {
-			return evictable.NewBfNode(
-				id.Idx,
-				typ,
-				metaloc,
-				bfKey,
-				metaKey,
-				mgr,
-				fs,
-			)
-		},
+		bfKey:  metaloc,
+		reader: reader,
+		typ:    typ,
 	}
+}
+
+func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
+	_, extent, _ := blockio.DecodeMetaLoc(r.bfKey)
+	bf, err := r.reader.LoadBloomFilterByExtent(context.Background(), r.idx, extent, nil)
+	if err != nil {
+		// TODOa: Error Handling?
+		return nil, err
+	}
+	return bf, err
 }
 
 func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
-	h, err := evictable.PinEvictableNode(r.mgr, r.bfKey, r.bfFacotry)
+	bf, err := r.getBloomFilter()
 	if err != nil {
-		// TODOa: Error Handling?
 		return
 	}
-	defer h.Close()
-	bfNode := h.GetNode().(*evictable.BfNode)
-	return bfNode.Bf.MayContainsKey(key)
+	return bf.MayContainsKey(key)
 }
 
 func (r *BfReader) MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (b bool, m *roaring.Bitmap, err error) {
-	h, err := evictable.PinEvictableNode(r.mgr, r.bfKey, r.bfFacotry)
+	bf, err := r.getBloomFilter()
 	if err != nil {
-		// TODOa: Error Handling?
 		return
 	}
-	defer h.Close()
-	bfNode := h.GetNode().(*evictable.BfNode)
-	return bfNode.Bf.MayContainsAnyKeys(keys, visibility)
+	return bf.MayContainsAnyKeys(keys, visibility)
 }
 
 func (r *BfReader) Destroy() error { return nil }
@@ -108,7 +103,7 @@ func (writer *BFWriter) Init(wr objectio.Writer, block objectio.BlockObject, cTy
 
 func (writer *BFWriter) Finalize() (*IndexMeta, error) {
 	if writer.impl != nil {
-		panic("formerly finalized filter not cleared yet")
+		panic(any("formerly finalized filter not cleared yet"))
 	}
 	sf, err := index.NewBinaryFuseFilter(writer.data)
 	if err != nil {

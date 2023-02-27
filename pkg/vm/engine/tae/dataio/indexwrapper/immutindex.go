@@ -22,10 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-var _ Index = (*immutableIndex)(nil)
+var _ blockio.Index = (*immutableIndex)(nil)
 
 type immutableIndex struct {
 	zmReader *ZmReader
@@ -50,7 +51,7 @@ func (index *immutableIndex) Dedup(key any, _ func(row uint32) error) (err error
 		exist, err = index.bfReader.MayContainsKey(key)
 		// 2. check bloomfilter has some error. return err
 		if err != nil {
-			err = TranslateError(err)
+			err = blockio.TranslateError(err)
 			return
 		}
 		// 3. all keys were checked. definitely not
@@ -80,7 +81,7 @@ func (index *immutableIndex) BatchDedup(
 		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, nil)
 		// 2. check bloomfilter has some unknown error. return err
 		if err != nil {
-			err = TranslateError(err)
+			err = blockio.TranslateError(err)
 			return
 		}
 		// 3. all keys were checked. definitely not

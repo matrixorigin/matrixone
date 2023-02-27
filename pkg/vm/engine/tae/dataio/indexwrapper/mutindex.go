@@ -19,10 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-var _ Index = (*mutableIndex)(nil)
+var _ blockio.Index = (*mutableIndex)(nil)
 
 type mutableIndex struct {
 	art     index.SecondaryIndex
@@ -39,7 +40,7 @@ func NewPkMutableIndex(keyT types.Type) *mutableIndex {
 func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
 	offset int) (err error) {
 	defer func() {
-		err = TranslateError(err)
+		err = blockio.TranslateError(err)
 	}()
 	if err = idx.zonemap.BatchUpdate(keysCtx); err != nil {
 		return
@@ -52,7 +53,7 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
 
 func (idx *mutableIndex) Delete(key any) (err error) {
 	defer func() {
-		err = TranslateError(err)
+		err = blockio.TranslateError(err)
 	}()
 	if _, err = idx.art.Delete(key); err != nil {
 		return
@@ -62,7 +63,7 @@ func (idx *mutableIndex) Delete(key any) (err error) {
 
 func (idx *mutableIndex) GetActiveRow(key any) (row []uint32, err error) {
 	defer func() {
-		err = TranslateError(err)
+		err = blockio.TranslateError(err)
 		// logutil.Infof("[Trace][GetActiveRow] key=%v: err=%v", key, err)
 	}()
 	exist := idx.zonemap.Contains(key)
@@ -73,7 +74,7 @@ func (idx *mutableIndex) GetActiveRow(key any) (row []uint32, err error) {
 	}
 	// 2. search art tree for key
 	row, err = idx.art.Search(key)
-	err = TranslateError(err)
+	err = blockio.TranslateError(err)
 	return
 }
 
@@ -141,7 +142,7 @@ func (idx *mutableIndex) Close() error {
 	return nil
 }
 
-var _ Index = (*nonPkMutIndex)(nil)
+var _ blockio.Index = (*nonPkMutIndex)(nil)
 
 type nonPkMutIndex struct {
 	zonemap *index.ZoneMap
@@ -165,7 +166,7 @@ func (idx *nonPkMutIndex) Close() error {
 func (idx *nonPkMutIndex) GetActiveRow(any) ([]uint32, error) { panic("not support") }
 func (idx *nonPkMutIndex) String() string                     { return "nonpk" }
 func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error) {
-	return TranslateError(idx.zonemap.BatchUpdate(keysCtx))
+	return blockio.TranslateError(idx.zonemap.BatchUpdate(keysCtx))
 }
 
 func (idx *nonPkMutIndex) Dedup(key any, _ func(uint32) error) (err error) {
