@@ -42,6 +42,11 @@ type basicHAKeeperClient interface {
 	GetClusterState(ctx context.Context) (pb.CheckerState, error)
 }
 
+// ClusterHAKeeperClient used to get cluster detail
+type ClusterHAKeeperClient interface {
+	basicHAKeeperClient
+}
+
 // CNHAKeeperClient is the HAKeeper client used by a CN store.
 type CNHAKeeperClient interface {
 	basicHAKeeperClient
