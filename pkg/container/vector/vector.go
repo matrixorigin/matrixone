@@ -1197,6 +1197,14 @@ func (v *Vector) Show() ([]byte, error) {
 		buf.Write(types.EncodeUint32(&lenA))
 		buf.Write(v.area)
 	}
+
+	// Write isConst
+	buf.Write(types.EncodeBool(&v.isConst))
+
+	// Write length
+	i := int64(v.length)
+	buf.Write(types.EncodeInt64(&i))
+
 	return buf.Bytes(), nil
 }
 
@@ -1239,10 +1247,22 @@ func (v *Vector) Read(data []byte) error {
 
 	// Read areaLen and area
 	size = types.DecodeUint32(data)
+	data = data[4:]
 	if size != 0 {
-		data = data[4:]
 		v.area = data[:size]
+		data = data[size:]
 	}
+
+	if len(data) >= 9 {
+
+		// Read isConst
+		v.isConst = types.DecodeBool(data[:1])
+		data = data[1:]
+
+		// Read length
+		v.length = int(types.DecodeInt64(data[:8]))
+	}
+
 	return nil
 }
 
@@ -1432,6 +1452,7 @@ func Union(v, w *Vector, sels []int64, hasNull bool, m *mpool.MPool) (err error)
 
 	if v.GetType().IsTuple() {
 		panic("union called on tuple vector")
+	} else if w.IsScalar() && w.Nsp != nil {
 	} else if v.GetType().IsVarlen() {
 		tgt := MustTCols[types.Varlena](v)
 		next := len(tgt) - len(sels)
