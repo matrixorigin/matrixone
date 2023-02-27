@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/inside"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/unary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
@@ -3064,6 +3066,21 @@ var builtins = map[int]Functions{
 				Volatile:        true,
 				RealTimeRelated: true,
 				Fn:              ctl.InternalColumnCharacterSet,
+			},
+		},
+	},
+	INTERNAL_AUTO_INCREMENT: {
+		Id:     INTERNAL_AUTO_INCREMENT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              inside.InternalAutoIncrement,
 			},
 		},
 	},
