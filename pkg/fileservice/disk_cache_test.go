@@ -54,7 +54,7 @@ func TestDiskCache(t *testing.T) {
 				},
 			},
 		}
-		err = cache.Update(ctx, vec)
+		err = cache.Update(ctx, vec, false)
 		assert.Nil(t, err)
 	}
 	testUpdate(cache)
