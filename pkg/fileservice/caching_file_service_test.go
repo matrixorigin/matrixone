@@ -30,6 +30,7 @@ func testCachingFileService(
 ) {
 
 	fs := newFS()
+	fs.SetAsyncUpdate(false)
 	ctx := context.Background()
 
 	buf := new(bytes.Buffer)
