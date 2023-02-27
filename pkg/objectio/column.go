@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -57,7 +58,7 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 		Offset: int64(cb.meta.location.Offset()),
 		Size:   int64(cb.meta.location.Length()),
 	}
-	data.Entries[0].ToObject = newDecompressToObject(int64(cb.meta.location.OriginSize()))
+	data.Entries[0].ToObject = newDecompressToObject(int64(cb.meta.location.OriginSize()), nil)
 	err = cb.object.fs.Read(ctx, data)
 	if err != nil {
 		return nil, err
@@ -66,6 +67,10 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 }
 
 func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, m *mpool.MPool) (IndexData, error) {
+	return cb.GetIndexWithFunc(ctx, dataType, newDecompressToObject, m)
+}
+
+func (cb *ColumnBlock) GetIndexWithFunc(ctx context.Context, dataType IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) (IndexData, error) {
 	if dataType == ZoneMapType {
 		return &cb.meta.zoneMap, nil
 	} else if dataType == BloomFilterType {
@@ -78,7 +83,7 @@ func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, m *
 			Size:   int64(cb.meta.bloomFilter.Length()),
 		}
 		var err error
-		data.Entries[0].ToObject = newDecompressToObject(int64(cb.meta.bloomFilter.OriginSize()))
+		data.Entries[0].ToObject = readFunc(int64(cb.meta.bloomFilter.OriginSize()), nil)
 		err = cb.object.fs.Read(ctx, data)
 		if err != nil {
 			return nil, err
@@ -115,10 +120,12 @@ func (cb *ColumnBlock) MarshalMeta() ([]byte, error) {
 	if err = binary.Write(&buffer, endian, cb.meta.location.OriginSize()); err != nil {
 		return nil, err
 	}
-	if cb.meta.zoneMap.buf == nil {
-		cb.meta.zoneMap.buf = make([]byte, ZoneMapMinSize+ZoneMapMaxSize)
+	var buf []byte
+	if cb.meta.zoneMap.data == nil {
+		buf = make([]byte, ZoneMapMinSize+ZoneMapMaxSize)
+		cb.meta.zoneMap.data = buf
 	}
-	if err = binary.Write(&buffer, endian, cb.meta.zoneMap.buf); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.zoneMap.data.([]byte)); err != nil {
 		return nil, err
 	}
 	if err = binary.Write(&buffer, endian, cb.meta.bloomFilter.Offset()); err != nil {
@@ -160,11 +167,17 @@ func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 	if err = binary.Read(cache, endian, &cb.meta.location.originSize); err != nil {
 		return err
 	}
+	buf := make([]byte, ZoneMapMinSize+ZoneMapMaxSize)
 	cb.meta.zoneMap = ZoneMap{
 		idx: cb.meta.idx,
-		buf: make([]byte, ZoneMapMinSize+ZoneMapMaxSize),
 	}
-	if err = binary.Read(cache, endian, &cb.meta.zoneMap.buf); err != nil {
+	if err = binary.Read(cache, endian, &buf); err != nil {
+		return err
+	}
+	t := types.Type{
+		Oid: types.T(cb.meta.typ),
+	}
+	if err = cb.meta.zoneMap.Unmarshal(buf, t); err != nil {
 		return err
 	}
 	cb.meta.bloomFilter = Extent{}
