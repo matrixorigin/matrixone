@@ -71,22 +71,28 @@ enum Method {
 // service.
 message Request {
   // RequestID request id
-  uint64       RequestID = 1;
+  uint64        RequestID = 1;
+  // ServiceID send to service
+  string        ServiceID = 2;
   // Method request type
-  Method       Method    = 2;
+  Method        Method    = 3;
   // Lock lock request
-  LockRequest  Lock      = 3 [(gogoproto.nullable) = false];
+  LockRequest   Lock      = 4 [(gogoproto.nullable) = false];
+  // Unlock unlock request
+  UnlockRequest Unlock    = 5 [(gogoproto.nullable) = false];
 }
 
 // Response response
 message Response {
     // RequestID corresponding request id
-    uint64       RequestID = 1;
+    uint64         RequestID = 1;
     // Error we use this field to send moerr from service to another cn. Set with 
     // moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
-    bytes        Error     = 2;
+    bytes          Error     = 2;
     // LockResponse lock response
-    LockResponse Lock      = 3;
+    LockResponse   Lock      = 3;
+    // UnlockResponse unlock response 
+    UnlockResponse Unlock    = 4;
 }
 
 // LockRequest lock request
@@ -94,12 +100,22 @@ message LockRequest {
   bytes           TxnID     = 1;
   repeated  bytes Rows      = 2;
   // LockTable lock target table
-  LockTable       LockTable = 3;
+  LockTable       LockTable = 3 [(gogoproto.nullable) = false];
   // LockOptions lock options
-  LockOptions     Options   = 4;
+  LockOptions     Options   = 4 [(gogoproto.nullable) = false];
 }
 
 // LockResponse lock response
 message LockResponse {
+
+}
+
+// UnlockRequest unlock request
+message UnlockRequest {
+  bytes TxnID     = 1;
+}
+
+// UnlockResponse unlock response
+message UnlockResponse {
 
 }

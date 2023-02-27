@@ -60,7 +60,10 @@ func (l *localLockTable) lock(
 	}
 }
 
-func (l *localLockTable) unlock(ctx context.Context, ls *cowSlice) error {
+func (l *localLockTable) unlock(
+	ctx context.Context,
+	txn *activeTxn,
+	ls *cowSlice) error {
 	locks := ls.slice()
 	defer locks.unref()
 

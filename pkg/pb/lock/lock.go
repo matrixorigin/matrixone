@@ -28,6 +28,7 @@ func (m *Request) GetID() uint64 {
 	return m.RequestID
 }
 
+// DebugString returns the debug string
 func (m *Request) DebugString() string {
 	return ""
 }
@@ -42,6 +43,7 @@ func (m *Response) GetID() uint64 {
 	return m.RequestID
 }
 
+// DebugString returns the debug string
 func (m *Response) DebugString() string {
 	return ""
 }

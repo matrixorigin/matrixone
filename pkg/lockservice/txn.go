@@ -70,7 +70,7 @@ func (txn *activeTxn) close(lockTableFunc func(uint64) lockTable) {
 	for table, cs := range txn.holdLocks {
 		l := lockTableFunc(table)
 		// TODO(fagongzi): use a deadline context, and retry if has a error
-		l.unlock(context.TODO(), cs)
+		l.unlock(context.TODO(), txn, cs)
 		cs.close()
 		delete(txn.holdLocks, table)
 	}

@@ -90,7 +90,7 @@ type lockTable interface {
 	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions) error
 	// Unlock release a set of locks, it will keep retrying until the context times out when it encounters an
 	// error.
-	unlock(ctx context.Context, ls *cowSlice) error
+	unlock(ctx context.Context, txn *activeTxn, ls *cowSlice) error
 	// getLock get a lock, it will keep retrying until the context times out when it encounters an error.
 	getLock(ctx context.Context, key []byte) (Lock, bool)
 }
@@ -153,6 +153,9 @@ type Client interface {
 
 // RequestHandleFunc request handle func
 type RequestHandleFunc func(context.Context, *pb.Request, *pb.Response) error
+
+// ServerOption server option
+type ServerOption func(*server)
 
 // Server receives and processes requests from Client.
 type Server interface {

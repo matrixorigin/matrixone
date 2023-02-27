@@ -15,11 +15,14 @@
 package lockservice
 
 import (
+	"context"
+
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
 func newRemoteLockTable(
 	binding pb.LockTable,
+	client Client,
 	detector *detector) *remoteLockTable {
 	l := &remoteLockTable{binding: binding, detector: detector}
 	return l
@@ -29,19 +32,48 @@ func newRemoteLockTable(
 // remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
 	binding  pb.LockTable
+	client   Client
 	detector *detector
 }
 
-// // lock attempts to add a lock to some data in a Table, either as a range or as a single lock set. Return
-// 	// nil means that the locking was successful. Transaction need to be abort if any error returned.
-// 	//
-// 	// Possible errors returned:
-// 	// 1. ErrDeadlockDetectorClosed, indicates that the current transaction has triggered a deadlock.
-// 	// 2. ErrLockTableNotMatch, indicates that the LockTable binding relationship has changed.
-// 	// 3. Other known errors.
-// 	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions) error
-// 	// Unlock release a set of locks, it will keep retrying until the context times out when it encounters an
-// 	// error.
-// 	unlock(ctx context.Context, ls *cowSlice) error
-// 	// getLock get a lock, it will keep retrying until the context times out when it encounters an error.
-// 	getLock(ctx context.Context, key []byte) (Lock, bool)
+func (l *remoteLockTable) lock(
+	ctx context.Context,
+	txn *activeTxn,
+	rows [][]byte,
+	options LockOptions) error {
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.ServiceID = l.binding.ServiceID
+	req.Method = pb.Method_Lock
+	req.Lock.Options = options
+	req.Lock.LockTable = l.binding
+	req.Lock.TxnID = txn.txnID
+	req.Lock.Rows = rows
+
+	resp, err := l.client.Send(ctx, req)
+	if err != nil {
+		return err
+	}
+	releaseResponse(resp)
+	return nil
+}
+
+func (l *remoteLockTable) unlock(
+	ctx context.Context,
+	txn *activeTxn,
+	ls *cowSlice) error {
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_Unlock
+	req.ServiceID = l.binding.ServiceID
+	req.Unlock.TxnID = txn.txnID
+
+	resp, err := l.client.Send(ctx, req)
+	if err != nil {
+		return err
+	}
+	releaseResponse(resp)
+	return nil
+}

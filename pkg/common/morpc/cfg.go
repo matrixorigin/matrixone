@@ -117,6 +117,39 @@ func (c Config) NewClient(
 	return NewClient(bf, c.getClientOptions(tag, logger.Named(tag))...)
 }
 
+// NewServer new rpc server
+func (c Config) NewServer(
+	tag string,
+	address string,
+	logger *zap.Logger,
+	requestFactory func() Message,
+	responseReleaseFunc func(Message)) (RPCServer, error) {
+	var codecOpts []CodecOption
+	codecOpts = append(codecOpts,
+		WithCodecEnableChecksum(),
+		WithCodecPayloadCopyBufferSize(int(c.PayloadCopyBufferSize)),
+		WithCodecMaxBodySize(int(c.MaxMessageSize)))
+	codecOpts = append(codecOpts, c.CodecOptions...)
+	if c.EnableCompress {
+		mp, err := mpool.NewMPool(tag, 0, mpool.NoFixed)
+		if err != nil {
+			return nil, err
+		}
+		codecOpts = append(codecOpts, WithCodecEnableCompress(mp))
+	}
+	return NewRPCServer(
+		tag,
+		address,
+		NewMessageCodec(requestFactory, codecOpts...),
+		WithServerLogger(logger.Named(tag)),
+		WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
+			m := v.(RPCMessage)
+			if !m.InternalMessage() {
+				responseReleaseFunc(m.Message)
+			}
+		})))
+}
+
 func (c Config) getBackendOptions(logger *zap.Logger) []BackendOption {
 	var opts []BackendOption
 	opts = append(opts,
