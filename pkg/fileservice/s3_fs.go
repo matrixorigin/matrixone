@@ -50,8 +50,9 @@ type S3FS struct {
 	bucket    string
 	keyPrefix string
 
-	memCache  *MemCache
-	diskCache *DiskCache
+	memCache    *MemCache
+	diskCache   *DiskCache
+	asyncUpdate bool
 }
 
 // key mapping scheme:
@@ -386,7 +387,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 			if err != nil {
 				return
 			}
-			err = s.memCache.Update(ctx, vector)
+			err = s.memCache.Update(ctx, vector, s.asyncUpdate)
 		}()
 	}
 
@@ -398,7 +399,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 			if err != nil {
 				return
 			}
-			err = s.diskCache.Update(ctx, vector)
+			err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
 		}()
 	}
 
@@ -756,6 +757,10 @@ func (s *S3FS) FlushCache() {
 	}
 }
 
+func (s *S3FS) SetAsyncUpdate(b bool) {
+	s.asyncUpdate = b
+}
+
 func (s *S3FS) CacheStats() *CacheStats {
 	if s.memCache != nil {
 		return s.memCache.CacheStats()
@@ -962,10 +967,11 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	}
 
 	fs := &S3FS{
-		name:      name,
-		s3Client:  client,
-		bucket:    bucket,
-		keyPrefix: prefix,
+		name:        name,
+		s3Client:    client,
+		bucket:      bucket,
+		keyPrefix:   prefix,
+		asyncUpdate: true,
 	}
 
 	return fs, nil
