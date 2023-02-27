@@ -134,6 +134,9 @@ type Config struct {
 
 	// RPC rpc config used to build txn sender
 	RPC rpc.Config `toml:"rpc"`
+
+	// Push Model configuration
+	TurnOnPushModel bool `toml:"turn-on-push-model"`
 }
 
 func (c *Config) Validate() error {

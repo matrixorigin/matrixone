@@ -93,6 +93,7 @@ type Engine struct {
 	txnHeap *transactionHeap
 
 	// XXX related to cn push model
+	usePushModel       bool
 	subscriber         *logTailSubscriber
 	receiveLogTailTime syncLogTailTimestamp
 	subscribed         subscribedTable
@@ -103,7 +104,6 @@ type DB struct {
 	sync.RWMutex
 	dnMap      map[string]int
 	metaTables map[string]Partitions
-	tables     map[[2]uint64]Partitions
 
 	// a pointer to cn engine for push model.
 	cnE *Engine

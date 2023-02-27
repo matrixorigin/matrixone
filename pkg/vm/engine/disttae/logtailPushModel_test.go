@@ -22,6 +22,10 @@ import (
 	"testing"
 )
 
+// the sort func should ensure that:
+// the smaller the table id of item, the smaller the indexing.
+// the smaller the timestamp of item, the smaller the indexing.
+// if timestamps are equal, the smaller table id one will be in front (with a smaller index).
 func TestLogList_Sort(t *testing.T) {
 	var lists logList = []logtail.TableLogtail{
 		{Ts: &timestamp.Timestamp{PhysicalTime: 1}, Table: &api.TableID{TbId: 2}},

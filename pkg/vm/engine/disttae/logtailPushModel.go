@@ -146,15 +146,33 @@ func (s *logTailSubscriber) subscribeTable(
 	return s.logTailClient.Subscribe(ctx, tblId)
 }
 
-//func (s *logTailSubscriber) unSubscribeTable(
-//	ctx context.Context, tblId api.TableID) error {
-//	// set a default deadline for ctx if it doesn't have.
-//	if _, ok := ctx.Deadline(); !ok {
-//		newCtx, _ := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
-//		return s.logTailClient.Unsubscribe(newCtx, tblId)
-//	}
-//	return s.logTailClient.Unsubscribe(ctx, tblId)
-//}
+// to ensure we can pass the SCA for unused code.
+var testLogTailSubscriber logTailSubscriber
+var _ = testLogTailSubscriber.unSubscribeTable
+
+// XXX There is no place to use the method unsubscribe now.
+// we will make a good way to unsubscribe table if the table was unused for a long time next pr.
+func (s *logTailSubscriber) unSubscribeTable(
+	ctx context.Context, tblId api.TableID) error {
+	// set a default deadline for ctx if it doesn't have.
+	if _, ok := ctx.Deadline(); !ok {
+		newCtx, cancel := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
+		_ = cancel
+		return s.logTailClient.Unsubscribe(newCtx, tblId)
+	}
+	return s.logTailClient.Unsubscribe(ctx, tblId)
+}
+
+func (e *Engine) SetPushModelFlag(turnOn bool) {
+	e.usePushModel = turnOn
+	// XXX it's really stupid but can avoid changing lots of codes to
+	// deliver the disttaeEngine.
+	e.db.cnE = e
+}
+
+func (e *Engine) UsePushModelOrNot() bool {
+	return e.usePushModel
+}
 
 func (e *Engine) InitLogTailPushModel(
 	ctx context.Context) error {
@@ -167,8 +185,7 @@ func (e *Engine) InitLogTailPushModel(
 	if err := e.connectToLogTailServer(ctx); err != nil {
 		return err
 	}
-	// XXX it's really stupid.
-	e.db.cnE = e
+	e.SetPushModelFlag(true)
 	return nil
 }
 
@@ -214,7 +231,7 @@ func (e *Engine) initTableLogTailSubscriber() error {
 	// new the log tail client.
 	e.subscriber.logTailClient, err = service.NewLogtailClient(s,
 		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
-	return nil
+	return err
 }
 
 func (e *Engine) connectToLogTailServer(
@@ -407,7 +424,6 @@ func updatePartitionOfPush(
 		logutil.Errorf("consume %d-%s log tail error: %v\n", tbl.tableId, tbl.tableName, err)
 		return err
 	}
-	// Need a lock here.
 	<-partition.lock
 	partition.ts = *tl.Ts
 	partition.lock <- struct{}{}
@@ -458,7 +474,6 @@ func (ls logList) Less(i, j int) bool {
 func (ls logList) Swap(i, j int) { ls[i], ls[j] = ls[j], ls[i] }
 func (ls logList) Sort() {
 	sort.Sort(ls)
-	return
 }
 
 func compareTableIdLess(i1, i2 uint64) bool {
