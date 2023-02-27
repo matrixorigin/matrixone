@@ -156,20 +156,20 @@ create table t4 (f1 date, f2 datetime, f3 varchar(20));
 drop view if exists view_t1;
 create view view_t1 as select coalesce(f1,f1) as f4 from t4;
 desc view_t1;
-Field    Type    Null    Key    Default    Comment
-f4    DATE    YES        NULL
+Field    Type    Null    Key    Default    Extra    Comment
+f4    DATE(0)    YES        null
 drop view view_t1;
 drop view if exists view_t2;
 create view view_t2 as select coalesce(f1,f2) as f4 from t4;
 desc view_t2;
-Field    Type    Null    Key    Default    Comment
-f4    DATETIME    YES        NULL
+Field    Type    Null    Key    Default    Extra    Comment
+f4    DATETIME(0)    YES        null
 drop view view_t2;
 drop view if exists view_t3;
 create view view_t3 as select coalesce(f2,f2) as f4 from t4;
 desc view_t3;
-Field    Type    Null    Key    Default    Comment
-f4    DATETIME    YES        NULL
+Field    Type    Null    Key    Default    Extra    Comment
+f4    DATETIME(0)    YES        null
 drop view view_t3;
 drop view if exists view_t4;
 create view view_t4 as select coalesce(f1,f3) as f4 from t4;
