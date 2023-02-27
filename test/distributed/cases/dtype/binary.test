@@ -6,6 +6,12 @@
 #Test for basic syntax.
 drop table if exists t1;
 create table t1(a binary(2));
+insert into t1 values(null);
+select * from t1;
+insert into t1 values("时");
+select * from t1;
+insert into t1 values(rpad("1", 500, "1"));
+delete from t1 where a="时";
 insert into t1 values("6");
 insert into t1 values("66");
 insert into t1 values("6");
