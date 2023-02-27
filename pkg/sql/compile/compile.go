@@ -297,9 +297,17 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 		insertNode := qry.Nodes[qry.Steps[0]]
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
-			c.cnListStrategy()
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(1, blkNum)}}
+			} else {
+				c.cnListStrategy()
+			}
 		} else {
-			c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(1, blkNum)}}
+			} else {
+				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+			}
 		}
 	default:
 		if blkNum < MinBlockNum {
@@ -341,6 +349,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			return nil, err
 		}
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
