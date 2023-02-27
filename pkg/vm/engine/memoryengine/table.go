@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
@@ -114,17 +115,13 @@ func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 
 func (t *Table) Delete(ctx context.Context, bat *batch.Batch, colName string) error {
 	vec := bat.Vecs[0]
-	clusterDetails, err := t.engine.getClusterDetails()
-	if err != nil {
-		return err
-	}
 	shards, err := t.engine.shardPolicy.Vector(
 		ctx,
 		t.id,
 		t.TableDefs,
 		colName,
 		vec,
-		clusterDetails.DNStores,
+		getDNServices(t.engine.cluster),
 	)
 	if err != nil {
 		return err
@@ -256,20 +253,13 @@ func (t *Table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
 }
 
 func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
-
-	clusterDetails, err := t.engine.getClusterDetails()
-	if err != nil {
-		return err
-	}
-
 	data.InitZsOne(data.Length())
-
 	shards, err := t.engine.shardPolicy.Batch(
 		ctx,
 		t.id,
 		t.TableDefs,
 		data,
-		clusterDetails.DNStores,
+		getDNServices(t.engine.cluster),
 	)
 	if err != nil {
 		return err
@@ -298,20 +288,13 @@ func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 }
 
 func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
-
-	clusterDetails, err := t.engine.getClusterDetails()
-	if err != nil {
-		return err
-	}
-
 	data.InitZsOne(data.Length())
-
 	shards, err := t.engine.shardPolicy.Batch(
 		ctx,
 		t.id,
 		t.TableDefs,
 		data,
-		clusterDetails.DNStores,
+		getDNServices(t.engine.cluster),
 	)
 	if err != nil {
 		return err

@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -46,7 +45,7 @@ func (*HashShard) Batch(
 	tableID ID,
 	getDefs getDefsFunc,
 	bat *batch.Batch,
-	nodes []logservicepb.DNStore,
+	nodes []metadata.DNService,
 ) (
 	sharded []*ShardedBatch,
 	err error,
@@ -101,7 +100,7 @@ func (*HashShard) Batch(
 					ShardID: info.ShardID,
 				},
 				ReplicaID: info.ReplicaID,
-				Address:   store.ServiceAddress,
+				Address:   store.TxnServiceAddress,
 			})
 		}
 	}
@@ -162,7 +161,7 @@ func (h *HashShard) Vector(
 	getDefs getDefsFunc,
 	colName string,
 	vec *vector.Vector,
-	nodes []logservicepb.DNStore,
+	nodes []metadata.DNService,
 ) (
 	sharded []*ShardedVector,
 	err error,
@@ -204,7 +203,7 @@ func (h *HashShard) Vector(
 					ShardID: info.ShardID,
 				},
 				ReplicaID: info.ReplicaID,
-				Address:   store.ServiceAddress,
+				Address:   store.TxnServiceAddress,
 			})
 		}
 	}
@@ -250,7 +249,11 @@ func (h *HashShard) Vector(
 
 var _ ShardPolicy = new(HashShard)
 
-func getBytesFromPrimaryVectorForHash(ctx context.Context, vec *vector.Vector, i int, typ types.Type) ([]byte, error) {
+func getBytesFromPrimaryVectorForHash(
+	ctx context.Context,
+	vec *vector.Vector,
+	i int,
+	typ types.Type) ([]byte, error) {
 	if vec.IsConst() {
 		panic("primary value vector should not be const")
 	}
