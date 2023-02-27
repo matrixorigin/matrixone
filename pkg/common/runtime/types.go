@@ -22,6 +22,8 @@ import (
 
 // The names of all global variables should be defined here.
 const (
+	// ClusterService cluster service
+	ClusterService = "cluster-service"
 	// TxnOptions options used to create txn
 	TxnOptions = "txn-options"
 )

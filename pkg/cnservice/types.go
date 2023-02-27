@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -134,6 +135,12 @@ type Config struct {
 
 	// RPC rpc config used to build txn sender
 	RPC rpc.Config `toml:"rpc"`
+
+	// Cluster configuration
+	Cluster struct {
+		// RefreshInterval refresh cluster info from hakeeper interval
+		RefreshInterval toml.Duration `toml:"refresh-interval"`
+	}
 }
 
 func (c *Config) Validate() error {
@@ -188,6 +195,9 @@ func (c *Config) Validate() error {
 	if c.Engine.Logstore == "" {
 		c.Engine.Logstore = options.LogstoreLogservice
 	}
+	if c.Cluster.RefreshInterval.Duration == 0 {
+		c.Cluster.RefreshInterval.Duration = time.Second * 10
+	}
 	return nil
 }
 
@@ -197,8 +207,13 @@ type service struct {
 	responsePool   *sync.Pool
 	logger         *zap.Logger
 	server         morpc.RPCServer
-	requestHandler func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient,
-		messageAcquirer func() morpc.Message, getClusterDetails engine.GetClusterDetailsFunc) error
+	requestHandler func(ctx context.Context,
+		message morpc.Message,
+		cs morpc.ClientSession,
+		engine engine.Engine,
+		fService fileservice.FileService,
+		cli client.TxnClient,
+		messageAcquirer func() morpc.Message) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once
@@ -211,6 +226,7 @@ type service struct {
 	metadataFS             fileservice.ReplaceableFileService
 	fileService            fileservice.FileService
 	pu                     *config.ParameterUnit
+	moCluster              clusterservice.MOCluster
 
 	stopper *stopper.Stopper
 

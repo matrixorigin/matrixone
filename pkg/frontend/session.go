@@ -34,7 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -327,9 +327,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		ses.GetMemPool(),
 		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService,
-		pu.GetClusterDetails,
-	)
+		pu.FileService)
 	ses.GetTxnCompileCtx().SetProcess(proc)
 	return ses
 }
@@ -511,24 +509,23 @@ func (ses *Session) GetTempTableStorage() *memorystorage.Storage {
 	return ses.tempTablestorage
 }
 
-func (ses *Session) SetTempTableStorage(ck clock.Clock) (*logservicepb.DNStore, error) {
+func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.DNService, error) {
 	// Without concurrency, there is no potential for data competition
 
 	// Arbitrary value is OK since it's single sharded. Let's use 0xbeef
 	// suggested by @reusee
-	shard := logservicepb.DNShardInfo{
-		ShardID:   0xbeef,
-		ReplicaID: 0xbeef,
-	}
-	shards := []logservicepb.DNShardInfo{
-		shard,
+	shards := []metadata.DNShard{
+		{
+			ReplicaID:     0xbeef,
+			DNShardRecord: metadata.DNShardRecord{ShardID: 0xbeef},
+		},
 	}
 	// Arbitrary value is OK, for more information about TEMPORARY_TABLE_DN_ADDR, please refer to the comment in defines/const.go
 	dnAddr := defines.TEMPORARY_TABLE_DN_ADDR
-	dnStore := logservicepb.DNStore{
-		UUID:           uuid.NewString(),
-		ServiceAddress: dnAddr,
-		Shards:         shards,
+	dnStore := metadata.DNService{
+		ServiceID:         uuid.NewString(),
+		TxnServiceAddress: dnAddr,
+		Shards:            shards,
 	}
 
 	ms, err := memorystorage.NewMemoryStorage(
