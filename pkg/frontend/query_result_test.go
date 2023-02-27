@@ -143,7 +143,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t")
+	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1)
 	assert.Nil(t, err)
 
 	ses.ast = asts[0]

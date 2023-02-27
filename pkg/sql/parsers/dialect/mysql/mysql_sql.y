@@ -738,7 +738,7 @@ mo_dump_stmt:
     {
 	$$ = &tree.MoDump{
 	    DumpDatabase: true,
-	    Database: tree.Identifier($3.ToLowerForConfig()),
+	    Database: tree.Identifier($3.Compare()),
 	    OutFile: $5,
 	    MaxFileSize: int64($6),
 	}
@@ -747,7 +747,7 @@ mo_dump_stmt:
     {
 	$$ = &tree.MoDump{
 	    DumpDatabase: true,
-	    Database: tree.Identifier($3.ToLowerForConfig()),
+	    Database: tree.Identifier($3.Compare()),
 	    Tables: $5,
 	    OutFile: $7,
 	    MaxFileSize: int64($8),
@@ -851,15 +851,15 @@ parallel_opt:
 normal_ident:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare())
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig(), $5.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
     }
 
 columns_or_variable_list_opt:
@@ -1243,22 +1243,22 @@ priv_level:
     {
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
-            DbName: $1.ToLowerForConfig(),
+            DbName: $1.Compare(),
         }
     }
 |   ident '.' ident
     {
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
-            DbName: $1.ToLowerForConfig(),
-            TabName: $3.ToLowerForConfig(),
+            DbName: $1.Compare(),
+            TabName: $3.Compare(),
         }
     }
 |   ident
     {
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE,
-            TabName: $1.ToLowerForConfig(),
+            TabName: $1.Compare(),
         }
     }
 
@@ -1784,11 +1784,11 @@ equal_or_assignment:
 var_name:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 |   ident '.' ident
     {
-        $$ = $1.ToLowerForConfig() + "." + $3.ToLowerForConfig()
+        $$ = $1.Compare() + "." + $3.Compare()
     }
 
 var_name_list:
@@ -1888,7 +1888,7 @@ use_stmt:
     {
         $$ = &tree.Use{
             SecondaryRole: false,
-            Name: $2.ToLowerForConfig(),
+            Name: $2,
         }
     }
 |   USE
@@ -2423,7 +2423,7 @@ show_grants_stmt:
 |   SHOW GRANTS FOR ROLE ident
     {
         s := &tree.ShowGrants{}
-        roles := []*tree.Role{tree.NewRole($5.ToLowerForConfig())}
+        roles := []*tree.Role{tree.NewRole($5.Compare())}
         s.Roles = roles
         s.ShowGrantType = tree.GrantForRole
         $$ = s
@@ -2548,8 +2548,8 @@ show_index_stmt:
     }
 |	SHOW extended_opt index_kwd from_or_in ident from_or_in ident where_expression_opt
      {
-     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7.ToLowerForConfig()), ExplicitSchema: true}
-         tbl := tree.NewTableName(tree.Identifier($5.ToLowerForConfig()), prefix)
+     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7.Compare()), ExplicitSchema: true}
+         tbl := tree.NewTableName(tree.Identifier($5.Compare()), prefix)
          $$ = &tree.ShowIndex{
              TableName: *tbl,
              Where: $8,
@@ -2700,7 +2700,7 @@ database_name_opt:
     }
 |   from_or_in ident
     {
-        $$ = $2.ToLowerForConfig()
+        $$ = $2.Compare()
     }
 
 table_column_name:
@@ -2744,31 +2744,31 @@ show_create_stmt:
 table_name_unresolved:
     ident
     {
-        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.Compare()})
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.ToLowerForConfig(), $1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.Compare(), $1.Compare()})
     }
 
 db_name:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 
 unresolved_object_name:
     ident
     {
-        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.Compare()})
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.ToLowerForConfig(), $1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.Compare(), $1.Compare()})
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(3, [3]string{$5.ToLowerForConfig(), $3.ToLowerForConfig(), $1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(3, [3]string{$5.Compare(), $3.Compare(), $1.Compare()})
     }
 
 truncate_table_stmt:
@@ -2845,7 +2845,7 @@ drop_index_stmt:
     DROP INDEX exists_opt ident ON table_name
     {
         $$ = &tree.DropIndex{
-            Name: tree.Identifier($4.ToLowerForConfig()),
+            Name: tree.Identifier($4.Compare()),
             TableName: *$6,
             IfExists: $3,
         }
@@ -2866,7 +2866,7 @@ drop_view_stmt:
 drop_database_stmt:
     DROP DATABASE exists_opt ident
     {
-        $$ = &tree.DropDatabase{Name: tree.Identifier($4.ToLowerForConfig()), IfExists: $3}
+        $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
     }
 
 drop_prepare_stmt:
@@ -2952,12 +2952,12 @@ table_name_opt_wild:
     ident wild_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.ToLowerForConfig()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
     }
 |    ident '.' ident wild_opt
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLowerForConfig()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.ToLowerForConfig()), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
     }
 
 wild_opt:
@@ -3187,11 +3187,11 @@ insert_column_list:
 insert_column:
     ident
     {
-        $$ = $1.ToLowerForConfig()
+        $$ = $1.Compare()
     }
 |   ident '.' ident
     {
-        $$ = $3.ToLowerForConfig()
+        $$ = $3.Compare()
     }
 
 values_list:
@@ -3249,11 +3249,11 @@ partition_clause_opt:
 partition_id_list:
     ident
     {
-        $$ = tree.IdentifierList{tree.Identifier($1.ToLowerForConfig())}
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
     }
 |   partition_id_list ',' ident
     {
-        $$ = append($1 , tree.Identifier($3.ToLowerForConfig()))
+        $$ = append($1 , tree.Identifier($3.Compare()))
     }
 
 into_table_name:
@@ -3387,11 +3387,11 @@ force_quote_list:
     ident
     {
         $$ = make([]string, 0, 4)
-        $$ = append($$, $1.ToLowerForConfig())
+        $$ = append($$, $1.Compare())
     }
 |   force_quote_list ',' ident
     {
-        $$ = append($1, $3.ToLowerForConfig())
+        $$ = append($1, $3.Compare())
     }
 
 select_stmt:
@@ -3457,7 +3457,7 @@ common_table_expr:
     ident column_list_opt AS '(' stmt ')'
     {
         $$ = &tree.CTE{
-            Name: &tree.AliasClause{Alias: tree.Identifier($1.ToLowerForConfig()), Cols: $2},
+            Name: &tree.AliasClause{Alias: tree.Identifier($1.Compare()), Cols: $2},
             Stmt: $5,
         }
     }
@@ -3823,11 +3823,11 @@ select_expression:
     }
 |   ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($1.ToLowerForConfig())}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($1.Compare())}
     }
 |   ident '.' ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($3.ToLowerForConfig(), $1.ToLowerForConfig())}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($3.Compare(), $1.Compare())}
     }
 
 from_opt:
@@ -4023,11 +4023,11 @@ join_condition:
 column_list:
     ident
     {
-        $$ = tree.IdentifierList{tree.Identifier($1.ToLowerForConfig())}
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
     }
 |   column_list ',' ident
     {
-        $$ = append($1, tree.Identifier($3.ToLowerForConfig()))
+        $$ = append($1, tree.Identifier($3.Compare()))
     }
 
 table_factor:
@@ -4072,7 +4072,7 @@ table_subquery:
 table_function:
     ident '(' expression_list_opt ')'
     {
-        name := tree.SetUnresolvedName(strings.ToLower($1.ToLowerForConfig()))
+        name := tree.SetUnresolvedName(strings.ToLower($1.Compare()))
         $$ = &tree.TableFunction{
        	    Func: &tree.FuncExpr{
         	Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -4157,11 +4157,11 @@ index_name_list:
 	}
 |	ident
 	{
-		$$ = []string{$1.ToLowerForConfig()}
+		$$ = []string{$1.Compare()}
 	}
 |	index_name_list ',' ident
 	{
-		$$ = append($1, $3.ToLowerForConfig())
+		$$ = append($1, $3.Compare())
 	}
 |	PRIMARY
 	{
@@ -4188,13 +4188,13 @@ as_opt_id:
 table_alias:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 |   STRING
 
 as_name_opt:
     {
-        $$ = tree.NewCStr("", false)
+        $$ = tree.NewCStr("", yylex.(*Lexer).lower)
     }
 |   ident
     {
@@ -4206,17 +4206,17 @@ as_name_opt:
     }
 |   STRING
     {
-        $$ = tree.NewCStr($1, true)
+        $$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   AS STRING
     {
-        $$ = tree.NewCStr($2, true)
+        $$ = tree.NewCStr($2, yylex.(*Lexer).lower)
     }
 
 stmt_name:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 
 //table_id:
@@ -4256,13 +4256,13 @@ create_extension_stmt:
 extension_lang:
     ident
     {
-        $$ = $1.ToLowerForConfig()
+        $$ = $1.Compare()
     }
 
 extension_name:
     ident
     {
-        $$ = $1.ToLowerForConfig()
+        $$ = $1.Compare()
     }
 
 
@@ -4282,12 +4282,12 @@ func_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewFuncName(tree.Identifier($1.ToLowerForConfig()), prefix)
+        $$ = tree.NewFuncName(tree.Identifier($1.Compare()), prefix)
     }
 |   ident '.' ident
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLowerForConfig()), ExplicitSchema: true}
-        $$ = tree.NewFuncName(tree.Identifier($3.ToLowerForConfig()), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        $$ = tree.NewFuncName(tree.Identifier($3.Compare()), prefix)
     }
 
 func_args_list_opt:
@@ -4329,7 +4329,7 @@ func_arg_decl:
 func_lang:
     ident
     {
-        $$ = $1.ToLowerForConfig()
+        $$ = $1.Compare()
     }
 
 func_return:
@@ -4364,7 +4364,7 @@ create_account_stmt:
 account_name:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 
 account_auth_option:
@@ -4384,7 +4384,7 @@ account_admin_name:
     }
 |	ident
 	{
-		$$ = $1.ToLowerForConfig()
+		$$ = $1.Compare()
 	}
 
 account_identified:
@@ -4459,7 +4459,7 @@ create_user_stmt:
 account_role_name:
     ident
     {
-   		$$ = $1.ToLowerForConfig()
+   		$$ = $1.Compare()
     }
 
 user_comment_or_attribute_opt:
@@ -4669,7 +4669,7 @@ user_identified:
 name_string:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 |   STRING
 
@@ -4695,7 +4695,7 @@ role_spec_list:
 role_spec:
     role_name
     {
-        $$ = &tree.Role{UserName: $1.ToLowerForConfig()}
+        $$ = &tree.Role{UserName: $1.Compare()}
     }
 //|   name_string '@' name_string
 //    {
@@ -4709,15 +4709,15 @@ role_spec:
 role_name:
     ID
 	{
-		$$ = tree.NewCStr($1, false)
+		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   QUOTE_ID
 	{
-		$$ = tree.NewCStr($1, true)
+		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   STRING
 	{
-    	$$ = tree.NewCStr($1, false)
+    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 
 index_prefix:
@@ -4748,7 +4748,7 @@ create_index_stmt:
             io.IType = $5
         }
         $$ = &tree.CreateIndex{
-            Name: tree.Identifier($4.ToLowerForConfig()),
+            Name: tree.Identifier($4.Compare()),
             Table: *$7,
             IndexCat: $2,
             KeyParts: $9,
@@ -4793,7 +4793,7 @@ index_option:
     }
 |   WITH PARSER ident
     {
-        $$ = &tree.IndexOption{ParserName: $3.ToLowerForConfig()}
+        $$ = &tree.IndexOption{ParserName: $3.Compare()}
     }
 |   VISIBLE
     {
@@ -4851,7 +4851,7 @@ create_database_stmt:
     {
         $$ = &tree.CreateDatabase{
             IfNotExists: $3,
-            Name: tree.Identifier($4.ToLowerForConfig()),
+            Name: tree.Identifier($4.Compare()),
             CreateOptions: $5,
         }
     }
@@ -5091,7 +5091,7 @@ partition:
     PARTITION ident values_opt sub_partition_list_opt
     {
         $$ = &tree.Partition{
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
             Values: $3,
             Options: nil,
             Subs: $4,
@@ -5100,7 +5100,7 @@ partition:
 |   PARTITION ident values_opt partition_option_list sub_partition_list_opt
     {
         $$ = &tree.Partition{
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
             Values: $3,
             Options: $4,
             Subs: $5,
@@ -5130,14 +5130,14 @@ sub_partition:
     SUBPARTITION ident
     {
         $$ = &tree.SubPartition{
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
             Options: nil,
         }
     }
 |   SUBPARTITION ident partition_option_list
     {
         $$ = &tree.SubPartition{
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
             Options: $3,
         }
     }
@@ -5412,7 +5412,7 @@ table_option:
     }
 |   TABLESPACE equal_opt ident storage_opt
     {
-        $$= tree.NewTableOptionTablespace($3.ToLowerForConfig(), $4)
+        $$= tree.NewTableOptionTablespace($3.Compare(), $4)
     }
 |   UNION equal_opt '(' table_name_list ')'
     {
@@ -5504,12 +5504,12 @@ table_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.ToLowerForConfig()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
     }
 |   ident '.' ident
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLowerForConfig()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.ToLowerForConfig()), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
     }
 
 table_elem_list_opt:
@@ -5660,7 +5660,7 @@ index_name_and_type_opt:
 |    ident TYPE index_type
     {
         $$ = make([]string, 2)
-        $$[0] = $1.ToLowerForConfig()
+        $$[0] = $1.Compare()
         $$[1] = $3
     }
 
@@ -5677,7 +5677,7 @@ index_name:
     }
 |    ident
 	{
-		$$ = $1.ToLowerForConfig()
+		$$ = $1.Compare()
 	}
 
 column_def:
@@ -5689,47 +5689,47 @@ column_def:
 column_name_unresolved:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare())
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig(), $5.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
     }
 
 ident:
     ID
     {
-		$$ = tree.NewCStr($1, false)
+		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |	QUOTE_ID
 	{
-    	$$ = tree.NewCStr($1, true)
+    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   not_keyword
 	{
-    	$$ = tree.NewCStr($1, false)
+    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   non_reserved_keyword
 	{
-    	$$ = tree.NewCStr($1, false)
+    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 
 column_name:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare())
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig(), $5.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
     }
 
 column_attribute_list_opt:
@@ -5849,7 +5849,7 @@ constraint_keyword:
     }
 |   CONSTRAINT ident
     {
-        $$ = $2.ToLowerForConfig()
+        $$ = $2.Compare()
     }
 
 references_def:
