@@ -122,6 +122,12 @@ type Config struct {
 			LogBackend string `toml:"log-backend"`
 		}
 	}
+
+	// Cluster configuration
+	Cluster struct {
+		// RefreshInterval refresh cluster info from hakeeper interval
+		RefreshInterval toml.Duration `toml:"refresh-interval"`
+	}
 }
 
 func (c *Config) Validate() error {
@@ -196,6 +202,8 @@ func (c *Config) Validate() error {
 	if c.LogtailServer.MaxLogtailFetchFailure <= 0 {
 		c.LogtailServer.MaxLogtailFetchFailure = defaultMaxLogtailFetchFailure
 	}
-
+	if c.Cluster.RefreshInterval.Duration == 0 {
+		c.Cluster.RefreshInterval.Duration = time.Second * 10
+	}
 	return nil
 }
