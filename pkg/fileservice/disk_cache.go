@@ -111,9 +111,14 @@ func (d *DiskCache) Read(
 
 		vector.Entries[i] = entry
 		numHit++
+		d.cacheHit()
 	}
 
 	return nil
+}
+
+func (d *DiskCache) cacheHit() {
+	profileAddSample()
 }
 
 func (d *DiskCache) Update(
@@ -166,7 +171,7 @@ func (d *DiskCache) Update(
 		}
 
 		// link
-		if err := os.Symlink(dataPath, linkPath); err != nil {
+		if err := os.Link(dataPath, linkPath); err != nil {
 			if os.IsExist(err) {
 				// ok
 			} else {

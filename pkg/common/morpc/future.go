@@ -33,6 +33,7 @@ func newFuture(releaseFunc func(f *Future)) *Future {
 
 // Future is used to obtain response data synchronously.
 type Future struct {
+	id   uint64
 	send RPCMessage
 	c    chan Message
 	errC chan error
@@ -54,6 +55,7 @@ func (f *Future) init(send RPCMessage) {
 	}
 	f.sended.Store(0)
 	f.send = send
+	f.id = send.Message.GetID()
 	f.mu.Lock()
 	f.mu.closed = false
 	f.mu.Unlock()
@@ -110,7 +112,7 @@ func (f *Future) maybeReleaseLocked() {
 }
 
 func (f *Future) getSendMessageID() uint64 {
-	return f.send.Message.GetID()
+	return f.id
 }
 
 func (f *Future) done(response Message, cb func()) {
@@ -168,6 +170,7 @@ func (f *Future) reset() {
 	}
 	f.send = RPCMessage{}
 	f.mu.cb = nil
+	f.id = 0
 }
 
 func (f *Future) timeout() bool {
