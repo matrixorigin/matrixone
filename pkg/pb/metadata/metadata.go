@@ -65,3 +65,47 @@ func MustParseCNRole(role string) CNRole {
 	}
 	panic(fmt.Sprintf("invalid CN Role %s", role))
 }
+
+func (m CNService) DebugString() string {
+	var buf bytes.Buffer
+	buf.WriteString(m.ServiceID)
+	buf.WriteString("/sql(")
+	buf.WriteString(m.SQLAddress)
+	buf.WriteString(")/pipeline(")
+	buf.WriteString(m.PipelineServiceAddress)
+	buf.WriteString(")/lock(")
+	buf.WriteString(m.LockServiceAddress)
+	buf.WriteString(")/[")
+	for k, v := range m.Labels {
+		buf.WriteString(k)
+		buf.WriteString("=")
+		buf.WriteString(v)
+		buf.WriteString(" ")
+	}
+	buf.WriteString("]")
+	return buf.String()
+}
+
+func (m DNService) DebugString() string {
+	var buf bytes.Buffer
+	buf.WriteString(m.ServiceID)
+	buf.WriteString("/txn(")
+	buf.WriteString(m.TxnServiceAddress)
+	buf.WriteString(")/[")
+	n := len(m.Shards)
+	for idx, shard := range m.Shards {
+		buf.WriteString(shard.DebugString())
+		if idx < n-1 {
+			buf.WriteString(", ")
+		}
+	}
+	buf.WriteString("]/")
+	for k, v := range m.Labels {
+		buf.WriteString(k)
+		buf.WriteString("=")
+		buf.WriteString(v)
+		buf.WriteString(" ")
+	}
+	buf.WriteString("]")
+	return buf.String()
+}
