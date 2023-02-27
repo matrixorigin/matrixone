@@ -53,8 +53,9 @@ func (base *vecBase[T]) Data() []byte                                   { return
 func (base *vecBase[T]) DataWindow(offset, length int) []byte {
 	return base.derived.stlvec.DataWindow(offset, length)
 }
-func (base *vecBase[T]) Bytes() *Bytes     { return base.derived.stlvec.Bytes() }
-func (base *vecBase[T]) Get(i int) (v any) { return base.derived.stlvec.Get(i) }
+func (base *vecBase[T]) Bytes() *Bytes            { return base.derived.stlvec.Bytes() }
+func (base *vecBase[T]) Get(i int) (v any)        { return base.derived.stlvec.Get(i) }
+func (base *vecBase[T]) ShallowGet(i int) (v any) { return base.derived.stlvec.ShallowGet(i) }
 
 func (base *vecBase[T]) tryCOW() {
 	if base.derived.roStorage != nil {
@@ -152,7 +153,7 @@ func (base *vecBase[T]) PPString(num int) string {
 			continue
 		}
 		if base.GetType().IsVarlen() {
-			_, _ = w.WriteString(fmt.Sprintf("%s, ", base.Get(i).([]byte)))
+			_, _ = w.WriteString(fmt.Sprintf("%s, ", base.ShallowGet(i).([]byte)))
 		} else {
 			_, _ = w.WriteString(fmt.Sprintf("%v, ", base.Get(i)))
 		}

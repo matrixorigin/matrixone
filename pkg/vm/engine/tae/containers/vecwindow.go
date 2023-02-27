@@ -83,7 +83,7 @@ func (win *vectorWindow[T]) Equals(o Vector) bool {
 		}
 		var v T
 		if _, ok := any(v).([]byte); ok {
-			if !bytes.Equal(win.Get(i).([]byte), o.Get(i).([]byte)) {
+			if !bytes.Equal(win.ShallowGet(i).([]byte), o.ShallowGet(i).([]byte)) {
 				return false
 			}
 		} else if _, ok := any(v).(types.Decimal64); ok {
@@ -139,6 +139,9 @@ func (win *vectorWindow[T]) Data() []byte {
 }
 func (win *vectorWindow[T]) Get(i int) (v any) {
 	return win.ref.Get(i + win.offset)
+}
+func (win *vectorWindow[T]) ShallowGet(i int) (v any) {
+	return win.ref.ShallowGet(i + win.offset)
 }
 
 func (win *vectorWindow[T]) Nullable() bool { return win.ref.Nullable() }

@@ -48,6 +48,7 @@ type VectorView interface {
 	SlicePtr() unsafe.Pointer
 	DataWindow(offset, length int) []byte
 	Get(i int) any
+	ShallowGet(i int) any
 
 	Length() int
 	Capacity() int

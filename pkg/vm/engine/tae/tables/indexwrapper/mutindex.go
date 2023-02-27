@@ -101,7 +101,7 @@ func (idx *mutableIndex) Dedup(key any, skipfn func(row uint32) (err error)) (er
 func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 	skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
 	if keys.Length() == 1 {
-		err = idx.Dedup(keys.Get(0), skipfn)
+		err = idx.Dedup(keys.ShallowGet(0), skipfn)
 		return
 	}
 	exist := idx.zonemap.FastContainsAny(keys)
