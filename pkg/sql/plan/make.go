@@ -25,6 +25,7 @@ import (
 
 func MakePlan2Decimal64ExprWithType(v types.Decimal64, typ *Type) *plan.Expr {
 	rawA := types.Decimal64ToInt64Raw(v)
+	typ.Size = 8
 	return &plan.Expr{
 		Typ: typ,
 		Expr: &plan.Expr_C{
@@ -42,6 +43,7 @@ func MakePlan2Decimal64ExprWithType(v types.Decimal64, typ *Type) *plan.Expr {
 
 func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 	rawA, rawB := types.Decimal128ToInt64Raw(v)
+	typ.Size = 16
 	return &plan.Expr{
 		Typ: typ,
 		Expr: &plan.Expr_C{
