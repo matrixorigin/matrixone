@@ -423,7 +423,7 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	setDistAggValues[T1, T2](a, a.otyp)
 	a.srcs = decode.Srcs
 	a.maps = make([]*hashmap.StrHashMap, len(a.srcs))
-	m := mpool.MustNewZero()
+	m := mpool.MustNewZeroNoFixed()
 	for i, src := range a.srcs {
 		mp, err := hashmap.NewStrMap(true, 0, 0, m)
 		if err != nil {
