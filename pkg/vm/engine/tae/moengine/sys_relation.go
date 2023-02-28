@@ -16,6 +16,8 @@ package moengine
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,6 +30,7 @@ import (
 
 var (
 	_ engine.Relation = (*sysRelation)(nil)
+	_ Relation        = (*sysRelation)(nil)
 )
 
 func newSysRelation(h handle.Relation) *sysRelation {
@@ -88,6 +91,10 @@ func (s *sysRelation) UpdateConstraint(context.Context, *engine.ConstraintDef) e
 }
 
 func (s *sysRelation) UpdateConstraintWithBin(context.Context, []byte) error {
+	return ErrReadOnly
+}
+
+func (s *sysRelation) AlterTable(context.Context, *tae.AlterTableReq) error {
 	return ErrReadOnly
 }
 

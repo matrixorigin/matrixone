@@ -16,12 +16,14 @@ package moengine
 
 import (
 	"context"
+
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	taepb "github.com/matrixorigin/matrixone/pkg/pb/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
@@ -58,6 +60,7 @@ func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error)
 	return defs, nil
 }
 
+// TODO(aptend) only cn-dn mode available, so this can be removed probably.
 func (rel *baseRelation) UpdateConstraint(_ context.Context, def *engine.ConstraintDef) error {
 	bin, err := def.MarshalBinary()
 	if err != nil {
@@ -68,6 +71,10 @@ func (rel *baseRelation) UpdateConstraint(_ context.Context, def *engine.Constra
 
 func (rel *baseRelation) UpdateConstraintWithBin(_ context.Context, bin []byte) error {
 	return rel.handle.UpdateConstraint(bin)
+}
+
+func (rel *baseRelation) AlterTable(ctx context.Context, req *taepb.AlterTableReq) error {
+	return rel.handle.AlterTable(ctx, req)
 }
 
 func (rel *baseRelation) TableColumns(_ context.Context) ([]*engine.Attribute, error) {
