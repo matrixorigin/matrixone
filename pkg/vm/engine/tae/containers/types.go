@@ -60,6 +60,8 @@ type VectorView interface {
 
 	Foreach(op ItOp, sels *roaring.Bitmap) error
 	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
+	ForeachShallow(op ItOp, sels *roaring.Bitmap) error
+	ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) error
 
 	WriteTo(w io.Writer) (int64, error)
 }

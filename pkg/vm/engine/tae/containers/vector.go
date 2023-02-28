@@ -32,7 +32,7 @@ import (
 type internalVector interface {
 	Vector
 	forEachWindowWithBias(offset, length int, op ItOp,
-		sels *roaring.Bitmap, bias int) (err error)
+		sels *roaring.Bitmap, bias int, shallow bool) (err error)
 }
 
 type vector[T any] struct {
@@ -397,6 +397,14 @@ func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
 
 func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 	return vec.impl.ForeachWindow(offset, length, op, sels)
+}
+
+func (vec *vector[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) (err error) {
+	return vec.impl.ForeachWindowShallow(0, vec.Length(), op, sels)
+}
+
+func (vec *vector[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	return vec.impl.ForeachWindowShallow(offset, length, op, sels)
 }
 
 func (vec *vector[T]) GetView() (view VectorView) {

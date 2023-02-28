@@ -180,10 +180,18 @@ func (base *vecBase[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
 }
 
 func (base *vecBase[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-	return base.forEachWindowWithBias(offset, length, op, sels, 0)
+	return base.forEachWindowWithBias(offset, length, op, sels, 0, false)
 }
 
-func (base *vecBase[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int) (err error) {
+func (base *vecBase[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) (err error) {
+	panic("not supported")
+}
+
+func (base *vecBase[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	return base.forEachWindowWithBias(offset, length, op, sels, 0, true)
+}
+
+func (base *vecBase[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
 	var v T
 	if _, ok := any(v).([]byte); !ok {
 		slice := base.derived.stlvec.Slice()
@@ -212,7 +220,12 @@ func (base *vecBase[T]) forEachWindowWithBias(offset, length int, op ItOp, sels 
 	}
 	if sels == nil || sels.IsEmpty() {
 		for i := offset; i < offset+length; i++ {
-			elem := base.derived.stlvec.Get(i + bias)
+			var elem any
+			if shallow {
+				elem = base.derived.stlvec.ShallowGet(i + bias)
+			} else {
+				elem = base.derived.stlvec.Get(i + bias)
+			}
 			if err = op(elem, i); err != nil {
 				break
 			}
@@ -228,7 +241,12 @@ func (base *vecBase[T]) forEachWindowWithBias(offset, length int, op ItOp, sels 
 		} else if int(idx) >= end {
 			break
 		}
-		elem := base.derived.stlvec.Get(int(idx) + bias)
+		var elem any
+		if shallow {
+			elem = base.derived.stlvec.ShallowGet(int(idx) + bias)
+		} else {
+			elem = base.derived.stlvec.Get(int(idx) + bias)
+		}
 		if err = op(elem, int(idx)); err != nil {
 			break
 		}

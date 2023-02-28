@@ -97,3 +97,11 @@ func (vec *vecView) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
 func (vec *vecView) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 	return vec.impl.ForeachWindow(offset, length, op, sels)
 }
+
+func (vec *vecView) ForeachShallow(op ItOp, sels *roaring.Bitmap) (err error) {
+	return vec.impl.ForeachWindowShallow(0, vec.Length(), op, sels)
+}
+
+func (vec *vecView) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	return vec.impl.ForeachWindowShallow(offset, length, op, sels)
+}
