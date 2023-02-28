@@ -212,3 +212,8 @@ func (win *vectorWindow[T]) GetDownstreamVector() *cnVector.Vector {
 	// Since WriteTo is not implemented, we don't need to expose Downstream here.
 	panic("not implemented")
 }
+
+func (win *vectorWindow[T]) SetDownstreamVector(vec *cnVector.Vector) {
+	// Windows are read only
+	panic("not implemented")
+}

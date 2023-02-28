@@ -76,6 +76,7 @@ type Vector interface {
 	ReadFrom(r io.Reader) (int64, error)
 
 	GetDownstreamVector() *cnVector.Vector
+	SetDownstreamVector(vec *cnVector.Vector)
 	Close()
 }
 

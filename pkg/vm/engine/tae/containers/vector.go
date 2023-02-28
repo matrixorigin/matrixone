@@ -434,6 +434,10 @@ func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
 	return vec.downstreamVector
 }
 
+func (vec *vector[T]) SetDownstreamVector(dsVec *cnVector.Vector) {
+	vec.downstreamVector = dsVec
+}
+
 // TODO - Below functions are not used in critical path.
 
 func (vec *vector[T]) String() string {

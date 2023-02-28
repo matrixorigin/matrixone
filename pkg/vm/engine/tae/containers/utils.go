@@ -62,54 +62,23 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool
 	return
 }
 
+// No copy
+func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
+	movecs := make([]*movec.Vector, len(vecs))
+	for i := range movecs {
+		movecs[i] = UnmarshalToMoVec(vecs[i])
+	}
+	return movecs
+}
+
 func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	return vec.GetDownstreamVector()
 }
 
-func NewShallowCopyMoVecFromBytes(typ types.Type, bs *Bytes) (mov *movec.Vector) {
-	if typ.IsVarlen() {
-		mov = movec.NewWithDataAndArea(typ, bs.HeaderBuf(), bs.StorageBuf())
-	} else {
-		mov = movec.NewWithData(typ, bs.StorageBuf())
-	}
-	return mov
-}
-
-func NewDeepCopyMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*movec.Vector, error) {
-
-	var mov *movec.Vector
-	if typ.IsVarlen() {
-		dataByteArr := bs.HeaderBuf()
-
-		dataAllocated, err := pool.Alloc(len(dataByteArr))
-		if err != nil {
-			return nil, err
-		}
-		copy(dataAllocated, dataByteArr)
-
-		areaByteArr := bs.StorageBuf()
-		areaAllocated, err := pool.Alloc(len(areaByteArr))
-		if err != nil {
-			return nil, err
-		}
-		copy(areaAllocated, areaByteArr)
-
-		mov = movec.NewWithDataAndArea(typ, dataAllocated, areaAllocated)
-	} else {
-
-		dataByteArr := bs.StorageBuf()
-		dataAllocated, err := pool.Alloc(len(dataByteArr))
-		if err != nil {
-			return nil, err
-		}
-		copy(dataAllocated, dataByteArr)
-
-		mov = movec.NewWithData(typ, dataAllocated)
-	}
-	return mov, nil
-}
+// Deep copy
 
 func CopyToMoVec(vec Vector) (mov *movec.Vector) {
+	//TODO: Improve the Copy part here
 	bs := vec.Bytes()
 	typ := vec.GetType()
 
@@ -150,16 +119,6 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	return mov
 }
 
-// No copy
-func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
-	movecs := make([]*movec.Vector, len(vecs))
-	for i := range movecs {
-		movecs[i] = UnmarshalToMoVec(vecs[i])
-	}
-	return movecs
-}
-
-// Deep copy
 func CopyToMoVecs(vecs []Vector) []*movec.Vector {
 	movecs := make([]*movec.Vector, len(vecs))
 	for i := range movecs {
@@ -176,16 +135,7 @@ func CopyToMoBatch(bat *Batch) *batch.Batch {
 	return ret
 }
 
-func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
-	bs := stl.NewFixedTypeBytes[T]()
-	if v.Col == nil || len(movec.MustTCols[T](v)) == 0 {
-		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
-	} else {
-		bs.Storage = types.EncodeSlice(movec.MustTCols[T](v))
-	}
-	return bs
-}
-
+// Shared Memory
 func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	bat := NewBatch()
 	for i, attr := range b.Attrs {
@@ -197,11 +147,20 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 
 func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(v.Typ, nullable)
-	bs := MoVecToBytes(v)
-	vec.ResetWithData(bs, v.Nsp)
+	vec.SetDownstreamVector(v)
 	return vec
 }
 
+// ToBytes
+func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
+	bs := stl.NewFixedTypeBytes[T]()
+	if v.Col == nil || len(movec.MustTCols[T](v)) == 0 {
+		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
+	} else {
+		bs.Storage = types.EncodeSlice(movec.MustTCols[T](v))
+	}
+	return bs
+}
 func MoVecToBytes(v *movec.Vector) *Bytes {
 	var bs *Bytes
 
@@ -257,6 +216,7 @@ func MoVecToBytes(v *movec.Vector) *Bytes {
 	return bs
 }
 
+// Split
 func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	if cnt == 1 {
 		return []*batch.Batch{bat}
@@ -307,32 +267,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	return bats
 }
 
-var mockMp = common.DefaultAllocator
-
-func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, v any) {
-	_, isNull := v.(types.Null)
-	if isNull {
-		cnNulls.Add(vec.Nsp, uint64(row))
-	} else {
-		movec.SetTAt(vec, int(row), v.(T))
-		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
-			vec.Nsp.Np.Remove(uint64(row))
-		}
-	}
-}
-
-func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
-	_, isNull := v.(types.Null)
-	if isNull {
-		cnNulls.Add(vec.Nsp, uint64(row))
-	} else {
-		movec.SetBytesAt(vec, int(row), v.([]byte), mockMp)
-		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
-			vec.Nsp.Np.Remove(uint64(row))
-		}
-	}
-}
-
+// Get
 func GetValue(col *movec.Vector, row uint32) any {
 	if col.Nsp != nil && col.Nsp.Np != nil && col.Nsp.Np.Contains(uint64(row)) {
 		return types.Null{}
@@ -390,6 +325,33 @@ func GetNonNullValue(col *movec.Vector, row uint32) any {
 	}
 }
 
+// Update
+func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, v any) {
+	_, isNull := v.(types.Null)
+	if isNull {
+		cnNulls.Add(vec.Nsp, uint64(row))
+	} else {
+		movec.SetTAt(vec, int(row), v.(T))
+		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
+			vec.Nsp.Np.Remove(uint64(row))
+		}
+	}
+}
+
+var mockMp = common.DefaultAllocator
+
+func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
+	_, isNull := v.(types.Null)
+	if isNull {
+		cnNulls.Add(vec.Nsp, uint64(row))
+	} else {
+		movec.SetBytesAt(vec, int(row), v.([]byte), mockMp)
+		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
+			vec.Nsp.Np.Remove(uint64(row))
+		}
+	}
+}
+
 func UpdateValue(col *movec.Vector, row uint32, val any) {
 	switch col.Typ.Oid {
 	case types.T_bool:
@@ -438,4 +400,49 @@ func UpdateValue(col *movec.Vector, row uint32, val any) {
 	default:
 		panic(moerr.NewInternalErrorNoCtx("%v not supported", col.Typ))
 	}
+}
+
+// Helpers to vector.go
+
+func NewShallowCopyMoVecFromBytes(typ types.Type, bs *Bytes) (mov *movec.Vector) {
+	if typ.IsVarlen() {
+		mov = movec.NewWithDataAndArea(typ, bs.HeaderBuf(), bs.StorageBuf())
+	} else {
+		mov = movec.NewWithData(typ, bs.StorageBuf())
+	}
+	return mov
+}
+
+func NewDeepCopyMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*movec.Vector, error) {
+
+	var mov *movec.Vector
+	if typ.IsVarlen() {
+		dataByteArr := bs.HeaderBuf()
+
+		dataAllocated, err := pool.Alloc(len(dataByteArr))
+		if err != nil {
+			return nil, err
+		}
+		copy(dataAllocated, dataByteArr)
+
+		areaByteArr := bs.StorageBuf()
+		areaAllocated, err := pool.Alloc(len(areaByteArr))
+		if err != nil {
+			return nil, err
+		}
+		copy(areaAllocated, areaByteArr)
+
+		mov = movec.NewWithDataAndArea(typ, dataAllocated, areaAllocated)
+	} else {
+
+		dataByteArr := bs.StorageBuf()
+		dataAllocated, err := pool.Alloc(len(dataByteArr))
+		if err != nil {
+			return nil, err
+		}
+		copy(dataAllocated, dataByteArr)
+
+		mov = movec.NewWithData(typ, dataAllocated)
+	}
+	return mov, nil
 }
