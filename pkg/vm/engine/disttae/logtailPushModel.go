@@ -190,6 +190,7 @@ func (e *Engine) InitLogTailPushModel(
 }
 
 func (e *Engine) initTableLogTailSubscriber() error {
+	var err error
 	// close the old rpc client.
 	if e.subscriber != nil {
 		if err := e.subscriber.logTailClient.Close(); err != nil {
@@ -197,13 +198,9 @@ func (e *Engine) initTableLogTailSubscriber() error {
 		}
 	}
 	e.subscriber = new(logTailSubscriber)
-	cluster, err := e.getClusterDetails()
-	if err != nil {
-		return err
-	}
 	// XXX we assume that we have only 1 dn now.
 	e.subscriber.dnNodeID = 0
-	dnLogTailServerBackend := cluster.DNStores[0].LogtailServerAddress
+	dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
 	// XXX generate a rpc client and new a stream.
 	// we should hide these code into NewClient method next day.
 	codec := morpc.NewMessageCodec(func() morpc.Message {

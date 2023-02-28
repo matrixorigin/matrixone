@@ -62,7 +62,6 @@ func (s *service) initDistributedTAE(
 		fs,
 		client,
 		hakeeper,
-		pu.GetClusterDetails,
 	)
 
 	// log tail client to subscribe table and receive table log.

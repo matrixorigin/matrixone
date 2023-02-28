@@ -124,7 +124,7 @@ func genLogTailReq(dn DNStore, req api.SyncLogTailReq) ([]txn.TxnRequest, error)
 						ShardID: info.ShardID,
 					},
 					ReplicaID: info.ReplicaID,
-					Address:   dn.ServiceAddress,
+					Address:   dn.GetTxnServiceAddress(),
 				},
 			},
 			Options: &txn.TxnRequestOptions{

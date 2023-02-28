@@ -29,7 +29,7 @@ import (
 func newDB(dnList []DNStore) *DB {
 	dnMap := make(map[string]int)
 	for i := range dnList {
-		dnMap[dnList[i].UUID] = i
+		dnMap[dnList[i].ServiceID] = i
 	}
 	db := &DB{
 		dnMap:      dnMap,
@@ -316,7 +316,7 @@ func (db *DB) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *table, op
 	db.Unlock()
 
 	for i, dn := range dnList {
-		part := parts[db.dnMap[dn.UUID]]
+		part := parts[db.dnMap[dn.ServiceID]]
 
 		select {
 		case <-part.lock:
