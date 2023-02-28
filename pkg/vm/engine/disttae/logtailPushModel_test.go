@@ -139,7 +139,7 @@ func mockLogTailServiceWithHandleFunc() (logTailService morpc.RPCServer, service
 	if err != nil {
 		return nil, serviceAddr, err
 	}
-	serviceAddr = fmt.Sprintf("127.0.0.1:%d", port)
+	serviceAddr = fmt.Sprintf("0.0.0.0:%d", port)
 	logTailService, err = morpc.NewRPCServer(
 		"mock-log-tail-service", serviceAddr,
 		morpc.NewMessageCodec(func() morpc.Message {
@@ -150,7 +150,7 @@ func mockLogTailServiceWithHandleFunc() (logTailService morpc.RPCServer, service
 
 // a method to get a free port.
 func getAFreePort() (int, error) {
-	addr, err1 := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
+	addr, err1 := net.ResolveTCPAddr("tcp", "0.0.0.0:0")
 	if err1 != nil {
 		return 0, err1
 	}
