@@ -24,7 +24,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -238,9 +237,6 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Free(m)
-			if vec.IsLowCardinality() {
-				vec.Index().(*index.LowCardinalityIndex).Free()
-			}
 		}
 	}
 	for _, agg := range bat.Aggs {
@@ -253,6 +249,18 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 		bat.Zs = nil
 	}
 	bat.Vecs = nil
+}
+
+func (bat *Batch) CleanOnlyData() {
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.CleanOnlyData()
+
+		}
+	}
+	if len(bat.Zs) != 0 {
+		bat.Zs = bat.Zs[:0]
+	}
 }
 
 func (bat *Batch) String() string {
@@ -290,18 +298,6 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 		if err := vector.UnionBatch(bat.Vecs[i], b.Vecs[i], 0, vector.Length(b.Vecs[i]), flags[:vector.Length(b.Vecs[i])], mh); err != nil {
 			return bat, err
 		}
-		if b.Vecs[i].IsLowCardinality() {
-			idx := b.Vecs[i].Index().(*index.LowCardinalityIndex)
-			if bat.Vecs[i].Index() == nil {
-				bat.Vecs[i].SetIndex(idx.Dup())
-			} else {
-				appendIdx := bat.Vecs[i].Index().(*index.LowCardinalityIndex)
-				dst, src := appendIdx.GetPoses(), idx.GetPoses()
-				if err := vector.UnionBatch(dst, src, 0, vector.Length(src), flags[:vector.Length(src)], mh); err != nil {
-					return bat, err
-				}
-			}
-		}
 	}
 	bat.Zs = append(bat.Zs, b.Zs...)
 	return bat, nil
@@ -321,4 +317,12 @@ func (bat *Batch) InitZsOne(len int) {
 	for i := range bat.Zs {
 		bat.Zs[i]++
 	}
+}
+
+func (bat *Batch) AddCnt(cnt int) {
+	atomic.AddInt64(&bat.Cnt, int64(cnt))
+}
+
+func (bat *Batch) SubCnt(cnt int) {
+	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
 }

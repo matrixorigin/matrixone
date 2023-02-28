@@ -698,8 +698,8 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 		return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
 	}
 
-	if tableDef.CompositePkey != nil {
-		names := util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)
+	if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
+		names := tableDef.Pkey.Names
 		for _, name := range names {
 			if name == col.Name {
 				return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", name))

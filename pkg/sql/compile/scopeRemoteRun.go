@@ -81,11 +81,13 @@ func CnServerMessageHandler(
 	ctx context.Context,
 	message morpc.Message,
 	cs morpc.ClientSession,
-	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message,
-	getClusterDetails engine.GetClusterDetailsFunc) error {
+	storeEngine engine.Engine,
+	fileService fileservice.FileService,
+	cli client.TxnClient,
+	messageAcquirer func() morpc.Message) error {
 	// new a receiver to receive message and write back result.
 	receiver := newMessageReceiverOnServer(ctx, message,
-		cs, messageAcquirer, storeEngine, fileService, cli, getClusterDetails)
+		cs, messageAcquirer, storeEngine, fileService, cli)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(receiver)
@@ -580,7 +582,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			// HasAutoCol:     t.HasAutoCol,
 			Ref:          t.InsertCtx.Ref,
 			TableDef:     t.InsertCtx.TableDef,
-			Idx:          t.InsertCtx.Idx,
 			ClusterTable: t.InsertCtx.ClusterTable,
 			ParentIdx:    t.InsertCtx.ParentIdx,
 		}
@@ -832,7 +833,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Affected: t.Affected,
 			IsRemote: t.IsRemote,
 			InsertCtx: &insert.InsertCtx{
-				Idx:          t.Idx,
 				Ref:          t.Ref,
 				TableDef:     t.TableDef,
 				ParentIdx:    t.ParentIdx,

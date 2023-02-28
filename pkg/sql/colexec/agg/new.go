@@ -720,7 +720,7 @@ func newGenericCount[T types.OrderedT | Decimal128AndString](typ types.Type, dis
 	if dist {
 		return NewUnaryDistAgg(AggregateCount, aggPriv, true, typ, CountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateCount, aggPriv, true, typ, CountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(AggregateCount, aggPriv, true, typ, CountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
 }
 
 func newGenericApproxcd[T any](typ types.Type, dist bool) Agg[any] {

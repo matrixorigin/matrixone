@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -600,6 +601,8 @@ func (c *Compile) ConstructScope() *Scope {
 }
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	ctx, span := trace.Start(ctx, "compileExternScan")
+	defer span.End()
 	mcpu := c.cnList[0].Mcpu
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
@@ -639,12 +642,15 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 				fileList[i] = strings.TrimSpace(fileList[i])
 			}
 		} else {
+			_, spanReadDir := trace.Start(ctx, "compileExternScan.ReadDir")
 			fileList, fileSize, err = plan2.ReadDir(param)
 			if err != nil {
+				spanReadDir.End()
 				return nil, err
 			}
+			spanReadDir.End()
 		}
-		fileList, fileSize, err = external.FilterFileList(n, c.proc, fileList, fileSize)
+		fileList, fileSize, err = external.FilterFileList(ctx, n, c.proc, fileList, fileSize)
 		if err != nil {
 			return nil, err
 		}

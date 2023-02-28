@@ -23,6 +23,7 @@ require (
 	github.com/google/btree v1.1.2
 	github.com/google/gofuzz v1.2.0
 	github.com/google/gops v0.3.25
+	github.com/google/pprof v0.0.0-20230207041349-798e818bf904
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.3.0
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
