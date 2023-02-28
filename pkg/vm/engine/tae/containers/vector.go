@@ -25,7 +25,6 @@ import (
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
-	"unsafe"
 )
 
 // DN vector is different from CN vector by
@@ -233,39 +232,10 @@ func (vec *vector[T]) HasNull() bool {
 
 // TODO: --- We can remove below functions as they don't have any usage
 
-func (vec *vector[T]) IsView() bool {
-	panic("Soon Deprecated")
-}
-
-func (vec *vector[T]) GetView() VectorView {
-	panic("Soon Deprecated")
-}
-
 func (vec *vector[T]) AppendMany(vs ...any) {
 	for _, v := range vs {
 		vec.Append(v)
 	}
-}
-
-func (vec *vector[T]) DataWindow(offset, length int) []byte {
-	panic("Soon Deprecated")
-}
-
-func (vec *vector[T]) Data() []byte {
-	panic("Soon Deprecated")
-}
-
-func (vec *vector[T]) SlicePtr() unsafe.Pointer {
-	slice := vec.Slice().([]T)
-	return unsafe.Pointer(&slice[0])
-}
-
-func (vec *vector[T]) AppendNoNulls(s any) {
-	panic("Soon Deprecated")
-}
-
-func (vec *vector[T]) Reset() {
-	panic("Soon Deprecated")
 }
 
 func (vec *vector[T]) Capacity() int {
