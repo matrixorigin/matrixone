@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package blockio
+package indexwrapper
 
 import (
 	"context"
@@ -23,25 +23,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type BfReader struct {
 	bfKey  string
 	idx    uint16
-	reader *BlockReader
+	reader *blockio.BlockReader
 	typ    types.Type
 }
 
-func newBfReader(
+func NewBfReader(
 	id *common.ID,
 	typ types.Type,
 	metaloc string,
 	mgr base.INodeManager,
 	fs *objectio.ObjectFS,
 ) *BfReader {
-	reader, _ := NewBlockReader(fs.Service, metaloc)
+	reader, _ := blockio.NewBlockReader(fs.Service, metaloc)
 
 	return &BfReader{
 		bfKey:  metaloc,
@@ -51,7 +51,7 @@ func newBfReader(
 }
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	_, extent, _ := DecodeMetaLoc(r.bfKey)
+	_, extent, _ := blockio.DecodeMetaLoc(r.bfKey)
 	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, extent, nil)
 	if err != nil {
 		// TODOa: Error Handling?
@@ -101,7 +101,7 @@ func (writer *BFWriter) Init(wr objectio.Writer, block objectio.BlockObject, cTy
 	return nil
 }
 
-func (writer *BFWriter) Finalize() (*indexwrapper.IndexMeta, error) {
+func (writer *BFWriter) Finalize() (*IndexMeta, error) {
 	if writer.impl != nil {
 		panic(any("formerly finalized filter not cleared yet"))
 	}
@@ -113,8 +113,8 @@ func (writer *BFWriter) Finalize() (*indexwrapper.IndexMeta, error) {
 	writer.data = nil
 
 	appender := writer.writer
-	meta := indexwrapper.NewEmptyIndexMeta()
-	meta.SetIndexType(indexwrapper.StaticFilterIndex)
+	meta := NewEmptyIndexMeta()
+	meta.SetIndexType(StaticFilterIndex)
 	meta.SetCompressType(writer.cType)
 	meta.SetIndexedColumn(writer.colIdx)
 	meta.SetInternalIndex(writer.internalIdx)

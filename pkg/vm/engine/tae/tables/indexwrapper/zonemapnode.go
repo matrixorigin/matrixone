@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package blockio
+package indexwrapper
 
 import (
 	"context"
@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -34,7 +34,7 @@ type ZmReader struct {
 	reader  *Reader
 }
 
-func newZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
+func NewZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
 	reader, _ := NewReader(context.Background(), fs, metaloc)
 	return &ZmReader{
 		metaKey: metaloc,
@@ -44,7 +44,7 @@ func newZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *object
 }
 
 func (r *ZmReader) getZoneMap() (*index.ZoneMap, error) {
-	_, extent, _ := DecodeMetaLoc(r.metaKey)
+	_, extent, _ := blockio.DecodeMetaLoc(r.metaKey)
 	zmList, err := r.reader.LoadZoneMapByExtent(context.Background(), []uint16{r.idx}, extent, nil)
 	if err != nil {
 		// TODOa: Error Handling?
@@ -108,13 +108,13 @@ func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cTy
 	return nil
 }
 
-func (writer *ZMWriter) Finalize() (*indexwrapper.IndexMeta, error) {
+func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
 	if writer.zonemap == nil {
 		panic(any("unexpected error"))
 	}
 	appender := writer.writer
-	meta := indexwrapper.NewEmptyIndexMeta()
-	meta.SetIndexType(indexwrapper.BlockZoneMapIndex)
+	meta := NewEmptyIndexMeta()
+	meta.SetIndexType(BlockZoneMapIndex)
 	meta.SetCompressType(writer.cType)
 	meta.SetIndexedColumn(writer.colIdx)
 	meta.SetInternalIndex(writer.internalIdx)

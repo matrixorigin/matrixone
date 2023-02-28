@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package blockio
+package indexwrapper
 
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"path"
 	"testing"
 
@@ -40,11 +41,11 @@ func TestStaticFilterIndex(t *testing.T) {
 	//var ans *roaring.Bitmap
 
 	// var res bool
-	dir := testutils.InitTestEnv(ModuleName, t)
+	dir := testutils.InitTestEnv(blockio.ModuleName, t)
 	dir = path.Join(dir, "/local")
 	id := 1
 	name := fmt.Sprintf("%d.blk", id)
-	bat := newBatch()
+	bat := blockio.newBatch()
 	c := fileservice.Config{
 		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",

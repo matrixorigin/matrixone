@@ -69,7 +69,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if err != nil {
 			return nil, err
 		}
-		_, err = zoneMapWriter.Finalize()
+		err = zoneMapWriter.Finalize()
 		if err != nil {
 			return nil, err
 		}
@@ -84,7 +84,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if err = bfWriter.AddValues(columnData); err != nil {
 			return nil, err
 		}
-		_, err = bfWriter.Finalize()
+		err = bfWriter.Finalize()
 		if err != nil {
 			return nil, err
 		}

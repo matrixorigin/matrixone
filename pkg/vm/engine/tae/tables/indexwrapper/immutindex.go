@@ -22,16 +22,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var _ Index = (*immutableIndex)(nil)
 
 type immutableIndex struct {
-	zmReader *blockio.ZmReader
-	bfReader *blockio.BfReader
+	zmReader *ZmReader
+	bfReader *BfReader
 }
 
 func NewImmutableIndex() *immutableIndex {
@@ -118,7 +116,7 @@ func (index *immutableIndex) ReadFrom(
 	location string,
 	colDef *catalog.ColDef) (err error) {
 	id.Idx = uint16(colDef.Idx)
-	index.zmReader = dataio.newZmReader(
+	index.zmReader = NewZmReader(
 		bufMgr,
 		colDef.Type,
 		*id,
@@ -127,7 +125,7 @@ func (index *immutableIndex) ReadFrom(
 		location)
 
 	if colDef.IsPrimary() {
-		index.bfReader = dataio.newBfReader(
+		index.bfReader = NewBfReader(
 			id,
 			colDef.Type,
 			location,
