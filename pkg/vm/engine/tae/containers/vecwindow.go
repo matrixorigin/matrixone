@@ -36,7 +36,6 @@ func (win *windowBase) AppendMany(vs ...any)                { panic("cannot modi
 func (win *windowBase) Extend(o Vector)                     { panic("cannot modify window") }
 func (win *windowBase) ExtendWithOffset(_ Vector, _, _ int) { panic("cannot modify window") }
 func (win *windowBase) Length() int                         { return win.length }
-func (win *windowBase) Capacity() int                       { return win.length }
 func (win *windowBase) Allocated() int                      { return 0 }
 func (win *windowBase) Close()                              {}
 func (win *windowBase) ReadFrom(io.Reader) (int64, error)   { panic("cannot modify window") }
