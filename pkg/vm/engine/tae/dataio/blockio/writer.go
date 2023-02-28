@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	indexwrapper2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -63,7 +62,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 	for i, vec := range batch.Vecs {
 		columnData := containers.NewVectorWithSharedMemory(vec, true)
 		zmPos := 0
-		zoneMapWriter := indexwrapper2.NewZMWriter()
+		zoneMapWriter := dataio.NewZMWriter()
 		if err = zoneMapWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(zmPos)); err != nil {
 			return nil, err
 		}
@@ -79,7 +78,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			continue
 		}
 		bfPos := 1
-		bfWriter := indexwrapper2.NewBFWriter()
+		bfWriter := dataio.NewBFWriter()
 		if err = bfWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(bfPos)); err != nil {
 			return nil, err
 		}

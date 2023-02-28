@@ -63,32 +63,34 @@ type Writer interface {
 	Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error)
 }
 
-func DecodeLocation(metaLoc string) (string, uint32, objectio.Extent, uint32) {
+func DecodeLocation(metaLoc string) (name string, id uint32, extent objectio.Extent, rows uint32, err error) {
 	info := strings.Split(metaLoc, ":")
-	name := info[0]
+	name = info[0]
 	location := strings.Split(info[1], "_")
 	offset, err := strconv.ParseUint(location[0], 10, 32)
 	if err != nil {
-		panic(any(err))
+		return
 	}
 	size, err := strconv.ParseUint(location[1], 10, 32)
 	if err != nil {
-		panic(any(err))
+		return
 	}
 	osize, err := strconv.ParseUint(location[2], 10, 32)
 	if err != nil {
 		panic(any(err))
 	}
-	id, err := strconv.ParseUint(location[3], 10, 32)
+	num, err := strconv.ParseUint(location[3], 10, 32)
 	if err != nil {
-		panic(any(err))
+		return
 	}
-	rows, err := strconv.ParseUint(info[2], 10, 32)
+	id = uint32(num)
+	r, err := strconv.ParseUint(info[2], 10, 32)
 	if err != nil {
-		panic(any(err))
+		return
 	}
-	extent := objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
-	return name, uint32(id), extent, uint32(rows)
+	rows = uint32(r)
+	extent = objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
+	return
 }
 
 func EncodeLocation(

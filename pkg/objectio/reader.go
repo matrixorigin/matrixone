@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 
@@ -119,30 +118,36 @@ func (r *ObjectReader) ReadMetaWithFunc(ctx context.Context,
 }
 
 func (r *ObjectReader) Read(ctx context.Context, extent Extent, idxs []uint16, m *mpool.MPool) (*fileservice.IOVector, error) {
-	data, err := r.ReadWithFunc(ctx, extent, idxs, m, newDecompressToObject, nil)
+	data, err := r.ReadWithFunc(ctx, extent, idxs, m, newDecompressToObject)
 	return data, err
 }
 
 func (r *ObjectReader) ReadWithFunc(ctx context.Context,
-	extent Extent, idxs []uint16, m *mpool.MPool, readFunc ReadObjectFunc, vectors []*vector.Vector) (*fileservice.IOVector, error) {
+	extent Extent, idxs []uint16, ids []uint32, m *mpool.MPool, readFunc ReadObjectFunc) (*fileservice.IOVector, error) {
 	blocks, err := r.ReadMeta(ctx, []Extent{extent}, m)
 	if err != nil {
 		return nil, err
 	}
-	block := blocks[0]
 
 	data := &fileservice.IOVector{
 		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, 0, len(idxs)),
+		Entries:  make([]fileservice.IOEntry, 0, len(idxs)*len(ids)),
 	}
-	for i, idx := range idxs {
-		col := block.(*Block).columns[idx]
-		data.Entries = append(data.Entries, fileservice.IOEntry{
-			Offset: int64(col.GetMeta().location.Offset()),
-			Size:   int64(col.GetMeta().location.Length()),
+	for _, id := range ids {
+		for _, block := range blocks {
+			if id == block.GetID() {
+				for _, idx := range idxs {
+					col := block.(*Block).columns[idx]
+					data.Entries = append(data.Entries, fileservice.IOEntry{
+						Offset: int64(col.GetMeta().location.Offset()),
+						Size:   int64(col.GetMeta().location.Length()),
 
-			ToObject: readFunc(int64(col.GetMeta().location.OriginSize()), vectors[i]),
-		})
+						ToObject: readFunc(int64(col.GetMeta().location.OriginSize())),
+					})
+				}
+			}
+			continue
+		}
 	}
 
 	err = r.object.fs.Read(ctx, data)
@@ -248,10 +253,10 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 }
 
 type ToObjectFunc = func(r io.Reader, buf []byte) (any, int64, error)
-type ReadObjectFunc = func(size int64, vec any) ToObjectFunc
+type ReadObjectFunc = func(size int64) ToObjectFunc
 
 // newDecompressToObject the decompression function passed to fileservice
-func newDecompressToObject(size int64, vec any) ToObjectFunc {
+func newDecompressToObject(size int64) ToObjectFunc {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error

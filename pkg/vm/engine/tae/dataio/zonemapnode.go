@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package indexwrapper
+package dataio
 
 import (
 	"context"
@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -108,13 +109,13 @@ func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cTy
 	return nil
 }
 
-func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
+func (writer *ZMWriter) Finalize() (*indexwrapper.IndexMeta, error) {
 	if writer.zonemap == nil {
 		panic(any("unexpected error"))
 	}
 	appender := writer.writer
-	meta := NewEmptyIndexMeta()
-	meta.SetIndexType(BlockZoneMapIndex)
+	meta := indexwrapper.NewEmptyIndexMeta()
+	meta.SetIndexType(indexwrapper.BlockZoneMapIndex)
 	meta.SetCompressType(writer.cType)
 	meta.SetIndexedColumn(writer.colIdx)
 	meta.SetInternalIndex(writer.internalIdx)

@@ -19,7 +19,6 @@ import (
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -61,8 +60,8 @@ type Reader interface {
 	Read(ctx context.Context, extents Extent, idxs []uint16, m *mpool.MPool) (*fileservice.IOVector, error)
 	ReadWithFunc(ctx context.Context,
 		extent Extent, idxs []uint16,
-		m *mpool.MPool, readFunc ReadObjectFunc,
-		vectors []*vector.Vector) (*fileservice.IOVector, error)
+		ids []uint32,
+		m *mpool.MPool, readFunc ReadObjectFunc) (*fileservice.IOVector, error)
 
 	// ReadMeta is the meta that reads a block
 	// extent is location of the block meta

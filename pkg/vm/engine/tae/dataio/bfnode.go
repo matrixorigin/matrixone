@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package indexwrapper
+package dataio
 
 import (
 	"context"
@@ -24,13 +24,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type BfReader struct {
 	bfKey  string
 	idx    uint16
-	reader *blockio.Reader
+	reader Reader
 	typ    types.Type
 }
 
@@ -52,7 +53,7 @@ func newBfReader(
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
 	_, extent, _ := blockio.DecodeMetaLoc(r.bfKey)
-	bf, err := r.reader.LoadBloomFilterByExtent(context.Background(), r.idx, extent, nil)
+	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, extent, nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err
@@ -101,7 +102,7 @@ func (writer *BFWriter) Init(wr objectio.Writer, block objectio.BlockObject, cTy
 	return nil
 }
 
-func (writer *BFWriter) Finalize() (*IndexMeta, error) {
+func (writer *BFWriter) Finalize() (*indexwrapper.IndexMeta, error) {
 	if writer.impl != nil {
 		panic(any("formerly finalized filter not cleared yet"))
 	}
@@ -113,8 +114,8 @@ func (writer *BFWriter) Finalize() (*IndexMeta, error) {
 	writer.data = nil
 
 	appender := writer.writer
-	meta := NewEmptyIndexMeta()
-	meta.SetIndexType(StaticFilterIndex)
+	meta := indexwrapper.NewEmptyIndexMeta()
+	meta.SetIndexType(indexwrapper.StaticFilterIndex)
 	meta.SetCompressType(writer.cType)
 	meta.SetIndexedColumn(writer.colIdx)
 	meta.SetInternalIndex(writer.internalIdx)

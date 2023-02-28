@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package indexwrapper
+package dataio
 
 import (
 	"context"
@@ -20,10 +20,13 @@ import (
 	"path"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -31,14 +34,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStaticFilterIndex(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	//bufManager := buffer.NewNodeManager(1024*1024, nil)
-	var err error
-	//var res bool
-	//var exist bool
-	//var ans *roaring.Bitmap
+const (
+	ModuleName = "IndexWrapper"
+)
 
+func TestBlockZoneMapIndex(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	var err error
 	// var res bool
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
@@ -55,16 +57,19 @@ func TestStaticFilterIndex(t *testing.T) {
 
 	objectWriter, err := objectio.NewObjectWriter(name, service)
 	assert.Nil(t, err)
-	/*fd*/ block, err := objectWriter.Write(bat)
+	/*fd*/ _, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
-
+	blocks, err := objectWriter.WriteEnd(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(blocks))
 	cType := common.Plain
 	typ := types.Type{Oid: types.T_int32}
-	colIdx := uint16(0)
+	pkColIdx := uint16(0)
 	interIdx := uint16(0)
+	// var visibility *roaring.Bitmap
 
-	writer := NewBFWriter()
-	err = writer.Init(objectWriter, block, cType, colIdx, interIdx)
+	writer := NewZMWriter()
+	err = writer.Init(objectWriter, blocks[0], cType, pkColIdx, interIdx)
 	require.NoError(t, err)
 
 	keys := containers.MockVector2(typ, 1000, 0)
@@ -73,25 +78,41 @@ func TestStaticFilterIndex(t *testing.T) {
 
 	_, err = writer.Finalize()
 	require.NoError(t, err)
-	blocks, err := objectWriter.WriteEnd(context.Background())
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(blocks))
+	t.Log(writer.String())
 
-	/*reader := NewBFReader(bufManager, file, new(common.ID))
+	// col, err := fd.GetColumn(0)
+	// assert.Nil(t, err)
+	// reader := NewZMReader(col, typ)
+	// require.NoError(t, err)
 
-	res, err = reader.MayContainsKey(int32(500))
-	require.NoError(t, err)
-	require.True(t, res)
+	// res = reader.Contains(int32(500))
+	// require.True(t, res)
 
-	res, err = reader.MayContainsKey(int32(2000))
-	require.NoError(t, err)
-	require.False(t, res)
+	// res = reader.Contains(int32(1000))
+	// require.False(t, res)
 
-	query := containers.MockVector2(typ, 1000, 1500)
-	exist, ans, err = reader.MayContainsAnyKeys(query, nil)
-	require.NoError(t, err)
-	require.True(t, ans.GetCardinality() < uint64(10))
-	require.True(t, exist)*/
+	// keys = containers.MockVector2(typ, 100, 1000)
+	// visibility, res = reader.ContainsAny(keys)
+	// require.False(t, res)
+	// require.Equal(t, uint64(0), visibility.GetCardinality())
 
-	//t.Log(bufManager.String())
+	// keys = containers.MockVector2(typ, 100, 0)
+	// visibility, res = reader.ContainsAny(keys)
+	// require.True(t, res)
+	// require.Equal(t, uint64(100), visibility.GetCardinality())
+}
+
+func newBatch() *batch.Batch {
+	mp := mpool.MustNewZero()
+	types := []types.Type{
+		{Oid: types.T_int32},
+		{Oid: types.T_int16},
+		{Oid: types.T_int32},
+		{Oid: types.T_int64},
+		{Oid: types.T_uint16},
+		{Oid: types.T_uint32},
+		{Oid: types.T_uint8},
+		{Oid: types.T_uint64},
+	}
+	return testutil.NewBatch(types, false, int(40000*2), mp)
 }
