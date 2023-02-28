@@ -125,6 +125,7 @@ func TestLogTailSubscriber(t *testing.T) {
 	subscriber := new(logTailSubscriber)
 	err = subscriber.init(serviceAddr)
 	require.NoError(t, err)
+	defer subscriber.logTailClient.Close()
 	require.NoError(t, subscriber.subscribeTable(context.TODO(), api.TableID{}))
 	require.NoError(t, subscriber.subscribeTable(context.TODO(), api.TableID{}))
 	require.NoError(t, subscriber.unSubscribeTable(context.TODO(), api.TableID{}))
@@ -144,7 +145,7 @@ func mockLogTailServiceWithHandleFunc() (logTailService morpc.RPCServer, service
 		morpc.NewMessageCodec(func() morpc.Message {
 			return &service.LogtailRequest{}
 		}))
-	return logTailService, serviceAddr, nil
+	return logTailService, serviceAddr, err
 }
 
 // a method to get a free port.
