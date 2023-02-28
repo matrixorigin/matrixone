@@ -16,57 +16,82 @@ package fileservice
 
 import (
 	"io"
+	"net/http"
 	"runtime"
+	"strconv"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/pprof/profile"
 )
 
-func StartProfile(w io.Writer) (stop func()) {
-	state := <-profileChan
-	id := atomic.AddInt64(&nextProfilerID, 1)
-	profiler := newProfiler()
-	state.profilers[id] = profiler
-	profiling.Store(true)
-	profileChan <- state
-	return func() {
-		state := <-profileChan
-		profiler := state.profilers[id]
-		delete(state.profilers, id)
-		if len(state.profilers) == 0 {
-			profiling.Store(false)
-		}
-		profileChan <- state
-		profiler.profile.Write(w)
-	}
+var FSProfileHandler = NewProfileHandler()
+
+type ProfileHandler struct {
+	profiling      atomic.Bool
+	nextProfilerID int64
+	stateChan      chan *profileState
 }
-
-var profiling atomic.Bool
-
-var nextProfilerID int64
 
 type profileState struct {
 	profilers map[int64]*profiler
 }
 
-var profileChan = func() chan *profileState {
+func NewProfileHandler() *ProfileHandler {
 	ch := make(chan *profileState, 1)
 	state := &profileState{
 		profilers: make(map[int64]*profiler),
 	}
 	ch <- state
-	return ch
-}()
+	return &ProfileHandler{
+		stateChan: ch,
+	}
+}
 
-func profileAddSample() {
-	if !profiling.Load() {
+func (p *ProfileHandler) StartProfile(w io.Writer) (stop func()) {
+	state := <-p.stateChan
+	id := atomic.AddInt64(&p.nextProfilerID, 1)
+	profiler := newProfiler()
+	state.profilers[id] = profiler
+	p.profiling.Store(true)
+	p.stateChan <- state
+	return func() {
+		state := <-p.stateChan
+		profiler := state.profilers[id]
+		delete(state.profilers, id)
+		if len(state.profilers) == 0 {
+			p.profiling.Store(false)
+		}
+		p.stateChan <- state
+		profiler.profile.Write(w)
+	}
+}
+
+func (p *ProfileHandler) AddSample() {
+	if !p.profiling.Load() {
 		return
 	}
-	state := <-profileChan
+	state := <-p.stateChan
 	for _, profiler := range state.profilers {
 		profiler.addSample(1)
 	}
-	profileChan <- state
+	p.stateChan <- state
+}
+
+func (p *ProfileHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	secStr := req.URL.Query().Get("seconds")
+	sec, err := strconv.Atoi(secStr)
+	if err != nil || sec > 3600*24 {
+		sec = 30
+	}
+
+	stop := p.StartProfile(w)
+	defer stop()
+
+	select {
+	case <-req.Context().Done():
+	case <-time.After(time.Second * time.Duration(sec)):
+	}
 }
 
 type profiler struct {

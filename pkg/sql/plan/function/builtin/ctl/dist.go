@@ -15,6 +15,7 @@
 package ctl
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -52,32 +53,36 @@ func getDNHandlerFunc(method pb.CmdMethod,
 			return false
 		}
 
-		detail, err := proc.GetClusterDetails()
+		cluster := clusterservice.GetMOCluster()
+		var requests []txn.CNOpRequest
+		cluster.GetDNService(clusterservice.NewSelector(),
+			func(store metadata.DNService) bool {
+				for _, shard := range store.Shards {
+					if len(targetDNs) == 0 || containsDN(shard.ShardID) {
+						payLoad, e := payload(shard.ShardID, parameter, proc)
+						if e != nil {
+							err = e
+							return false
+						}
+						requests = append(requests, txn.CNOpRequest{
+							OpCode: uint32(method),
+							Target: metadata.DNShard{
+								DNShardRecord: metadata.DNShardRecord{
+									ShardID: shard.ShardID,
+								},
+								ReplicaID: shard.ReplicaID,
+								Address:   store.TxnServiceAddress,
+							},
+							Payload: payLoad,
+						})
+					}
+				}
+				return true
+			})
 		if err != nil {
 			return pb.CtlResult{}, err
 		}
-		var requests []txn.CNOpRequest
-		for _, store := range detail.GetDNStores() {
-			for _, shard := range store.Shards {
-				if len(targetDNs) == 0 || containsDN(shard.ShardID) {
-					payLoad, err := payload(shard.ShardID, parameter, proc)
-					if err != nil {
-						return pb.CtlResult{}, err
-					}
-					requests = append(requests, txn.CNOpRequest{
-						OpCode: uint32(method),
-						Target: metadata.DNShard{
-							DNShardRecord: metadata.DNShardRecord{
-								ShardID: shard.ShardID,
-							},
-							ReplicaID: shard.ReplicaID,
-							Address:   store.ServiceAddress,
-						},
-						Payload: payLoad,
-					})
-				}
-			}
-		}
+
 		results := make([]interface{}, 0, len(requests))
 		if len(requests) > 0 {
 			responses, err := sender(proc.Ctx, requests)

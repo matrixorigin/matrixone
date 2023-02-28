@@ -38,9 +38,8 @@ import (
 
 // cnInformation records service information to help handle messages.
 type cnInformation struct {
-	storeEngine       engine.Engine
-	fileService       fileservice.FileService
-	getClusterDetails engine.GetClusterDetailsFunc
+	storeEngine engine.Engine
+	fileService fileservice.FileService
 }
 
 // processHelper records source process information to help
@@ -148,11 +147,13 @@ type messageReceiverOnServer struct {
 }
 
 func newMessageReceiverOnServer(
-	ctx context.Context, message morpc.Message,
-	cs morpc.ClientSession, messageAcquirer func() morpc.Message,
-	storeEngine engine.Engine, fileService fileservice.FileService, txnClient client.TxnClient,
-	getClusterDetails engine.GetClusterDetailsFunc,
-) messageReceiverOnServer {
+	ctx context.Context,
+	message morpc.Message,
+	cs morpc.ClientSession,
+	messageAcquirer func() morpc.Message,
+	storeEngine engine.Engine,
+	fileService fileservice.FileService,
+	txnClient client.TxnClient) messageReceiverOnServer {
 	m, ok := message.(*pipeline.Message)
 	if !ok {
 		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
@@ -181,9 +182,8 @@ func newMessageReceiverOnServer(
 	case pipeline.PipelineMessage:
 		var err error
 		receiver.cnInformation = cnInformation{
-			storeEngine:       storeEngine,
-			fileService:       fileService,
-			getClusterDetails: getClusterDetails,
+			storeEngine: storeEngine,
+			fileService: fileService,
 		}
 		receiver.procBuildHelper, err = generateProcessHelper(m.GetProcInfoData(), txnClient)
 		if err != nil {
@@ -218,10 +218,11 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	}
 	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
 	proc := process.New(
-		receiver.ctx, mp,
-		pHelper.txnClient, pHelper.txnOperator,
-		cnInfo.fileService, cnInfo.getClusterDetails,
-	)
+		receiver.ctx,
+		mp,
+		pHelper.txnClient,
+		pHelper.txnOperator,
+		cnInfo.fileService)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim

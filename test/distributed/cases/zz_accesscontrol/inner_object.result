@@ -28,21 +28,21 @@ Trigger    Event    Table    Statement    Timing    Created    sql_mode    Defin
 use mo_catalog;
 show columns from mo_tables;
 Field    Type    Null    Key    Default    Extra    Comment
-creator    INT UNSIGNED    YES        NULL
-account_id    INT UNSIGNED    YES        NULL
-owner    INT UNSIGNED    YES        NULL
-rel_comment    VARCHAR(5000)    YES        NULL
-relkind    VARCHAR(5000)    YES        NULL
-reldatabase    VARCHAR(5000)    YES        NULL
-rel_createsql    TEXT    YES        NULL
-viewdef    BLOB    YES        NULL
-relname    VARCHAR(5000)    YES        NULL
-reldatabase_id    BIGINT UNSIGNED    YES        NULL
-rel_id    BIGINT UNSIGNED    NO    PRI    NULL
-created_time    TIMESTAMP    YES        NULL
-constraint    VARCHAR(5000)    YES        NULL
-relpersistence    VARCHAR(5000)    YES        NULL
-partitioned    BLOB    YES        NULL
+viewdef    BLOB(0)    YES        null
+relpersistence    VARCHAR(5000)    YES        null
+creator    INT UNSIGNED(0)    YES        null
+partitioned    BLOB(0)    YES        null
+account_id    INT UNSIGNED(0)    YES        null
+reldatabase_id    BIGINT UNSIGNED(0)    YES        null
+relkind    VARCHAR(5000)    YES        null
+rel_comment    VARCHAR(5000)    YES        null
+relname    VARCHAR(5000)    YES        null
+rel_createsql    TEXT(0)    YES        null
+created_time    TIMESTAMP(0)    YES        null
+owner    INT UNSIGNED(0)    YES        null
+constraint    VARCHAR(5000)    YES        null
+reldatabase    VARCHAR(5000)    YES        null
+rel_id    BIGINT UNSIGNED(0)    YES    PRI    null
 select datname, dat_createsql from mo_database;
 datname    dat_createsql
 system    create database system;

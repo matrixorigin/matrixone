@@ -16,20 +16,20 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 )
 
 func newDB(dnList []DNStore) *DB {
 	dnMap := make(map[string]int)
 	for i := range dnList {
-		dnMap[dnList[i].UUID] = i
+		dnMap[dnList[i].ServiceID] = i
 	}
 	db := &DB{
 		dnMap:      dnMap,
@@ -298,7 +298,11 @@ func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
 	return parts
 }
 
-func (db *DB) Update(ctx context.Context, dnList []DNStore, tbl *table, op client.TxnOperator,
+func (db *DB) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
+	return db.cnE.tryToGetTableLogTail(ctx, databaseId, tableId)
+}
+
+func (db *DB) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *table, op client.TxnOperator,
 	primaryIdx int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	db.Lock()
 	parts, ok := db.partitions[[2]uint64{databaseId, tableId}]
@@ -312,7 +316,7 @@ func (db *DB) Update(ctx context.Context, dnList []DNStore, tbl *table, op clien
 	db.Unlock()
 
 	for i, dn := range dnList {
-		part := parts[db.dnMap[dn.UUID]]
+		part := parts[db.dnMap[dn.ServiceID]]
 
 		select {
 		case <-part.lock:
@@ -325,7 +329,7 @@ func (db *DB) Update(ctx context.Context, dnList []DNStore, tbl *table, op clien
 			return ctx.Err()
 		}
 
-		if err := updatePartition(
+		if err := updatePartitionOfPull(
 			i, primaryIdx, tbl, ts, ctx, op, db, part, dn,
 			genSyncLogTailReq(part.ts, ts, databaseId, tableId),
 		); err != nil {
