@@ -43,7 +43,7 @@ start transaction ;
 insert into atomic_table_1 select 10,"eeeeee",20.3;
 insert into atomic_table_1 select 11,"ffff",2.3;
 commit;
-Duplicate entry '3b150a460165656565656500' for key '__mo_cpkey_001a001b'
+Duplicate entry '3b150a460165656565656500' for key '__mo_cpkey_col'
 select * from atomic_table_1;
 a    b    c
 1    gooooooge    8092.9

@@ -391,6 +391,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
+		ColId:     col.ColId,
 		Name:      col.Name,
 		Alg:       col.Alg,
 		Typ:       DeepCopyTyp(col.Typ),

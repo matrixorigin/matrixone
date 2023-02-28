@@ -443,6 +443,35 @@ func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
 	return newFilters
 }
 
+// strict filter means col compared to const. for example col1>1
+// func(col1)=1 is not strict
+func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "=", ">", "<", ">=", "<=":
+			switch child0 := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_Col:
+				col = child0.Col
+			default:
+				return false, nil, nil
+			}
+			switch child1 := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				constExpr = child1.C
+				b = true
+				return
+			default:
+				return false, nil, nil
+			}
+		default:
+			return false, nil, nil
+		}
+	default:
+		return false, nil, nil
+	}
+}
+
 // for predicate deduction, filter must be like func(col)>1 , or (col=1) or (col=2)
 // and only 1 colRef is allowd in the filter
 func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
@@ -1102,6 +1131,8 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		case types.T_float32:
 			//float32 has 6-7 significant digits.
 			return constVal <= 100000 && constVal >= -100000
+		case types.T_decimal64:
+			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		default:
 			return false
 		}
@@ -1131,6 +1162,8 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		case types.T_float32:
 			//float32 has 6-7 significant digits.
 			return constVal <= 100000
+		case types.T_decimal64:
+			return constVal <= math.MaxInt32
 		default:
 			return false
 		}

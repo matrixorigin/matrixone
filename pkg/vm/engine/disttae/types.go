@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -59,7 +59,7 @@ const (
 	MO_PRIMARY_OFF                = 2
 )
 
-type DNStore = logservice.DNStore
+type DNStore = metadata.DNService
 
 type IDGenerator interface {
 	AllocateID(ctx context.Context) (uint64, error)
@@ -81,14 +81,13 @@ type MVCC interface {
 
 type Engine struct {
 	sync.RWMutex
-	mp                *mpool.MPool
-	fs                fileservice.FileService
-	db                *DB
-	cli               client.TxnClient
-	idGen             IDGenerator
-	getClusterDetails engine.GetClusterDetailsFunc
-	txns              map[string]*Transaction
-	catalog           *cache.CatalogCache
+	mp      *mpool.MPool
+	fs      fileservice.FileService
+	db      *DB
+	cli     client.TxnClient
+	idGen   IDGenerator
+	txns    map[string]*Transaction
+	catalog *cache.CatalogCache
 	// minimum heap of currently active transactions
 	txnHeap *transactionHeap
 }

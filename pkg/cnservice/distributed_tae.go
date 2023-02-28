@@ -62,7 +62,6 @@ func (s *service) initDistributedTAE(
 		fs,
 		client,
 		hakeeper,
-		pu.GetClusterDetails,
 	)
 	return nil
 }
