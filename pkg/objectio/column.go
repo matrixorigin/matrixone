@@ -58,7 +58,7 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 		Offset: int64(cb.meta.location.Offset()),
 		Size:   int64(cb.meta.location.Length()),
 	}
-	data.Entries[0].ToObject = newDecompressToObject(int64(cb.meta.location.OriginSize()), nil)
+	data.Entries[0].ToObject = newDecompressToObject(int64(cb.meta.location.OriginSize()))
 	err = cb.object.fs.Read(ctx, data)
 	if err != nil {
 		return nil, err
@@ -83,7 +83,7 @@ func (cb *ColumnBlock) GetIndexWithFunc(ctx context.Context, dataType IndexDataT
 			Size:   int64(cb.meta.bloomFilter.Length()),
 		}
 		var err error
-		data.Entries[0].ToObject = readFunc(int64(cb.meta.bloomFilter.OriginSize()), nil)
+		data.Entries[0].ToObject = readFunc(int64(cb.meta.bloomFilter.OriginSize()))
 		err = cb.object.fs.Read(ctx, data)
 		if err != nil {
 			return nil, err

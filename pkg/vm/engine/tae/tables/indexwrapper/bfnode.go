@@ -52,12 +52,12 @@ func NewBfReader(
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
 	_, extent, _ := blockio.DecodeMetaLoc(r.bfKey)
-	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, extent, nil)
+	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, []uint32{extent.Id()}, nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err
 	}
-	return bf, err
+	return bf[0], err
 }
 
 func (r *BfReader) MayContainsKey(key any) (b bool, err error) {

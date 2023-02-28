@@ -31,11 +31,11 @@ import (
 type ZmReader struct {
 	metaKey string
 	idx     uint16
-	reader  *Reader
+	reader  *blockio.BlockReader
 }
 
 func NewZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
-	reader, _ := NewReader(context.Background(), fs, metaloc)
+	reader, _ := blockio.NewBlockReader(fs.Service, metaloc)
 	return &ZmReader{
 		metaKey: metaloc,
 		idx:     idx,
@@ -45,12 +45,12 @@ func NewZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *object
 
 func (r *ZmReader) getZoneMap() (*index.ZoneMap, error) {
 	_, extent, _ := blockio.DecodeMetaLoc(r.metaKey)
-	zmList, err := r.reader.LoadZoneMapByExtent(context.Background(), []uint16{r.idx}, extent, nil)
+	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, []uint32{extent.Id()}, nil)
 	if err != nil {
 		// TODOa: Error Handling?
 		return nil, err
 	}
-	return zmList[0], err
+	return zmList[0][0], err
 }
 
 func (r *ZmReader) Contains(key any) bool {
