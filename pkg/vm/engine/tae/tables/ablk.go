@@ -386,7 +386,7 @@ func (blk *ablock) getPersistedRowByFilter(
 	}
 	defer sortKey.Close()
 	rows := make([]uint32, 0)
-	err = sortKey.Foreach(func(v any, offset int) error {
+	err = sortKey.ForeachShallow(func(v any, offset int) error {
 		if compute.CompareGeneric(v, filter.Val, sortKey.GetType()) == 0 {
 			row := uint32(offset)
 			rows = append(rows, row)
@@ -561,7 +561,7 @@ func (blk *ablock) dedupClosure(
 	mask *roaring.Bitmap,
 	def *catalog.ColDef) func(any, int) error {
 	return func(v1 any, _ int) (err error) {
-		return vec.Foreach(func(v2 any, row int) error {
+		return vec.ForeachShallow(func(v2 any, row int) error {
 			if mask != nil && mask.ContainsInt(row) {
 				return nil
 			}
