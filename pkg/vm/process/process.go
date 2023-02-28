@@ -115,7 +115,7 @@ func (proc *Process) SetQueryId(id string) {
 // plan.ConstantFold -> colexec.EvalExpr, busted.
 // hack in a fall back mpool.  This is by design a Zero MP so that there
 // will not be real leaks, except we leak counters in globalStats
-var xxxProcMp = mpool.MustNew("fallback_proc_mp")
+var xxxProcMp = mpool.MustNewNoFixed("fallback_proc_mp")
 
 func (proc *Process) GetMPool() *mpool.MPool {
 	if proc == nil {

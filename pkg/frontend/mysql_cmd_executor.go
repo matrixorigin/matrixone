@@ -2180,7 +2180,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		tempEngine := memoryengine.New(
 			requestCtx,
 			memoryengine.NewDefaultShardPolicy(
-				mpool.MustNewZero(),
+				mpool.MustNewZeroNoFixed(),
 			),
 			memoryengine.RandomIDGenerator,
 			clusterservice.NewMOCluster(

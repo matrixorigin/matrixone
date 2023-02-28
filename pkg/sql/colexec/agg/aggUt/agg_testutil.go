@@ -68,7 +68,7 @@ func RunTest(t *testing.T, testCases []testCase) {
 
 func RunBaseTest(t *testing.T, c *testCase) {
 	// base test: Grows(), Fill(), Eval() and Merge()
-	m := mpool.MustNewZero()
+	m := mpool.MustNewZeroNoFixed()
 
 	// Grows(), Fill() and Eval() test
 	{
@@ -148,7 +148,7 @@ func RunBaseTest(t *testing.T, c *testCase) {
 
 func RunBaseMarshalTest(t *testing.T, c *testCase) {
 	// base test: Grows(), Fill() and Eval()
-	m := mpool.MustNewZero()
+	m := mpool.MustNewZeroNoFixed()
 	{
 		// New()
 		agg0, newErr := agg.New(c.op, c.isDistinct, c.inputTyp)
