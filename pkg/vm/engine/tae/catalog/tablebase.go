@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	taepb "github.com/matrixorigin/matrixone/pkg/pb/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -129,6 +131,31 @@ func (be *TableBaseEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (is
 	var entry *TableMVCCNode
 	isNewNode, entry = be.getOrSetUpdateNode(txn)
 	entry.Constraints = string(cstr)
+	return
+}
+
+func (be *TableBaseEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *taepb.AlterTableReq) (isNewNode bool, err error) {
+	be.Lock()
+	defer be.Unlock()
+	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		be.Unlock()
+		txnToWait.GetTxnState(true)
+		be.Lock()
+	}
+	err = be.CheckConflict(txn)
+	if err != nil {
+		return
+	}
+	var entry *TableMVCCNode
+	isNewNode, entry = be.getOrSetUpdateNode(txn)
+	switch req.Kind {
+	case taepb.AlterKind_UpdateConstraint:
+		entry.Constraints = req.GetUpdateCstr().Constraints
+	default:
+		err = moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
+	}
+
 	return
 }
 

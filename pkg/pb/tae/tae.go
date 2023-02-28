@@ -41,3 +41,36 @@ func (d *TableEntryDelta) UnmarshalFromReader(r io.Reader) (int, error) {
 	err := d.Unmarshal(buf)
 	return int(size + 4), err
 }
+
+func NewUpdateConstraintReq(did, tid uint64, cstr string) *AlterTableReq {
+	return &AlterTableReq{
+		DbId:    did,
+		TableId: tid,
+		Kind:    AlterKind_UpdateConstraint,
+		Operation: &AlterTableReq_UpdateCstr{
+			&AlterTableConstraint{Constraints: cstr},
+		},
+	}
+}
+
+func NewUpdateCommentReq(did, tid uint64, comment string) *AlterTableReq {
+	return &AlterTableReq{
+		TableId: did,
+		DbId:    tid,
+		Kind:    AlterKind_UpdateComment,
+		Operation: &AlterTableReq_UpdateComment{
+			&AlterTableComment{Comment: comment},
+		},
+	}
+}
+
+func NewRenameTableReq(did, tid uint64, old, new string) *AlterTableReq {
+	return &AlterTableReq{
+		TableId: did,
+		DbId:    tid,
+		Kind:    AlterKind_RenameTable,
+		Operation: &AlterTableReq_RenameTable{
+			&AlterTableRenameTable{OldName: old, NewName: new},
+		},
+	}
+}

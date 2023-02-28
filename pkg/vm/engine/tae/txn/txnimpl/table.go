@@ -816,6 +816,22 @@ func (tbl *txnTable) UpdateConstraint(cstr []byte) (err error) {
 	return
 }
 
+func (tbl *txnTable) AlterTable(ctx context.Context, req *taepb.AlterTableReq) error {
+	logutil.Infof("xxxx alter req: %#v", req)
+	switch req.Kind {
+	case taepb.AlterKind_UpdateConstraint:
+	default:
+		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
+	}
+	tbl.store.IncreateWriteCnt()
+	tbl.store.txn.GetMemo().AddCatalogChange()
+	isNewNode, err := tbl.entry.AlterTable(ctx, tbl.store.txn, req)
+	if isNewNode {
+		tbl.txnEntries.Append(tbl.entry)
+	}
+	return err
+}
+
 func (tbl *txnTable) UncommittedRows() uint32 {
 	if tbl.localSegment == nil {
 		return 0
@@ -979,11 +995,6 @@ func (tbl *txnTable) BatchDedupLocal(bat *containers.Batch) (err error) {
 	}
 	err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
 	return
-}
-
-func (tbl *txnTable) AlterTable(ctx context.Context, req *taepb.AlterTableReq) error {
-	logutil.Infof("xxxx alter req: %#v", req)
-	return nil
 }
 
 func (tbl *txnTable) PrepareRollback() (err error) {
