@@ -124,9 +124,11 @@ message DNService {
   string ServiceID              = 1;
   // TxnServiceAddress is used to provide txn service
   string TxnServiceAddress      = 2;
+  // LogTailServiceAddress is used to provide logtail push service
+  string LogTailServiceAddress  = 3;
   // Shards DN shards on service
-  repeated DNShard Shards       = 3 [(gogoproto.nullable) = false];
+  repeated DNShard Shards       = 4 [(gogoproto.nullable) = false];
   // Labels lables on service
-  map<string,string> Labels     = 4 [(gogoproto.nullable) = false];
+  map<string,string> Labels     = 5 [(gogoproto.nullable) = false];
 }
 
