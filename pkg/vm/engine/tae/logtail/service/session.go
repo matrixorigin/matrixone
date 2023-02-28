@@ -34,6 +34,9 @@ const (
 	TableOnSubscription TableState = iota
 	TableSubscribed
 	TableNotFound
+
+	// it's estimated the average size of logtail response would be 64 bytes.
+	responseBufferSize = 1024 * 1024
 )
 
 // SessionManager manages all client sessions.
@@ -190,7 +193,7 @@ func NewSession(
 		notifier:    notifier,
 		stream:      stream,
 		poisionTime: poisionTime,
-		sendChan:    make(chan message, 16), // buffer response for morpc client session
+		sendChan:    make(chan message, responseBufferSize), // buffer response for morpc client session
 		tables:      make(map[TableID]TableState),
 	}
 
