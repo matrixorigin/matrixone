@@ -34,7 +34,7 @@ import (
 )
 
 func NewProcess() *process.Process {
-	mp := mpool.MustNewZero()
+	mp := mpool.MustNewZeroNoFixed()
 	return NewProcessWithMPool(mp)
 }
 

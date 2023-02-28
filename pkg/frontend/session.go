@@ -532,7 +532,7 @@ func (ses *Session) SetTempTableStorage(ck clock.Clock) (*logservicepb.DNStore, 
 	}
 
 	ms, err := memorystorage.NewMemoryStorage(
-		mpool.MustNewZero(),
+		mpool.MustNewZeroNoFixed(),
 		ck,
 		memoryengine.RandomIDGenerator,
 	)

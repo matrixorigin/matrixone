@@ -2185,7 +2185,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		tempEngine := memoryengine.New(
 			requestCtx,
 			memoryengine.NewDefaultShardPolicy(
-				mpool.MustNewZero(),
+				mpool.MustNewZeroNoFixed(),
 			),
 			func() (logservicepb.ClusterDetails, error) {
 				return logservicepb.ClusterDetails{

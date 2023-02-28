@@ -57,7 +57,7 @@ func New(
 	}
 
 	storage, err := memorystorage.NewMemoryStorage(
-		mpool.MustNewZero(),
+		mpool.MustNewZeroNoFixed(),
 		ck,
 		memoryengine.RandomIDGenerator,
 	)
@@ -75,7 +75,7 @@ func New(
 	e := memoryengine.New(
 		ctx,
 		memoryengine.NewDefaultShardPolicy(
-			mpool.MustNewZero(),
+			mpool.MustNewZeroNoFixed(),
 		),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{

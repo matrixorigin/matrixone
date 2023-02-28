@@ -78,7 +78,7 @@ func (gc *GroupConcat) MarshalBinary() (data []byte, err error) {
 func (gc *GroupConcat) UnmarshalBinary(data []byte) error {
 	eg := &EncodeGroupConcat{}
 	types.Decode(data, eg)
-	m := mpool.MustNewZero()
+	m := mpool.MustNewZeroNoFixed()
 	da1, err := m.Alloc(len(eg.inserts_strData))
 	if err != nil {
 		return err
