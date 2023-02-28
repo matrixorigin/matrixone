@@ -352,6 +352,20 @@ var (
 		//	"rel_comment AS TABLE_COMMENT " +
 		//	"FROM mo_catalog.mo_tables;",
 
+		"CREATE VIEW IF NOT EXISTS VIEWS AS " +
+			"SELECT 'def' AS `TABLE_CATALOG`," +
+			"tbl.reldatabase AS `TABLE_SCHEMA`," +
+			"tbl.relname AS `TABLE_NAME`," +
+			"tbl.rel_createsql AS `VIEW_DEFINITION`," +
+			"'NONE' AS `CHECK_OPTION`," +
+			"'YES' AS `IS_UPDATABLE`," +
+			"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
+			"'DEFINER' AS `SECURITY_TYPE`," +
+			"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
+			"'utf8mb4_0900_ai_ci' AS `COLLATION_CONNECTION` " +
+			"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
+			"WHERE tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'",
+
 		"CREATE TABLE IF NOT EXISTS ENGINES (" +
 			"ENGINE varchar(64)," +
 			"SUPPORT varchar(8)," +
