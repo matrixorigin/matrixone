@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -114,7 +113,7 @@ func (vec *vector[T]) GetType() types.Type {
 }
 
 func (vec *vector[T]) String() string {
-	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Capacity(), vec.Allocated())
+	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Allocated())
 
 	end := 100
 	if vec.Length() < end {
@@ -230,7 +229,7 @@ func (vec *vector[T]) HasNull() bool {
 	return vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Any()
 }
 
-// TODO: --- We can remove below functions as they don't have any usage
+// TODO: --- We can remove below function as they are only used in Testcases.
 
 func (vec *vector[T]) AppendMany(vs ...any) {
 	for _, v := range vs {
@@ -238,61 +237,9 @@ func (vec *vector[T]) AppendMany(vs ...any) {
 	}
 }
 
-func (vec *vector[T]) Capacity() int {
-	return vec.Length()
-}
-
-// TODO: --- We can remove below function as they are only used in Testcases.
-
 func (vec *vector[T]) Delete(delRowId int) {
 	deletes := roaring.BitmapOf(uint32(delRowId))
 	vec.Compact(deletes)
-}
-
-func (vec *vector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
-	stat := f.Stat()
-	var n []byte
-	var buf []byte
-	var tmpNode []byte
-	if stat.CompressAlgo() != compress.None {
-		osize := int(stat.OriginSize())
-		size := stat.Size()
-		tmpNode, err = vec.GetAllocator().Alloc(int(size))
-		if err != nil {
-			return
-		}
-		defer vec.GetAllocator().Free(tmpNode)
-		srcBuf := tmpNode[:size]
-		if _, err = f.Read(srcBuf); err != nil {
-			return
-		}
-		if buffer == nil {
-			n, err = vec.GetAllocator().Alloc(osize)
-			if err != nil {
-				return
-			}
-			buf = n[:osize]
-		} else {
-			buffer.Reset()
-			if osize > buffer.Cap() {
-				buffer.Grow(osize)
-			}
-			buf = buffer.Bytes()[:osize]
-		}
-		if _, err = compress.Decompress(srcBuf, buf, compress.Lz4); err != nil {
-			if n != nil {
-				vec.GetAllocator().Free(n)
-			}
-			return nil
-		}
-	}
-
-	_, err = vec.ReadFrom(bytes.NewBuffer(buf))
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 //TODO: --- Below Functions Can be implemented in CN Vector.

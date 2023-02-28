@@ -15,12 +15,10 @@
 package containers
 
 import (
-	"bytes"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
 	"io"
@@ -44,7 +42,6 @@ type VectorView interface {
 	Get(i int) any
 
 	Length() int
-	Capacity() int
 	Allocated() int
 	GetAllocator() *mpool.MPool
 	GetType() types.Type
@@ -73,8 +70,6 @@ type Vector interface {
 	Window(offset, length int) Vector
 	WriteTo(w io.Writer) (int64, error)
 	ReadFrom(r io.Reader) (int64, error)
-
-	ReadFromFile(common.IVFile, *bytes.Buffer) error
 
 	Close()
 }
