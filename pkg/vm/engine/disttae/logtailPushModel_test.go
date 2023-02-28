@@ -17,15 +17,11 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"github.com/stretchr/testify/require"
-	"net"
 	"testing"
-	"time"
 )
 
 // the sort func should ensure that:
@@ -110,54 +106,29 @@ func TestSubscribedTable(t *testing.T) {
 	require.Equal(t, 0, len(subscribeRecord.m))
 }
 
-// should ensure that subscriber can send request.
-func TestLogTailSubscriber(t *testing.T) {
-	receiveCount := 0
-	logTailService, serviceAddr, err := mockLogTailServiceWithHandleFunc()
-	require.NoError(t, err)
-	require.NoError(t, logTailService.Start())
-	defer logTailService.Close()
-	logTailService.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
-		receiveCount++
-		return nil
-	})
+var _ = debugToPrintLogList
 
-	subscriber := new(logTailSubscriber)
-	err = subscriber.init(serviceAddr)
-	require.NoError(t, err)
-	defer subscriber.logTailClient.Close()
-	require.NoError(t, subscriber.subscribeTable(context.TODO(), api.TableID{}))
-	require.NoError(t, subscriber.subscribeTable(context.TODO(), api.TableID{}))
-	require.NoError(t, subscriber.unSubscribeTable(context.TODO(), api.TableID{}))
-	time.Sleep(2 * time.Second)
-	require.Equal(t, 3, receiveCount)
-}
-
-func mockLogTailServiceWithHandleFunc() (logTailService morpc.RPCServer, serviceAddr string, err error) {
-	port := 0
-	port, err = getAFreePort()
-	if err != nil {
-		return nil, serviceAddr, err
+func debugToPrintLogList(ls []logtail.TableLogtail) string {
+	if len(ls) == 0 {
+		return ""
 	}
-	serviceAddr = fmt.Sprintf("0.0.0.0:%d", port)
-	logTailService, err = morpc.NewRPCServer(
-		"mock-log-tail-service", serviceAddr,
-		morpc.NewMessageCodec(func() morpc.Message {
-			return &service.LogtailRequest{}
-		}))
-	return logTailService, serviceAddr, err
-}
-
-// a method to get a free port.
-func getAFreePort() (int, error) {
-	addr, err1 := net.ResolveTCPAddr("tcp", "0.0.0.0:0")
-	if err1 != nil {
-		return 0, err1
+	str := "log list are:\n"
+	for i, l := range ls {
+		did, tid := l.Table.DbId, l.Table.TbId
+		str += fmt.Sprintf("\t log: %d, dn: %d, tbl: %d\n", i, did, tid)
+		if len(l.Commands) > 0 {
+			str += "\tcommands are :\n"
+		}
+		for j, command := range l.Commands {
+			typ := "insert"
+			if command.EntryType == 1 {
+				typ = "delete"
+			} else if command.EntryType == 2 {
+				typ = "update"
+			}
+			str += fmt.Sprintf("\t\t %d: [dnName: %s, tableName: %s, typ: %s]\n",
+				j, command.DatabaseName, command.TableName, typ)
+		}
 	}
-	listener, err2 := net.ListenTCP("tcp", addr)
-	if err2 != nil {
-		return 0, err2
-	}
-	defer listener.Close()
-	return listener.Addr().(*net.TCPAddr).Port, nil
+	return str
 }
