@@ -205,9 +205,7 @@ func (s *service) registerExecutorsLocked() {
 		&s.cfg.Frontend,
 		nil,
 		nil,
-		nil,
-		s.pu.GetClusterDetails,
-	)
+		nil)
 	pu.StorageEngine = s.storeEngine
 	pu.TxnClient = s._txnClient
 	s.cfg.Frontend.SetDefaultValues()

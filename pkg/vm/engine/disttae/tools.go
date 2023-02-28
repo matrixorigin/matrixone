@@ -653,9 +653,9 @@ func genWriteReqs(writes [][]Entry) ([]txn.TxnRequest, error) {
 			if err != nil {
 				return nil, err
 			}
-			mp[e.dnStore.UUID] = append(mp[e.dnStore.UUID], pe)
-			if _, ok := mq[e.dnStore.UUID]; !ok {
-				mq[e.dnStore.UUID] = e.dnStore
+			mp[e.dnStore.ServiceID] = append(mp[e.dnStore.ServiceID], pe)
+			if _, ok := mq[e.dnStore.ServiceID]; !ok {
+				mq[e.dnStore.ServiceID] = e.dnStore
 			}
 		}
 	}
@@ -676,7 +676,7 @@ func genWriteReqs(writes [][]Entry) ([]txn.TxnRequest, error) {
 							ShardID: info.ShardID,
 						},
 						ReplicaID: info.ReplicaID,
-						Address:   dn.ServiceAddress,
+						Address:   dn.TxnServiceAddress,
 					},
 				},
 				Options: &txn.TxnRequestOptions{

@@ -52,7 +52,7 @@ func (e *miniExec) SetSession(sess *Session) {
 
 func TestIe(t *testing.T) {
 	ctx := context.TODO()
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 
 	// Mock autoIncrCaches
 	aic := defines.AutoIncrCaches{}
@@ -70,7 +70,7 @@ func TestIe(t *testing.T) {
 }
 
 func TestIeProto(t *testing.T) {
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 
 	// Mock autoIncrCaches
 	aic := defines.AutoIncrCaches{}
