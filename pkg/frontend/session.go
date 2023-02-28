@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -1934,6 +1936,107 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		return nil, nil
 	}
 	return tcc.getTableDef(ctx, table, dbName, tableName)
+}
+
+func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (string, error) {
+	var expectInvalidArgErr bool
+	var expectedInvalidArgLengthErr bool
+	var badValue string
+	var argstr string
+	var body string
+	var sql string
+	var err error
+	var erArray []ExecResult
+
+	ses := tcc.GetSession()
+	ctx := ses.GetRequestContext()
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	sql = fmt.Sprintf(`select args, body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			// reset flag
+			expectedInvalidArgLengthErr = false
+			expectInvalidArgErr = false
+			argstr, err = erArray[0].GetString(ctx, i, 0)
+			if err != nil {
+				goto handleFailed
+			}
+			body, err = erArray[0].GetString(ctx, i, 1)
+			if err != nil {
+				goto handleFailed
+			}
+			// arg type check
+			argMap := make(map[string]string)
+			json.Unmarshal([]byte(argstr), &argMap)
+			if len(argMap) != len(args) {
+				expectedInvalidArgLengthErr = true
+				continue
+			}
+			i := 0
+			for _, v := range argMap {
+				switch t := int32(types.Types[v]); {
+				case (t >= 20 && t <= 29): // int family
+					if args[i].Typ.Id < 20 || args[i].Typ.Id > 29 {
+						expectInvalidArgErr = true
+						badValue = v
+					}
+				case t == 10: // bool family
+					if args[i].Typ.Id != 10 {
+						expectInvalidArgErr = true
+						badValue = v
+					}
+				case (t >= 30 && t <= 33): // float family
+					if args[i].Typ.Id < 30 || args[i].Typ.Id > 33 {
+						expectInvalidArgErr = true
+						badValue = v
+					}
+				}
+				i++
+			}
+			if (!expectInvalidArgErr) && (!expectedInvalidArgLengthErr) {
+				goto handleSuccess
+			}
+		}
+		goto handleFailed
+	} else {
+		return "", moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+	}
+handleSuccess:
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return body, nil
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return "", rbErr
+	}
+	if expectedInvalidArgLengthErr {
+		return "", moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+	} else if expectInvalidArgErr {
+		return "", moerr.NewInvalidArg(ctx, name+" function have invalid input args", badValue)
+	}
+	return "", moerr.NewNotSupported(ctx, "function or operator '%s'", name)
 }
 
 func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Relation, dbName, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {

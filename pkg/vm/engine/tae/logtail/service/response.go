@@ -14,6 +14,7 @@
 package service
 
 import (
+	"fmt"
 	"math"
 	"sync"
 
@@ -36,7 +37,7 @@ func (r *LogtailResponse) GetID() uint64 {
 	return r.ResponseId
 }
 func (r *LogtailResponse) DebugString() string {
-	return r.LogtailResponse.String()
+	return ""
 }
 
 func (r *LogtailResponse) Size() int {
@@ -91,7 +92,13 @@ func (s *LogtailResponseSegment) GetID() uint64 {
 }
 
 func (s *LogtailResponseSegment) DebugString() string {
-	return s.String()
+	return fmt.Sprintf(
+		"LogtailResponseSegment: StreamID=%d, MessageSize=%d, Sequence=%d, MaxSequence=%d",
+		s.GetStreamID(),
+		s.GetMessageSize(),
+		s.GetSequence(),
+		s.GetMaxSequence(),
+	)
 }
 
 func (s *LogtailResponseSegment) Size() int {
