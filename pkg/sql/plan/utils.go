@@ -1347,7 +1347,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 
 	for i, uniqueColMap := range uniqueCols {
 		var condExpr *Expr
-		var condIdx int = 0
+		condIdx := int(0)
 		for _, colIdx := range uniqueColMap {
 			col := tableDef.Cols[colIdx]
 			leftExpr := &Expr{
@@ -1406,7 +1406,7 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 
 	for i, uniqueColMap := range uniqueCols {
 		var condExpr *Expr
-		var condIdx int = 0
+		condIdx := int(0)
 		for _, colIdx := range uniqueColMap {
 			col := tableDef.Cols[colIdx]
 			// insert values

@@ -647,7 +647,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			joinIdx := 0
 			for _, uniqueColMap := range uniqueCols {
 				var condExpr *Expr
-				var condIdx int = 0
+				condIdx := int(0)
 				for _, colIdx := range uniqueColMap {
 					col := rightTableDef.Cols[colIdx]
 					leftExpr := &Expr{
