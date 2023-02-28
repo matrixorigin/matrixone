@@ -19,7 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -27,7 +27,12 @@ type FallbackShard []ShardPolicy
 
 var _ ShardPolicy = FallbackShard{}
 
-func (f FallbackShard) Batch(ctx context.Context, tableID ID, getDefs func(context.Context) ([]engine.TableDef, error), batch *batch.Batch, nodes []logservicepb.DNStore) (sharded []*ShardedBatch, err error) {
+func (f FallbackShard) Batch(
+	ctx context.Context,
+	tableID ID,
+	getDefs func(context.Context) ([]engine.TableDef, error),
+	batch *batch.Batch,
+	nodes []metadata.DNService) (sharded []*ShardedBatch, err error) {
 	for _, policy := range f {
 		sharded, err := policy.Batch(ctx, tableID, getDefs, batch, nodes)
 		if err != nil {
@@ -41,7 +46,13 @@ func (f FallbackShard) Batch(ctx context.Context, tableID ID, getDefs func(conte
 	panic("all shard policy failed")
 }
 
-func (f FallbackShard) Vector(ctx context.Context, tableID ID, getDefs func(context.Context) ([]engine.TableDef, error), colName string, vec *vector.Vector, nodes []logservicepb.DNStore) (sharded []*ShardedVector, err error) {
+func (f FallbackShard) Vector(
+	ctx context.Context,
+	tableID ID,
+	getDefs func(context.Context) ([]engine.TableDef, error),
+	colName string,
+	vec *vector.Vector,
+	nodes []metadata.DNService) (sharded []*ShardedVector, err error) {
 	for _, policy := range f {
 		sharded, err := policy.Vector(ctx, tableID, getDefs, colName, vec, nodes)
 		if err != nil {

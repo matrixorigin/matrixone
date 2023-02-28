@@ -25,14 +25,21 @@ import (
 	"math"
 )
 
+type statsInfoMap struct {
+	ndvMap      map[string]float64
+	minValMap   map[string]float64
+	maxValMap   map[string]float64
+	dataTypeMap map[string]types.T
+}
+
 func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 	if sortOrder == -1 {
 		return cost
 	}
 	// coefficient is 0.5 when tableCnt equals cost, and 1 when tableCnt >> cost
-	coefficient1 := math.Pow(0.5, cost/tableCnt)
+	coefficient1 := math.Pow(0.6, cost/tableCnt)
 	// coefficient is 0.25 when tableCnt is small, and 1 when very large table.
-	coefficient2 := math.Pow(0.2, (1 / math.Log10(tableCnt)))
+	coefficient2 := math.Pow(0.3, (1 / math.Log10(tableCnt)))
 
 	outCnt := cost * coefficient1 * coefficient2
 	if sortOrder == 0 {
@@ -52,7 +59,7 @@ func estimateOutCntForEquality(expr *plan.Expr, sortKeyName string, tableCnt, co
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
 	ret, col := plan2.CheckFilter(expr)
 	if !ret {
-		return cost / 5
+		return cost / 100
 	}
 	sortOrder := util.GetClusterByColumnOrder(sortKeyName, col.Name)
 	//if col is clusterby, we assume most of the rows in blocks we read is needed
@@ -60,16 +67,64 @@ func estimateOutCntForEquality(expr *plan.Expr, sortKeyName string, tableCnt, co
 	if sortOrder != -1 {
 		return estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
 	} else {
-		if ndv, ok := ndvMap[col.Name]; ok {
-			return tableCnt / ndv
-		} else {
-			return tableCnt / 100
+		//check strict filter, otherwise can not estimate outcnt by ndv
+		ret, col, _ := plan2.CheckStrictFilter(expr)
+		if ret {
+			if ndv, ok := ndvMap[col.Name]; ok {
+				return tableCnt / ndv
+			}
 		}
 	}
+	return cost / 100
+}
+
+func calcOutCntByMinMax(funcName string, tableCnt, min, max, val float64) float64 {
+	switch funcName {
+	case ">", ">=":
+		return (max - val) / (max - min) * tableCnt
+	case "<", "<=":
+		return (val - min) / (max - min) * tableCnt
+	}
+	return -1 // never reach here
+}
+
+func estimateOutCntForNonEquality(expr *plan.Expr, funcName, sortKeyName string, tableCnt, cost float64, s statsInfoMap) float64 {
+	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
+	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
+	ret, col := plan2.CheckFilter(expr)
+	if !ret {
+		return cost / 10
+	}
+	sortOrder := util.GetClusterByColumnOrder(sortKeyName, col.Name)
+	//if col is clusterby, we assume most of the rows in blocks we read is needed
+	//otherwise, deduce selectivity according to ndv
+	if sortOrder != -1 {
+		return estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
+	} else {
+		//check strict filter, otherwise can not estimate outcnt by min/max val
+		ret, col, constExpr := plan2.CheckStrictFilter(expr)
+		if ret {
+			switch s.dataTypeMap[col.Name] {
+			case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+				if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
+					return calcOutCntByMinMax(funcName, tableCnt, s.minValMap[col.Name], s.maxValMap[col.Name], float64(val.I64Val))
+				}
+			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+				if val, valOk := constExpr.Value.(*plan.Const_U64Val); valOk {
+					return calcOutCntByMinMax(funcName, tableCnt, s.minValMap[col.Name], s.maxValMap[col.Name], float64(val.U64Val))
+				}
+			case types.T_date:
+				if val, valOk := constExpr.Value.(*plan.Const_Dateval); valOk {
+					return calcOutCntByMinMax(funcName, tableCnt, s.minValMap[col.Name], s.maxValMap[col.Name], float64(val.Dateval))
+				}
+			}
+		}
+	}
+	return cost / 10
 }
 
 // estimate output lines for a filter
-func estimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, ndvMap map[string]float64) float64 {
+func estimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, s statsInfoMap) float64 {
 	if expr == nil {
 		return cost
 	}
@@ -79,19 +134,19 @@ func estimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=":
-			outcnt = estimateOutCntForEquality(expr, sortKeyName, tableCnt, cost, ndvMap)
+			outcnt = estimateOutCntForEquality(expr, sortKeyName, tableCnt, cost, s.ndvMap)
 		case ">", "<", ">=", "<=":
 			//for filters like a>1, no good way to estimate, return 3 * equality
-			outcnt = estimateOutCntForEquality(expr, sortKeyName, tableCnt, cost, ndvMap) * 3
+			outcnt = estimateOutCntForNonEquality(expr, funcName, sortKeyName, tableCnt, cost, s)
 		case "and":
 			//get the smaller one of two children, and tune it down a little bit
-			out1 := estimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, ndvMap)
-			out2 := estimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, ndvMap)
+			out1 := estimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, s)
+			out2 := estimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, s)
 			outcnt = math.Min(out1, out2) * 0.8
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
-			out1 := estimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, ndvMap)
-			out2 := estimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, ndvMap)
+			out1 := estimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, s)
+			out2 := estimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, s)
 			outcnt = math.Max(out1, out2) * 1.5
 		default:
 			//no good way to estimate, just 0.1*cost
@@ -180,7 +235,9 @@ func calcNdvUsingMinMax(minVal, maxVal any, t types.Type) float64 {
 	}
 }
 
-func getColumnsNDVFromZoneMap(ctx context.Context, columns []int, blocks *[][]BlockMeta, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef) (map[string]float64, error) {
+// get minval , maxval, datatype from zonemap, and calculate ndv
+// then put these in a statsInfoMap and return
+func getStatsInfoMap(ctx context.Context, columns []int, blocks *[][]BlockMeta, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef) (statsInfoMap, error) {
 	lenCols := len(columns)
 	dataTypes := make([]types.Type, lenCols)
 	maxVal := make([]any, lenCols)         //maxvalue of all blocks for column
@@ -190,13 +247,14 @@ func getColumnsNDVFromZoneMap(ctx context.Context, columns []int, blocks *[][]Bl
 		valMap[i] = make(map[any]int, blockNumTotal)
 	}
 
+	var s statsInfoMap
 	//first, get info needed from zonemap
 	var init bool
 	for i := range *blocks {
 		for j := range (*blocks)[i] {
 			zonemapVal, blkTypes, err := getZonemapDataFromMeta(ctx, columns, (*blocks)[i][j], tableDef)
 			if err != nil {
-				return nil, err
+				return s, err
 			}
 			if !init {
 				init = true
@@ -231,12 +289,47 @@ func getColumnsNDVFromZoneMap(ctx context.Context, columns []int, blocks *[][]Bl
 	}
 
 	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
-	ndvMap := make(map[string]float64, lenCols) //return ndvs
+	//set info in statsInfoMap
+	s.ndvMap = make(map[string]float64, lenCols)
+	s.minValMap = make(map[string]float64, lenCols)
+	s.maxValMap = make(map[string]float64, lenCols)
+	s.dataTypeMap = make(map[string]types.T, lenCols)
 	for i := range columns {
 		colName := tableDef.Cols[columns[i]].Name
-		ndvMap[colName] = calcNdv(minVal[i], maxVal[i], float64(len(valMap[i])), float64(blockNumTotal), tableCnt, dataTypes[i])
+		s.ndvMap[colName] = calcNdv(minVal[i], maxVal[i], float64(len(valMap[i])), float64(blockNumTotal), tableCnt, dataTypes[i])
+		s.dataTypeMap[colName] = dataTypes[i].Oid
+		switch dataTypes[i].Oid {
+		case types.T_int8:
+			s.minValMap[colName] = float64(minVal[i].(int8))
+			s.maxValMap[colName] = float64(maxVal[i].(int8))
+		case types.T_int16:
+			s.minValMap[colName] = float64(minVal[i].(int16))
+			s.maxValMap[colName] = float64(maxVal[i].(int16))
+		case types.T_int32:
+			s.minValMap[colName] = float64(minVal[i].(int32))
+			s.maxValMap[colName] = float64(maxVal[i].(int32))
+		case types.T_int64:
+			s.minValMap[colName] = float64(minVal[i].(int64))
+			s.maxValMap[colName] = float64(maxVal[i].(int64))
+		case types.T_uint8:
+			s.minValMap[colName] = float64(minVal[i].(uint8))
+			s.maxValMap[colName] = float64(maxVal[i].(uint8))
+		case types.T_uint16:
+			s.minValMap[colName] = float64(minVal[i].(uint16))
+			s.maxValMap[colName] = float64(maxVal[i].(uint16))
+		case types.T_uint32:
+			s.minValMap[colName] = float64(minVal[i].(uint32))
+			s.maxValMap[colName] = float64(maxVal[i].(uint32))
+		case types.T_uint64:
+			s.minValMap[colName] = float64(minVal[i].(uint64))
+			s.maxValMap[colName] = float64(maxVal[i].(uint64))
+		case types.T_date:
+			s.minValMap[colName] = float64(minVal[i].(types.Date))
+			s.maxValMap[colName] = float64(maxVal[i].(types.Date))
+		}
 	}
-	return ndvMap, nil
+
+	return s, nil
 }
 
 // calculate the stats for scan node.
@@ -261,11 +354,11 @@ func CalcStats(ctx context.Context, blocks *[][]BlockMeta, expr *plan.Expr, tabl
 	stats.TableCnt = float64(tableCnt)
 	stats.Cost = float64(cost)
 	if expr != nil {
-		ndvMap, err := getColumnsNDVFromZoneMap(ctx, columns, blocks, blockNumTotal, stats.TableCnt, tableDef)
+		s, err := getStatsInfoMap(ctx, columns, blocks, blockNumTotal, stats.TableCnt, tableDef)
 		if err != nil {
 			return plan2.DefaultStats(), nil
 		}
-		stats.Outcnt = estimateOutCnt(expr, sortKeyName, stats.TableCnt, stats.Cost, ndvMap)
+		stats.Outcnt = estimateOutCnt(expr, sortKeyName, stats.TableCnt, stats.Cost, s)
 	} else {
 		stats.Outcnt = stats.TableCnt
 	}

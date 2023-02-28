@@ -51,9 +51,9 @@ drop table if exists t7;
 create cluster table t7(a int, b int);
 desc t7;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT    YES        NULL        
-b    INT    YES        NULL        
-account_id    INT UNSIGNED    NO        NULL        the account_id added by the mo
+a    INT(32)    YES        null
+b    INT(32)    YES        null
+account_id    INT UNSIGNED(32)    NO        null        the account_id added by the mo
 drop table t7;
 use mo_catalog;
 drop table if exists cluster_table_1;

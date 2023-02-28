@@ -18,22 +18,21 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/fagongzi/util/protoc"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCmdPingDNWithEmptyDN(t *testing.T) {
 	ctx := context.Background()
-	clusterDetails := func() (logservice.ClusterDetails, error) {
-		return logservice.ClusterDetails{}, nil
-	}
-	proc := process.New(ctx, nil, nil, nil, nil, clusterDetails)
+	initTestRuntime()
+	proc := process.New(ctx, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		dn,
 		"",
@@ -46,22 +45,11 @@ func TestCmdPingDNWithEmptyDN(t *testing.T) {
 }
 
 func TestCmdPingDNWithSingleDN(t *testing.T) {
+	initTestRuntime(1)
+
 	shardID := uint64(1)
 	ctx := context.Background()
-	clusterDetails := func() (logservice.ClusterDetails, error) {
-		return logservice.ClusterDetails{
-			DNStores: []logservice.DNStore{
-				{
-					Shards: []logservice.DNShardInfo{
-						{
-							ShardID: 1,
-						},
-					},
-				},
-			},
-		}, nil
-	}
-	proc := process.New(ctx, nil, nil, nil, nil, clusterDetails)
+	proc := process.New(ctx, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		dn,
 		"",
@@ -81,23 +69,8 @@ func TestCmdPingDNWithSingleDN(t *testing.T) {
 
 func TestCmdPingDNWithMultiDN(t *testing.T) {
 	ctx := context.Background()
-	clusterDetails := func() (logservice.ClusterDetails, error) {
-		return logservice.ClusterDetails{
-			DNStores: []logservice.DNStore{
-				{
-					Shards: []logservice.DNShardInfo{
-						{
-							ShardID: 1,
-						},
-						{
-							ShardID: 2,
-						},
-					},
-				},
-			},
-		}, nil
-	}
-	proc := process.New(ctx, nil, nil, nil, nil, clusterDetails)
+	initTestRuntime(1, 2)
+	proc := process.New(ctx, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		dn,
 		"",
@@ -120,23 +93,8 @@ func TestCmdPingDNWithMultiDN(t *testing.T) {
 
 func TestCmdPingDNWithParameter(t *testing.T) {
 	ctx := context.Background()
-	clusterDetails := func() (logservice.ClusterDetails, error) {
-		return logservice.ClusterDetails{
-			DNStores: []logservice.DNStore{
-				{
-					Shards: []logservice.DNShardInfo{
-						{
-							ShardID: 1,
-						},
-						{
-							ShardID: 2,
-						},
-					},
-				},
-			},
-		}, nil
-	}
-	proc := process.New(ctx, nil, nil, nil, nil, clusterDetails)
+	initTestRuntime(1, 2)
+	proc := process.New(ctx, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		dn,
 		"1",
@@ -152,4 +110,25 @@ func TestCmdPingDNWithParameter(t *testing.T) {
 		Method: pb.CmdMethod_Ping.String(),
 		Data:   []interface{}{pb.DNPingResponse{ShardID: 1}},
 	}, result)
+}
+
+func initTestRuntime(shardIDs ...uint64) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	var shards []metadata.DNShard
+	for _, id := range shardIDs {
+		shards = append(shards, metadata.DNShard{
+			DNShardRecord: metadata.DNShardRecord{ShardID: id},
+		})
+	}
+
+	cluster := clusterservice.NewMOCluster(
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(nil, []metadata.DNService{
+			{
+				Shards: shards,
+			},
+		}))
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 }
