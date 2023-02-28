@@ -16,11 +16,11 @@ package cnservice
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
@@ -63,5 +63,18 @@ func (s *service) initDistributedTAE(
 		client,
 		hakeeper,
 	)
+
+	// log tail client to subscribe table and receive table log.
+	usePushModel := s.cfg.TurnOnPushModel
+	cnEngine := pu.StorageEngine.(*disttae.Engine)
+	cnEngine.SetPushModelFlag(usePushModel)
+	if usePushModel {
+		logutil.Info("cn turn push model on.")
+		err = cnEngine.InitLogTailPushModel(ctx)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
