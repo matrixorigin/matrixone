@@ -42,6 +42,10 @@ type MockCompilerContext struct {
 	ctx context.Context
 }
 
+func (m *MockCompilerContext) ResolveUdf(name string, ast []*plan.Expr) (string, error) {
+	return "", nil
+}
+
 func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
 	return []uint32{catalog.System_Account}, nil
 }

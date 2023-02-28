@@ -139,7 +139,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					return nil, moerr.NewInternalError(ctx, "The current version does not support modifying the data read from s3 within a transaction")
 				}
 			}
-			ivec, err = p.s3BlockReader.Read(context.Background(), extent, p.getIdxs(colNames), p.proc.GetMPool())
+			ivec, err = p.s3BlockReader.Read(ctx, extent, p.getIdxs(colNames), p.proc.GetMPool())
 			if err != nil {
 				return nil, err
 			}

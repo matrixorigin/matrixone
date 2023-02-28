@@ -223,7 +223,7 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 		return nil, err
 	}
 	logutil.Info("Using Dump Storage Engine and Cluster Nodes.")
-	pu := mo_config.NewParameterUnit(sv, eng, txnClient, engine.Nodes{}, nil)
+	pu := mo_config.NewParameterUnit(sv, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
 }

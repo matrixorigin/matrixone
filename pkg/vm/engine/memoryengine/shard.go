@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -47,7 +46,7 @@ type ShardPolicy interface {
 		getDefs getDefsFunc,
 		colName string,
 		vec *vector.Vector,
-		nodes []logservicepb.DNStore,
+		nodes []metadata.DNService,
 	) (
 		sharded []*ShardedVector,
 		err error,
@@ -58,7 +57,7 @@ type ShardPolicy interface {
 		tableID ID,
 		getDefs getDefsFunc,
 		batch *batch.Batch,
-		nodes []logservicepb.DNStore,
+		nodes []metadata.DNService,
 	) (
 		sharded []*ShardedBatch,
 		err error,
@@ -76,18 +75,14 @@ type ShardedBatch struct {
 }
 
 func (e *Engine) allShards() (shards []Shard, err error) {
-	clusterDetails, err := e.getClusterDetails()
-	if err != nil {
-		return nil, err
-	}
-	for _, store := range clusterDetails.DNStores {
+	for _, store := range getDNServices(e.cluster) {
 		for _, shard := range store.Shards {
 			shards = append(shards, Shard{
 				DNShardRecord: metadata.DNShardRecord{
 					ShardID: shard.ShardID,
 				},
 				ReplicaID: shard.ReplicaID,
-				Address:   store.ServiceAddress,
+				Address:   store.TxnServiceAddress,
 			})
 		}
 	}
@@ -95,18 +90,14 @@ func (e *Engine) allShards() (shards []Shard, err error) {
 }
 
 func (e *Engine) anyShard() (shards []Shard, err error) {
-	clusterDetails, err := e.getClusterDetails()
-	if err != nil {
-		return nil, err
-	}
-	for _, store := range clusterDetails.DNStores {
+	for _, store := range getDNServices(e.cluster) {
 		for _, shard := range store.Shards {
 			shards = append(shards, Shard{
 				DNShardRecord: metadata.DNShardRecord{
 					ShardID: shard.ShardID,
 				},
 				ReplicaID: shard.ReplicaID,
-				Address:   store.ServiceAddress,
+				Address:   store.TxnServiceAddress,
 			})
 			return
 		}
@@ -133,11 +124,11 @@ type NoShard struct {
 	shard   Shard
 }
 
-func (s *NoShard) setShard(stores []logservicepb.DNStore) {
+func (s *NoShard) setShard(stores []metadata.DNService) {
 	s.setOnce.Do(func() {
 		type ShardInfo struct {
-			Store logservicepb.DNStore
-			Shard logservicepb.DNShardInfo
+			Store metadata.DNService
+			Shard metadata.DNShard
 		}
 		infos := make([]ShardInfo, 0, len(stores))
 		for _, store := range stores {
@@ -160,7 +151,7 @@ func (s *NoShard) setShard(stores []logservicepb.DNStore) {
 				ShardID: info.Shard.ShardID,
 			},
 			ReplicaID: info.Shard.ReplicaID,
-			Address:   info.Store.ServiceAddress,
+			Address:   info.Store.TxnServiceAddress,
 		}
 	})
 }
@@ -173,7 +164,7 @@ func (s *NoShard) Vector(
 	getDefs getDefsFunc,
 	colName string,
 	vec *vector.Vector,
-	nodes []logservicepb.DNStore,
+	nodes []metadata.DNService,
 ) (
 	sharded []*ShardedVector,
 	err error,
@@ -191,7 +182,7 @@ func (s *NoShard) Batch(
 	tableID ID,
 	getDefs getDefsFunc,
 	bat *batch.Batch,
-	nodes []logservicepb.DNStore,
+	nodes []metadata.DNService,
 ) (
 	sharded []*ShardedBatch,
 	err error,

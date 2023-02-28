@@ -210,6 +210,12 @@ func (mr *MockCompilerContext2MockRecorder) GetUserName() *gomock.Call {
 }
 
 // Resolve mocks base method.
+func (m *MockCompilerContext2) ResolveUdf(name string, args []*plan.Expr) (string, error) {
+	return "", nil
+}
+
+
+// Resolve mocks base method.
 func (m *MockCompilerContext2) Resolve(schemaName, tableName string) (*plan.ObjectRef, *plan.TableDef) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Resolve", schemaName, tableName)
