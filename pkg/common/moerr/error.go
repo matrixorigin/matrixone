@@ -15,15 +15,14 @@
 package moerr
 
 import (
-	"bytes"
 	"context"
 	"encoding"
-	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"sync/atomic"
 
+	moerrpb "github.com/matrixorigin/matrixone/pkg/pb/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 )
@@ -359,34 +358,27 @@ func (e *Error) SqlState() string {
 	return e.sqlState
 }
 
-type encodingErr struct {
-	Code      uint16
-	MysqlCode uint16
-	Message   string
-	SqlState  string
-}
-
 var _ encoding.BinaryMarshaler = new(Error)
 
 func (e *Error) MarshalBinary() ([]byte, error) {
-	ee := encodingErr{
+	ee := moerrpb.Error{
 		Code:      e.code,
 		MysqlCode: e.mysqlCode,
 		Message:   e.message,
 		SqlState:  e.sqlState,
 	}
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(ee); err != nil {
+	data := make([]byte, ee.ProtoSize())
+	if _, err := ee.MarshalToSizedBuffer(data); err != nil {
 		return nil, ConvertGoError(Context(), err)
 	}
-	return buf.Bytes(), nil
+	return data, nil
 }
 
 var _ encoding.BinaryUnmarshaler = new(Error)
 
 func (e *Error) UnmarshalBinary(data []byte) error {
-	var ee encodingErr
-	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&ee); err != nil {
+	var ee moerrpb.Error
+	if err := ee.Unmarshal(data); err != nil {
 		return ConvertGoError(Context(), err)
 	}
 	e.code = ee.Code

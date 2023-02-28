@@ -16,15 +16,14 @@ package testengine
 
 import (
 	"context"
-	"math"
-	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -37,24 +36,23 @@ func New(
 	client client.TxnClient,
 	compilerContext plan.CompilerContext,
 ) {
-
-	ck := clock.NewHLCClock(func() int64 {
-		return time.Now().Unix()
-	}, math.MaxInt)
-
-	shard := logservicepb.DNShardInfo{
-		ShardID:   2,
-		ReplicaID: 2,
-	}
-	shards := []logservicepb.DNShardInfo{
-		shard,
-	}
-	dnAddr := "1"
-	dnStore := logservicepb.DNStore{
-		UUID:           uuid.NewString(),
-		ServiceAddress: dnAddr,
-		Shards:         shards,
-	}
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	ck := runtime.ProcessLevelRuntime().Clock()
+	addr := "1"
+	services := []metadata.DNService{{
+		ServiceID:         uuid.NewString(),
+		TxnServiceAddress: "1",
+		Shards: []metadata.DNShard{
+			{
+				DNShardRecord: metadata.DNShardRecord{ShardID: 2},
+				ReplicaID:     2,
+			},
+		},
+	}}
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService,
+		clusterservice.NewMOCluster(nil, 0,
+			clusterservice.WithDisableRefresh(),
+			clusterservice.WithServices(nil, services)))
 
 	storage, err := memorystorage.NewMemoryStorage(
 		mpool.MustNewZero(),
@@ -68,7 +66,7 @@ func New(
 	client = memorystorage.NewStorageTxnClient(
 		ck,
 		map[string]*memorystorage.Storage{
-			dnAddr: storage,
+			addr: storage,
 		},
 	)
 
@@ -77,14 +75,8 @@ func New(
 		memoryengine.NewDefaultShardPolicy(
 			mpool.MustNewZero(),
 		),
-		func() (logservicepb.ClusterDetails, error) {
-			return logservicepb.ClusterDetails{
-				DNStores: []logservicepb.DNStore{
-					dnStore,
-				},
-			}, nil
-		},
 		memoryengine.RandomIDGenerator,
+		clusterservice.GetMOCluster(),
 	)
 
 	txnOp, err := client.New()

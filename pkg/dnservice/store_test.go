@@ -170,6 +170,7 @@ func runDNStoreTestWithFileServiceFactory(
 	testFn func(*store),
 	fsFactory fileservice.NewFileServicesFunc,
 	opts ...Option) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	thc := newTestHAKeeperClient()
 	opts = append(opts,
 		WithHAKeeperClientFactory(func() (logservice.DNHAKeeperClient, error) {

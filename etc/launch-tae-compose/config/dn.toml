@@ -56,10 +56,11 @@ incremental-interval = "180s"
 global-min-count = 60
 
 [dn.LogtailServer]
-listen-address = "127.0.0.1:32003"
+listen-address = "0.0.0.0:32003"
+service-address = "dn:32003"
 rpc-max-message-size = "16KiB"
 rpc-payload-copy-buffer-size = "16KiB"
 rpc-enable-checksum = true
-logtail-collect-interval = "50ms"
+logtail-collect-interval = "2ms"
 logtail-response-send-timeout = "10s"
 max-logtail-fetch-failure = 5

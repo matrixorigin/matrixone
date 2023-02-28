@@ -428,6 +428,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 					},
 				})
 			}
+		case vm.Output:
 		default:
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, dupInstruction(&in, nil))
