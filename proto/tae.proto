@@ -26,38 +26,7 @@ option (gogoproto.protosizer_all) = true;
 message TableEntryDelta {
     string name = 1;
     string constraints = 2;
+    string comment = 3;
 }
 
 
-enum AlterKind {
-    Nop = 0;
-    RenameTable = 1;
-    UpdateConstraint = 2;
-    UpdateComment = 3;
-}
-
-
-message AlterTableConstraint {
-    string constraints = 1;
-}
-
-message AlterTableComment {
-    string comment = 1;
-}
-
-message AlterTableRenameTable {
-    string old_name = 1;
-    string new_name = 2;
-}
-
-message AlterTableReq {
-    uint64 table_id = 1;
-    uint64 db_id = 2;
-    AlterKind kind = 3;
-
-    oneof operation {
-        AlterTableRenameTable rename_table = 4;
-        AlterTableConstraint update_cstr = 5;
-        AlterTableComment update_comment = 6;
-    }
-}

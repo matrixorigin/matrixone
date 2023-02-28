@@ -17,7 +17,7 @@ package txnbase
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/tae"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -93,9 +93,9 @@ func (rel *TxnRelation) DeleteByFilter(filter *handle.Filter) (err error)       
 func (rel *TxnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }
-func (rel *TxnRelation) UpdateConstraint(cstr []byte) (err error)                   { return }
-func (rel *TxnRelation) AlterTable(context.Context, *tae.AlterTableReq) (err error) { return }
-func (rel *TxnRelation) GetDB() (handle.Database, error)                            { return nil, nil }
+func (rel *TxnRelation) UpdateConstraint(cstr []byte) (err error)                     { return }
+func (rel *TxnRelation) AlterTable(context.Context, *apipb.AlterTableReq) (err error) { return }
+func (rel *TxnRelation) GetDB() (handle.Database, error)                              { return nil, nil }
 
 func (seg *TxnSegment) GetMeta() any                     { return nil }
 func (seg *TxnSegment) String() string                   { return "" }

@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
-	taepb "github.com/matrixorigin/matrixone/pkg/pb/tae"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -132,7 +131,7 @@ func (h *Handle) HandleCommit(
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-			case *taepb.AlterTableReq:
+			case *apipb.AlterTableReq:
 				err = h.HandleAlterTable(
 					ctx,
 					meta,
@@ -247,7 +246,7 @@ func (h *Handle) HandlePrepare(
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-			case *taepb.AlterTableReq:
+			case *apipb.AlterTableReq:
 				err = h.HandleAlterTable(
 					ctx,
 					meta,
@@ -614,7 +613,7 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case []catalog.UpdateConstraint:
 			for _, cmd := range cmds {
-				req := taepb.NewUpdateConstraintReq(
+				req := apipb.NewUpdateConstraintReq(
 					cmd.DatabaseId,
 					cmd.TableId,
 					string(cmd.Constraint))
@@ -901,7 +900,7 @@ func (h *Handle) HandleWrite(
 func (h *Handle) HandleAlterTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *taepb.AlterTableReq,
+	req *apipb.AlterTableReq,
 	resp *db.WriteResp) (err error) {
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))

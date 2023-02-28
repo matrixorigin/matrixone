@@ -23,7 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	taepb "github.com/matrixorigin/matrixone/pkg/pb/tae"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -134,7 +134,7 @@ func (be *TableBaseEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (is
 	return
 }
 
-func (be *TableBaseEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *taepb.AlterTableReq) (isNewNode bool, err error) {
+func (be *TableBaseEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *apipb.AlterTableReq) (isNewNode bool, err error) {
 	be.Lock()
 	defer be.Unlock()
 	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
@@ -150,7 +150,7 @@ func (be *TableBaseEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, r
 	var entry *TableMVCCNode
 	isNewNode, entry = be.getOrSetUpdateNode(txn)
 	switch req.Kind {
-	case taepb.AlterKind_UpdateConstraint:
+	case apipb.AlterKind_UpdateConstraint:
 		entry.Constraints = req.GetUpdateCstr().Constraints
 	default:
 		err = moerr.NewNYI(ctx, "alter table %s", req.Kind.String())

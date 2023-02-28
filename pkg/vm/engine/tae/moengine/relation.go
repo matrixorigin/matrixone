@@ -22,8 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	taepb "github.com/matrixorigin/matrixone/pkg/pb/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
@@ -73,7 +73,7 @@ func (rel *baseRelation) UpdateConstraintWithBin(_ context.Context, bin []byte) 
 	return rel.handle.UpdateConstraint(bin)
 }
 
-func (rel *baseRelation) AlterTable(ctx context.Context, req *taepb.AlterTableReq) error {
+func (rel *baseRelation) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {
 	return rel.handle.AlterTable(ctx, req)
 }
 

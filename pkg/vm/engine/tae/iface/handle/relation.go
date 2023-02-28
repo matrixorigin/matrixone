@@ -18,7 +18,7 @@ import (
 	"context"
 	"io"
 
-	taepb "github.com/matrixorigin/matrixone/pkg/pb/tae"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -32,7 +32,7 @@ type Relation interface {
 	GetCardinality(attr string) int64
 	Schema() any
 	UpdateConstraint([]byte) error
-	AlterTable(ctx context.Context, req *taepb.AlterTableReq) error
+	AlterTable(ctx context.Context, req *apipb.AlterTableReq) error
 	MakeSegmentIt() SegmentIt
 	MakeBlockIt() BlockIt
 

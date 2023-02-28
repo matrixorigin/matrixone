@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	taepb "github.com/matrixorigin/matrixone/pkg/pb/tae"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -816,10 +816,10 @@ func (tbl *txnTable) UpdateConstraint(cstr []byte) (err error) {
 	return
 }
 
-func (tbl *txnTable) AlterTable(ctx context.Context, req *taepb.AlterTableReq) error {
+func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {
 	logutil.Infof("xxxx alter req: %#v", req)
 	switch req.Kind {
-	case taepb.AlterKind_UpdateConstraint:
+	case apipb.AlterKind_UpdateConstraint:
 	default:
 		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
 	}

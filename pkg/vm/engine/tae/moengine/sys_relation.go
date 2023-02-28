@@ -17,14 +17,13 @@ package moengine
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/tae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
@@ -94,7 +93,7 @@ func (s *sysRelation) UpdateConstraintWithBin(context.Context, []byte) error {
 	return ErrReadOnly
 }
 
-func (s *sysRelation) AlterTable(context.Context, *tae.AlterTableReq) error {
+func (s *sysRelation) AlterTable(context.Context, *apipb.AlterTableReq) error {
 	return ErrReadOnly
 }
 

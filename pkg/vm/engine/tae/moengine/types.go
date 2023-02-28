@@ -26,8 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	taepb "github.com/matrixorigin/matrixone/pkg/pb/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -56,7 +56,7 @@ type Relation interface {
 	GetHideKeys(context.Context) ([]*engine.Attribute, error)
 	GetSchema(ctx context.Context) *catalog.Schema
 
-	AlterTable(context.Context, *taepb.AlterTableReq) error
+	AlterTable(context.Context, *apipb.AlterTableReq) error
 	UpdateConstraintWithBin(context.Context, []byte) error
 	//Write just append data into txn's workspace, instead of applying data into state machine.
 	//TODO::Add flag parameter to indicate whether tae need to

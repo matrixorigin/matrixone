@@ -659,6 +659,7 @@ func (s *Schema) deltaPartFromSchema() taepb.TableEntryDelta {
 	return taepb.TableEntryDelta{
 		Name:        s.Name,
 		Constraints: s.Constraint,
+		Comment:     s.Comment,
 	}
 }
 
