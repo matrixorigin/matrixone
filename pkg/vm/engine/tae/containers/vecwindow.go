@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
@@ -49,8 +49,8 @@ func (win *windowBase) ReadFrom(io.Reader) (int64, error)    { panic("cannot mod
 func (win *windowBase) ReadFromFile(common.IVFile, *bytes.Buffer) error {
 	panic("cannot modify window")
 }
-func (win *windowBase) Reset()                                  { panic("cannot modify window") }
-func (win *windowBase) ResetWithData(*Bytes, *roaring64.Bitmap) { panic("cannot modify window") }
+func (win *windowBase) Reset()                               { panic("cannot modify window") }
+func (win *windowBase) ResetWithData(*Bytes, *cnNulls.Nulls) { panic("cannot modify window") }
 
 type vectorWindow[T any] struct {
 	*windowBase
@@ -69,12 +69,12 @@ func (win *vectorWindow[T]) HasNull() bool {
 	return win.ref.HasNull()
 }
 
-func (win *vectorWindow[T]) NullMask() *roaring64.Bitmap {
+func (win *vectorWindow[T]) NullMask() *cnNulls.Nulls {
 	mask := win.ref.NullMask()
 	if win.offset == 0 || mask == nil {
 		return mask
 	}
-	return common.BM64Window(mask, win.offset, win.offset+win.length)
+	return cnNulls.Range(mask, uint64(win.offset), uint64(win.offset+win.length), 0, cnNulls.NewWithSize(0))
 }
 
 func (win *vectorWindow[T]) Bytes() *Bytes {
@@ -139,13 +139,13 @@ func (win *vectorWindow[T]) Equals(o Vector) bool {
 		return false
 	}
 	if win.HasNull() {
-		if !win.NullMask().Equals(o.NullMask()) {
+		if !win.NullMask().IsSame(o.NullMask()) {
 			return false
 		}
 	}
 	mask := win.NullMask()
 	for i := 0; i < win.Length(); i++ {
-		if mask != nil && mask.ContainsInt(i) {
+		if mask != nil && mask.Contains(uint64(i)) {
 			continue
 		}
 		var v T

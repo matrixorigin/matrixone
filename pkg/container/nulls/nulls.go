@@ -289,3 +289,16 @@ func (n *Nulls) Or(m *Nulls) *Nulls {
 		return n
 	}
 }
+
+func (n *Nulls) IsSame(m *Nulls) bool {
+	switch {
+	case n == nil && m == nil:
+		return true
+	case n.Np == nil && m.Np == nil:
+		return true
+	case n.Np != nil && m.Np != nil:
+		return n.Np.IsSame(m.Np)
+	default:
+		return false
+	}
+}
