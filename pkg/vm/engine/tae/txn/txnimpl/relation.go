@@ -15,10 +15,12 @@
 package txnimpl
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	taepb "github.com/matrixorigin/matrixone/pkg/pb/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -311,4 +313,8 @@ func (h *txnRelation) GetDB() (handle.Database, error) {
 
 func (h *txnRelation) UpdateConstraint(cstr []byte) (err error) {
 	return h.table.UpdateConstraint(cstr)
+}
+
+func (h *txnRelation) AlterTable(ctx context.Context, req *taepb.AlterTableReq) (err error) {
+	return h.table.AlterTable(ctx, req)
 }

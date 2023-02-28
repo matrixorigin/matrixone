@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	taepb "github.com/matrixorigin/matrixone/pkg/pb/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -977,6 +979,11 @@ func (tbl *txnTable) BatchDedupLocal(bat *containers.Batch) (err error) {
 	}
 	err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
 	return
+}
+
+func (tbl *txnTable) AlterTable(ctx context.Context, req *taepb.AlterTableReq) error {
+	logutil.Infof("xxxx alter req: %#v", req)
+	return nil
 }
 
 func (tbl *txnTable) PrepareRollback() (err error) {
