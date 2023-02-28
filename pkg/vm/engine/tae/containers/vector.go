@@ -112,30 +112,6 @@ func (vec *vector[T]) GetType() types.Type {
 	return vec.downstreamVector.GetType()
 }
 
-func (vec *vector[T]) String() string {
-	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Allocated())
-
-	end := 100
-	if vec.Length() < end {
-		end = vec.Length()
-	}
-	if end == 0 {
-		return s
-	}
-
-	data := "Vals=["
-	for i := 0; i < end; i++ {
-		data = fmt.Sprintf("%s %v", data, vec.Get(i))
-	}
-	if vec.Length() > end {
-		s = fmt.Sprintf("%s %s...]", s, data)
-	} else {
-		s = fmt.Sprintf("%s %s]", s, data)
-	}
-
-	return s
-}
-
 func (vec *vector[T]) Extend(src Vector) {
 	vec.ExtendWithOffset(src, 0, src.Length())
 }
@@ -227,19 +203,6 @@ func (vec *vector[T]) Window(offset, length int) Vector {
 
 func (vec *vector[T]) HasNull() bool {
 	return vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Any()
-}
-
-// TODO: --- We can remove below function as they are only used in Testcases.
-
-func (vec *vector[T]) AppendMany(vs ...any) {
-	for _, v := range vs {
-		vec.Append(v)
-	}
-}
-
-func (vec *vector[T]) Delete(delRowId int) {
-	deletes := roaring.BitmapOf(uint32(delRowId))
-	vec.Compact(deletes)
 }
 
 //TODO: --- Below Functions Can be implemented in CN Vector.
@@ -338,37 +301,6 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 	return
 }
 
-func (vec *vector[T]) PPString(num int) string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("[T=%s][Len=%d][Data=(", vec.GetType().String(), vec.Length()))
-	limit := vec.Length()
-	if num > 0 && num < limit {
-		limit = num
-	}
-	size := vec.Length()
-	long := false
-	if size > limit {
-		long = true
-		size = limit
-	}
-	for i := 0; i < size; i++ {
-		if vec.IsNull(i) {
-			_, _ = w.WriteString("null")
-			continue
-		}
-		if vec.GetType().IsVarlen() {
-			_, _ = w.WriteString(fmt.Sprintf("%s, ", vec.Get(i).([]byte)))
-		} else {
-			_, _ = w.WriteString(fmt.Sprintf("%v, ", vec.Get(i)))
-		}
-	}
-	if long {
-		_, _ = w.WriteString("...")
-	}
-	_, _ = w.WriteString(")]")
-	return w.String()
-}
-
 //TODO: --- Need advise on the below functions
 
 func (vec *vector[T]) Close() {
@@ -459,4 +391,71 @@ func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 		}
 	}
 	cnVector.Shrink(vec.downstreamVector, sels)
+}
+
+// TODO - Below functions are not used in critical path.
+
+func (vec *vector[T]) String() string {
+	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Allocated())
+
+	end := 100
+	if vec.Length() < end {
+		end = vec.Length()
+	}
+	if end == 0 {
+		return s
+	}
+
+	data := "Vals=["
+	for i := 0; i < end; i++ {
+		data = fmt.Sprintf("%s %v", data, vec.Get(i))
+	}
+	if vec.Length() > end {
+		s = fmt.Sprintf("%s %s...]", s, data)
+	} else {
+		s = fmt.Sprintf("%s %s]", s, data)
+	}
+
+	return s
+}
+func (vec *vector[T]) PPString(num int) string {
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("[T=%s][Len=%d][Data=(", vec.GetType().String(), vec.Length()))
+	limit := vec.Length()
+	if num > 0 && num < limit {
+		limit = num
+	}
+	size := vec.Length()
+	long := false
+	if size > limit {
+		long = true
+		size = limit
+	}
+	for i := 0; i < size; i++ {
+		if vec.IsNull(i) {
+			_, _ = w.WriteString("null")
+			continue
+		}
+		if vec.GetType().IsVarlen() {
+			_, _ = w.WriteString(fmt.Sprintf("%s, ", vec.Get(i).([]byte)))
+		} else {
+			_, _ = w.WriteString(fmt.Sprintf("%v, ", vec.Get(i)))
+		}
+	}
+	if long {
+		_, _ = w.WriteString("...")
+	}
+	_, _ = w.WriteString(")]")
+	return w.String()
+}
+
+func (vec *vector[T]) AppendMany(vs ...any) {
+	for _, v := range vs {
+		vec.Append(v)
+	}
+}
+
+func (vec *vector[T]) Delete(delRowId int) {
+	deletes := roaring.BitmapOf(uint32(delRowId))
+	vec.Compact(deletes)
 }
