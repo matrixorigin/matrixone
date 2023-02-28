@@ -74,7 +74,25 @@ func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *vector[T]
 }
 
 func (vec *vector[T]) Get(i int) any {
-	return GetValue(vec.downstreamVector, uint32(i))
+	if vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Np != nil && vec.downstreamVector.Nsp.Np.Contains(uint64(i)) {
+		return types.Null{}
+	}
+
+	if vec.GetType().IsVarlen() {
+		bs := vec.ShallowGet(i).([]byte)
+		ret := make([]byte, len(bs))
+		copy(ret, bs)
+		return any(ret).(T)
+	}
+
+	return vec.ShallowGet(i)
+}
+
+func (vec *vector[T]) ShallowGet(i int) any {
+	if vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Np != nil && vec.downstreamVector.Nsp.Np.Contains(uint64(i)) {
+		return types.Null{}
+	}
+	return GetNonNullValue(vec.downstreamVector, uint32(i))
 }
 
 func (vec *vector[T]) Length() int {
@@ -121,15 +139,13 @@ func (vec *vector[T]) Update(i int, v any) {
 }
 
 func (vec *vector[T]) Slice() any {
+	//TODO: expensive
 	return vec.downstreamVector.Col
 }
 
 func (vec *vector[T]) Bytes() *Bytes {
+	//TODO: get rid of Bytes type
 	return MoVecToBytes(vec.downstreamVector)
-}
-
-func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
-	return vec.ForeachWindow(0, vec.Length(), op, sels)
 }
 
 func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
@@ -269,16 +285,32 @@ func (vec *vector[T]) Equals(o Vector) bool {
 	return true
 }
 
+func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
+	return vec.ForeachWindow(0, vec.Length(), op, sels)
+}
 func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-	err = vec.forEachWindowWithBias(offset, length, op, sels, 0)
+	err = vec.forEachWindowWithBias(offset, length, op, sels, 0, false)
 	return
 }
 
-func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int) (err error) {
+func (vec *vector[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) error {
+	return vec.ForeachWindowShallow(0, vec.Length(), op, sels)
+}
+
+func (vec *vector[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) error {
+	return vec.forEachWindowWithBias(offset, length, op, sels, 0, true)
+}
+
+func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
 	if sels == nil || sels.IsEmpty() {
-		for i := offset; i < offset+length; i++ {
-			elem := vec.Get(i + bias)
-			if err = op(elem, i); err != nil {
+		for rowId := offset; rowId < offset+length; rowId++ {
+			var elem any
+			if shallow {
+				elem = vec.ShallowGet(rowId + bias)
+			} else {
+				elem = vec.Get(rowId + bias)
+			}
+			if err = op(elem, rowId); err != nil {
 				break
 			}
 		}
@@ -292,7 +324,12 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 			} else if int(rowId) >= end {
 				break
 			}
-			elem := vec.Get(int(rowId) + bias)
+			var elem any
+			if shallow {
+				elem = vec.ShallowGet(int(rowId) + bias)
+			} else {
+				elem = vec.Get(int(rowId) + bias)
+			}
 			if err = op(elem, int(rowId)); err != nil {
 				break
 			}
@@ -373,7 +410,7 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 		cloned.Append(v)
 		return nil
 	}
-	err := vec.ForeachWindow(offset, length, op, nil)
+	err := vec.ForeachWindowShallow(offset, length, op, nil)
 	if err != nil {
 		return nil
 	}
@@ -391,6 +428,10 @@ func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 		}
 	}
 	cnVector.Shrink(vec.downstreamVector, sels)
+}
+
+func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
+	return vec.downstreamVector
 }
 
 // TODO - Below functions are not used in critical path.
@@ -448,13 +489,11 @@ func (vec *vector[T]) PPString(num int) string {
 	_, _ = w.WriteString(")]")
 	return w.String()
 }
-
 func (vec *vector[T]) AppendMany(vs ...any) {
 	for _, v := range vs {
 		vec.Append(v)
 	}
 }
-
 func (vec *vector[T]) Delete(delRowId int) {
 	deletes := roaring.BitmapOf(uint32(delRowId))
 	vec.Compact(deletes)

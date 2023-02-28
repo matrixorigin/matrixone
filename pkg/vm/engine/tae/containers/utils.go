@@ -75,15 +75,7 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool
 }
 
 func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
-	bs := vec.Bytes()
-
-	mov = NewShallowCopyMoVecFromBytes(vec.GetType(), bs)
-	if vec.HasNull() {
-		mov.Nsp = vec.NullMask().Clone()
-	}
-	mov.SetOriginal(true)
-
-	return
+	return vec.GetDownstreamVector()
 }
 
 func NewShallowCopyMoVecFromBytes(typ types.Type, bs *Bytes) (mov *movec.Vector) {

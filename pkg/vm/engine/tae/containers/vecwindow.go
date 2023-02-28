@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"io"
 )
 
@@ -77,10 +78,6 @@ func (win *vectorWindow[T]) Slice() any {
 	return win.ref.Slice().([]T)[win.offset : win.offset+win.length]
 }
 
-func (win *vectorWindow[T]) Get(i int) any {
-	return win.ref.Get(i + win.offset)
-}
-
 func (win *vectorWindow[T]) GetAllocator() *mpool.MPool {
 	return win.ref.GetAllocator()
 }
@@ -98,16 +95,34 @@ func (win *vectorWindow[T]) PPString(num int) string {
 	s := fmt.Sprintf("[Window[%d,%d)];%s", win.offset, win.offset+win.length, win.ref.PPString(num))
 	return s
 }
+func (win *vectorWindow[T]) Get(i int) any {
+	return win.ref.Get(i + win.offset)
+}
+
+func (win *vectorWindow[T]) ShallowGet(i int) (v any) {
+	return win.ref.ShallowGet(i + win.offset)
+}
 
 func (win *vectorWindow[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
-	return win.ref.forEachWindowWithBias(0, win.length, op, sels, win.offset)
+	return win.ref.forEachWindowWithBias(0, win.length, op, sels, win.offset, false)
 }
 
 func (win *vectorWindow[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error {
 	if offset+length > win.length {
 		panic("bad param")
 	}
-	return win.ref.forEachWindowWithBias(offset, length, op, sels, win.offset)
+	return win.ref.forEachWindowWithBias(offset, length, op, sels, win.offset, false)
+}
+
+func (win *vectorWindow[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) (err error) {
+	return win.ref.forEachWindowWithBias(0, win.length, op, sels, win.offset, true)
+}
+
+func (win *vectorWindow[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	if offset+length > win.length {
+		panic("bad param")
+	}
+	return win.ref.forEachWindowWithBias(offset, length, op, sels, win.offset, true)
 }
 
 func (win *vectorWindow[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
@@ -190,5 +205,10 @@ func (win *vectorWindow[T]) Window(offset, length int) Vector {
 }
 
 func (win *vectorWindow[T]) WriteTo(w io.Writer) (int64, error) {
+	panic("not implemented")
+}
+
+func (win *vectorWindow[T]) GetDownstreamVector() *cnVector.Vector {
+	// Since WriteTo is not implemented, we don't need to expose Downstream here.
 	panic("not implemented")
 }
