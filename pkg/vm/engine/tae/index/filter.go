@@ -16,13 +16,13 @@ package index
 
 import (
 	"bytes"
-	"github.com/samber/lo"
 	"strconv"
 
 	"github.com/FastFilter/xorfilter"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/samber/lo"
 )
 
 const FuseFilterError = "too many iterations, you probably have duplicate keys"
@@ -53,14 +53,14 @@ func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
 		return nil
 	}
 	var err error
-	if err = data.Foreach(op, nil); err != nil {
+	if err = data.ForeachShallow(op, nil); err != nil {
 		return nil, err
 	}
 	if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
 		if err.Error() == FuseFilterError {
 			// 230+ duplicate keys in hashes
 			// block was deleted 115+ rows
-			hashes = lo.Uniq[uint64](hashes)
+			hashes = lo.Uniq(hashes)
 			if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
 				return nil, err
 			}
@@ -105,7 +105,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector, visib
 		return nil
 	}
 
-	if err := keys.Foreach(op, visibility); err != nil {
+	if err := keys.ForeachShallow(op, visibility); err != nil {
 		return false, nil, err
 	}
 	if positive.GetCardinality() != 0 {
