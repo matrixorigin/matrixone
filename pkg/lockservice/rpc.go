@@ -18,10 +18,12 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
@@ -40,15 +42,19 @@ var (
 )
 
 type client struct {
-	cfg    *morpc.Config
-	client morpc.RPCClient
+	cfg     *morpc.Config
+	cluster clusterservice.MOCluster
+	client  morpc.RPCClient
 }
 
 func NewClient(cfg morpc.Config) (Client, error) {
-	c := &client{cfg: &cfg}
+	c := &client{
+		cfg:     &cfg,
+		cluster: clusterservice.GetMOCluster(),
+	}
 	c.cfg.Adjust()
 
-	client, err := c.cfg.NewClient("lockservice-client",
+	client, err := c.cfg.NewClient("lockservice.client",
 		runtime.ProcessLevelRuntime().Logger().RawLogger(),
 		func() morpc.Message { return acquireResponse() })
 	if err != nil {
@@ -59,7 +65,32 @@ func NewClient(cfg morpc.Config) (Client, error) {
 }
 
 func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, error) {
-	return nil, nil
+	ctx, span := trace.Debug(ctx, "lockservice.client.Send")
+	defer span.End()
+
+	var address string
+	c.cluster.GetCNService(clusterservice.NewServiceIDSelector(request.ServiceID),
+		func(s metadata.CNService) bool {
+			address = s.LockServiceAddress
+			return false
+		})
+	f, err := c.client.Send(ctx, address, request)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	v, err := f.Get()
+	if err != nil {
+		return nil, err
+	}
+	resp := v.(*pb.Response)
+	if err := resp.UnwrapError(); err != nil {
+		releaseResponse(resp)
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 func (c *client) Close() error {
@@ -91,7 +122,7 @@ func NewServer(
 	cfg morpc.Config,
 	opts ...ServerOption) (Server, error) {
 	s := &server{
-		logger:   runtime.ProcessLevelRuntime().Logger(),
+		logger:   runtime.ProcessLevelRuntime().Logger().Named("lockservice.server"),
 		cfg:      &cfg,
 		handlers: make(map[pb.Method]RequestHandleFunc),
 	}
@@ -100,10 +131,10 @@ func NewServer(
 		opt(s)
 	}
 
-	rpc, err := s.cfg.NewServer("lockservice-server",
+	rpc, err := s.cfg.NewServer("lockservice.server",
 		address,
 		s.logger.RawLogger(),
-		acquireRequest,
+		func() morpc.Message { return acquireRequest() },
 		releaseResponse)
 	if err != nil {
 		return nil, err
@@ -136,31 +167,47 @@ func (s *server) onMessage(
 	if !ok {
 		s.logger.Fatal("received invalid message", zap.Any("message", request))
 	}
-	defer s.releaseRequest(m)
+	defer releaseRequest(m)
 
-	if s.options.filter != nil && !s.options.filter(m) {
+	if s.logger.Enabled(zap.DebugLevel) {
+		s.logger.Debug("handle request",
+			zap.String("request", m.DebugString()))
+	}
+
+	if s.options.filter != nil &&
+		!s.options.filter(m) {
+		if s.logger.Enabled(zap.DebugLevel) {
+			s.logger.Debug("skip request by filter",
+				zap.String("request", m.DebugString()))
+		}
 		return nil
 	}
 
 	handler, ok := s.handlers[m.Method]
 	if !ok {
-		s.rt.Logger().Fatal("missing txn request handler",
+		s.logger.Fatal("missing request handler",
 			zap.String("method", m.Method.String()))
 	}
 
 	select {
 	case <-ctx.Done():
+		if s.logger.Enabled(zap.DebugLevel) {
+			s.logger.Debug("skip request by timeout",
+				zap.String("request", m.DebugString()))
+		}
 		return nil
 	default:
 	}
 
-	resp := s.acquireResponse()
-	if err := handler(ctx, m, resp); err != nil {
-		s.releaseResponse(resp)
-		return err
-	}
-
+	resp := acquireResponse()
 	resp.RequestID = m.RequestID
+	if err := handler(ctx, m, resp); err != nil {
+		resp.WrapError(err)
+	}
+	if s.logger.Enabled(zap.DebugLevel) {
+		s.logger.Debug("handle request completed",
+			zap.String("response", resp.DebugString()))
+	}
 	return cs.Write(ctx, resp)
 }
 

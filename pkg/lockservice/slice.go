@@ -149,10 +149,6 @@ func (s *fixedSlice) append(values [][]byte) {
 	s.atomic.len.Add(uint32(len(values)))
 }
 
-func (s *fixedSlice) all() [][]byte {
-	return s.values[:s.len()]
-}
-
 func (s *fixedSlice) iter(fn func([]byte) bool) {
 	n := s.len()
 	for i := 0; i < n; i++ {

@@ -15,7 +15,10 @@
 package lock
 
 import (
+	"context"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // SetID implement morpc Messgae
@@ -75,4 +78,27 @@ func (m LockOptions) WithMode(mode LockMode) LockOptions {
 func (m LockOptions) WithWaitPolicy(policy WaitPolicy) LockOptions {
 	m.Policy = policy
 	return m
+}
+
+// WrapError wrapper error to TxnError
+func (m *Response) WrapError(err error) {
+	me := moerr.ConvertGoError(context.TODO(), err).(*moerr.Error)
+	data, e := me.MarshalBinary()
+	if e != nil {
+		panic(e)
+	}
+	m.Error = data
+}
+
+// UnwrapError unwrap the moerr from the error bytes
+func (m Response) UnwrapError() error {
+	if len(m.Error) == 0 {
+		return nil
+	}
+
+	err := &moerr.Error{}
+	if e := err.UnmarshalBinary(m.Error); e != nil {
+		panic(e)
+	}
+	return err
 }

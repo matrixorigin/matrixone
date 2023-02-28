@@ -20,20 +20,23 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
-func newRemoteLockTable(
-	binding pb.LockTable,
-	client Client,
-	detector *detector) *remoteLockTable {
-	l := &remoteLockTable{binding: binding, detector: detector}
-	return l
-}
-
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable. And the
 // remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
 	binding  pb.LockTable
 	client   Client
 	detector *detector
+}
+
+func newRemoteLockTable(
+	binding pb.LockTable,
+	client Client,
+	detector *detector) *remoteLockTable {
+	l := &remoteLockTable{
+		binding:  binding,
+		detector: detector,
+	}
+	return l
 }
 
 func (l *remoteLockTable) lock(
@@ -52,11 +55,13 @@ func (l *remoteLockTable) lock(
 	req.Lock.Rows = rows
 
 	resp, err := l.client.Send(ctx, req)
-	if err != nil {
-		return err
+	if err == nil {
+		releaseResponse(resp)
+		return nil
 	}
-	releaseResponse(resp)
-	return nil
+
+	// handle errors
+	return err
 }
 
 func (l *remoteLockTable) unlock(
@@ -70,10 +75,23 @@ func (l *remoteLockTable) unlock(
 	req.ServiceID = l.binding.ServiceID
 	req.Unlock.TxnID = txn.txnID
 
-	resp, err := l.client.Send(ctx, req)
-	if err != nil {
-		return err
+	// we need retry unlock remote lock if encounter an error util context timeout.
+	return l.doSendRetryUntilContextTimeout(ctx, req)
+}
+
+func (l *remoteLockTable) doSendRetryUntilContextTimeout(
+	ctx context.Context,
+	req *pb.Request) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			resp, err := l.client.Send(ctx, req)
+			releaseResponse(resp)
+			if err == nil {
+				return nil
+			}
+		}
 	}
-	releaseResponse(resp)
-	return nil
 }
