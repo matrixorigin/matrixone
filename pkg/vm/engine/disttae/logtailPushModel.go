@@ -61,7 +61,8 @@ type subscribeID struct {
 	tbl uint64
 }
 
-// subscribedTable records cn table subscribe status.
+// subscribedTable used to record table subscribed status.
+// only if m[table T] = true, T has been subscribed.
 type subscribedTable struct {
 	m     map[subscribeID]bool
 	mutex sync.RWMutex
@@ -83,6 +84,15 @@ func (s *subscribedTable) getTableSubscribe(dbId, tblId uint64) bool {
 func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
 	s.mutex.Lock()
 	s.m[subscribeID{dbId, tblId}] = true
+	s.mutex.Unlock()
+}
+
+var subscribedT subscribedTable
+var _ = subscribedT.setTableUnsubscribe
+
+func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
+	s.mutex.Lock()
+	delete(s.m, subscribeID{dbId, tblId})
 	s.mutex.Unlock()
 }
 
@@ -130,9 +140,45 @@ func (r *syncLogTailTimestamp) blockUntilTxnTimeIsLegal(
 	}
 }
 
+// logTailSubscriber is responsible for
+// sending subscribe request and unsubscribe request to dn.
 type logTailSubscriber struct {
 	dnNodeID      int
 	logTailClient *service.LogtailClient
+}
+
+func (s *logTailSubscriber) init(serviceAddr string) (err error) {
+	// XXX we assume that we have only 1 dn now.
+	s.dnNodeID = 0
+
+	// XXX generate a rpc client and new a stream.
+	// we should hide these code into NewClient method next day.
+	codec := morpc.NewMessageCodec(func() morpc.Message {
+		return &service.LogtailResponseSegment{}
+	})
+	factory := morpc.NewGoettyBasedBackendFactory(codec,
+		morpc.WithBackendGoettyOptions(
+			goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
+		),
+		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-log-tail-client-backend")),
+	)
+
+	c, err1 := morpc.NewClient(factory,
+		morpc.WithClientMaxBackendPerHost(10000),
+		morpc.WithClientTag("cn-log-tail-client"),
+	)
+	if err1 != nil {
+		return err1
+	}
+
+	stream, err2 := c.NewStream(serviceAddr, true)
+	if err2 != nil {
+		return err2
+	}
+	// new the log tail client.
+	s.logTailClient, err = service.NewLogtailClient(stream,
+		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
+	return err
 }
 
 func (s *logTailSubscriber) subscribeTable(
@@ -190,7 +236,6 @@ func (e *Engine) InitLogTailPushModel(
 }
 
 func (e *Engine) initTableLogTailSubscriber() error {
-	var err error
 	// close the old rpc client.
 	if e.subscriber != nil {
 		if err := e.subscriber.logTailClient.Close(); err != nil {
@@ -198,37 +243,8 @@ func (e *Engine) initTableLogTailSubscriber() error {
 		}
 	}
 	e.subscriber = new(logTailSubscriber)
-	// XXX we assume that we have only 1 dn now.
-	e.subscriber.dnNodeID = 0
 	dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
-	// XXX generate a rpc client and new a stream.
-	// we should hide these code into NewClient method next day.
-	codec := morpc.NewMessageCodec(func() morpc.Message {
-		return &service.LogtailResponseSegment{}
-	})
-	factory := morpc.NewGoettyBasedBackendFactory(codec,
-		morpc.WithBackendGoettyOptions(
-			goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
-		),
-		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-log-tail-client-backend")),
-	)
-
-	c, err1 := morpc.NewClient(factory,
-		morpc.WithClientMaxBackendPerHost(10000),
-		morpc.WithClientTag("cn-log-tail-client"),
-	)
-	if err1 != nil {
-		return err1
-	}
-
-	s, err2 := c.NewStream(dnLogTailServerBackend, true)
-	if err2 != nil {
-		return err2
-	}
-	// new the log tail client.
-	e.subscriber.logTailClient, err = service.NewLogtailClient(s,
-		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
-	return err
+	return e.subscriber.init(dnLogTailServerBackend)
 }
 
 func (e *Engine) connectToLogTailServer(
