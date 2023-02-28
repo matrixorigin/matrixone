@@ -114,7 +114,7 @@ type Schema struct {
 	View             string
 	UniqueIndex      string
 	SecondaryIndex   string
-	Constraint       []byte
+	Constraint       string
 
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
@@ -187,7 +187,7 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
-	if s.Constraint, sn, err = common.ReadBytes(r); err != nil {
+	if s.Constraint, sn, err = common.ReadString(r); err != nil {
 		return
 	}
 	n += sn
@@ -303,7 +303,7 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	if _, err = common.WriteString(s.View, &w); err != nil {
 		return
 	}
-	if _, err = common.WriteBytes(s.Constraint, &w); err != nil {
+	if _, err = common.WriteString(s.Constraint, &w); err != nil {
 		return
 	}
 	if err = binary.Write(&w, binary.BigEndian, uint16(len(s.ColDefs))); err != nil {
@@ -687,7 +687,8 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
 		}
 	}
-	schema.Constraint, _ = constraintDef.MarshalBinary()
+	buf, _ := constraintDef.MarshalBinary()
+	schema.Constraint = string(buf)
 
 	_ = schema.Finalize(false)
 	return schema
@@ -786,7 +787,8 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 	}
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
-	schema.Constraint, _ = constraintDef.MarshalBinary()
+	buf, _ := constraintDef.MarshalBinary()
+	schema.Constraint = string(buf)
 	_ = schema.Finalize(false)
 	return schema
 }

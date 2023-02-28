@@ -121,6 +121,17 @@ func (db *txnDatabase) DropRelationByID(id uint64) (rel handle.Relation, err err
 	return db.Txn.GetStore().DropRelationByID(db.txnDB.entry.ID, id)
 }
 
+// TODO(aptend): rearrage columns if truncate
+func cloneLatestSchema(meta *catalog.TableEntry) *catalog.Schema {
+	schema := meta.GetSchema().Clone()
+	latest := meta.MVCCChain.GetLatestCommittedNode()
+	if latest != nil {
+		node := latest.(*catalog.TableMVCCNode)
+		schema.Constraint = node.SchemaConstraints
+	}
+	return schema
+}
+
 func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err error) {
 	newTableId := db.txnDB.entry.GetCatalog().IDAlloctor.NextTable()
 
@@ -130,11 +141,7 @@ func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err err
 		return
 	}
 	meta := oldRel.GetMeta().(*catalog.TableEntry)
-	schema := meta.GetSchema().Clone()
-	latest := meta.MVCCChain.GetLatestCommittedNode()
-	if latest != nil {
-		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
-	}
+	schema := cloneLatestSchema(meta)
 	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
 	if err != nil {
@@ -151,11 +158,7 @@ func (db *txnDatabase) TruncateWithID(name string, newTableId uint64) (rel handl
 		return
 	}
 	meta := oldRel.GetMeta().(*catalog.TableEntry)
-	schema := meta.GetSchema().Clone()
-	latest := meta.MVCCChain.GetLatestCommittedNode()
-	if latest != nil {
-		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
-	}
+	schema := cloneLatestSchema(meta)
 	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
 	if err != nil {
@@ -172,11 +175,7 @@ func (db *txnDatabase) TruncateByID(id uint64, newTableId uint64) (rel handle.Re
 		return
 	}
 	meta := oldRel.GetMeta().(*catalog.TableEntry)
-	schema := meta.GetSchema().Clone()
-	latest := meta.MVCCChain.GetLatestCommittedNode()
-	if latest != nil {
-		schema.Constraint = []byte(latest.(*catalog.TableMVCCNode).SchemaConstraints)
-	}
+	schema := cloneLatestSchema(meta)
 	db.Txn.BindAccessInfo(schema.AcInfo.TenantID, schema.AcInfo.UserID, schema.AcInfo.RoleID)
 	rel, err = db.CreateRelationWithID(schema, newTableId)
 	if err != nil {

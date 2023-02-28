@@ -104,7 +104,7 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 
 	if len(schema.Constraint) > 0 {
 		c := new(engine.ConstraintDef)
-		if err := c.UnmarshalBinary(schema.Constraint); err != nil {
+		if err := c.UnmarshalBinary([]byte(schema.Constraint)); err != nil {
 			return nil, err
 		}
 		defs = append(defs, c)
@@ -186,7 +186,8 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 		case *engine.CommentDef:
 			schema.Comment = defVal.Comment
 		case *engine.ConstraintDef:
-			schema.Constraint, err = defVal.MarshalBinary()
+			buf, err := defVal.MarshalBinary()
+			schema.Constraint = string(buf)
 			if err != nil {
 				return nil, err
 			}
