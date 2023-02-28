@@ -21,10 +21,8 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -158,52 +156,6 @@ func TestVector3(t *testing.T) {
 	vec1.Close()
 	vec2.Close()
 	assert.Zero(t, opts.Allocator.CurrNB())
-}
-
-func TestVector4(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
-	for _, vecType := range vecTypes {
-		vec := MockVector(vecType, 1000, false, true, nil)
-		assert.Equal(t, 1000, vec.Length())
-		vec.Append(types.Null{})
-		w := new(bytes.Buffer)
-		_, err := vec.WriteTo(w)
-		assert.NoError(t, err)
-		srcBuf := w.Bytes()
-		srcSize := len(srcBuf)
-		destBuf := make([]byte, lz4.CompressBlockBound(srcSize))
-		destBuf, err = compress.Compress(srcBuf, destBuf, compress.Lz4)
-		assert.NoError(t, err)
-		f := MockCompressedFile(destBuf, srcSize, compress.Lz4)
-		vec2 := MakeVector(vecType, true)
-		err = vec2.ReadFromFile(f, nil)
-		assert.NoError(t, err)
-		assert.True(t, vec.Equals(vec2))
-		vec.Close()
-		vec2.Close()
-	}
-	buffer := new(bytes.Buffer)
-	for _, vecType := range vecTypes {
-		vec := MockVector(vecType, 1000, false, true, nil)
-		assert.Equal(t, 1000, vec.Length())
-		vec.Append(types.Null{})
-		w := new(bytes.Buffer)
-		_, err := vec.WriteTo(w)
-		assert.NoError(t, err)
-		srcBuf := w.Bytes()
-		srcSize := len(srcBuf)
-		destBuf := make([]byte, lz4.CompressBlockBound(srcSize))
-		destBuf, err = compress.Compress(srcBuf, destBuf, compress.Lz4)
-		assert.NoError(t, err)
-		f := MockCompressedFile(destBuf, srcSize, compress.Lz4)
-		vec2 := MakeVector(vecType, true)
-		err = vec2.ReadFromFile(f, buffer)
-		assert.NoError(t, err)
-		assert.True(t, vec.Equals(vec2))
-		vec.Close()
-		vec2.Close()
-	}
 }
 
 func TestVector5(t *testing.T) {
