@@ -21,14 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -67,7 +65,7 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool
 	}
 	cloned = MakeVector(src.GetType(), src.Nullable(), opts)
 	bs := src.Bytes()
-	var nulls *roaring64.Bitmap
+	var nulls *cnNulls.Nulls
 	if src.Nullable() {
 		nulls = src.NullMask().Clone()
 	}
@@ -81,8 +79,7 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 
 	mov = NewShallowCopyMoVecFromBytes(vec.GetType(), bs)
 	if vec.HasNull() {
-		mov.Nsp.Np = bitmap.New(vec.Length())
-		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
+		mov.Nsp = vec.NullMask().Clone()
 	}
 	mov.SetOriginal(true)
 
@@ -163,13 +160,11 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 		if len(data) > 0 {
 			copy(data, bs.Storage)
 		}
-		mov = movec.NewOriginalWithData(vec.GetType(), data, new(nulls.Nulls))
+		mov = movec.NewOriginalWithData(vec.GetType(), data, new(cnNulls.Nulls))
 	}
 
 	if vec.HasNull() {
-		mov.Nsp.Np = bitmap.New(vec.Length())
-		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
-		//mov.Nsp.Np = vec.NullMask()
+		mov.Nsp = vec.NullMask().Clone()
 	}
 
 	return mov
@@ -223,12 +218,7 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(v.Typ, nullable)
 	bs := MoVecToBytes(v)
-	var np *roaring64.Bitmap
-	if v.Nsp.Np != nil {
-		np = roaring64.New()
-		np.AddMany(v.Nsp.Np.ToArray())
-	}
-	vec.ResetWithData(bs, np)
+	vec.ResetWithData(bs, v.Nsp)
 	return vec
 }
 
@@ -479,7 +469,7 @@ func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
-		nulls.Add(vec.Nsp, uint64(row))
+		cnNulls.Add(vec.Nsp, uint64(row))
 	} else {
 		movec.SetTAt(vec, int(row), v.(T))
 		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
@@ -491,7 +481,7 @@ func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, 
 func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
-		nulls.Add(vec.Nsp, uint64(row))
+		cnNulls.Add(vec.Nsp, uint64(row))
 	} else {
 		movec.SetBytesAt(vec, int(row), v.([]byte), mockMp)
 		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
@@ -569,7 +559,7 @@ func AppendValue(vec *movec.Vector, v any) {
 }
 
 func GetValue(col *movec.Vector, row uint32) any {
-	if col.Nsp.Np != nil && col.Nsp.Np.Contains(uint64(row)) {
+	if col.Nsp != nil && col.Nsp.Np != nil && col.Nsp.Np.Contains(uint64(row)) {
 		return types.Null{}
 	}
 	return GetNonNullValue(col, row)
@@ -776,10 +766,9 @@ func CopyToProtoBatch(bat *Batch) (*api.Batch, error) {
 }
 
 func CopyToProtoVector(vec Vector) (*api.Vector, error) {
-	vecNsp := new(nulls.Nulls)
+	vecNsp := new(cnNulls.Nulls)
 	if vec.HasNull() {
-		vecNsp.Np = bitmap.New(vec.Length())
-		vecNsp.Np.AddMany(vec.NullMask().ToArray())
+		vecNsp = vec.NullMask().Clone()
 	}
 	nsp, err := vecNsp.Show()
 	if err != nil {

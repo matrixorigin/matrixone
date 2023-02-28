@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -26,7 +25,6 @@ import (
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
-	"unsafe"
 )
 
 // DN vector is different from CN vector by
@@ -107,13 +105,8 @@ func (vec *vector[T]) IsNull(i int) bool {
 	return vec.downstreamVector.GetNulls() != nil && vec.downstreamVector.GetNulls().Contains(uint64(i))
 }
 
-func (vec *vector[T]) NullMask() *roaring64.Bitmap {
-	if input := vec.downstreamVector.GetNulls().Np; input != nil {
-		np := roaring64.New()
-		np.AddMany(input.ToArray())
-		return np
-	}
-	return nil
+func (vec *vector[T]) NullMask() *cnNulls.Nulls {
+	return vec.downstreamVector.GetNulls()
 }
 
 func (vec *vector[T]) GetType() types.Type {
@@ -239,39 +232,10 @@ func (vec *vector[T]) HasNull() bool {
 
 // TODO: --- We can remove below functions as they don't have any usage
 
-func (vec *vector[T]) IsView() bool {
-	panic("Soon Deprecated")
-}
-
-func (vec *vector[T]) GetView() VectorView {
-	panic("Soon Deprecated")
-}
-
 func (vec *vector[T]) AppendMany(vs ...any) {
 	for _, v := range vs {
 		vec.Append(v)
 	}
-}
-
-func (vec *vector[T]) DataWindow(offset, length int) []byte {
-	panic("Soon Deprecated")
-}
-
-func (vec *vector[T]) Data() []byte {
-	panic("Soon Deprecated")
-}
-
-func (vec *vector[T]) SlicePtr() unsafe.Pointer {
-	slice := vec.Slice().([]T)
-	return unsafe.Pointer(&slice[0])
-}
-
-func (vec *vector[T]) AppendNoNulls(s any) {
-	panic("Soon Deprecated")
-}
-
-func (vec *vector[T]) Reset() {
-	panic("Soon Deprecated")
 }
 
 func (vec *vector[T]) Capacity() int {
@@ -348,13 +312,13 @@ func (vec *vector[T]) Equals(o Vector) bool {
 		return false
 	}
 	if vec.HasNull() {
-		if !vec.NullMask().Equals(o.NullMask()) {
+		if !vec.NullMask().IsSame(o.NullMask()) {
 			return false
 		}
 	}
 	mask := vec.NullMask()
 	for i := 0; i < vec.Length(); i++ {
-		if mask != nil && mask.ContainsInt(i) {
+		if mask != nil && mask.Contains(uint64(i)) {
 			continue
 		}
 		var v T
@@ -478,19 +442,10 @@ func (vec *vector[T]) Allocated() int {
 	return vec.downstreamVector.Size()
 }
 
-func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
+func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *cnNulls.Nulls) {
 
 	newDownstream := NewShallowCopyMoVecFromBytes(vec.GetType(), bs)
-
-	if vec.Nullable() {
-		//TODO: We can avoid cloning NSP when nulls is changed to a regular bitmap
-		newNulls := cnNulls.NewWithSize(0)
-		if nulls != nil && !nulls.IsEmpty() {
-			cnNulls.Add(newNulls, nulls.ToArray()...)
-		}
-
-		newDownstream.Nsp = newNulls
-	}
+	newDownstream.Nsp = nulls
 
 	vec.releaseDownstream()
 	vec.downstreamVector = newDownstream
