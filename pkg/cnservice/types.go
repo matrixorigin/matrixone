@@ -136,6 +136,9 @@ type Config struct {
 	// RPC rpc config used to build txn sender
 	RPC rpc.Config `toml:"rpc"`
 
+	// Push Model configuration
+	TurnOnPushModel bool `toml:"turn-on-push-model"`
+
 	// Cluster configuration
 	Cluster struct {
 		// RefreshInterval refresh cluster info from hakeeper interval
