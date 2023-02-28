@@ -88,7 +88,7 @@ func TestCalculateStorageUsage(t *testing.T) {
 	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Database(gomock.Any(), gomock.Any(), txnOperator).Return(db, nil).AnyTimes()
 	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	pu.SV.SetDefaultValues()
 
 	// Mock autoIncrCache

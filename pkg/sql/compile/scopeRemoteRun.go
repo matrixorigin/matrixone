@@ -81,11 +81,13 @@ func CnServerMessageHandler(
 	ctx context.Context,
 	message morpc.Message,
 	cs morpc.ClientSession,
-	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message,
-	getClusterDetails engine.GetClusterDetailsFunc) error {
+	storeEngine engine.Engine,
+	fileService fileservice.FileService,
+	cli client.TxnClient,
+	messageAcquirer func() morpc.Message) error {
 	// new a receiver to receive message and write back result.
 	receiver := newMessageReceiverOnServer(ctx, message,
-		cs, messageAcquirer, storeEngine, fileService, cli, getClusterDetails)
+		cs, messageAcquirer, storeEngine, fileService, cli)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(receiver)
