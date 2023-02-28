@@ -455,6 +455,7 @@ const (
 	PrivilegeTypeShowTables
 	PrivilegeTypeCreateObject //includes: table, view, stream, sequence, function, dblink,etc
 	PrivilegeTypeCreateTable
+	PrivilegeTypeCreateSequence
 	PrivilegeTypeCreateView
 	PrivilegeTypeDropObject
 	PrivilegeTypeDropTable
@@ -570,6 +571,8 @@ func (pt PrivilegeType) String() string {
 		return "create object"
 	case PrivilegeTypeCreateTable:
 		return "create table"
+	case PrivilegeTypeCreateSequence:
+		return "create sequence"
 	case PrivilegeTypeCreateView:
 		return "create view"
 	case PrivilegeTypeDropObject:
@@ -656,7 +659,7 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeRole
 	case PrivilegeTypeShowTables:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeCreateObject, PrivilegeTypeCreateTable, PrivilegeTypeCreateView:
+	case PrivilegeTypeCreateObject, PrivilegeTypeCreateTable, PrivilegeTypeCreateView, PrivilegeTypeCreateSequence:
 		return PrivilegeScopeDatabase
 	case PrivilegeTypeDropObject, PrivilegeTypeDropTable, PrivilegeTypeDropView:
 		return PrivilegeScopeDatabase
@@ -1579,6 +1582,7 @@ var (
 		PrivilegeTypeAccountAll,
 		PrivilegeTypeShowTables,
 		PrivilegeTypeCreateTable,
+		PrivilegeTypeCreateSequence,
 		PrivilegeTypeDropTable,
 		PrivilegeTypeAlterTable,
 		PrivilegeTypeCreateView,
@@ -1613,6 +1617,7 @@ var (
 		PrivilegeTypeAccountAll,
 		PrivilegeTypeShowTables,
 		PrivilegeTypeCreateTable,
+		PrivilegeTypeCreateSequence,
 		PrivilegeTypeDropTable,
 		PrivilegeTypeAlterTable,
 		PrivilegeTypeCreateView,
@@ -3643,6 +3648,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		dbName = string(st.Table.SchemaName)
 	case *tree.CreateView:
 		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeCreateSequence, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
+	case *tree.CreateSequence:
+		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
 		if st.Name != nil {
@@ -4951,6 +4963,8 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		privType = PrivilegeTypeShowTables
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLE:
 		privType = PrivilegeTypeCreateTable
+	case tree.PRIVILEGE_TYPE_STATIC_CREATE_SEQUENCE:
+		privType = PrivilegeTypeCreateSequence
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_TABLE:
 		privType = PrivilegeTypeDropTable
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_VIEW:

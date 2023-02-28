@@ -202,6 +202,12 @@ import (
     tableLocks []tree.TableLock
     tableLockType tree.TableLockType
     cstr *tree.CStr
+    incrementByOption *tree.IncrementByOption
+    minValueOption  *tree.MinValueOption
+    maxValueOption  *tree.MaxValueOption 
+    startWithOption *tree.StartWithOption 
+    cacheOption     *tree.CacheOption
+    ownedByOption   *tree.OwnedByOption
 }
 
 %token LEX_ERROR
@@ -267,7 +273,7 @@ import (
 
 // Create Table
 %token <str> CREATE ALTER DROP RENAME ANALYZE ADD RETURNS
-%token <str> SCHEMA TABLE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
+%token <str> SCHEMA TABLE SEQUENCE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
 %token <str> SHOW DESCRIBE EXPLAIN DATE ESCAPE REPAIR OPTIMIZE TRUNCATE
 %token <str> MAXVALUE PARTITION REORGANIZE LESS THAN PROCEDURE TRIGGER
 %token <str> STATUS VARIABLES ROLE PROXY AVG_ROW_LENGTH STORAGE DISK MEMORY
@@ -279,6 +285,9 @@ import (
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
+
+// Sequence
+%token <str> INCREMENT CYCLE MINVALUE CACHE OWNED
 
 // MO table option
 %token <str> PROPERTIES
@@ -376,7 +385,7 @@ import (
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
-%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt
+%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_sequence_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
@@ -543,12 +552,18 @@ import (
 %type <subPartition> sub_partition
 %type <subPartitions> sub_partition_list sub_partition_list_opt
 %type <subquery> subquery
+%type <incrementByOption> increment_by_opt
+%type <minValueOption> min_value_opt
+%type <maxValueOption> max_value_opt
+%type <startWithOption> start_with_opt
+%type <cacheOption> cache_opt
+%type <ownedByOption>   owned_by_opt
 
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
 %type <unsignedOpt> unsigned_opt header_opt parallel_opt
 %type <zeroFillOpt> zero_fill_opt
-%type <boolVal> global_scope exists_opt distinct_opt temporary_opt
+%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict distinct_keyword separator_opt
 %type <insert> insert_data
@@ -1373,6 +1388,10 @@ priv_type:
 |    CREATE TABLESPACE
     {
         $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLESPACE
+    }
+|   CREATE SEQUENCE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_SEQUENCE
     }
 |    TRIGGER
     {
@@ -4242,6 +4261,7 @@ create_ddl_stmt:
 |    create_view_stmt
 |   create_function_stmt
 |   create_extension_stmt
+|   create_sequence_stmt
 
 create_extension_stmt:
     CREATE EXTENSION extension_lang AS extension_name FILE STRING
@@ -5013,7 +5033,111 @@ tail_param_opt:
             Assignments: $5,
         }
     }
-
+create_sequence_stmt:
+    CREATE temporary_opt SEQUENCE not_exists_opt table_name increment_by_opt min_value_opt max_value_opt start_with_opt cache_opt cycle_opt owned_by_opt
+    {
+        $$ = &tree.CreateSequence {
+            Temporary: $2,
+            IfNotExists: $4,
+            Name: $5,
+            IncrementBy: $6,
+            MinValue: $7,
+            MaxValue: $8,
+            StartWith: $9,
+            Cache: $10,
+            Cycle: $11, 
+            OwnedBy: $12,
+        }
+    }
+increment_by_opt:
+    {
+        $$ = nil
+    }
+|   INCREMENT BY INTEGRAL 
+    {
+        $$ = &tree.IncrementByOption{
+            Step: $3.(int),
+        }
+    }
+|   INCREMENT INTEGRAL
+    {
+        $$ = &tree.IncrementByOption{
+            Step: $2.(int),
+        }
+    }
+cycle_opt:
+    {
+        $$ = false
+    }
+|   NO CYCLE
+    {
+        $$ = false
+    }
+|   CYCLE
+    {
+        $$ = true
+    }
+min_value_opt:
+    {
+        $$ = nil
+    }
+|   MINVALUE INTEGRAL 
+    {
+        $$ = &tree.MinValueOption{
+            MinV: $2.(int),
+        }
+    }
+max_value_opt:
+    {
+        $$ = nil
+    }
+|   MAXVALUE INTEGRAL
+    {
+        $$ = &tree.MaxValueOption{
+            MaxV: $2.(int),
+        }
+    }
+start_with_opt:
+    {
+        $$ = nil
+    }
+|   START WITH INTEGRAL
+    {
+        $$ = &tree.StartWithOption{
+            StartV: $3.(int),
+        }
+    }
+|   START INTEGRAL
+    {
+        $$ = &tree.StartWithOption{
+            StartV: $2.(int),
+        }
+    }
+cache_opt:
+    {
+        $$ = nil
+    }
+|   CACHE INTEGRAL
+    {
+        $$ = &tree.CacheOption{
+            CacheSize: $2.(int),
+        }
+    }
+owned_by_opt:
+    {
+        $$ = nil
+    }
+|   OWNED BY NONE
+    {
+        $$ = nil
+    }
+|   OWNED BY STRING '.' STRING
+    {
+        $$ = &tree.OwnedByOption{
+            TableName:  $3,
+            ColumnName: $5,
+        }
+    }
 temporary_opt:
     {
         $$ = false

@@ -320,6 +320,8 @@ func (node *PrivilegeType) ToString() string {
 		return "truncate"
 	case PRIVILEGE_TYPE_STATIC_REFERENCE:
 		return "reference"
+	case PRIVILEGE_TYPE_STATIC_CREATE_SEQUENCE:
+		return "create sequence"
 	default:
 		return "Unknown PrivilegeType"
 	}
@@ -362,6 +364,7 @@ const (
 	PRIVILEGE_TYPE_STATIC_INDEX   //Enable indexes to be created or dropped. Levels: Global, database, table.
 	PRIVILEGE_TYPE_STATIC_EXECUTE //Enable the user to execute stored routines. Levels: Global, database, routine.
 	PRIVILEGE_TYPE_STATIC_VALUES  //Enable use of VALUES. Levels: Global, database, table.
+	PRIVILEGE_TYPE_STATIC_CREATE_SEQUENCE
 
 	PRIVILEGE_TYPE_STATIC_ALTER
 	PRIVILEGE_TYPE_STATIC_CREATE
