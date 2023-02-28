@@ -23,14 +23,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var _ Index = (*immutableIndex)(nil)
 
 type immutableIndex struct {
-	zmReader *dataio.ZmReader
-	bfReader *dataio.BfReader
+	zmReader *blockio.ZmReader
+	bfReader *blockio.BfReader
 }
 
 func NewImmutableIndex() *immutableIndex {

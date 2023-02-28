@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dataio
+package blockio
 
 import (
 	"context"
@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -31,7 +30,7 @@ import (
 type BfReader struct {
 	bfKey  string
 	idx    uint16
-	reader Reader
+	reader *BlockReader
 	typ    types.Type
 }
 
@@ -42,7 +41,7 @@ func newBfReader(
 	mgr base.INodeManager,
 	fs *objectio.ObjectFS,
 ) *BfReader {
-	reader, _ := blockio.NewReader(context.Background(), fs, metaloc)
+	reader, _ := NewBlockReader(fs.Service, metaloc)
 
 	return &BfReader{
 		bfKey:  metaloc,
@@ -52,7 +51,7 @@ func newBfReader(
 }
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	_, extent, _ := blockio.DecodeMetaLoc(r.bfKey)
+	_, extent, _ := DecodeMetaLoc(r.bfKey)
 	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, extent, nil)
 	if err != nil {
 		// TODOa: Error Handling?

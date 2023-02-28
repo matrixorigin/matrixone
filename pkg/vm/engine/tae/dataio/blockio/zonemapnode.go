@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dataio
+package blockio
 
 import (
 	"context"
@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -32,11 +31,11 @@ import (
 type ZmReader struct {
 	metaKey string
 	idx     uint16
-	reader  *blockio.Reader
+	reader  *Reader
 }
 
 func newZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
-	reader, _ := blockio.NewReader(context.Background(), fs, metaloc)
+	reader, _ := NewReader(context.Background(), fs, metaloc)
 	return &ZmReader{
 		metaKey: metaloc,
 		idx:     idx,
@@ -45,7 +44,7 @@ func newZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *object
 }
 
 func (r *ZmReader) getZoneMap() (*index.ZoneMap, error) {
-	_, extent, _ := blockio.DecodeMetaLoc(r.metaKey)
+	_, extent, _ := DecodeMetaLoc(r.metaKey)
 	zmList, err := r.reader.LoadZoneMapByExtent(context.Background(), []uint16{r.idx}, extent, nil)
 	if err != nil {
 		// TODOa: Error Handling?

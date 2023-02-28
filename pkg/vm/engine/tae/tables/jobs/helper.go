@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	indexwrapper2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -31,7 +31,7 @@ import (
 func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef *catalog.ColDef, columnData containers.Vector, isPk, isSorted bool) (metas []indexwrapper2.IndexMeta, err error) {
 	zmPos := 0
 
-	zoneMapWriter := dataio.NewZMWriter()
+	zoneMapWriter := blockio.NewZMWriter()
 	if err = zoneMapWriter.Init(writer, block, common.Plain, uint16(colDef.Idx), uint16(zmPos)); err != nil {
 		return
 	}
@@ -58,7 +58,7 @@ func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef
 	}
 
 	bfPos := 1
-	bfWriter := dataio.NewBFWriter()
+	bfWriter := blockio.NewBFWriter()
 	if err = bfWriter.Init(writer, block, common.Plain, uint16(colDef.Idx), uint16(bfPos)); err != nil {
 		return
 	}

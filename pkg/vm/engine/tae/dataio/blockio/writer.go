@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -31,7 +30,7 @@ type BlockWriter struct {
 	pk      uint16
 }
 
-func NewBlockWriter(fs fileservice.FileService, name string) (dataio.Writer, error) {
+func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, error) {
 	writer, err := objectio.NewObjectWriter(name, fs)
 	if err != nil {
 		return nil, err
@@ -62,7 +61,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 	for i, vec := range batch.Vecs {
 		columnData := containers.NewVectorWithSharedMemory(vec, true)
 		zmPos := 0
-		zoneMapWriter := dataio.NewZMWriter()
+		zoneMapWriter := NewZMWriter()
 		if err = zoneMapWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(zmPos)); err != nil {
 			return nil, err
 		}
@@ -78,7 +77,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			continue
 		}
 		bfPos := 1
-		bfWriter := dataio.NewBFWriter()
+		bfWriter := NewBFWriter()
 		if err = bfWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(bfPos)); err != nil {
 			return nil, err
 		}
