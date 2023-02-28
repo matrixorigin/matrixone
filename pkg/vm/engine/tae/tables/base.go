@@ -368,7 +368,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 	}
 	defer view.Close()
 	dedupFn := dedupClosure(view.GetData(), ts, view.DeleteMask, def)
-	err = keys.Foreach(dedupFn, sels)
+	err = keys.ForeachShallow(dedupFn, sels)
 	return
 }
 
