@@ -165,114 +165,58 @@ func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 }
 
 func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
-	var nr int
+	// 1. Nullable Flag [1 byte]
+	buf := types.EncodeFixed(vec.Nullable())
 
-	// 1. Nullable Flag
-	if nr, err = w.Write(types.EncodeFixed(vec.Nullable())); err != nil {
-		return
+	// 2. Vector bytes
+	var vecBytes []byte
+	if vecBytes, err = vec.downstreamVector.MarshalBinary(); err != nil {
+		return 0, err
 	}
-	n += int64(nr)
+	buf = append(buf, vecBytes...)
 
-	// 2. DownStream Vector
-	var output []byte
-	if output, err = vec.downstreamVector.MarshalBinary(); err != nil {
-		return
-	}
-	if nr, err = w.Write(output); err != nil {
-		return
-	}
-	n += int64(nr)
+	//0. Length of vector bytes [8 bytes]
+	i64 := int64(len(buf))
+	buf = append(types.EncodeInt64(&i64), buf...)
 
-	return
+	var writtenBytes int
+	if writtenBytes, err = w.Write(buf); err != nil {
+		return 0, err
+	}
+
+	return int64(writtenBytes), nil
 }
 
 func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	// Nullable Flag [1 byte]
-	isNullable := make([]byte, 1)
-	if _, err = r.Read(isNullable); err != nil {
-		return
+	// 0. Length [8 bytes]
+	lengthBytes := make([]byte, 8)
+	if _, err = r.Read(lengthBytes); err != nil {
+		return 0, err
 	}
-	nullable := types.DecodeFixed[bool](isNullable)
-	vec.isNullable = nullable
-	n += 1
+	length := types.DecodeInt64(lengthBytes[:8])
+	n += 8
 
-	var downStreamVectorByteArr []byte
-
-	// isScalar [1 byte]
-	scalar := make([]byte, 1)
-	if _, err = r.Read(scalar); err != nil {
-		return
+	// Whole DN Vector
+	buf := make([]byte, length)
+	if _, err = r.Read(buf); err != nil {
+		return 0, err
 	}
-	downStreamVectorByteArr = append(downStreamVectorByteArr, scalar...)
 
-	// Length [8 bytes]
-	length := make([]byte, 8)
-	if _, err = r.Read(length); err != nil {
-		return
-	}
-	downStreamVectorByteArr = append(downStreamVectorByteArr, length...)
+	n += int64(len(buf))
 
-	// Typ [20 bytes]
-	vecTyp := make([]byte, 20)
-	if _, err = r.Read(vecTyp); err != nil {
-		return
-	}
-	downStreamVectorByteArr = append(downStreamVectorByteArr, vecTyp...)
+	// 1. Nullable flag [1 byte]
+	isNullable := types.DecodeFixed[bool](buf[:1])
+	vec.isNullable = isNullable
 
-	//1. Nsp Length [4 bytes]
-	nspLen := make([]byte, 4)
-	if _, err = r.Read(nspLen); err != nil {
-		return
-	}
-	downStreamVectorByteArr = append(downStreamVectorByteArr, nspLen...)
-
-	// Nsp [variable bytes]
-	nspLenVal := types.DecodeUint32(nspLen)
-	nsp := make([]byte, nspLenVal)
-	if _, err = r.Read(nsp); err != nil {
-		return
-	}
-	downStreamVectorByteArr = append(downStreamVectorByteArr, nsp...)
-
-	//2. Col Length [4 bytes]
-	colLen := make([]byte, 4)
-	if _, err = r.Read(colLen); err != nil {
-		return
-	}
-	downStreamVectorByteArr = append(downStreamVectorByteArr, colLen...)
-
-	// Col [variable bytes]
-	colLenVal := types.DecodeUint32(colLen)
-	col := make([]byte, colLenVal)
-	if _, err = r.Read(col); err != nil {
-		return
-	}
-	downStreamVectorByteArr = append(downStreamVectorByteArr, col...)
-
-	//3. Col Length [4 bytes]
-	areaLen := make([]byte, 4)
-	if _, err = r.Read(areaLen); err != nil {
-		return
-	}
-	downStreamVectorByteArr = append(downStreamVectorByteArr, areaLen...)
-
-	// Col [variable bytes]
-	areaLenVal := types.DecodeUint32(areaLen)
-	area := make([]byte, areaLenVal)
-	if _, err = r.Read(area); err != nil {
-		return
-	}
-	downStreamVectorByteArr = append(downStreamVectorByteArr, area...)
-
-	n = int64(len(downStreamVectorByteArr))
-
-	newVector := cnVector.New(vec.GetType())
-	err = newVector.UnmarshalBinary(downStreamVectorByteArr)
+	//2. Vector
+	buf = buf[1:]
 
 	vec.releaseDownstream()
-	vec.downstreamVector = newVector
+	if err = vec.downstreamVector.UnmarshalBinary(buf); err != nil {
+		return 0, err
+	}
 
-	return
+	return n, nil
 }
 
 func (vec *vector[T]) Window(offset, length int) Vector {
@@ -387,7 +331,7 @@ func (vec *vector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err e
 	return nil
 }
 
-// TODO: --- Below Functions Can be implemented in CN Vector.
+//TODO: --- Below Functions Can be implemented in CN Vector.
 
 func (vec *vector[T]) Equals(o Vector) bool {
 
