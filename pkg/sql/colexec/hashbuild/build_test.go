@@ -88,39 +88,6 @@ func TestBuild(t *testing.T) {
 	}
 }
 
-/*
-func TestLowCardinalityBuild(t *testing.T) {
-	tc := newTestCase([]bool{false}, []types.Type{types.T_varchar.ToType()},
-		[]*plan.Expr{
-			newExpr(0, types.T_varchar.ToType()),
-		},
-	)
-	err := Prepare(tc.proc, tc.arg)
-	require.NoError(t, err)
-
-	values := []string{"a", "b", "a", "c", "b", "c", "a", "a"}
-	v := testutil.NewVector(len(values), types.T_varchar.ToType(), tc.proc.Mp(), false, values)
-	//constructIndex(t, v, tc.proc.Mp())
-
-	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
-	tc.proc.Reg.MergeReceivers[0].Ch <- nil
-
-	ok, err := Call(0, tc.proc, tc.arg, false, false)
-	require.NoError(t, err)
-	require.Equal(t, true, ok)
-	mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
-	require.NotNil(t, mp.Index())
-
-	sels := mp.Sels()
-	require.Equal(t, []int32{0, 2, 6, 7}, sels[0])
-	require.Equal(t, []int32{1, 4}, sels[1])
-	require.Equal(t, []int32{3, 5}, sels[2])
-
-	mp.Free()
-	tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-}
-*/
-
 func BenchmarkBuild(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []buildTestCase{
@@ -190,15 +157,3 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
-
-/*
-func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
-	idx, err := index.New(*v.GetType(), m)
-	require.NoError(t, err)
-
-	err = idx.InsertBatch(v)
-	require.NoError(t, err)
-
-	v.SetIndex(idx)
-}
-*/

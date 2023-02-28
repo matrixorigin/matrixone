@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -51,6 +52,9 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid.ToString())
 	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return false, moerr.NewQueryIdNotFound(proc.Ctx, uuid.ToString())
+		}
 		return false, err
 	}
 	// read meta's meta

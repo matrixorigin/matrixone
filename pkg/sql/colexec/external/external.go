@@ -36,6 +36,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -60,7 +61,7 @@ import (
 )
 
 var (
-	ONE_BATCH_MAX_ROW  = 40000
+	ONE_BATCH_MAX_ROW  = int(options.DefaultBlockMaxRows)
 	S3_PARALLEL_MAXNUM = 10
 )
 
@@ -832,6 +833,9 @@ func ScanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		if !ok && param.Extern.QueryResult {
 			e, err := service.StatFile(proc.Ctx, param.Fileparam.Filepath)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					return nil, moerr.NewQueryIdNotFound(ctx, param.Fileparam.Filepath)
+				}
 				return nil, err
 			}
 			param.Filter.File2Size[param.Fileparam.Filepath] = e.Size

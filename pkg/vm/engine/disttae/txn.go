@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -807,8 +806,8 @@ func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.Table
 		return []int{0}
 	}
 	for _, key := range priKeys {
-		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
-		if isCPkey {
+		// If it is a composite primary key, skip
+		if key.Name == catalog.CPrimaryKeyColName {
 			continue
 		}
 		pk = key

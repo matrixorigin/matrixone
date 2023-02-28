@@ -104,6 +104,55 @@ func (v *Vector) GetBytes(i int) []byte {
 	return bs[i].GetByteSlice(v.area)
 }
 
+// GetFixedVector decode data and return decoded []T.
+// For const/scalar vector we expand and return newly allocated slice.
+func GetFixedVectorValues[T types.FixedSizeT](v *Vector) []T {
+	if v.IsConst() {
+		cols := MustTCols[T](v)
+		vs := make([]T, v.Length())
+		for i := range vs {
+			vs[i] = cols[0]
+		}
+		return vs
+	}
+	return MustTCols[T](v)
+}
+
+func GetStrVectorValues(v *Vector) []string {
+	if v.IsConst() {
+		cols := MustTCols[types.Varlena](v)
+		ss := cols[0].GetString(v.area)
+		vs := make([]string, v.Length())
+		for i := range vs {
+			vs[i] = ss
+		}
+		return vs
+	}
+	return MustStrCols(v)
+}
+
+func GetBytesVectorValues(v *Vector) [][]byte {
+	if v.IsConst() {
+		cols := MustTCols[types.Varlena](v)
+		ss := cols[0].GetByteSlice(v.area)
+		vs := make([][]byte, v.Length())
+		for i := range vs {
+			vs[i] = ss
+		}
+		return vs
+	}
+	return MustBytesCols(v)
+}
+
+func (v *Vector) CleanOnlyData() {
+	if v.data != nil {
+		v.length = 0
+	}
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
+}
+
 //func (v *Vector) GetRawData() []byte {
 //	return (*(*[]byte)(unsafe.Pointer(&v.col)))[:v.length*v.typ.TypeSize()]
 //}
@@ -619,6 +668,7 @@ func (v *Vector) Shuffle(sels []int64, m *mpool.MPool) error {
 	return nil
 }
 
+// XXX Old Copy is FUBAR.
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, m *mpool.MPool) error {
 	if w.class == CONSTANT {

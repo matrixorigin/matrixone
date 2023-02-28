@@ -60,8 +60,7 @@ type ShowStatementType int
 
 const (
 	NotShowStatement ShowStatementType = 0
-	ShowColumns      ShowStatementType = 1
-	ShowTableStatus  ShowStatementType = 2
+	ShowTableStatus  ShowStatementType = 1
 )
 
 type TxnHandler struct {
@@ -1961,7 +1960,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var refChildTbls []uint64
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
 			col := &plan2.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
@@ -1980,7 +1978,8 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Comment:   attr.Attr.Comment,
 				ClusterBy: attr.Attr.ClusterBy,
 			}
-			if isCPkey {
+			// Is it a composite primary key
+			if attr.Attr.Name == catalog.CPrimaryKeyColName {
 				CompositePkey = col
 				continue
 			}
@@ -2285,6 +2284,9 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
 	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
+		}
 		return nil, "", err
 	}
 	// read meta's meta

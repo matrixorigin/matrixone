@@ -247,7 +247,5 @@ func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
 
 	err = idx.InsertBatch(v)
 	require.NoError(t, err)
-
-	v.SetIndex(idx)
 }
 */
