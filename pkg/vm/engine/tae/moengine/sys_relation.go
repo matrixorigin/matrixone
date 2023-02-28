@@ -66,7 +66,7 @@ func (s *sysRelation) AddBlksWithMetaLoc(
 	_ []containers.Vector,
 	_ string,
 	_ []string,
-	_ int32,
+	_ bool,
 ) error {
 	return ErrReadOnly
 }

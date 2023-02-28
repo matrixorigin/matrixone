@@ -184,14 +184,14 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
 	file string,
 	metaLoc []string,
-	flag int32,
+	dedupWithSanp bool,
 ) error {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(tid, pkVecs, file, metaLoc, flag)
+	return db.AddBlksWithMetaLoc(tid, pkVecs, file, metaLoc, dedupWithSanp)
 }
 
 func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {

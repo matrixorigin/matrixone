@@ -614,7 +614,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
 	file string,
 	metaLocs []string,
-	flag int32) (err error) {
+	dedupWithSnap bool) (err error) {
 	//TODO::If txn at CN had checked duplication against its snapshot and workspace,
 	// we should skip here.
 	if tbl.schema.HasPK() {

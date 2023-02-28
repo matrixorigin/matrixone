@@ -29,7 +29,8 @@ var _ NodeT = (*persistedNode)(nil)
 
 type persistedNode struct {
 	common.RefHelper
-	block   *baseBlock
+	block *baseBlock
+	//ZM and BF index.
 	pkIndex indexwrapper.Index
 	indexes map[int]indexwrapper.Index
 }

@@ -62,8 +62,9 @@ type Relation interface {
 	Write(context.Context, *batch.Batch) error
 
 	//AddBlksWithMetaLoc just add  non-appendable blocks into txn's workspace.
+	//dedupWithSnap : true if primary keys of blocks are not duplicated with txn's snapshot data.
 	AddBlksWithMetaLoc(ctx context.Context, pks []containers.Vector,
-		file string, metaloc []string, flag int32) error
+		file string, metaloc []string, dedupWithSnap bool) error
 
 	//Delete by primary key or physical addr.
 	Delete(context.Context, *batch.Batch, string) error

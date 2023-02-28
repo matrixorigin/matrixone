@@ -47,7 +47,7 @@ type Relation interface {
 
 	BatchDedup(col containers.Vector) error
 	Append(data *containers.Batch) error
-	AddBlksWithMetaLoc(pkVecs []containers.Vector, file string, metaLcos []string, flag int32) error
+	AddBlksWithMetaLoc(pkVecs []containers.Vector, file string, metaLcos []string, dedupWithSanp bool) error
 
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)

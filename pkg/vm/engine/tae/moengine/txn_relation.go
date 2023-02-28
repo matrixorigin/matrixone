@@ -66,8 +66,8 @@ func (rel *txnRelation) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
 	file string,
 	metaLocs []string,
-	flag int32) error {
-	return rel.handle.AddBlksWithMetaLoc(pkVecs, file, metaLocs, flag)
+	dedupWithSnap bool) error {
+	return rel.handle.AddBlksWithMetaLoc(pkVecs, file, metaLocs, dedupWithSnap)
 }
 
 func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {

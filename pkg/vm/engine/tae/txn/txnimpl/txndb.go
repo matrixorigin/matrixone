@@ -126,7 +126,7 @@ func (db *txnDB) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
 	file string,
 	metaLocs []string,
-	flag int32) error {
+	dedupWithSanp bool) error {
 	table, err := db.getOrSetTable(tid)
 	if err != nil {
 		return err
@@ -134,7 +134,7 @@ func (db *txnDB) AddBlksWithMetaLoc(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.AddBlksWithMetaLoc(pkVecs, file, metaLocs, flag)
+	return table.AddBlksWithMetaLoc(pkVecs, file, metaLocs, dedupWithSanp)
 }
 
 func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {

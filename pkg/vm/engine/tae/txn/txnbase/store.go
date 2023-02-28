@@ -36,7 +36,7 @@ func (store *NoopTxnStore) AddBlksWithMetaLoc(
 	pks []containers.Vector,
 	file string,
 	metaLocs []string,
-	flag int32) error {
+	dedupWithSnap bool) error {
 	return nil
 }
 func (store *NoopTxnStore) PrepareRollback() error { return nil }

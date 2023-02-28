@@ -166,14 +166,14 @@ func (h *txnRelation) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
 	file string,
 	metaLocs []string,
-	flag int32) error {
+	dedupWithSnap bool) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
 		pkVecs,
 		file,
 		metaLocs,
-		flag,
+		dedupWithSnap,
 	)
 }
 
