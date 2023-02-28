@@ -7,7 +7,6 @@ mysql	%!%mo_increment_columns
 sp_table	%!%mo_increment_columns	
 system	%!%mo_increment_columns	
 system_metrics	%!%mo_increment_columns	
-system_variables	%!%mo_increment_columns	
 select relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and account_id = 0 order by relname;
 relname	relkind
 %!%mo_increment_columns
