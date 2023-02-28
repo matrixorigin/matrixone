@@ -90,6 +90,12 @@ type Engine struct {
 	catalog *cache.CatalogCache
 	// minimum heap of currently active transactions
 	txnHeap *transactionHeap
+
+	// XXX related to cn push model
+	usePushModel       bool
+	subscriber         *logTailSubscriber
+	receiveLogTailTime syncLogTailTimestamp
+	subscribed         subscribedTable
 }
 
 // DB is implementataion of cache
@@ -97,6 +103,10 @@ type DB struct {
 	sync.RWMutex
 	dnMap      map[string]int
 	metaTables map[string]Partitions
+
+	// a pointer to cn engine for push model.
+	cnE *Engine
+
 	partitions map[[2]uint64]Partitions
 }
 

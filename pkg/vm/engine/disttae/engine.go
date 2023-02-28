@@ -364,37 +364,48 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
-	// update catalog's cache
-	table := &table{
-		db: &database{
-			fs: e.fs,
-			txn: &Transaction{
-				catalog: e.catalog,
+
+	if e.UsePushModelOrNot() {
+		if err := e.receiveLogTailTime.blockUntilTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
+			e.delTransaction(txn)
+			return err
+		}
+	} else {
+		// update catalog's cache
+		table := &table{
+			db: &database{
+				fs: e.fs,
+				txn: &Transaction{
+					catalog: e.catalog,
+				},
+				databaseId: catalog.MO_CATALOG_ID,
 			},
-			databaseId: catalog.MO_CATALOG_ID,
-		},
+		}
+		table.tableId = catalog.MO_DATABASE_ID
+		table.tableName = catalog.MO_DATABASE
+		if err := e.db.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
+			catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
+			e.delTransaction(txn)
+			return err
+		}
+
+		table.tableId = catalog.MO_TABLES_ID
+		table.tableName = catalog.MO_TABLES
+		if err := e.db.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
+			catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
+			e.delTransaction(txn)
+			return err
+		}
+
+		table.tableId = catalog.MO_COLUMNS_ID
+		table.tableName = catalog.MO_COLUMNS
+		if err := e.db.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
+			catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
+			e.delTransaction(txn)
+			return err
+		}
 	}
-	table.tableId = catalog.MO_DATABASE_ID
-	table.tableName = catalog.MO_DATABASE
-	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
-		catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
-		e.delTransaction(txn)
-		return err
-	}
-	table.tableId = catalog.MO_TABLES_ID
-	table.tableName = catalog.MO_TABLES
-	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
-		catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
-		e.delTransaction(txn)
-		return err
-	}
-	table.tableId = catalog.MO_COLUMNS_ID
-	table.tableName = catalog.MO_COLUMNS
-	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
-		catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
-		e.delTransaction(txn)
-		return err
-	}
+
 	return nil
 }
 
