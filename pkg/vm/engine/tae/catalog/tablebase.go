@@ -88,8 +88,8 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn, schema *Schema) {
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
 		},
-		TxnMVCCNode:       txnbase.NewTxnMVCCNodeWithTxn(txn),
-		SchemaConstraints: string(schema.Constraint),
+		TxnMVCCNode:     txnbase.NewTxnMVCCNodeWithTxn(txn),
+		TableEntryDelta: schema.deltaPartFromSchema(),
 	}
 	be.Insert(node)
 }
@@ -128,7 +128,7 @@ func (be *TableBaseEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (is
 	}
 	var entry *TableMVCCNode
 	isNewNode, entry = be.getOrSetUpdateNode(txn)
-	entry.SchemaConstraints = string(cstr)
+	entry.Constraints = string(cstr)
 	return
 }
 

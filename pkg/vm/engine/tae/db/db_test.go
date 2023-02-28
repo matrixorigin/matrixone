@@ -4930,7 +4930,7 @@ func TestUpdateCstr(t *testing.T) {
 	schema.Name = "test"
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	schema.Constraint = []byte("start version")
+	schema.Constraint = "start version"
 
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db", "")

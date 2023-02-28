@@ -127,7 +127,7 @@ func cloneLatestSchema(meta *catalog.TableEntry) *catalog.Schema {
 	latest := meta.MVCCChain.GetLatestCommittedNode()
 	if latest != nil {
 		node := latest.(*catalog.TableMVCCNode)
-		schema.Constraint = node.SchemaConstraints
+		schema.Constraint = node.Constraints
 	}
 	return schema
 }

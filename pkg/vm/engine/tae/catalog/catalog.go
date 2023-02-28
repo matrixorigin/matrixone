@@ -416,8 +416,8 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 			EntryMVCCNode: &EntryMVCCNode{
 				CreatedAt: tblCreatedAt,
 			},
-			TxnMVCCNode:       txnNode,
-			SchemaConstraints: string(schema.Constraint),
+			TxnMVCCNode:     txnNode,
+			TableEntryDelta: schema.deltaPartFromSchema(),
 		}
 		tbl.Insert(un)
 
@@ -433,8 +433,8 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
-		TxnMVCCNode:       txnNode,
-		SchemaConstraints: string(schema.Constraint),
+		TxnMVCCNode:     txnNode,
+		TableEntryDelta: schema.deltaPartFromSchema(),
 	}
 	tbl.Insert(un)
 }

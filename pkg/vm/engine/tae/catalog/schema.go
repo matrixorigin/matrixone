@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	taepb "github.com/matrixorigin/matrixone/pkg/pb/tae"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -652,6 +653,13 @@ func (s *Schema) GetColIdx(attr string) int {
 		return -1
 	}
 	return idx
+}
+
+func (s *Schema) deltaPartFromSchema() taepb.TableEntryDelta {
+	return taepb.TableEntryDelta{
+		Name:        s.Name,
+		Constraints: s.Constraint,
+	}
 }
 
 func GetAttrIdx(attrs []string, name string) int {
