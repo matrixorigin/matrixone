@@ -125,6 +125,9 @@ func (gc *GroupConcat) Dup() agg.Agg[any] {
 // Type return the type of the agg's result.
 func (gc *GroupConcat) OutputType() types.Type {
 	typ := types.T_text.ToType()
+	if gc.ityp[0].Oid == types.T_binary || gc.ityp[0].Oid == types.T_varbinary || gc.ityp[0].Oid == types.T_blob {
+		typ = types.T_blob.ToType()
+	}
 	// set to largest length
 	typ.Width = types.MaxVarcharLen
 	return typ

@@ -47,8 +47,15 @@ var aggregates = map[int]Functions{
 		},
 		Overloads: []Function{
 			{
-				Index:         0,
-				ReturnTyp:     types.T_text,
+				Index: 0,
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					for _, p := range parameters {
+						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
+							return types.T_blob.ToType()
+						}
+					}
+					return types.T_text.ToType()
+				},
 				AggregateInfo: agg.AggregateGroupConcat,
 			},
 		},
@@ -883,6 +890,18 @@ var aggregates = map[int]Functions{
 				Index:         21,
 				Args:          []types.T{types.T_time},
 				ReturnTyp:     types.T_time,
+				AggregateInfo: agg.AggregateAnyValue,
+			},
+			{
+				Index:         22,
+				Args:          []types.T{types.T_binary},
+				ReturnTyp:     types.T_binary,
+				AggregateInfo: agg.AggregateAnyValue,
+			},
+			{
+				Index:         23,
+				Args:          []types.T{types.T_varbinary},
+				ReturnTyp:     types.T_varbinary,
 				AggregateInfo: agg.AggregateAnyValue,
 			},
 		},
