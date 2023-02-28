@@ -289,9 +289,9 @@ drop table if exists t1;
 create table t1 (a int, b int);
 prepare stmt1 from 'show columns from t1';
 execute stmt1;
-Field    Type    Null    Key     Default    Extra    Comment
-a    INT    YES        NULL            
-b    INT    YES        NULL            
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null
+b    INT(32)    YES        null            
 prepare stmt1 from 'show variables like "aaaa"';
 execute stmt1;
 Variable_name    Value
