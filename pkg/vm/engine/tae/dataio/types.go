@@ -39,6 +39,8 @@ type Reader interface {
 	// protocol information, which needs to be processed internally and returned to the caller's visible data
 	LoadColumnsByTS(ctx context.Context, idxs []uint16, info catalog.BlockInfo,
 		ts timestamp.Timestamp, m *mpool.MPool) (*batch.Batch, error)
+
+	LoadBlocksMeta(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error)
 }
 
 // Writer is the only interface that mo provides to CN/DN/ETL... modules to write data

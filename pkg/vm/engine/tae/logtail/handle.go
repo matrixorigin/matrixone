@@ -608,7 +608,7 @@ func LoadCheckpointEntries(
 		location := locations[i]
 		exec := func(ctx context.Context) (result *tasks.JobResult) {
 			result = &tasks.JobResult{}
-			reader, err := blockio.NewCheckpointReader(ctx, fs, location)
+			reader, err := blockio.NewBlockReader(ctx, fs, location)
 			if err != nil {
 				result.Err = err
 				return

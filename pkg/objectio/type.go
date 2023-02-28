@@ -57,20 +57,18 @@ type Reader interface {
 	// Read is to read columns data of a block from fileservice at one time
 	// extent is location of the block meta
 	// idxs is the column serial number of the data to be read
-	Read(ctx context.Context, extents Extent, idxs []uint16, m *mpool.MPool) (*fileservice.IOVector, error)
-	ReadWithFunc(ctx context.Context,
+	Read(ctx context.Context,
 		extent Extent, idxs []uint16,
 		ids []uint32,
 		m *mpool.MPool, readFunc ReadObjectFunc) (*fileservice.IOVector, error)
 
 	// ReadMeta is the meta that reads a block
 	// extent is location of the block meta
-	ReadMeta(ctx context.Context, extent []Extent, m *mpool.MPool) ([]BlockObject, error)
-
-	ReadMetaWithFunc(ctx context.Context, extent []Extent, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) ([]BlockObject, error)
+	ReadMeta(ctx context.Context, extent []Extent, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) ([]BlockObject, error)
 
 	// ReadIndex is the index data of the read columns
-	ReadIndex(ctx context.Context, extent Extent, idxs []uint16, dataType IndexDataType, m *mpool.MPool) ([]IndexData, error)
+	ReadIndex(ctx context.Context, extent Extent,
+		idxs []uint16, typ IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) ([]IndexData, error)
 
 	// ReadAllMeta is read the meta of all blocks in an object
 	ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool) ([]BlockObject, error)

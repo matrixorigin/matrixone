@@ -17,6 +17,7 @@ package checkpoint
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"sync"
 	"time"
 
@@ -37,14 +38,16 @@ type CheckpointEntry struct {
 	state      State
 	entryType  EntryType
 	location   string
+	reader     dataio.Reader
 }
 
-func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
+func NewCheckpointEntry(start, end types.TS, typ EntryType, reader dataio.Reader) *CheckpointEntry {
 	return &CheckpointEntry{
 		start:     start,
 		end:       end,
 		state:     ST_Pending,
 		entryType: typ,
+		reader:    reader,
 	}
 }
 
@@ -131,7 +134,7 @@ func (e *CheckpointEntry) Replay(
 	c *catalog.Catalog,
 	fs *objectio.ObjectFS,
 	dataFactory catalog.DataFactory) (readDuration, applyDuration time.Duration, err error) {
-	reader, err := blockio.NewCheckpointReader(ctx, fs.Service, e.location)
+	reader, err := blockio.NewBlockReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -139,7 +142,7 @@ func (e *CheckpointEntry) Replay(
 	data := logtail.NewCheckpointData()
 	defer data.Close()
 	t0 := time.Now()
-	if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(ctx, reader, nil, common.DefaultAllocator); err != nil {
 		return
 	}
 	readDuration = time.Since(t0)
@@ -153,13 +156,14 @@ func (e *CheckpointEntry) Read(
 	scheduler tasks.JobScheduler,
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
-	reader, err := blockio.NewCheckpointReader(ctx, fs.Service, e.location)
+	reader, err := blockio.NewBlockReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
 
 	data = logtail.NewCheckpointData()
 	if err = data.ReadFrom(
+		ctx,
 		reader,
 		scheduler,
 		common.DefaultAllocator,
@@ -169,13 +173,13 @@ func (e *CheckpointEntry) Read(
 	return
 }
 func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns *api.Batch, err error) {
-	reader, err := blockio.NewCheckpointReader(context.Background(), fs.Service, e.location)
+	reader, err := blockio.NewBlockReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
 	data := logtail.NewCheckpointData()
 	defer data.Close()
-	if err = data.ReadFrom(reader, nil, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(context.Background(), reader, nil, common.DefaultAllocator); err != nil {
 		return
 	}
 	ins, del, cnIns, err = data.GetTableData(tid)

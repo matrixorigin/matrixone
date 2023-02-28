@@ -129,3 +129,48 @@ func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
 	}
 	return objectSize, nil
 }
+
+func DecodeLocation(metaLoc string) (name string, id uint32, extent objectio.Extent, rows uint32, err error) {
+	info := strings.Split(metaLoc, ":")
+	name = info[0]
+	location := strings.Split(info[1], "_")
+	offset, err := strconv.ParseUint(location[0], 10, 32)
+	if err != nil {
+		return
+	}
+	size, err := strconv.ParseUint(location[1], 10, 32)
+	if err != nil {
+		return
+	}
+	osize, err := strconv.ParseUint(location[2], 10, 32)
+	if err != nil {
+		panic(any(err))
+	}
+	num, err := strconv.ParseUint(location[3], 10, 32)
+	if err != nil {
+		return
+	}
+	id = uint32(num)
+	r, err := strconv.ParseUint(info[2], 10, 32)
+	if err != nil {
+		return
+	}
+	rows = uint32(r)
+	extent = objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
+	return
+}
+
+func EncodeLocation(
+	name string,
+	extent objectio.Extent,
+	rows uint32) (string, error) {
+	metaLoc := fmt.Sprintf("%s:%d_%d_%d_%d:%d",
+		name,
+		extent.Offset(),
+		extent.Length(),
+		extent.OriginSize(),
+		extent.Id(),
+		rows,
+	)
+	return metaLoc, nil
+}

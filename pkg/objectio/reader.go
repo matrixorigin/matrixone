@@ -27,6 +27,7 @@ import (
 
 type ObjectReader struct {
 	object *Object
+	blocks []BlockObject
 	name   string
 }
 
@@ -42,11 +43,7 @@ func NewObjectReader(name string, fs fileservice.FileService) (Reader, error) {
 	return reader, nil
 }
 
-func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.MPool) ([]BlockObject, error) {
-	return r.ReadMetaWithFunc(ctx, extents, m, nil)
-}
-
-func (r *ObjectReader) ReadMetaWithFunc(ctx context.Context,
+func (r *ObjectReader) ReadMeta(ctx context.Context,
 	extents []Extent, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) ([]BlockObject, error) {
 	l := len(extents)
 	if l == 0 {
@@ -114,27 +111,19 @@ func (r *ObjectReader) ReadMetaWithFunc(ctx context.Context,
 		block := metas.Entries[0].Object.([]*Block)[extent.id]
 		blocks = append(blocks, block)
 	}
+	r.blocks = blocks
 	return blocks, err
 }
 
-func (r *ObjectReader) Read(ctx context.Context, extent Extent, idxs []uint16, m *mpool.MPool) (*fileservice.IOVector, error) {
-	data, err := r.ReadWithFunc(ctx, extent, idxs, m, newDecompressToObject)
-	return data, err
-}
-
-func (r *ObjectReader) ReadWithFunc(ctx context.Context,
+func (r *ObjectReader) Read(ctx context.Context,
 	extent Extent, idxs []uint16, ids []uint32, m *mpool.MPool, readFunc ReadObjectFunc) (*fileservice.IOVector, error) {
-	blocks, err := r.ReadMeta(ctx, []Extent{extent}, m)
-	if err != nil {
-		return nil, err
-	}
 
 	data := &fileservice.IOVector{
 		FilePath: r.name,
 		Entries:  make([]fileservice.IOEntry, 0, len(idxs)*len(ids)),
 	}
 	for _, id := range ids {
-		for _, block := range blocks {
+		for _, block := range r.blocks {
 			if id == block.GetID() {
 				for _, idx := range idxs {
 					col := block.(*Block).columns[idx]
@@ -150,7 +139,7 @@ func (r *ObjectReader) ReadWithFunc(ctx context.Context,
 		}
 	}
 
-	err = r.object.fs.Read(ctx, data)
+	err := r.object.fs.Read(ctx, data)
 	if err != nil {
 		return nil, err
 	}
@@ -158,17 +147,8 @@ func (r *ObjectReader) ReadWithFunc(ctx context.Context,
 }
 
 func (r *ObjectReader) ReadIndex(ctx context.Context, extent Extent,
-	idxs []uint16, typ IndexDataType, m *mpool.MPool) ([]IndexData, error) {
-	return r.ReadIndexWithFunc(ctx, extent, idxs, typ, newDecompressToObject, m)
-}
-
-func (r *ObjectReader) ReadIndexWithFunc(ctx context.Context, extent Extent,
 	idxs []uint16, typ IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) ([]IndexData, error) {
-	blocks, err := r.ReadMeta(ctx, []Extent{extent}, m)
-	if err != nil {
-		return nil, err
-	}
-	block := blocks[0]
+	block := r.blocks[0]
 	indexes := make([]IndexData, 0)
 	for _, idx := range idxs {
 		col := block.(*Block).columns[idx]
@@ -190,7 +170,7 @@ func (r *ObjectReader) ReadAllMetaWithFunc(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	return r.ReadMetaWithFunc(ctx, footer.extents, m, ZMUnmarshalFunc)
+	return r.ReadMeta(ctx, footer.extents, m, ZMUnmarshalFunc)
 }
 
 func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.MPool) (*Footer, error) {
