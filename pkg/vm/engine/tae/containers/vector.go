@@ -113,7 +113,7 @@ func (vec *vector[T]) GetType() types.Type {
 }
 
 func (vec *vector[T]) String() string {
-	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Capacity(), vec.Allocated())
+	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Allocated())
 
 	end := 100
 	if vec.Length() < end {
@@ -229,19 +229,13 @@ func (vec *vector[T]) HasNull() bool {
 	return vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Any()
 }
 
-// TODO: --- We can remove below functions as they don't have any usage
+// TODO: --- We can remove below function as they are only used in Testcases.
 
 func (vec *vector[T]) AppendMany(vs ...any) {
 	for _, v := range vs {
 		vec.Append(v)
 	}
 }
-
-func (vec *vector[T]) Capacity() int {
-	return vec.Length()
-}
-
-// TODO: --- We can remove below function as they are only used in Testcases.
 
 func (vec *vector[T]) Delete(delRowId int) {
 	deletes := roaring.BitmapOf(uint32(delRowId))

@@ -211,7 +211,6 @@ func TestVector6(t *testing.T) {
 		bias := 0
 		win := vec.Window(bias, 8)
 		assert.Equal(t, 8, win.Length())
-		assert.Equal(t, 8, win.Capacity())
 		rows := make([]int, 0)
 		op := func(v any, row int) (err error) {
 			rows = append(rows, row)

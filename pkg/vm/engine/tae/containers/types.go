@@ -42,7 +42,6 @@ type VectorView interface {
 	Get(i int) any
 
 	Length() int
-	Capacity() int
 	Allocated() int
 	GetAllocator() *mpool.MPool
 	GetType() types.Type
