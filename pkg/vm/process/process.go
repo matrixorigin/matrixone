@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // New creates a new Process.
@@ -36,18 +35,15 @@ func New(
 	m *mpool.MPool,
 	txnClient client.TxnClient,
 	txnOperator client.TxnOperator,
-	fileService fileservice.FileService,
-	getClusterDetails engine.GetClusterDetailsFunc,
-) *Process {
+	fileService fileservice.FileService) *Process {
 	return &Process{
-		mp:                m,
-		Ctx:               ctx,
-		TxnClient:         txnClient,
-		TxnOperator:       txnOperator,
-		FileService:       fileService,
-		GetClusterDetails: getClusterDetails,
-		UnixTime:          time.Now().UnixNano(),
-		LastInsertID:      new(uint64),
+		mp:           m,
+		Ctx:          ctx,
+		TxnClient:    txnClient,
+		TxnOperator:  txnOperator,
+		FileService:  fileService,
+		UnixTime:     time.Now().UnixNano(),
+		LastInsertID: new(uint64),
 	}
 }
 
@@ -70,7 +66,6 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.AnalInfos = p.AnalInfos
 	proc.SessionInfo = p.SessionInfo
 	proc.FileService = p.FileService
-	proc.GetClusterDetails = p.GetClusterDetails
 	proc.UnixTime = p.UnixTime
 	proc.LastInsertID = p.LastInsertID
 

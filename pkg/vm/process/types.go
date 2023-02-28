@@ -162,8 +162,6 @@ type Process struct {
 
 	FileService fileservice.FileService
 
-	GetClusterDetails engine.GetClusterDetailsFunc
-
 	LoadTag bool
 
 	LastInsertID *uint64

@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -37,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 func NewService(
@@ -81,8 +81,7 @@ func NewService(
 		},
 	}
 
-	hakeeper, err := srv.getHAKeeperClient()
-	if err != nil {
+	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
 
@@ -92,9 +91,7 @@ func NewService(
 		nil,
 		engine.Nodes{engine.Node{
 			Addr: cfg.ServiceAddress,
-		}},
-		memoryengine.GetClusterDetailsFromHAKeeper(ctx, hakeeper),
-	)
+		}})
 	cfg.Frontend.SetDefaultValues()
 	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 	frontend.InitServerVersion(pu.SV.MoVersion)
@@ -125,7 +122,13 @@ func NewService(
 	srv.storeEngine = pu.StorageEngine
 	srv._txnClient = pu.TxnClient
 
-	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message, getClusterDetails engine.GetClusterDetailsFunc) error {
+	srv.requestHandler = func(ctx context.Context,
+		message morpc.Message,
+		cs morpc.ClientSession,
+		engine engine.Engine,
+		fService fileservice.FileService,
+		cli client.TxnClient,
+		messageAcquirer func() morpc.Message) error {
 		return nil
 	}
 	for _, opt := range options {
@@ -181,6 +184,7 @@ func (s *service) stopRPCs() error {
 		}
 	}
 	if s._hakeeperClient != nil {
+		s.moCluster.Close()
 		if err := s._hakeeperClient.Close(); err != nil {
 			return err
 		}
@@ -208,8 +212,18 @@ func (s *service) releaseMessage(m *pipeline.Message) {
 	}
 }
 
-func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
-	go s.requestHandler(ctx, req, cs, s.storeEngine, s.fileService, s._txnClient, s.acquireMessage, s.pu.GetClusterDetails)
+func (s *service) handleRequest(
+	ctx context.Context,
+	req morpc.Message,
+	_ uint64,
+	cs morpc.ClientSession) error {
+	go s.requestHandler(ctx,
+		req,
+		cs,
+		s.storeEngine,
+		s.fileService,
+		s._txnClient,
+		s.acquireMessage)
 	return nil
 }
 
@@ -294,9 +308,16 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 			return
 		}
 		s._hakeeperClient = client
+		s.initClusterService()
 	})
 	client = s._hakeeperClient
 	return
+}
+
+func (s *service) initClusterService() {
+	s.moCluster = clusterservice.NewMOCluster(s._hakeeperClient,
+		s.cfg.Cluster.RefreshInterval.Duration)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, s.moCluster)
 }
 
 func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {

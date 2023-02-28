@@ -18,10 +18,11 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
@@ -52,8 +53,8 @@ func (s *service) initMemoryEngine(
 	pu.StorageEngine = memoryengine.New(
 		ctx,
 		memoryengine.NewDefaultShardPolicy(mp),
-		pu.GetClusterDetails,
 		memoryengine.NewHakeeperIDGenerator(hakeeper),
+		s.moCluster,
 	)
 
 	return nil
@@ -68,19 +69,23 @@ func (s *service) initMemoryEngineNonDist(
 	if err != nil {
 		return err
 	}
-	shard := logservicepb.DNShardInfo{
-		ShardID:   2,
-		ReplicaID: 2,
-	}
-	shards := []logservicepb.DNShardInfo{
+
+	shard := metadata.DNShard{}
+	shard.ShardID = 2
+	shard.ReplicaID = 2
+	shards := []metadata.DNShard{
 		shard,
 	}
 	dnAddr := "1"
-	dnStore := logservicepb.DNStore{
-		UUID:           uuid.NewString(),
-		ServiceAddress: dnAddr,
-		Shards:         shards,
-	}
+	dnServices := []metadata.DNService{{
+		ServiceID:         uuid.NewString(),
+		TxnServiceAddress: dnAddr,
+		Shards:            shards,
+	}}
+	cluster := clusterservice.NewMOCluster(nil, 0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(nil, dnServices))
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
 	storage, err := memorystorage.NewMemoryStorage(
 		mp,
@@ -102,14 +107,8 @@ func (s *service) initMemoryEngineNonDist(
 	engine := memoryengine.New(
 		ctx,
 		memoryengine.NewDefaultShardPolicy(mp),
-		func() (logservicepb.ClusterDetails, error) {
-			return logservicepb.ClusterDetails{
-				DNStores: []logservicepb.DNStore{
-					dnStore,
-				},
-			}, nil
-		},
 		memoryengine.RandomIDGenerator,
+		cluster,
 	)
 	pu.StorageEngine = engine
 
