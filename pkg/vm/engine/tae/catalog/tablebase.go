@@ -118,12 +118,7 @@ func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err
 func (be *TableBaseEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *apipb.AlterTableReq) (isNewNode bool, err error) {
 	be.Lock()
 	defer be.Unlock()
-	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
-	if needWait {
-		be.Unlock()
-		txnToWait.GetTxnState(true)
-		be.Lock()
-	}
+	be.TryWaitCommittingLocked(txn.GetStartTS(), be.RWMutex)
 	err = be.CheckConflict(txn)
 	if err != nil {
 		return
@@ -132,9 +127,10 @@ func (be *TableBaseEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, r
 	isNewNode, entry = be.getOrSetUpdateNode(txn)
 	switch req.Kind {
 	case apipb.AlterKind_UpdateConstraint:
-		entry.Constraints = req.GetUpdateCstr().Constraints
+		entry.Constraints = req.GetUpdateCstr().GetConstraints()
+	case apipb.AlterKind_UpdateComment:
+		entry.Comment = req.GetUpdateComment().GetComment()
 	default:
-		err = moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
 	}
 
 	return
@@ -154,6 +150,17 @@ func (be *TableBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnR
 		return false, nil
 	}
 	return un.NeedWaitCommitting(startTS)
+}
+
+// Check if need to wait for the latest node to finish committing, if so, release the readlock and wait it.
+// TryWaitCommittingLocked returns with readlock acquired.
+func (be *TableBaseEntry) TryWaitCommittingLocked(startTs types.TS, lock *sync.RWMutex) {
+	needWait, txnToWait := be.NeedWaitCommitting(startTs)
+	if needWait {
+		lock.RUnlock()
+		txnToWait.GetTxnState(true)
+		lock.RLock()
+	}
 }
 
 func (be *TableBaseEntry) HasDropCommitted() bool {
@@ -181,10 +188,7 @@ func (be *TableBaseEntry) DoCompre(voe BaseEntry) int {
 
 func (be *TableBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
 	visible, dropped := be.GetVisibilityLocked(ts)
-	if !visible {
-		return false
-	}
-	return !dropped
+	return visible && !dropped
 }
 
 func (be *TableBaseEntry) GetVisibilityLocked(ts types.TS) (visible, dropped bool) {
@@ -202,12 +206,7 @@ func (be *TableBaseEntry) GetVisibilityLocked(ts types.TS) (visible, dropped boo
 }
 
 func (be *TableBaseEntry) IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error) {
-	needWait, txnToWait := be.NeedWaitCommitting(ts)
-	if needWait {
-		mu.RUnlock()
-		txnToWait.GetTxnState(true)
-		mu.RLock()
-	}
+	be.TryWaitCommittingLocked(ts, mu)
 	ok = be.ensureVisibleAndNotDropped(ts)
 	return
 }
@@ -228,12 +227,7 @@ func (be *TableBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 	be.RLock()
 	defer be.RUnlock()
 	if txn != nil {
-		needWait, waitTxn := be.NeedWaitCommitting(txn.GetStartTS())
-		if needWait {
-			be.RUnlock()
-			waitTxn.GetTxnState(true)
-			be.RLock()
-		}
+		be.TryWaitCommittingLocked(txn.GetStartTS(), be.RWMutex)
 		err = be.CheckConflict(txn)
 		if err != nil {
 			return
@@ -289,12 +283,7 @@ func (be *TableBaseEntry) GetDeleteAt() types.TS {
 func (be *TableBaseEntry) GetVisibility(ts types.TS) (visible, dropped bool) {
 	be.RLock()
 	defer be.RUnlock()
-	needWait, txnToWait := be.NeedWaitCommitting(ts)
-	if needWait {
-		be.RUnlock()
-		txnToWait.GetTxnState(true)
-		be.RLock()
-	}
+	be.TryWaitCommittingLocked(ts, be.RWMutex)
 	return be.GetVisibilityLocked(ts)
 }
 func (be *TableBaseEntry) WriteOneNodeTo(w io.Writer) (n int64, err error) {

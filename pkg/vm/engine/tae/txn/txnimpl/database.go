@@ -121,7 +121,6 @@ func (db *txnDatabase) DropRelationByID(id uint64) (rel handle.Relation, err err
 	return db.Txn.GetStore().DropRelationByID(db.txnDB.entry.ID, id)
 }
 
-// TODO(aptend): rearrage columns if truncate
 func cloneLatestSchema(meta *catalog.TableEntry) *catalog.Schema {
 	schema := meta.GetSchema().Clone()
 	latest := meta.MVCCChain.GetLatestCommittedNode()

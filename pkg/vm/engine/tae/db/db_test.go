@@ -4920,7 +4920,7 @@ func TestGCDropTable(t *testing.T) {
 	tae.restart()
 }
 
-func TestUpdateCstr(t *testing.T) {
+func TestUpdateCstrAndComment(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -4931,6 +4931,7 @@ func TestUpdateCstr(t *testing.T) {
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
 	schema.Constraint = "start version"
+	schema.Comment = "comment version"
 
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db", "")
@@ -4940,7 +4941,9 @@ func TestUpdateCstr(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	tbl, _ := db.GetRelationByName("test")
-	err := tbl.UpdateConstraint([]byte("version 1"))
+	err := tbl.AlterTable(context.Background(), api.NewUpdateConstraintReq(0, 0, "version 1"))
+	assert.NoError(t, err)
+	err = tbl.AlterTable(context.Background(), api.NewUpdateCommentReq(0, 0, "comment version 1"))
 	assert.NoError(t, err)
 	err = txn.Commit()
 	assert.NoError(t, err)
@@ -4948,7 +4951,7 @@ func TestUpdateCstr(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	tbl, _ = db.GetRelationByName("test")
-	err = tbl.UpdateConstraint([]byte("version 2"))
+	err = tbl.AlterTable(context.Background(), api.NewUpdateConstraintReq(0, 0, "version 2"))
 	assert.NoError(t, err)
 	txn.Commit()
 
@@ -4970,6 +4973,12 @@ func TestUpdateCstr(t *testing.T) {
 	assert.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
 	assert.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
 
+	commetCol := containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Comment)
+	assert.Equal(t, 3, cstrCol.Length())
+	assert.Equal(t, []byte("comment version"), commetCol.Get(0).([]byte))
+	assert.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
+	assert.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
+
 	tae.restart()
 
 	resp, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
@@ -4984,6 +4993,12 @@ func TestUpdateCstr(t *testing.T) {
 	assert.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
 	assert.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
 	assert.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
+
+	commetCol = containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Comment)
+	assert.Equal(t, 3, cstrCol.Length())
+	assert.Equal(t, []byte("comment version"), commetCol.Get(0).([]byte))
+	assert.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
+	assert.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")

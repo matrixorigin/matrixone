@@ -202,6 +202,19 @@ func (entry *TableEntry) GetSchema() *Schema {
 	return entry.schema
 }
 
+// Given ts, find a suitable version node. Return nil if no visible version is found.
+func (entry *TableEntry) GetVisibleMVCCNode(ts types.TS) *TableMVCCNode {
+	entry.RLock()
+	defer entry.RUnlock()
+
+	entry.TryWaitCommittingLocked(ts, entry.RWMutex)
+	node := entry.GetVisibleNode(ts)
+	if node == nil {
+		return nil
+	}
+	return node.(*TableMVCCNode)
+}
+
 func (entry *TableEntry) GetColDefs() []*ColDef {
 	colDefs := entry.schema.ColDefs
 	colDefs = append(colDefs, entry.schema.PhyAddrKey)

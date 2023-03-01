@@ -807,9 +807,8 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc string) (err error) 
 }
 
 func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {
-	logutil.Infof("xxxx alter req: %#v", req)
 	switch req.Kind {
-	case apipb.AlterKind_UpdateConstraint:
+	case apipb.AlterKind_UpdateConstraint, apipb.AlterKind_UpdateComment:
 	default:
 		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
 	}

@@ -261,7 +261,11 @@ func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vec
 	case pkgcatalog.SystemRelAttr_DBID:
 		colData.Append(table.GetDB().GetID())
 	case pkgcatalog.SystemRelAttr_Comment:
-		colData.Append([]byte(table.GetSchema().Comment))
+		if node := table.GetVisibleMVCCNode(ts); node != nil {
+			colData.Append([]byte(node.Comment))
+		} else {
+			colData.Append([]byte(""))
+		}
 	case pkgcatalog.SystemRelAttr_Partition:
 		colData.Append([]byte(table.GetSchema().Partition))
 	case pkgcatalog.SystemRelAttr_Persistence:
@@ -281,10 +285,8 @@ func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vec
 	case pkgcatalog.SystemRelAttr_AccID:
 		colData.Append(schema.AcInfo.TenantID)
 	case pkgcatalog.SystemRelAttr_Constraint:
-		table.RLock()
-		defer table.RUnlock()
-		if node := table.MVCCChain.GetVisibleNode(ts); node != nil {
-			colData.Append([]byte(node.(*catalog.TableMVCCNode).Constraints))
+		if node := table.GetVisibleMVCCNode(ts); node != nil {
+			colData.Append([]byte(node.Constraints))
 		} else {
 			colData.Append([]byte(""))
 		}
