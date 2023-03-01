@@ -19,13 +19,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-)
-
-var (
-	// ErrDeadlockDetectorClosed deadlock detector is closed
-	ErrDeadlockDetectorClosed = moerr.NewInvalidStateNoCtx("deadlock detector is closed")
 )
 
 type detector struct {

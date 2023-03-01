@@ -276,6 +276,10 @@ func NewDeadLockDetectedNoCtx() *Error {
 	return newError(Context(), ErrDeadLockDetected)
 }
 
+func NewLockTableBindChangedNoCtx() *Error {
+	return newError(Context(), ErrLockTableBindChanged)
+}
+
 func NewUDFAlreadyExistsNoCtx(f string) *Error {
 	return newError(Context(), ErrFunctionAlreadyExists, f)
 }

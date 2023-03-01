@@ -103,6 +103,30 @@ func TestRequestCanBeFilter(t *testing.T) {
 	)
 }
 
+func TestLockTableBindChanged(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			s.RegisterMethodHandler(
+				lock.Method_Lock,
+				func(
+					ctx context.Context,
+					req *lock.Request,
+					resp *lock.Response) error {
+					resp.NewBind = &lock.LockTable{ServiceID: "s1"}
+					return nil
+				})
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			defer cancel()
+			resp, err := c.Send(ctx, &lock.Request{ServiceID: "s1", Method: lock.Method_Lock})
+			require.NoError(t, err)
+			require.NotNil(t, resp.NewBind)
+			assert.Equal(t, lock.LockTable{ServiceID: "s1"}, *resp.NewBind)
+		},
+	)
+}
+
 func runRPCTests(
 	t *testing.T,
 	fn func(Client, Server),
@@ -117,17 +141,17 @@ func runRPCTests(
 		clusterservice.WithServices([]metadata.CNService{
 			{
 				ServiceID:          "s1",
-				LockServiceAddress: "127.0.0.1:12345",
+				LockServiceAddress: testSockets,
 			},
 		}, nil))
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
 	s, err := NewServer(testSockets, morpc.Config{}, opts...)
 	require.NoError(t, err)
-	// defer func() {
-	// 	assert.NoError(t, s.Close())
-	// }()
-	// require.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+	require.NoError(t, s.Start())
 
 	c, err := NewClient(morpc.Config{})
 	require.NoError(t, err)

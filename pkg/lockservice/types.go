@@ -17,7 +17,17 @@ package lockservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+)
+
+var (
+	// ErrDeadlockDetectorClosed deadlock detector is closed
+	ErrDeadlockDetectorClosed = moerr.NewInvalidStateNoCtx("deadlock detector is closed")
+	// ErrDeadLockDetected dead lock detected
+	ErrDeadLockDetected = moerr.NewDeadLockDetectedNoCtx()
+	// ErrLockTableBindChanged lock table and lock service bind changed
+	ErrLockTableBindChanged = moerr.NewLockTableBindChangedNoCtx()
 )
 
 // LockStorage the store that holds the locks, a storage instance is corresponding to
@@ -93,6 +103,8 @@ type lockTable interface {
 	unlock(ctx context.Context, txn *activeTxn, ls *cowSlice) error
 	// getLock get a lock, it will keep retrying until the context times out when it encounters an error.
 	getLock(ctx context.Context, key []byte) (Lock, bool)
+	// close close the locktable
+	close()
 }
 
 // LockTableAllocator is used to managing the binding relationship between

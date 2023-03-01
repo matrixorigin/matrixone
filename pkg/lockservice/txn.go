@@ -95,7 +95,7 @@ func (txn *activeTxn) abort(txnID []byte) {
 		panic("BUG: abort a non-waiting txn")
 	}
 
-	if !txn.blockedWaiter.notify(ErrDeadlockDetectorClosed) {
+	if !txn.blockedWaiter.notify(ErrDeadLockDetected) {
 		panic("BUG: can not notify deadlock failed")
 	}
 }

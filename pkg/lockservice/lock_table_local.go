@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
@@ -30,7 +31,8 @@ type localLockTable struct {
 
 	mu struct {
 		sync.RWMutex
-		store LockStorage
+		closed bool
+		store  LockStorage
 	}
 }
 
@@ -49,7 +51,11 @@ func (l *localLockTable) lock(
 	options LockOptions) error {
 	waiter := acquireWaiter(txn.txnID)
 	for {
-		if added := l.doAcquireLock(txn, waiter, rows, options); added {
+		added, err := l.doAcquireLock(txn, waiter, rows, options)
+		if err != nil {
+			return err
+		}
+		if added {
 			return nil
 		}
 
@@ -69,6 +75,10 @@ func (l *localLockTable) unlock(
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.mu.closed {
+		return moerr.NewInvalidStateNoCtx("local lock table closed")
+	}
+
 	locks.iter(func(key []byte) bool {
 		if lock, ok := l.mu.store.Get(key); ok {
 			if lock.isLockRow() || lock.isLockRangeEnd() {
@@ -84,25 +94,38 @@ func (l *localLockTable) unlock(
 func (l *localLockTable) getLock(ctx context.Context, key []byte) (Lock, bool) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	if l.mu.closed {
+		return Lock{}, false
+	}
 	return l.mu.store.Get(key)
+}
+
+func (l *localLockTable) close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.mu.closed = true
 }
 
 func (l *localLockTable) doAcquireLock(
 	txn *activeTxn,
 	waiter *waiter,
 	rows [][]byte,
-	opts LockOptions) bool {
+	opts LockOptions) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	if l.mu.closed {
+		return false, moerr.NewInvalidStateNoCtx("local lock table closed")
+	}
+
 	switch opts.Granularity {
 	case pb.Granularity_Row:
-		return l.acquireRowLockLocked(txn, waiter, rows[0], opts.Mode)
+		return l.acquireRowLockLocked(txn, waiter, rows[0], opts.Mode), nil
 	case pb.Granularity_Range:
 		if len(rows) != 2 {
 			panic("invalid range lock")
 		}
-		return l.acquireRangeLockLocked(txn, waiter, rows[0], rows[1], opts.Mode)
+		return l.acquireRangeLockLocked(txn, waiter, rows[0], rows[1], opts.Mode), nil
 	default:
 		panic(fmt.Sprintf("not support lock granularity %d", opts))
 	}

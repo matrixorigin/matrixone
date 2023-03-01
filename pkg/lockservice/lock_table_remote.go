@@ -16,25 +16,41 @@ package lockservice
 
 import (
 	"context"
+	"sync"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
-// remoteLockTable the lock corresponding to the Table is managed by a remote LockTable. And the
-// remoteLockTable acts as a proxy for this LockTable locally.
+// remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
+// And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
-	binding  pb.LockTable
-	client   Client
-	detector *detector
+	logger            *log.MOLogger
+	binding           pb.LockTable
+	client            Client
+	stopper           *stopper.Stopper
+	retryC            chan []byte
+	heartbeatInterval time.Duration
 }
 
 func newRemoteLockTable(
 	binding pb.LockTable,
-	client Client,
-	detector *detector) *remoteLockTable {
+	client Client) *remoteLockTable {
+	tag := "remote-lock-table"
+	logger := runtime.ProcessLevelRuntime().Logger().
+		Named(tag).
+		With(zap.String("binding", binding.DebugString()))
 	l := &remoteLockTable{
-		binding:  binding,
-		detector: detector,
+		logger:  logger,
+		binding: binding,
+		stopper: stopper.NewStopper(tag,
+			stopper.WithLogger(logger.RawLogger())),
+		retryC: make(chan []byte, 1024),
 	}
 	return l
 }
@@ -44,6 +60,9 @@ func (l *remoteLockTable) lock(
 	txn *activeTxn,
 	rows [][]byte,
 	options LockOptions) error {
+	ctx, span := trace.Debug(ctx, "lockservice.remote.lock")
+	defer span.End()
+
 	req := acquireRequest()
 	defer releaseRequest(req)
 
@@ -59,8 +78,6 @@ func (l *remoteLockTable) lock(
 		releaseResponse(resp)
 		return nil
 	}
-
-	// handle errors
 	return err
 }
 
@@ -68,30 +85,76 @@ func (l *remoteLockTable) unlock(
 	ctx context.Context,
 	txn *activeTxn,
 	ls *cowSlice) error {
+	return l.doUnlock(ctx, txn.txnID)
+}
+
+func (l *remoteLockTable) addToRetry(id []byte) {
+	l.retryC <- id
+}
+
+// backgroundTask once a remote local table has been created, a periodic heartbeat needs to
+// be enabled to maintain communication so that the remote lockservice does not think the
+// current lockservice instance is down and release all the locks held by the transactions
+// created on the current instance.
+func (l *remoteLockTable) backgroundTask(ctx context.Context) {
+	timer := time.NewTimer(l.heartbeatInterval)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			timer.Reset(l.heartbeatInterval)
+		case txnID := <-l.retryC:
+			ctx2, cancel := context.WithTimeout(ctx, l.heartbeatInterval)
+			if err := l.doUnlock(ctx2, txnID); err != nil {
+				if l.logger.Enabled(zap.DebugLevel) {
+					l.logger.Debug("failed to retry unlock txn",
+						zap.ByteString("txn-id", txnID))
+				}
+			}
+			cancel()
+		}
+	}
+}
+
+func (l *remoteLockTable) doHeartbeat() {
+
+}
+
+func (l *remoteLockTable) doUnlock(ctx context.Context, id []byte) error {
 	req := acquireRequest()
 	defer releaseRequest(req)
 
 	req.Method = pb.Method_Unlock
 	req.ServiceID = l.binding.ServiceID
-	req.Unlock.TxnID = txn.txnID
+	req.Unlock.TxnID = id
 
-	// we need retry unlock remote lock if encounter an error util context timeout.
-	return l.doSendRetryUntilContextTimeout(ctx, req)
+	resp, err := l.client.Send(ctx, req)
+	if err == nil {
+		releaseResponse(resp)
+		return nil
+	}
+
+	l.addToRetry(id)
+	return err
 }
 
-func (l *remoteLockTable) doSendRetryUntilContextTimeout(
-	ctx context.Context,
-	req *pb.Request) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			resp, err := l.client.Send(ctx, req)
-			releaseResponse(resp)
-			if err == nil {
-				return nil
-			}
-		}
+type lockTableServer struct {
+	logger        *log.MOLogger
+	lockTableFunc func(uint64) lockTable
+	mu            struct {
+		sync.RWMutex
+		remoteActiveTxns map[string]string
 	}
+}
+
+func newLockTableServer(server Server) *lockTableServer {
+	return nil
+}
+
+func (s *lockTableServer) handleRemoteLock(context.Context, *pb.Request, *pb.Response) error {
+
+	return nil
 }

@@ -89,10 +89,12 @@ message Response {
     // Error we use this field to send moerr from service to another cn. Set with 
     // moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
     bytes          Error     = 2;
+    // NewBind lock table and lockservice bind changed
+    LockTable      NewBind   = 3;
     // LockResponse lock response
-    LockResponse   Lock      = 3;
+    LockResponse   Lock      = 4;
     // UnlockResponse unlock response 
-    UnlockResponse Unlock    = 4;
+    UnlockResponse Unlock    = 5;
 }
 
 // LockRequest lock request
