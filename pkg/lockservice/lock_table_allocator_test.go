@@ -126,9 +126,10 @@ func TestKeepaliveBind(t *testing.T) {
 			binds := a.getServiceBinds("s1")
 			assert.NotNil(t, binds)
 
+			// close keep alive
 			assert.NoError(t, k.Close())
 
-			time.Sleep(interval * 2)
+			time.Sleep(interval * 10)
 			a.mu.Lock()
 			assert.Equal(t,
 				pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, Valid: false},

@@ -430,6 +430,7 @@ func WriteBlock(container *WriteS3Container, bat *batch.Batch, proc *process.Pro
 		return err
 	}
 	// atomic.AddUint64(&n.Affected, uint64(bat.Vecs[0].Length()))
+
 	container.lengths = append(container.lengths, uint64(bat.Vecs[0].Length()))
 	if err := GenerateIndex(container, fd, container.writer, bat); err != nil {
 		return err
