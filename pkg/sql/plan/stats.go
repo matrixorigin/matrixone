@@ -48,52 +48,58 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 		//isCrossJoin := (len(node.OnList) == 0)
 		isCrossJoin := false
 
+		selectivity := math.Pow(rightStats.Selectivity, leftStats.Selectivity)
+
 		switch node.JoinType {
 		case plan.Node_INNER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if !isCrossJoin {
-				outcnt *= 0.1
+				outcnt *= selectivity
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_LEFT:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if !isCrossJoin {
-				outcnt *= 0.1
+				outcnt *= selectivity
 				outcnt += leftStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_RIGHT:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if !isCrossJoin {
-				outcnt *= 0.1
+				outcnt *= selectivity
 				outcnt += rightStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_OUTER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if !isCrossJoin {
-				outcnt *= 0.1
+				outcnt *= selectivity
 				outcnt += leftStats.Outcnt + rightStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_SEMI, plan.Node_ANTI:
@@ -101,6 +107,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      leftStats.Outcnt * .7,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_SINGLE, plan.Node_MARK:
@@ -108,6 +115,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      leftStats.Outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 		}
 

@@ -45,11 +45,11 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 	if sortOrder == 0 {
 		return outCnt * 0.95
 	} else if sortOrder == 1 {
-		return outCnt * 0.75
+		return outCnt * 0.7
 	} else if sortOrder == 2 {
-		return outCnt * 0.55
+		return outCnt * 0.25
 	} else {
-		return outCnt * 0.35
+		return outCnt * 0.1
 	}
 
 }
