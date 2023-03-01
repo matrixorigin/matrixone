@@ -17,6 +17,8 @@ package tables
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -26,6 +28,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 )
 
+func constructRowId(id *common.ID, rows uint32) (col containers.Vector, err error) {
+	prefix := model.EncodeBlockKeyPrefix(id.SegmentID, id.BlockID)
+	return model.PreparePhyAddrData(
+		types.T_Rowid.ToType(),
+		prefix,
+		0,
+		rows,
+	)
+}
+
 func LoadPersistedColumnData(
 	mgr base.INodeManager,
 	fs *objectio.ObjectFS,
@@ -33,9 +45,12 @@ func LoadPersistedColumnData(
 	def *catalog.ColDef,
 	location string,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
-	_, _, meta, _, err := blockio.DecodeLocation(location)
+	_, _, meta, rows, err := blockio.DecodeLocation(location)
 	if err != nil {
 		return nil, err
+	}
+	if def.IsPhyAddr() {
+		return constructRowId(id, rows)
 	}
 	reader, err := blockio.NewBlockReader(fs.Service, location)
 	if err != nil {

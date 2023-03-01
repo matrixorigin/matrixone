@@ -70,7 +70,7 @@ func (task *flushBlkTask) Execute() error {
 		return err
 	}
 	if task.delta != nil {
-		_, err := writer.WriteBlock(task.delta)
+		_, err := writer.WriteBlockWithOutIndex(task.delta)
 		if err != nil {
 			return err
 		}

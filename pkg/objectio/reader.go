@@ -82,6 +82,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 					originSize: extents[0].originSize,
 				}
 				block := &Block{
+					id:     i,
 					object: r.object,
 					extent: extent,
 					name:   r.name,
@@ -111,13 +112,14 @@ func (r *ObjectReader) ReadMeta(ctx context.Context,
 		block := metas.Entries[0].Object.([]*Block)[extent.id]
 		blocks = append(blocks, block)
 	}
-	r.blocks = blocks
+	for i := range metas.Entries[0].Object.([]*Block) {
+		r.blocks = append(r.blocks, metas.Entries[0].Object.([]*Block)[i])
+	}
 	return blocks, err
 }
 
 func (r *ObjectReader) Read(ctx context.Context,
 	extent Extent, idxs []uint16, ids []uint32, m *mpool.MPool, readFunc ReadObjectFunc) (*fileservice.IOVector, error) {
-
 	data := &fileservice.IOVector{
 		FilePath: r.name,
 		Entries:  make([]fileservice.IOEntry, 0, len(idxs)*len(ids)),

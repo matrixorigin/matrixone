@@ -88,7 +88,7 @@ func (cb *ColumnBlock) GetIndexWithFunc(ctx context.Context, dataType IndexDataT
 		if err != nil {
 			return nil, err
 		}
-		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Object.([]byte)), nil
+		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Object), nil
 	}
 	return nil, nil
 }
@@ -168,9 +168,7 @@ func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 		return err
 	}
 	buf := make([]byte, ZoneMapMinSize+ZoneMapMaxSize)
-	cb.meta.zoneMap = ZoneMap{
-		idx: cb.meta.idx,
-	}
+	cb.meta.zoneMap.idx = cb.meta.idx
 	if err = binary.Read(cache, endian, &buf); err != nil {
 		return err
 	}

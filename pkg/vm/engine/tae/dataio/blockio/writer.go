@@ -17,6 +17,7 @@ package blockio
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -49,7 +50,7 @@ func (w *BlockWriter) SetPrimaryKey(idx uint16) {
 func (w *BlockWriter) WriteBlock(columns *containers.Batch) (block objectio.BlockObject, err error) {
 	bat := batch.New(true, columns.Attrs)
 	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
-	block, err = w.writer.Write(bat)
+	block, err = w.WriteBatch(bat)
 	return
 }
 
@@ -59,6 +60,9 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		return nil, err
 	}
 	for i, vec := range batch.Vecs {
+		if vec.Typ.Oid == types.T_Rowid || vec.Typ.Oid == types.T_TS {
+			continue
+		}
 		columnData := containers.NewVectorWithSharedMemory(vec, true)
 		zmPos := 0
 		zoneMapWriter := NewZMWriter()
@@ -73,7 +77,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if err != nil {
 			return nil, err
 		}
-		if !w.isSetPK {
+		if !w.isSetPK || w.pk != uint16(i) {
 			continue
 		}
 		bfPos := 1
@@ -92,12 +96,21 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 	return block, nil
 }
 
+func (w *BlockWriter) WriteBlockWithOutIndex(columns *containers.Batch) (objectio.BlockObject, error) {
+	bat := batch.New(true, columns.Attrs)
+	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
+	return w.writer.Write(bat)
+}
+
 func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.BlockObject, error) {
 	return w.writer.Write(batch)
 }
 
 func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error) {
 	blocks, err := w.writer.WriteEnd(ctx)
+	if len(blocks) == 0 {
+		return blocks, objectio.Extent{}, err
+	}
 	return blocks, blocks[0].GetExtent(), err
 }
 

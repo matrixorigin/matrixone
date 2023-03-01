@@ -131,7 +131,7 @@ func (e *CheckpointEntry) Replay(
 	c *catalog.Catalog,
 	fs *objectio.ObjectFS,
 	dataFactory catalog.DataFactory) (readDuration, applyDuration time.Duration, err error) {
-	reader, err := blockio.NewBlockReader(fs.Service, e.location)
+	reader, err := blockio.NewCheckPointReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -153,7 +153,7 @@ func (e *CheckpointEntry) Read(
 	scheduler tasks.JobScheduler,
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
-	reader, err := blockio.NewBlockReader(fs.Service, e.location)
+	reader, err := blockio.NewCheckPointReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -170,7 +170,7 @@ func (e *CheckpointEntry) Read(
 	return
 }
 func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns *api.Batch, err error) {
-	reader, err := blockio.NewBlockReader(fs.Service, e.location)
+	reader, err := blockio.NewCheckPointReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}

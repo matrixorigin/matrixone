@@ -363,7 +363,7 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 		return nil, err
 	}
 	for i := range bats {
-		if _, err := writer.WriteBlock(bats[i]); err != nil {
+		if _, err := writer.WriteBlockWithOutIndex(bats[i]); err != nil {
 			return nil, err
 		}
 	}

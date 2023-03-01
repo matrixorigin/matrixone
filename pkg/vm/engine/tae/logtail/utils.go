@@ -446,7 +446,7 @@ func (data *CheckpointData) WriteTo(
 	for _, bat := range data.bats {
 		mobat := batch.New(true, bat.Attrs)
 		mobat.Vecs = containers.UnmarshalToMoVecs(bat.Vecs)
-		if _, err = writer.WriteBatch(mobat); err != nil {
+		if _, err = writer.WriteBatchWithOutIndex(mobat); err != nil {
 			return
 		}
 	}

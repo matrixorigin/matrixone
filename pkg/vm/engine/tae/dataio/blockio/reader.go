@@ -54,6 +54,23 @@ func NewBlockReader(service fileservice.FileService, key string) (*BlockReader, 
 	}, nil
 }
 
+func NewCheckPointReader(service fileservice.FileService, key string) (*BlockReader, error) {
+	name, locs, err := DecodeMetaLocToMetas(key)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := objectio.NewObjectReader(name, service)
+	if err != nil {
+		return nil, err
+	}
+	return &BlockReader{
+		key:    key,
+		reader: reader,
+		name:   name,
+		meta:   locs[0],
+	}, nil
+}
+
 func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
 	ids []uint32, m *mpool.MPool) ([]*batch.Batch, error) {
 	bats := make([]*batch.Batch, 0)
@@ -85,8 +102,8 @@ func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 		return nil, err
 	}
 	blocksZoneMap := make([][]*index.ZoneMap, len(ids))
-	for i, id := range ids {
-		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, blocks[id], m)
+	for i, _ := range ids {
+		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, blocks[0], m)
 		if err != nil {
 			return nil, err
 		}
@@ -95,7 +112,11 @@ func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 }
 
 func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
-	return r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
+	_, locs, err := DecodeMetaLocToMetas(r.key)
+	if err != nil {
+		return nil, err
+	}
+	return r.reader.ReadMeta(ctx, locs, m, LoadZoneMapFunc)
 }
 
 func (r *BlockReader) LoadZoneMap(
@@ -128,12 +149,12 @@ func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 		return nil, err
 	}
 	blocksBloomFilters := make([]index.StaticFilter, len(ids))
-	for i, id := range ids {
-		column, err := blocks[id].GetColumn(idx)
+	for i, _ := range ids {
+		column, err := blocks[0].GetColumn(idx)
 		if err != nil {
 			return nil, err
 		}
-		bf, err := column.GetIndex(ctx, objectio.BloomFilterType, m)
+		bf, err := column.GetIndexWithFunc(ctx, objectio.BloomFilterType, LoadBloomFilterFunc, m)
 		if err != nil {
 			return nil, err
 		}
@@ -157,7 +178,7 @@ func LoadZoneMapFunc(buf []byte, typ types.Type) (any, error) {
 	return zm, err
 }
 
-func LoadBloomFilterFunc(size int64, vec any) objectio.ToObjectFunc {
+func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {
 	return func(reader io.Reader, data []byte) (any, int64, error) {
 		// decompress
 		var err error
