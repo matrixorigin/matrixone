@@ -39,22 +39,22 @@ func InitTAEMPool() {
 	onceBody := func() {
 		var err error
 		mpool.DeleteMPool(DefaultAllocator)
-		if DefaultAllocator, err = mpool.NewMPool("tae_default", 0, 0); err != nil {
+		if DefaultAllocator, err = mpool.NewMPool("tae_default", 0, mpool.NoFixed); err != nil {
 			panic(err)
 		}
 
 		mpool.DeleteMPool(MutMemAllocator)
-		if MutMemAllocator, err = mpool.NewMPool("tae_immutable", 0, 0); err != nil {
+		if MutMemAllocator, err = mpool.NewMPool("tae_immutable", 0, mpool.NoFixed); err != nil {
 			panic(err)
 		}
 
 		mpool.DeleteMPool(CacheAllocator)
-		if CacheAllocator, err = mpool.NewMPool("tae_cache", 0, 0); err != nil {
+		if CacheAllocator, err = mpool.NewMPool("tae_cache", 0, mpool.NoFixed); err != nil {
 			panic(err)
 		}
 
 		mpool.DeleteMPool(LogAllocator)
-		if LogAllocator, err = mpool.NewMPool("tae_log", 0, 0); err != nil {
+		if LogAllocator, err = mpool.NewMPool("tae_log", 0, mpool.NoFixed); err != nil {
 			panic(err)
 		}
 	}
