@@ -61,6 +61,7 @@ type Reader interface {
 		extent Extent, idxs []uint16,
 		ids []uint32,
 		m *mpool.MPool,
+		zoneMapFunc ZoneMapUnmarshalFunc,
 		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
 
 	// ReadMeta is the meta that reads a block

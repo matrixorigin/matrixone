@@ -44,6 +44,7 @@ func NewBfReader(
 	reader, _ := blockio.NewBlockReader(fs.Service, metaloc)
 
 	return &BfReader{
+		idx:    id.Idx,
 		bfKey:  metaloc,
 		reader: reader,
 		typ:    typ,

@@ -77,11 +77,7 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
 	if r.meta.End() == 0 {
 		return bats, nil
 	}
-	_, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
-	if err != nil {
-		return nil, err
-	}
-	ioVectors, err := r.reader.Read(ctx, r.meta, idxs, ids, nil, LoadColumnFunc)
+	ioVectors, err := r.reader.Read(ctx, r.meta, idxs, ids, nil, LoadZoneMapFunc, LoadColumnFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -102,8 +98,8 @@ func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 		return nil, err
 	}
 	blocksZoneMap := make([][]*index.ZoneMap, len(ids))
-	for i, _ := range ids {
-		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, blocks[0], m)
+	for i, id := range ids {
+		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, blocks[id], m)
 		if err != nil {
 			return nil, err
 		}
@@ -149,8 +145,8 @@ func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 		return nil, err
 	}
 	blocksBloomFilters := make([]index.StaticFilter, len(ids))
-	for i, _ := range ids {
-		column, err := blocks[0].GetColumn(idx)
+	for i, id := range ids {
+		column, err := blocks[id].GetColumn(idx)
 		if err != nil {
 			return nil, err
 		}

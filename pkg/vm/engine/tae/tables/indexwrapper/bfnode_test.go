@@ -17,7 +17,6 @@ package indexwrapper
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"path"
 	"testing"
 
@@ -41,11 +40,11 @@ func TestStaticFilterIndex(t *testing.T) {
 	//var ans *roaring.Bitmap
 
 	// var res bool
-	dir := testutils.InitTestEnv(blockio.ModuleName, t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
 	id := 1
 	name := fmt.Sprintf("%d.blk", id)
-	bat := blockio.newBatch()
+	bat := newBatch()
 	c := fileservice.Config{
 		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
