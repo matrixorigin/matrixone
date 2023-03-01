@@ -15,7 +15,7 @@
 package colexec
 
 import (
-	"sort"
+	"container/heap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
@@ -35,7 +35,6 @@ type MixData[T any] struct {
 // clusterby key, so we just need one
 // vector of every batch.
 type Merge[T any] struct {
-	datas []*MixData[T]
 	// the number of bacthes
 	size    uint64
 	cmpLess func([]T, int64, int64) bool
@@ -50,61 +49,124 @@ type Merge[T any] struct {
 	pointers []int
 
 	nulls []*nulls.Nulls
+
+	heaps *Heap[T]
 }
 
-func NewMerge[T any](size int, compLess func([]T, int64, int64) bool, cols [][]T, nulls []*nulls.Nulls) (mergeHeap *Merge[T]) {
-	mergeHeap = &Merge[T]{
-		datas:    make([]*MixData[T], size),
+func NewMerge[T any](size int, compLess func([]T, int64, int64) bool, cols [][]T, nulls []*nulls.Nulls) (merge *Merge[T]) {
+	merge = &Merge[T]{
 		size:     uint64(size),
 		cmpLess:  compLess,
 		cols:     cols,
 		pointers: make([]int, size),
 		nulls:    nulls,
 	}
-	mergeHeap.datas = mergeHeap.datas[:0]
+	merge.NewHeap()
+	merge.InitHeap()
 	return
 }
 
-func (mergeHeap *Merge[T]) GetNextPos() (batchIndex, rowIndex, size int) {
-	mergeHeap.datas = mergeHeap.datas[:0]
-	mergeHeap.pushNext()
-	sort.Slice(mergeHeap.datas, func(i, j int) bool {
-		return mergeHeap.Less(i, j)
-	})
-	batchIndex = mergeHeap.datas[0].batIndex
-	rowIndex = mergeHeap.datas[0].rowIndex
-	mergeHeap.pointers[batchIndex]++
-	if mergeHeap.pointers[batchIndex] >= len(mergeHeap.cols[batchIndex]) {
-		mergeHeap.pointers[batchIndex] = -1
-		mergeHeap.size--
-	}
-	size = int(mergeHeap.size)
-	return
-}
-
-func (mergeHeap *Merge[T]) Len() int {
-	return int(mergeHeap.size)
-}
-
-func (mergeHeap *Merge[T]) Less(i, j int) bool {
-	if mergeHeap.datas[i].isNull {
-		return true
-	}
-	if mergeHeap.datas[j].isNull {
-		return false
-	}
-	return mergeHeap.cmpLess([]T{*mergeHeap.datas[i].data, *mergeHeap.datas[j].data}, 0, 1)
-}
-
-func (mergeHeap *Merge[T]) pushNext() {
-	for i := 0; i < len(mergeHeap.pointers); i++ {
-		if mergeHeap.pointers[i] != -1 {
-			mergeHeap.datas = append(mergeHeap.datas, &MixData[T]{
-				data:     &mergeHeap.cols[i][mergeHeap.pointers[i]],
-				isNull:   mergeHeap.nulls[i].Contains(uint64(mergeHeap.pointers[i])),
-				batIndex: i,
-				rowIndex: mergeHeap.pointers[i],
-			})
+func (merge *Merge[T]) InitHeap() {
+	heap.Init(merge.heaps)
+	for i := 0; i < int(merge.size); i++ {
+		if len(merge.cols[i]) == 0 {
+			merge.pointers[i] = -1
+			merge.size--
+			continue
+		}
+		heap.Push(merge.heaps, &MixData[T]{
+			data:     &merge.cols[i][merge.pointers[i]],
+			isNull:   merge.nulls[i].Contains(uint64(merge.pointers[i])),
+			batIndex: i,
+			rowIndex: merge.pointers[i],
+		})
+		if merge.pointers[i] >= len(merge.cols[i]) {
+			merge.pointers[i] = -1
+			merge.size--
 		}
 	}
+}
+
+func (merge *Merge[T]) GetNextPos() (batchIndex, rowIndex, size int) {
+	data := merge.pushNext()
+	if data == nil {
+		// now, merge.size is 0
+		return -1, -1, int(merge.size)
+	}
+	return data.batIndex, data.rowIndex, int(merge.size)
+}
+
+func (merge *Merge[T]) Len() int {
+	return int(merge.size)
+}
+
+func (merge *Merge[T]) Less(i, j int) bool {
+	if merge.heaps.datas[i].isNull {
+		return true
+	}
+	if merge.heaps.datas[j].isNull {
+		return false
+	}
+	return merge.cmpLess([]T{*merge.heaps.datas[i].data, *merge.heaps.datas[j].data}, 0, 1)
+}
+
+func (merge *Merge[T]) pushNext() *MixData[T] {
+	if merge.size == 0 {
+		return nil
+	}
+	data := heap.Pop(merge.heaps).(*MixData[T])
+
+	batchIndex := data.batIndex
+	merge.pointers[batchIndex]++
+	if merge.pointers[batchIndex] >= len(merge.cols[batchIndex]) {
+		merge.pointers[batchIndex] = -1
+		merge.size--
+	}
+	if merge.pointers[batchIndex] != -1 {
+		heap.Push(merge.heaps, &MixData[T]{
+			data:     &merge.cols[batchIndex][merge.pointers[batchIndex]],
+			isNull:   merge.nulls[batchIndex].Contains(uint64(merge.pointers[batchIndex])),
+			batIndex: batchIndex,
+			rowIndex: merge.pointers[batchIndex],
+		})
+	}
+	return data
+}
+
+type Heap[T any] struct {
+	datas []*MixData[T]
+	less  func(int, int) bool
+}
+
+func (merge *Merge[T]) NewHeap() {
+	merge.heaps = &Heap[T]{
+		datas: make([]*MixData[T], merge.size),
+		less:  merge.Less,
+	}
+	merge.heaps.datas = merge.heaps.datas[:0]
+}
+
+func (h *Heap[T]) Less(i, j int) bool {
+	return h.less(i, j)
+}
+
+func (h *Heap[T]) Push(x any) {
+	h.datas = append(h.datas, x.(*MixData[T]))
+}
+
+func (h *Heap[T]) Len() int {
+	return len(h.datas)
+}
+
+func (h *Heap[T]) Swap(i, j int) {
+	h.datas[i], h.datas[j] = h.datas[j], h.datas[i]
+}
+
+func (h *Heap[T]) Pop() any {
+	if h.Len() == 0 {
+		return nil
+	}
+	x := h.datas[len(h.datas)-1]
+	h.datas = h.datas[:len(h.datas)-1]
+	return x
 }
