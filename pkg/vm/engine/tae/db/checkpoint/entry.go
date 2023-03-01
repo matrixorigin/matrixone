@@ -17,7 +17,6 @@ package checkpoint
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"sync"
 	"time"
 
@@ -38,16 +37,14 @@ type CheckpointEntry struct {
 	state      State
 	entryType  EntryType
 	location   string
-	reader     dataio.Reader
 }
 
-func NewCheckpointEntry(start, end types.TS, typ EntryType, reader dataio.Reader) *CheckpointEntry {
+func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
 	return &CheckpointEntry{
 		start:     start,
 		end:       end,
 		state:     ST_Pending,
 		entryType: typ,
-		reader:    reader,
 	}
 }
 

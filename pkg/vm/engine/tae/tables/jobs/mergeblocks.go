@@ -313,30 +313,23 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
-	phyAddr := schema.PhyAddrKey
 	name := blockio.EncodeObjectName()
-	writer := blockio.NewWriter(context.Background(), task.mergedBlks[0].GetBlockData().GetFs(), name)
+	writer, err := blockio.NewBlockWriter(task.mergedBlks[0].GetBlockData().GetFs().Service, name)
+	if err != nil {
+		return err
+	}
 	pkIdx := -1
 	if schema.HasPK() {
 		pkIdx = schema.GetSingleSortKeyIdx()
+		writer.SetPrimaryKey(uint16(pkIdx))
 	}
 	for _, bat := range batchs {
-		block, err := writer.WriteBlock(bat)
+		_, err = writer.WriteBlock(bat)
 		if err != nil {
 			return err
 		}
-		for idx, vec := range bat.Vecs {
-			if phyAddr.Idx == idx {
-				continue
-			}
-			isPk := idx == pkIdx
-			_, err = BuildColumnIndex(writer.GetWriter(), block, schema.ColDefs[idx], vec, isPk, isPk)
-			if err != nil {
-				return err
-			}
-		}
 	}
-	blocks, err := writer.Sync()
+	blocks, _, err := writer.Sync(context.Background())
 	if err != nil {
 		return err
 	}

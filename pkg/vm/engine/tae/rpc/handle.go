@@ -445,29 +445,28 @@ func (h *Handle) startLoadJobs(
 				}
 				//reader, err := blockio.NewReader(ctx,
 				//	h.eng.GetTAE(ctx).Fs, req.MetaLocs[i])
-				reader, err := blockio.NewReader(ctx,
-					h.eng.GetTAE(ctx).Fs, loc)
+				_, id, _, _, err := blockio.DecodeLocation(loc)
 				if err != nil {
 					jobR.Err = err
 					return
 				}
-				meta, err := reader.ReadMeta(nil)
+				reader, err := blockio.NewBlockReader(
+					h.eng.GetTAE(ctx).Fs.Service, loc)
 				if err != nil {
 					jobR.Err = err
 					return
 				}
-				bat, err := reader.LoadBlkColumnsByMetaAndIdx(
-					columnTypes,
-					columnNames,
-					isNull,
-					meta,
-					columnIdx,
+				bat, err := reader.LoadColumns(
+					ctx,
+					[]uint16{uint16(columnIdx)},
+					[]uint32{id},
+					nil,
 				)
 				if err != nil {
 					jobR.Err = err
 					return
 				}
-				jobR.Res = bat.Vecs[0]
+				jobR.Res = containers.NewVectorWithSharedMemory(bat[0].Vecs[0], isNull[0])
 				return
 			},
 		)

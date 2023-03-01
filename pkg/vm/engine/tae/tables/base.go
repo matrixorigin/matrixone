@@ -170,25 +170,21 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if location == "" {
 		return
 	}
-	reader, err := blockio.NewReader(context.Background(), blk.fs, location)
+	reader, err := blockio.NewBlockReader(blk.fs.Service, location)
 	if err != nil {
 		return
 	}
-	meta, err := reader.ReadMeta(nil)
-	if err != nil {
-		return
-	}
-	bat, err := reader.LoadBlkColumnsByMetaAndIdx(
-		[]types.Type{types.T_TS.ToType()},
-		[]string{catalog.AttrCommitTs},
-		[]bool{false},
-		meta,
-		len(blk.meta.GetSchema().NameIndex),
+	_, id, _, _, err := blockio.DecodeLocation(location)
+	bat, err := reader.LoadColumns(
+		context.Background(),
+		[]uint16{uint16(len(blk.meta.GetSchema().NameIndex))},
+		[]uint32{id},
+		nil,
 	)
 	if err != nil {
 		return
 	}
-	vec = bat.Vecs[0]
+	vec = containers.NewVectorWithSharedMemory(bat[0].Vecs[0], false)
 	return
 }
 

@@ -58,12 +58,15 @@ func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute() error {
 	name := blockio.EncodeObjectName()
-	writer := blockio.NewWriter(context.Background(), task.fs, name)
-	block, err := writer.WriteBlock(task.data)
+	writer, err := blockio.NewBlockWriter(task.fs.Service, name)
 	if err != nil {
 		return err
 	}
-	if err = BuildBlockIndex(writer.GetWriter(), block, task.meta.GetSchema(), task.data, true); err != nil {
+	if task.meta.GetSchema().HasSortKey() {
+		writer.SetPrimaryKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
+	}
+	_, err = writer.WriteBlock(task.data)
+	if err != nil {
 		return err
 	}
 	if task.delta != nil {
@@ -72,6 +75,6 @@ func (task *flushBlkTask) Execute() error {
 			return err
 		}
 	}
-	task.blocks, err = writer.Sync()
+	task.blocks, _, err = writer.Sync(context.Background())
 	return err
 }
