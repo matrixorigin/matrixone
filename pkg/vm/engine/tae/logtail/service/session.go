@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,8 +36,12 @@ const (
 	TableSubscribed
 	TableNotFound
 
-	// it's estimated the average size of logtail response would be 64 bytes.
-	responseBufferSize = 1024 * 1024
+	// responseBufferSize is the size of buffer channel.
+	// We couldn't set this size to an unlimited value,
+	// because channel's memory is allocated according to the specified size.
+	// NOTE: we afford 1GiB heap memory for this buffer channel's own.
+	// but items within the channel would consume extra heap memory.
+	responseBufferSize = 1024 * 1024 * 1024 / unsafe.Sizeof(message{})
 )
 
 // SessionManager manages all client sessions.
@@ -187,7 +192,7 @@ func NewSession(
 	ss := &Session{
 		sessionCtx:  ctx,
 		cancelFunc:  cancel,
-		logger:      logger,
+		logger:      logger.With(zap.Uint64("stream-id", stream.streamID)),
 		sendTimeout: sendTimeout,
 		responses:   responses,
 		notifier:    notifier,
@@ -200,6 +205,7 @@ func NewSession(
 	sender := func() {
 		defer ss.wg.Done()
 
+		sizeMarker := 0
 		for {
 			select {
 			case <-ss.sessionCtx.Done():
@@ -210,6 +216,14 @@ func NewSession(
 				if !ok {
 					ss.logger.Info("session sender channel closed")
 					return
+				}
+
+				// FIXME: update with metrics
+				// log real buffer size every 1024 change
+				realSize := len(ss.sendChan)
+				if (realSize-sizeMarker) == 1024 || (realSize-sizeMarker) == -1024 {
+					sizeMarker = realSize
+					ss.logger.Info("logtail response waiting to be sent", zap.Int("size", realSize))
 				}
 
 				sendFunc := func() error {
