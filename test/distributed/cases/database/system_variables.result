@@ -525,3 +525,9 @@ version()
 0.7
 drop database test;
 drop database test1;
+alter account config sys set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+select version();
+version()
+8.0.30-MatrixOne-v0.7.0
+alter account config abc1 set mysql_compatbility_mode = '{"version_compatibility": "0.7"}';
+internal error: Permission change abc1's config denied
