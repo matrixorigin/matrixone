@@ -121,7 +121,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 	case plan.Node_AGG:
 		if len(node.GroupBy) > 0 {
 			node.Stats = &plan.Stats{
-				Outcnt:      childStats.Outcnt * 0.1,
+				Outcnt:      childStats.Outcnt * 0.2,
 				Cost:        childStats.Outcnt,
 				HashmapSize: childStats.Outcnt,
 			}
