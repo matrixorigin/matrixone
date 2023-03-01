@@ -1951,6 +1951,10 @@ var (
 			input:  "UNLOCK TABLES",
 			output: "UnLock Table",
 		},
+		{
+			input:  "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
+			output: "create sequence s as datatype smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
+		},
 	}
 )
 

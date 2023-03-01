@@ -8629,6 +8629,9 @@ non_reserved_keyword:
 |   NODE
 |   UUID
 |   PARALLEL
+|   INCREMENT
+|   CYCLE
+|   MINVALUE
 
 func_not_keyword:
     DATE_ADD

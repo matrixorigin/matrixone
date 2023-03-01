@@ -56,9 +56,9 @@ func (node *CreateSequence) Format(ctx *FmtCtx) {
 		node.StartWith.Format(ctx)
 	}
 	if node.Cycle {
-		ctx.WriteString("cycle ")
+		ctx.WriteString("cycle")
 	} else {
-		ctx.WriteString("no cycle ")
+		ctx.WriteString("no cycle")
 	}
 }
 
