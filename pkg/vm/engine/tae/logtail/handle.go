@@ -75,6 +75,9 @@ func HandleSyncLogTailReq(
 	logutil.Debugf("[Logtail] begin handle %+v", req)
 	defer func() {
 		logutil.Debugf("[Logtail] end handle %d entries[%q], err %v", len(resp.Commands), resp.CkpLocation, err)
+		if resp.CkpLocation != "" {
+			logutil.Infof("[Logtail] resp has ckp: %+v, %s ", req, resp.CkpLocation)
+		}
 	}()
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
@@ -91,17 +94,23 @@ func HandleSyncLogTailReq(
 		start = tableEntry.GetCreatedAt()
 	}
 
-	ckpLoc, checkpointed, err := ckpClient.CollectCheckpointsInRange(ctx, start, end)
-	if err != nil {
-		return
-	}
+	ckpLoc := ""
+	// reduce IO by avoid sending too much checkpoint.
+	// send ckp for two cases: snapshot read and subscribing logtail. they both are with CNHave = 0
+	if req.CnHave.IsEmpty() {
+		ckpLoc, checkpointed, ierr := ckpClient.CollectCheckpointsInRange(ctx, start, end)
+		if err != nil {
+			err = ierr
+			return
+		}
 
-	if checkpointed.GreaterEq(end) {
-		return api.SyncLogTailResp{
-			CkpLocation: ckpLoc,
-		}, err
-	} else if ckpLoc != "" {
-		start = checkpointed.Next()
+		if checkpointed.GreaterEq(end) {
+			return api.SyncLogTailResp{
+				CkpLocation: ckpLoc,
+			}, err
+		} else if ckpLoc != "" {
+			start = checkpointed.Next()
+		}
 	}
 
 	scope := DecideTableScope(tid)
