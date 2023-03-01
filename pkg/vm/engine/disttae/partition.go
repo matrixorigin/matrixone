@@ -39,11 +39,13 @@ func NewPartition(
 ) *Partition {
 	lock := make(chan struct{}, 1)
 	lock <- struct{}{}
-	return &Partition{
+	ret := &Partition{
 		lock:             lock,
 		data:             memtable.NewTable[RowID, DataValue, *DataRow](),
 		columnsIndexDefs: columnsIndexDefs,
 	}
+	ret.state.Store(NewPartitionState())
+	return ret
 }
 
 type RowID types.Rowid
@@ -100,7 +102,9 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 		// in cache, no need to do merge read, BlockRead will filter out
 		// invisible and deleted rows with respect to the timestamp
 		if !blocks[i].Info.EntryState {
-			ids[i] = blocks[i].Info.BlockID
+			if blocks[i].Info.CommitTs.ToTimestamp().Less(ts) { // hack
+				ids[i] = blocks[i].Info.BlockID
+			}
 		}
 	}
 	p.IterDeletedRowIDs(ctx, ids, ts, func(rowID RowID) bool {
@@ -393,6 +397,11 @@ func (p *Partition) GetRowsByIndexPrefix(ts timestamp.Timestamp, prefix memtable
 
 func rowIDToBlockID(rowID RowID) uint64 {
 	id, _ := catalog.DecodeRowid(types.Rowid(rowID))
+	return id
+}
+
+func blockIDFromRowID(rowID types.Rowid) uint64 {
+	id, _ := catalog.DecodeRowid(rowID)
 	return id
 }
 

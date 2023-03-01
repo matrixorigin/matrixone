@@ -242,7 +242,7 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 		var mid int
 		for start <= end {
 			mid = (start + end) / 2
-			res := bytes.Compare(data.Get(mid).([]byte), val)
+			res := bytes.Compare(data.ShallowGet(mid).([]byte), val)
 			if res > 0 {
 				end = mid - 1
 			} else if res < 0 {
