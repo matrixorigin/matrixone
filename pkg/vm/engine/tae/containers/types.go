@@ -48,6 +48,7 @@ type VectorView interface {
 	SlicePtr() unsafe.Pointer
 	DataWindow(offset, length int) []byte
 	Get(i int) any
+	ShallowGet(i int) any
 
 	Length() int
 	Capacity() int
@@ -59,6 +60,8 @@ type VectorView interface {
 
 	Foreach(op ItOp, sels *roaring.Bitmap) error
 	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
+	ForeachShallow(op ItOp, sels *roaring.Bitmap) error
+	ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) error
 
 	WriteTo(w io.Writer) (int64, error)
 }

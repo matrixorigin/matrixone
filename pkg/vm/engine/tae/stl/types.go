@@ -92,8 +92,10 @@ type Vector[T any] interface {
 	SliceWindow(offset, length int) []T
 
 	// Get returns the specified element at i
-	// Note: If T is []byte, make sure not to use v after the vector is closed
+	// Note: If T is []byte, copy bytes
 	Get(i int) (v T)
+	// Note: If T is []byte, returns slice of the underlying bytes
+	ShallowGet(i int) (v T)
 	// Append appends a element into the vector
 	// If the prediction length is large than Capacity, it will cause the underlying memory reallocation.
 	// Reallocation:

@@ -90,7 +90,7 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32) (err error)
 		return nil
 	}
 
-	err = keys.Keys.ForeachWindow(keys.Start, keys.Count, op, nil)
+	err = keys.Keys.ForeachWindowShallow(keys.Start, keys.Count, op, nil)
 	return
 }
 
