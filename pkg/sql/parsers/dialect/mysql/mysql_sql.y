@@ -206,8 +206,6 @@ import (
     minValueOption  *tree.MinValueOption
     maxValueOption  *tree.MaxValueOption 
     startWithOption *tree.StartWithOption 
-    cacheOption     *tree.CacheOption
-    ownedByOption   *tree.OwnedByOption
 }
 
 %token LEX_ERROR
@@ -287,7 +285,7 @@ import (
 %token <str> EXTENSION
 
 // Sequence
-%token <str> INCREMENT CYCLE MINVALUE CACHE OWNED
+%token <str> INCREMENT CYCLE MINVALUE
 
 // MO table option
 %token <str> PROPERTIES
@@ -442,7 +440,7 @@ import (
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
 %type <columnType> mo_cast_type mysql_cast_type
-%type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type
+%type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type as_datatype_opt
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
@@ -556,8 +554,6 @@ import (
 %type <minValueOption> min_value_opt
 %type <maxValueOption> max_value_opt
 %type <startWithOption> start_with_opt
-%type <cacheOption> cache_opt
-%type <ownedByOption>   owned_by_opt
 
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
@@ -5034,20 +5030,36 @@ tail_param_opt:
         }
     }
 create_sequence_stmt:
-    CREATE temporary_opt SEQUENCE not_exists_opt table_name increment_by_opt min_value_opt max_value_opt start_with_opt cache_opt cycle_opt owned_by_opt
+    CREATE SEQUENCE not_exists_opt table_name as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt cycle_opt
     {
         $$ = &tree.CreateSequence {
-            Temporary: $2,
-            IfNotExists: $4,
-            Name: $5,
+            IfNotExists: $3,
+            Name: $4,
+            Type: $5,
             IncrementBy: $6,
             MinValue: $7,
             MaxValue: $8,
             StartWith: $9,
-            Cache: $10,
-            Cycle: $11, 
-            OwnedBy: $12,
+            Cycle: $10, 
         }
+    }
+as_datatype_opt:
+    {
+        locale := ""
+        fstr := "bigint"
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.IntFamily,
+                FamilyString: fstr,
+                Width:  64,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+            },
+        }
+    }
+|   AS column_type
+    {
+        $$ = $2
     }
 increment_by_opt:
     {
@@ -5056,13 +5068,25 @@ increment_by_opt:
 |   INCREMENT BY INTEGRAL 
     {
         $$ = &tree.IncrementByOption{
-            Step: $3.(int),
+            Step: $3.(int64),
         }
     }
 |   INCREMENT INTEGRAL
     {
         $$ = &tree.IncrementByOption{
-            Step: $2.(int),
+            Step: $2.(int64),
+        }
+    }
+|   INCREMENT BY '-' INTEGRAL
+    {
+        $$ = &tree.IncrementByOption{
+            Step: -$4.(int64),
+        }
+    }
+|   INCREMENT '-' INTEGRAL
+    {
+        $$ = &tree.IncrementByOption {
+            Step: -$3.(int64),
         }
     }
 cycle_opt:
@@ -5084,7 +5108,13 @@ min_value_opt:
 |   MINVALUE INTEGRAL 
     {
         $$ = &tree.MinValueOption{
-            MinV: $2.(int),
+            MinV: $2.(int64),
+        }
+    }
+|   MINVALUE '-' INTEGRAL
+    {
+        $$ = &tree.MinValueOption{
+            MinV: -$3.(int64),
         }
     }
 max_value_opt:
@@ -5094,7 +5124,13 @@ max_value_opt:
 |   MAXVALUE INTEGRAL
     {
         $$ = &tree.MaxValueOption{
-            MaxV: $2.(int),
+            MaxV: $2.(int64),
+        }
+    }
+|   MAXVALUE '-' INTEGRAL
+    {
+        $$ = &tree.MaxValueOption{
+            MaxV: -$3.(int64),
         }
     }
 start_with_opt:
@@ -5104,38 +5140,25 @@ start_with_opt:
 |   START WITH INTEGRAL
     {
         $$ = &tree.StartWithOption{
-            StartV: $3.(int),
+            StartV: $3.(int64),
         }
     }
 |   START INTEGRAL
     {
         $$ = &tree.StartWithOption{
-            StartV: $2.(int),
+            StartV: $2.(int64),
         }
     }
-cache_opt:
+|   START WITH '-' INTEGRAL
     {
-        $$ = nil
-    }
-|   CACHE INTEGRAL
-    {
-        $$ = &tree.CacheOption{
-            CacheSize: $2.(int),
+        $$ = &tree.StartWithOption{
+            StartV: -$4.(int64),
         }
     }
-owned_by_opt:
+|   START '-' INTEGRAL
     {
-        $$ = nil
-    }
-|   OWNED BY NONE
-    {
-        $$ = nil
-    }
-|   OWNED BY STRING '.' STRING
-    {
-        $$ = &tree.OwnedByOption{
-            TableName:  $3,
-            ColumnName: $5,
+        $$ = &tree.StartWithOption{
+            StartV: -$3.(int64),
         }
     }
 temporary_opt:

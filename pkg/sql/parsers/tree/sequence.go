@@ -14,43 +14,59 @@
 
 package tree
 
-import "fmt"
+import (
+	"fmt"
+)
 
 type CreateSequence struct {
 	statementImpl
 
-	Temporary   bool
 	Name        *TableName
+	Type        ResolvableTypeReference
 	IfNotExists bool
 	IncrementBy *IncrementByOption
 	MinValue    *MinValueOption
 	MaxValue    *MaxValueOption
 	StartWith   *StartWithOption
-	Cache       *CacheOption
 	Cycle       bool
-	OwnedBy     *OwnedByOption
 }
 
 func (node *CreateSequence) Format(ctx *FmtCtx) {
-	ctx.WriteString("create ")
-	if node.Temporary {
-		ctx.WriteString("temporary ")
-	}
-
-	ctx.WriteString("sequence ")
+	ctx.WriteString("create sequence ")
 
 	if node.IfNotExists {
 		ctx.WriteString("if not exists ")
 	}
 
 	node.Name.Format(ctx)
+
+	ctx.WriteString(" as datatype ")
+	node.Type.(*T).InternalType.Format(ctx)
+	ctx.WriteString(" ")
+	if node.IncrementBy != nil {
+		node.IncrementBy.Format(ctx)
+	}
+	if node.MinValue != nil {
+		node.MinValue.Format(ctx)
+	}
+	if node.MaxValue != nil {
+		node.MaxValue.Format(ctx)
+	}
+	if node.StartWith != nil {
+		node.StartWith.Format(ctx)
+	}
+	if node.Cycle {
+		ctx.WriteString("cycle ")
+	} else {
+		ctx.WriteString("no cycle ")
+	}
 }
 
 func (node *CreateSequence) GetStatementType() string { return "Create Sequence" }
 func (node *CreateSequence) GetQueryType() string     { return QueryTypeDDL }
 
 type IncrementByOption struct {
-	Step int
+	Step int64
 }
 
 func (node *IncrementByOption) Format(ctx *FmtCtx) {
@@ -59,22 +75,28 @@ func (node *IncrementByOption) Format(ctx *FmtCtx) {
 }
 
 type MinValueOption struct {
-	MinV int
+	MinV int64
+}
+
+func (node *MinValueOption) Format(ctx *FmtCtx) {
+	ctx.WriteString("minvalue ")
+	ctx.WriteString(fmt.Sprintf("%v ", node.MinV))
 }
 
 type MaxValueOption struct {
-	MaxV int
+	MaxV int64
+}
+
+func (node *MaxValueOption) Format(ctx *FmtCtx) {
+	ctx.WriteString("maxvalue ")
+	ctx.WriteString(fmt.Sprintf("%v ", node.MaxV))
 }
 
 type StartWithOption struct {
-	StartV int
+	StartV int64
 }
 
-type CacheOption struct {
-	CacheSize int
-}
-
-type OwnedByOption struct {
-	TableName  string
-	ColumnName string
+func (node *StartWithOption) Format(ctx *FmtCtx) {
+	ctx.WriteString("start with ")
+	ctx.WriteString(fmt.Sprintf("%v ", node.StartV))
 }

@@ -135,6 +135,10 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}, nil
 }
 
+func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan, error) {
+	return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
+}
+
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,

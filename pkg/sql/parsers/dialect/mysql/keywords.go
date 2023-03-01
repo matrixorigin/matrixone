@@ -539,7 +539,5 @@ func init() {
 		"increment":                INCREMENT,
 		"cycle":                    CYCLE,
 		"minvalue":                 MINVALUE,
-		"cache":                    CACHE,
-		"owned":                    OWNED,
 	}
 }
