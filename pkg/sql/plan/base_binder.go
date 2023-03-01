@@ -18,11 +18,14 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go/constant"
+	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
@@ -345,6 +348,11 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
 		nodeID, err = b.builder.buildSelect(subquery.Select, subCtx, false)
+		if err != nil {
+			return nil, err
+		}
+	case *tree.Select:
+		nodeID, err = b.builder.buildSelect(subquery, subCtx, false)
 		if err != nil {
 			return nil, err
 		}
@@ -720,8 +728,66 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if b.builder != nil {
 		return bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 	} else {
-		return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
+		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
+		// first look for builtin func
+		builtinExpr, err := bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
+		if err == nil {
+			return builtinExpr, nil
+		} else if !strings.Contains(err.Error(), "not supported") {
+			return nil, err
+		}
 	}
+	// } else {
+	// 	return nil, err
+	// }
+
+	// not a builtin func, look to resolve udf
+	cmpCtx := b.builder.compCtx
+	udfSql, err := cmpCtx.ResolveUdf(name, args)
+	if err != nil {
+		return nil, err
+	}
+
+	return bindFuncExprImplUdf(b, name, udfSql, astArgs, depth)
+}
+
+func bindFuncExprImplUdf(b *baseBinder, name string, sql string, args []tree.Expr, depth int32) (*plan.Expr, error) {
+	// replace sql with actual arg value
+	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	for i := 0; i < len(args); i++ {
+		args[i].Format(fmtctx)
+		sql = strings.Replace(sql, "$"+strconv.Itoa(i+1), fmtctx.String(), 1)
+		fmtctx.Reset()
+	}
+
+	// if does not contain SELECT, an expression. In order to pass the parser,
+	// make it start with a 'SELECT'.
+
+	var expr *plan.Expr
+
+	if !strings.Contains(sql, "select") {
+		sql = "select " + sql
+		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql)
+		if err != nil {
+			return nil, err
+		}
+		expr, err = b.impl.BindExpr(substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, depth, false)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql)
+		if err != nil {
+			return nil, err
+		}
+		subquery := tree.NewSubquery(substmts[0], false)
+		expr, err = b.impl.BindSubquery(subquery, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return expr, nil
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {

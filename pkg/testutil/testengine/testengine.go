@@ -55,7 +55,7 @@ func New(
 			clusterservice.WithServices(nil, services)))
 
 	storage, err := memorystorage.NewMemoryStorage(
-		mpool.MustNewZero(),
+		mpool.MustNewZeroNoFixed(),
 		ck,
 		memoryengine.RandomIDGenerator,
 	)
@@ -73,7 +73,7 @@ func New(
 	e := memoryengine.New(
 		ctx,
 		memoryengine.NewDefaultShardPolicy(
-			mpool.MustNewZero(),
+			mpool.MustNewZeroNoFixed(),
 		),
 		memoryengine.RandomIDGenerator,
 		clusterservice.GetMOCluster(),
