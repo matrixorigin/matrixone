@@ -1287,6 +1287,11 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 	lockTables := make([]*plan.TableLockInfo, 0, len(stmt.TableLocks))
 	uniqueTableName := make(map[string]bool)
 
+	//get transaction id
+	var txnID []byte
+	txn := ctx.GetProcess().TxnOperator
+	copy(txnID[:], txn.Txn().ID)
+
 	//Check table locks
 	for _, tableLock := range stmt.TableLocks {
 		tb := tableLock.Table
@@ -1320,9 +1325,10 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 		binary.BigEndian.PutUint64(rangeMax, ^uint64(0))
 
 		tableLockInfo := &plan.TableLockInfo{
-			LockType: plan.TableLockType(tableLock.LockType),
-			TableID:  tableDef.TblId,
-			Rows:     [][]byte{[]byte("0"), rangeMax},
+			LockType:      plan.TableLockType(tableLock.LockType),
+			TableID:       tableDef.TblId,
+			Rows:          [][]byte{[]byte("0"), rangeMax},
+			TransactionID: txnID,
 		}
 		lockTables = append(lockTables, tableLockInfo)
 	}

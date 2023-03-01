@@ -953,6 +953,7 @@ message TableLockInfo {
 	TableLockType lockType = 1;
 	uint64 tableID = 2;
 	repeated bytes rows = 3;
+	bytes transactionID = 4;
 }
 
 message LockTables {
