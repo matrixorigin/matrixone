@@ -46,7 +46,7 @@ func (s *service) initMemoryEngine(
 	}
 
 	// engine
-	mp, err := mpool.NewMPool("cnservice_mem_engine", 0, 0)
+	mp, err := mpool.NewMPool("cnservice_mem_engine", 0, mpool.NoFixed)
 	if err != nil {
 		return err
 	}
@@ -65,7 +65,7 @@ func (s *service) initMemoryEngineNonDist(
 	pu *config.ParameterUnit,
 ) error {
 	ck := runtime.ProcessLevelRuntime().Clock()
-	mp, err := mpool.NewMPool("cnservice_mem_engine_nondist", 0, 0)
+	mp, err := mpool.NewMPool("cnservice_mem_engine_nondist", 0, mpool.NoFixed)
 	if err != nil {
 		return err
 	}

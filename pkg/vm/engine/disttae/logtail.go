@@ -25,7 +25,10 @@ import (
 )
 
 func consumeEntry(idx, primaryIdx int, tbl *table,
-	ctx context.Context, db *DB, mvcc MVCC, e *api.Entry) error {
+	ctx context.Context, db *DB, partition *Partition, state *PartitionState, e *api.Entry) error {
+
+	state.HandleLogtailEntry(ctx, e)
+
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {
 			vec, err := vector.ProtoVectorToVector(e.Bat.Vecs[catalog.BLOCKMETA_ID_IDX+MO_PRIMARY_OFF])
@@ -59,9 +62,9 @@ func consumeEntry(idx, primaryIdx int, tbl *table,
 			tbl.db.txn.catalog.InsertColumns(bat)
 		}
 		if primaryIdx >= 0 {
-			return mvcc.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
+			return partition.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
 		}
-		return mvcc.Insert(ctx, primaryIdx, e.Bat, false)
+		return partition.Insert(ctx, primaryIdx, e.Bat, false)
 	}
 	if isMetaTable(e.TableName) {
 		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
@@ -74,5 +77,5 @@ func consumeEntry(idx, primaryIdx int, tbl *table,
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
 		tbl.db.txn.catalog.DeleteDatabase(bat)
 	}
-	return mvcc.Delete(ctx, e.Bat)
+	return partition.Delete(ctx, e.Bat)
 }
