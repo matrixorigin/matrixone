@@ -7549,6 +7549,10 @@ decimal_type:
 |   FLOAT_TYPE float_length_opt
     {
         locale := ""
+        if $2.DisplayWith > 255 {
+            yylex.Error("Display width for float out of range (max = 255)")
+            return 1
+        }
         if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
         	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         	return 1

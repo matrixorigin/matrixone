@@ -46,24 +46,24 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 		switch defines.MysqlType(n.InternalType.Oid) {
 		case defines.MYSQL_TYPE_TINY:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: int32(types.T_uint8), Width: n.InternalType.Width, Size: 1}, nil
+				return &plan.Type{Id: int32(types.T_uint8), Width: n.InternalType.Width, Size: 1, Precision: -1}, nil
 			}
-			return &plan.Type{Id: int32(types.T_int8), Width: n.InternalType.Width, Size: 1}, nil
+			return &plan.Type{Id: int32(types.T_int8), Width: n.InternalType.Width, Size: 1, Precision: -1}, nil
 		case defines.MYSQL_TYPE_SHORT:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Size: 2}, nil
+				return &plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Size: 2, Precision: -1}, nil
 			}
-			return &plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Size: 2}, nil
+			return &plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Size: 2, Precision: -1}, nil
 		case defines.MYSQL_TYPE_LONG:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Size: 4}, nil
+				return &plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Size: 4, Precision: -1}, nil
 			}
-			return &plan.Type{Id: int32(types.T_int32), Width: n.InternalType.Width, Size: 4}, nil
+			return &plan.Type{Id: int32(types.T_int32), Width: n.InternalType.Width, Size: 4, Precision: -1}, nil
 		case defines.MYSQL_TYPE_LONGLONG:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: int32(types.T_uint64), Width: n.InternalType.Width, Size: 8}, nil
+				return &plan.Type{Id: int32(types.T_uint64), Width: n.InternalType.Width, Size: 8, Precision: -1}, nil
 			}
-			return &plan.Type{Id: int32(types.T_int64), Width: n.InternalType.Width, Size: 8}, nil
+			return &plan.Type{Id: int32(types.T_int64), Width: n.InternalType.Width, Size: 8, Precision: -1}, nil
 		case defines.MYSQL_TYPE_FLOAT:
 			return &plan.Type{Id: int32(types.T_float32), Width: n.InternalType.DisplayWith, Size: 4, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DOUBLE:

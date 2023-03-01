@@ -89,8 +89,6 @@ func Prepare(proc *process.Process, arg any) error {
 			return moerr.NewNotSupported(proc.Ctx, "the jsonline format '%s' is not supported now", param.Extern.JsonData)
 		}
 	}
-	param.Extern.FileService = proc.FileService
-	param.Extern.Ctx = proc.Ctx
 	param.IgnoreLineTag = int(param.Extern.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
 	if len(param.FileList) == 0 {
@@ -1238,7 +1236,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
 				// origin float32 data type
-				if vec.Typ.Precision < 0 {
+				if vec.Typ.Precision < 0 || vec.Typ.Width == 0 {
 					d, err := strconv.ParseFloat(field, 32)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1260,7 +1258,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
 				// origin float64 data type
-				if vec.Typ.Precision < 0 {
+				if vec.Typ.Precision < 0 || vec.Typ.Width == 0 {
 					d, err := strconv.ParseFloat(field, 64)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
