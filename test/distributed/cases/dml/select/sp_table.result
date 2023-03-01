@@ -1,12 +1,12 @@
 select reldatabase,relname,relkind from mo_catalog.mo_tables where relname = '%!%mo_increment_columns' and account_id = 0 order by reldatabase;
-reldatabase	relname	relkind
-information_schema	%!%mo_increment_columns	
-mo_catalog	%!%mo_increment_columns	
-mo_task	%!%mo_increment_columns	
-mysql	%!%mo_increment_columns	
-sp_table	%!%mo_increment_columns	
-system	%!%mo_increment_columns	
-system_metrics	%!%mo_increment_columns	
+reldatabase    relname    relkind
+information_schema    %!%mo_increment_columns    
+mo_catalog    %!%mo_increment_columns    
+mo_task    %!%mo_increment_columns    
+mysql    %!%mo_increment_columns    
+sp_table    %!%mo_increment_columns    
+system    %!%mo_increment_columns    
+system_metrics    %!%mo_increment_columns    
 select relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and account_id = 0 order by relname;
 relname    relkind
 %!%mo_increment_columns    
