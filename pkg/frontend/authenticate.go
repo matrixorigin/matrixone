@@ -1918,7 +1918,7 @@ func (g *graph) hasLoop(start int64) bool {
 	return !g.toposort(start, visited)
 }
 
-// nameIsInvalid checks the name of account/user/role is valid or not
+// nameIsInvalid checks the name of user/role is valid or not
 func nameIsInvalid(name string) bool {
 	s := strings.TrimSpace(name)
 	if len(s) == 0 {
@@ -1934,6 +1934,29 @@ func normalizeName(ctx context.Context, name string) (string, error) {
 		return "", moerr.NewInternalError(ctx, `the name "%s" is invalid`, name)
 	}
 	return s, nil
+}
+
+func normalizeNameOfAccount(ctx context.Context, ca *tree.CreateAccount) error {
+	s := strings.TrimSpace(ca.Name)
+	if len(s) == 0 {
+		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
+	}
+	for _, c := range s {
+		switch {
+		case c >= '0' && c <= '9':
+			continue
+		case c >= 'a' && c <= 'z':
+			continue
+		case c >= 'A' && c <= 'Z':
+			continue
+		case c == '_' || c == '-':
+			continue
+		default:
+			return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
+		}
+	}
+	ca.Name = s
+	return nil
 }
 
 // normalizeNameOfRole normalizes the name
@@ -5330,7 +5353,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	}
 
 	//normalize the name
-	ca.Name, err = normalizeName(ctx, ca.Name)
+	err = normalizeNameOfAccount(ctx, ca)
 	if err != nil {
 		return err
 	}
