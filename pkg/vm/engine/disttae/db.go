@@ -330,7 +330,7 @@ func (db *DB) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *table, op
 		}
 
 		if err := updatePartitionOfPull(
-			i, primaryIdx, tbl, ts, ctx, op, db, part, dn,
+			i, primaryIdx, tbl, ctx, op, db, part, dn,
 			genSyncLogTailReq(part.ts, ts, databaseId, tableId),
 		); err != nil {
 			part.lock <- struct{}{}

@@ -39,11 +39,13 @@ func NewPartition(
 ) *Partition {
 	lock := make(chan struct{}, 1)
 	lock <- struct{}{}
-	return &Partition{
+	ret := &Partition{
 		lock:             lock,
 		data:             memtable.NewTable[RowID, DataValue, *DataRow](),
 		columnsIndexDefs: columnsIndexDefs,
 	}
+	ret.state.Store(NewPartitionState())
+	return ret
 }
 
 type RowID types.Rowid
@@ -395,6 +397,11 @@ func (p *Partition) GetRowsByIndexPrefix(ts timestamp.Timestamp, prefix memtable
 
 func rowIDToBlockID(rowID RowID) uint64 {
 	id, _ := catalog.DecodeRowid(types.Rowid(rowID))
+	return id
+}
+
+func blockIDFromRowID(rowID types.Rowid) uint64 {
+	id, _ := catalog.DecodeRowid(rowID)
 	return id
 }
 
