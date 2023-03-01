@@ -47,7 +47,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 		//will fix this in the future
 		//isCrossJoin := (len(node.OnList) == 0)
 		isCrossJoin := false
-		selectivity := math.Min(math.Pow(rightStats.Selectivity, leftStats.Selectivity), math.Pow(leftStats.Selectivity, rightStats.Selectivity))
+		selectivity := math.Pow(rightStats.Selectivity, math.Pow(leftStats.Selectivity, 0.5))
 
 		switch node.JoinType {
 		case plan.Node_INNER:

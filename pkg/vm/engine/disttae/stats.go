@@ -178,7 +178,7 @@ func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64)
 	if distinctValNum <= 1 {
 		return 1 // only one value
 	} else if distinctValNum == 2 {
-		return 2 / coefficient //if only 1 block, ndv is 20. if many block
+		return 2 / coefficient
 	} else if distinctValNum <= 10 && distinctValNum/blockNumTotal < 0.2 {
 		return distinctValNum / coefficient
 	}
