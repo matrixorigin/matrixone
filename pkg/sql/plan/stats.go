@@ -43,10 +43,15 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 		if ndv < 1 {
 			ndv = 1
 		}
+		//assume all join is not cross join
+		//will fix this in the future
+		//isCrossJoin := (len(node.OnList) == 0)
+		isCrossJoin := false
+
 		switch node.JoinType {
 		case plan.Node_INNER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
+			if !isCrossJoin {
 				outcnt *= 0.1
 			}
 			node.Stats = &plan.Stats{
@@ -57,7 +62,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 
 		case plan.Node_LEFT:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
+			if !isCrossJoin {
 				outcnt *= 0.1
 				outcnt += leftStats.Outcnt
 			}
@@ -69,7 +74,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 
 		case plan.Node_RIGHT:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
+			if !isCrossJoin {
 				outcnt *= 0.1
 				outcnt += rightStats.Outcnt
 			}
@@ -81,7 +86,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 
 		case plan.Node_OUTER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
+			if !isCrossJoin {
 				outcnt *= 0.1
 				outcnt += leftStats.Outcnt + rightStats.Outcnt
 			}
