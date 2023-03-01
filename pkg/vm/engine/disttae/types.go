@@ -84,7 +84,6 @@ type Engine struct {
 	sync.RWMutex
 	mp      *mpool.MPool
 	fs      fileservice.FileService
-	db      *DB
 	cli     client.TxnClient
 	idGen   IDGenerator
 	txns    map[string]*Transaction
@@ -92,23 +91,15 @@ type Engine struct {
 	// minimum heap of currently active transactions
 	txnHeap *transactionHeap
 
+	dnMap      map[string]int
+	metaTables map[string]Partitions
+	partitions map[[2]uint64]Partitions
+
 	// XXX related to cn push model
 	usePushModel       bool
 	subscriber         *logTailSubscriber
 	receiveLogTailTime syncLogTailTimestamp
 	subscribed         subscribedTable
-}
-
-// DB is implementataion of cache
-type DB struct {
-	sync.RWMutex
-	dnMap      map[string]int
-	metaTables map[string]Partitions
-
-	// a pointer to cn engine for push model.
-	cnE *Engine
-
-	partitions map[[2]uint64]Partitions
 }
 
 type Partitions []*Partition
@@ -129,7 +120,7 @@ type Partition struct {
 // Transaction represents a transaction
 type Transaction struct {
 	sync.Mutex
-	db *DB
+	engine *Engine
 	// readOnly default value is true, once a write happen, then set to false
 	readOnly bool
 	// db       *DB
@@ -159,8 +150,6 @@ type Transaction struct {
 	// interim incremental rowid
 	rowId [2]uint64
 
-	catalog *cache.CatalogCache
-
 	// use to cache table
 	tableMap *sync.Map
 	// use to cache database
@@ -185,12 +174,11 @@ type Entry struct {
 
 type transactionHeap []*Transaction
 
-type database struct {
+// txnDatabase represents an opened database in a transaction
+type txnDatabase struct {
 	databaseId   uint64
 	databaseName string
-	db           *DB
 	txn          *Transaction
-	fs           fileservice.FileService
 }
 
 type tableKey struct {
@@ -214,11 +202,12 @@ type tableMeta struct {
 	defs          []engine.TableDef
 }
 
-type table struct {
+// txnTable represents an opened table in a transaction
+type txnTable struct {
 	tableId    uint64
 	tableName  string
 	dnList     []int
-	db         *database
+	db         *txnDatabase
 	meta       *tableMeta
 	parts      Partitions
 	insertExpr *plan.Expr

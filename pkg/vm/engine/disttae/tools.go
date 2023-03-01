@@ -147,7 +147,7 @@ func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constra
 	return bat, nil
 }
 
-func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint32, name string,
+func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId uint32, name string,
 	tableId uint64, databaseId uint64, databaseName string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
@@ -965,7 +965,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 	return bats, nil
 }
 
-func partitionDeleteBatch(tbl *table, bat *batch.Batch) ([]*batch.Batch, error) {
+func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, error) {
 	txn := tbl.db.txn
 	bats := make([]*batch.Batch, len(tbl.parts))
 	for i := range bats {
