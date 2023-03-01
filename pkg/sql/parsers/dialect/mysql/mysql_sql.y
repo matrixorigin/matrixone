@@ -1982,13 +1982,13 @@ table_lock_list:
     }
 |   table_lock_list ',' table_lock_elem
     {
-       $$ = append($1, $3);
+       $$ = append($1, $3)
     }
 
 table_lock_elem:
     table_name table_lock_type
     {
-        $$ = tree.TableLock{$1, $2}
+        $$ = tree.TableLock{*$1, $2}
     }
 
 table_lock_type:  
