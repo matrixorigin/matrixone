@@ -699,6 +699,9 @@ func (v *Vector) CleanOnlyData() {
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
+	if v.Nsp != nil && v.Nsp.Np != nil {
+		v.Nsp.Np.Clear()
+	}
 }
 
 func (v *Vector) FreeOriginal(m *mpool.MPool) {
