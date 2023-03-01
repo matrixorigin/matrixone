@@ -852,7 +852,7 @@ func RollbackTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) 
 
 func GetNewAutoIncrTableRelation(db engine.Database, eg engine.Engine, dbName string, txn client.TxnOperator, ctx context.Context) (engine.Relation, error) {
 	tblName := catalog.AutoIncrTableName
-	if dbName == defines.TEMPORARY_DBNAME {
+	if db != nil && dbName == defines.TEMPORARY_DBNAME {
 		// Essentially, temporary table is not an operation of a transaction.
 		// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
 		return db.Relation(ctx, tblName)
