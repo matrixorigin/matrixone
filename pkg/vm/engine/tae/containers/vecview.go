@@ -69,10 +69,11 @@ func (vec *vecView) Data() []byte                { return vec.impl.Data() }
 func (vec *vecView) DataWindow(offset, length int) []byte {
 	return vec.impl.DataWindow(offset, length)
 }
-func (vec *vecView) Get(i int) (v any) { return vec.impl.Get(i) }
-func (vec *vecView) Length() int       { return vec.impl.Length() }
-func (vec *vecView) Capacity() int     { return vec.impl.Capacity() }
-func (vec *vecView) Allocated() int    { return vec.impl.Allocated() }
+func (vec *vecView) Get(i int) (v any)        { return vec.impl.Get(i) }
+func (vec *vecView) ShallowGet(i int) (v any) { return vec.impl.ShallowGet(i) }
+func (vec *vecView) Length() int              { return vec.impl.Length() }
+func (vec *vecView) Capacity() int            { return vec.impl.Capacity() }
+func (vec *vecView) Allocated() int           { return vec.impl.Allocated() }
 
 func (vec *vecView) GetAllocator() *mpool.MPool { return vec.impl.GetAllocator() }
 func (vec *vecView) GetType() types.Type        { return vec.impl.GetType() }
@@ -95,4 +96,12 @@ func (vec *vecView) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
 
 func (vec *vecView) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 	return vec.impl.ForeachWindow(offset, length, op, sels)
+}
+
+func (vec *vecView) ForeachShallow(op ItOp, sels *roaring.Bitmap) (err error) {
+	return vec.impl.ForeachWindowShallow(0, vec.Length(), op, sels)
+}
+
+func (vec *vecView) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	return vec.impl.ForeachWindowShallow(offset, length, op, sels)
 }
