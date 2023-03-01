@@ -153,6 +153,7 @@ schemata
 character_sets
 triggers
 tables
+views
 engines
 routines
 parameters
