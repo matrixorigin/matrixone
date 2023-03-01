@@ -171,7 +171,7 @@ func (zm *ZoneMap) FastContainsAny(keys containers.Vector) (ok bool) {
 		}
 		return
 	}
-	keys.Foreach(op, nil)
+	keys.ForeachShallow(op, nil)
 	return
 }
 
@@ -191,7 +191,7 @@ func (zm *ZoneMap) ContainsAny(keys containers.Vector) (visibility *roaring.Bitm
 		row++
 		return
 	}
-	if err := keys.Foreach(op, nil); err != nil {
+	if err := keys.ForeachShallow(op, nil); err != nil {
 		panic(err)
 	}
 	if visibility.GetCardinality() != 0 {

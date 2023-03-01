@@ -28,14 +28,15 @@ import (
 )
 
 var (
-	defaultListenAddress    = "0.0.0.0:22000"
-	defaultServiceAddress   = "127.0.0.1:22000"
-	defaultLogtailAddress   = "127.0.0.1:22001"
-	defaultZombieTimeout    = time.Hour
-	defaultDiscoveryTimeout = time.Second * 30
-	defaultHeatbeatInterval = time.Second
-	defaultConnectTimeout   = time.Second * 30
-	defaultHeatbeatTimeout  = time.Second * 3
+	defaultListenAddress         = "0.0.0.0:22000"
+	defaultServiceAddress        = "127.0.0.1:22000"
+	defaultLogtailListenAddress  = "0.0.0.0:22001"
+	defaultLogtailServiceAddress = "127.0.0.1:22001"
+	defaultZombieTimeout         = time.Hour
+	defaultDiscoveryTimeout      = time.Second * 30
+	defaultHeatbeatInterval      = time.Second
+	defaultConnectTimeout        = time.Second * 30
+	defaultHeatbeatTimeout       = time.Second * 3
 
 	defaultFlushInterval       = time.Second * 60
 	defaultScanInterval        = time.Second * 5
@@ -97,6 +98,7 @@ type Config struct {
 
 	LogtailServer struct {
 		ListenAddress              string        `toml:"listen-address"`
+		ServiceAddress             string        `toml:"service-address"`
 		RpcMaxMessageSize          toml.ByteSize `toml:"rpc-max-message-size"`
 		RpcPayloadCopyBufferSize   toml.ByteSize `toml:"rpc-payload-copy-buffer-size"`
 		RpcEnableChecksum          bool          `toml:"rpc-enable-checksum"`
@@ -185,7 +187,11 @@ func (c *Config) Validate() error {
 		c.Ckp.GlobalMinCount = defaultGlobalMinCount
 	}
 	if c.LogtailServer.ListenAddress == "" {
-		c.LogtailServer.ListenAddress = defaultLogtailAddress
+		c.LogtailServer.ListenAddress = defaultLogtailListenAddress
+		c.LogtailServer.ServiceAddress = defaultLogtailServiceAddress
+	}
+	if c.LogtailServer.ServiceAddress == "" {
+		c.LogtailServer.ServiceAddress = c.LogtailServer.ListenAddress
 	}
 	if c.LogtailServer.RpcMaxMessageSize <= 0 {
 		c.LogtailServer.RpcMaxMessageSize = toml.ByteSize(defaultRpcMaxMsgSize)
