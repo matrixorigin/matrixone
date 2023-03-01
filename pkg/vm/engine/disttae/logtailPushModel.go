@@ -224,9 +224,6 @@ func (s *logTailSubscriber) receiveResponse() logTailSubscriberResponse {
 
 func (e *Engine) SetPushModelFlag(turnOn bool) {
 	e.usePushModel = turnOn
-	// XXX it's really stupid but can avoid changing lots of codes to
-	// deliver the disttaeEngine.
-	e.db.cnE = e
 }
 
 func (e *Engine) UsePushModelOrNot() bool {
@@ -408,21 +405,20 @@ func updatePartitionOfPush(
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
-	partitions := e.db.getPartitions(dbId, tblId)
+	partitions := e.getPartitions(dbId, tblId)
 	partition := partitions[dnId]
 
 	curState := partition.state.Load()
 	state := curState.Copy()
 
 	key := e.catalog.GetTableById(dbId, tblId)
-	tbl := &table{
-		db: &database{
+	tbl := &txnTable{
+		db: &txnDatabase{
 			databaseId:   dbId,
 			databaseName: "",
 			txn: &Transaction{
-				catalog: e.catalog,
+				engine: e,
 			},
-			fs: e.fs,
 		},
 		parts:        partitions,
 		tableId:      key.Id,
@@ -440,7 +436,7 @@ func updatePartitionOfPush(
 	}
 
 	if err = consumeLogTailOfPush(ctx,
-		dnId, tbl, e.db, partition, state, tl); err != nil {
+		dnId, tbl, e, partition, state, tl); err != nil {
 		logutil.Errorf("consume %d-%s log tail error: %v\n", tbl.tableId, tbl.tableName, err)
 		return err
 	}
@@ -458,27 +454,27 @@ func updatePartitionOfPush(
 
 func consumeLogTailOfPush(
 	ctx context.Context,
-	idx int, tbl *table,
-	db *DB, partition *Partition, state *PartitionState, lt *logtail.TableLogtail) (err error) {
+	idx int, tbl *txnTable,
+	engine *Engine, partition *Partition, state *PartitionState, lt *logtail.TableLogtail) (err error) {
 	var entries []*api.Entry
 
 	if entries, err = logtail2.LoadCheckpointEntries(
 		ctx,
 		lt.CkpLocation,
 		tbl.tableId, tbl.tableName,
-		tbl.db.databaseId, tbl.db.databaseName, tbl.db.fs); err != nil {
+		tbl.db.databaseId, tbl.db.databaseName, tbl.db.txn.engine.fs); err != nil {
 		return
 	}
 	for _, entry := range entries {
 		if err = consumeEntry(idx, tbl.primaryIdx, tbl, ctx,
-			db, partition, state, entry); err != nil {
+			engine, partition, state, entry); err != nil {
 			return
 		}
 	}
 
 	for i := 0; i < len(lt.Commands); i++ {
 		if err = consumeEntry(idx, tbl.primaryIdx, tbl, ctx,
-			db, partition, state, &lt.Commands[i]); err != nil {
+			engine, partition, state, &lt.Commands[i]); err != nil {
 			return
 		}
 	}

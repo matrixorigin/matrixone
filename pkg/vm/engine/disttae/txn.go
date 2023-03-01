@@ -542,9 +542,9 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 		accessed[dn.ServiceID] = 0
 	}
 	if len(name) == 0 {
-		parts = txn.db.getPartitions(databaseId, tableId)
+		parts = txn.engine.getPartitions(databaseId, tableId)
 	} else {
-		parts = txn.db.getMetaPartitions(name)
+		parts = txn.engine.getMetaPartitions(name)
 	}
 	for i, dn := range txn.dnStores {
 		if _, ok := accessed[dn.ServiceID]; !ok {
