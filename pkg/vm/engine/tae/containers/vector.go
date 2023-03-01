@@ -74,7 +74,7 @@ func NewVector[T any](typ types.Type, nullable bool, opts ...Options) *vector[T]
 }
 
 func (vec *vector[T]) Get(i int) any {
-	if vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Np != nil && vec.downstreamVector.Nsp.Np.Contains(uint64(i)) {
+	if vec.IsNull(i) {
 		return types.Null{}
 	}
 
@@ -89,7 +89,7 @@ func (vec *vector[T]) Get(i int) any {
 }
 
 func (vec *vector[T]) ShallowGet(i int) any {
-	if vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Np != nil && vec.downstreamVector.Nsp.Np.Contains(uint64(i)) {
+	if vec.IsNull(i) {
 		return types.Null{}
 	}
 	return GetNonNullValue(vec.downstreamVector, uint32(i))
