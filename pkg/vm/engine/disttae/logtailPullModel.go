@@ -29,9 +29,9 @@ import (
 )
 
 // updatePartitionOfPull the old method of log tail pull model.
-func updatePartitionOfPull(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
+func updatePartitionOfPull(idx, primaryIdx int, tbl *table,
 	ctx context.Context, op client.TxnOperator, db *DB,
-	mvcc MVCC, dn DNStore, req api.SyncLogTailReq) error {
+	partition *Partition, dn DNStore, req api.SyncLogTailReq) error {
 	reqs, err := genLogTailReq(dn, req)
 	if err != nil {
 		return err
@@ -40,12 +40,21 @@ func updatePartitionOfPull(idx, primaryIdx int, tbl *table, ts timestamp.Timesta
 	if err != nil {
 		return err
 	}
+
+	curState := partition.state.Load()
+	state := curState.Copy()
+
 	for i := range logTails {
-		if err := consumeLogTailOfPull(idx, primaryIdx, tbl, ts, ctx, db, mvcc, logTails[i]); err != nil {
+		if err := consumeLogTailOfPull(idx, primaryIdx, tbl, ctx, db, partition, state, logTails[i]); err != nil {
 			logutil.Errorf("consume %d-%s logtail error: %v\n", tbl.tableId, tbl.tableName, err)
 			return err
 		}
 	}
+
+	if !partition.state.CompareAndSwap(curState, state) {
+		panic("concurrent mutation")
+	}
+
 	return nil
 }
 
@@ -66,8 +75,7 @@ func getLogTail(ctx context.Context, op client.TxnOperator, reqs []txn.TxnReques
 	return logTails, nil
 }
 
-func consumeLogTailOfPull(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
-	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) (err error) {
+func consumeLogTailOfPull(idx, primaryIdx int, tbl *table, ctx context.Context, db *DB, partition *Partition, state *PartitionState, logTail *api.SyncLogTailResp) (err error) {
 	var entries []*api.Entry
 
 	if entries, err = logtail.LoadCheckpointEntries(
@@ -82,14 +90,14 @@ func consumeLogTailOfPull(idx, primaryIdx int, tbl *table, ts timestamp.Timestam
 	}
 	for _, e := range entries {
 		if err = consumeEntry(idx, primaryIdx, tbl, ctx,
-			db, mvcc, e); err != nil {
+			db, partition, state, e); err != nil {
 			return
 		}
 	}
 
 	for i := 0; i < len(logTail.Commands); i++ {
 		if err = consumeEntry(idx, primaryIdx, tbl, ctx,
-			db, mvcc, logTail.Commands[i]); err != nil {
+			db, partition, state, logTail.Commands[i]); err != nil {
 			return
 		}
 	}
