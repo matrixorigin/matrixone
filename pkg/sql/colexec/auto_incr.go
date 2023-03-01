@@ -124,26 +124,28 @@ func renameAutoIncrCache(newname, oldname string, proc *process.Process) {
 	}
 }
 
-func getNextOneCache(param *AutoIncrParam, bat *batch.Batch, pos int, name string, cachesize, curNum uint64) (uint64, uint64, uint64, error) {
-	for i := 0; i < 100; i++ {
-		txn, err := NewTxn(param.eg, param.proc, param.proc.Ctx)
-		if err != nil {
-			continue
-		}
-
-		d, m, s, err := getOneColRangeFromAutoIncrTable(param, bat, name, pos, txn, cachesize, curNum)
-		if err != nil { // Get next 1000.
-			RollbackTxn(param.eg, txn, param.proc.Ctx)
-			continue
-		}
-
-		if err := CommitTxn(param.eg, txn, param.proc.Ctx); err != nil {
-			continue
-		}
-
-		return d, m, s, nil
+func getNextOneCache(param *AutoIncrParam, bat *batch.Batch, i int, name string, cachesize, curNum uint64) (uint64, uint64, uint64, error) {
+	var err error
+	loopCnt := 0
+loop:
+	loopCnt += 1
+	if loopCnt >= 100 {
+		return 0, 0, 0, err
 	}
-	return 0, 0, 0, moerr.NewInternalErrorNoCtx("failed to get next one cache")
+
+	txn, err := NewTxn(param.eg, param.proc, param.proc.Ctx)
+	if err != nil {
+		goto loop
+	}
+	var d, m, s uint64
+	if d, m, s, err = getOneColRangeFromAutoIncrTable(param, bat, name, i, txn, cachesize, curNum); err != nil { // Get next 1000.
+		RollbackTxn(param.eg, txn, param.proc.Ctx)
+		goto loop
+	}
+	if err = CommitTxn(param.eg, txn, param.proc.Ctx); err != nil {
+		goto loop
+	}
+	return d, m, s, nil
 }
 
 func UpdateInsertBatch(bat *batch.Batch, incrParam *AutoIncrParam) error {
