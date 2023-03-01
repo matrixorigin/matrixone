@@ -105,6 +105,13 @@ func TestSessionError(t *testing.T) {
 }
 
 func TestPoisionSession(t *testing.T) {
+	// make responseBufferSize small enough temporarily
+	original := responseBufferSize
+	responseBufferSize = 1024
+	defer func() {
+		responseBufferSize = original
+	}()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

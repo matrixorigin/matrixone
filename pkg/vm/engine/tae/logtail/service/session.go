@@ -35,13 +35,15 @@ const (
 	TableOnSubscription TableState = iota
 	TableSubscribed
 	TableNotFound
+)
 
+var (
 	// responseBufferSize is the size of buffer channel.
 	// We couldn't set this size to an unlimited value,
 	// because channel's memory is allocated according to the specified size.
 	// NOTE: we afford 1GiB heap memory for this buffer channel's own.
 	// but items within the channel would consume extra heap memory.
-	responseBufferSize = 1024 * 1024 * 1024 / unsafe.Sizeof(message{})
+	responseBufferSize = 1024 * 1024 * 1024 / int(unsafe.Sizeof(message{}))
 )
 
 // SessionManager manages all client sessions.
