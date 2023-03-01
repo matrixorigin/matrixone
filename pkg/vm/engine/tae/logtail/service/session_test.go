@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -31,6 +32,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
+
+func TestMain(m *testing.M) {
+	// make responseBufferSize small enough temporarily
+	// Larger buffer size would have a negative effect on CI.
+	original := responseBufferSize
+	responseBufferSize = 1024
+	ret := m.Run()
+	responseBufferSize = original
+	os.Exit(ret)
+}
 
 func TestSessionManger(t *testing.T) {
 	sm := NewSessionManager()
@@ -105,13 +116,6 @@ func TestSessionError(t *testing.T) {
 }
 
 func TestPoisionSession(t *testing.T) {
-	// make responseBufferSize small enough temporarily
-	original := responseBufferSize
-	responseBufferSize = 1024
-	defer func() {
-		responseBufferSize = original
-	}()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
