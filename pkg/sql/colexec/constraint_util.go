@@ -111,7 +111,15 @@ func FilterAndUpdateByRowId(
 
 			// fill auto incr column
 			if info.hasAutoCol {
-				if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, updateBatch, uint64(ref[i].Obj), ref[i].SchemaName, tableDef.Name); err != nil {
+				incrParam := &AutoIncrParam{
+					eg:      eg,
+					proc:    proc,
+					colDefs: tableDef.Cols,
+					dbName:  ref[i].SchemaName,
+					tblName: tableDef.Name,
+					tblID:   uint64(ref[i].Obj),
+				}
+				if err = UpdateInsertBatch(updateBatch, incrParam); err != nil {
 					return 0, err
 				}
 			}
@@ -465,7 +473,15 @@ func InsertBatch(
 
 	// fill auto incr column
 	if info.hasAutoCol {
-		if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, insertBatch, uint64(ref.Obj), ref.SchemaName, tableDef.Name); err != nil {
+		incrParam := &AutoIncrParam{
+			eg:      eg,
+			proc:    proc,
+			colDefs: tableDef.Cols,
+			dbName:  ref.SchemaName,
+			tblName: tableDef.Name,
+			tblID:   uint64(ref.Obj),
+		}
+		if err = UpdateInsertBatch(insertBatch, incrParam); err != nil {
 			return 0, err
 		}
 	}
