@@ -219,9 +219,10 @@ func NewSession(
 				}
 
 				// FIXME: update with metrics
-				// log real buffer size every 1024 change
+				// log real buffer size every 1024*1024 change
+				stride := 1024 * 1024
 				realSize := len(ss.sendChan)
-				if (realSize-sizeMarker) == 1024 || (realSize-sizeMarker) == -1024 {
+				if (realSize-sizeMarker) == stride || (realSize-sizeMarker) == -stride {
 					sizeMarker = realSize
 					ss.logger.Info("logtail response waiting to be sent", zap.Int("size", realSize))
 				}
