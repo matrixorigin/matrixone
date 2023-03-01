@@ -23,10 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -126,7 +124,7 @@ func readColumnBatchByMetaloc(
 	pool *mpool.MPool) (*containers.Batch, error) {
 	var bat *containers.Batch
 	var err error
-	name, extent, rows := DecodeMetaLoc(info.MetaLoc)
+	_, extent, rows := DecodeMetaLoc(info.MetaLoc)
 	idxsWithouRowid := make([]uint16, 0, len(colIdxs))
 	var rowidData containers.Vector
 	// sift rowid column
@@ -174,49 +172,31 @@ func readColumnBatchByMetaloc(
 		idxsWithouRowid = append(idxsWithouRowid, uint16(schemaColCnt+1)) // aborted
 	}
 
-	// raed s3
-	reader, err := objectio.NewObjectReader(name, fs)
+	reader, err := NewBlockReader(fs, info.MetaLoc)
 	if err != nil {
 		return nil, err
 	}
 
-	ioResult, err := reader.Read(ctx, extent, idxsWithouRowid, nil)
+	ioResult, err := reader.LoadColumns(ctx, idxsWithouRowid, []uint32{extent.Id()}, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	entry := ioResult.Entries
 	for i, typ := range colTyps {
 		if typ.Oid == types.T_Rowid {
 			bat.AddVector(colNames[i], rowidData)
 		} else {
-			vec := vector.New(colTyps[i])
-			data := make([]byte, len(entry[0].Object.([]byte)))
-			copy(data, entry[0].Object.([]byte))
-			err := vec.Read(data)
-			if err != nil {
-				return nil, err
-			}
-			bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(vec, colNulls[i]))
-			entry = entry[1:]
+			bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(ioResult[0].Vecs[i], colNulls[i]))
 		}
 	}
-
+	lenVecs := len(ioResult[0].Vecs)
 	// generate filter map
 	if info.EntryState {
 		t0 := time.Now()
-		v1 := vector.New(types.T_TS.ToType())
-		err := v1.Read(entry[0].Object.([]byte))
-		if err != nil {
-			return nil, err
-		}
+		v1 := ioResult[0].Vecs[lenVecs-2]
 		commits := containers.NewVectorWithSharedMemory(v1, false)
 		defer commits.Close()
-		v2 := vector.New(types.T_bool.ToType())
-		err = v2.Read(entry[1].Object.([]byte))
-		if err != nil {
-			return nil, err
-		}
+		v2 := ioResult[0].Vecs[lenVecs-1]
 		abort := containers.NewVectorWithSharedMemory(v2, false)
 		defer abort.Close()
 		for i := 0; i < commits.Length(); i++ {
@@ -238,26 +218,20 @@ func readColumnBatchByMetaloc(
 func readDeleteBatchByDeltaloc(ctx context.Context, deltaloc string, fs fileservice.FileService) (*containers.Batch, error) {
 	bat := containers.NewBatch()
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
-	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
+	//colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
 
-	name, extent, _ := DecodeMetaLoc(deltaloc)
-	reader, err := objectio.NewObjectReader(name, fs)
+	_, extent, _ := DecodeMetaLoc(deltaloc)
+	reader, err := NewBlockReader(fs, deltaloc)
 	if err != nil {
 		return nil, err
 	}
-	ioResult, err := reader.Read(ctx, extent, []uint16{0, 1, 2}, nil)
+
+	ioResult, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, []uint32{extent.Id()}, nil)
 	if err != nil {
 		return nil, err
 	}
-	for i, entry := range ioResult.Entries {
-		vec := vector.New(colTypes[i])
-		data := make([]byte, len(entry.Object.([]byte)))
-		copy(data, entry.Object.([]byte))
-		err := vec.Read(data)
-		if err != nil {
-			return nil, err
-		}
-		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(vec, false))
+	for i, entry := range ioResult[0].Vecs {
+		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(entry, false))
 	}
 	return bat, nil
 }

@@ -16,15 +16,14 @@ package tables
 
 import (
 	"bytes"
+	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/evictable"
 )
 
 func LoadPersistedColumnData(
@@ -34,13 +33,19 @@ func LoadPersistedColumnData(
 	def *catalog.ColDef,
 	location string,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
-	return evictable.FetchColumnData(
-		id,
-		def,
-		location,
-		buffer,
-		mgr,
-		fs)
+	_, _, meta, _, err := blockio.DecodeLocation(location)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := blockio.NewBlockReader(fs.Service, location)
+	if err != nil {
+		return
+	}
+	bat, err := reader.LoadColumns(context.Background(), []uint16{uint16(def.Idx)}, []uint32{meta.Id()}, nil)
+	if err != nil {
+		return
+	}
+	return containers.NewVectorWithSharedMemory(bat[0].Vecs[0], def.NullAbility), nil
 }
 
 func ReadPersistedBlockRow(location string) int {
@@ -55,15 +60,22 @@ func LoadPersistedDeletes(
 	mgr base.INodeManager,
 	fs *objectio.ObjectFS,
 	location string) (bat *containers.Batch, err error) {
+	_, _, meta, _, err := blockio.DecodeLocation(location)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := blockio.NewBlockReader(fs.Service, location)
+	if err != nil {
+		return
+	}
+	movbat, err := reader.LoadColumns(context.Background(), []uint16{0, 1, 2}, []uint32{meta.Id()}, nil)
+	if err != nil {
+		return
+	}
 	bat = containers.NewBatch()
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
-	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
 	for i := 0; i < 3; i++ {
-		vec, err := evictable.FetchDeltaData(nil, mgr, fs, location, uint16(i), colTypes[i])
-		if err != nil {
-			return bat, err
-		}
-		bat.AddVector(colNames[i], vec)
+		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(movbat[0].Vecs[i], false))
 	}
 	return
 }
