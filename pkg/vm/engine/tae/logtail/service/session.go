@@ -341,6 +341,8 @@ func (ss *Session) AdvanceState(id TableID) {
 func (ss *Session) SendErrorResponse(
 	sendCtx context.Context, table api.TableID, code uint16, message string,
 ) error {
+	ss.logger.Debug("send error response", zap.Any("table", table), zap.Uint16("code", code), zap.String("message", message))
+
 	resp := ss.responses.Acquire()
 	resp.Response = newErrorResponse(table, code, message)
 	return ss.SendResponse(sendCtx, resp)
@@ -350,6 +352,8 @@ func (ss *Session) SendErrorResponse(
 func (ss *Session) SendSubscriptionResponse(
 	sendCtx context.Context, tail logtail.TableLogtail,
 ) error {
+	ss.logger.Debug("send subscription response", zap.Any("table", tail.Table), zap.String("To", tail.Ts.String()))
+
 	resp := ss.responses.Acquire()
 	resp.Response = newSubscritpionResponse(tail)
 	return ss.SendResponse(sendCtx, resp)
@@ -359,6 +363,8 @@ func (ss *Session) SendSubscriptionResponse(
 func (ss *Session) SendUnsubscriptionResponse(
 	sendCtx context.Context, table api.TableID,
 ) error {
+	ss.logger.Debug("send unsubscription response", zap.Any("table", table))
+
 	resp := ss.responses.Acquire()
 	resp.Response = newUnsubscriptionResponse(table)
 	return ss.SendResponse(sendCtx, resp)
@@ -368,6 +374,8 @@ func (ss *Session) SendUnsubscriptionResponse(
 func (ss *Session) SendUpdateResponse(
 	sendCtx context.Context, from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
 ) error {
+	ss.logger.Debug("send additional logtail", zap.Any("From", from.String()), zap.String("To", to.String()), zap.Int("tables", len(tails)))
+
 	resp := ss.responses.Acquire()
 	resp.Response = newUpdateResponse(from, to, tails...)
 	return ss.SendResponse(sendCtx, resp)
