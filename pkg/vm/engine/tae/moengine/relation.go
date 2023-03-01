@@ -61,16 +61,17 @@ func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error)
 }
 
 // TODO(aptend) only cn-dn mode available, so this can be removed probably.
-func (rel *baseRelation) UpdateConstraint(_ context.Context, def *engine.ConstraintDef) error {
+func (rel *baseRelation) UpdateConstraint(ctx context.Context, def *engine.ConstraintDef) error {
 	bin, err := def.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	return rel.handle.UpdateConstraint(bin)
-}
-
-func (rel *baseRelation) UpdateConstraintWithBin(_ context.Context, bin []byte) error {
-	return rel.handle.UpdateConstraint(bin)
+	db, err := rel.handle.GetDB()
+	if err != nil {
+		return err
+	}
+	req := apipb.NewUpdateConstraintReq(db.GetID(), rel.handle.ID(), string(bin))
+	return rel.handle.AlterTable(ctx, req)
 }
 
 func (rel *baseRelation) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {

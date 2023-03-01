@@ -311,10 +311,6 @@ func (h *txnRelation) GetDB() (handle.Database, error) {
 	return h.Txn.GetStore().GetDatabase(h.GetMeta().(*catalog.TableEntry).GetDB().GetName())
 }
 
-func (h *txnRelation) UpdateConstraint(cstr []byte) (err error) {
-	return h.table.UpdateConstraint(cstr)
-}
-
 func (h *txnRelation) AlterTable(ctx context.Context, req *apipb.AlterTableReq) (err error) {
 	return h.table.AlterTable(ctx, req)
 }

@@ -115,25 +115,6 @@ func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err
 	return
 }
 
-func (be *TableBaseEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (isNewNode bool, err error) {
-	be.Lock()
-	defer be.Unlock()
-	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
-	if needWait {
-		be.Unlock()
-		txnToWait.GetTxnState(true)
-		be.Lock()
-	}
-	err = be.CheckConflict(txn)
-	if err != nil {
-		return
-	}
-	var entry *TableMVCCNode
-	isNewNode, entry = be.getOrSetUpdateNode(txn)
-	entry.Constraints = string(cstr)
-	return
-}
-
 func (be *TableBaseEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *apipb.AlterTableReq) (isNewNode bool, err error) {
 	be.Lock()
 	defer be.Unlock()

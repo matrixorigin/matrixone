@@ -85,14 +85,6 @@ func (s *sysRelation) DeleteByPhyAddrKeys(_ context.Context, _ *vector.Vector) e
 	return ErrReadOnly
 }
 
-func (s *sysRelation) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
-	return ErrReadOnly
-}
-
-func (s *sysRelation) UpdateConstraintWithBin(context.Context, []byte) error {
-	return ErrReadOnly
-}
-
 func (s *sysRelation) AlterTable(context.Context, *apipb.AlterTableReq) error {
 	return ErrReadOnly
 }

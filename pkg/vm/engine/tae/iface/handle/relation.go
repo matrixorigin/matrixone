@@ -31,7 +31,6 @@ type Relation interface {
 	SimplePPString(common.PPLevel) string
 	GetCardinality(attr string) int64
 	Schema() any
-	UpdateConstraint([]byte) error
 	AlterTable(ctx context.Context, req *apipb.AlterTableReq) error
 	MakeSegmentIt() SegmentIt
 	MakeBlockIt() BlockIt
