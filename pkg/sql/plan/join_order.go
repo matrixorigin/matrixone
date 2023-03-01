@@ -113,8 +113,16 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) swapJoinOrderByStats(children []int32) []int32 {
+	//left deep tree is preferred for pipeline
+	//if scan compare with join, scan should be 5% bigger than join, then we can swap
 	left := builder.qry.Nodes[children[0]].Stats.Outcnt
+	if builder.qry.Nodes[children[0]].Stats.TableCnt == 0 {
+		left *= 1.05
+	}
 	right := builder.qry.Nodes[children[1]].Stats.Outcnt
+	if builder.qry.Nodes[children[1]].Stats.TableCnt == 0 {
+		right *= 1.05
+	}
 	if left < right {
 		return []int32{children[1], children[0]}
 	} else {
