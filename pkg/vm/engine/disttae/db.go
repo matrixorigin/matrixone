@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -24,39 +23,49 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 )
 
+func newDB(dnList []DNStore) *DB {
+	dnMap := make(map[string]int)
+	for i := range dnList {
+		dnMap[dnList[i].ServiceID] = i
+	}
+	db := &DB{
+		dnMap:      dnMap,
+		metaTables: make(map[string]Partitions),
+		partitions: make(map[[2]uint64]Partitions),
+	}
+	return db
+}
+
 // init is used to insert some data that will not be synchronized by logtail.
-func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
-	e.Lock()
-	defer e.Unlock()
-
+func (db *DB) init(ctx context.Context, m *mpool.MPool, catalogCache *cache.CatalogCache) error {
+	db.Lock()
+	defer db.Unlock()
 	{
-		parts := make(Partitions, len(e.dnMap))
+		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {
 			parts[i] = NewPartition(nil)
 		}
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = parts
+		db.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = parts
 	}
-
 	{
-		parts := make(Partitions, len(e.dnMap))
+		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {
 			parts[i] = NewPartition(nil)
 		}
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = parts
+		db.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = parts
 	}
-
 	{
-		parts := make(Partitions, len(e.dnMap))
+		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {
 			parts[i] = NewPartition(nil)
 		}
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = parts
+		db.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = parts
 	}
-
 	{ // mo_catalog
-		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}][0]
+		part := db.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}][0]
 		bat, err := genCreateDatabaseTuple("", 0, 0, 0, catalog.MO_CATALOG, catalog.MO_CATALOG_ID, m)
 		if err != nil {
 			return err
@@ -70,18 +79,17 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		e.catalog.InsertDatabase(bat)
+		catalogCache.InsertDatabase(bat)
 		bat.Clean(m)
 	}
-
 	{ // mo_database
-		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
+		part := db.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
 		cols, err := genColumns(0, catalog.MO_DATABASE, catalog.MO_CATALOG, catalog.MO_DATABASE_ID,
 			catalog.MO_CATALOG_ID, catalog.MoDatabaseTableDefs)
 		if err != nil {
 			return err
 		}
-		tbl := new(txnTable)
+		tbl := new(table)
 		tbl.relKind = catalog.SystemOrdinaryRel
 		bat, err := genCreateTableTuple(tbl, "", 0, 0, 0,
 			catalog.MO_DATABASE, catalog.MO_DATABASE_ID,
@@ -98,9 +106,9 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		e.catalog.InsertTable(bat)
+		catalogCache.InsertTable(bat)
 		bat.Clean(m)
-		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		part = db.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 		bat.SetZs(len(cols), m)
@@ -133,18 +141,17 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		e.catalog.InsertColumns(bat)
+		catalogCache.InsertColumns(bat)
 		bat.Clean(m)
 	}
-
 	{ // mo_tables
-		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
+		part := db.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
 		cols, err := genColumns(0, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG_ID, catalog.MoTablesTableDefs)
 		if err != nil {
 			return err
 		}
-		tbl := new(txnTable)
+		tbl := new(table)
 		tbl.relKind = catalog.SystemOrdinaryRel
 		bat, err := genCreateTableTuple(tbl, "", 0, 0, 0, catalog.MO_TABLES, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, m)
@@ -160,9 +167,9 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		e.catalog.InsertTable(bat)
+		catalogCache.InsertTable(bat)
 		bat.Clean(m)
-		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		part = db.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 		bat.SetZs(len(cols), m)
@@ -195,18 +202,17 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		e.catalog.InsertColumns(bat)
+		catalogCache.InsertColumns(bat)
 		bat.Clean(m)
 	}
-
 	{ // mo_columns
-		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
+		part := db.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
 		cols, err := genColumns(0, catalog.MO_COLUMNS, catalog.MO_CATALOG, catalog.MO_COLUMNS_ID,
 			catalog.MO_CATALOG_ID, catalog.MoColumnsTableDefs)
 		if err != nil {
 			return err
 		}
-		tbl := new(txnTable)
+		tbl := new(table)
 		tbl.relKind = catalog.SystemOrdinaryRel
 		bat, err := genCreateTableTuple(tbl, "", 0, 0, 0, catalog.MO_COLUMNS, catalog.MO_COLUMNS_ID,
 			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, m)
@@ -222,9 +228,9 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		e.catalog.InsertTable(bat)
+		catalogCache.InsertTable(bat)
 		bat.Clean(m)
-		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		part = db.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 		bat.SetZs(len(cols), m)
@@ -257,60 +263,60 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		e.catalog.InsertColumns(bat)
+		catalogCache.InsertColumns(bat)
 		bat.Clean(m)
 	}
-
 	return nil
 }
 
-func (e *Engine) getMetaPartitions(name string) Partitions {
-	e.Lock()
-	defer e.Unlock()
-	parts, ok := e.metaTables[name]
+func (db *DB) getMetaPartitions(name string) Partitions {
+	db.Lock()
+	parts, ok := db.metaTables[name]
 	if !ok { // create a new table
-		parts = make(Partitions, len(e.dnMap))
+		parts = make(Partitions, len(db.dnMap))
 		for i := range parts {
 			parts[i] = NewPartition(nil)
 		}
-		e.metaTables[name] = parts
+		db.metaTables[name] = parts
 	}
+	db.Unlock()
 	return parts
+
 }
 
-func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
-	e.Lock()
-	defer e.Unlock()
-	parts, ok := e.partitions[[2]uint64{databaseId, tableId}]
+func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
+	db.Lock()
+	parts, ok := db.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		parts = make(Partitions, len(e.dnMap))
+		parts = make(Partitions, len(db.dnMap))
 		for i := range parts {
 			parts[i] = NewPartition(nil)
 		}
-		e.partitions[[2]uint64{databaseId, tableId}] = parts
+		db.partitions[[2]uint64{databaseId, tableId}] = parts
 	}
+	db.Unlock()
 	return parts
 }
 
-func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
-	return e.tryToGetTableLogTail(ctx, databaseId, tableId)
+func (db *DB) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
+	return db.cnE.tryToGetTableLogTail(ctx, databaseId, tableId)
 }
 
-func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTable, op client.TxnOperator,
+func (db *DB) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *table, op client.TxnOperator,
 	primaryIdx int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
-	e.Lock()
-	parts, ok := e.partitions[[2]uint64{databaseId, tableId}]
+	db.Lock()
+	parts, ok := db.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		parts = make(Partitions, len(e.dnMap))
+		parts = make(Partitions, len(db.dnMap))
 		for i := range parts {
 			parts[i] = NewPartition(nil)
 		}
-		e.partitions[[2]uint64{databaseId, tableId}] = parts
+		db.partitions[[2]uint64{databaseId, tableId}] = parts
 	}
-	e.Unlock()
+	db.Unlock()
 
 	for i, dn := range dnList {
-		part := parts[e.dnMap[dn.ServiceID]]
+		part := parts[db.dnMap[dn.ServiceID]]
 
 		select {
 		case <-part.lock:
@@ -324,7 +330,7 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 		}
 
 		if err := updatePartitionOfPull(
-			i, primaryIdx, tbl, ctx, op, e, part, dn,
+			i, primaryIdx, tbl, ctx, op, db, part, dn,
 			genSyncLogTailReq(part.ts, ts, databaseId, tableId),
 		); err != nil {
 			part.lock <- struct{}{}

@@ -25,9 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 )
 
-var _ engine.Database = new(txnDatabase)
+var _ engine.Database = new(database)
 
-func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
+func (db *database) Relations(ctx context.Context) ([]string, error) {
 	var rels []string
 
 	db.txn.createMap.Range(func(k, _ any) bool {
@@ -37,12 +37,12 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 		}
 		return true
 	})
-	tbls, _ := db.txn.engine.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
+	tbls, _ := db.txn.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
 	rels = append(rels, tbls...)
 	return rels, nil
 }
 
-func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
+func (db *database) getTableNameById(ctx context.Context, id uint64) string {
 	tblName := ""
 	db.txn.createMap.Range(func(k, _ any) bool {
 		key := k.(tableKey)
@@ -54,7 +54,7 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	})
 
 	if tblName == "" {
-		tbls, tblIds := db.txn.engine.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
+		tbls, tblIds := db.txn.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
 		for idx, tblId := range tblIds {
 			if tblId == id {
 				tblName = tbls[idx]
@@ -65,7 +65,7 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	return tblName
 }
 
-func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, engine.Relation, error) {
+func (db *database) getRelationById(ctx context.Context, id uint64) (string, engine.Relation, error) {
 	tblName := db.getTableNameById(ctx, id)
 	if tblName == "" {
 		return "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", id)
@@ -74,57 +74,59 @@ func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, 
 	return tblName, rel, err
 }
 
-func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relation, error) {
+func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {
 	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
-		return v.(*txnTable), nil
+		return v.(*table), nil
 	}
 	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
-		return v.(*txnTable), nil
+		return v.(*table), nil
 	}
-	if db.databaseName == catalog.MO_CATALOG {
-		switch name {
-		case catalog.MO_DATABASE:
+	if db.databaseName == "mo_catalog" {
+		if name == catalog.MO_DATABASE {
 			id := uint64(catalog.MO_DATABASE_ID)
 			defs := catalog.MoDatabaseTableDefs
 			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
-		case catalog.MO_TABLES:
+		}
+		if name == catalog.MO_TABLES {
 			id := uint64(catalog.MO_TABLES_ID)
 			defs := catalog.MoTablesTableDefs
 			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
-		case catalog.MO_COLUMNS:
+		}
+		if name == catalog.MO_COLUMNS {
 			id := uint64(catalog.MO_COLUMNS_ID)
 			defs := catalog.MoColumnsTableDefs
 			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+
 		}
 	}
-	item := &cache.TableItem{
+	key := &cache.TableItem{
 		Name:       name,
 		DatabaseId: db.databaseId,
 		AccountId:  getAccountId(ctx),
 		Ts:         db.txn.meta.SnapshotTS,
 	}
-	if ok := db.txn.engine.catalog.GetTable(item); !ok {
+	if ok := db.txn.catalog.GetTable(key); !ok {
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
-	parts := db.txn.engine.getPartitions(db.databaseId, item.Id)
-	tbl := &txnTable{
+	parts := db.txn.db.getPartitions(db.databaseId, key.Id)
+	tbl := &table{
 		db:           db,
 		parts:        parts,
-		tableId:      item.Id,
-		tableName:    item.Name,
-		defs:         item.Defs,
-		tableDef:     item.TableDef,
-		primaryIdx:   item.PrimaryIdx,
-		clusterByIdx: item.ClusterByIdx,
-		relKind:      item.Kind,
-		viewdef:      item.ViewDef,
-		comment:      item.Comment,
-		partition:    item.Partition,
-		createSql:    item.CreateSql,
-		constraint:   item.Constraint,
+		tableId:      key.Id,
+		tableName:    key.Name,
+		defs:         key.Defs,
+		tableDef:     key.TableDef,
+		primaryIdx:   key.PrimaryIdx,
+		clusterByIdx: key.ClusterByIdx,
+		relKind:      key.Kind,
+		viewdef:      key.ViewDef,
+		comment:      key.Comment,
+		partition:    key.Partition,
+		createSql:    key.CreateSql,
+		constraint:   key.Constraint,
 	}
-	columnLength := len(item.TableDef.Cols) - 1 // we use this data to fetch zonemap, but row_id has no zonemap
-	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(item.Id),
+	columnLength := len(key.TableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
+	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(key.Id),
 		true, columnLength, true)
 	if err != nil {
 		return nil, err
@@ -135,7 +137,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 	return tbl, nil
 }
 
-func (db *txnDatabase) Delete(ctx context.Context, name string) error {
+func (db *database) Delete(ctx context.Context, name string) error {
 	var id uint64
 
 	k := genTableKey(ctx, name, db.databaseId)
@@ -143,36 +145,32 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		db.txn.createMap.Delete(k)
 		return nil
 	} else if v, ok := db.txn.tableMap.Load(k); ok {
-		id = v.(*txnTable).tableId
+		id = v.(*table).tableId
 		db.txn.tableMap.Delete(k)
 	} else {
-		item := &cache.TableItem{
+		key := &cache.TableItem{
 			Name:       name,
 			DatabaseId: db.databaseId,
 			AccountId:  getAccountId(ctx),
 			Ts:         db.txn.meta.SnapshotTS,
 		}
-		if ok := db.txn.engine.catalog.GetTable(item); !ok {
+		if ok := db.txn.catalog.GetTable(key); !ok {
 			return moerr.GetOkExpectedEOB()
 		}
-		id = item.Id
+		id = key.Id
 	}
 	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err
 	}
-
-	for _, store := range db.txn.dnStores {
-		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1); err != nil {
-			return err
-		}
+	if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0], -1); err != nil {
+		return err
 	}
-
 	return nil
 }
 
-func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error) {
+func (db *database) Truncate(ctx context.Context, name string) (uint64, error) {
 	var oldId uint64
 
 	newId, err := db.txn.allocateID(ctx)
@@ -181,47 +179,47 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	}
 	k := genTableKey(ctx, name, db.databaseId)
 	if v, ok := db.txn.createMap.Load(k); ok {
-		oldId = v.(*txnTable).tableId
-		v.(*txnTable).tableId = newId
+		oldId = v.(*table).tableId
+		v.(*table).tableId = newId
 	} else if v, ok := db.txn.tableMap.Load(k); ok {
-		oldId = v.(*txnTable).tableId
+		oldId = v.(*table).tableId
 	} else {
-		item := &cache.TableItem{
+		key := &cache.TableItem{
 			Name:       name,
 			DatabaseId: db.databaseId,
 			AccountId:  getAccountId(ctx),
 			Ts:         db.txn.meta.SnapshotTS,
 		}
-		if ok := db.txn.engine.catalog.GetTable(item); !ok {
+		if ok := db.txn.catalog.GetTable(key); !ok {
 			return 0, moerr.GetOkExpectedEOB()
 		}
-		oldId = item.Id
+		oldId = key.Id
 	}
 	bat, err := genTruncateTableTuple(newId, db.databaseId,
 		genMetaTableName(oldId)+name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return 0, err
 	}
-	for _, store := range db.txn.dnStores {
+	for i := range db.txn.dnStores {
 		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1); err != nil {
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[i], -1); err != nil {
 			return 0, err
 		}
 	}
 	return newId, nil
 }
 
-func (db *txnDatabase) GetDatabaseId(ctx context.Context) string {
+func (db *database) GetDatabaseId(ctx context.Context) string {
 	return strconv.FormatUint(db.databaseId, 10)
 }
 
-func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
+func (db *database) Create(ctx context.Context, name string, defs []engine.TableDef) error {
 	accountId, userId, roleId := getAccessInfo(ctx)
 	tableId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}
-	tbl := new(txnTable)
+	tbl := new(table)
 	tbl.comment = getTableComment(defs)
 	{
 		for _, def := range defs { // copy from tae
@@ -261,11 +259,9 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		if err != nil {
 			return err
 		}
-		for _, store := range db.txn.dnStores {
-			if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-				catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1); err != nil {
-				return err
-			}
+		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0], -1); err != nil {
+			return err
 		}
 	}
 	tbl.primaryIdx = -1
@@ -275,11 +271,9 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		if err != nil {
 			return err
 		}
-		for _, store := range db.txn.dnStores {
-			if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1); err != nil {
-				return err
-			}
+		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, db.txn.dnStores[0], -1); err != nil {
+			return err
 		}
 		if col.constraintType == catalog.SystemColPKConstraint {
 			tbl.primaryIdx = i
@@ -292,16 +286,16 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.defs = defs
 	tbl.tableName = name
 	tbl.tableId = tableId
-	tbl.parts = db.txn.engine.getPartitions(db.databaseId, tableId)
+	tbl.parts = db.txn.db.getPartitions(db.databaseId, tableId)
 	tbl.getTableDef()
 	db.txn.createMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return nil
 }
 
-func (db *txnDatabase) openSysTable(key tableKey, id uint64, name string,
+func (db *database) openSysTable(key tableKey, id uint64, name string,
 	defs []engine.TableDef) engine.Relation {
-	parts := db.txn.engine.getPartitions(db.databaseId, id)
-	tbl := &txnTable{
+	parts := db.txn.db.getPartitions(db.databaseId, id)
+	tbl := &table{
 		db:           db,
 		tableId:      id,
 		tableName:    name,

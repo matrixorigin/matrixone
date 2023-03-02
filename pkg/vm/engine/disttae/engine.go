@@ -48,7 +48,6 @@ func New(
 	cli client.TxnClient,
 	idGen IDGenerator,
 ) *Engine {
-
 	var services []metadata.DNService
 	cluster := clusterservice.GetMOCluster()
 	cluster.GetDNService(clusterservice.NewSelector(),
@@ -56,31 +55,22 @@ func New(
 			services = append(services, d)
 			return true
 		})
-
-	dnMap := make(map[string]int)
-	for i := range services {
-		dnMap[services[i].ServiceID] = i
-	}
-
-	e := &Engine{
-		mp:         mp,
-		fs:         fs,
-		cli:        cli,
-		idGen:      idGen,
-		catalog:    cache.NewCatalog(),
-		txnHeap:    &transactionHeap{},
-		txns:       make(map[string]*Transaction),
-		dnMap:      dnMap,
-		metaTables: make(map[string]Partitions),
-		partitions: make(map[[2]uint64]Partitions),
-	}
-
-	if err := e.init(ctx, mp); err != nil {
+	db := newDB(services)
+	catalogCache := cache.NewCatalog()
+	if err := db.init(ctx, mp, catalogCache); err != nil {
 		panic(err)
 	}
-
+	e := &Engine{
+		db:      db,
+		mp:      mp,
+		fs:      fs,
+		cli:     cli,
+		idGen:   idGen,
+		catalog: catalogCache,
+		txnHeap: &transactionHeap{},
+		txns:    make(map[string]*Transaction),
+	}
 	go e.gc(ctx)
-
 	return e
 }
 
@@ -105,8 +95,10 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
 		return err
 	}
-	txn.databaseMap.Store(genDatabaseKey(ctx, name), &txnDatabase{
+	txn.databaseMap.Store(genDatabaseKey(ctx, name), &database{
 		txn:          txn,
+		db:           e.db,
+		fs:           e.fs,
 		databaseId:   databaseId,
 		databaseName: name,
 	})
@@ -120,11 +112,13 @@ func (e *Engine) Database(ctx context.Context, name string,
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
 	if v, ok := txn.databaseMap.Load(genDatabaseKey(ctx, name)); ok {
-		return v.(*txnDatabase), nil
+		return v.(*database), nil
 	}
 	if name == catalog.MO_CATALOG {
-		db := &txnDatabase{
+		db := &database{
 			txn:          txn,
+			db:           e.db,
+			fs:           e.fs,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
@@ -138,8 +132,10 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if ok := e.catalog.GetDatabase(key); !ok {
 		return nil, moerr.GetOkExpectedEOB()
 	}
-	return &txnDatabase{
+	return &database{
 		txn:          txn,
+		db:           e.db,
+		fs:           e.fs,
 		databaseName: name,
 		databaseId:   key.Id,
 	}, nil
@@ -180,7 +176,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 			if err != nil {
 				return false
 			}
-			distDb := db.(*txnDatabase)
+			distDb := db.(*database)
 			tblName = distDb.getTableNameById(ctx, key.id)
 			if tblName != "" {
 				return false
@@ -196,7 +192,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 			if err != nil {
 				return "", "", err
 			}
-			distDb := db.(*txnDatabase)
+			distDb := db.(*database)
 			tableName, rel, _ := distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				tblName = tableName
@@ -228,7 +224,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			if err != nil {
 				return false
 			}
-			distDb := db.(*txnDatabase)
+			distDb := db.(*database)
 			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				return false
@@ -244,7 +240,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			if err != nil {
 				return "", "", nil, err
 			}
-			distDb := db.(*txnDatabase)
+			distDb := db.(*database)
 			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				break
@@ -259,7 +255,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 }
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
-	var db *txnDatabase
+	var db *database
 
 	txn := e.getTransaction(op)
 	if txn == nil {
@@ -278,8 +274,10 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		if ok := e.catalog.GetDatabase(key); !ok {
 			return moerr.GetOkExpectedEOB()
 		}
-		db = &txnDatabase{
+		db = &database{
 			txn:          txn,
+			db:           e.db,
+			fs:           e.fs,
 			databaseName: name,
 			databaseId:   key.Id,
 		}
@@ -326,7 +324,7 @@ func (e *Engine) hasDuplicate(ctx context.Context, txn *Transaction) bool {
 			if !ok {
 				continue
 			}
-			tbl := v.(*txnTable)
+			tbl := v.(*table)
 			if tbl.meta == nil {
 				continue
 			}
@@ -351,7 +349,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	txn := &Transaction{
 		op:          op,
 		proc:        proc,
-		engine:      e,
+		db:          e.db,
 		readOnly:    true,
 		meta:        op.Txn(),
 		idGen:       e.idGen,
@@ -362,6 +360,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		tableMap:    new(sync.Map),
 		databaseMap: new(sync.Map),
 		createMap:   new(sync.Map),
+		catalog:     e.catalog,
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
@@ -373,17 +372,18 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		}
 	} else {
 		// update catalog's cache
-		table := &txnTable{
-			db: &txnDatabase{
+		table := &table{
+			db: &database{
+				fs: e.fs,
 				txn: &Transaction{
-					engine: e,
+					catalog: e.catalog,
 				},
 				databaseId: catalog.MO_CATALOG_ID,
 			},
 		}
 		table.tableId = catalog.MO_DATABASE_ID
 		table.tableName = catalog.MO_DATABASE
-		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
+		if err := e.db.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
 			catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
 			e.delTransaction(txn)
 			return err
@@ -391,7 +391,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 
 		table.tableId = catalog.MO_TABLES_ID
 		table.tableName = catalog.MO_TABLES
-		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
+		if err := e.db.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
 			catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
 			e.delTransaction(txn)
 			return err
@@ -399,7 +399,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 
 		table.tableId = catalog.MO_COLUMNS_ID
 		table.tableName = catalog.MO_COLUMNS
-		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
+		if err := e.db.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
 			catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
 			e.delTransaction(txn)
 			return err
@@ -565,11 +565,11 @@ func (e *Engine) gc(ctx context.Context) {
 			}
 			ts = (*e.txnHeap)[0].meta.SnapshotTS
 			e.RUnlock()
-			e.Lock()
-			for k := range e.partitions {
-				ps = append(ps, e.partitions[k])
+			e.db.Lock()
+			for k := range e.db.partitions {
+				ps = append(ps, e.db.partitions[k])
 			}
-			e.Unlock()
+			e.db.Unlock()
 			for i := range ps {
 				for j := range ps[i] {
 					select {
