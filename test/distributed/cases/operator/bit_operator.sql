@@ -172,3 +172,5 @@ SELECT HEX(str1) & BIN(88), BIN(str1) | HEX(88) FROM t1;
 SELECT HEX(str1) & BIN(88) ^ BIN(str1) | HEX(100) FROM t1;
 SELECT HEX(str1) >> BIN(88) << BIN(str1) >> HEX(100) FROM t1;
 DROP TABLE t1;
+select binary(3) & binary(4);
+select binary(3) | binary(4);

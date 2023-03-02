@@ -249,9 +249,9 @@ character_set_name    description    maxlen
 desc triggers;
 Field    Type    Null    Key    Default    Extra    Comment
 action_statement    TEXT(0)    YES        null
-action_condition    VARCHAR(65535)    YES        null
+action_condition    BINARY(0)    YES        null
 trigger_schema    VARCHAR(64)    YES        null
-action_reference_new_table    VARCHAR(65535)    YES        null
+action_reference_new_table    BINARY(0)    YES        null
 created    TIMESTAMP(0)    YES        null
 definer    VARCHAR(288)    YES        null
 sql_mode    VARCHAR(10)    YES        null
@@ -259,7 +259,7 @@ action_reference_old_row    VARCHAR(3)    YES        null
 event_manipulation    VARCHAR(10)    YES        null
 character_set_client    VARCHAR(64)    YES        null
 action_orientation    VARCHAR(3)    YES        null
-action_reference_old_table    VARCHAR(65535)    YES        null
+action_reference_old_table    BINARY(0)    YES        null
 trigger_name    VARCHAR(64)    YES        null
 action_order    INT UNSIGNED(32)    YES        null
 event_object_table    VARCHAR(64)    YES        null
