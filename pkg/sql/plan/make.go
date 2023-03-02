@@ -29,7 +29,7 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 		return nil, err
 	}
 	var typ *plan.Type
-	if scale < types.DECIMAL64_WIDTH {
+	if scale < types.DECIMAL64_WIDTH && len(v) < types.DECIMAL64_WIDTH {
 		typ = &plan.Type{
 			Id:          int32(types.T_decimal64),
 			Width:       types.DECIMAL64_WIDTH,
