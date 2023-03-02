@@ -40,12 +40,10 @@ type PartitionReader struct {
 	firstCalled bool
 	readTime    memtable.Time
 	tx          *memtable.Transaction
-	index       memtable.Tuple
 	inserts     []*batch.Batch
 	deletes     map[types.Rowid]uint8
 	skipBlocks  map[uint64]uint8
-	iter        *memtable.TableIter[RowID, DataValue]
-	data        *memtable.Table[RowID, DataValue, *DataRow]
+	iter        partitionIter
 	proc        *process.Process
 
 	// the following attributes are used to support cn2s3
@@ -56,6 +54,13 @@ type PartitionReader struct {
 	colIdxMp        map[string]int
 	blockBatch      *BlockBatch
 	currentFileName string
+}
+
+type partitionIter interface {
+	First() bool
+	Next() bool
+	Close() error
+	Read() (RowID, DataValue, error)
 }
 
 type BlockBatch struct {
@@ -168,61 +173,13 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			return b, nil
 		}
 	}
+
 	b := batch.NewWithSize(len(colNames))
 	b.SetAttributes(colNames)
 	for i, name := range colNames {
 		b.Vecs[i] = vector.New(p.typsMap[name])
 	}
 	rows := 0
-	if len(p.index) > 0 {
-		p.iter.Close()
-		itr := p.data.NewIndexIter(p.tx, p.index, p.index)
-		for ok := itr.First(); ok; ok = itr.Next() {
-			entry := itr.Item()
-			if _, ok := p.deletes[types.Rowid(entry.Key)]; ok {
-				continue
-			}
-			if p.skipBlocks != nil {
-				if _, ok := p.skipBlocks[rowIDToBlockID(entry.Key)]; ok {
-					continue
-				}
-			}
-			dataValue, err := p.data.Get(p.tx, entry.Key)
-			if err != nil {
-				itr.Close()
-				p.end = true
-				return nil, err
-			}
-			if dataValue.op == opDelete {
-				continue
-			}
-			for i, name := range b.Attrs {
-				if name == catalog.Row_ID {
-					if err := b.Vecs[i].Append(types.Rowid(entry.Key), false, mp); err != nil {
-						return nil, err
-					}
-					continue
-				}
-				value, ok := dataValue.value[name]
-				if !ok {
-					panic(fmt.Sprintf("invalid column name: %v", name))
-				}
-				if err := value.AppendVector(b.Vecs[i], mp); err != nil {
-					return nil, err
-				}
-			}
-			rows++
-		}
-		if rows > 0 {
-			b.SetZs(rows, mp)
-		}
-		itr.Close()
-		p.end = true
-		if rows == 0 {
-			return nil, nil
-		}
-		return b, nil
-	}
 
 	fn := p.iter.Next
 	if !p.firstCalled {
