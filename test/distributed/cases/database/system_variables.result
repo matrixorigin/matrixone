@@ -133,6 +133,7 @@ schemata
 character_sets
 triggers
 tables
+views
 engines
 routines
 parameters
@@ -155,12 +156,12 @@ select table_name, column_name from key_column_usage limit 2;
 table_name    column_name
 desc columns;
 Field    Type    Null    Key    Default    Extra    Comment
-character_octet_length    INT(0)    YES        null
+character_octet_length    BIGINT(0)    YES        null
 column_default    VARCHAR(65535)    YES        null
 column_key    VARCHAR(3)    YES        null
 table_schema    VARCHAR(256)    YES        null
 datetime_precision    BIGINT(0)    YES        null
-generation_expression    VARCHAR(0)    YES        null
+generation_expression    VARCHAR(500)    YES        null
 data_type    VARCHAR(65535)    YES        null
 extra    VARCHAR(14)    YES        null
 srs_id    BIGINT(0)    YES        null
@@ -176,7 +177,7 @@ privileges    VARCHAR(31)    YES        null
 column_name    VARCHAR(256)    YES        null
 column_type    VARCHAR(65535)    YES        null
 ordinal_position    INT(0)    YES        null
-character_maximum_length    INT(0)    YES        null
+character_maximum_length    BIGINT(0)    YES        null
 select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
 table_name    column_name
 mo_account    account_id
@@ -184,6 +185,23 @@ mo_account    account_name
 mo_account    comments
 mo_account    created_time
 mo_account    status
+desc views;
+Field    Type    Null    Key    Default    Extra    Comment
+character_set_client    VARCHAR(7)    YES        null
+table_name    VARCHAR(5000)    YES        null
+is_updatable    VARCHAR(3)    YES        null
+definer    VARCHAR(300)    YES        null
+collation_connection    VARCHAR(18)    YES        null
+security_type    VARCHAR(7)    YES        null
+check_option    VARCHAR(4)    YES        null
+view_definition    TEXT(0)    YES        null
+table_schema    VARCHAR(5000)    YES        null
+table_catalog    VARCHAR(3)    YES        null
+select table_schema, table_name, definer from views where table_schema = 'system' order by table_name;
+table_schema    table_name    definer
+system    error_info    root@localhost
+system    log_info    root@localhost
+system    span_info    root@localhost
 desc profiling;
 Field    Type    Null    Key    Default    Extra    Comment
 messages_sent    INT(32)    YES        null
@@ -233,7 +251,7 @@ schema_name    VARCHAR(5000)    YES        NULL
 default_character_set_name    VARCHAR(7)    YES        NULL
 default_collation_name    VARCHAR(18)    YES        NULL
 sql_path    VARCHAR(0)    YES        NULL
-default_encryption    VARCHAR(2)    YES        NULL
+default_encryption    VARCHAR(3)    YES        NULL
 select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' order by catalog_name, schema_name;
 catalog_name    schema_name
 def    mo_task
