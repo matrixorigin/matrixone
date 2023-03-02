@@ -35,7 +35,7 @@ var boolType = types.T_bool.ToType()
 
 func handleScalarNull(v1, v2 *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if v1.IsConstNull() {
-		return vector.NewConstNull(boolType, v1.Length(), proc.Mp()), nil
+		return vector.NewConstNull(boolType, v2.Length(), proc.Mp()), nil
 	} else if v2.IsConstNull() {
 		return vector.NewConstNull(boolType, v1.Length(), proc.Mp()), nil
 	}

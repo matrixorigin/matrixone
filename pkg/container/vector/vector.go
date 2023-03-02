@@ -362,6 +362,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 			}
 		}
 	}
+	v.selfManaged = true
 	return nil
 }
 
@@ -421,68 +422,66 @@ func (v *Vector) UnmarshalBinaryWithMpool(data []byte, mp *mpool.MPool) error {
 	return nil
 }
 
-func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
+func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
 	if v.class == CONSTANT {
 		return v
 	}
 	switch v.typ.Oid {
 	case types.T_bool:
-		return toConstVector[bool](v, row, mp)
+		return toConstVector[bool](v, row, length, mp)
 	case types.T_int8:
-		return toConstVector[int8](v, row, mp)
+		return toConstVector[int8](v, row, length, mp)
 	case types.T_int16:
-		return toConstVector[int16](v, row, mp)
+		return toConstVector[int16](v, row, length, mp)
 	case types.T_int32:
-		return toConstVector[int32](v, row, mp)
+		return toConstVector[int32](v, row, length, mp)
 	case types.T_int64:
-		return toConstVector[int64](v, row, mp)
+		return toConstVector[int64](v, row, length, mp)
 	case types.T_uint8:
-		return toConstVector[uint8](v, row, mp)
+		return toConstVector[uint8](v, row, length, mp)
 	case types.T_uint16:
-		return toConstVector[uint16](v, row, mp)
+		return toConstVector[uint16](v, row, length, mp)
 	case types.T_uint32:
-		return toConstVector[uint32](v, row, mp)
+		return toConstVector[uint32](v, row, length, mp)
 	case types.T_uint64:
-		return toConstVector[uint64](v, row, mp)
+		return toConstVector[uint64](v, row, length, mp)
 	case types.T_float32:
-		return toConstVector[float32](v, row, mp)
+		return toConstVector[float32](v, row, length, mp)
 	case types.T_float64:
-		return toConstVector[float64](v, row, mp)
+		return toConstVector[float64](v, row, length, mp)
 	case types.T_date:
-		return toConstVector[types.Date](v, row, mp)
+		return toConstVector[types.Date](v, row, length, mp)
 	case types.T_datetime:
-		return toConstVector[types.Datetime](v, row, mp)
+		return toConstVector[types.Datetime](v, row, length, mp)
 	case types.T_time:
-		return toConstVector[types.Time](v, row, mp)
+		return toConstVector[types.Time](v, row, length, mp)
 	case types.T_timestamp:
-		return toConstVector[types.Timestamp](v, row, mp)
+		return toConstVector[types.Timestamp](v, row, length, mp)
 	case types.T_decimal64:
-		return toConstVector[types.Decimal64](v, row, mp)
+		return toConstVector[types.Decimal64](v, row, length, mp)
 	case types.T_decimal128:
-		return toConstVector[types.Decimal128](v, row, mp)
+		return toConstVector[types.Decimal128](v, row, length, mp)
 	case types.T_uuid:
-		return toConstVector[types.Uuid](v, row, mp)
+		return toConstVector[types.Uuid](v, row, length, mp)
 	case types.T_TS:
-		return toConstVector[types.TS](v, row, mp)
+		return toConstVector[types.TS](v, row, length, mp)
 	case types.T_Rowid:
-		return toConstVector[types.Rowid](v, row, mp)
+		return toConstVector[types.Rowid](v, row, length, mp)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		if nulls.Contains(v.nsp, uint64(row)) {
-			return NewConstNull(v.typ, 1, mp)
+			return NewConstNull(v.typ, length, mp)
+		} else {
+			return NewConstBytes(v.typ, v.GetBytesAt(row), length, mp)
 		}
-		bs := v.GetBytesAt(row)
-		vec := NewConstBytes(v.typ, bs, 1, mp)
-		return vec
 	}
 	return nil
 }
 
-func toConstVector[T types.FixedSizeT](v *Vector, row int, m *mpool.MPool) *Vector {
+func toConstVector[T types.FixedSizeT](v *Vector, row, length int, m *mpool.MPool) *Vector {
 	if nulls.Contains(v.nsp, uint64(row)) {
-		return NewConstNull(v.typ, 1, m)
+		return NewConstNull(v.typ, length, m)
 	} else {
-		val := v.col.([]T)[row]
-		return NewConstFixed(v.typ, val, 1, m)
+		return NewConstFixed(v.typ, v.col.([]T)[row], length, m)
 	}
 }
 

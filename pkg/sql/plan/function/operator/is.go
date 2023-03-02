@@ -42,7 +42,7 @@ func Is(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	} else {
 		lefts := vector.MustFixedCol[bool](lv)
 		l := len(lefts)
-		vec, err := proc.AllocVectorOfRows(*lv.GetType(), l, lv.GetNulls())
+		vec, err := proc.AllocVectorOfRows(*lv.GetType(), l, nil)
 		if err != nil {
 			return nil, err
 		}

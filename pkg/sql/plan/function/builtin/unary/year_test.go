@@ -27,7 +27,7 @@ func TestYearFunction(t *testing.T) {
 	convey.Convey("DateToYearCase", t, func() {
 		type kase struct {
 			s    string
-			want uint16
+			want int64
 		}
 
 		kases := []kase{
@@ -46,14 +46,14 @@ func TestYearFunction(t *testing.T) {
 		}
 
 		var inStrs []string
-		var wantuint16 []uint16
+		var wantint64 []int64
 		for _, k := range kases {
 			inStrs = append(inStrs, k.s)
-			wantuint16 = append(wantuint16, k.want)
+			wantint64 = append(wantint64, k.want)
 		}
 
 		inVector := testutil.MakeDateVector(inStrs, nil)
-		wantVector := testutil.MakeUint16Vector(wantuint16, nil)
+		wantVector := testutil.MakeInt64Vector(wantint64, nil)
 		proc := testutil.NewProc()
 		res, err := DateToYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -64,7 +64,7 @@ func TestYearFunction(t *testing.T) {
 	convey.Convey("DateToYearCaseScalar", t, func() {
 		type kase struct {
 			s    string
-			want uint16
+			want int64
 		}
 
 		k := kase{
@@ -73,7 +73,7 @@ func TestYearFunction(t *testing.T) {
 		}
 
 		inVector := testutil.MakeScalarDate(k.s, 10)
-		wantVector := testutil.MakeScalarUint16(k.want, 10)
+		wantVector := testutil.MakeScalarInt64(k.want, 10)
 		proc := testutil.NewProc()
 		res, err := DateToYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -83,7 +83,7 @@ func TestYearFunction(t *testing.T) {
 
 	convey.Convey("DateToYearCaseScalarNull", t, func() {
 		inVector := testutil.MakeScalarNull(types.T_date, 10)
-		wantVector := testutil.MakeScalarNull(types.T_uint16, 10)
+		wantVector := testutil.MakeScalarNull(types.T_int64, 10)
 		proc := testutil.NewProc()
 		res, err := DateToYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -94,7 +94,7 @@ func TestYearFunction(t *testing.T) {
 	convey.Convey("DatetimeToYearCase", t, func() {
 		type kase struct {
 			s    string
-			want uint16
+			want int64
 		}
 
 		kases := []kase{
@@ -113,13 +113,13 @@ func TestYearFunction(t *testing.T) {
 		}
 
 		var inStrs []string
-		var wantUint16 []uint16
+		var wantInt64 []int64
 		for _, k := range kases {
 			inStrs = append(inStrs, k.s)
-			wantUint16 = append(wantUint16, k.want)
+			wantInt64 = append(wantInt64, k.want)
 		}
 		inVector := testutil.MakeDateTimeVector(inStrs, nil)
-		wantVector := testutil.MakeUint16Vector(wantUint16, nil)
+		wantVector := testutil.MakeInt64Vector(wantInt64, nil)
 		proc := testutil.NewProc()
 		res, err := DatetimeToYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -130,7 +130,7 @@ func TestYearFunction(t *testing.T) {
 	convey.Convey("DatetimeToYearCaseScalar", t, func() {
 		type kase struct {
 			s    string
-			want uint16
+			want int64
 		}
 
 		k := kase{
@@ -139,7 +139,7 @@ func TestYearFunction(t *testing.T) {
 		}
 
 		inVector := testutil.MakeScalarDateTime(k.s, 10)
-		wantVector := testutil.MakeScalarUint16(k.want, 10)
+		wantVector := testutil.MakeScalarInt64(k.want, 10)
 		proc := testutil.NewProc()
 		res, err := DatetimeToYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -149,7 +149,7 @@ func TestYearFunction(t *testing.T) {
 
 	convey.Convey("DatetimeToYearCaseScalarNull", t, func() {
 		inVector := testutil.MakeScalarNull(types.T_datetime, 10)
-		wantVector := testutil.MakeScalarNull(types.T_uint16, 10)
+		wantVector := testutil.MakeScalarNull(types.T_int64, 10)
 		proc := testutil.NewProc()
 		res, err := DatetimeToYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -160,7 +160,7 @@ func TestYearFunction(t *testing.T) {
 	convey.Convey("DateStringToYearCase", t, func() {
 		type kase struct {
 			s    string
-			want uint16
+			want int64
 		}
 
 		kases := []kase{
@@ -183,14 +183,14 @@ func TestYearFunction(t *testing.T) {
 		}
 
 		var inStrs []string
-		var wantUint16 []uint16
+		var wantInt64 []int64
 		for _, k := range kases {
 			inStrs = append(inStrs, k.s)
-			wantUint16 = append(wantUint16, k.want)
+			wantInt64 = append(wantInt64, k.want)
 		}
 
 		inVector := testutil.MakeVarcharVector(inStrs, nil)
-		wantVector := testutil.MakeUint16Vector(wantUint16, nil)
+		wantVector := testutil.MakeInt64Vector(wantInt64, nil)
 		proc := testutil.NewProc()
 		res, err := DateStringToYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -201,7 +201,7 @@ func TestYearFunction(t *testing.T) {
 	convey.Convey("DateStringToYearCaseScalar", t, func() {
 		type kase struct {
 			s    string
-			want uint16
+			want int64
 		}
 
 		k := kase{
@@ -210,7 +210,7 @@ func TestYearFunction(t *testing.T) {
 		}
 
 		inVector := testutil.MakeScalarChar(k.s, 10)
-		wantVector := testutil.MakeScalarUint16(k.want, 10)
+		wantVector := testutil.MakeScalarInt64(k.want, 10)
 		proc := testutil.NewProc()
 		res, err := DateStringToYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -220,7 +220,7 @@ func TestYearFunction(t *testing.T) {
 
 	convey.Convey("DateStringToYearCaseScalarNull", t, func() {
 		inVector := testutil.MakeScalarNull(types.T_char, 10)
-		wantVector := testutil.MakeScalarNull(types.T_uint16, 10)
+		wantVector := testutil.MakeScalarNull(types.T_int64, 10)
 		proc := testutil.NewProc()
 		res, err := DateStringToYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)

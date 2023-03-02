@@ -95,6 +95,7 @@ func Like(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		}
 		vec := vector.NewVec(rtyp)
 		vector.AppendFixedList(vec, rs, nil, proc.Mp())
+		vec.SetNulls(nsp)
 		return vec, nil
 	}
 	return nil, moerr.NewInternalError(proc.Ctx, "unexpected case for LIKE operator")

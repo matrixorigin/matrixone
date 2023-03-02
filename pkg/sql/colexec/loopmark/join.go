@@ -120,6 +120,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i, pos := range ap.Result {
 		if pos == -1 {
 			rbat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+			rbat.Vecs[i].PreExtend(bat.Length(), proc.Mp())
 			markPos = i
 			break
 		}
@@ -137,11 +138,19 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		exprVals := vector.MustFixedCol[bool](vec)
 		hasTrue := false
 		hasNull := false
-		for j := range exprVals {
-			if vec.GetNulls().Contains(uint64(j)) {
+		if vec.IsConst() {
+			if vec.GetNulls().Contains(0) {
 				hasNull = true
-			} else if exprVals[j] {
-				hasTrue = true
+			} else {
+				hasTrue = exprVals[0]
+			}
+		} else {
+			for j := range exprVals {
+				if vec.GetNulls().Contains(uint64(j)) {
+					hasNull = true
+				} else if exprVals[j] {
+					hasTrue = true
+				}
 			}
 		}
 		if hasTrue {
