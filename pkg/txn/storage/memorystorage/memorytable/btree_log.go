@@ -17,11 +17,11 @@ package memorytable
 import (
 	"bytes"
 	"encoding"
-	"encoding/gob"
 	"errors"
 	"io"
 
 	"github.com/tidwall/btree"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 type BTreeLog[
@@ -80,13 +80,14 @@ func (b *btreeLogIter[K, V]) Read() (*logEntry[K, V], error) {
 var _ encoding.BinaryMarshaler = new(BTreeLog[Int, int])
 
 func (b *BTreeLog[K, V]) MarshalBinary() ([]byte, error) {
-	gobRegister(b)
 	buf := new(bytes.Buffer)
-	encoder := gob.NewEncoder(buf)
+	enc := msgpack.GetEncoder()
+	defer msgpack.PutEncoder(enc)
+	enc.Reset(buf)
 	iter := b.log.Copy().Iter()
 	for ok := iter.First(); ok; ok = iter.Next() {
 		entry := iter.Item()
-		if err := encoder.Encode(entry); err != nil {
+		if err := enc.Encode(entry); err != nil {
 			return nil, err
 		}
 	}
@@ -96,15 +97,16 @@ func (b *BTreeLog[K, V]) MarshalBinary() ([]byte, error) {
 var _ encoding.BinaryUnmarshaler = new(BTreeLog[Int, int])
 
 func (b *BTreeLog[K, V]) UnmarshalBinary(data []byte) error {
-	gobRegister(b)
 	log := b.log
 	if log == nil {
 		log = btree.NewBTreeG(compareLogEntry[K, V])
 	}
-	decoder := gob.NewDecoder(bytes.NewReader(data))
+	dec := msgpack.GetDecoder()
+	defer msgpack.PutDecoder(dec)
+	dec.Reset(bytes.NewReader(data))
 	for {
 		var entry *logEntry[K, V]
-		err := decoder.Decode(&entry)
+		err := dec.Decode(&entry)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break

@@ -16,11 +16,11 @@ package logservice
 
 import (
 	"encoding/binary"
-	"encoding/gob"
 	"io"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 // XXX WHY BIG ENDIAN?
@@ -204,12 +204,16 @@ func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
 	// FIXME: use gogoproto to marshal the state, need to figure out how to
 	// marshal to a io.Writer
-	enc := gob.NewEncoder(w)
+	enc := msgpack.GetEncoder()
+	defer msgpack.PutEncoder(enc)
+	enc.Reset(w)
 	return enc.Encode(s.state)
 }
 
 func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
-	dec := gob.NewDecoder(r)
+	dec := msgpack.GetDecoder()
+	defer msgpack.PutDecoder(dec)
+	dec.Reset(r)
 	return dec.Decode(&s.state)
 }

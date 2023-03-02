@@ -15,18 +15,18 @@
 package taestorage
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
+	"io"
+
+	"github.com/vmihailenco/msgpack/v5"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
-	"io"
 )
 
 // Read implements storage.TxnTAEStorage
-
 func (s *taeStorage) Read(
 	ctx context.Context,
 	txnMeta txn.TxnMeta,
@@ -67,7 +67,7 @@ func handleRead[Req any, Resp any](
 
 	var req Req
 	if len(payload) != 0 {
-		if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
+		if err := msgpack.Unmarshal(payload, &req); err != nil {
 			return nil, err
 		}
 	}
@@ -85,12 +85,12 @@ func handleRead[Req any, Resp any](
 		return nil, err
 	}
 
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(resp); err != nil {
+	data, err := msgpack.Marshal(resp)
+	if err != nil {
 		return nil, err
 	}
 	res = &readResult{
-		payload: buf.Bytes(),
+		payload: data,
 	}
 
 	return res, nil

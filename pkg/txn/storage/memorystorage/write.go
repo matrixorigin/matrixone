@@ -15,12 +15,11 @@
 package memorystorage
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func (s *Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (result []byte, err error) {
@@ -119,7 +118,7 @@ func handleWrite[
 ) {
 
 	var req Req
-	if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
+	if err := msgpack.Unmarshal(payload, &req); err != nil {
 		return nil, err
 	}
 
@@ -131,11 +130,10 @@ func handleWrite[
 		return nil, err
 	}
 
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(resp); err != nil {
+	res, err = msgpack.Marshal(resp)
+	if err != nil {
 		return nil, err
 	}
-	res = buf.Bytes()
 
 	return
 }

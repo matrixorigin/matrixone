@@ -15,16 +15,16 @@
 package taestorage
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
+
+	"github.com/vmihailenco/msgpack/v5"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
 // Write implements storage.TxnTAEStorage
-
 func (s *taeStorage) Write(
 	ctx context.Context,
 	txnMeta txn.TxnMeta,
@@ -43,9 +43,7 @@ func (s *taeStorage) Write(
 
 	default:
 		panic(moerr.NewInfoNoCtx("OpCode is not supported"))
-
 	}
-
 }
 
 func handleWrite[
@@ -70,7 +68,7 @@ func handleWrite[
 ) {
 
 	var req Req
-	if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
+	if err := msgpack.Unmarshal(payload, &req); err != nil {
 		return nil, err
 	}
 
@@ -82,11 +80,10 @@ func handleWrite[
 		return nil, err
 	}
 
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(resp); err != nil {
+	res, err = msgpack.Marshal(resp)
+	if err != nil {
 		return nil, err
 	}
-	res = buf.Bytes()
 
 	return
 }

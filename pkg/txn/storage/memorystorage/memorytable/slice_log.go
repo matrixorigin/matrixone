@@ -17,9 +17,10 @@ package memorytable
 import (
 	"bytes"
 	"encoding"
-	"encoding/gob"
 	"errors"
 	"io"
+
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 type SliceLog[
@@ -76,12 +77,13 @@ func (s *sliceLogIter[K, V]) Read() (*logEntry[K, V], error) {
 var _ encoding.BinaryMarshaler = new(SliceLog[Int, int])
 
 func (s *SliceLog[K, V]) MarshalBinary() ([]byte, error) {
-	gobRegister(s)
 	buf := new(bytes.Buffer)
-	encoder := gob.NewEncoder(buf)
+	enc := msgpack.GetEncoder()
+	defer msgpack.PutEncoder(enc)
+	enc.Reset(buf)
 	slice := *s
 	for _, entry := range slice {
-		if err := encoder.Encode(entry); err != nil {
+		if err := enc.Encode(entry); err != nil {
 			return nil, err
 		}
 	}
@@ -91,12 +93,13 @@ func (s *SliceLog[K, V]) MarshalBinary() ([]byte, error) {
 var _ encoding.BinaryUnmarshaler = new(BTreeLog[Int, int])
 
 func (s *SliceLog[K, V]) UnmarshalBinary(data []byte) error {
-	gobRegister(s)
-	decoder := gob.NewDecoder(bytes.NewReader(data))
+	dec := msgpack.GetDecoder()
+	defer msgpack.PutDecoder(dec)
+	dec.Reset(bytes.NewReader(data))
 	var slice []*logEntry[K, V]
 	for {
 		var entry *logEntry[K, V]
-		err := decoder.Decode(&entry)
+		err := dec.Decode(&entry)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break

@@ -17,11 +17,11 @@ package memorytable
 import (
 	"bytes"
 	"encoding"
-	"encoding/gob"
 	"errors"
 	"io"
 
 	"github.com/tidwall/btree"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 type BTree[
@@ -98,14 +98,15 @@ func (b *btreeKVIter[K, V]) Seek(pivot TreeNode[K, V]) bool {
 var _ encoding.BinaryMarshaler = new(BTree[Int, int])
 
 func (b *BTree[K, V]) MarshalBinary() ([]byte, error) {
-	gobRegister(b)
 	buf := new(bytes.Buffer)
-	encoder := gob.NewEncoder(buf)
+	enc := msgpack.GetEncoder()
+	defer msgpack.PutEncoder(enc)
+	enc.Reset(buf)
 	iter := b.rows.Copy().Iter()
 	defer iter.Release()
 	for ok := iter.First(); ok; ok = iter.Next() {
 		pair := iter.Item()
-		if err := encoder.Encode(pair); err != nil {
+		if err := enc.Encode(pair); err != nil {
 			return nil, err
 		}
 	}
@@ -115,15 +116,16 @@ func (b *BTree[K, V]) MarshalBinary() ([]byte, error) {
 var _ encoding.BinaryUnmarshaler = new(BTree[Int, int])
 
 func (b *BTree[K, V]) UnmarshalBinary(data []byte) error {
-	gobRegister(b)
 	rows := b.rows
 	if rows == nil {
 		rows = btree.NewBTreeG(compareTreeNode[K, V])
 	}
-	decoder := gob.NewDecoder(bytes.NewReader(data))
+	dec := msgpack.GetDecoder()
+	defer msgpack.PutDecoder(dec)
+	dec.Reset(bytes.NewReader(data))
 	for {
 		var node TreeNode[K, V]
-		err := decoder.Decode(&node)
+		err := dec.Decode(&node)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break

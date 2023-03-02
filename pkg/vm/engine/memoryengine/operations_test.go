@@ -15,13 +15,12 @@
 package memoryengine
 
 import (
-	"bytes"
-	"encoding/gob"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/assert"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func TestVectorGobEncoding(t *testing.T) {
@@ -34,12 +33,11 @@ func TestVectorGobEncoding(t *testing.T) {
 		Oid: types.T_int16,
 	})
 
-	buf := new(bytes.Buffer)
-	err := gob.NewEncoder(buf).Encode(vec)
+	data, err := msgpack.Marshal(vec)
 	assert.Nil(t, err)
 
 	var v vector.Vector
-	err = gob.NewDecoder(buf).Decode(&v)
+	err = msgpack.Unmarshal(data, &v)
 	assert.Nil(t, err)
 
 	_, ok := v.Col.([]int16)

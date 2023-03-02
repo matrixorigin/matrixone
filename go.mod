@@ -42,6 +42,7 @@ require (
 	github.com/stretchr/testify v1.8.0
 	github.com/tidwall/btree v1.4.3
 	github.com/tidwall/pretty v1.2.1
+	github.com/vmihailenco/msgpack/v5 v5.3.5
 	github.com/yireyun/go-queue v0.0.0-20220725040158-a4dd64810e1e
 	go.opentelemetry.io/proto/otlp v0.19.0
 	go.uber.org/ratelimit v0.2.0
@@ -85,6 +86,7 @@ require (
 	github.com/spf13/pflag v1.0.3 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
+	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20200902074654-038fdea0a05b // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )

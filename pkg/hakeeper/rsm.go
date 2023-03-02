@@ -19,7 +19,6 @@ package hakeeper
 
 import (
 	"encoding/binary"
-	"encoding/gob"
 	"fmt"
 	"io"
 	"time"
@@ -27,6 +26,7 @@ import (
 	"github.com/lni/dragonboat/v4/logger"
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/mohae/deepcopy"
+	"github.com/vmihailenco/msgpack/v5"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -586,12 +586,16 @@ func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
 	// FIXME: ready to use gogoproto to marshal the state, just need to figure
 	// out how to write to the writer.
-	enc := gob.NewEncoder(w)
+	enc := msgpack.GetEncoder()
+	defer msgpack.PutEncoder(enc)
+	enc.Reset(w)
 	return enc.Encode(s.state)
 }
 
 func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
-	dec := gob.NewDecoder(r)
+	dec := msgpack.GetDecoder()
+	defer msgpack.PutDecoder(dec)
+	dec.Reset(r)
 	return dec.Decode(&s.state)
 }

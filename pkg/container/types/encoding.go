@@ -19,10 +19,11 @@ package types
 
 import (
 	"bytes"
-	"encoding/gob"
 	"fmt"
 	"io"
 	"unsafe"
+
+	"github.com/vmihailenco/msgpack/v5"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -72,16 +73,11 @@ func DecodeSlice[T any](v []byte) []T {
 }
 
 func Encode(v interface{}) ([]byte, error) {
-	var buf bytes.Buffer
-
-	if err := gob.NewEncoder(&buf).Encode(v); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return msgpack.Marshal(v)
 }
 
 func Decode(data []byte, v interface{}) error {
-	return gob.NewDecoder(bytes.NewReader(data)).Decode(v)
+	return msgpack.Unmarshal(data, v)
 }
 
 func EncodeJson(v bytejson.ByteJson) ([]byte, error) {

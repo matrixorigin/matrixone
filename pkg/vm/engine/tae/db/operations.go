@@ -16,7 +16,6 @@ package db
 
 import (
 	"context"
-	"encoding/gob"
 	"time"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -32,41 +31,6 @@ const (
 	OpPreCommit  = uint32(apipb.OpCode_OpPreCommit)
 	OpGetLogTail = uint32(apipb.OpCode_OpGetLogTail)
 )
-
-func init() {
-
-	// register TableDef types
-	gob.Register(new(engine.ViewDef))
-	gob.Register(new(engine.CommentDef))
-	gob.Register(new(engine.PartitionDef))
-	gob.Register(new(engine.AttributeDef))
-	gob.Register(new(engine.IndexTableDef))
-	gob.Register(new(engine.PropertiesDef))
-	gob.Register(new(engine.ConstraintDef))
-
-	// register vector column types
-	gob.Register([]bool{})
-	gob.Register([]int8{})
-	gob.Register([]int16{})
-	gob.Register([]int32{})
-	gob.Register([]int64{})
-	gob.Register([]uint8{})
-	gob.Register([]uint16{})
-	gob.Register([]uint32{})
-	gob.Register([]uint64{})
-	gob.Register([]float32{})
-	gob.Register([]float64{})
-	gob.Register([]string{})
-	gob.Register([][]any{})
-	gob.Register([]types.Date{})
-	gob.Register([]types.Datetime{})
-	gob.Register([]types.Timestamp{})
-	gob.Register([]types.Decimal64{})
-	gob.Register([]types.Decimal128{})
-
-	//plan types
-
-}
 
 type Request interface {
 	CreateDatabaseReq |

@@ -15,14 +15,13 @@
 package memorytable
 
 import (
-	"bytes"
 	"encoding"
-	"encoding/gob"
 	"fmt"
 	"io"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 // tableState represents a snapshot state of a table
@@ -224,23 +223,17 @@ type encodingTableState[
 var _ encoding.BinaryMarshaler = new(tableState[Int, int])
 
 func (t *tableState[K, V]) MarshalBinary() ([]byte, error) {
-	gobRegister(t.tree)
-	gobRegister(t.log)
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(encodingTableState[K, V]{
+	return msgpack.Marshal(encodingTableState[K, V]{
 		Log:  t.log,
 		Tree: t.tree,
-	}); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	})
 }
 
 var _ encoding.BinaryUnmarshaler = new(tableState[Int, int])
 
 func (t *tableState[K, V]) UnmarshalBinary(data []byte) error {
 	var e encodingTableState[K, V]
-	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&e); err != nil {
+	if err := msgpack.Unmarshal(data, &e); err != nil {
 		return err
 	}
 	t.tree = e.Tree

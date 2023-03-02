@@ -15,13 +15,12 @@
 package fileservice
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func testCachingFileService(
@@ -33,12 +32,10 @@ func testCachingFileService(
 	fs.SetAsyncUpdate(false)
 	ctx := context.Background()
 
-	buf := new(bytes.Buffer)
-	err := gob.NewEncoder(buf).Encode(map[int]int{
+	data, err := msgpack.Marshal(map[int]int{
 		42: 42,
 	})
 	assert.Nil(t, err)
-	data := buf.Bytes()
 
 	err = fs.Write(ctx, IOVector{
 		FilePath: "foo",
@@ -63,7 +60,7 @@ func testCachingFileService(
 						assert.Equal(t, bs, data)
 					}
 					var m map[int]int
-					if err := gob.NewDecoder(bytes.NewReader(bs)).Decode(&m); err != nil {
+					if err := msgpack.Unmarshal(bs, &m); err != nil {
 						return nil, 0, err
 					}
 					return m, 1, nil

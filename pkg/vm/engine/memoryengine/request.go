@@ -15,15 +15,14 @@
 package memoryengine
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func DoTxnRequest[
@@ -64,14 +63,14 @@ func DoTxnRequest[
 
 	requests := make([]txn.TxnRequest, 0, len(shards))
 	for _, shard := range shards {
-		buf := new(bytes.Buffer)
-		if err := gob.NewEncoder(buf).Encode(req); err != nil {
+		data, err := msgpack.Marshal(req)
+		if err != nil {
 			panic(err)
 		}
 		requests = append(requests, txn.TxnRequest{
 			CNRequest: &txn.CNOpRequest{
 				OpCode:  op,
-				Payload: buf.Bytes(),
+				Payload: data,
 				Target:  shard,
 			},
 			Options: &txn.TxnRequestOptions{
@@ -108,8 +107,9 @@ func DoTxnRequest[
 
 	for _, res := range result.Responses {
 		var resp Resp
-		if err = gob.NewDecoder(bytes.NewReader(res.CNOpResponse.Payload)).Decode(&resp); err != nil {
+		if err = msgpack.Unmarshal(res.CNOpResponse.Payload, &resp); err != nil {
 			return
+
 		}
 		resps = append(resps, resp)
 	}

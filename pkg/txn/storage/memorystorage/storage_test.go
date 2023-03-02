@@ -15,24 +15,24 @@
 package memorystorage
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/vmihailenco/msgpack/v5"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/stretchr/testify/assert"
 )
 
 func testDatabase(
@@ -728,18 +728,17 @@ func testRead[
 	err error,
 ) {
 
-	buf := new(bytes.Buffer)
-	err = gob.NewEncoder(buf).Encode(req)
+	buf, err := msgpack.Marshal(req)
 	assert.Nil(t, err)
 
-	res, err := s.Read(ctx, txnMeta, op, buf.Bytes())
+	res, err := s.Read(ctx, txnMeta, op, buf)
 	if err != nil {
 		return
 	}
 	data, err := res.Read()
 	assert.Nil(t, err)
 
-	err = gob.NewDecoder(bytes.NewReader(data)).Decode(&resp)
+	err = msgpack.Unmarshal(data, &resp)
 	assert.Nil(t, err)
 
 	return
@@ -760,16 +759,15 @@ func testWrite[
 	err error,
 ) {
 
-	buf := new(bytes.Buffer)
-	err = gob.NewEncoder(buf).Encode(req)
+	buf, err := msgpack.Marshal(req)
 	assert.Nil(t, err)
 
-	data, err := s.Write(ctx, txnMeta, op, buf.Bytes())
+	data, err := s.Write(ctx, txnMeta, op, buf)
 	if err != nil {
 		return
 	}
 
-	err = gob.NewDecoder(bytes.NewReader(data)).Decode(&resp)
+	err = msgpack.Unmarshal(data, &resp)
 	assert.Nil(t, err)
 
 	return
