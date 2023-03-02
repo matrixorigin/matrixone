@@ -29,3 +29,7 @@ show columns from `SCHEMATA`;
 show columns from `CHARACTER_SETS`;
 show columns from `TRIGGERS`;
 show columns from `TABLES`;
+drop table is exists t2;
+create table t2 (b int, a int);
+desc t2;
+drop table t2;
