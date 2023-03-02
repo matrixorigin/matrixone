@@ -17,7 +17,6 @@ package logservice
 import (
 	"encoding/binary"
 	"io"
-	"io/ioutil"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -213,7 +212,7 @@ func (s *stateMachine) SaveSnapshot(w io.Writer,
 
 func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
-	data, err := ioutil.ReadAll(r)
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
