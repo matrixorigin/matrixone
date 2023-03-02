@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,7 +39,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
 		types.T_date, types.T_datetime,
@@ -382,7 +383,7 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[uint32](result, length)
 	case types.T_uint64:
 		return appendNulls[uint64](result, length)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
 		return appendNulls[types.Varlena](result, length)
 	case types.T_float32:
 		return appendNulls[float32](result, length)
@@ -2535,8 +2536,12 @@ func decimal64ToDecimal64(
 				return err
 			}
 		} else {
-			result, _ := v.Scale(totype.Scale - fromtype.Scale)
-			if err := to.Append(result, false); err != nil {
+			dec := v.Format(fromtype.Scale)
+			result, err := types.ParseDecimal64(dec, totype.Precision, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -2559,12 +2564,16 @@ func decimal64ToDecimal128(
 				return err
 			}
 		} else {
-			result := types.Decimal128{B0_63: uint64(v), B64_127: 0}
+			fromdec := types.Decimal128{B0_63: uint64(v), B64_127: 0}
 			if v.Sign() {
-				result.B64_127 = ^result.B64_127
+				fromdec.B64_127 = ^fromdec.B64_127
 			}
-			result, _ = result.Scale(totype.Scale - fromtype.Scale)
-			if err := to.Append(result, false); err != nil {
+			dec := fromdec.Format(fromtype.Scale)
+			result, err := types.ParseDecimal128(dec, totype.Precision, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -2581,7 +2590,8 @@ func decimal128ToDecimal64(
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
-	//totype := to.GetType()
+	fromtype := from.GetType()
+	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2589,8 +2599,12 @@ func decimal128ToDecimal64(
 				return err
 			}
 		} else {
-			result := types.Decimal64(v.B0_63)
-			if err := to.Append(result, false); err != nil {
+			dec := v.Format(fromtype.Scale)
+			result, err := types.ParseDecimal64(dec, totype.Precision, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -2615,8 +2629,12 @@ func decimal128ToDecimal128(
 				return err
 			}
 		} else {
-			result, _ := v.Scale(totype.Scale - fromtype.Scale)
-			if err := to.Append(result, false); err != nil {
+			dec := v.Format(fromtype.Scale)
+			result, err := types.ParseDecimal128(dec, totype.Precision, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -2815,7 +2833,7 @@ func strToDecimal64(
 	var l = uint64(length)
 	var dft types.Decimal64
 	totype := to.GetType()
-	//isb := from.GetSourceVector().GetIsBin()
+	isb := from.GetSourceVector().GetIsBin()
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -2824,13 +2842,22 @@ func strToDecimal64(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			result, err := types.ParseDecimal64(
-				s, totype.Precision, totype.Scale)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
-				return err
+			if !isb {
+				result, err := types.ParseDecimal64(s, totype.Precision, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
+			} else {
+				result, err := types.ParseDecimal64FromByte(s, totype.Precision, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -2845,7 +2872,7 @@ func strToDecimal128(
 	var l = uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
-	//isb := from.GetSourceVector().GetIsBin()
+	isb := from.GetSourceVector().GetIsBin()
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -2854,13 +2881,22 @@ func strToDecimal128(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			result, err := types.ParseDecimal128(
-				s, totype.Precision, totype.Scale)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
-				return err
+			if !isb {
+				result, err := types.ParseDecimal128(s, totype.Precision, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
+			} else {
+				result, err := types.ParseDecimal128FromByte(s, totype.Precision, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -3074,7 +3110,7 @@ func strToStr(
 			}
 			// check the length.
 			s := convertByteSliceToString(v)
-			if len(s) > destLen {
+			if utf8.RuneCountInString(s) > destLen {
 				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}

@@ -16,6 +16,7 @@ package explain
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -189,7 +190,12 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		if err != nil {
 			return result, err
 		}
-		result += "CAST(" + describeExpr + " AS " + types.T(Typ.Id).String() + ")"
+		tt := types.T(Typ.Id)
+		if tt == types.T_decimal64 || tt == types.T_decimal128 {
+			result += fmt.Sprintf("CAST(%s AS %s(%d, %d))", describeExpr, tt.String(), Typ.Precision, Typ.Scale)
+		} else {
+			result += "CAST(" + describeExpr + " AS " + tt.String() + ")"
+		}
 	case function.CASE_WHEN_EXPRESSION:
 		// TODO need rewrite to deal with case is nil
 		result += "CASE"

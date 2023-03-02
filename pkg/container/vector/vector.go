@@ -60,9 +60,6 @@ type Vector struct {
 	// TODO: check whether isBin should be changed into array/bitmap
 	// now we assumpt that it can only be true in the case of only one data in vector
 	isBin bool
-
-	// idx for low cardinality scenario.
-	idx any
 }
 
 func (v *Vector) SetIsBin(isBin bool) {
@@ -97,18 +94,6 @@ func (v *Vector) IsOriginal() bool {
 
 func (v *Vector) SetOriginal(status bool) {
 	v.original = status
-}
-
-func (v *Vector) IsLowCardinality() bool {
-	return v.idx != nil
-}
-
-func (v *Vector) Index() any {
-	return v.idx
-}
-
-func (v *Vector) SetIndex(idx any) {
-	v.idx = idx
 }
 
 func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
@@ -707,6 +692,15 @@ func (v *Vector) Free(m *mpool.MPool) {
 	v.colFromData()
 }
 
+func (v *Vector) CleanOnlyData() {
+	if v.data != nil {
+		v.data = v.data[:0]
+	}
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
+}
+
 func (v *Vector) FreeOriginal(m *mpool.MPool) {
 	if v.original {
 		m.Free(v.data)
@@ -793,11 +787,7 @@ func (v *Vector) Append(w any, isNull bool, m *mpool.MPool) error {
 	case types.T_Rowid:
 		return appendOne(v, w.(types.Rowid), isNull, m)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
-		if isNull {
-			return appendOneBytes(v, nil, true, m)
-		}
-		wv := w.([]byte)
-		return appendOneBytes(v, wv, false, m)
+		return appendOneBytes(v, w.([]byte), isNull, m)
 	}
 	return nil
 }
@@ -928,7 +918,7 @@ func Dup(v *Vector, m *mpool.MPool) (*Vector, error) {
 // Window just returns a window out of input and no deep copy.
 func Window(v *Vector, start, end int, w *Vector) *Vector {
 	w.Typ = v.Typ
-	w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+	w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), uint64(start), w.Nsp)
 	w.data = v.data
 	w.area = v.area
 	w.setupColFromData(start, end)
@@ -1207,6 +1197,14 @@ func (v *Vector) Show() ([]byte, error) {
 		buf.Write(types.EncodeUint32(&lenA))
 		buf.Write(v.area)
 	}
+
+	// Write isConst
+	buf.Write(types.EncodeBool(&v.isConst))
+
+	// Write length
+	i := int64(v.length)
+	buf.Write(types.EncodeInt64(&i))
+
 	return buf.Bytes(), nil
 }
 
@@ -1249,10 +1247,22 @@ func (v *Vector) Read(data []byte) error {
 
 	// Read areaLen and area
 	size = types.DecodeUint32(data)
+	data = data[4:]
 	if size != 0 {
-		data = data[4:]
 		v.area = data[:size]
+		data = data[size:]
 	}
+
+	if len(data) >= 9 {
+
+		// Read isConst
+		v.isConst = types.DecodeBool(data[:1])
+		data = data[1:]
+
+		// Read length
+		v.length = int(types.DecodeInt64(data[:8]))
+	}
+
 	return nil
 }
 
@@ -1442,6 +1452,7 @@ func Union(v, w *Vector, sels []int64, hasNull bool, m *mpool.MPool) (err error)
 
 	if v.GetType().IsTuple() {
 		panic("union called on tuple vector")
+	} else if w.IsScalar() && w.Nsp != nil {
 	} else if v.GetType().IsVarlen() {
 		tgt := MustTCols[types.Varlena](v)
 		next := len(tgt) - len(sels)

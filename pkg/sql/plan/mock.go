@@ -19,8 +19,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -75,8 +73,8 @@ type col struct {
 	Name      string
 	Id        types.T
 	Nullable  bool
-	Width     int32
 	Precision int32
+	Scale     int32
 }
 
 type index struct {
@@ -391,7 +389,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		idxs: []index{
 			{
 				indexName: "",
-				tableName: "__mo_index_unique__412f4fad-77ba-11ed-b347-000c29847904",
+				tableName: catalog.IndexTableNamePrefix + "412f4fad-77ba-11ed-b347-000c29847904",
 				parts:     []string{"ename", "job"},
 				cols: []col{
 					{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
@@ -403,7 +401,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	// index table
-	constraintTestSchema["__mo_index_unique__412f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
+	constraintTestSchema[catalog.IndexTableNamePrefix+"412f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
 		cols: []col{
 			{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
 			{"__mo_index_pri_col", types.T_uint32, true, 32, 0},
@@ -433,7 +431,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		idxs: []index{
 			{
 				indexName: "",
-				tableName: "__mo_index_unique__8e3246dd-7a19-11ed-ba7d-000c29847904",
+				tableName: catalog.IndexTableNamePrefix + "8e3246dd-7a19-11ed-ba7d-000c29847904",
 				parts:     []string{"dname"},
 				cols: []col{
 					{"__mo_index_idx_col", types.T_varchar, true, 15, 0},
@@ -445,7 +443,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	// index table
-	constraintTestSchema["__mo_index_unique__8e3246dd-7a19-11ed-ba7d-000c29847904"] = &Schema{
+	constraintTestSchema[catalog.IndexTableNamePrefix+"8e3246dd-7a19-11ed-ba7d-000c29847904"] = &Schema{
 		cols: []col{
 			{"__mo_index_idx_col", types.T_varchar, true, 15, 0},
 			{"__mo_index_pri_col", types.T_uint32, true, 32, 0},
@@ -504,7 +502,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		idxs: []index{
 			{
 				indexName: "",
-				tableName: "__mo_index_unique__6380d30e-79f8-11ed-9c02-000c29847904",
+				tableName: catalog.IndexTableNamePrefix + "6380d30e-79f8-11ed-9c02-000c29847904",
 				parts:     []string{"empno", "ename"},
 				cols: []col{
 					{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
@@ -515,7 +513,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		outcnt: 14,
 	}
 
-	constraintTestSchema["__mo_index_unique__6380d30e-79f8-11ed-9c02-000c29847904"] = &Schema{
+	constraintTestSchema[catalog.IndexTableNamePrefix+"6380d30e-79f8-11ed-9c02-000c29847904"] = &Schema{
 		cols: []col{
 			{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
@@ -541,11 +539,12 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					Typ: &plan.Type{
 						Id:          int32(col.Id),
 						NotNullable: !col.Nullable,
-						Width:       col.Width,
 						Precision:   col.Precision,
+						Scale:       col.Scale,
 					},
-					Name:  col.Name,
-					Pkidx: 1,
+					Name:    col.Name,
+					Primary: idx == 0,
+					Pkidx:   1,
 					Default: &plan.Default{
 						NullAbility: col.Nullable,
 					},
@@ -568,51 +567,20 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				TblId:     uint64(tableIdx),
 				Name:      tableName,
 				Cols:      colDefs,
+				Indexes:   make([]*IndexDef, len(table.idxs)),
 			}
 
 			if table.idxs != nil {
-				unidef := &plan.UniqueIndexDef{
-					IndexNames:  make([]string, 0),
-					TableNames:  make([]string, 0),
-					Fields:      make([]*plan.Field, 0),
-					TableExists: make([]bool, 0),
-				}
-
-				for _, idx := range table.idxs {
-					field := &plan.Field{
-						Parts: idx.parts,
-						Cols:  make([]*ColDef, 0),
+				for i, idx := range table.idxs {
+					indexdef := &plan.IndexDef{
+						IndexName:      idx.indexName,
+						Parts:          idx.parts,
+						Unique:         true,
+						IndexTableName: idx.tableName,
+						TableExist:     true,
 					}
-
-					for _, col := range idx.cols {
-						field.Cols = append(field.Cols, &ColDef{
-							Alg: plan.CompressType_Lz4,
-							Typ: &plan.Type{
-								Id:          int32(col.Id),
-								NotNullable: !col.Nullable,
-								Width:       col.Width,
-								Precision:   col.Precision,
-							},
-							Name:  col.Name,
-							Pkidx: 1,
-							Default: &plan.Default{
-								NullAbility:  false,
-								Expr:         nil,
-								OriginString: "",
-							},
-						})
-					}
-					unidef.IndexNames = append(unidef.IndexNames, idx.indexName)
-					unidef.TableNames = append(unidef.TableNames, idx.tableName)
-					unidef.Fields = append(unidef.Fields, field)
-					unidef.TableExists = append(unidef.TableExists, true)
+					tableDef.Indexes[i] = indexdef
 				}
-
-				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-					Def: &plan.TableDef_DefType_UIdx{
-						UIdx: unidef,
-					},
-				})
 			}
 
 			if table.fks != nil {
@@ -646,19 +614,16 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 
 			if tableName == "test_idx" {
-				testField := &plan.Field{
-					Parts: []string{"n_nationkey"},
+				indexParts := []string{"n_nationkey"}
+
+				p := &plan.IndexDef{
+					IndexName:      "idx1",
+					Parts:          indexParts,
+					Unique:         true,
+					IndexTableName: "nation",
+					TableExist:     true,
 				}
-				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-					Def: &plan.TableDef_DefType_UIdx{
-						UIdx: &plan.UniqueIndexDef{
-							IndexNames:  []string{"idx1"},
-							TableNames:  []string{"nation"},
-							Fields:      []*plan.Field{testField},
-							TableExists: []bool{false},
-						},
-					},
-				})
+				tableDef.Indexes = []*plan.IndexDef{p}
 			}
 
 			if tableName == "v1" {
@@ -731,7 +696,6 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectR
 	name := strings.ToLower(tableName)
 	tableDef := DeepCopyTableDef(m.tables[name])
 	if tableDef != nil && !m.isDml {
-
 		for i, col := range tableDef.Cols {
 			if col.Typ.Id == int32(types.T_Rowid) {
 				tableDef.Cols = append(tableDef.Cols[:i], tableDef.Cols[i+1:]...)
@@ -740,8 +704,8 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectR
 		}
 
 		for i, col := range tableDef.Cols {
-			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(col.Name)
-			if isCPkey {
+			// judege whether it is a composite primary key
+			if col.Name == catalog.CPrimaryKeyColName {
 				tableDef.Cols = append(tableDef.Cols[:i], tableDef.Cols[i+1:]...)
 				break
 			}
@@ -794,6 +758,13 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {
 	return nil, "", nil
+}
+
+func (m *MockCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
+}
+
+func (m *MockCompilerContext) GetBuildingAlterView() (bool, string, string) {
+	return false, "", ""
 }
 
 type MockOptimizer struct {

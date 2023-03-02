@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"os"
 	"path"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -165,34 +166,25 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	entries = append(entries, createDbEntries...)
 	//create table from "dbtest"
 	defs, err := moengine.SchemaToDefs(schema)
-	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: true,
-		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: "expr1",
+	for i := 0; i < len(defs); i++ {
+		if attrdef, ok := defs[i].(*engine.AttributeDef); ok {
+			attrdef.Attr.Default = &plan.Default{
+				NullAbility: true,
+				Expr: &plan.Expr{
+					Expr: &plan.Expr_C{
+						C: &plan.Const{
+							Isnull: false,
+							Value: &plan.Const_Sval{
+								Sval: "expr" + strconv.Itoa(i),
+							},
+						},
 					},
 				},
-			},
-		},
-		OriginString: "expr1",
+				OriginString: "expr" + strconv.Itoa(i),
+			}
+		}
 	}
-	defs[1].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: false,
-		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: "expr2",
-					},
-				},
-			},
-		},
-		OriginString: "expr2",
-	}
+
 	assert.Nil(t, err)
 	tbTestID := IDAlloc.NextTable()
 	createTbEntries, err := makeCreateTableEntries(
@@ -458,33 +450,23 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 
 	//create table from "dbtest"
 	defs, err := moengine.SchemaToDefs(schema)
-	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: true,
-		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: "expr1",
+	for i := 0; i < len(defs); i++ {
+		if attrdef, ok := defs[i].(*engine.AttributeDef); ok {
+			attrdef.Attr.Default = &plan.Default{
+				NullAbility: true,
+				Expr: &plan.Expr{
+					Expr: &plan.Expr_C{
+						C: &plan.Const{
+							Isnull: false,
+							Value: &plan.Const_Sval{
+								Sval: "expr" + strconv.Itoa(i),
+							},
+						},
 					},
 				},
-			},
-		},
-		OriginString: "expr1",
-	}
-	defs[1].(*engine.AttributeDef).Attr.Default = &plan.Default{
-		NullAbility: false,
-		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: "expr2",
-					},
-				},
-			},
-		},
-		OriginString: "expr2",
+				OriginString: "expr" + strconv.Itoa(i),
+			}
+		}
 	}
 	assert.Nil(t, err)
 

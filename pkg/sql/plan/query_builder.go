@@ -117,6 +117,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
 			CompositePkey: node.TableDef.CompositePkey,
+			OriginCols:    node.TableDef.OriginCols,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -1220,13 +1221,15 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 
 			colName := fmt.Sprintf("column_%d", i) // like MySQL
+			as := tree.NewCStr(colName, false)
+			as.SetConfig(0)
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: &tree.UnresolvedName{
 					NumParts: 1,
 					Star:     false,
 					Parts:    [4]string{colName, "", "", ""},
 				},
-				As: tree.UnrestrictedIdentifier(colName),
+				As: as,
 			})
 			ctx.headings = append(ctx.headings, colName)
 			tableDef.Cols[i] = &plan.ColDef{
@@ -1279,8 +1282,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					selectList = append(selectList, cols...)
 					ctx.headings = append(ctx.headings, names...)
 				} else {
-					if len(selectExpr.As) > 0 {
-						ctx.headings = append(ctx.headings, string(selectExpr.As))
+					if selectExpr.As != nil && !selectExpr.As.Empty() {
+						ctx.headings = append(ctx.headings, string(selectExpr.As.Origin()))
 					} else {
 						ctx.headings = append(ctx.headings, expr.Parts[0])
 					}
@@ -1300,8 +1303,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					expr.ValType = tree.P_nulltext
 				}
 
-				if len(selectExpr.As) > 0 {
-					ctx.headings = append(ctx.headings, string(selectExpr.As))
+				if selectExpr.As != nil && !selectExpr.As.Empty() {
+					ctx.headings = append(ctx.headings, string(selectExpr.As.Origin()))
 				} else {
 					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
 				}
@@ -1314,8 +1317,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					As:   selectExpr.As,
 				})
 			default:
-				if len(selectExpr.As) > 0 {
-					ctx.headings = append(ctx.headings, string(selectExpr.As))
+				if selectExpr.As != nil && !selectExpr.As.Empty() {
+					ctx.headings = append(ctx.headings, string(selectExpr.As.Origin()))
 				} else {
 					for {
 						if parenExpr, ok := expr.(*tree.ParenExpr); ok {
@@ -1420,9 +1423,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = tree.String(astExpr, dialect.MYSQL)
 
-		alias := string(selectExpr.As)
-		if len(alias) > 0 {
-			ctx.aliasMap[alias] = int32(len(ctx.projects))
+		if selectExpr.As != nil && !selectExpr.As.Empty() {
+			ctx.aliasMap[selectExpr.As.ToLower()] = int32(len(ctx.projects))
 		}
 		ctx.projects = append(ctx.projects, expr)
 	}
@@ -1786,7 +1788,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			}
 			tableDef.Cols = append(tableDef.Cols, col)
 		} else if tableDef.TableType == catalog.SystemViewRel {
-
+			if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
+				currentDB := schema
+				if currentDB == "" {
+					currentDB = builder.compCtx.DefaultDatabase()
+				}
+				if dbOfView == currentDB && nameOfView == table {
+					return 0, moerr.NewInternalError(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
+				}
+			}
 			// set view statment to CTE
 			viewDefString := tableDef.ViewSql.View
 
@@ -1817,13 +1827,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					viewStmt.Name = alterstmt.Name
 					viewStmt.ColNames = alterstmt.ColNames
 					viewStmt.AsSource = alterstmt.AsSource
-					viewStmt.Temporary = alterstmt.Temporary
 				}
 
 				viewName := viewStmt.Name.ObjectName
 				var maskedCTEs map[string]any
 				if len(ctx.cteByName) > 0 {
-					maskedCTEs := make(map[string]any)
+					maskedCTEs = make(map[string]any)
 					for name := range ctx.cteByName {
 						maskedCTEs[name] = nil
 					}
@@ -1832,7 +1841,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				ctx.cteByName[string(viewName)] = &CTERef{
 					ast: &tree.CTE{
 						Name: &tree.AliasClause{
-							Alias: tree.Identifier(viewName),
+							Alias: viewName,
 							Cols:  viewStmt.ColNames,
 						},
 						Stmt: viewStmt.AsSource,
@@ -1841,7 +1850,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					maskedCTEs:      maskedCTEs,
 				}
 
-				newTableName := tree.NewTableName(tree.Identifier(viewName), tree.ObjectNamePrefix{
+				newTableName := tree.NewTableName(viewName, tree.ObjectNamePrefix{
 					CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
 					SchemaName:      tree.Identifier(""),
 					ExplicitCatalog: false,
@@ -2037,7 +2046,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			if i < len(alias.Cols) {
 				cols[i] = string(alias.Cols[i])
 			} else {
-				cols[i] = col
+				cols[i] = strings.ToLower(col)
 			}
 			types[i] = projects[i].Typ
 
@@ -2105,7 +2114,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		return 0, err
 	}
 
-	err = ctx.mergeContexts(leftCtx, rightCtx)
+	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
 		return 0, err
 	}
@@ -2390,6 +2399,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			default:
 				cantPushdown = append(cantPushdown, filter)
 			}
+		}
+
+		if node.JoinType == plan.Node_INNER {
+			//only inner join can deduce new predicate
+			builder.pushdownFilters(node.Children[0], predsDeduction(rightPushdown, node.OnList))
+			builder.pushdownFilters(node.Children[1], predsDeduction(leftPushdown, node.OnList))
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], leftPushdown)

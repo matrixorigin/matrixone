@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -61,8 +60,7 @@ type ShowStatementType int
 
 const (
 	NotShowStatement ShowStatementType = 0
-	ShowColumns      ShowStatementType = 1
-	ShowTableStatus  ShowStatementType = 2
+	ShowTableStatus  ShowStatementType = 1
 )
 
 type TxnHandler struct {
@@ -224,72 +222,6 @@ func (ses *Session) GetAutoIncrCaches() defines.AutoIncrCaches {
 	return ses.autoIncrCaches
 }
 
-func (ses *Session) DeleteAutoIncrCache(name string) {
-	ses.autoIncrCaches.Mu.Lock()
-	defer ses.autoIncrCaches.Mu.Unlock()
-	_, ok := ses.autoIncrCaches.AutoIncrCaches[name]
-	if ok {
-		delete(ses.autoIncrCaches.AutoIncrCaches, name)
-	}
-}
-
-func (ses *Session) RenameAutoIncrCache(oldname, newname string) {
-	ses.autoIncrCaches.Mu.Lock()
-	defer ses.autoIncrCaches.Mu.Unlock()
-	_, ok := ses.autoIncrCaches.AutoIncrCaches[oldname]
-	if ok {
-		ses.autoIncrCaches.AutoIncrCaches[newname] = defines.AutoIncrCache{CurNum: ses.autoIncrCaches.AutoIncrCaches[oldname].CurNum,
-			MaxNum: ses.autoIncrCaches.AutoIncrCaches[oldname].MaxNum, Step: ses.autoIncrCaches.AutoIncrCaches[oldname].Step}
-		delete(ses.autoIncrCaches.AutoIncrCaches, oldname)
-	}
-}
-
-func (ses *Session) GetNextAutoIncrNum(colDefs []*plan.ColDef, ctx context.Context, incrParam *colexec.AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
-	ses.autoIncrCaches.Mu.Lock()
-	defer ses.autoIncrCaches.Mu.Unlock()
-	offset, step := make([]uint64, 0), make([]uint64, 0)
-	for i, col := range colDefs {
-		if !col.Typ.AutoIncr {
-			continue
-		}
-
-		name := fmt.Sprintf("%d_%s", tableID, col.Name)
-		autoincrcache, ok := ses.autoIncrCaches.AutoIncrCaches[name]
-		// Not cached yet or the cache is ran out.
-		// Need new txn for read from the table.
-		if !ok || autoincrcache.CurNum >= autoincrcache.MaxNum {
-			// Need return maxNum for correction.
-			cur := uint64(0)
-			if ok {
-				cur = autoincrcache.CurNum
-			}
-			curNum, maxNum, stp, err := colexec.GetNextOneCache(ctx, incrParam, bat, tableID, i, name, uint64(cacheSize), cur)
-			if err != nil {
-				return nil, nil, err
-			}
-			ses.autoIncrCaches.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: curNum, MaxNum: maxNum, Step: stp}
-		}
-
-		offset = append(offset, ses.autoIncrCaches.AutoIncrCaches[name].CurNum)
-		step = append(step, ses.autoIncrCaches.AutoIncrCaches[name].Step)
-
-		// Here got the most recent id in the cache.
-		// Need compare witch vec and get the maxNum.
-		maxNum, err := colexec.GetMax(incrParam, bat, i, ses.autoIncrCaches.AutoIncrCaches[name].Step, 1, ses.autoIncrCaches.AutoIncrCaches[name].CurNum)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		incrParam.SetLastInsertID(maxNum)
-
-		// Update the caches.
-		ses.autoIncrCaches.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: maxNum,
-			MaxNum: ses.autoIncrCaches.AutoIncrCaches[name].MaxNum, Step: ses.autoIncrCaches.AutoIncrCaches[name].Step}
-	}
-
-	return offset, step, nil
-}
-
 const saveQueryIdCnt = 10
 
 func (ses *Session) pushQueryId(uuid string) {
@@ -306,6 +238,7 @@ func (ses *Session) Dispose() {
 		mpool.DeleteMPool(mp)
 		ses.SetMemPool(mp)
 	}
+	ses.cleanCache()
 }
 
 type errInfo struct {
@@ -389,6 +322,15 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Dispose()
 	})
+	proc := process.New(
+		context.Background(),
+		ses.GetMemPool(),
+		ses.GetTxnHandler().GetTxnClient(),
+		ses.GetTxnHandler().GetTxnOperator(),
+		pu.FileService,
+		pu.GetClusterDetails,
+	)
+	ses.GetTxnCompileCtx().SetProcess(proc)
 	return ses
 }
 
@@ -456,7 +398,7 @@ func (ses *Session) IsBackgroundSession() bool {
 	return ses.isBackgroundSession
 }
 
-func (ses *Session) cachePlan(sql string, stmts []*tree.Statement, plans []*plan.Plan) {
+func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.planCache.cache(sql, stmts, plans)
@@ -1765,9 +1707,10 @@ func (th *TxnHandler) GetStorage() engine.Engine {
 }
 
 func (th *TxnHandler) GetTxn() (TxnOperator, error) {
-	err := th.GetSession().TxnStart()
+	ses := th.GetSession()
+	err := ses.TxnStart()
 	if err != nil {
-		logutil.Errorf("GetTxn. error:%v", err)
+		logErrorf(ses.GetConciseProfile(), "GetTxn. error:%v", err)
 		return nil, err
 	}
 	return th.GetTxnOperator(), nil
@@ -1790,12 +1733,28 @@ const (
 )
 
 type TxnCompilerContext struct {
-	dbName     string
-	QryTyp     QueryType
-	txnHandler *TxnHandler
-	ses        *Session
-	proc       *process.Process
-	mu         sync.Mutex
+	dbName               string
+	QryTyp               QueryType
+	txnHandler           *TxnHandler
+	ses                  *Session
+	proc                 *process.Process
+	buildAlterView       bool
+	dbOfView, nameOfView string
+	mu                   sync.Mutex
+}
+
+func (tcc *TxnCompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tcc.buildAlterView = yesOrNo
+	tcc.dbOfView = dbName
+	tcc.nameOfView = viewName
+}
+
+func (tcc *TxnCompilerContext) GetBuildingAlterView() (bool, string, string) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.buildAlterView, tcc.dbOfView, tcc.nameOfView
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
@@ -1909,11 +1868,11 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (con
 		return nil, nil, err
 	}
 
-	tableNames, err := db.Relations(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
+	// tableNames, err := db.Relations(ctx)
+	// if err != nil {
+	// 	return nil, nil, err
+	// }
+	// logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
 	table, err := db.Relation(ctx, tableName)
@@ -1993,12 +1952,14 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var properties []*plan2.Property
 	var TableType, Createsql string
 	var CompositePkey *plan2.ColDef = nil
+	var partitionInfo *plan2.PartitionByDef
 	var viewSql *plan2.ViewDef
 	var foreignKeys []*plan2.ForeignKeyDef
+	var primarykey *plan2.PrimaryKeyDef
+	var indexes []*plan2.IndexDef
 	var refChildTbls []uint64
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
 			col := &plan2.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
@@ -2017,7 +1978,8 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Comment:   attr.Attr.Comment,
 				ClusterBy: attr.Attr.ClusterBy,
 			}
-			if isCPkey {
+			// Is it a composite primary key
+			if attr.Attr.Name == catalog.CPrimaryKeyColName {
 				CompositePkey = col
 				continue
 			}
@@ -2051,32 +2013,14 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		} else if c, ok := def.(*engine.ConstraintDef); ok {
 			for _, ct := range c.Cts {
 				switch k := ct.(type) {
-				case *engine.UniqueIndexDef:
-					u := &plan.UniqueIndexDef{}
-					err = u.UnMarshalUniqueIndexDef(([]byte)(k.UniqueIndex))
-					if err != nil {
-						return nil, nil
-					}
-					defs = append(defs, &plan.TableDef_DefType{
-						Def: &plan.TableDef_DefType_UIdx{
-							UIdx: u,
-						},
-					})
-				case *engine.SecondaryIndexDef:
-					s := &plan.SecondaryIndexDef{}
-					err = s.UnMarshalSecondaryIndexDef(([]byte)(k.SecondaryIndex))
-					if err != nil {
-						return nil, nil
-					}
-					defs = append(defs, &plan.TableDef_DefType{
-						Def: &plan.TableDef_DefType_SIdx{
-							SIdx: s,
-						},
-					})
+				case *engine.IndexDef:
+					indexes = k.Indexes
 				case *engine.ForeignKeyDef:
 					foreignKeys = k.Fkeys
 				case *engine.RefChildTableDef:
 					refChildTbls = k.Tables
+				case *engine.PrimaryKeyDef:
+					primarykey = k.Pkey
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
@@ -2085,16 +2029,12 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Value: commnetDef.Comment,
 			})
 		} else if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			p := &plan2.PartitionInfo{}
+			p := &plan2.PartitionByDef{}
 			err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
 			if err != nil {
 				return nil, nil
 			}
-			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_Partition{
-					Partition: p,
-				},
-			})
+			partitionInfo = p
 		}
 	}
 	if len(properties) > 0 {
@@ -2130,6 +2070,10 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		SchemaName: dbName,
 		ObjName:    tableName,
 	}
+	originCols := make([]*plan2.ColDef, len(cols))
+	for i, col := range cols {
+		originCols[i] = plan2.DeepCopyColDef(col)
+	}
 
 	tableDef := &plan2.TableDef{
 		TblId:         tableId,
@@ -2138,11 +2082,15 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		Defs:          defs,
 		TableType:     TableType,
 		Createsql:     Createsql,
+		Pkey:          primarykey,
 		CompositePkey: CompositePkey,
 		ViewSql:       viewSql,
+		Partition:     partitionInfo,
 		Fkeys:         foreignKeys,
 		RefChildTbls:  refChildTbls,
 		ClusterBy:     clusterByDef,
+		OriginCols:    originCols,
+		Indexes:       indexes,
 	}
 	return obj, tableDef
 }
@@ -2305,7 +2253,7 @@ func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {
-	stats = new(plan2.Stats)
+
 	dbName := obj.GetSchemaName()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
@@ -2320,14 +2268,8 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	blockNum, rows, err := table.FilteredStats(ctx, e)
-	if err != nil {
-		return
-	}
-	stats.Cost = float64(rows)
-	stats.Outcnt = stats.Cost * plan2.DeduceSelectivity(e)
-	stats.BlockNum = blockNum
-	return
+	stats, _ = table.Stats(ctx, e)
+	return stats
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
@@ -2339,28 +2281,20 @@ func (tcc *TxnCompilerContext) GetProcess() *process.Process {
 func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
 	proc := tcc.proc
 	// get file size
-	fs := objectio.NewObjectFS(proc.FileService, catalog.QueryResultMetaDir)
-	dirs, err := fs.ListDir(catalog.QueryResultMetaDir)
+	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
+	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
+		}
 		return nil, "", err
 	}
-	var size int64 = -1
-	name := catalog.BuildQueryResultMetaName(proc.SessionInfo.Account, uuid)
-	for _, d := range dirs {
-		if d.Name == name {
-			size = d.Size
-		}
-	}
-	if size == -1 {
-		return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
-	}
 	// read meta's meta
-	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
 	reader, err := objectio.NewObjectReader(path, proc.FileService)
 	if err != nil {
 		return nil, "", err
 	}
-	bs, err := reader.ReadAllMeta(proc.Ctx, size, proc.Mp())
+	bs, err := reader.ReadAllMeta(proc.Ctx, e.Size, proc.Mp())
 	if err != nil {
 		return nil, "", err
 	}

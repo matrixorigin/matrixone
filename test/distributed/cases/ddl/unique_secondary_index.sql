@@ -495,9 +495,7 @@ select * from create_secondary_01;
 show create table create_secondary_01;
 drop index secondary_key on create_secondary_01;
 truncate table create_secondary_01;
--- @bvt:issue#7740
 show create table create_secondary_01;
--- @bvt:issue
 drop table create_secondary_01;
 
 --primary key create secondary key

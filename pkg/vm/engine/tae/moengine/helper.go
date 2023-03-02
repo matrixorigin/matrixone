@@ -18,7 +18,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -121,13 +120,6 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		}
 		defs = append(defs, &engine.AttributeDef{Attr: *attr})
 	}
-	if schema.SortKey != nil && schema.SortKey.IsPrimary() {
-		pk := new(engine.PrimaryIndexDef)
-		for _, def := range schema.SortKey.Defs {
-			pk.Names = append(pk.Names, def.Name)
-		}
-		defs = append(defs, pk)
-	}
 	pro := new(engine.PropertiesDef)
 	pro.Properties = append(pro.Properties, engine.Property{
 		Key:   pkgcatalog.SystemRelAttr_Kind,
@@ -146,79 +138,21 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 
 func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, err error) {
 	schema = catalog.NewEmptySchema(name)
-	pkMap := make(map[string]int)
-	for _, def := range defs {
-		if pkDef, ok := def.(*engine.PrimaryIndexDef); ok {
-			for i, name := range pkDef.Names {
-				pkMap[name] = i
-			}
-			break
-		}
-	}
+	var pkeyColName string
 	for _, def := range defs {
 		switch defVal := def.(type) {
-		case *engine.AttributeDef:
-			if idx, ok := pkMap[defVal.Attr.Name]; ok {
-				if err = schema.AppendSortColWithAttribute(defVal.Attr, idx, true); err != nil {
-					return
-				}
-			} else if defVal.Attr.ClusterBy {
-				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, false); err != nil {
-					return
-				}
-			} else {
-				if err = schema.AppendColWithAttribute(defVal.Attr); err != nil {
-					return
-				}
-			}
-
-		case *engine.PropertiesDef:
-			for _, property := range defVal.Properties {
-				switch strings.ToLower(property.Key) {
-				case pkgcatalog.SystemRelAttr_Comment:
-					schema.Comment = property.Value
-				case pkgcatalog.SystemRelAttr_Kind:
-					schema.Relkind = property.Value
-				case pkgcatalog.SystemRelAttr_CreateSQL:
-					schema.Createsql = property.Value
-				default:
-				}
-			}
-
-		case *engine.PartitionDef:
-			schema.Partition = defVal.Partition
-		case *engine.ViewDef:
-			schema.View = defVal.View
 		case *engine.ConstraintDef:
-			schema.Constraint, err = defVal.MarshalBinary()
-			if err != nil {
-				return nil, err
+			primaryKeyDef := defVal.GetPrimaryKeyDef()
+			if primaryKeyDef != nil {
+				pkeyColName = primaryKeyDef.Pkey.PkeyColName
+				break
 			}
-		default:
-			// We will not deal with other cases for the time being
 		}
 	}
-	if err = schema.Finalize(false); err != nil {
-		return
-	}
-	return
-}
-
-// this function used in PrecommitWrite. CN won't give PrimaryIndexDef and ComputeIndexDef
-// HandleDefsToSchema assume there is at most one AttributeDef with Primary true. TODO:
-func HandleDefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, err error) {
-	schema = catalog.NewEmptySchema(name)
-
-	have_one := false
 	for _, def := range defs {
 		switch defVal := def.(type) {
 		case *engine.AttributeDef:
-			if defVal.Attr.Primary {
-				if have_one {
-					panic(moerr.NewInternalErrorNoCtx("%s more one pk", name))
-				} else {
-					have_one = true
-				}
+			if pkeyColName == defVal.Attr.Name {
 				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, true); err != nil {
 					return
 				}
@@ -247,15 +181,13 @@ func HandleDefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Sc
 
 		case *engine.PartitionDef:
 			schema.Partition = defVal.Partition
-
 		case *engine.ViewDef:
 			schema.View = defVal.View
-
 		case *engine.CommentDef:
 			schema.Comment = defVal.Comment
-
 		case *engine.ConstraintDef:
-			if schema.Constraint, err = defVal.MarshalBinary(); err != nil {
+			schema.Constraint, err = defVal.MarshalBinary()
+			if err != nil {
 				return nil, err
 			}
 		default:

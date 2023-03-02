@@ -29,6 +29,8 @@ import (
 
 //TODO LRU
 
+//TODO full data. If we know the size and it's small, we can get the whole object in one request and save it to a file named full_data
+
 type DiskCache struct {
 	capacity   int64
 	path       string
@@ -111,14 +113,20 @@ func (d *DiskCache) Read(
 
 		vector.Entries[i] = entry
 		numHit++
+		d.cacheHit()
 	}
 
 	return nil
 }
 
+func (d *DiskCache) cacheHit() {
+	profileAddSample()
+}
+
 func (d *DiskCache) Update(
 	ctx context.Context,
 	vector *IOVector,
+	async bool,
 ) (
 	err error,
 ) {
@@ -166,7 +174,7 @@ func (d *DiskCache) Update(
 		}
 
 		// link
-		if err := os.Symlink(dataPath, linkPath); err != nil {
+		if err := os.Link(dataPath, linkPath); err != nil {
 			if os.IsExist(err) {
 				// ok
 			} else {

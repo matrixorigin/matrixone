@@ -18,9 +18,11 @@ import (
 	"container/heap"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/shirou/gopsutil/v3/mem"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -44,6 +46,7 @@ const (
 	constMergeMinBlks      = 3
 	constMergeMinRows      = 3000
 	constHeapCapacity      = 300
+	const4GBytes           = 4 * (1 << 30)
 )
 
 // min heap item
@@ -159,14 +162,14 @@ func (d *deletableSegBuilder) finish() []*catalog.SegmentEntry {
 	if last := len(d.segCandids) - 1; last >= 0 && d.segCandids[last].ID == d.maxSegId {
 		d.segCandids = d.segCandids[:last]
 	}
-	if len(d.segCandids) == 0 {
+	if len(d.segCandids) == 0 && len(d.nsegCandids) == 0 {
 		return nil
 	}
 	ret := make([]*catalog.SegmentEntry, len(d.segCandids)+len(d.nsegCandids))
 	copy(ret[:len(d.segCandids)], d.segCandids)
 	copy(ret[len(d.segCandids):], d.nsegCandids)
 	if cnt := len(d.nsegCandids); cnt != 0 {
-		logutil.Info("deletable nseg", zap.Int("cnt", cnt))
+		logutil.Info("Mergeblocks deletable nseg", zap.Int("cnt", cnt))
 	}
 	return ret
 }
@@ -182,7 +185,17 @@ func (st *stat) String() string {
 
 // mergeLimiter consider update rate and time to decide to merge or not.
 type mergeLimiter struct {
-	stats map[uint64]*stat
+	stats                map[uint64]*stat
+	concurrentMergeLimit int32
+	activeMergeCount     int32
+}
+
+func (ml *mergeLimiter) IncActiveCount() {
+	atomic.AddInt32(&ml.activeMergeCount, 1)
+}
+
+func (ml *mergeLimiter) OnExecDone(_ any) {
+	atomic.AddInt32(&ml.activeMergeCount, -1)
 }
 
 // merge immediately if it has enough rows, skip if:
@@ -190,6 +203,9 @@ type mergeLimiter struct {
 // 2. is actively updating, which means total rows changes obviously compared with last time
 // in other cases, wait some time to merge
 func (ml *mergeLimiter) canMerge(tid uint64, totalRow int, blks int) bool {
+	if atomic.LoadInt32(&ml.activeMergeCount) >= ml.concurrentMergeLimit {
+		return false
+	}
 	if totalRow > constMergeRightNow {
 		logutil.Infof("Mergeblocks %d merge right now: %d rows %d blks", tid, totalRow, blks)
 		delete(ml.stats, tid)
@@ -257,7 +273,8 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 		db:            db,
 		LoopProcessor: new(catalog.LoopProcessor),
 		limiter: &mergeLimiter{
-			stats: make(map[uint64]*stat),
+			stats:                make(map[uint64]*stat),
+			concurrentMergeLimit: 1,
 		},
 		segBuilder: &deletableSegBuilder{
 			segCandids:  make([]*catalog.SegmentEntry, 0),
@@ -280,8 +297,32 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 	if s.tid == 0 {
 		return
 	}
+	// compactable blks
 	mergedBlks := s.blkBuilder.finish()
-	if !s.limiter.canMerge(s.tid, s.tableRowCnt, len(mergedBlks)) {
+	// deletable segs
+	mergedSegs := s.segBuilder.finish()
+	hasDelSeg := len(mergedSegs) > 0
+	hasMergeBlk := s.limiter.canMerge(s.tid, s.tableRowCnt, len(mergedBlks))
+	if !hasDelSeg && !hasMergeBlk {
+		return
+	}
+
+	segScopes := make([]common.ID, len(mergedSegs))
+	for i, s := range mergedSegs {
+		segScopes[i] = *s.AsCommonID()
+	}
+
+	// remove stale segments only
+	if hasDelSeg && !hasMergeBlk {
+		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
+			return jobs.NewDelSegTask(ctx, txn, mergedSegs), nil
+		}
+		_, err := s.db.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, segScopes, factory)
+		if err != nil {
+			logutil.Infof("[Mergeblocks] Schedule del seg errinfo=%v", err)
+			return
+		}
+		logutil.Infof("[Mergeblocks] Scheduled | del %d seg", len(mergedSegs))
 		return
 	}
 
@@ -289,24 +330,23 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 	for i, blk := range mergedBlks {
 		scopes[i] = *blk.AsCommonID()
 	}
-	// deletable segs
-	mergedSegs := s.segBuilder.finish()
-
-	segIds := make([]uint64, len(mergedSegs))
-	for i, s := range mergedSegs {
-		segIds[i] = s.ID
-	}
 
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		return jobs.NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, s.db.Scheduler)
 	}
-
-	_, err := s.db.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
+	task, err := s.db.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 	if err != nil {
-		logutil.Infof("[Mergeblocks] Schedule errinfo=%v", err)
+		if err != tasks.ErrScheduleScopeConflict {
+			logutil.Infof("[Mergeblocks] Schedule error info=%v", err)
+		}
 	} else {
-		logutil.Infof("[Mergeblocks] Scheduled | Scopes=%v,[%d]%s",
-			segIds, len(scopes),
+		// record big merge
+		if len(scopes) > constHeapCapacity/3 {
+			s.limiter.IncActiveCount()
+			task.AddObserver(s.limiter)
+		}
+		logutil.Infof("[Mergeblocks] Scheduled | Scopes=[%d],[%d]%s",
+			len(segScopes), len(scopes),
 			common.BlockIDArraryString(scopes[:constMergeMinBlks]))
 	}
 }
@@ -329,11 +369,25 @@ func (s *MergeTaskBuilder) PreExecute() error {
 	if s.runCnt%10 == 0 {
 		logutil.Infof("Mergeblocks stats: %s", s.limiter.String())
 	}
+
+	if s.runCnt%5 == 0 {
+		// fresh mem use
+		if stats, err := mem.VirtualMemory(); err == nil {
+			logutil.Infof("Mergeblocks available mem: %dg", stats.Available/(1<<30))
+			if limit := int32(stats.Available / const4GBytes); limit != s.limiter.concurrentMergeLimit && limit > 1 {
+				s.limiter.concurrentMergeLimit = limit
+				logutil.Infof("Mergeblocks set concurrency limit %d", limit)
+			}
+		}
+	}
 	return nil
 }
 func (s *MergeTaskBuilder) PostExecute() error {
 	s.trySchedMergeTask()
 	s.resetForTable(0)
+	if cnt := atomic.LoadInt32(&s.limiter.activeMergeCount); cnt > 0 {
+		logutil.Infof("Mergeblocks current big active task: %d", cnt)
+	}
 	return nil
 }
 
@@ -349,9 +403,6 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 func (s *MergeTaskBuilder) onSegment(segmentEntry *catalog.SegmentEntry) (err error) {
 	if !segmentEntry.IsActive() || (!segmentEntry.IsAppendable() && segmentEntry.IsSorted()) {
 		return moerr.GetOkStopCurrRecur()
-	}
-	if !segmentEntry.IsAppendable() {
-		logutil.Info("Mergeblocks scan nseg", zap.Uint64("seg", segmentEntry.ID))
 	}
 	// handle appendable segs and unsorted non-appendable segs(which was written by cn)
 	s.segBuilder.resetForNewSeg()

@@ -194,7 +194,6 @@ func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 	} else {
 		entry.link.Delete(n)
 		delete(entry.entries, segment.GetID())
-		segment.Close()
 	}
 	return nil
 }
@@ -357,32 +356,10 @@ func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (delete
 func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(segment.String()))
-	segment.Close()
+	// segment.Close()
 	entry.Lock()
 	defer entry.Unlock()
 	return entry.deleteEntryLocked(segment)
-}
-
-func (entry *TableEntry) Close() {
-	segs := entry.getAllSegs()
-	entry.Lock()
-	defer entry.Unlock()
-	for _, seg := range segs {
-		err := entry.deleteEntryLocked(seg)
-		if err != nil {
-			panic(err)
-		}
-	}
-}
-
-func (entry *TableEntry) getAllSegs() []*SegmentEntry {
-	segs := make([]*SegmentEntry, 0)
-	it := entry.MakeSegmentIt(false)
-	for it.Valid() {
-		segs = append(segs, it.Get().GetPayload())
-		it.Next()
-	}
-	return segs
 }
 
 func (entry *TableEntry) PrepareRollback() (err error) {

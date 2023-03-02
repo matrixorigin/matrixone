@@ -73,8 +73,7 @@ func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
 }
 
 type service struct {
-	tables sync.Map // tableid -> *locktable
-	// activeTxn        sync.Map // txnid -> *activeTxns
+	tables           sync.Map // tableid -> locktable
 	activeTxns       activeTxnHolder
 	fsp              *fixedSlicePool
 	deadlockDetector *detector
@@ -96,13 +95,13 @@ func (s *service) Lock(
 	tableID uint64,
 	rows [][]byte,
 	txnID []byte,
-	options LockOptions) (bool, error) {
+	options LockOptions) error {
 	txn := s.activeTxns.getActiveTxn(txnID, true)
 	l := s.getLockTable(tableID)
 	if err := l.lock(ctx, txn, rows, options); err != nil {
-		return false, err
+		return err
 	}
-	return true, nil
+	return nil
 }
 
 func (s *service) Unlock(txnID []byte) error {
@@ -143,14 +142,14 @@ func (s *service) abortDeadlockTxn(txnID []byte) {
 	txn.abort(txnID)
 }
 
-func (s *service) getLockTable(tableID uint64) *lockTable {
+func (s *service) getLockTable(tableID uint64) lockTable {
 	if v, ok := s.tables.Load(tableID); ok {
-		return v.(*lockTable)
+		return v.(lockTable)
 	}
 
-	l := newLockTable(tableID, s.deadlockDetector)
+	l := newLocalLockTable(tableID, s.deadlockDetector)
 	if v, loaded := s.tables.LoadOrStore(tableID, l); loaded {
-		return v.(*lockTable)
+		return v.(lockTable)
 	}
 	return l
 }

@@ -21,6 +21,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -39,7 +40,8 @@ type LocalFS struct {
 	sync.RWMutex
 	dirFiles map[string]*os.File
 
-	memCache *MemCache
+	memCache    *MemCache
+	asyncUpdate bool
 }
 
 var _ FileService = new(LocalFS)
@@ -99,9 +101,10 @@ func NewLocalFS(
 	}
 
 	fs := &LocalFS{
-		name:     name,
-		rootPath: rootPath,
-		dirFiles: make(map[string]*os.File),
+		name:        name,
+		rootPath:    rootPath,
+		dirFiles:    make(map[string]*os.File),
+		asyncUpdate: true,
 	}
 	if memCacheCapacity > 0 {
 		fs.memCache = NewMemCache(memCacheCapacity)
@@ -144,6 +147,8 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 		return ctx.Err()
 	default:
 	}
+
+	profileAddSample()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
@@ -233,7 +238,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			if err != nil {
 				return
 			}
-			err = l.memCache.Update(ctx, vector)
+			err = l.memCache.Update(ctx, vector, l.asyncUpdate)
 		}()
 	}
 
@@ -248,6 +253,8 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 	if vector.allDone() {
 		return nil
 	}
+
+	profileAddSample()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
@@ -412,6 +419,8 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 	default:
 	}
 
+	profileAddSample()
+
 	path, err := ParsePathAtService(dirPath, l.name)
 	if err != nil {
 		return nil, err
@@ -464,12 +473,49 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 	return
 }
 
+func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	profileAddSample()
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+
+	stat, err := os.Stat(nativePath)
+	if os.IsNotExist(err) {
+		return nil, moerr.NewFileNotFound(ctx, filePath)
+	}
+
+	if stat.IsDir() {
+		return nil, moerr.NewFileNotFound(ctx, filePath)
+	}
+
+	fileSize := stat.Size()
+	nBlock := ceilingDiv(fileSize, _BlockSize)
+	contentSize := fileSize - _ChecksumSize*nBlock
+
+	return &DirEntry{
+		Name:  pathpkg.Base(filePath),
+		IsDir: false,
+		Size:  contentSize,
+	}, nil
+}
+
 func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
 	}
+
+	profileAddSample()
 
 	for _, filePath := range filePaths {
 		if err := l.deleteSingle(ctx, filePath); err != nil {
@@ -617,6 +663,8 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 	default:
 	}
 
+	profileAddSample()
+
 	// write
 	for _, entry := range entries {
 
@@ -682,6 +730,10 @@ func (l *LocalFS) CacheStats() *CacheStats {
 		return l.memCache.CacheStats()
 	}
 	return nil
+}
+
+func (l *LocalFS) SetAsyncUpdate(b bool) {
+	l.asyncUpdate = b
 }
 
 func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {

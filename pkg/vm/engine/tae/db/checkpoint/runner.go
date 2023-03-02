@@ -602,7 +602,7 @@ func (r *runner) tryScheduleCheckpoint() {
 
 func (r *runner) fillDefaults() {
 	if r.options.forceFlushTimeout <= 0 {
-		r.options.forceFlushTimeout = time.Second * 10
+		r.options.forceFlushTimeout = time.Second * 30
 	}
 	if r.options.forceFlushCheckInterval <= 0 {
 		r.options.forceFlushCheckInterval = time.Millisecond * 400
@@ -767,6 +767,10 @@ func (r *runner) Stop() {
 		r.postCheckpointQueue.Stop()
 		r.waitQueue.Stop()
 	})
+}
+
+func (r *runner) GetDirtyCollector() logtail.Collector {
+	return r.source
 }
 
 func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (locations string, checkpointed types.TS, err error) {

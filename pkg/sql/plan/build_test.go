@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/stretchr/testify/assert"
 	"os"
 	"strings"
 	"testing"
@@ -30,8 +31,10 @@ import (
 
 // only use in developing
 func TestSingleSQL(t *testing.T) {
-	sql := "select * from nation"
-
+	//sql := "select * from nation"
+	//sql := "create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation"
+	//sql := "CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey))"
+	sql := "create table t2(empno int unsigned,ename varchar(15),job varchar(10) key) cluster by(empno,ename)"
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
@@ -749,7 +752,6 @@ func TestDdl(t *testing.T) {
 		"create table tbl_name (t bool(20) comment 'dd', b int unsigned, c char(20), d varchar(20), primary key(b), index idx_t(c)) comment 'test comment'",
 		"create table if not exists tbl_name (b int default 20 primary key, c char(20) default 'ss', d varchar(20) default 'kkk')",
 		"create table if not exists nation (t bool(20), b int, c char(20), d varchar(20))",
-		"load data infile 'test/loadfile5' ignore INTO TABLE nation FIELDS TERMINATED BY  ',' (@,@,n_name,n_comment)",
 		"drop table if exists tbl_name",
 		"drop table if exists nation",
 		"drop table nation",
@@ -762,6 +764,9 @@ func TestDdl(t *testing.T) {
 		"truncate table nation",
 		"truncate table tpch.nation",
 		"create unique index idx_name on nation(n_regionkey)",
+		"create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation",
+		"CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey)) COMMENT='xxxxx'",
+		"create table t2(empno int unsigned,ename varchar(15),job varchar(10) key) cluster by(empno,ename)",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -774,6 +779,7 @@ func TestDdl(t *testing.T) {
 		"drop table tbl_name",           //table not exists in tpch
 		"drop table tpch.tbl_not_exist", //database not exists
 		"drop table db_not_exist.tbl",   //table not exists
+		"create table t6(empno int unsigned,ename varchar(15) auto_increment) cluster by(empno,ename)",
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -788,15 +794,18 @@ func TestShow(t *testing.T) {
 		"show create table tpch.nation",
 		"show databases",
 		"show databases like '%d'",
-		"show databases where `Database` = '11'",
-		"show databases where `Database` = '11' or `Database` = 'ddd'",
+		"show databases where `database` = '11'",
+		"show databases where `database` = '11' or `database` = 'ddd'",
 		"show tables",
 		"show tables from tpch",
 		"show tables like '%dd'",
-		"show tables from tpch where `Tables_in_tpch` = 'aa' or `Tables_in_tpch` like '%dd'",
+		"show tables from tpch where `tables_in_tpch` = 'aa' or `tables_in_tpch` like '%dd'",
 		"show columns from nation",
+		"show full columns from nation",
 		"show columns from nation from tpch",
-		"show columns from nation where `Field` like '%ff' or `Type` = 1 or `Null` = 0",
+		"show full columns from nation from tpch",
+		"show columns from nation where `field` like '%ff' or `type` = 1 or `null` = 0",
+		"show full columns from nation where `field` like '%ff' or `type` = 1 or `null` = 0",
 		"show create view v1",
 		"show create table v1",
 		"show table_number",
@@ -823,8 +832,11 @@ func TestShow(t *testing.T) {
 		"show tables from tpch22222",                           //database not exist
 		"show tables from tpch where Tables_in_tpch222 = 'aa'", //column not exist
 		"show columns from nation_ddddd",                       //table not exist
-		"show columns from nation_ddddd from tpch",             //table not exist
-		"show columns from nation where `Field22` like '%ff'",  //column not exist
+		"show full columns from nation_ddddd",
+		"show columns from nation_ddddd from tpch", //table not exist
+		"show full columns from nation_ddddd from tpch",
+		"show columns from nation where `Field22` like '%ff'", //column not exist
+		"show full columns from nation where `Field22` like '%ff'",
 		"show index from tpch.dddd",
 		"show table_number from tpch222",
 		"show column_number from nation222",
@@ -1020,4 +1032,35 @@ func runTestShouldError(opt Optimizer, t *testing.T, sqls []string) {
 			t.Fatalf("should error, but pass: %v", sql)
 		}
 	}
+}
+
+func Test_mergeContexts(t *testing.T) {
+	b1 := NewBinding(0, 1, "a", nil, nil, false)
+	bc1 := NewBindContext(nil, nil)
+	bc1.bindings = append(bc1.bindings, b1)
+
+	b2 := NewBinding(1, 2, "a", nil, nil, false)
+	bc2 := NewBindContext(nil, nil)
+	bc2.bindings = append(bc2.bindings, b2)
+
+	bc := NewBindContext(nil, nil)
+
+	//a merge a
+	err := bc.mergeContexts(context.Background(), bc1, bc2)
+	assert.Error(t, err)
+	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
+
+	//a merge b
+	b3 := NewBinding(2, 3, "b", nil, nil, false)
+	bc3 := NewBindContext(nil, nil)
+	bc3.bindings = append(bc3.bindings, b3)
+
+	err = bc.mergeContexts(context.Background(), bc1, bc3)
+	assert.NoError(t, err)
+
+	// a merge a, ctx is  nil
+	var ctx context.Context
+	err = bc.mergeContexts(ctx, bc1, bc2)
+	assert.Error(t, err)
+	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
 }

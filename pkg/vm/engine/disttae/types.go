@@ -98,14 +98,14 @@ type DB struct {
 	sync.RWMutex
 	dnMap      map[string]int
 	metaTables map[string]Partitions
-	tables     map[[2]uint64]Partitions
+	partitions map[[2]uint64]Partitions
 }
 
 type Partitions []*Partition
 
 // a partition corresponds to a dn
 type Partition struct {
-	sync.RWMutex
+	lock chan struct{}
 	// multi-version data of logtail, implemented with reusee's memengine
 	data             *memtable.Table[RowID, DataValue, *DataRow]
 	columnsIndexDefs []ColumnsIndexDef

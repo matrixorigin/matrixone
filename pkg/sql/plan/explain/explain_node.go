@@ -189,7 +189,7 @@ func (ndesc *NodeDescribeImpl) GetActualAnalyzeInfo(ctx context.Context, options
 		}
 		result += describe
 	} else {
-		result += "timeConsumed=0ms waitTime=0ms inputRows=0  outputRows=0 inputSize=0 bytes outputSize:0 bytes, memorySize=0 bytes"
+		result += "timeConsumed=0ns waitTime=0ns inputRows=0  outputRows=0 inputSize=0 bytes outputSize:0 bytes, memorySize=0 bytes"
 	}
 	return result, nil
 }
@@ -435,8 +435,8 @@ func NewAnalyzeInfoDescribeImpl(analyze *plan.AnalyzeInfo) *AnalyzeInfoDescribeI
 }
 
 func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "timeConsumed=" + strconv.FormatInt(a.AnalyzeInfo.TimeConsumed, 10) + "us" +
-		" waitTime=" + strconv.FormatInt(a.AnalyzeInfo.WaitTimeConsumed, 10) + "us" +
+	result := "timeConsumed=" + strconv.FormatInt(a.AnalyzeInfo.TimeConsumed, 10) + "ns" +
+		" waitTime=" + strconv.FormatInt(a.AnalyzeInfo.WaitTimeConsumed, 10) + "ns" +
 		" inputRows=" + strconv.FormatInt(a.AnalyzeInfo.InputRows, 10) +
 		" outputRows=" + strconv.FormatInt(a.AnalyzeInfo.OutputRows, 10) +
 		" inputSize=" + strconv.FormatInt(a.AnalyzeInfo.InputSize, 10) + "bytes" +
@@ -455,9 +455,10 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		result = " (cost=0)"
 		//result = " (cost=%.2f..%.2f rows=%.2f ndv=%.2f rowsize=%.f)"
 	} else {
-		var blockNumStr, hashmapSizeStr string
+		var blockNumStr, hashmapSizeStr, selString string
 		if c.Stats.BlockNum > 0 {
 			blockNumStr = " blockNum=" + strconv.FormatInt(int64(c.Stats.BlockNum), 10)
+			selString = " selectivity=" + strconv.FormatFloat(c.Stats.Selectivity, 'f', 2, 64)
 		}
 		if c.Stats.HashmapSize > 0 {
 			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapSize, 'f', 2, 64)
@@ -465,7 +466,7 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 
 		result = " (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
 			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +
-			blockNumStr + hashmapSizeStr + ")"
+			blockNumStr + selString + hashmapSizeStr + ")"
 	}
 	return result, nil
 }

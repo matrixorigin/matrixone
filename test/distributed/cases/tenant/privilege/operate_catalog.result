@@ -87,9 +87,9 @@ invalid input: cannot insert/update/delete from view
 update system.error_info set err_code = "1111";
 invalid input: cannot insert/update/delete from view
 insert into error_info values ("2022-10-09 00:00:00", "1", "1", "1", "1", "1");
-invalid input: cannot insert into view 'error_info'
+invalid input: cannot insert/update/delete from view
 insert into system.error_info values ("2022-10-09 00:00:00", "1", "1", "1", "1", "1");
-invalid input: cannot insert into view 'error_info'
+invalid input: cannot insert/update/delete from view
 delete from error_info;
 invalid input: cannot insert/update/delete from view
 delete from system.error_info;
@@ -170,9 +170,9 @@ invalid input: cannot insert/update/delete from view
 update system_metrics.sql_statement_total set type = "1";
 invalid input: cannot insert/update/delete from view
 insert into sql_statement_total values ("2022-10-09 00:00:00",0,"1","1","1","1");
-invalid input: cannot insert into view 'sql_statement_total'
+invalid input: cannot insert/update/delete from view
 insert into system_metrics.sql_statement_total values ("2022-10-09 00:00:00",0,"1","1","1","1");
-invalid input: cannot insert into view 'sql_statement_total'
+invalid input: cannot insert/update/delete from view
 drop table if exists mysql.user;
 internal error: do not have privilege to execute the statement
 drop table if exists mysql.db;

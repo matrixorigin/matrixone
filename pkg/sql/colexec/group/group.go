@@ -256,12 +256,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		ctr.vecs[i] = vec
 	}
 
-	if len(ctr.groupVecs) == 1 && !ctr.groupVecs[0].needFree {
-		if ctr.groupVecs[0].vec.IsLowCardinality() {
-			ctr.idx = ctr.groupVecs[0].vec.Index().(*index.LowCardinalityIndex).Dup()
-		}
-	}
-
 	if ctr.bat == nil {
 		size := 0
 		ctr.bat = batch.NewWithSize(len(ap.Exprs))

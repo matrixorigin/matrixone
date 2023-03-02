@@ -187,8 +187,6 @@ type MVCCNode interface {
 	ReadFrom(r io.Reader) (n int64, err error)
 	CloneData() MVCCNode
 	CloneAll() MVCCNode
-
-	Close()
 }
 type AppendNode interface {
 	MVCCNode

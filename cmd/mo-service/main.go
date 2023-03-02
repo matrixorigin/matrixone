@@ -70,6 +70,10 @@ func main() {
 	if *allocsProfilePathFlag != "" {
 		defer writeAllocsProfile()
 	}
+	if *fileServiceProfilePathFlag != "" {
+		stop := startFileServiceProfile()
+		defer stop()
+	}
 	if *httpListenAddr != "" {
 		go func() {
 			http.ListenAndServe(*httpListenAddr, nil)
@@ -175,7 +179,7 @@ func startCNService(
 			panic(err)
 		}
 		// TODO: global client need to refactor
-		err = cnclient.NewCNClient(&cnclient.ClientConfig{})
+		err = cnclient.NewCNClient(&cnclient.ClientConfig{RPC: cfg.getCNServiceConfig().RPC})
 		if err != nil {
 			panic(err)
 		}
@@ -289,7 +293,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		initWG.Add(1)
 		collector := export.NewMOCollector(ctx)
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
-			if ctx, err = motrace.InitWithConfig(ctx,
+			if err = motrace.InitWithConfig(ctx,
 				&SV,
 				motrace.WithNode(UUID, nodeRole),
 				motrace.WithBatchProcessor(collector),

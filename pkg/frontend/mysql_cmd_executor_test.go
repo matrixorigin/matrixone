@@ -23,13 +23,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/fagongzi/goetty/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/google/uuid"
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -157,7 +158,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().GetColumns().Return(cols, nil).AnyTimes()
 
 		cws := []ComputationWrapper{
-			use_t,
+			//use_t,
 			create_1,
 			select_1,
 		}
@@ -798,59 +799,6 @@ func Test_GetComputationWrapper(t *testing.T) {
 	})
 }
 
-func Test_handleShowColumns(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("handleShowColumns succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-		ioses.EXPECT().Ref().AnyTimes()
-		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false)
-		ses.SetRequestContext(ctx)
-		data := make([][]interface{}, 1)
-		data[0] = make([]interface{}, primaryKeyPos+1)
-		data[0][0] = []byte("col1")
-		typ, err := types.Encode(types.New(types.T_int8, 0, 0, 0))
-		convey.So(err, convey.ShouldBeNil)
-		data[0][1] = typ
-		data[0][2] = []byte("NULL")
-		data[0][3] = int8(2)
-		defaultV, err := types.Encode(&plan2.Default{NullAbility: true, Expr: nil, OriginString: "", XXX_NoUnkeyedLiteral: struct{}{}, XXX_unrecognized: []byte{}, XXX_sizecache: 0})
-		convey.So(err, convey.ShouldBeNil)
-		data[0][5] = defaultV
-		data[0][primaryKeyPos] = []byte("p")
-		ses.SetData(data)
-		proto.ses = ses
-
-		ses.mrs = &MysqlResultSet{}
-
-		tableName := &tree.UnresolvedObjectName{
-			NumParts: 2,
-		}
-		tableName.Parts[0] = "x"
-		tableName.Parts[0] = "y"
-		err = handleShowColumns(ses, &tree.ShowColumns{
-			Table: tableName,
-		})
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
-
 func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecutor) error) {
 	ctx := context.TODO()
 	convey.Convey(fmt.Sprintf("%s succ", funName), t, func() {
@@ -1037,43 +985,6 @@ func Test_convert_type(t *testing.T) {
 	})
 }
 
-func Test_handleLoadData(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("call handleLoadData func", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-		ioses.EXPECT().Ref().AnyTimes()
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		proc := &process.Process{}
-
-		mce := NewMysqlCmdExecutor()
-		ses := &Session{
-			protocol: proto,
-		}
-		mce.ses = ses
-		load := &tree.Import{
-			Local: true,
-		}
-		err = mce.handleLoadData(ctx, proc, load)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-}
-
 func TestHandleDump(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("call handleDump func", t, func() {
@@ -1229,7 +1140,7 @@ func Test_getSqlType(t *testing.T) {
 		ses.getSqlType(sql)
 		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudUserSql)
 
-		sql = "/* cloud_nouser */ use db"
+		sql = "/* cloud_nonuser */ use db"
 		ses.getSqlType(sql)
 		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudNoUserSql)
 
@@ -1241,7 +1152,11 @@ func Test_getSqlType(t *testing.T) {
 
 func TestProcessLoadLocal(t *testing.T) {
 	convey.Convey("call processLoadLocal func", t, func() {
-		param := &tree.ExternParam{Filepath: "test.csv"}
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "test.csv",
+			},
+		}
 		proc := testutil.NewProc()
 		var writer *io.PipeWriter
 		proc.LoadLocalReader, writer = io.Pipe()
@@ -1260,6 +1175,7 @@ func TestProcessLoadLocal(t *testing.T) {
 			cnt++
 			return
 		}).AnyTimes()
+		ioses.EXPECT().Close().AnyTimes()
 		proto := &FakeProtocol{
 			ioses: ioses,
 		}
@@ -1285,4 +1201,43 @@ func TestProcessLoadLocal(t *testing.T) {
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
 	})
+}
+
+func Test_StatementClassify(t *testing.T) {
+	type arg struct {
+		stmt tree.Statement
+		want bool
+	}
+
+	args := []arg{
+		{&tree.ShowCreateTable{}, true},
+		{&tree.ShowCreateView{}, true},
+		{&tree.ShowCreateDatabase{}, true},
+		{&tree.ShowColumns{}, true},
+		{&tree.ShowDatabases{}, true},
+		{&tree.ShowTarget{}, true},
+		{&tree.ShowTableStatus{}, true},
+		{&tree.ShowGrants{}, true},
+		{&tree.ShowTables{}, true},
+		{&tree.ShowProcessList{}, true},
+		{&tree.ShowErrors{}, true},
+		{&tree.ShowWarnings{}, true},
+		{&tree.ShowCollation{}, true},
+		{&tree.ShowVariables{}, true},
+		{&tree.ShowStatus{}, true},
+		{&tree.ShowIndex{}, true},
+		{&tree.ShowFunctionStatus{}, true},
+		{&tree.ShowNodeList{}, true},
+		{&tree.ShowLocks{}, true},
+		{&tree.ShowTableNumber{}, true},
+		{&tree.ShowColumnNumber{}, true},
+		{&tree.ShowTableValues{}, true},
+		{&tree.ShowAccounts{}, true},
+	}
+
+	for _, a := range args {
+		ret, err := StatementCanBeExecutedInUncommittedTransaction(nil, a.stmt)
+		assert.Nil(t, err)
+		assert.Equal(t, ret, a.want)
+	}
 }

@@ -33,13 +33,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func appendQueryNode(query *Query, node *Node) int32 {
-	nodeID := int32(len(query.Nodes))
-	node.NodeId = nodeID
-	query.Nodes = append(query.Nodes, node)
+// func appendQueryNode(query *Query, node *Node) int32 {
+// 	nodeID := int32(len(query.Nodes))
+// 	node.NodeId = nodeID
+// 	query.Nodes = append(query.Nodes, node)
 
-	return nodeID
-}
+// 	return nodeID
+// }
 
 func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
@@ -73,20 +73,21 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 			// for char type,if we didn't specify the length,
 			// the default width should be 1, and for varchar,it's
 			// the defaultMaxLength
+			fstr := strings.ToLower(n.InternalType.FamilyString)
 			if width == -1 {
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
-				if n.InternalType.FamilyString == "char" {
+				if fstr == "char" {
 					width = 1
 				} else {
 					width = types.MaxVarcharLen
 				}
 			}
-			if n.InternalType.FamilyString == "char" && width > types.MaxCharLen {
+			if fstr == "char" && width > types.MaxCharLen {
 				return nil, moerr.NewOutOfRange(ctx, "char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
-			} else if n.InternalType.FamilyString == "varchar" && width > types.MaxVarcharLen {
+			} else if fstr == "varchar" && width > types.MaxVarcharLen {
 				return nil, moerr.NewOutOfRange(ctx, "varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
-			if n.InternalType.FamilyString == "char" { // type char
+			if fstr == "char" { // type char
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
 			}
 			return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
@@ -95,20 +96,21 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 			// for char type,if we didn't specify the length,
 			// the default width should be 1, and for varchar,it's
 			// the defaultMaxLength
+			fstr := strings.ToLower(n.InternalType.FamilyString)
 			if width == -1 {
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
-				if n.InternalType.FamilyString == "char" {
+				if fstr == "char" {
 					width = 1
 				} else {
 					width = types.MaxVarcharLen
 				}
 			}
-			if n.InternalType.FamilyString == "char" && width > types.MaxCharLen {
+			if fstr == "char" && width > types.MaxCharLen {
 				return nil, moerr.NewOutOfRange(ctx, "char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
-			} else if n.InternalType.FamilyString == "varchar" && width > types.MaxVarcharLen {
+			} else if fstr == "varchar" && width > types.MaxVarcharLen {
 				return nil, moerr.NewOutOfRange(ctx, "varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
-			if n.InternalType.FamilyString == "char" { // type char
+			if fstr == "char" { // type char
 				return &plan.Type{Id: int32(types.T_char), Size: 24, Width: width}, nil
 			}
 			return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
@@ -405,16 +407,18 @@ func judgeUnixTimestampReturnType(timestr string) types.T {
 }
 
 // Get the primary key name of the table
-func GetTablePriKeyName(cols []*plan.ColDef, cPkeyCol *plan.ColDef) string {
-	for _, col := range cols {
-		if col.Name != catalog.Row_ID && col.Primary {
-			return col.Name
-		}
-
+func getTablePriKeyName(priKeyDef *plan.PrimaryKeyDef) string {
+	if priKeyDef == nil {
+		return ""
+	} else {
+		return priKeyDef.PkeyColName
 	}
+}
 
-	if cPkeyCol != nil {
-		return cPkeyCol.Name
+// Check whether the table column name is an internal key
+func checkTableColumnNameValid(name string) bool {
+	if name == catalog.Row_ID || name == catalog.CPrimaryKeyColName {
+		return false
 	}
-	return ""
+	return true
 }

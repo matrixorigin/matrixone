@@ -31,7 +31,7 @@ func TestNewFutureWillPanic(t *testing.T) {
 		}
 	}()
 	f := newFuture(nil)
-	f.init(0, context.Background())
+	f.init(RPCMessage{Ctx: context.Background()})
 }
 
 func TestCloseChanAfterGC(t *testing.T) {
@@ -57,15 +57,15 @@ func TestNewFuture(t *testing.T) {
 	defer cancel()
 
 	f := newFuture(nil)
-	f.init(1, ctx)
+	f.init(newTestRPCMessage(ctx, 1))
 	defer f.Close()
 
 	assert.NotNil(t, f)
 	assert.False(t, f.mu.closed, false)
 	assert.NotNil(t, f.c)
 	assert.Equal(t, 0, len(f.c))
-	assert.Equal(t, uint64(1), f.id)
-	assert.Equal(t, ctx, f.ctx)
+	assert.Equal(t, uint64(1), f.getSendMessageID())
+	assert.Equal(t, ctx, f.send.Ctx)
 }
 
 func TestReleaseFuture(t *testing.T) {
@@ -74,13 +74,13 @@ func TestReleaseFuture(t *testing.T) {
 
 	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(1, ctx)
+	f.init(newTestRPCMessage(ctx, 1))
 	f.c <- req
 	f.Close()
 	assert.True(t, f.mu.closed)
 	assert.Equal(t, 0, len(f.c))
-	assert.Equal(t, uint64(0), f.id)
-	assert.Nil(t, f.ctx)
+	assert.Equal(t, RPCMessage{}, f.send)
+	assert.Nil(t, f.send.Ctx)
 }
 
 func TestGet(t *testing.T) {
@@ -90,10 +90,10 @@ func TestGet(t *testing.T) {
 	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
 	f.ref()
-	f.init(1, ctx)
+	f.init(newTestRPCMessage(ctx, 1))
 	defer f.Close()
 
-	f.writeCompleted()
+	f.messageSended(nil)
 	f.done(req, nil)
 	resp, err := f.Get()
 	assert.Nil(t, err)
@@ -106,10 +106,10 @@ func TestGetWithTimeout(t *testing.T) {
 
 	f := newFuture(func(f *Future) { f.reset() })
 	f.ref()
-	f.init(1, ctx)
+	f.init(newTestRPCMessage(ctx, 1))
 	defer f.Close()
 
-	f.writeCompleted()
+	f.messageSended(nil)
 	resp, err := f.Get()
 	assert.NotNil(t, err)
 	assert.Nil(t, resp)
@@ -122,13 +122,13 @@ func TestGetWithError(t *testing.T) {
 
 	f := newFuture(func(f *Future) { f.reset() })
 	f.ref()
-	f.init(1, ctx)
+	f.init(newTestRPCMessage(ctx, 1))
 	defer f.Close()
 
 	errResp := moerr.NewBackendClosed(context.TODO())
 	f.error(1, errResp, nil)
 
-	f.writeCompleted()
+	f.messageSended(nil)
 	resp, err := f.Get()
 	assert.Error(t, err)
 	assert.Nil(t, resp)
@@ -140,7 +140,7 @@ func TestGetWithInvalidResponse(t *testing.T) {
 	defer cancel()
 
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(1, ctx)
+	f.init(newTestRPCMessage(ctx, 1))
 	defer f.Close()
 
 	f.done(newTestMessage(2), nil)
@@ -150,10 +150,14 @@ func TestGetWithInvalidResponse(t *testing.T) {
 func TestTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(1, ctx)
+	f.init(newTestRPCMessage(ctx, 1))
 	defer f.Close()
 
 	assert.False(t, f.timeout())
 	cancel()
 	assert.True(t, f.timeout())
+}
+
+func newTestRPCMessage(ctx context.Context, id uint64) RPCMessage {
+	return RPCMessage{Ctx: ctx, Message: newTestMessage(id)}
 }

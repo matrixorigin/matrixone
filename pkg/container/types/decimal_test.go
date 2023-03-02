@@ -16,52 +16,14 @@ package types
 
 import (
 	"fmt"
-	"math/big"
 	"math/rand"
 	"testing"
 )
 
-func Test2(t *testing.T) {
-	x, _, y := Parse128("0xFFFFFFFFFFFFFE")
+func Test1(t *testing.T) {
+	x, y := ParseDecimal128("0.9999999999999999999999999999999999999999999999999999999", 5, 4)
 	if y == nil {
 		fmt.Println(x)
-	}
-}
-func Test1(t *testing.T) {
-	a1 := rand.Int()
-	a2 := rand.Int()
-	a3 := rand.Int()
-	a4 := rand.Int()
-	x := Decimal256{uint64(a1), uint64(a2), 0, 0}
-	y := Decimal256{uint64(a3), uint64(a4), 0, 0}
-	z := big.NewInt(int64(x.B64_127))
-	z1 := big.NewInt(1 << 32)
-	z2 := big.NewInt(int64(x.B0_63))
-	z1.Mul(z1, z1)
-	z.Mul(z, z1).Add(z, z2)
-	w := big.NewInt(int64(y.B64_127))
-	w2 := big.NewInt(int64(y.B0_63))
-	w.Mul(w, z1).Add(w, w2)
-	z.Mul(z, w)
-	err := error(nil)
-	x, err = x.Mul256(y)
-	if err != nil {
-		panic("wrong")
-	}
-	if w.Mod(z, z1).Uint64() != x.B0_63 {
-		panic("wrong")
-	}
-	z.Div(z, z1)
-	if w.Mod(z, z1).Uint64() != x.B64_127 {
-		panic("wrong")
-	}
-	z.Div(z, z1)
-	if w.Mod(z, z1).Uint64() != x.B128_191 {
-		panic("wrong")
-	}
-	z.Div(z, z1)
-	if z.Uint64() != x.B192_255 {
-		panic("wrong")
 	}
 }
 func TestDecimalFloat(t *testing.T) {
@@ -130,7 +92,7 @@ func BenchmarkSub(b *testing.B) {
 
 func BenchmarkFloatMul(b *testing.B) {
 	x := float64(rand.Int())
-	y := float64(1.0000001)
+	y := float64(1)
 	for i := 0; i < b.N; i++ {
 		x *= y
 	}

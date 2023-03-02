@@ -37,6 +37,7 @@ type _TestS3Config struct {
 	APIKey    string `json:"s3-test-key"`
 	APISecret string `json:"s3-test-secret"`
 	Bucket    string `json:"s3-test-bucket"`
+	RoleARN   string `json:"role-arn"`
 }
 
 func loadS3TestConfig() (config _TestS3Config, err error) {
@@ -126,7 +127,7 @@ func TestS3FS(t *testing.T) {
 		assert.True(t, len(entries) > 0)
 	})
 
-	t.Run("caching file service", func(t *testing.T) {
+	t.Run("mem caching file service", func(t *testing.T) {
 		cacheDir := t.TempDir()
 		testCachingFileService(t, func() CachingFileService {
 			fs, err := NewS3FS(
@@ -136,6 +137,24 @@ func TestS3FS(t *testing.T) {
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				128*1024,
+				-1,
+				cacheDir,
+			)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
+	t.Run("disk caching file service", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		testCachingFileService(t, func() CachingFileService {
+			fs, err := NewS3FS(
+				"",
+				"s3",
+				config.Endpoint,
+				config.Bucket,
+				time.Now().Format("2006-01-02.15:04:05.000000"),
+				-1,
 				128*1024,
 				cacheDir,
 			)
@@ -239,6 +258,75 @@ func TestDynamicS3Opts(t *testing.T) {
 			"foo/bar/baz",
 		))
 		assert.Nil(t, err)
+		assert.Equal(t, path, "foo/bar/baz")
+		return fs
+	})
+}
+
+func TestDynamicS3OptsRoleARN(t *testing.T) {
+	config, err := loadS3TestConfig()
+	assert.Nil(t, err)
+	if config.Endpoint == "" {
+		// no config
+		t.Skip()
+	}
+	t.Setenv("AWS_REGION", config.Region)
+	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
+	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
+	testFileService(t, func(name string) FileService {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		err := w.Write([]string{
+			"s3-opts",
+			"endpoint=" + config.Endpoint,
+			"bucket=" + config.Bucket,
+			"prefix=" + time.Now().Format("2006-01-02.15:04:05.000000"),
+			"name=" + name,
+			"role-arn=" + config.RoleARN,
+		})
+		assert.Nil(t, err)
+		w.Flush()
+		fs, path, err := GetForETL(nil, JoinPath(
+			buf.String(),
+			"foo/bar/baz",
+		))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assert.Equal(t, path, "foo/bar/baz")
+		return fs
+	})
+}
+
+func TestDynamicS3OptsNoRegion(t *testing.T) {
+	config, err := loadS3TestConfig()
+	assert.Nil(t, err)
+	if config.Endpoint == "" {
+		// no config
+		t.Skip()
+	}
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
+	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
+	testFileService(t, func(name string) FileService {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		err := w.Write([]string{
+			"s3-opts",
+			"bucket=" + config.Bucket,
+			"prefix=" + time.Now().Format("2006-01-02.15:04:05.000000"),
+			"name=" + name,
+			"role-arn=" + config.RoleARN,
+		})
+		assert.Nil(t, err)
+		w.Flush()
+		fs, path, err := GetForETL(nil, JoinPath(
+			buf.String(),
+			"foo/bar/baz",
+		))
+		if err != nil {
+			t.Fatal(err)
+		}
 		assert.Equal(t, path, "foo/bar/baz")
 		return fs
 	})

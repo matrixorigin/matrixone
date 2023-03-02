@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -354,14 +355,38 @@ func (h *Handle) HandleFlushTable(
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	_ db.FlushTable,
+	req db.Checkpoint,
 	resp *apipb.SyncLogTailResp) (err error) {
+
+	timeout := req.FlushDuration
 
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 
 	err = h.eng.ForceCheckpoint(ctx,
-		currTs)
+		currTs, timeout)
 	return err
+}
+
+func (h *Handle) HandleInspectDN(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req db.InspectDN,
+	resp *db.InspectResp) (err error) {
+	tae := h.eng.GetTAE(context.Background())
+	args, _ := shlex.Split(req.Operation)
+	logutil.Info("Inspect", zap.Strings("args", args))
+	b := &bytes.Buffer{}
+
+	inspectCtx := &inspectContext{
+		db:     tae,
+		acinfo: &req.AccessInfo,
+		args:   args,
+		out:    b,
+		resp:   resp,
+	}
+	RunInspect(inspectCtx)
+	resp.Message = b.String()
+	return nil
 }
 
 func (h *Handle) startLoadJobs(
@@ -525,7 +550,8 @@ func (h *Handle) CacheTxnRequest(
 	h.mu.Unlock()
 	txnCtx.reqs = append(txnCtx.reqs, req)
 	if r, ok := req.(*db.CreateRelationReq); ok {
-		schema, err := moengine.HandleDefsToSchema(r.Name, r.Defs)
+		// Does this place need
+		schema, err := moengine.DefsToSchema(r.Name, r.Defs)
 		if err != nil {
 			return err
 		}

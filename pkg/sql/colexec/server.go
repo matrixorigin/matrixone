@@ -21,6 +21,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -36,6 +37,8 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 	Srv = &Server{
 		mp:       make(map[uint64]*process.WaitRegister),
 		hakeeper: client,
+
+		uuidCsChanMap: UuidCsChanMap{mp: make(map[uuid.UUID]chan process.WrapCs)},
 	}
 	return Srv
 }
@@ -53,6 +56,23 @@ func (srv *Server) RegistConnector(reg *process.WaitRegister) uint64 {
 	srv.mp[srv.id] = reg
 	defer func() { srv.id++ }()
 	return srv.id
+}
+
+func (srv *Server) GetNotifyChByUuid(u uuid.UUID) (chan process.WrapCs, bool) {
+	srv.uuidCsChanMap.Lock()
+	defer srv.uuidCsChanMap.Unlock()
+	p, ok := srv.uuidCsChanMap.mp[u]
+	if !ok {
+		return nil, false
+	}
+	return p, true
+}
+
+func (srv *Server) PutNotifyChIntoUuidMap(u uuid.UUID, ch chan process.WrapCs) error {
+	srv.uuidCsChanMap.Lock()
+	defer srv.uuidCsChanMap.Unlock()
+	srv.uuidCsChanMap.mp[u] = ch
+	return nil
 }
 
 func (srv *Server) HandleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {

@@ -50,7 +50,7 @@ func init() {
 
 var inited uint32
 
-func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opts ...TracerProviderOption) (context.Context, error) {
+func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opts ...TracerProviderOption) error {
 	opts = append(opts,
 		withMOVersion(SV.MoVersion),
 		EnableTracer(!SV.DisableTrace),
@@ -62,10 +62,10 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 	return Init(ctx, opts...)
 }
 
-func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, error) {
+func Init(ctx context.Context, opts ...TracerProviderOption) error {
 	// fix multi-init in standalone
 	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
-		return trace.ContextWithSpanContext(ctx, *DefaultSpanContext()), nil
+		return nil
 	}
 
 	// init TraceProvider
@@ -88,7 +88,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 
 	// init Exporter
 	if err := initExporter(ctx, config); err != nil {
-		return nil, err
+		return err
 	}
 
 	// init tool dependence
@@ -98,7 +98,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 
 	logutil.Infof("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
 
-	return DefaultContext(), nil
+	return nil
 }
 
 func initExporter(ctx context.Context, config *tracerProviderConfig) error {

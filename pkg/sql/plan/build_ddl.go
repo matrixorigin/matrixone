@@ -44,7 +44,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
 	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
 		cols[idx] = &plan.ColDef{
-			Name: query.Headings[idx],
+			Name: strings.ToLower(query.Headings[idx]),
 			Alg:  plan.CompressType_Lz4,
 			Typ:  expr.Typ,
 			Default: &plan.Default{
@@ -56,8 +56,19 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	}
 	tableDef.Cols = cols
 
+	// Check alter and change the viewsql.
+	viewSql := ctx.GetRootSql()
+	if len(viewSql) != 0 {
+		if viewSql[0] == 'A' {
+			viewSql = strings.Replace(viewSql, "ALTER", "CREATE", 1)
+		}
+		if viewSql[0] == 'a' {
+			viewSql = strings.Replace(viewSql, "alter", "create", 1)
+		}
+	}
+
 	viewData, err := json.Marshal(ViewData{
-		Stmt:            ctx.GetRootSql(),
+		Stmt:            viewSql,
 		DefaultDatabase: ctx.DefaultDatabase(),
 	})
 	if err != nil {
@@ -91,7 +102,6 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	viewName := stmt.Name.ObjectName
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
-		Temporary:   stmt.Temporary,
 		TableDef: &TableDef{
 			Name: string(viewName),
 		},
@@ -204,7 +214,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider":
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id":
 			default:
 				return nil, moerr.NewBadConfig(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
@@ -236,6 +246,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		kind := catalog.SystemOrdinaryRel
 		if stmt.IsClusterTable {
 			kind = catalog.SystemClusterRel
+		}
+		// when create hidden talbe(like: auto_incr_table, index_table)， we set relKind to empty
+		if catalog.IsHiddenTable(createTable.TableDef.Name) {
+			kind = ""
 		}
 		properties := []*plan.Property{
 			{
@@ -382,6 +396,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				return err
 			}
 
+			if !checkTableColumnNameValid(def.Name.Parts[0]) {
+				return moerr.NewInvalidInput(ctx.GetContext(), "table column name '%s' is illegal and conflicts with internal keyword", def.Name.Parts[0])
+			}
+
 			colType.AutoIncr = auto_incr
 			col := &ColDef{
 				Name:     def.Name.Parts[0],
@@ -471,44 +489,46 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 
 			fkDef.ForeignTbl = tableRef.TblId
-			columnNames := make(map[string]uint64)
-			uniqueColumn := make(map[uint64]bool)
-			for _, col := range tableRef.Cols {
-				columnNames[col.Name] = col.ColId
+			columnIdPos := make(map[uint64]int)
+			columnNamePos := make(map[string]int)
+			uniqueColumn := make(map[string]uint64)
+			for i, col := range tableRef.Cols {
+				columnIdPos[col.ColId] = i
+				columnNamePos[col.Name] = i
 				if col.Primary {
-					uniqueColumn[col.ColId] = true
+					uniqueColumn[col.Name] = col.ColId
+				}
+			}
+			if tableRef.Pkey != nil {
+				for _, colName := range tableRef.Pkey.Names {
+					uniqueColumn[colName] = tableRef.Cols[columnNamePos[colName]].ColId
 				}
 			}
 
-			/// now tableRef.Indices is empty, you can not test it
-			for _, index := range tableRef.Indices {
+			// now tableRef.Indices is empty, you can not test it
+			for _, index := range tableRef.Indexes {
 				if index.Unique {
 					if len(index.Parts) == 1 {
-						if colId, ok := getColIdFromExpr(index.Parts[0]); ok {
-							uniqueColumn[colId] = true
-						}
+						uniqueColName := index.Parts[0]
+						colId := tableRef.Cols[columnNamePos[uniqueColName]].ColId
+						uniqueColumn[uniqueColName] = colId
 					}
 				}
 			}
+
 			for i, keyPart := range refer.KeyParts {
-				getCol := false
 				colName := keyPart.ColName.Parts[0]
-				for _, col := range tableRef.Cols {
-					if col.Name == colName {
-						if _, ok := uniqueColumn[col.ColId]; ok {
-							// check column type
-							if col.Typ.Id != fkColTyp[i].Id {
-								return moerr.NewInternalError(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkColName[i])
-							}
-							fkDef.ForeignCols[i] = col.ColId
-							getCol = true
-						} else {
-							return moerr.NewInternalError(ctx.GetContext(), "reference column '%v' is not unique constraint(Unique index or Primary Key)", colName)
+				if _, exists := columnNamePos[colName]; exists {
+					if colId, ok := uniqueColumn[colName]; ok {
+						// check column type
+						if tableRef.Cols[columnIdPos[colId]].Typ.Id != fkColTyp[i].Id {
+							return moerr.NewInternalError(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkColName[i])
 						}
-						break
+						fkDef.ForeignCols[i] = colId
+					} else {
+						return moerr.NewInternalError(ctx.GetContext(), "reference column '%v' is not unique constraint(Unique index or Primary Key)", colName)
 					}
-				}
-				if !getCol {
+				} else {
 					return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkTableName)
 				}
 			}
@@ -566,15 +586,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 		if len(primaryKeys) == 1 {
 			pkeyName = primaryKeys[0]
-			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: &plan.PrimaryKeyDef{
-						Names: primaryKeys,
-					},
-				},
-			})
+			for _, col := range createTable.TableDef.Cols {
+				if col.Name == pkeyName {
+					col.Primary = true
+					createTable.TableDef.Pkey = &PrimaryKeyDef{
+						Names:       primaryKeys,
+						PkeyColName: pkeyName,
+					}
+					break
+				}
+			}
 		} else {
-			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
+			//pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
+			pkeyName = catalog.CPrimaryKeyColName
 			colDef := &ColDef{
 				Name: pkeyName,
 				Alg:  plan.CompressType_Lz4,
@@ -589,15 +613,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					OriginString: "",
 				},
 			}
+			colDef.Primary = true
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[pkeyName] = colDef
-			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: &plan.PrimaryKeyDef{
-						Names: []string{pkeyName},
-					},
-				},
-			})
+
+			pkeyDef := &PrimaryKeyDef{
+				Names:       primaryKeys,
+				PkeyColName: pkeyName,
+			}
+			createTable.TableDef.Pkey = pkeyDef
 		}
 		for _, primaryKey := range primaryKeys {
 			colMap[primaryKey].Default.NullAbility = false
@@ -607,6 +631,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	//handle cluster by keys
 	if stmt.ClusterByOption != nil {
+		if stmt.Temporary {
+			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with temporary table is not support")
+		}
 		if len(primaryKeys) > 0 {
 			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
 		}
@@ -685,22 +712,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	return nil
 }
 
-func getColIdFromExpr(e *plan.Expr) (uint64, bool) {
-	switch exprImpl := e.Expr.(type) {
-	case *plan.Expr_F:
-		for _, expr := range exprImpl.F.Args {
-			if colId, ok := getColIdFromExpr(expr); ok {
-				return colId, ok
-			}
-		}
-		return 0, false
-	case *plan.Expr_Col:
-		return uint64(exprImpl.Col.ColPos), true
-	default:
-		return 0, false
-	}
-}
-
 func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 	switch typ {
 	case tree.REFERENCE_OPTION_CASCADE:
@@ -719,12 +730,12 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 }
 
 func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
-	def := &plan.UniqueIndexDef{
-		Fields: make([]*plan.Field, 0),
-	}
 	nameCount := make(map[string]int)
 
 	for _, indexInfo := range indexInfos {
+		indexDef := &plan.IndexDef{}
+		indexDef.Unique = true
+
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), true)
 
 		if err != nil {
@@ -733,10 +744,8 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		tableDef := &TableDef{
 			Name: indexTableName,
 		}
-		field := &plan.Field{
-			Parts: make([]string, 0),
-			Cols:  make([]*ColDef, 0),
-		}
+		indexParts := make([]string, 0)
+
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
@@ -751,7 +760,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if colMap[name].Typ.Id == int32(types.T_json) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
-			field.Parts = append(field.Parts, name)
+			indexParts = append(indexParts, name)
 		}
 
 		var keyName string
@@ -772,14 +781,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: &plan.PrimaryKeyDef{
-						Names: []string{keyName},
-					},
-				},
-			})
-			field.Cols = append(field.Cols, colDef)
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{keyName},
+				PkeyColName: keyName,
+			}
 		} else {
 			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
@@ -797,14 +802,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Pk{
-					Pk: &plan.PrimaryKeyDef{
-						Names: []string{keyName},
-					},
-				},
-			})
-			field.Cols = append(field.Cols, colDef)
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{keyName},
+				PkeyColName: keyName,
+			}
 		}
 		if pkeyName != "" {
 			colDef := &ColDef{
@@ -818,7 +819,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
-			field.Cols = append(field.Cols, colDef)
 		}
 		if indexInfo.Name == "" {
 			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
@@ -828,39 +828,34 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if count > 1 {
 				indexName = firstPart + "_" + strconv.Itoa(count)
 			}
-			def.IndexNames = append(def.IndexNames, indexName)
+			indexDef.IndexName = indexName
 		} else {
-			def.IndexNames = append(def.IndexNames, indexInfo.Name)
+			indexDef.IndexName = indexInfo.Name
 		}
-		def.TableNames = append(def.TableNames, indexTableName)
-		def.Fields = append(def.Fields, field)
-		def.TableExists = append(def.TableExists, true)
+		indexDef.IndexTableName = indexTableName
+		indexDef.Parts = indexParts
+		indexDef.TableExist = true
 		if indexInfo.IndexOption != nil {
-			def.Comments = append(def.Comments, indexInfo.IndexOption.Comment)
+			indexDef.Comment = indexInfo.IndexOption.Comment
 		} else {
-			def.Comments = append(def.Comments, "")
+			indexDef.Comment = ""
 		}
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
+
+		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 	}
-	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-		Def: &plan.TableDef_DefType_UIdx{
-			UIdx: def,
-		},
-	})
 	return nil
 }
 
 func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, ctx CompilerContext) error {
-	def := &plan.SecondaryIndexDef{
-		Fields: make([]*plan.Field, 0),
-	}
 	nameCount := make(map[string]int)
 
 	for _, indexInfo := range indexInfos {
-		field := &plan.Field{
-			Parts: make([]string, 0),
-			Cols:  make([]*ColDef, 0),
-		}
+		indexDef := &plan.IndexDef{}
+		indexDef.Unique = false
+
+		indexParts := make([]string, 0)
+
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
@@ -875,7 +870,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			if colMap[name].Typ.Id == int32(types.T_json) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
-			field.Parts = append(field.Parts, name)
+			indexParts = append(indexParts, name)
 		}
 
 		if indexInfo.Name == "" {
@@ -886,24 +881,20 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			if count > 1 {
 				indexName = firstPart + "_" + strconv.Itoa(count)
 			}
-			def.IndexNames = append(def.IndexNames, indexName)
+			indexDef.IndexName = indexName
 		} else {
-			def.IndexNames = append(def.IndexNames, indexInfo.Name)
+			indexDef.IndexName = indexInfo.Name
 		}
-		def.TableNames = append(def.TableNames, "")
-		def.Fields = append(def.Fields, field)
-		def.TableExists = append(def.TableExists, false)
+		indexDef.IndexTableName = ""
+		indexDef.Parts = indexParts
+		indexDef.TableExist = false
 		if indexInfo.IndexOption != nil {
-			def.Comments = append(def.Comments, indexInfo.IndexOption.Comment)
+			indexDef.Comment = indexInfo.IndexOption.Comment
 		} else {
-			def.Comments = append(def.Comments, "")
+			indexDef.Comment = ""
 		}
+		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 	}
-	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-		Def: &plan.TableDef_DefType_SIdx{
-			SIdx: def,
-		},
-	})
 	return nil
 }
 
@@ -943,19 +934,11 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
 		}
 
-		uDef, sDef := buildIndexDefs(tableDef.Defs)
 		truncateTable.IndexTableNames = make([]string, 0)
-		if uDef != nil {
-			for i := 0; i < len(uDef.TableNames); i++ {
-				if uDef.TableExists[i] {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, uDef.TableNames[i])
-				}
-			}
-		}
-		if sDef != nil {
-			for i := 0; i < len(sDef.TableNames); i++ {
-				if sDef.TableExists[i] {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, sDef.TableNames[i])
+		if tableDef.Indexes != nil {
+			for _, indexdef := range tableDef.Indexes {
+				if indexdef.TableExist {
+					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
 		}
@@ -1022,19 +1005,11 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			}
 		}
 
-		uDef, sDef := buildIndexDefs(tableDef.Defs)
 		dropTable.IndexTableNames = make([]string, 0)
-		if uDef != nil {
-			for i := 0; i < len(uDef.TableNames); i++ {
-				if uDef.TableExists[i] {
-					dropTable.IndexTableNames = append(dropTable.IndexTableNames, uDef.TableNames[i])
-				}
-			}
-		}
-		if sDef != nil {
-			for i := 0; i < len(sDef.TableNames); i++ {
-				if sDef.TableExists[i] {
-					dropTable.IndexTableNames = append(dropTable.IndexTableNames, sDef.TableNames[i])
+		if tableDef.Indexes != nil {
+			for _, indexdef := range tableDef.Indexes {
+				if indexdef.TableExist {
+					dropTable.IndexTableNames = append(dropTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
 		}
@@ -1141,20 +1116,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// check index
 	indexName := string(stmt.Name)
-	for _, def := range tableDef.Defs {
-		switch idx := def.Def.(type) {
-		case *plan.TableDef_DefType_UIdx:
-			for _, name := range idx.UIdx.IndexNames {
-				if indexName == name {
-					return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
-				}
-			}
-		case *plan.TableDef_DefType_SIdx:
-			for _, name := range idx.SIdx.IndexNames {
-				if indexName == name {
-					return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
-				}
-			}
+	for _, def := range tableDef.Indexes {
+		if def.IndexName == indexName {
+			return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
 		}
 	}
 	// build index
@@ -1182,7 +1146,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// index.TableDef.Defs store info of index need to be modified
 	// index.IndexTables store index table need to be created
-	oriPriKeyName := GetTablePriKeyName(tableDef.Cols, tableDef.CompositePkey)
+	oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 	createIndex.OriginTablePrimaryKey = oriPriKeyName
 
 	index := &plan.CreateTable{TableDef: &TableDef{}}
@@ -1231,26 +1195,15 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	// check index
 	dropIndex.IndexName = string(stmt.Name)
 	found := false
-	for _, def := range tableDef.Defs {
-		switch idx := def.Def.(type) {
-		case *plan.TableDef_DefType_UIdx:
-			for i, name := range idx.UIdx.IndexNames {
-				if dropIndex.IndexName == name {
-					dropIndex.IndexTableName = idx.UIdx.TableNames[i]
-					found = true
-					break
-				}
-			}
-		case *plan.TableDef_DefType_SIdx:
-			for i, name := range idx.SIdx.IndexNames {
-				if dropIndex.IndexName == name {
-					dropIndex.IndexTableName = idx.SIdx.TableNames[i]
-					found = true
-					break
-				}
-			}
+
+	for _, indexdef := range tableDef.Indexes {
+		if dropIndex.IndexName == indexdef.IndexName {
+			dropIndex.IndexTableName = indexdef.IndexTableName
+			found = true
+			break
 		}
 	}
+
 	if !found {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
 	}
@@ -1269,12 +1222,11 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 
 // Get tabledef(col, viewsql, properties) for alterview.
 func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
-	viewName := stmt.Name.ObjectName
+	viewName := string(stmt.Name.ObjectName)
 	alterView := &plan.AlterView{
-		IfExists:  stmt.IfExists,
-		Temporary: stmt.Temporary,
+		IfExists: stmt.IfExists,
 		TableDef: &plan.TableDef{
-			Name: string(viewName),
+			Name: viewName,
 		},
 	}
 	// get database name
@@ -1283,7 +1235,32 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	} else {
 		alterView.Database = string(stmt.Name.SchemaName)
 	}
+	if alterView.Database == "" {
+		alterView.Database = ctx.DefaultDatabase()
+	}
 
+	//step 1: check the view exists or not
+	_, oldViewDef := ctx.Resolve(alterView.Database, viewName)
+	if oldViewDef == nil {
+		if !alterView.IfExists {
+			return nil, moerr.NewBadView(ctx.GetContext(),
+				alterView.Database,
+				viewName)
+		}
+	} else {
+		if oldViewDef.ViewSql == nil {
+			return nil, moerr.NewBadView(ctx.GetContext(),
+				alterView.Database,
+				viewName)
+		}
+	}
+
+	//step 2: generate new view def
+	ctx.SetBuildingAlterView(true, alterView.Database, viewName)
+	//restore
+	defer func() {
+		ctx.SetBuildingAlterView(false, "", "")
+	}()
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
 	if err != nil {
 		return nil, err

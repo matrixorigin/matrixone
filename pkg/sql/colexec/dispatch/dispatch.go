@@ -16,13 +16,10 @@ package dispatch
 
 import (
 	"bytes"
-	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -33,40 +30,55 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	if ap.CrossCN {
-		ap.ctr.streams = make([]*WrapperStream, 0, len(ap.Nodes))
-		for i := range ap.ctr.streams {
-			if ap.Nodes[i].Node.Addr == "" {
-				ap.ctr.streams = append(ap.ctr.streams, nil)
-				continue
-			}
-			stream, errStream := cnclient.GetStreamSender(ap.Nodes[i].Node.Addr)
-			if errStream != nil {
-				return errStream
-			}
-			ap.ctr.streams = append(ap.ctr.streams, &WrapperStream{stream, ap.Nodes[i].Uuid})
+
+	switch ap.FuncId {
+	case SendToAllFunc:
+		if len(ap.RemoteRegs) == 0 {
+			return moerr.NewInternalError(proc.Ctx, "SendToAllFunc should include RemoteRegs")
 		}
+		ap.prepared = false
+		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, len(ap.RemoteRegs))
+		ap.ctr.sendFunc = sendToAllFunc
+		for _, rr := range ap.RemoteRegs {
+			colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
+		}
+
+	case SendToAllLocalFunc:
+		if len(ap.RemoteRegs) != 0 {
+			return moerr.NewInternalError(proc.Ctx, "SendToAllLocalFunc should not send to remote")
+		}
+		ap.prepared = true
+		ap.ctr.remoteReceivers = nil
+		ap.ctr.sendFunc = sendToAllLocalFunc
+	case SendToAnyLocalFunc:
+		if len(ap.RemoteRegs) != 0 {
+			return moerr.NewInternalError(proc.Ctx, "SendToAnyLocalFunc should not send to remote")
+		}
+		ap.prepared = true
+		ap.ctr.remoteReceivers = nil
+		ap.ctr.sendFunc = sendToAnyLocalFunc
+	default:
+		return moerr.NewInternalError(proc.Ctx, "wrong sendFunc id for dispatch")
 	}
+
 	return nil
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
+
+	// waiting all remote receive prepared
+	// put it in Call() for better parallel
+
 	bat := proc.InputBatch()
-	if ap.CrossCN {
-		if bat == nil {
-			return true, nil
-		}
-		if err := ap.SendFunc(ap.ctr.streams, ap.LocalIndex, bat, ap.Regs[ap.LocalIndex], proc); err != nil {
-			return false, err
-		}
-		return false, nil
-	}
 	if bat == nil {
 		return true, nil
 	}
 
-	// source vectors should be cloned and instead before it was sent.
+	if bat.Length() == 0 {
+		return false, nil
+	}
+
 	for i, vec := range bat.Vecs {
 		if vec.IsOriginal() {
 			cloneVec, err := vector.Dup(vec, proc.Mp())
@@ -78,74 +90,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 	}
 
-	// send to each one
-	if ap.All {
-		refCountAdd := int64(len(ap.Regs) - 1)
-		atomic.AddInt64(&bat.Cnt, refCountAdd)
-		if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
-			jm.IncRef(refCountAdd)
-			jm.SetDupCount(int64(len(ap.Regs)))
-		}
-
-		for _, reg := range ap.Regs {
-			select {
-			case <-reg.Ctx.Done():
-				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
-			case reg.Ch <- bat:
-			}
-		}
-		return false, nil
+	if err := ap.ctr.sendFunc(bat, ap, proc); err != nil {
+		return false, err
 	}
-	// send to any one
-	for len(ap.Regs) > 0 {
-		if ap.ctr.i == len(ap.Regs) {
-			ap.ctr.i = 0
-		}
-		reg := ap.Regs[ap.ctr.i]
-		select {
-		case <-reg.Ctx.Done():
-			for len(reg.Ch) > 0 { // free memory
-				bat := <-reg.Ch
-				if bat == nil {
-					break
-				}
-				bat.Clean(proc.Mp())
-			}
-			ap.Regs = append(ap.Regs[:ap.ctr.i], ap.Regs[ap.ctr.i+1:]...)
-			if ap.ctr.i >= len(ap.Regs) {
-				ap.ctr.i = 0
-			}
-		case reg.Ch <- bat:
-			proc.SetInputBatch(nil)
-			ap.ctr.i++
-			return false, nil
-		}
+	if len(ap.LocalRegs) == 0 {
+		return true, nil
 	}
-	return true, nil
-}
-
-func CloseStreams(streams []*WrapperStream, localIndex uint64, proc *process.Process) error {
-	for i := range streams {
-		if i == int(localIndex) {
-			continue
-		} else {
-			message := cnclient.AcquireMessage()
-			message.Id = streams[i].Stream.ID()
-			message.Cmd = 1
-			message.Sid = pipeline.MessageEnd
-			message.Uuid = streams[i].Uuid[:]
-			if err := streams[i].Stream.Send(proc.Ctx, message); err != nil {
-				return err
-			}
-		}
-	}
-	for i := range streams {
-		if streams[i] == nil {
-			continue
-		}
-		if err := streams[i].Stream.Close(); err != nil {
-			return err
-		}
-	}
-	return nil
+	proc.SetInputBatch(nil)
+	return false, nil
 }

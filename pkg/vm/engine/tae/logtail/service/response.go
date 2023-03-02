@@ -21,11 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 )
 
-const (
-	// Reserved capacity for morpc internal header.
-	reservedMorpcHeaderSize = 96
-)
-
 // LogtailResponse wraps logtail.LogtailResponse.
 type LogtailResponse struct {
 	logtail.LogtailResponse
@@ -153,9 +148,9 @@ func (s *segmentPool) LeastEffectiveCapacity() int {
 	segment.Sequence = math.MaxInt32
 	segment.MaxSequence = math.MaxInt32
 	segment.MessageSize = math.MaxInt32
+	// Now, maxHeaderSize is 32 bytes.
+	maxHeaderSize := segment.ProtoSize() - s.maxMessageSize
 
-	// NOTE: All reserved capacity is composed of two parts:
-	// segment.ProtoSize() - s.maxMessageSize (now is 32)
-	// reservedMorpcHeaderSize
-	return s.maxMessageSize - (segment.ProtoSize() - s.maxMessageSize) - reservedMorpcHeaderSize
+	// Take out reserved size, then effective capacity left.
+	return s.maxMessageSize - maxHeaderSize
 }

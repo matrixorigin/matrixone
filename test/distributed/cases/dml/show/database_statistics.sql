@@ -1,16 +1,16 @@
 
 -- test system db table_number
--- @bvt:issue#7564
+
 show table_number from mo_task;
 show table_number from information_schema;
 show table_number from mysql;
 show table_number from mo_catalog;
 show table_number from system_metrics;
 show table_number from system;
--- @bvt:issue
+
 
 -- test system tables column_number
--- @bvt:issue#7564
+
 use mo_task;
 show column_number from sys_async_task;
 show column_number from sys_cron_task;
@@ -19,13 +19,13 @@ use information_schema;
 show column_number from key_column_usage;
 show column_number from columns;
 show column_number from profiling;
--- @bvt:issue
+
 
 -- @bvt:issue#7520
 show column_number from PROCESSLIST;
 -- @bvt:issue
 
--- @bvt:issue#7564
+
 show column_number from schemata;
 show column_number from character_sets;
 show column_number from triggers;
@@ -79,14 +79,14 @@ show column_number from rawlog;
 show column_number from log_info;
 show column_number from error_info;
 show column_number from span_info;
--- @bvt:issue
+
 
 -- test max nad min values of the data in the table
 drop database if exists test_db;
 create database test_db;
--- @bvt:issue#7564
+
 show table_number from test_db;
--- @bvt:issue
+
 use test_db;
 
 drop table if exists t1;
@@ -100,9 +100,9 @@ col6 date,
 col7 bool
 );
 
--- @bvt:issue#7564
+
 show table_number from test_db;
--- @bvt:issue
+
 
 show table_values from t1;
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
@@ -127,9 +127,9 @@ col6 date,
 col7 bool
 );
 
--- @bvt:issue#7564
+
 show table_number from test_db;
--- @bvt:issue
+
 
 show table_values from t11;
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
@@ -153,13 +153,11 @@ col7 bool
 )infile{"filepath"='$resources/external_table_file/external_table.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 
 select * from external_table;
--- @bvt:issue#7564
-show table_number from test_db;
--- @bvt:issue
 
--- @bvt:issue#7568
+show table_number from test_db;
+
+
 show table_values from external_table;
--- @bvt:issue
 
 
 create table t2(
@@ -180,10 +178,9 @@ show table_values from t2;
 
 
 create table t3(
-col1 decimal
+col1 decimal(5,2)
 );
 
--- @bvt:issue#7562
 show table_values from t3;
 
 insert into t3 values();
@@ -194,7 +191,7 @@ show table_values from t3;
 
 insert into t3 values(3.2);
 show table_values from t3;
--- @bvt:issue
+
 drop database test_db;
 
 
@@ -202,7 +199,7 @@ drop database test_db;
 drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
 -- @session:id=2&user=test_account:test_user&password=111
--- @bvt:issue#7564
+
 show table_number from information_schema;
 show table_number from mysql;
 show table_number from mo_catalog;
@@ -213,12 +210,12 @@ use information_schema;
 show column_number from key_column_usage;
 show column_number from columns;
 show column_number from profiling;
--- @bvt:issue#7564
+
 
 -- @bvt:issue#7520
 show column_number from PROCESSLIST;
 -- @bvt:issue
--- @bvt:issue#7564
+
 show column_number from schemata;
 show column_number from character_sets;
 show column_number from triggers;
@@ -248,15 +245,15 @@ show column_number from mo_columns;
 
 use system;
 show column_number from statement_info;
--- @bvt:issue
+
 
 -- test max nad min values of the data in the table
 drop database if exists test_db;
 create database test_db;
 
--- @bvt:issue#7564
+
 show table_number from test_db;
--- @bvt:issue
+
 
 use test_db;
 
@@ -271,9 +268,9 @@ col6 date,
 col7 bool
 );
 
--- @bvt:issue#7564
+
 show table_number from test_db;
--- @bvt:issue
+
 
 show table_values from t1;
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
@@ -298,9 +295,9 @@ col6 date,
 col7 bool
 );
 
--- @bvt:issue#7564
+
 show table_number from test_db;
--- @bvt:issue
+
 
 show table_values from t11;
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
@@ -324,13 +321,11 @@ col7 bool
 )infile{"filepath"='$resources/external_table_file/external_table.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 
 select * from external_table;
--- @bvt:issue#7564
-show table_number from test_db;
--- @bvt:issue
 
--- @bvt:issue#7568
+show table_number from test_db;
+
+
 show table_values from external_table;
--- @bvt:issue
 
 
 create table t2(
@@ -354,7 +349,6 @@ create table t3(
 col1 decimal
 );
 
--- @bvt:issue#7562
 show table_values from t3;
 
 insert into t3 values();
@@ -365,7 +359,7 @@ show table_values from t3;
 
 insert into t3 values(3.2);
 show table_values from t3;
--- @bvt:issue
+
 drop database test_db;
 -- @session
 

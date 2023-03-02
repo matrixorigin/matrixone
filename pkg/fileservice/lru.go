@@ -97,6 +97,11 @@ func (l *LRU) evict() {
 				}
 			}
 
+			// Releasable
+			if v, ok := item.Value.(Releasable); ok {
+				v.Release()
+			}
+
 			l.size -= item.Size
 			l.evicts.Remove(elem)
 			delete(l.kv, item.Key)

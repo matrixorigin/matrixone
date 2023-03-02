@@ -249,6 +249,9 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 	i, j := start>>6, (end-1)>>6
 	if i == j {
 		n.data[i] &= ^((^uint64(0) << uint(start&0x3F)) & (^uint64(0) >> (uint(-end) % 0x3F)))
+		if n.emptyFlag == -1 {
+			n.emptyFlag = 0 //after removeRange operation, not sure
+		}
 		return
 	}
 	n.data[i] &= ^(^uint64(0) << uint(start&0x3F))

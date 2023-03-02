@@ -16,6 +16,7 @@ package binary
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -78,7 +79,11 @@ func showType(s [][]byte, showLen bool) ([]string, error) {
 			return nil, err
 		}
 		if showLen {
-			ret[i] = fmt.Sprintf("%s(%d)", tp.String(), tp.Width)
+			if types.IsDecimal(tp.Oid) {
+				ret[i] = fmt.Sprintf("%s(%d)", tp.String(), tp.Precision)
+			} else {
+				ret[i] = fmt.Sprintf("%s(%d)", tp.String(), tp.Width)
+			}
 		} else {
 			ret[i] = tp.String()
 		}

@@ -362,3 +362,4 @@ insert into t1 values(1, 1, 1);
 insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
+drop database if exists db1;

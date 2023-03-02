@@ -550,12 +550,12 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			{
 				Name:  TimeConsumed,
 				Value: analyzeInfo.TimeConsumed,
-				Unit:  "us",
+				Unit:  "ns",
 			},
 			{
 				Name:  WaitTime,
 				Value: analyzeInfo.WaitTimeConsumed,
-				Unit:  "us",
+				Unit:  "ns",
 			},
 		}
 		mbps := []StatisticValue{

@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -238,6 +239,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			int(seg.nseg.GetMeta().(*catalog.SegmentEntry).GetTable().
 				GetSchema().SegmentMaxBlocks) {
 		seg.nseg, err = seg.table.CreateNonAppendableSegment(true)
+		seg.nseg.GetMeta().(*catalog.SegmentEntry).SetSorted()
 		if err != nil {
 			return
 		}
@@ -435,6 +437,11 @@ func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 func (seg *localSegment) GetPKColumn() containers.Vector {
 	schema := seg.table.entry.GetSchema()
 	return seg.index.KeyToVector(schema.GetSingleSortKeyType())
+}
+
+func (seg *localSegment) GetPKVecs() []containers.Vector {
+	schema := seg.table.entry.GetSchema()
+	return seg.index.KeyToVectors(schema.GetSingleSortKeyType())
 }
 
 func (seg *localSegment) BatchDedup(key containers.Vector) error {

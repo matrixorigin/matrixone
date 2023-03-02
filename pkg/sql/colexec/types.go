@@ -19,7 +19,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,25 +31,28 @@ func NewResultPos(rel int32, pos int32) ResultPos {
 	return ResultPos{Rel: rel, Pos: pos}
 }
 
-// WrapperNode used to spec which node,
-// and which register you need
-type WrapperNode struct {
-	Node engine.Node
-	Uuid uuid.UUID
+// ReceiveInfo used to spec which node,
+// and which registers you need
+type ReceiveInfo struct {
+	NodeAddr string
+	Uuid     uuid.UUID
 }
 
+// TODO: remove batchCntMap when dispatch executor using the stream correctly
 // Server used to support cn2s3 directly, for more info, refer to docs about it
 type Server struct {
 	sync.Mutex
 	id uint64
-	mp map[uint64]*process.WaitRegister // k = id, v = reg
-	// chanMp will be used in two ways
-	// 1. uuid --> WaitRegister, we need to know the batch which is recieved from
-	// remote CN should be filled into which chan
-	// 2. messgage.Id --> dataBuf (when a batch is too large, it will be split into small ones in the source
-	// CN, and the target CN need to recieve them all and then merge them into one batch)
-	ChanBufMp     sync.Map
+	mp map[uint64]*process.WaitRegister
+
 	hakeeper      logservice.CNHAKeeperClient
 	CNSegmentId   [12]byte
 	InitSegmentId bool
+
+	uuidCsChanMap UuidCsChanMap
+}
+
+type UuidCsChanMap struct {
+	sync.Mutex
+	mp map[uuid.UUID]chan process.WrapCs
 }

@@ -172,3 +172,16 @@ load data infile '$resources/load_data/auto_increment_2.csv' into table t6;
 select * from t6;
 
 drop table t6;
+
+create table t7(
+col1 int,
+col2 int,
+col3 int
+);
+load data infile '$resources/load_data/auto_increment_2.csv' into table t7 parallel 'true';
+select * from t7 order by col1;
+
+drop table t7;
+
+create table t8(a int, b int);
+load data infile '$resources/load_data/auto_increment_20.csv' into table t7 set col2=nullif(col2, '1');

@@ -299,6 +299,7 @@ func init() {
 		"outfile":                  OUTFILE,
 		"ownership":                OWNERSHIP,
 		"header":                   HEADER,
+		"parallel":                 PARALLEL,
 		"max_file_size":            MAX_FILE_SIZE,
 		"force_quote":              FORCE_QUOTE,
 		"external":                 EXTERNAL,

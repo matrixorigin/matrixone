@@ -100,13 +100,10 @@ const (
 	cmdFieldListSql = "__++__internal_cmd_field_list"
 	intereSql       = "internal_sql"
 	cloudUserSql    = "cloud_user_sql"
-	cloudNoUserSql  = "cloud_nouser_sql"
+	cloudNoUserSql  = "cloud_nonuser_sql"
 	externSql       = "external_sql"
-)
-
-// Cache size of auto_increment_columns cache.
-const (
-	cacheSize = 3000
+	cloudUserTag    = "cloud_user"
+	cloudNoUserTag  = "cloud_nonuser"
 )
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.

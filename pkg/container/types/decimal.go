@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"runtime/debug"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -305,6 +306,9 @@ func (x Decimal64) Scale(n int32) (Decimal64, error) {
 }
 
 func (x Decimal128) Scale(n int32) (Decimal128, error) {
+	if n == 0 {
+		return x, nil
+	}
 	signx := x.Sign()
 	x1 := x
 	if signx {
@@ -1266,9 +1270,15 @@ func Decimal128FromFloat64(x float64, precision, scale int32) (y Decimal128, err
 
 func Parse64(x string) (y Decimal64, scale int32, err error) {
 	y = Decimal64(0)
+	z := Decimal64(0)
 	scale = -1
+	precision := 0
 	i := 0
 	flag := false
+	t := false
+	floatflag := false
+	scalecount := int32(0)
+	scalesign := false
 	signx := false
 	err = nil
 	if x[0] == '-' {
@@ -1276,6 +1286,41 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 		signx = true
 	}
 	for i < len(x) {
+		if x[i] == ' ' {
+			i++
+			continue
+		}
+		if x[i] == 'x' && i != 0 && x[i-1] == '0' && y == 0 {
+			t = true
+			i++
+			continue
+		}
+		if t {
+			if (x[i] >= '0' && x[i] <= '9') || (x[i] >= 'a' && x[i] <= 'f') || (x[i] >= 'A' && x[i] <= 'F') {
+				xx := uint64(0)
+				if x[i] >= '0' && x[i] <= '9' {
+					xx = uint64(x[i] - '0')
+				} else if x[i] >= 'a' && x[i] <= 'f' {
+					xx = uint64(x[i]-'a') + 10
+				} else {
+					xx = uint64(x[i]-'A') + 10
+				}
+				flag = true
+				z, err = y.Mul64(Decimal64(16))
+				if err == nil {
+					y, err = z.Add64(Decimal64(xx))
+				}
+				if err != nil {
+					err = moerr.NewInvalidInputNoCtx("Can't convert string To Decimal128: %s", x)
+					return
+				}
+			} else {
+				err = moerr.NewInvalidInputNoCtx("Can't convert string To Decimal128: %s", x)
+				return
+			}
+			i++
+			continue
+		}
 		if x[i] == '.' {
 			if scale == -1 {
 				scale = 0
@@ -1284,19 +1329,46 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
+			if x[i] == 'e' {
+				floatflag = true
+				i++
+				continue
+			}
+			if x[i] == '-' && floatflag {
+				scalesign = true
+				i++
+				continue
+			}
 			err = moerr.NewInvalidInputNoCtx("Can't convert string To Decimal64: %s", x)
 			return
-		} else {
+		} else if !floatflag {
+			if precision == 18 {
+				if scale == -1 {
+					err = moerr.NewInvalidInputNoCtx("Can't convert string To Decimal64: %s", x)
+					return
+				}
+				if x[i] >= '5' {
+					y, _ = y.Add64(1)
+					if y1, _ := y.Mod64(10); y1 == 0 {
+						scale--
+						y, _ = y.Scale(-1)
+					}
+				}
+				break
+			}
 			flag = true
-			z := y
+			z = y
 			y = y*10 + Decimal64(x[i]-'0')
 			if y>>63 != 0 || y/10 != z {
 				err = moerr.NewInvalidInputNoCtx("Can't convert string To Decimal64: %s", x)
 				return
 			}
+			precision++
 			if scale != -1 {
 				scale++
 			}
+		} else {
+			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
 	}
@@ -1306,6 +1378,16 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 	}
 	if scale == -1 {
 		scale = 0
+	}
+	if floatflag {
+		if scalesign {
+			scalecount = -scalecount
+		}
+		scale -= scalecount
+		if scale < 0 {
+			y, err = y.Scale(-scale)
+			scale = 0
+		}
 	}
 	if signx {
 		y = y.Minus()
@@ -1346,13 +1428,34 @@ func ParseDecimal64(x string, precision, scale int32) (y Decimal64, err error) {
 	return
 }
 
+func ParseDecimal64FromByte(x string, precision, scale int32) (y Decimal64, err error) {
+	y = 0
+	err = nil
+	n := len(x)
+	for i := 0; i < n; i++ {
+		y, err = y.Mul64(256)
+		if err != nil {
+			return
+		}
+		y, err = y.Add64(Decimal64(x[i]))
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
 func Parse128(x string) (y Decimal128, scale int32, err error) {
 	y = Decimal128{0, 0}
 	z := Decimal128{0, 0}
+	precision := 0
 	t := false
 	scale = -1
 	i := 0
 	flag := false
+	floatflag := false
+	scalecount := int32(0)
+	scalesign := false
 	signx := false
 	if x[0] == '-' {
 		i++
@@ -1402,9 +1505,33 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
+			if x[i] == 'e' {
+				floatflag = true
+				i++
+				continue
+			}
+			if x[i] == '-' && floatflag {
+				scalesign = true
+				i++
+				continue
+			}
 			err = moerr.NewInvalidInputNoCtx("Can't convert string To Decimal128: %s", x)
 			return
-		} else {
+		} else if !floatflag {
+			if precision == 38 {
+				if scale == -1 {
+					err = moerr.NewInvalidInputNoCtx("Can't convert string To Decimal128: %s", x)
+					return
+				}
+				if x[i] >= '5' {
+					y, err = y.Add128(Decimal128{1, 0})
+					if y1, _ := y.Mod128(Decimal128{10, 0}); y1.B0_63 == 0 {
+						scale--
+						y, _ = y.Scale(-1)
+					}
+				}
+				break
+			}
 			flag = true
 			z, err = y.Mul128(Decimal128{Pow10[1], 0})
 			if err == nil {
@@ -1414,9 +1541,12 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 				err = moerr.NewInvalidInputNoCtx("Can't convert string To Decimal128: %s", x)
 				return
 			}
+			precision++
 			if scale != -1 {
 				scale++
 			}
+		} else {
+			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
 	}
@@ -1427,6 +1557,16 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 	if scale == -1 {
 		scale = 0
 	}
+	if floatflag {
+		if scalesign {
+			scalecount = -scalecount
+		}
+		scale -= scalecount
+		if scale < 0 {
+			y, err = y.Scale(-scale)
+			scale = 0
+		}
+	}
 	if signx {
 		y = y.Minus()
 	}
@@ -1434,12 +1574,17 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 }
 
 func ParseDecimal128(x string, precision, scale int32) (y Decimal128, err error) {
+	strn := len(x)
+	for i := 0; i < strn; i++ {
+		fmt.Println(int(x[i]))
+	}
 	if precision > 38 {
 		precision = 38
 	}
 	n := int32(0)
 	y, n, err = Parse128(x)
 	if err != nil {
+		debug.PrintStack()
 		err = moerr.NewInvalidInputNoCtx("#-1Can't convert string To Decimal128: %s(%d,%d)", x, precision, scale)
 		return
 	}
@@ -1466,6 +1611,23 @@ func ParseDecimal128(x string, precision, scale int32) (y Decimal128, err error)
 	} else {
 		if !y.Less(z) {
 			err = moerr.NewInvalidInputNoCtx("#2Can't convert string To Decimal128: %s(%d,%d)", x, precision, scale)
+			return
+		}
+	}
+	return
+}
+
+func ParseDecimal128FromByte(x string, precision, scale int32) (y Decimal128, err error) {
+	y = Decimal128{0, 0}
+	err = nil
+	n := len(x)
+	for i := 0; i < n; i++ {
+		y, err = y.Mul128(Decimal128{256, 0})
+		if err != nil {
+			return
+		}
+		y, err = y.Add128(Decimal128{uint64(x[i]), 0})
+		if err != nil {
 			return
 		}
 	}

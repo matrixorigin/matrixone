@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"io"
 	"math/rand"
 	"sort"
@@ -387,8 +388,12 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		isAutoIncrement := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsAutoIncrement)).Get(offset).(int8)
 		def.AutoIncrement = i82bool(isAutoIncrement)
 		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))
-		def.OnUpdate = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
-		def.Default = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
+		buf := bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
+		def.OnUpdate = make([]byte, len(buf))
+		copy(def.OnUpdate, buf)
+		buf = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
+		def.Default = make([]byte, len(buf))
+		copy(def.Default, buf)
 		def.Idx = int(bat.GetVectorByName((pkgcatalog.SystemColAttr_Num)).Get(offset).(int32)) - 1
 		s.NameIndex[def.Name] = def.Idx
 		s.ColDefs = append(s.ColDefs, def)
@@ -665,13 +670,28 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 	rand.Seed(time.Now().UnixNano())
 	schema := NewEmptySchema(time.Now().String())
 	prefix := "mock_"
+
+	constraintDef := &engine.ConstraintDef{
+		Cts: make([]engine.Constraint, 0),
+	}
+
 	for i := 0; i < colCnt; i++ {
 		if pkIdx == i {
-			_ = schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4}, 0)
+			colName := fmt.Sprintf("%s%d", prefix, i)
+			_ = schema.AppendPKCol(colName, types.Type{Oid: types.T_int32, Size: 4, Width: 4}, 0)
+			pkConstraint := &engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					PkeyColName: colName,
+					Names:       []string{colName},
+				},
+			}
+			constraintDef.Cts = append(constraintDef.Cts, pkConstraint)
 		} else {
 			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
 		}
 	}
+	schema.Constraint, _ = constraintDef.MarshalBinary()
+
 	_ = schema.Finalize(false)
 	return schema
 }
@@ -685,6 +705,11 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 	if len(from) > 0 {
 		start = from[0]
 	}
+
+	constraintDef := &engine.ConstraintDef{
+		Cts: make([]engine.Constraint, 0),
+	}
+
 	for i := 0; i < colCnt; i++ {
 		if i < start {
 			continue
@@ -750,6 +775,13 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 
 		if pkIdx == i {
 			_ = schema.AppendPKCol(name, typ, 0)
+			pkConstraint := &engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					PkeyColName: name,
+					Names:       []string{name},
+				},
+			}
+			constraintDef.Cts = append(constraintDef.Cts, pkConstraint)
 		} else {
 			_ = schema.AppendCol(name, typ)
 			schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
@@ -757,6 +789,7 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 	}
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
+	schema.Constraint, _ = constraintDef.MarshalBinary()
 	_ = schema.Finalize(false)
 	return schema
 }

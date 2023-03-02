@@ -148,8 +148,7 @@ func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constra
 }
 
 func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint32, name string,
-	tableId uint64, databaseId uint64, databaseName string,
-	comment string, m *mpool.MPool) (*batch.Batch, error) {
+	tableId uint64, databaseId uint64, databaseName string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
 	bat.SetZs(1, m)
@@ -823,12 +822,16 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			}
 		}
 		for _, def := range defs {
-			if indexDef, ok := def.(*engine.PrimaryIndexDef); ok {
-				for _, name := range indexDef.Names {
-					attr, _ := defs[mp[name]].(*engine.AttributeDef)
-					attr.Attr.Primary = true
+			if constraintDef, ok := def.(*engine.ConstraintDef); ok {
+				for _, ct := range constraintDef.Cts {
+					if pkdef, ok2 := ct.(*engine.PrimaryKeyDef); ok2 {
+						pos := mp[pkdef.Pkey.PkeyColName]
+						attr, _ := defs[pos].(*engine.AttributeDef)
+						attr.Attr.Primary = true
+					}
 				}
 			}
+
 			if clusterByDef, ok := def.(*engine.ClusterByDef); ok {
 				attr, _ := defs[mp[clusterByDef.Name]].(*engine.AttributeDef)
 				attr.Attr.ClusterBy = true

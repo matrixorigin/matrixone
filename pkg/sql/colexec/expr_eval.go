@@ -64,7 +64,10 @@ func getConstVecInList(ctx context.Context, proc *process.Process, exprs []*plan
 	}
 	for i := 0; i < lenList; i++ {
 		expr := exprs[i]
-		t := expr.Expr.(*plan.Expr_C)
+		t, ok := expr.Expr.(*plan.Expr_C)
+		if !ok {
+			return nil, moerr.NewInternalError(proc.Ctx, "args in list must be constant")
+		}
 		if t.C.GetIsnull() {
 			vec.Nsp.Set(uint64(i))
 		} else {

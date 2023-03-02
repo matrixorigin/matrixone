@@ -72,6 +72,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.FileService = p.FileService
 	proc.GetClusterDetails = p.GetClusterDetails
 	proc.UnixTime = p.UnixTime
+	proc.LastInsertID = p.LastInsertID
 
 	// reg and cancel
 	proc.Ctx = newctx
@@ -83,6 +84,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 			Ch:  make(chan *batch.Batch, 1),
 		}
 	}
+	proc.DispatchNotifyCh = make(chan WrapCs)
 	proc.LoadLocalReader = p.LoadLocalReader
 	return proc
 }
@@ -118,7 +120,7 @@ func (proc *Process) SetQueryId(id string) {
 // plan.ConstantFold -> colexec.EvalExpr, busted.
 // hack in a fall back mpool.  This is by design a Zero MP so that there
 // will not be real leaks, except we leak counters in globalStats
-var xxxProcMp = mpool.MustNewZeroWithTag("fallback_proc_mp")
+var xxxProcMp = mpool.MustNew("fallback_proc_mp")
 
 func (proc *Process) GetMPool() *mpool.MPool {
 	if proc == nil {
