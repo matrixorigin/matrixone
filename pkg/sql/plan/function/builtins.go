@@ -1616,28 +1616,28 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Volatile:  true,
+				Volatile:  false,
 				Args:      []types.T{types.T_date, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_date,
 				Fn:        multi.DateAdd,
 			},
 			{
 				Index:     1,
-				Volatile:  true,
+				Volatile:  false,
 				Args:      []types.T{types.T_datetime, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.DatetimeAdd,
 			},
 			{
 				Index:     2,
-				Volatile:  true,
+				Volatile:  false,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.DateStringAdd,
 			},
 			{
 				Index:     3,
-				Volatile:  true,
+				Volatile:  false,
 				Args:      []types.T{types.T_char, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.DateStringAdd,
@@ -1651,7 +1651,7 @@ var builtins = map[int]Functions{
 			},
 			{
 				Index:     5,
-				Volatile:  true,
+				Volatile:  false,
 				Args:      []types.T{types.T_time, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_time,
 				Fn:        multi.TimeAdd,

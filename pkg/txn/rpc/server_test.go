@@ -214,6 +214,20 @@ func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) 
 	return nil
 }
 
+func (cs *testClientSession) CreateCache(
+	ctx context.Context,
+	cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+
+func (cs *testClientSession) DeleteCache(cacheID uint64) {
+	panic("not implement")
+}
+
+func (cs *testClientSession) GetCache(cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+
 func newTestClock() clock.Clock {
 	return clock.NewHLCClock(func() int64 { return 0 }, 0)
 }

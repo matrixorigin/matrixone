@@ -129,6 +129,35 @@ func TestDup(t *testing.T) {
 	require.Equal(t, v10.GetString(3), v10Duplicate.GetString(3))
 }
 
+func TestGetUnionOneFunction(t *testing.T) {
+	{ // test const vector
+		mp := mpool.MustNewZero()
+		v := New(types.New(types.T_int8, 0, 0, 0))
+		w := New(types.New(types.T_int8, 0, 0, 0))
+		err := w.Append(int8(0), false, mp)
+		require.NoError(t, err)
+		uf := GetUnionOneFunction(w.GetType(), mp)
+		err = uf(v, w, 0)
+		require.NoError(t, err)
+		w.Free(mp)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // test const vector
+		mp := mpool.MustNewZero()
+		v := New(types.New(types.T_varchar, 0, 0, 0))
+		w := New(types.New(types.T_varchar, 0, 0, 0))
+		err := w.Append([]byte("x"), false, mp)
+		require.NoError(t, err)
+		uf := GetUnionOneFunction(w.GetType(), mp)
+		err = uf(v, w, 0)
+		require.NoError(t, err)
+		w.Free(mp)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+}
+
 func TestWindow(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v0 := New(types.Type{Oid: types.T(types.T_int8)})
