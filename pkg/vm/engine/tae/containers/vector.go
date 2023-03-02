@@ -223,68 +223,6 @@ func (vec *vector[T]) HasNull() bool {
 
 //TODO: --- Below Functions Can be implemented in CN Vector.
 
-func (vec *vector[T]) Equals(o Vector) bool {
-
-	if vec.Length() != o.Length() {
-		return false
-	}
-	if vec.GetType() != o.GetType() {
-		return false
-	}
-	if vec.Nullable() != o.Nullable() {
-		return false
-	}
-	if vec.HasNull() != o.HasNull() {
-		return false
-	}
-	if vec.HasNull() {
-		if !vec.NullMask().IsSame(o.NullMask()) {
-			return false
-		}
-	}
-	mask := vec.NullMask()
-	for i := 0; i < vec.Length(); i++ {
-		if mask != nil && mask.Contains(uint64(i)) {
-			continue
-		}
-		var v T
-		if _, ok := any(v).([]byte); ok {
-			if !bytes.Equal(vec.Get(i).([]byte), o.Get(i).([]byte)) {
-				return false
-			}
-		} else if _, ok := any(v).(types.Decimal64); ok {
-			d := vec.Get(i).(types.Decimal64)
-			od := vec.Get(i).(types.Decimal64)
-			if d.Ne(od) {
-				return false
-			}
-		} else if _, ok := any(v).(types.Decimal128); ok {
-			d := vec.Get(i).(types.Decimal128)
-			od := vec.Get(i).(types.Decimal128)
-			if d.Ne(od) {
-				return false
-			}
-		} else if _, ok := any(v).(types.TS); ok {
-			d := vec.Get(i).(types.TS)
-			od := vec.Get(i).(types.TS)
-			if types.CompareTSTSAligned(d, od) != 0 {
-				return false
-			}
-		} else if _, ok := any(v).(types.Rowid); ok {
-			d := vec.Get(i).(types.Rowid)
-			od := vec.Get(i).(types.Rowid)
-			if types.CompareRowidRowidAligned(d, od) != 0 {
-				return false
-			}
-		} else {
-			if vec.Get(i) != o.Get(i) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 	return vec.ForeachWindow(0, vec.Length(), op, sels)
 }
@@ -360,11 +298,20 @@ func (vec *vector[T]) Allocated() int {
 
 func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *cnNulls.Nulls) {
 
-	newDownstream := NewShallowCopyMoVecFromBytes(vec.GetType(), bs)
+	newDownstream := newShallowCopyMoVecFromBytes(vec.GetType(), bs)
 	newDownstream.Nsp = nulls
 
 	vec.releaseDownstream()
 	vec.downstreamVector = newDownstream
+}
+
+func newShallowCopyMoVecFromBytes(typ types.Type, bs *Bytes) (mov *cnVector.Vector) {
+	if typ.IsVarlen() {
+		mov = cnVector.NewWithDataAndArea(typ, bs.HeaderBuf(), bs.StorageBuf())
+	} else {
+		mov = cnVector.NewWithData(typ, bs.StorageBuf())
+	}
+	return mov
 }
 
 // When a new Append() is happening on a SharedMemory vector, we allocate the data[] from the mpool.
@@ -374,12 +321,46 @@ func (vec *vector[T]) tryPromoting() {
 		src := vec.Bytes()
 
 		// deep copy
-		newDownstream, _ := NewDeepCopyMoVecFromBytes(vec.GetType(), src, vec.GetAllocator())
+		newDownstream, _ := newDeepCopyMoVecFromBytes(vec.GetType(), src, vec.GetAllocator())
 		newDownstream.Nsp = vec.downstreamVector.Nsp.Clone()
 
 		vec.downstreamVector = newDownstream
 		vec.isOwner = true
 	}
+}
+
+func newDeepCopyMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*cnVector.Vector, error) {
+
+	var mov *cnVector.Vector
+	if typ.IsVarlen() {
+		dataByteArr := bs.HeaderBuf()
+
+		dataAllocated, err := pool.Alloc(len(dataByteArr))
+		if err != nil {
+			return nil, err
+		}
+		copy(dataAllocated, dataByteArr)
+
+		areaByteArr := bs.StorageBuf()
+		areaAllocated, err := pool.Alloc(len(areaByteArr))
+		if err != nil {
+			return nil, err
+		}
+		copy(areaAllocated, areaByteArr)
+
+		mov = cnVector.NewWithDataAndArea(typ, dataAllocated, areaAllocated)
+	} else {
+
+		dataByteArr := bs.StorageBuf()
+		dataAllocated, err := pool.Alloc(len(dataByteArr))
+		if err != nil {
+			return nil, err
+		}
+		copy(dataAllocated, dataByteArr)
+
+		mov = cnVector.NewWithData(typ, dataAllocated)
+	}
+	return mov, nil
 }
 
 func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
@@ -501,4 +482,66 @@ func (vec *vector[T]) AppendMany(vs ...any) {
 func (vec *vector[T]) Delete(delRowId int) {
 	deletes := roaring.BitmapOf(uint32(delRowId))
 	vec.Compact(deletes)
+}
+
+func (vec *vector[T]) Equals(o Vector) bool {
+
+	if vec.Length() != o.Length() {
+		return false
+	}
+	if vec.GetType() != o.GetType() {
+		return false
+	}
+	if vec.Nullable() != o.Nullable() {
+		return false
+	}
+	if vec.HasNull() != o.HasNull() {
+		return false
+	}
+	if vec.HasNull() {
+		if !vec.NullMask().IsSame(o.NullMask()) {
+			return false
+		}
+	}
+	mask := vec.NullMask()
+	for i := 0; i < vec.Length(); i++ {
+		if mask != nil && mask.Contains(uint64(i)) {
+			continue
+		}
+		var v T
+		if _, ok := any(v).([]byte); ok {
+			if !bytes.Equal(vec.Get(i).([]byte), o.Get(i).([]byte)) {
+				return false
+			}
+		} else if _, ok := any(v).(types.Decimal64); ok {
+			d := vec.Get(i).(types.Decimal64)
+			od := vec.Get(i).(types.Decimal64)
+			if d.Ne(od) {
+				return false
+			}
+		} else if _, ok := any(v).(types.Decimal128); ok {
+			d := vec.Get(i).(types.Decimal128)
+			od := vec.Get(i).(types.Decimal128)
+			if d.Ne(od) {
+				return false
+			}
+		} else if _, ok := any(v).(types.TS); ok {
+			d := vec.Get(i).(types.TS)
+			od := vec.Get(i).(types.TS)
+			if types.CompareTSTSAligned(d, od) != 0 {
+				return false
+			}
+		} else if _, ok := any(v).(types.Rowid); ok {
+			d := vec.Get(i).(types.Rowid)
+			od := vec.Get(i).(types.Rowid)
+			if types.CompareRowidRowidAligned(d, od) != 0 {
+				return false
+			}
+		} else {
+			if vec.Get(i) != o.Get(i) {
+				return false
+			}
+		}
+	}
+	return true
 }
