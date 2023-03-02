@@ -240,6 +240,8 @@ func (vec *vector[T]) Allocated() int {
 	return vec.downstreamVector.Size()
 }
 
+// ResetWithData is used by CloneWithBuffer to create a shallow copy of the srcVector.
+// When the shallowCopy undergoes an append, we allocate mpool memory. So we need isOwner flag.
 func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *cnNulls.Nulls) {
 
 	newDownstream := newShallowCopyMoVecFromBytes(vec.GetType(), bs)
@@ -321,24 +323,6 @@ func (vec *vector[T]) Window(offset, length int) Vector {
 	}
 }
 
-//TODO: --- Below Functions Can be implemented in CN Vector.
-
-func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
-	//TODO: CN vector include
-
-	if srcLen <= 0 {
-		return
-	}
-
-	// The downstream vector, ie CN vector needs isNull as argument.
-	// So, we can't directly call cn_vector.Append() without parsing the data.
-	// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
-	// it into the current CnVectorAdapter via this function.
-	for i := srcOff; i < srcOff+srcLen; i++ {
-		vec.Append(src.Get(i))
-	}
-}
-
 func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
 	// TODO: Can we do it in CN vector?
 	opts := Options{}
@@ -361,7 +345,24 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 	return cloned
 }
 
-// TODO: --- Need advise on the below functions
+//TODO: --- Below Functions Can be implemented in CN Vector.
+
+func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+	//TODO: CN vector include
+
+	if srcLen <= 0 {
+		return
+	}
+
+	// The downstream vector, ie CN vector needs isNull as argument.
+	// So, we can't directly call cn_vector.Append() without parsing the data.
+	// Hence, we are using src.Get(i) to retrieve the Null value as such from the src, and inserting
+	// it into the current CnVectorAdapter via this function.
+	for i := srcOff; i < srcOff+srcLen; i++ {
+		vec.Append(src.Get(i))
+	}
+}
+
 func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
 	//TODO: Benchmark.
 	if !vec.Nullable() {
@@ -429,6 +430,8 @@ func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *r
 	}
 	return
 }
+
+// TODO: --- Need advise on the below functions
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	// TODO: Not doing tryPromoting()
