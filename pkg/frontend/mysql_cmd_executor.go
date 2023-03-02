@@ -3125,8 +3125,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService)
-	fmt.Printf("yangzhaoabc1 txn %v", ses.GetTxnHandler().GetTxnOperator() == nil)
-	fmt.Printf("yangzhaoabc txn %v", proc.TxnOperator == nil)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
