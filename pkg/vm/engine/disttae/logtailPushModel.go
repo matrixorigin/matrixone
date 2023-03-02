@@ -57,7 +57,7 @@ const (
 
 const (
 	// routine number to consume log tail.
-	parallelNums = 2
+	parallelNums = 4
 
 	// each routine's log tail buffer size.
 	bufferLength = 100
