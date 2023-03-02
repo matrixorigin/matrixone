@@ -15,9 +15,71 @@
 package plan
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
+	"sort"
 )
+
+func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
+
+	switch expr.Typ.Id {
+	case int32(types.T_decimal64):
+		w += 64
+	case int32(types.T_decimal128):
+		w += 128
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text), int32(types.T_json):
+		w += 4
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcImpl := exprImpl.F
+		switch funcImpl.Func.GetObjName() {
+		case "like":
+			w += 10
+		case "in":
+			w += 5
+		default:
+			w += 1
+		}
+		for _, child := range exprImpl.F.Args {
+			w += estimateFilterWeight(child, 0)
+		}
+	}
+	return w
+}
+
+func SortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			SortFilterListByStats(ctx, child, builder)
+		}
+	}
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		if node.ObjRef != nil && len(node.FilterList) > 1 {
+			weights := make([]float64, len(node.FilterList))
+			bat := batch.NewWithSize(0)
+			bat.Zs = []int64{1}
+			for i := range node.FilterList {
+				expr, _ := ConstantFold(bat, DeepCopyExpr(node.FilterList[i]), builder.compCtx.GetProcess())
+				weights[i] = estimateFilterWeight(expr, 0)
+				if CheckExprIsMonotonic(builder.GetContext(), expr) {
+					//this is a monotonic filter
+					//calc selectivity is too heavy now. will change this in the future
+					weights[i] *= 0.1
+				}
+			}
+			sort.Slice(node.FilterList, func(i, j int) bool {
+				return weights[i] <= weights[j]
+			})
+		}
+	}
+}
 
 func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 	node := builder.qry.Nodes[nodeID]
@@ -174,6 +236,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 		if node.ObjRef != nil {
 			expr, num := HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess())
 			node.Stats = builder.compCtx.Stats(node.ObjRef, expr)
+			//if there is non monotonic filters
 			if num > 0 {
 				node.Stats.Selectivity *= 0.1
 				node.Stats.Outcnt *= 0.1
