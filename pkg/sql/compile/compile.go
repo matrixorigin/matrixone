@@ -1568,7 +1568,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			c.cnList[i].Addr = ""
 		}
 	}
-	ranges, err = rel.Ranges(ctx, plan2.HandleFiltersForZM(n.FilterList, c.proc))
+	expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
+	ranges, err = rel.Ranges(ctx, expr)
 	if err != nil {
 		return nil, err
 	}
