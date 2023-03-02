@@ -411,9 +411,6 @@ func updatePartitionOfPush(
 	partitions := e.db.getPartitions(dbId, tblId)
 	partition := partitions[dnId]
 
-	curState := partition.state.Load()
-	state := curState.Copy()
-
 	key := e.catalog.GetTableById(dbId, tblId)
 	tbl := &table{
 		db: &database{
@@ -440,26 +437,20 @@ func updatePartitionOfPush(
 	}
 
 	if err = consumeLogTailOfPush(ctx,
-		dnId, tbl, e.db, partition, state, tl); err != nil {
+		dnId, tbl, e.db, partition, tl); err != nil {
 		logutil.Errorf("consume %d-%s log tail error: %v\n", tbl.tableId, tbl.tableName, err)
 		return err
 	}
-
-	if !partition.state.CompareAndSwap(curState, state) {
-		panic("concurrent mutation")
-	}
-
 	<-partition.lock
 	partition.ts = *tl.Ts
 	partition.lock <- struct{}{}
-
 	return nil
 }
 
 func consumeLogTailOfPush(
 	ctx context.Context,
 	idx int, tbl *table,
-	db *DB, partition *Partition, state *PartitionState, lt *logtail.TableLogtail) (err error) {
+	db *DB, mvcc MVCC, lt *logtail.TableLogtail) (err error) {
 	var entries []*api.Entry
 
 	if entries, err = logtail2.LoadCheckpointEntries(
@@ -471,14 +462,14 @@ func consumeLogTailOfPush(
 	}
 	for _, entry := range entries {
 		if err = consumeEntry(idx, tbl.primaryIdx, tbl, ctx,
-			db, partition, state, entry); err != nil {
+			db, mvcc, entry); err != nil {
 			return
 		}
 	}
 
 	for i := 0; i < len(lt.Commands); i++ {
 		if err = consumeEntry(idx, tbl.primaryIdx, tbl, ctx,
-			db, partition, state, &lt.Commands[i]); err != nil {
+			db, mvcc, &lt.Commands[i]); err != nil {
 			return
 		}
 	}
