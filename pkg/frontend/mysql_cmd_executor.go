@@ -4268,8 +4268,6 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 	case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView:
 		//background transaction can execute the DROPxxx in one transaction
 		return ses.IsBackgroundSession(), nil
-	case *tree.LockTableStmt:
-		return true, nil
 	}
 
 	return false, nil
