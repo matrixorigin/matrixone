@@ -204,8 +204,12 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 		case *plan.Const_Sval:
 			sval := t.C.GetSval()
 			// Distingush binary with non-binary string.
-			if expr.Typ.Id == int32(types.T_binary) || expr.Typ.Id == int32(types.T_varbinary) || expr.Typ.Id == int32(types.T_blob) {
-				vec = vector.NewConstString(constBinType, length, sval, proc.Mp())
+			if expr.Typ != nil {
+				if expr.Typ.Id == int32(types.T_binary) || expr.Typ.Id == int32(types.T_varbinary) || expr.Typ.Id == int32(types.T_blob) {
+					vec = vector.NewConstString(constBinType, length, sval, proc.Mp())
+				} else {
+					vec = vector.NewConstString(constSType, length, sval, proc.Mp())
+				}
 			} else {
 				vec = vector.NewConstString(constSType, length, sval, proc.Mp())
 			}
