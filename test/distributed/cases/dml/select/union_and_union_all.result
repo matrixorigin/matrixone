@@ -477,7 +477,8 @@ from (select 11.1234 as a
 UNION select 11.1234
 UNION select 11.1234
 ) t;
-Data truncation: data out of range: data type dec64, value '11.1234'
+cast(a as decimal(3, 2))
+11.12
 drop table if exists t14;
 CREATE TABLE t14 (
 `pseudo` char(35) NOT NULL default '',

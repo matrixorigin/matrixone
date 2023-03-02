@@ -19,12 +19,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"os"
 	"strconv"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -458,7 +459,9 @@ func exportDataToCSVFile(oq *outputQueue) error {
 					}
 				}
 			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+		// Binary/varbinary has mysql_type_varchar.
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
+			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
 			value, err := oq.mrs.GetValue(oq.ctx, 0, i)
 			if err != nil {
 				return err

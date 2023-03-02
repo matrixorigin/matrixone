@@ -292,12 +292,9 @@ const (
 
 	MO_LOG_DATE // parse date from string, like __mo_filepath
 
-	INTERNAL_CHAR_LENGTH //
-	INTERNAL_CHAR_SIZE   //
-	//internal_numeric_precision
-	//internal_numeric_scale
-	//internal_datetime_precision
-	//internal_column_character_set
+	BINARY
+	INTERNAL_CHAR_LENGTH
+	INTERNAL_CHAR_SIZE
 	INTERNAL_NUMERIC_PRECISION
 	INTERNAL_NUMERIC_SCALE
 	INTERNAL_DATETIME_PRECISION
@@ -518,6 +515,7 @@ var functionIdRegister = map[string]int32{
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
 	"trim":                           TRIM,
 	"mo_log_date":                    MO_LOG_DATE,
+	"binary":                         BINARY,
 	"internal_char_length":           INTERNAL_CHAR_LENGTH,
 	"internal_char_size":             INTERNAL_CHAR_SIZE,
 	"internal_numeric_precision":     INTERNAL_NUMERIC_PRECISION,

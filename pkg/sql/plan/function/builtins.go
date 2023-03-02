@@ -111,7 +111,8 @@ var builtins = map[int]Functions{
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob && t != types.T_text {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any &&
+						t != types.T_binary && t != types.T_varbinary && t != types.T_blob && t != types.T_text {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -130,10 +131,17 @@ var builtins = map[int]Functions{
 		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Args:      []types.T{},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Concat_ws,
+				Index: 0,
+				Args:  []types.T{},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					for _, p := range parameters {
+						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
+							return types.T_blob.ToType()
+						}
+					}
+					return types.T_varchar.ToType()
+				},
+				Fn: multi.Concat_ws,
 			},
 		},
 	},
@@ -541,6 +549,12 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Ltrim,
 			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        unary.Ltrim,
+			},
 		},
 	},
 	MONTH: {
@@ -652,6 +666,12 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Reverse,
 			},
+			{
+				Index:     2,
+				Args:      []types.T{types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        unary.Reverse,
+			},
 		},
 	},
 	RTRIM: {
@@ -663,6 +683,12 @@ var builtins = map[int]Functions{
 				Index:     0,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_varchar,
+				Fn:        unary.Rtrim,
+			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_blob},
+				ReturnTyp: types.T_blob,
 				Fn:        unary.Rtrim,
 			},
 		},
@@ -984,6 +1010,24 @@ var builtins = map[int]Functions{
 				Index:     2,
 				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_varchar},
 				ReturnTyp: types.T_varchar, Fn: multi.Lpad,
+			},
+			{
+				Index:     3,
+				Args:      []types.T{types.T_blob, types.T_int64, types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        multi.Lpad,
+			},
+			{
+				Index:     4,
+				Args:      []types.T{types.T_blob, types.T_uint64, types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        multi.Lpad,
+			},
+			{
+				Index:     5,
+				Args:      []types.T{types.T_blob, types.T_float64, types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        multi.Lpad,
 			},
 		},
 	},
@@ -1348,6 +1392,24 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
+			{
+				Index:     50,
+				Args:      []types.T{types.T_blob, types.T_int64, types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        multi.Rpad,
+			},
+			{
+				Index:     51,
+				Args:      []types.T{types.T_blob, types.T_uint64, types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        multi.Rpad,
+			},
+			{
+				Index:     52,
+				Args:      []types.T{types.T_blob, types.T_float64, types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        multi.Rpad,
+			},
 		},
 	},
 	SUBSTRING: {
@@ -1466,25 +1528,25 @@ var builtins = map[int]Functions{
 			{
 				Index:     18,
 				Args:      []types.T{types.T_blob, types.T_int64, types.T_int64},
-				ReturnTyp: types.T_char,
+				ReturnTyp: types.T_blob,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     19,
 				Args:      []types.T{types.T_blob, types.T_int64, types.T_uint64},
-				ReturnTyp: types.T_char,
+				ReturnTyp: types.T_blob,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     20,
 				Args:      []types.T{types.T_blob, types.T_uint64, types.T_int64},
-				ReturnTyp: types.T_char,
+				ReturnTyp: types.T_blob,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     21,
 				Args:      []types.T{types.T_blob, types.T_uint64, types.T_uint64},
-				ReturnTyp: types.T_char,
+				ReturnTyp: types.T_blob,
 				Fn:        multi.Substring,
 			},
 
@@ -1510,6 +1572,24 @@ var builtins = map[int]Functions{
 				Index:     25,
 				Args:      []types.T{types.T_text, types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     26,
+				Args:      []types.T{types.T_blob, types.T_float64},
+				ReturnTyp: types.T_blob,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     27,
+				Args:      []types.T{types.T_blob, types.T_uint64},
+				ReturnTyp: types.T_blob,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     28,
+				Args:      []types.T{types.T_blob, types.T_int64},
+				ReturnTyp: types.T_blob,
 				Fn:        multi.Substring,
 			},
 		},
