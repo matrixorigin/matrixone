@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -349,12 +350,8 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
-			rs = c.newInsertMergeScope(arg, ss)
+			rs = c.newInsertMergeScope(arg, preArg, ss)
 			rs.Magic = MergeInsert
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op:  vm.PreInsert,
-				Arg: preArg,
-			})
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
@@ -1258,7 +1255,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	return []*Scope{c.newMergeScope(append(rs, ss...))}
 }
 
-func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
+func (c *Compile) newInsertMergeScope(arg *insert.Argument, preArg *preinsert.Argument, ss []*Scope) *Scope {
 	ss2 := make([]*Scope, 0, len(ss))
 	for _, s := range ss {
 		if s.IsEnd {
@@ -1266,12 +1263,17 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 		}
 		ss2 = append(ss2, s)
 	}
-	insert := &vm.Instruction{
+	preInsertInstr := &vm.Instruction{
+		Op:  vm.PreInsert,
+		Arg: preArg,
+	}
+	insertInstr := &vm.Instruction{
 		Op:  vm.Insert,
 		Arg: arg,
 	}
 	for i := range ss2 {
-		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil))
+		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(preInsertInstr, nil))
+		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insertInstr, nil))
 	}
 	return c.newMergeScope(ss2)
 }

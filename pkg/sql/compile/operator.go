@@ -378,6 +378,14 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			InsertCtx: t.InsertCtx,
 			// HasAutoCol:           t.HasAutoCol,
 		}
+	case vm.PreInsert:
+		t := sourceIns.Arg.(*preinsert.Argument)
+		res.Arg = &preinsert.Argument{
+			Ctx:        t.Ctx,
+			Eg:         t.Eg,
+			SchemaName: t.SchemaName,
+			TableDef:   t.TableDef,
+		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}

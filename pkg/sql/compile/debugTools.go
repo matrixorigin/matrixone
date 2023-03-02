@@ -63,6 +63,7 @@ var debugInstructionNames = map[int]string{
 	vm.Intersect:    "intersect",
 	vm.IntersectAll: "intersect all",
 	vm.HashBuild:    "hash build",
+	vm.MergeBlock:   "merge block",
 }
 
 var debugMagicNames = map[int]string{
