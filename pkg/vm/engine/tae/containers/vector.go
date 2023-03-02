@@ -140,6 +140,7 @@ func (vec *vector[T]) Update(i int, v any) {
 
 func (vec *vector[T]) Slice() any {
 	//TODO: expensive
+	// MustFixedCol[T]
 	return vec.downstreamVector.Col
 }
 
@@ -203,25 +204,9 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, nil
 }
 
-func (vec *vector[T]) Window(offset, length int) Vector {
-
-	// In DN Vector, we are using SharedReference for Window.
-	// In CN Vector, we are creating a new Clone for Window.
-	// So inorder to retain the nature of DN vector, we had use vectorWindow Adapter.
-	return &vectorWindow[T]{
-		ref: vec,
-		windowBase: &windowBase{
-			offset: offset,
-			length: length,
-		},
-	}
-}
-
 func (vec *vector[T]) HasNull() bool {
-	return vec.downstreamVector.Nsp != nil && vec.downstreamVector.Nsp.Any()
+	return vec.NullMask() != nil && vec.NullMask().Any()
 }
-
-//TODO: --- Below Functions Can be implemented in CN Vector.
 
 func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 	return vec.ForeachWindow(0, vec.Length(), op, sels)
@@ -230,53 +215,12 @@ func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.B
 	err = vec.forEachWindowWithBias(offset, length, op, sels, 0, false)
 	return
 }
-
 func (vec *vector[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) error {
 	return vec.ForeachWindowShallow(0, vec.Length(), op, sels)
 }
-
 func (vec *vector[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) error {
 	return vec.forEachWindowWithBias(offset, length, op, sels, 0, true)
 }
-
-func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
-	if sels == nil || sels.IsEmpty() {
-		for rowId := offset; rowId < offset+length; rowId++ {
-			var elem any
-			if shallow {
-				elem = vec.ShallowGet(rowId + bias)
-			} else {
-				elem = vec.Get(rowId + bias)
-			}
-			if err = op(elem, rowId); err != nil {
-				break
-			}
-		}
-	} else {
-
-		selsArray := sels.ToArray()
-		end := offset + length
-		for _, rowId := range selsArray {
-			if int(rowId) < offset {
-				continue
-			} else if int(rowId) >= end {
-				break
-			}
-			var elem any
-			if shallow {
-				elem = vec.ShallowGet(int(rowId) + bias)
-			} else {
-				elem = vec.Get(int(rowId) + bias)
-			}
-			if err = op(elem, int(rowId)); err != nil {
-				break
-			}
-		}
-	}
-	return
-}
-
-//TODO: --- Need advise on the below functions
 
 func (vec *vector[T]) Close() {
 	vec.releaseDownstream()
@@ -363,7 +307,24 @@ func newDeepCopyMoVecFromBytes(typ types.Type, bs *Bytes, pool *mpool.MPool) (*c
 	return mov, nil
 }
 
+func (vec *vector[T]) Window(offset, length int) Vector {
+
+	// In DN Vector, we are using SharedReference for Window.
+	// In CN Vector, we are creating a new Clone for Window.
+	// So inorder to retain the nature of DN vector, we had use vectorWindow Adapter.
+	return &vectorWindow[T]{
+		ref: vec,
+		windowBase: &windowBase{
+			offset: offset,
+			length: length,
+		},
+	}
+}
+
+//TODO: --- Below Functions Can be implemented in CN Vector.
+
 func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+	//TODO: CN vector include
 
 	if srcLen <= 0 {
 		return
@@ -379,6 +340,7 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 }
 
 func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
+	// TODO: Can we do it in CN vector?
 	opts := Options{}
 	if len(allocator) == 0 {
 		opts.Allocator = vec.GetAllocator()
@@ -397,6 +359,75 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 	}
 
 	return cloned
+}
+
+// TODO: --- Need advise on the below functions
+func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
+	//TODO: Benchmark.
+	if !vec.Nullable() {
+		var v T
+		if _, ok := any(v).([]byte); !ok {
+			// Optimization for :- Vectors which are 1. not nullable & 2. not byte[]
+			slice := vec.Slice().([]T)
+			slice = slice[offset+bias : offset+length+bias]
+			if sels == nil || sels.IsEmpty() {
+				for i, elem := range slice {
+					if err = op(elem, i+offset); err != nil {
+						break
+					}
+				}
+			} else {
+				idxes := sels.ToArray()
+				end := offset + length
+				for _, idx := range idxes {
+					if int(idx) < offset {
+						continue
+					} else if int(idx) >= end {
+						break
+					}
+					if err = op(slice[int(idx)-offset], int(idx)); err != nil {
+						break
+					}
+				}
+			}
+			return
+		}
+
+	}
+	if sels == nil || sels.IsEmpty() {
+		for rowId := offset; rowId < offset+length; rowId++ {
+			var elem any
+			if shallow {
+				elem = vec.ShallowGet(rowId + bias)
+			} else {
+				elem = vec.Get(rowId + bias)
+			}
+			if err = op(elem, rowId); err != nil {
+				break
+			}
+		}
+	} else {
+
+		selsArray := sels.ToArray()
+		end := offset + length
+		for _, rowId := range selsArray {
+			if int(rowId) < offset {
+				continue
+			} else if int(rowId) >= end {
+				break
+			}
+			var elem any
+			if shallow {
+				elem = vec.ShallowGet(int(rowId) + bias)
+			} else {
+				elem = vec.Get(int(rowId) + bias)
+			}
+			if err = op(elem, int(rowId)); err != nil {
+				break
+			}
+		}
+	}
+	return
 }
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
@@ -419,7 +450,7 @@ func (vec *vector[T]) SetDownstreamVector(dsVec *cnVector.Vector) {
 	vec.downstreamVector = dsVec
 }
 
-// TODO - Below functions are not used in critical path.
+// TODO - Below functions are not used in critical path. Used mainly for testing
 
 func (vec *vector[T]) String() string {
 	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Allocated())
@@ -483,7 +514,6 @@ func (vec *vector[T]) Delete(delRowId int) {
 	deletes := roaring.BitmapOf(uint32(delRowId))
 	vec.Compact(deletes)
 }
-
 func (vec *vector[T]) Equals(o Vector) bool {
 
 	if vec.Length() != o.Length() {
