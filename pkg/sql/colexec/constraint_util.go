@@ -449,6 +449,7 @@ func InsertBatch(
 	var insertBatch *batch.Batch
 	var err error
 	affectedRows := bat.Vecs[0].Length()
+	fmt.Println("affectedRows", affectedRows)
 	defer func() {
 		if insertBatch != nil {
 			insertBatch.Clean(proc.Mp())
@@ -463,6 +464,8 @@ func InsertBatch(
 		return 0, err
 	}
 
+	fmt.Println("insertBatch:", insertBatch)
+
 	// check new rows not null
 	err = batchDataNotNullCheck(insertBatch, tableDef, proc.Ctx)
 	if err != nil {
@@ -471,13 +474,16 @@ func InsertBatch(
 
 	if container != nil {
 		// write to s3
+		fmt.Println("Writing S3")
 		err = container.WriteS3Batch(insertBatch, proc, 0)
 		if err != nil {
+			fmt.Println("write unique table:", err)
 			return 0, err
 		}
 
 		err = writeUniqueTable(container, eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos, uniqueRel)
 		if err != nil {
+			fmt.Println("write origin table:", err)
 			return 0, err
 		}
 
@@ -485,15 +491,16 @@ func InsertBatch(
 		// write unique key table
 		err = writeUniqueTable(nil, eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos, uniqueRel)
 		if err != nil {
+			fmt.Println("write unique table:", err)
 			return 0, err
 		}
 
 		// write origin table
 		err = rel.Write(proc.Ctx, insertBatch)
-	}
-
-	if err != nil {
-		return 0, err
+		if err != nil {
+			fmt.Println("write origin table:", err)
+			return 0, err
+		}
 	}
 
 	return uint64(affectedRows), nil

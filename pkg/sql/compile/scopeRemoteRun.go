@@ -62,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
@@ -585,6 +586,11 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			ClusterTable: t.InsertCtx.ClusterTable,
 			ParentIdx:    t.InsertCtx.ParentIdx,
 		}
+	case *preinsert.Argument:
+		in.Preinsert = &pipeline.PreInsert{
+			SchemaName: t.SchemaName,
+			TableDef:   t.TableDef,
+		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
 			Ibucket:   t.Ibucket,
@@ -838,6 +844,12 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				ParentIdx:    t.ParentIdx,
 				ClusterTable: t.ClusterTable,
 			},
+		}
+	case vm.PreInsert:
+		t := opr.GetPreinsert()
+		v.Arg = &preinsert.Argument{
+			SchemaName: t.GetSchemaName(),
+			TableDef:   t.GetTableDef(),
 		}
 	case vm.Anti:
 		t := opr.GetAnti()

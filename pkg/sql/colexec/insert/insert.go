@@ -16,6 +16,7 @@ package insert
 
 import (
 	"bytes"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -63,12 +64,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	insertCtx := insertArg.InsertCtx
 	clusterTable := insertCtx.ClusterTable
 
-	var insertBat *batch.Batch
 	defer func() {
 		bat.Clean(proc.Mp())
-		if insertBat != nil {
-			insertBat.Clean(proc.Mp())
-		}
 		anal := proc.GetAnalyze(idx)
 		anal.AddInsertTime(t1)
 	}()
@@ -155,6 +152,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if insertArg.IsRemote {
 		insertArg.Container.WriteEnd(proc)
 	}
+	fmt.Println("affectedRows", affectedRows)
 	atomic.AddUint64(&insertArg.Affected, affectedRows)
 	return false, nil
 }

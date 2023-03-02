@@ -506,22 +506,5 @@ func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int)
 		container.metaLocBat.Vecs[0].Append(uint16(idx), false, proc.GetMPool())
 		container.metaLocBat.Vecs[1].Append([]byte(metaLoc), false, proc.GetMPool())
 	}
-	// for i := range container.unique_writer {
-	// 	if blocks, err = container.unique_writer[i].WriteEnd(proc.Ctx); err != nil {
-	// 		return err
-	// 	}
-	// 	for j := range blocks {
-	// 		metaLoc, err := blockio.EncodeMetaLocWithObject(
-	// 			blocks[0].GetExtent(),
-	// 			uint32(container.unique_lengths[i][j]),
-	// 			blocks,
-	// 		)
-	// 		if err != nil {
-	// 			return err
-	// 		}
-	// 		metaLocBat.Vecs[0].Append(uint16(i+1), false, proc.GetMPool())
-	// 		metaLocBat.Vecs[1].Append([]byte(metaLoc), false, proc.GetMPool())
-	// 	}
-	// }
 	return nil
 }

@@ -37,7 +37,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	defer analyze(idx, proc)()
 
 	arg := x.(*Argument)
-	bat := proc.Reg.InputBatch
+	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
