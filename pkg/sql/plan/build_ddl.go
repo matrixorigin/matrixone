@@ -1288,9 +1288,10 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 	uniqueTableName := make(map[string]bool)
 
 	//get transaction id
-	var txnID []byte
+
 	txn := ctx.GetProcess().TxnOperator
-	copy(txnID[:], txn.Txn().ID)
+	txnID := make([]byte, len(txn.Txn().ID))
+	copy(txnID, txn.Txn().ID)
 
 	//Check table locks
 	for _, tableLock := range stmt.TableLocks {

@@ -3125,6 +3125,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService)
+	fmt.Printf("yangzhaoabc1 txn %v", ses.GetTxnHandler().GetTxnOperator() == nil)
+	fmt.Printf("yangzhaoabc txn %v", proc.TxnOperator == nil)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -4266,6 +4268,8 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 	case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView:
 		//background transaction can execute the DROPxxx in one transaction
 		return ses.IsBackgroundSession(), nil
+	case *tree.LockTableStmt:
+		return true, nil
 	}
 
 	return false, nil
