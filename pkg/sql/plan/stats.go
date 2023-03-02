@@ -23,8 +23,7 @@ import (
 	"sort"
 )
 
-func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
-
+func estimateFilterWeight(ctx context.Context, expr *plan.Expr, w float64) float64 {
 	switch expr.Typ.Id {
 	case int32(types.T_decimal64):
 		w += 64
@@ -33,7 +32,6 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text), int32(types.T_json):
 		w += 4
 	}
-
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcImpl := exprImpl.F
@@ -42,12 +40,19 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 			w += 10
 		case "in":
 			w += 5
+		case "<", "<=":
+			w += 1.1
 		default:
 			w += 1
 		}
 		for _, child := range exprImpl.F.Args {
-			w += estimateFilterWeight(child, 0)
+			w += estimateFilterWeight(ctx, child, 0)
 		}
+	}
+	if CheckExprIsMonotonic(ctx, expr) {
+		//this is a monotonic filter
+		//calc selectivity is too heavy now. will change this in the future
+		w *= 0.1
 	}
 	return w
 }
@@ -62,20 +67,16 @@ func SortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil && len(node.FilterList) > 1 {
-			weights := make([]float64, len(node.FilterList))
 			bat := batch.NewWithSize(0)
 			bat.Zs = []int64{1}
 			for i := range node.FilterList {
 				expr, _ := ConstantFold(bat, DeepCopyExpr(node.FilterList[i]), builder.compCtx.GetProcess())
-				weights[i] = estimateFilterWeight(expr, 0)
-				if CheckExprIsMonotonic(builder.GetContext(), expr) {
-					//this is a monotonic filter
-					//calc selectivity is too heavy now. will change this in the future
-					weights[i] *= 0.1
+				if expr != nil {
+					node.FilterList[i] = expr
 				}
 			}
 			sort.Slice(node.FilterList, func(i, j int) bool {
-				return weights[i] <= weights[j]
+				return estimateFilterWeight(builder.GetContext(), node.FilterList[i], 0) <= estimateFilterWeight(builder.GetContext(), node.FilterList[j], 0)
 			})
 		}
 	}
