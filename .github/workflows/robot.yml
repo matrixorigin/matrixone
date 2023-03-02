@@ -195,7 +195,7 @@ jobs:
           i=1 && while [ -n "$(ps -aux|grep 'mo-service' | grep -v 'grep' | awk '{print $2}')" ] && [ $i -le 300 ]; do echo "mo-service kill not finished......$i/300"; i=$(($i+1)); sleep 1s; done
           if [ $i -gt 300 ]; then echo 'stop mo-service failed...'; exit 1; else echo 'stop mo-service successed...'; fi
           go tool covdata textfmt -i="$GITHUB_WORKSPACE/matrixone" -o ${{ env.raw_bvt_coverage }}
-          cat ${{ env.raw_bvt_coverage }} | grep -v '${{ env.bvt_excluded_pkg }}' > ${{ env.bvt_coverage }}
+          cat ${{ env.raw_bvt_coverage }} | grep -v ${{ env.bvt_excluded_pkg }} > ${{ env.bvt_coverage }}
           echo "bvt_coverage finished"
           go tool cover -o ${{ env.bvt_html_coverage }} -html=${{ env.bvt_coverage }}
           echo "bvt_html_coverage finished"        
