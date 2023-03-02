@@ -133,8 +133,8 @@ jobs:
           echo "bvt_coverage='bvt_coverage.out'" >> $GITHUB_ENV
           echo "ut_html_coverage='ut_coverage.html'" >> $GITHUB_ENV
           echo "bvt_html_coverage='bvt_coverage.html'" >> $GITHUB_ENV
-          echo "ut_excluded_pkg='pkg/pb\|pkg/sql/parsers/goyacc'" >> $GITHUB_ENV
-          echo "bvt_excluded_pkg='pkg/pb'" >> $GITHUB_ENV
+          echo "ut_excluded_pkg='pkg/pb\|pkg/sql/parsers/goyacc\|yaccpar'" >> $GITHUB_ENV
+          echo "bvt_excluded_pkg='pkg/pb\|yaccpar'" >> $GITHUB_ENV
 
       - name: Clone test-tool repository
         uses: actions/checkout@v3
@@ -161,16 +161,12 @@ jobs:
           echo "ut finished"
           cat ${{ env.raw_ut_coverage }} | grep -v ${{ env.ut_excluded_pkg }} > ${{ env.ut_coverage }}
           echo "ut_coverage finished"
-          go tool cover -o ${{ env.ut_html_coverage }} -html=${{ env.ut_coverage }}
-          echo "ut_html_coverage finished"
-          rm -rf ${{ env.raw_ut_coverage }}
 
-      - name: Start Test Service
+      - name: Start BVT Test Service
         if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
         run: |
           cd $GITHUB_WORKSPACE/matrixone
-          make clean && make config && make cgo
           sed -i.bak 's/level = "info"/level = "error"/g'  ./etc/launch-tae-CN-tae-DN/log.toml
           if  [ -d  "./store"  ]; then rm -rf ./store; fi
           GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(go version)' -X 'main.BranchName=$(git rev-parse --abbrev-ref HEAD)' -X 'main.CommitID=$(git rev-parse HEAD)' -X 'main.BuildTime=$(date)' -X 'main.Version=$(git describe --always --tags $(git rev-list --tags --max-count=1))'"
@@ -186,15 +182,18 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases 2>&1
 
-      - name: Generate BVT Coverage File
+      - name: Generate UT and BVT Coverage File
         if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
         run: |
           cd $GITHUB_WORKSPACE/matrixone
+          go tool cover -o ${{ env.ut_html_coverage }} -html=${{ env.ut_coverage }}
+          echo "ut_html_coverage finished"
+          rm -rf ${{ env.raw_ut_coverage }}
           ps aux | grep 'mo-service' | grep -v 'grep' | awk '{print $2}' | xargs kill -s SIGINT
           while(($(ps aux|grep 'mo-service' | grep -v 'grep' | awk '{print $2}'))); do echo 'mo-service kill not finished'; sleep 1s; done
           go tool covdata textfmt -i="$GITHUB_WORKSPACE/matrixone" -o ${{ env.raw_bvt_coverage }}
-          cat ${{ env.raw_bvt_coverage }} | grep -v '${{ env.bvt_excluded_pkg }}' | grep -v 'yaccpar' > ${{ env.bvt_coverage }}
+          cat ${{ env.raw_bvt_coverage }} | grep -v '${{ env.bvt_excluded_pkg }}' > ${{ env.bvt_coverage }}
           echo "bvt_coverage finished"
           go tool cover -o ${{ env.bvt_html_coverage }} -html=${{ env.bvt_coverage }}
           echo "bvt_html_coverage finished"        
@@ -271,6 +270,7 @@ jobs:
           retention-days: 7
 
       - name: WeChat Work notification
+        if: ${{ always() && !cancelled() }}
         id: notification
         uses: chf007/action-wechat-work@master
         env:
@@ -281,6 +281,7 @@ jobs:
           content: "<font color=\"warning\">Nightly Code Quality - ${{ env.Today }} </font>\nUT Coverage Summary:<font color=\"warning\">${{ env.UT_CODE_COVERAGE }}</font>\nBVT Coverage Summary:<font color=\"warning\">${{ env.BVT_CODE_COVERAGE }}</font>\nGeneral Coverage Summary:<font color=\"warning\">${{ env.GENERAL_CODE_COVERAGE }}</font>\nFor details, please visit [Action Run](${{ env.Url }})\n"
 
       - name: WeChat Work notification
+        if: ${{ always() && !cancelled() }}
         id: detail-notification
         uses: chf007/action-wechat-work@master
         env:
