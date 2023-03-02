@@ -17,12 +17,11 @@ package types
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 func NewProtoType(oid T) *plan.Type {
-	typ := New(oid, 0, 0, 0)
+	typ := New(oid, 0, 0)
 	return &plan.Type{
-		Id:        int32(oid),
-		Size:      typ.Size,
-		Width:     typ.Width,
-		Scale:     typ.Scale,
-		Precision: typ.Precision,
+		Id:    int32(oid),
+		Size:  typ.Size,
+		Width: typ.Width,
+		Scale: typ.Scale,
 	}
 }

@@ -14874,7 +14874,7 @@ yydefault:
 			yyLOCAL = &tree.T{
 				InternalType: tree.InternalType{
 					Family:             tree.TimestampFamily,
-					Precision:          yyDollar[2].lengthOptUnion(),
+					Scale:              yyDollar[2].lengthOptUnion(),
 					FamilyString:       yyDollar[1].str,
 					DisplayWith:        yyDollar[2].lengthOptUnion(),
 					TimePrecisionIsSet: false,
@@ -14895,7 +14895,7 @@ yydefault:
 					Family:             tree.TimeFamily,
 					FamilyString:       yyDollar[1].str,
 					DisplayWith:        yyDollar[2].lengthOptUnion(),
-					Precision:          yyDollar[2].lengthOptUnion(),
+					Scale:              yyDollar[2].lengthOptUnion(),
 					TimePrecisionIsSet: false,
 					Locale:             &locale,
 					Oid:                uint32(defines.MYSQL_TYPE_TIME),
@@ -16584,7 +16584,7 @@ yydefault:
 				yylex.Error("Display width for double out of range (max = 255)")
 				return 1
 			}
-			if yyDollar[2].lengthScaleOptUnion().Precision != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Precision > yyDollar[2].lengthScaleOptUnion().DisplayWith {
+			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
 				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
 				return 1
 			}
@@ -16596,7 +16596,7 @@ yydefault:
 					Locale:       &locale,
 					Oid:          uint32(defines.MYSQL_TYPE_DOUBLE),
 					DisplayWith:  yyDollar[2].lengthScaleOptUnion().DisplayWith,
-					Precision:    yyDollar[2].lengthScaleOptUnion().Precision,
+					Scale:        yyDollar[2].lengthScaleOptUnion().Scale,
 				},
 			}
 		}
@@ -16611,7 +16611,7 @@ yydefault:
 				yylex.Error("Display width for float out of range (max = 255)")
 				return 1
 			}
-			if yyDollar[2].lengthScaleOptUnion().Precision != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Precision > yyDollar[2].lengthScaleOptUnion().DisplayWith {
+			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
 				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
 				return 1
 			}
@@ -16624,7 +16624,7 @@ yydefault:
 						Locale:       &locale,
 						Oid:          uint32(defines.MYSQL_TYPE_DOUBLE),
 						DisplayWith:  yyDollar[2].lengthScaleOptUnion().DisplayWith,
-						Precision:    yyDollar[2].lengthScaleOptUnion().Precision,
+						Scale:        yyDollar[2].lengthScaleOptUnion().Scale,
 					},
 				}
 			} else {
@@ -16636,7 +16636,7 @@ yydefault:
 						Locale:       &locale,
 						Oid:          uint32(defines.MYSQL_TYPE_FLOAT),
 						DisplayWith:  yyDollar[2].lengthScaleOptUnion().DisplayWith,
-						Precision:    yyDollar[2].lengthScaleOptUnion().Precision,
+						Scale:        yyDollar[2].lengthScaleOptUnion().Scale,
 					},
 				}
 			}
@@ -16648,7 +16648,7 @@ yydefault:
 //line mysql_sql.y:7588
 		{
 			locale := ""
-			if yyDollar[2].lengthScaleOptUnion().Precision != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Precision > yyDollar[2].lengthScaleOptUnion().DisplayWith {
+			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
 				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
 				return 1
 			}
@@ -16664,7 +16664,7 @@ yydefault:
 						Locale:       &locale,
 						Oid:          uint32(defines.MYSQL_TYPE_DECIMAL),
 						DisplayWith:  yyDollar[2].lengthScaleOptUnion().DisplayWith,
-						Precision:    yyDollar[2].lengthScaleOptUnion().Precision,
+						Scale:        yyDollar[2].lengthScaleOptUnion().Scale,
 					},
 				}
 			} else {
@@ -16676,7 +16676,7 @@ yydefault:
 						Locale:       &locale,
 						Oid:          uint32(defines.MYSQL_TYPE_DECIMAL),
 						DisplayWith:  yyDollar[2].lengthScaleOptUnion().DisplayWith,
-						Precision:    yyDollar[2].lengthScaleOptUnion().Precision,
+						Scale:        yyDollar[2].lengthScaleOptUnion().Scale,
 					},
 				}
 			}
@@ -16696,7 +16696,7 @@ yydefault:
 					Locale:       &locale,
 					Oid:          uint32(defines.MYSQL_TYPE_DOUBLE),
 					DisplayWith:  yyDollar[2].lengthScaleOptUnion().DisplayWith,
-					Precision:    yyDollar[2].lengthScaleOptUnion().Precision,
+					Scale:        yyDollar[2].lengthScaleOptUnion().Scale,
 				},
 			}
 		}
@@ -16730,7 +16730,7 @@ yydefault:
 				yyLOCAL = &tree.T{
 					InternalType: tree.InternalType{
 						Family:             tree.TimeFamily,
-						Precision:          yyDollar[2].lengthOptUnion(),
+						Scale:              yyDollar[2].lengthOptUnion(),
 						FamilyString:       yyDollar[1].str,
 						DisplayWith:        26,
 						TimePrecisionIsSet: true,
@@ -16754,7 +16754,7 @@ yydefault:
 				yyLOCAL = &tree.T{
 					InternalType: tree.InternalType{
 						Family:             tree.TimestampFamily,
-						Precision:          yyDollar[2].lengthOptUnion(),
+						Scale:              yyDollar[2].lengthOptUnion(),
 						FamilyString:       yyDollar[1].str,
 						DisplayWith:        26,
 						TimePrecisionIsSet: true,
@@ -16778,7 +16778,7 @@ yydefault:
 				yyLOCAL = &tree.T{
 					InternalType: tree.InternalType{
 						Family:             tree.TimestampFamily,
-						Precision:          yyDollar[2].lengthOptUnion(),
+						Scale:              yyDollar[2].lengthOptUnion(),
 						FamilyString:       yyDollar[1].str,
 						DisplayWith:        26,
 						TimePrecisionIsSet: true,
@@ -17192,7 +17192,7 @@ yydefault:
 		{
 			yyLOCAL = tree.LengthScaleOpt{
 				DisplayWith: tree.NotDefineDisplayWidth,
-				Precision:   tree.NotDefineDec,
+				Scale:       tree.NotDefineDec,
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -17203,7 +17203,7 @@ yydefault:
 		{
 			yyLOCAL = tree.LengthScaleOpt{
 				DisplayWith: tree.GetDisplayWith(int32(yyDollar[2].item.(int64))),
-				Precision:   tree.NotDefineDec,
+				Scale:       tree.NotDefineDec,
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -17214,7 +17214,7 @@ yydefault:
 		{
 			yyLOCAL = tree.LengthScaleOpt{
 				DisplayWith: tree.GetDisplayWith(int32(yyDollar[2].item.(int64))),
-				Precision:   int32(yyDollar[4].item.(int64)),
+				Scale:       int32(yyDollar[4].item.(int64)),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -17224,8 +17224,8 @@ yydefault:
 //line mysql_sql.y:8058
 		{
 			yyLOCAL = tree.LengthScaleOpt{
-				DisplayWith: 34, // this is the default precision for decimal
-				Precision:   0,
+				DisplayWith: 34, // this is the default scale for decimal
+				Scale:       0,
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -17236,7 +17236,7 @@ yydefault:
 		{
 			yyLOCAL = tree.LengthScaleOpt{
 				DisplayWith: tree.GetDisplayWith(int32(yyDollar[2].item.(int64))),
-				Precision:   0,
+				Scale:       0,
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -17247,7 +17247,7 @@ yydefault:
 		{
 			yyLOCAL = tree.LengthScaleOpt{
 				DisplayWith: tree.GetDisplayWith(int32(yyDollar[2].item.(int64))),
-				Precision:   int32(yyDollar[4].item.(int64)),
+				Scale:       int32(yyDollar[4].item.(int64)),
 			}
 		}
 		yyVAL.union = yyLOCAL

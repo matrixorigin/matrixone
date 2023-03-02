@@ -426,7 +426,6 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 					Id:        int32(attr.Attr.Type.Oid),
 					Width:     attr.Attr.Type.Width,
 					Size:      attr.Attr.Type.Size,
-					Precision: attr.Attr.Type.Precision,
 					Scale:     attr.Attr.Type.Scale,
 					AutoIncr:  attr.Attr.AutoIncrement,
 				},

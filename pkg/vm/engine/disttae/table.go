@@ -236,7 +236,6 @@ func (tbl *table) getTableDef() *plan.TableDef {
 						Id:        int32(attr.Attr.Type.Oid),
 						Width:     attr.Attr.Type.Width,
 						Size:      attr.Attr.Type.Size,
-						Precision: attr.Attr.Type.Precision,
 						Scale:     attr.Attr.Type.Scale,
 						AutoIncr:  attr.Attr.AutoIncrement,
 					},
@@ -363,7 +362,7 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 		IsHidden: true,
 		IsRowId:  true,
 		Name:     catalog.Row_ID,
-		Type:     types.New(types.T_Rowid, 0, 0, 0),
+		Type:     types.New(types.T_Rowid, 0, 0),
 		Primary:  true,
 	})
 	return attrs, nil

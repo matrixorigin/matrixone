@@ -1123,7 +1123,6 @@ func convertToPlanTypes(ts []types.Type) []*plan.Type {
 		result[i] = &plan.Type{
 			Id:        int32(t.Oid),
 			Width:     t.Width,
-			Precision: t.Precision,
 			Size:      t.Size,
 			Scale:     t.Scale,
 		}
@@ -1138,7 +1137,6 @@ func convertToTypes(ts []*plan.Type) []types.Type {
 		result[i] = types.Type{
 			Oid:       types.T(t.Id),
 			Width:     t.Width,
-			Precision: t.Precision,
 			Size:      t.Size,
 			Scale:     t.Scale,
 		}

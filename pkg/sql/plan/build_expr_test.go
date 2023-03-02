@@ -407,7 +407,7 @@ func makeTimeExpr(s string, p int32) *plan.Expr {
 	return &plan.Expr{
 		Typ: &plan.Type{
 			Id:        int32(types.T_time),
-			Precision: p,
+			Scale: p,
 		},
 		Expr: &plan.Expr_C{
 			C: &plan.Const{

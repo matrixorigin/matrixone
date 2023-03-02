@@ -408,13 +408,13 @@ func Test_GetBatchData(t *testing.T) {
 			{
 				Typ: &plan.Type{
 					Id:        int32(types.T_float32),
-					Precision: -1,
+					Scale: -1,
 				},
 			},
 			{
 				Typ: &plan.Type{
 					Id:        int32(types.T_float64),
-					Precision: -1,
+					Scale: -1,
 				},
 			},
 			{

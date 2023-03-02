@@ -95,10 +95,9 @@ type Type struct {
 
 	// Width means max Display width for float and double, char and varchar
 	// todo: need to add new attribute DisplayWidth ?
-	Size      int32
-	Width     int32
-	Scale     int32
-	Precision int32
+	Size  int32
+	Width int32
+	Scale int32
 }
 
 type Date int32
@@ -200,14 +199,13 @@ var Types map[string]T = map[string]T{
 	"rowid":                 T_Rowid,
 }
 
-func New(oid T, width, scale, precision int32) Type {
+func New(oid T, width, scale int32) Type {
 	return Type{
-		Oid:       oid,
-		Width:     width,
-		Scale:     scale,
-		Precision: precision,
-		Size:      int32(TypeSize(oid)),
-		Charset:   CharsetType(oid),
+		Oid:     oid,
+		Width:   width,
+		Scale:   scale,
+		Size:    int32(TypeSize(oid)),
+		Charset: CharsetType(oid),
 	}
 }
 

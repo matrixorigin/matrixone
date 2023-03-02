@@ -51,13 +51,13 @@ func (arg *Argument) GetMetaLocBat(name string) {
 	bat := batch.New(true, []string{name})
 	bat.Cnt = 1
 	bat.Vecs[0] = vector.New(types.New(types.T_varchar,
-		types.MaxVarcharLen, 0, 0))
+		types.MaxVarcharLen, 0))
 	arg.container.mp[0] = bat
 	for i := range arg.Unique_tbls {
 		bat := batch.New(true, []string{name})
 		bat.Cnt = 1
 		bat.Vecs[0] = vector.New(types.New(types.T_varchar,
-			types.MaxVarcharLen, 0, 0))
+			types.MaxVarcharLen, 0))
 		arg.container.mp[i+1] = bat
 	}
 }

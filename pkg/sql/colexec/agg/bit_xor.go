@@ -15,15 +15,16 @@
 package agg
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type BitXor[T1 types.Ints | types.UInts | types.Floats] struct {
 }
 
 func BitXorReturnType(_ []types.Type) types.Type {
-	return types.New(types.T_uint64, 0, 0, 0)
+	return types.New(types.T_uint64, 0, 0)
 }
 
 func NewBitXor[T1 types.Ints | types.UInts | types.Floats]() *BitXor[T1] {

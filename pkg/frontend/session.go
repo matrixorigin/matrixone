@@ -2066,7 +2066,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Typ: &plan2.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
-					Precision:   attr.Attr.Type.Precision,
 					Scale:       attr.Attr.Type.Scale,
 					AutoIncr:    attr.Attr.AutoIncrement,
 					Table:       tableName,
@@ -2158,7 +2157,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 			Typ: &plan2.Type{
 				Id:        int32(hideKey.Type.Oid),
 				Width:     hideKey.Type.Width,
-				Precision: hideKey.Type.Precision,
 				Scale:     hideKey.Type.Scale,
 			},
 			Primary: hideKey.Primary,
@@ -2298,7 +2296,6 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 			Typ: &plan2.Type{
 				Id:        int32(key.Type.Oid),
 				Width:     key.Type.Width,
-				Precision: key.Type.Precision,
 				Scale:     key.Type.Scale,
 				Size:      key.Type.Size,
 			},
@@ -2332,7 +2329,6 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 		Typ: &plan2.Type{
 			Id:        int32(hideKey.Type.Oid),
 			Width:     hideKey.Type.Width,
-			Precision: hideKey.Type.Precision,
 			Scale:     hideKey.Type.Scale,
 			Size:      hideKey.Type.Size,
 		},

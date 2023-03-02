@@ -785,7 +785,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 						Id:        int32(attr.Attr.Type.Oid),
 						Width:     attr.Attr.Type.Width,
 						Size:      attr.Attr.Type.Size,
-						Precision: attr.Attr.Type.Precision,
 						Scale:     attr.Attr.Type.Scale,
 						AutoIncr:  attr.Attr.AutoIncrement,
 					},
@@ -1688,7 +1687,6 @@ func dupType(typ *plan.Type) types.Type {
 		Size:      typ.Size,
 		Width:     typ.Width,
 		Scale:     typ.Scale,
-		Precision: typ.Precision,
 	}
 }
 

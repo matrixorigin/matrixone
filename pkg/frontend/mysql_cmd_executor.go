@@ -710,40 +710,40 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	case types.T_float32:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float32)
-			if vec.Typ.Precision < 0 || vec.Typ.Width == 0 {
+			if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
 				row[i] = vs[rowIndex]
 			} else {
-				row[i] = strconv.FormatFloat(float64(vs[rowIndex]), 'f', int(vec.Typ.Precision), 64)
+				row[i] = strconv.FormatFloat(float64(vs[rowIndex]), 'f', int(vec.Typ.Scale), 64)
 			}
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float32)
-				if vec.Typ.Precision < 0 || vec.Typ.Width == 0 {
+				if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
 					row[i] = vs[rowIndex]
 				} else {
-					row[i] = strconv.FormatFloat(float64(vs[rowIndex]), 'f', int(vec.Typ.Precision), 64)
+					row[i] = strconv.FormatFloat(float64(vs[rowIndex]), 'f', int(vec.Typ.Scale), 64)
 				}
 			}
 		}
 	case types.T_float64:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float64)
-			if vec.Typ.Precision < 0 || vec.Typ.Width == 0 {
+			if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
 				row[i] = vs[rowIndex]
 			} else {
-				row[i] = strconv.FormatFloat(vs[rowIndex], 'f', int(vec.Typ.Precision), 64)
+				row[i] = strconv.FormatFloat(vs[rowIndex], 'f', int(vec.Typ.Scale), 64)
 			}
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float64)
-				if vec.Typ.Precision < 0 || vec.Typ.Width == 0 {
+				if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
 					row[i] = vs[rowIndex]
 				} else {
-					row[i] = strconv.FormatFloat(vs[rowIndex], 'f', int(vec.Typ.Precision), 64)
+					row[i] = strconv.FormatFloat(vs[rowIndex], 'f', int(vec.Typ.Scale), 64)
 				}
 			}
 		}
@@ -770,42 +770,42 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			}
 		}
 	case types.T_datetime:
-		precision := vec.Typ.Precision
+		scale := vec.Typ.Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Datetime)
-			row[i] = vs[rowIndex].String2(precision)
+			row[i] = vs[rowIndex].String2(scale)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Datetime)
-				row[i] = vs[rowIndex].String2(precision)
+				row[i] = vs[rowIndex].String2(scale)
 			}
 		}
 	case types.T_time:
-		precision := vec.Typ.Precision
+		scale := vec.Typ.Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Time)
-			row[i] = vs[rowIndex].String2(precision)
+			row[i] = vs[rowIndex].String2(scale)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Time)
-				row[i] = vs[rowIndex].String2(precision)
+				row[i] = vs[rowIndex].String2(scale)
 			}
 		}
 	case types.T_timestamp:
-		precision := vec.Typ.Precision
+		scale := vec.Typ.Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Timestamp)
-			row[i] = vs[rowIndex].String2(timeZone, precision)
+			row[i] = vs[rowIndex].String2(timeZone, scale)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Timestamp)
-				row[i] = vs[rowIndex].String2(timeZone, precision)
+				row[i] = vs[rowIndex].String2(timeZone, scale)
 			}
 		}
 	case types.T_decimal64:
@@ -1526,7 +1526,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 
 func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"Variable_name", "Value"})
-	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
+	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
 	cnt := len(rows)
 	bat.Zs = make([]int64, cnt)
 	for i := range bat.Zs {

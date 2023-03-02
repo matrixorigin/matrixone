@@ -17,6 +17,9 @@ package etl
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"strconv"
-	"time"
 )
 
 const BatchSize = 8192
@@ -75,7 +76,7 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 	for i, typ := range typs {
 		switch typ.Oid {
 		case types.T_datetime:
-			typ.Precision = 6
+			typ.Scale = 6
 		}
 		vec := vector.NewOriginal(typ)
 		vector.PreAlloc(vec, batchSize, batchSize, pool)
@@ -256,7 +257,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 			switch t := field.(type) {
 			case time.Time:
 				datetimeStr := Time2DatetimeString(field.(time.Time))
-				d, err := types.ParseDatetime(datetimeStr, vec.Typ.Precision)
+				d, err := types.ParseDatetime(datetimeStr, vec.Typ.Scale)
 				if err != nil {
 					return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
 				}
@@ -266,7 +267,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 				if len(datetimeStr) == 0 {
 					cols[rowIdx] = types.Datetime(0)
 				} else {
-					d, err := types.ParseDatetime(datetimeStr, vec.Typ.Precision)
+					d, err := types.ParseDatetime(datetimeStr, vec.Typ.Scale)
 					if err != nil {
 						return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
 					}

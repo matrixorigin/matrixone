@@ -546,7 +546,7 @@ func (p *Partition) NewReader(
 		}
 	}
 
-	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0, 0)
+	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0)
 	for _, def := range defs {
 		attr, ok := def.(*engine.AttributeDef)
 		if !ok {

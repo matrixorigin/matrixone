@@ -946,7 +946,6 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				Type: types.Type{
 					Oid:       types.T(colTyp.GetId()),
 					Width:     colTyp.GetWidth(),
-					Precision: colTyp.GetPrecision(),
 					Scale:     colTyp.GetScale(),
 					Size:      colTyp.GetSize(),
 				},

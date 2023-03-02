@@ -77,7 +77,7 @@ type col struct {
 	Name      string
 	Id        types.T
 	Nullable  bool
-	Precision int32
+	Width int32
 	Scale     int32
 }
 
@@ -543,7 +543,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					Typ: &plan.Type{
 						Id:          int32(col.Id),
 						NotNullable: !col.Nullable,
-						Precision:   col.Precision,
+						Width:   col.Width,
 						Scale:       col.Scale,
 					},
 					Name:    col.Name,

@@ -24,50 +24,50 @@ func TestForamtENUS(t *testing.T) {
 	cases := []struct {
 		name      string
 		number    string
-		precision string
+		scale string
 		want      string
 	}{
 		{
 			name:      "TEST01",
 			number:    "12332.2",
-			precision: "2",
+			scale: "2",
 			want:      "12,332.20",
 		},
 		{
 			name:      "TEST02",
 			number:    "12332.123456",
-			precision: "4",
+			scale: "4",
 			want:      "12,332.1235",
 		},
 		{
 			name:      "TEST03",
 			number:    "12332.1",
-			precision: "4",
+			scale: "4",
 			want:      "12,332.1000",
 		},
 		{
 			name:      "TEST04",
 			number:    "12332.2",
-			precision: "0",
+			scale: "0",
 			want:      "12,332",
 		},
 		{
 			name:      "TEST05",
 			number:    "-.12334.2",
-			precision: "2",
+			scale: "2",
 			want:      "-0.12",
 		},
 		{
 			name:      "TEST06",
 			number:    "19999999.999999999",
-			precision: "4",
+			scale: "4",
 			want:      "20,000,000.0000",
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := formatENUS(c.number, c.precision)
+			got, _ := formatENUS(c.number, c.scale)
 			require.Equal(t, c.want, got)
 		})
 	}
@@ -77,50 +77,50 @@ func TestForamtARSA(t *testing.T) {
 	cases := []struct {
 		name      string
 		number    string
-		precision string
+		scale string
 		want      string
 	}{
 		{
 			name:      "TEST01",
 			number:    "12332.2",
-			precision: "2",
+			scale: "2",
 			want:      "12332.20",
 		},
 		{
 			name:      "TEST02",
 			number:    "12332.123456",
-			precision: "4",
+			scale: "4",
 			want:      "12332.1235",
 		},
 		{
 			name:      "TEST03",
 			number:    "12332.1",
-			precision: "4",
+			scale: "4",
 			want:      "12332.1000",
 		},
 		{
 			name:      "TEST04",
 			number:    "12332.2",
-			precision: "0",
+			scale: "0",
 			want:      "12332",
 		},
 		{
 			name:      "TEST05",
 			number:    "-.12334.2",
-			precision: "2",
+			scale: "2",
 			want:      "-0.12",
 		},
 		{
 			name:      "TEST06",
 			number:    "19999999.999999999",
-			precision: "4",
+			scale: "4",
 			want:      "20000000.0000",
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := formatARSA(c.number, c.precision)
+			got, _ := formatARSA(c.number, c.scale)
 			require.Equal(t, c.want, got)
 		})
 	}
@@ -130,50 +130,50 @@ func TestForamtBEBY(t *testing.T) {
 	cases := []struct {
 		name      string
 		number    string
-		precision string
+		scale string
 		want      string
 	}{
 		{
 			name:      "TEST01",
 			number:    "12332.2",
-			precision: "2",
+			scale: "2",
 			want:      "12.332,20",
 		},
 		{
 			name:      "TEST02",
 			number:    "12332.123456",
-			precision: "4",
+			scale: "4",
 			want:      "12.332,1235",
 		},
 		{
 			name:      "TEST03",
 			number:    "12332.1",
-			precision: "4",
+			scale: "4",
 			want:      "12.332,1000",
 		},
 		{
 			name:      "TEST04",
 			number:    "12332.2",
-			precision: "0",
+			scale: "0",
 			want:      "12.332",
 		},
 		{
 			name:      "TEST05",
 			number:    "-.12334.2",
-			precision: "2",
+			scale: "2",
 			want:      "-0,12",
 		},
 		{
 			name:      "TEST06",
 			number:    "19999999.999999999",
-			precision: "4",
+			scale: "4",
 			want:      "20.000.000,0000",
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := formatBEBY(c.number, c.precision)
+			got, _ := formatBEBY(c.number, c.scale)
 			require.Equal(t, c.want, got)
 		})
 	}
@@ -183,50 +183,50 @@ func TestForamtBGBG(t *testing.T) {
 	cases := []struct {
 		name      string
 		number    string
-		precision string
+		scale string
 		want      string
 	}{
 		{
 			name:      "TEST01",
 			number:    "12332.2",
-			precision: "2",
+			scale: "2",
 			want:      "12 332,20",
 		},
 		{
 			name:      "TEST02",
 			number:    "12332.123456",
-			precision: "4",
+			scale: "4",
 			want:      "12 332,1235",
 		},
 		{
 			name:      "TEST03",
 			number:    "12332.1",
-			precision: "4",
+			scale: "4",
 			want:      "12 332,1000",
 		},
 		{
 			name:      "TEST04",
 			number:    "12332.2",
-			precision: "0",
+			scale: "0",
 			want:      "12 332",
 		},
 		{
 			name:      "TEST05",
 			number:    "-.12334.2",
-			precision: "2",
+			scale: "2",
 			want:      "-0,12",
 		},
 		{
 			name:      "TEST06",
 			number:    "19999999.999999999",
-			precision: "4",
+			scale: "4",
 			want:      "20 000 000,0000",
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := formatBGBG(c.number, c.precision)
+			got, _ := formatBGBG(c.number, c.scale)
 			require.Equal(t, c.want, got)
 		})
 	}
@@ -236,50 +236,50 @@ func TestForamtDECH(t *testing.T) {
 	cases := []struct {
 		name      string
 		number    string
-		precision string
+		scale string
 		want      string
 	}{
 		{
 			name:      "TEST01",
 			number:    "12332.2",
-			precision: "2",
+			scale: "2",
 			want:      "12'332.20",
 		},
 		{
 			name:      "TEST02",
 			number:    "12332.123456",
-			precision: "4",
+			scale: "4",
 			want:      "12'332.1235",
 		},
 		{
 			name:      "TEST03",
 			number:    "12332.1",
-			precision: "4",
+			scale: "4",
 			want:      "12'332.1000",
 		},
 		{
 			name:      "TEST04",
 			number:    "12332.2",
-			precision: "0",
+			scale: "0",
 			want:      "12'332",
 		},
 		{
 			name:      "TEST05",
 			number:    "-.12334.2",
-			precision: "2",
+			scale: "2",
 			want:      "-0.12",
 		},
 		{
 			name:      "TEST06",
 			number:    "19999999.999999999",
-			precision: "4",
+			scale: "4",
 			want:      "20'000'000.0000",
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := formatDECH(c.number, c.precision)
+			got, _ := formatDECH(c.number, c.scale)
 			require.Equal(t, c.want, got)
 		})
 	}
