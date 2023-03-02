@@ -110,6 +110,14 @@ func initTypeCheckRelated() {
 				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{typ1, typ2, types.T_float64, types.T_float64})
 				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{typ2, typ1, types.T_float64, types.T_float64})
 			}
+			for _, typ2 := range decimals {
+				if typ1 == types.T_decimal128 || typ2 == types.T_decimal128 {
+					convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{typ1, typ2, types.T_decimal128, types.T_decimal128})
+				} else {
+					convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{typ1, typ2, types.T_decimal64, types.T_decimal64})
+				}
+
+			}
 		}
 		for i := 0; i < len(ints)-1; i++ {
 			for j := 0; j < len(uints)-1; j++ {
@@ -460,8 +468,8 @@ func initTypeCheckRelated() {
 		types.T_varchar:    {types.T_char, types.T_int64},
 		types.T_blob:       {types.T_blob},
 		types.T_text:       {types.T_text},
-		types.T_decimal64:  {types.T_decimal128, types.T_float64},
-		types.T_decimal128: {types.T_float64},
+		types.T_decimal64:  {types.T_decimal64, types.T_decimal128, types.T_float64},
+		types.T_decimal128: {types.T_decimal128, types.T_float64},
 		types.T_date:       {types.T_datetime},
 	}
 	preferredTypeConvert = make([][]bool, maxTypes)

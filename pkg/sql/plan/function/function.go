@@ -320,7 +320,9 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (int
 	} else {
 		finalTypes = args
 	}
-
+	/*if len(finalTypes) == 2 && finalTypes[0].Scale == 5 {
+		return -1, emptyType, nil, moerr.NewInvalidInputNoCtx("!!!!!!%d", finalTypes[1].Scale)
+	}*/
 	// deal the failed situations
 	switch index {
 	case wrongFunctionParameters:
@@ -370,6 +372,19 @@ func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 		for i := range sources {
 			if targets[i].Oid == types.T_decimal64 || targets[i].Oid == types.T_decimal128 {
 				if sources[i].Scale < maxScale {
+					if targets[i].Oid == types.T_decimal64 {
+						if sources[i].Precision+maxScale-sources[i].Scale > 18 {
+							sources[i].Precision = 18
+						} else {
+							sources[i].Precision += maxScale - sources[i].Scale
+						}
+					} else {
+						if sources[i].Precision+maxScale-sources[i].Scale > 38 {
+							sources[i].Precision = 38
+						} else {
+							sources[i].Precision += maxScale - sources[i].Scale
+						}
+					}
 					sources[i].Scale = maxScale
 				}
 			}
