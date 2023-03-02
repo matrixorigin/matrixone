@@ -137,7 +137,6 @@ jobs:
           echo "bvt_excluded_pkg='pkg/pb'" >> $GITHUB_ENV
 
       - name: Clone test-tool repository
-        if: ${{ env.Job-Status }} == 2
         uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
@@ -145,7 +144,6 @@ jobs:
           ref: main
 
       - name: Set up JDK 8 for x64
-        if: ${{ env.Job-Status }} == 2
         uses: actions/setup-java@v3
         with:
           java-version: '8'
@@ -168,6 +166,7 @@ jobs:
           rm -rf ${{ env.raw_ut_coverage }}
 
       - name: Start Test Service
+        if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
         run: |
           cd $GITHUB_WORKSPACE/matrixone
@@ -180,7 +179,7 @@ jobs:
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch-tae-CN-tae-DN
           
       - name: Start BVT Test
-        if: ${{ env.Job-Status }} == 2
+        if: ${{ always() && !cancelled() }}
         id: bvt_on_pr_version
         continue-on-error: true
         run: |
@@ -188,9 +187,12 @@ jobs:
           ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases 2>&1
 
       - name: Generate BVT Coverage File
+        if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
         run: |
           cd $GITHUB_WORKSPACE/matrixone
+          ps aux | grep 'mo-service' | grep -v 'grep' | awk '{print $2}' | xargs kill -s SIGINT
+          while(($(ps aux|grep 'mo-service' | grep -v 'grep' | awk '{print $2}'))); do echo 'mo-service kill not finished'; sleep 1s; done
           go tool covdata textfmt -i="$GITHUB_WORKSPACE/matrixone" -o ${{ env.raw_bvt_coverage }}
           cat ${{ env.raw_bvt_coverage }} | grep -v '${{ env.bvt_excluded_pkg }}' | grep -v 'yaccpar' > ${{ env.bvt_coverage }}
           echo "bvt_coverage finished"
@@ -198,6 +200,7 @@ jobs:
           echo "bvt_html_coverage finished"        
 
       - name: Coverage Calculate
+        if: ${{ always() && !cancelled() }}
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           echo "UT_CODE_COVERAGE: $(awk 'BEGIN {covered_line=0;all_line=0} {if ($3>=1 && !($1 in covered)) {covered[$1] = $2; covered_line+=$2;} if (!($1 in all)) { all[$1] = $2; all_line+=$2;}} END {print covered_line/all_line}' ${{ env.ut_coverage }})" > coverage_report.txt
@@ -239,6 +242,7 @@ jobs:
           zip -r code_quality_reports.zip ${{ env.bvt_html_coverage }} ${{ env.ut_html_coverage }} coverage_report.txt UT-Report.out
 
       - name: Generate Notice Content
+        if: ${{ always() && !cancelled() }}
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           cat coverage_report.txt
@@ -249,7 +253,7 @@ jobs:
           echo 'EOF' >> $GITHUB_ENV
           
       - uses: actions/upload-artifact@v3
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         continue-on-error: true
         with:
           name: code_quality_reports
@@ -274,7 +278,7 @@ jobs:
         with:
           msgtype: markdown
           mentioned_list: '["@all"]'
-          content: "<font color=\"warning\">Nightly Code Quality - ${{ env.Today }} </font>\nNumber of files failed static checks:<font color=\"warning\">${{ env.FAILED_FILES_NUM }}</font>\nUT Coverage Summary:<font color=\"warning\">${{ env.UT_CODE_COVERAGE }}</font>\nBVT Coverage Summary:<font color=\"warning\">${{ env.BVT_CODE_COVERAGE }}</font>\nGeneral Coverage Summary:<font color=\"warning\">${{ env.GENERAL_CODE_COVERAGE }}</font>\nFor details, please visit [Action Run](${{ env.Url }})\n"
+          content: "<font color=\"warning\">Nightly Code Quality - ${{ env.Today }} </font>\nUT Coverage Summary:<font color=\"warning\">${{ env.UT_CODE_COVERAGE }}</font>\nBVT Coverage Summary:<font color=\"warning\">${{ env.BVT_CODE_COVERAGE }}</font>\nGeneral Coverage Summary:<font color=\"warning\">${{ env.GENERAL_CODE_COVERAGE }}</font>\nFor details, please visit [Action Run](${{ env.Url }})\n"
 
       - name: WeChat Work notification
         id: detail-notification
