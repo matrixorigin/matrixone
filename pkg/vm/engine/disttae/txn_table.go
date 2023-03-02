@@ -31,9 +31,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
-var _ engine.Relation = new(table)
+var _ engine.Relation = new(txnTable)
 
-func (tbl *table) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, error) {
+func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, error) {
 	switch tbl.tableId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
 		return plan2.DefaultStats(), nil
@@ -53,7 +53,7 @@ func (tbl *table) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, erro
 	}
 }
 
-func (tbl *table) Rows(ctx context.Context) (int64, error) {
+func (tbl *txnTable) Rows(ctx context.Context) (int64, error) {
 	var rows int64
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
@@ -110,7 +110,7 @@ func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	return rows, nil
 }
 
-func (tbl *table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
+func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
 	cols := tbl.getTableDef().GetCols()
 	dataLength := len(cols) - 1
 	//dateType of each column for table
@@ -163,13 +163,13 @@ func (tbl *table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error
 	return tableVal, tableTypes, nil
 }
 
-func (tbl *table) Size(ctx context.Context, name string) (int64, error) {
+func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	// TODO
 	return 0, nil
 }
 
 // return all unmodified blocks
-func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error) {
+func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error) {
 	/*
 		// consider halloween problem
 		if int64(tbl.db.txn.statementId)-1 > 0 {
@@ -221,7 +221,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 }
 
 // getTableDef only return all cols and their index.
-func (tbl *table) getTableDef() *plan.TableDef {
+func (tbl *txnTable) getTableDef() *plan.TableDef {
 	if tbl.tableDef == nil {
 		var cols []*plan.ColDef
 		i := int32(0)
@@ -258,7 +258,7 @@ func (tbl *table) getTableDef() *plan.TableDef {
 	return tbl.tableDef
 }
 
-func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
+func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	//return tbl.defs, nil
 	// I don't understand why the logic now is not to get all the tableDef. Don't understand.
 	// copy from tae's logic
@@ -310,7 +310,7 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 }
 
-func (tbl *table) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
+func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
 	ct, err := c.MarshalBinary()
 	if err != nil {
 		return err
@@ -327,7 +327,7 @@ func (tbl *table) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef)
 	return nil
 }
 
-func (tbl *table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
+func (tbl *txnTable) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
 	var attrs []*engine.Attribute
 	for _, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -337,7 +337,7 @@ func (tbl *table) TableColumns(ctx context.Context) ([]*engine.Attribute, error)
 	return attrs, nil
 }
 
-func (tbl *table) getCbName() string {
+func (tbl *txnTable) getCbName() string {
 	if tbl.clusterByIdx == -1 {
 		return ""
 	} else {
@@ -345,7 +345,7 @@ func (tbl *table) getCbName() string {
 	}
 }
 
-func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
+func (tbl *txnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
 	attrs := make([]*engine.Attribute, 0, 1)
 	for _, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -357,7 +357,7 @@ func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, erro
 	return attrs, nil
 }
 
-func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
+func (tbl *txnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
 	attrs := make([]*engine.Attribute, 0, 1)
 	attrs = append(attrs, &engine.Attribute{
 		IsHidden: true,
@@ -369,7 +369,7 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 	return attrs, nil
 }
 
-func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
+func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if bat == nil {
 		return nil
 	}
@@ -415,11 +415,11 @@ func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
 	return nil
 }
 
-func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
+func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 	return nil
 }
 
-func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
+func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {
 	bat.SetAttributes([]string{catalog.Row_ID})
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
@@ -441,19 +441,19 @@ func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) err
 	return nil
 }
 
-func (tbl *table) AddTableDef(ctx context.Context, def engine.TableDef) error {
+func (tbl *txnTable) AddTableDef(ctx context.Context, def engine.TableDef) error {
 	return nil
 }
 
-func (tbl *table) DelTableDef(ctx context.Context, def engine.TableDef) error {
+func (tbl *txnTable) DelTableDef(ctx context.Context, def engine.TableDef) error {
 	return nil
 }
 
-func (tbl *table) GetTableID(ctx context.Context) uint64 {
+func (tbl *txnTable) GetTableID(ctx context.Context) uint64 {
 	return tbl.tableId
 }
 
-func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
+func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	if len(ranges) == 0 {
 		return tbl.newMergeReader(ctx, num, expr)
 	}
@@ -485,7 +485,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	return tbl.newBlockReader(ctx, num, expr, ranges)
 }
 
-func (tbl *table) newMergeReader(ctx context.Context, num int,
+func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
 	var index memtable.Tuple
 	/*
@@ -525,7 +525,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		}
 		tbl.parts[i].txn = tbl.db.txn
 		rds0, err := tbl.parts[i].NewReader(ctx, num, index, tbl.defs, tbl.tableDef,
-			tbl.skipBlocks, blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
+			tbl.skipBlocks, blks, tbl.db.txn.meta.SnapshotTS, tbl.db.txn.engine.fs, writes)
 		if err != nil {
 			return nil, err
 		}
@@ -537,7 +537,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 	return rds, nil
 }
 
-func (tbl *table) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
+func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	blks := make([]BlockMeta, len(ranges))
 	for i := range ranges {
@@ -549,7 +549,7 @@ func (tbl *table) newBlockReader(ctx context.Context, num int, expr *plan.Expr, 
 	if len(ranges) < num {
 		for i := range ranges {
 			rds[i] = &blockReader{
-				fs:         tbl.db.fs,
+				fs:         tbl.db.txn.engine.fs,
 				tableDef:   tableDef,
 				primaryIdx: tbl.primaryIdx,
 				expr:       expr,
@@ -570,7 +570,7 @@ func (tbl *table) newBlockReader(ctx context.Context, num int, expr *plan.Expr, 
 	for i := 0; i < num; i++ {
 		if i == num-1 {
 			rds[i] = &blockReader{
-				fs:         tbl.db.fs,
+				fs:         tbl.db.txn.engine.fs,
 				tableDef:   tableDef,
 				primaryIdx: tbl.primaryIdx,
 				expr:       expr,
@@ -580,7 +580,7 @@ func (tbl *table) newBlockReader(ctx context.Context, num int, expr *plan.Expr, 
 			}
 		} else {
 			rds[i] = &blockReader{
-				fs:         tbl.db.fs,
+				fs:         tbl.db.txn.engine.fs,
 				tableDef:   tableDef,
 				primaryIdx: tbl.primaryIdx,
 				expr:       expr,
