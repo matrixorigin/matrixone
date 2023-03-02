@@ -42,11 +42,7 @@ type InsertCtx struct {
 	TableDef     *plan.TableDef
 	UniqueSource []engine.Relation
 
-	OnDuplicateIdx  []int32
-	OnDuplicateExpr map[string]*plan.Expr
-
-	ParentIdx map[string]int32
-
+	ParentIdx    map[string]int32
 	ClusterTable *plan.ClusterTable
 }
 
