@@ -320,9 +320,7 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (int
 	} else {
 		finalTypes = args
 	}
-	/*if len(finalTypes) == 2 && finalTypes[0].Scale == 5 {
-		return -1, emptyType, nil, moerr.NewInvalidInputNoCtx("!!!!!!%d", finalTypes[1].Scale)
-	}*/
+
 	// deal the failed situations
 	switch index {
 	case wrongFunctionParameters:

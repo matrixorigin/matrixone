@@ -1170,7 +1170,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			return nil, moerr.NewInvalidArg(ctx, "cast types length not match args length", "")
 		}
 		for idx, castType := range argsCastType {
-			if castType.Oid != types.T_any {
+			if (!argsType[idx].Eq(castType) || types.IsDecimal(castType.Oid)) && castType.Oid != types.T_any {
 				typ := makePlan2Type(&castType)
 				args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
 				if err != nil {
