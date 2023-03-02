@@ -288,20 +288,6 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	return nil
 }
 
-func (e *Engine) getMetaPartitions(name string) Partitions {
-	e.Lock()
-	defer e.Unlock()
-	parts, ok := e.metaTables[name]
-	if !ok { // create a new table
-		parts = make(Partitions, len(e.dnMap))
-		for i := range parts {
-			parts[i] = NewPartition(nil, true)
-		}
-		e.metaTables[name] = parts
-	}
-	return parts
-}
-
 func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
 	e.Lock()
 	defer e.Unlock()

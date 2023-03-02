@@ -77,7 +77,6 @@ type Engine struct {
 	txnHeap *transactionHeap
 
 	dnMap      map[string]int
-	metaTables map[string]Partitions
 	partitions map[[2]uint64]Partitions
 
 	// XXX related to cn push model

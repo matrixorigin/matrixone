@@ -17,10 +17,12 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"runtime/trace"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -76,15 +78,10 @@ func (r RowEntry) Less(than RowEntry) bool {
 }
 
 type BlockEntry struct {
-	BlockID uint64
+	catalog.BlockInfo
 
-	MetaLocation  string
-	DeltaLocation string
-	SegmentID     uint64
-	Sorted        bool
-	CreateTime    types.TS
-	CommitTime    types.TS
-	DeleteTime    types.TS
+	CreateTime types.TS
+	DeleteTime types.TS
 }
 
 func (b BlockEntry) Less(than BlockEntry) bool {
@@ -95,6 +92,11 @@ func (b BlockEntry) Less(than BlockEntry) bool {
 		return false
 	}
 	return false
+}
+
+func (b *BlockEntry) Visible(ts types.TS) bool {
+	return b.CreateTime.LessEq(ts) &&
+		(b.DeleteTime.IsEmpty() || ts.Less(b.DeleteTime))
 }
 
 type PrimaryIndexEntry struct {
@@ -249,7 +251,9 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 		trace.WithRegion(ctx, "handle a row", func() {
 
 			pivot := BlockEntry{
-				BlockID: blockID,
+				BlockInfo: catalog.BlockInfo{
+					BlockID: blockID,
+				},
 			}
 			entry, ok := p.Blocks.Get(pivot)
 			if !ok {
@@ -257,10 +261,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			}
 
 			if location := metaLocationVector[i]; location != "" {
-				entry.MetaLocation = location
+				entry.MetaLoc = location
 			}
 			if location := deltaLocationVector[i]; location != "" {
-				entry.DeltaLocation = location
+				entry.DeltaLoc = location
 			}
 			if id := segmentIDVector[i]; id > 0 {
 				entry.SegmentID = id
@@ -270,8 +274,9 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 				entry.CreateTime = t
 			}
 			if t := commitTimeVector[i]; !t.IsEmpty() {
-				entry.CommitTime = t
+				entry.CommitTs = t
 			}
+			entry.EntryState = entryStateVector[i]
 
 			p.Blocks.Set(entry)
 
@@ -304,15 +309,17 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	deleteTimeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[1]))
 
 	for i, rowID := range rowIDVector {
-		blockID := blockIDFromRowID(rowID)
+		blockID := types.DecodeUint64(rowID[:8])
 		trace.WithRegion(ctx, "handle a row", func() {
 
 			pivot := BlockEntry{
-				BlockID: blockID,
+				BlockInfo: catalog.BlockInfo{
+					BlockID: blockID,
+				},
 			}
 			entry, ok := p.Blocks.Get(pivot)
 			if !ok {
-				entry = pivot
+				panic(fmt.Sprintf("invalid block id. %x", rowID))
 			}
 
 			entry.DeleteTime = deleteTimeVector[i]

@@ -16,11 +16,9 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
@@ -31,24 +29,7 @@ func consumeEntry(idx, primaryIdx int, tbl *txnTable,
 
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {
-			vec, err := vector.ProtoVectorToVector(e.Bat.Vecs[catalog.BLOCKMETA_ID_IDX+MO_PRIMARY_OFF])
-			if err != nil {
-				return err
-			}
-			timeVec, err := vector.ProtoVectorToVector(e.Bat.Vecs[catalog.BLOCKMETA_COMMITTS_IDX+MO_PRIMARY_OFF])
-			if err != nil {
-				return err
-			}
-			vs := vector.MustTCols[uint64](vec)
-			timestamps := vector.MustTCols[types.TS](timeVec)
-			for i, v := range vs {
-				if err := tbl.parts[idx].DeleteByBlockID(ctx, timestamps[i].ToTimestamp(), v); err != nil {
-					if !moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
-						return err
-					}
-				}
-			}
-			return engine.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)
+			return nil
 		}
 		switch e.TableId {
 		case catalog.MO_TABLES_ID:
@@ -67,7 +48,7 @@ func consumeEntry(idx, primaryIdx int, tbl *txnTable,
 		return partition.Insert(ctx, primaryIdx, e.Bat, false)
 	}
 	if isMetaTable(e.TableName) {
-		return engine.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
+		return nil
 	}
 	switch e.TableId {
 	case catalog.MO_TABLES_ID:
