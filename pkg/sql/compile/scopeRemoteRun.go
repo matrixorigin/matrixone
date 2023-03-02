@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -85,16 +86,50 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	cli client.TxnClient,
 	messageAcquirer func() morpc.Message) error {
-	// new a receiver to receive message and write back result.
-	receiver := newMessageReceiverOnServer(ctx, message,
-		cs, messageAcquirer, storeEngine, fileService, cli)
 
-	// rebuild pipeline to run and send query result back.
-	err := cnMessageHandle(receiver)
-	if err != nil {
-		return receiver.sendError(err)
+	msg, ok := message.(*pipeline.Message)
+	if !ok {
+		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
+		panic("cn server receive a message with unexpected type")
 	}
-	return receiver.sendEndMessage()
+
+	switch msg.GetSid() {
+	case pipeline.WaitingNext:
+		return handleWaitingNextMsg(ctx, message, cs)
+	case pipeline.Last:
+		// new a receiver to receive message and write back result.
+		receiver := newMessageReceiverOnServer(ctx, msg,
+			cs, messageAcquirer, storeEngine, fileService, cli)
+
+		// rebuild pipeline to run and send query result back.
+		err := cnMessageHandle(receiver)
+		if err != nil {
+			return receiver.sendError(err)
+		}
+		return receiver.sendEndMessage()
+	}
+	return nil
+}
+
+// put the waiting-next type msg into client session's cache and return directly
+func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+	msg, _ := message.(*pipeline.Message)
+	switch msg.GetCmd() {
+	case pipeline.PipelineMessage:
+		var cache morpc.MessageCache
+		var err error
+		if msg.GetSequence() == 0 {
+			if cache, err = cs.CreateCache(ctx, 0); err != nil {
+				return err
+			}
+		} else {
+			if cache, err = cs.GetCache(0); err != nil {
+				return err
+			}
+		}
+		cache.Add(message)
+	}
+	return nil
 }
 
 func fillEngineForInsert(s *Scope, e engine.Engine) {

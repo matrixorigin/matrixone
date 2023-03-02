@@ -686,9 +686,9 @@ func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, for
 		// normal receive
 		dataBuffer = append(dataBuffer, m.Data...)
 		switch m.GetSid() {
-		case pbpipeline.BatchWaitingNext:
+		case pbpipeline.WaitingNext:
 			continue
-		case pbpipeline.BatchEnd:
+		case pbpipeline.Last:
 			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
 				return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 			}
