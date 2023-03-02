@@ -19,9 +19,9 @@ package hakeeper
 
 import (
 	"encoding/binary"
-	"encoding/gob"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"time"
 
 	"github.com/lni/dragonboat/v4/logger"
@@ -584,14 +584,20 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 
 func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
-	// FIXME: ready to use gogoproto to marshal the state, just need to figure
-	// out how to write to the writer.
-	enc := gob.NewEncoder(w)
-	return enc.Encode(s.state)
+	data := make([]byte, s.state.Size())
+	n, err := s.state.MarshalToSizedBuffer(data)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(data[:n])
+	return err
 }
 
 func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
-	dec := gob.NewDecoder(r)
-	return dec.Decode(&s.state)
+	data, err := ioutil.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	return s.state.Unmarshal(data)
 }
