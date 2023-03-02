@@ -40,7 +40,7 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, e
 	}
 
 	if tbl.meta == nil || !tbl.updated {
-		err := GetTableMeta(ctx, tbl, expr)
+		err := tbl.updateMeta(ctx, expr)
 		if err != nil {
 			return plan2.DefaultStats(), err
 		}
@@ -53,21 +53,24 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, e
 	}
 }
 
-func (tbl *txnTable) Rows(ctx context.Context) (int64, error) {
-	var rows int64
+func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
+
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
 		for _, entry := range tbl.db.txn.writes[i] {
-			if entry.databaseId == tbl.db.databaseId &&
-				entry.tableId == tbl.tableId {
-				writes = append(writes, entry)
+			if entry.databaseId != tbl.db.databaseId {
+				continue
 			}
+			if entry.tableId != tbl.tableId {
+				continue
+			}
+			writes = append(writes, entry)
 		}
 	}
 	tbl.db.txn.Unlock()
 
-	deletes := make(map[types.Rowid]uint8)
+	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
 		if entry.typ == INSERT {
 			rows = rows + int64(entry.bat.Length())
@@ -75,31 +78,30 @@ func (tbl *txnTable) Rows(ctx context.Context) (int64, error) {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
 				vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
-					deletes[v] = 0
+					deletes[v] = struct{}{}
 				}
 			}
 		}
 	}
 
-	t := memtable.Time{
-		Timestamp: tbl.db.txn.meta.SnapshotTS,
-	}
-	tx := memtable.NewTransaction(
-		newMemTableTransactionID(),
-		t,
-		memtable.SnapshotIsolation,
-	)
+	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
 	for _, partition := range tbl.parts {
-		pRows, err := partition.Rows(tx, deletes, tbl.skipBlocks)
-		if err != nil {
-			return 0, err
+		iter := partition.state.Load().NewRowsIter(ts, nil, false)
+		for iter.Next() {
+			entry := iter.Entry()
+			if _, ok := deletes[entry.RowID]; ok {
+				continue
+			}
+			if tbl.skipBlocks != nil {
+				if _, ok := tbl.skipBlocks[entry.BlockID]; ok {
+					continue
+				}
+			}
+			rows++
 		}
-		rows = rows + pRows
+		iter.Close()
 	}
 
-	if tbl.meta == nil {
-		return rows, nil
-	}
 	if tbl.meta != nil {
 		for _, blks := range tbl.meta.blocks {
 			for _, blk := range blks {
@@ -107,6 +109,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (int64, error) {
 			}
 		}
 	}
+
 	return rows, nil
 }
 
@@ -183,14 +186,17 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	for i := range tbl.db.txn.writes {
 		for _, entry := range tbl.db.txn.writes[i] {
-			if entry.databaseId == tbl.db.databaseId &&
-				entry.tableId == tbl.tableId {
-				writes = append(writes, entry)
+			if entry.databaseId != tbl.db.databaseId {
+				continue
 			}
+			if entry.tableId != tbl.tableId {
+				continue
+			}
+			writes = append(writes, entry)
 		}
 	}
 
-	err := GetTableMeta(ctx, tbl, expr)
+	err := tbl.updateMeta(ctx, expr)
 	if err != nil {
 		return nil, err
 	}
@@ -206,8 +212,51 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range tbl.dnList {
-		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
-			tbl.meta.blocks[i], writes)
+
+		blocks := tbl.meta.blocks[i]
+		blks := make([]BlockMeta, 0, len(blocks))
+		deletes := make(map[uint64][]int)
+		if len(blocks) > 0 {
+			ts := tbl.db.txn.meta.SnapshotTS
+			ids := make([]uint64, len(blocks))
+			for i := range blocks {
+				// if cn can see a appendable block, this block must contain all updates
+				// in cache, no need to do merge read, BlockRead will filter out
+				// invisible and deleted rows with respect to the timestamp
+				if !blocks[i].Info.EntryState {
+					if blocks[i].Info.CommitTs.ToTimestamp().Less(ts) { // hack
+						ids[i] = blocks[i].Info.BlockID
+					}
+				}
+			}
+
+			for _, blockID := range ids {
+				ts := types.TimestampToTS(ts)
+				iter := tbl.parts[i].state.Load().NewRowsIter(ts, &blockID, true)
+				for iter.Next() {
+					entry := iter.Entry()
+					id, offset := catalog.DecodeRowid(entry.RowID)
+					deletes[id] = append(deletes[id], int(offset))
+				}
+				iter.Close()
+			}
+
+			for _, entry := range writes {
+				if entry.typ == DELETE {
+					vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+					for _, v := range vs {
+						id, offset := catalog.DecodeRowid(v)
+						deletes[id] = append(deletes[id], int(offset))
+					}
+				}
+			}
+			for i := range blocks {
+				if _, ok := deletes[blocks[i].Info.BlockID]; !ok {
+					blks = append(blks, blocks[i])
+				}
+			}
+		}
+
 		for _, blk := range blks {
 			tbl.skipBlocks[blk.Info.BlockID] = 0
 			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
