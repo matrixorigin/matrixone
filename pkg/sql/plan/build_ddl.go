@@ -1165,6 +1165,21 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	createIndex.Index = index
 	createIndex.Table = tableName
 
+	if sIdx != nil {
+		return &Plan{
+			Plan: &plan.Plan_Ddl{
+				Ddl: &plan.DataDefinition{
+					DdlType: plan.DataDefinition_CREATE_INDEX,
+					Definition: &plan.DataDefinition_CreateIndex{
+						CreateIndex: createIndex,
+					},
+				},
+			},
+		}, nil
+	}
+
+	// build select plan
+
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
