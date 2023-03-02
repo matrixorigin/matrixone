@@ -19,7 +19,3 @@ import "bytes"
 func (r Rowid) Less(than Rowid) bool {
 	return bytes.Compare(r[:], than[:]) < 0
 }
-
-func (r Rowid) Equal(to Rowid) bool {
-	return bytes.Equal(r[:], to[:])
-}

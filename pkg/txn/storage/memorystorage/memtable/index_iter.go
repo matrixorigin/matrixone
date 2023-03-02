@@ -26,13 +26,12 @@ type IndexIter[
 	K memorytable.Ordered[K],
 	V any,
 ] struct {
-	iter           btree.GenericIter[*IndexEntry[K, V]]
-	rows           *btree.BTreeG[*PhysicalRow[K, V]]
-	readTime       Time
-	tx             *Transaction
-	min            Tuple
-	max            Tuple
-	currentVersion *Version[V]
+	iter     btree.GenericIter[*IndexEntry[K, V]]
+	rows     *btree.BTreeG[*PhysicalRow[K, V]]
+	readTime Time
+	tx       *Transaction
+	min      Tuple
+	max      Tuple
 }
 
 func (t *Table[K, V, R]) NewIndexIter(tx *Transaction, min Tuple, max Tuple) *IndexIter[K, V] {
@@ -110,7 +109,6 @@ func (i *IndexIter[K, V]) seekToValid() bool {
 			}
 			continue
 		}
-		i.currentVersion = currentVersion
 		return true
 	}
 }
@@ -129,11 +127,4 @@ func (i *IndexIter[K, V]) Close() error {
 
 func (i *IndexIter[K, V]) Item() *IndexEntry[K, V] {
 	return i.iter.Item()
-}
-
-func (i *IndexIter[K, V]) Read() (key K, value V, err error) {
-	item := i.iter.Item()
-	key = item.Key
-	value = i.currentVersion.Value
-	return
 }

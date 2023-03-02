@@ -278,3 +278,11 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 
 	partitionStateProfileHandler.AddSample()
 }
+
+func mustVectorFromProto(v *api.Vector) *vector.Vector {
+	ret, err := vector.ProtoVectorToVector(v)
+	if err != nil {
+		panic(err)
+	}
+	return ret
+}
