@@ -75,6 +75,7 @@ func (l *remoteLockTable) lock(
 
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
+		// TODO: handle bind changed
 		releaseResponse(resp)
 		return nil
 	}
@@ -105,6 +106,7 @@ func (l *remoteLockTable) backgroundTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+			l.doHeartbeat()
 			timer.Reset(l.heartbeatInterval)
 		case txnID := <-l.retryC:
 			ctx2, cancel := context.WithTimeout(ctx, l.heartbeatInterval)
@@ -133,6 +135,7 @@ func (l *remoteLockTable) doUnlock(ctx context.Context, id []byte) error {
 
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
+		// TODO: handle bind changed
 		releaseResponse(resp)
 		return nil
 	}
