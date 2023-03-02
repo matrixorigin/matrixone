@@ -711,6 +711,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootId, _ = builder.pushdownFilters(rootId, nil)
 		ReCalcNodeStats(rootId, builder, true)
 		rootId = builder.determineJoinOrder(rootId)
+		SortFilterListByStats(builder.GetContext(), rootId, builder)
 		rootId = builder.pushdownSemiAntiJoins(rootId)
 		builder.qry.Steps[i] = rootId
 
