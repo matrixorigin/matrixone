@@ -54,6 +54,17 @@ func NewBlockReader(service fileservice.FileService, key string) (*BlockReader, 
 	}, nil
 }
 
+func NewFileReader(service fileservice.FileService, name string) (*BlockReader, error) {
+	reader, err := objectio.NewObjectReader(name, service)
+	if err != nil {
+		return nil, err
+	}
+	return &BlockReader{
+		reader: reader,
+		name:   name,
+	}, nil
+}
+
 func NewCheckPointReader(service fileservice.FileService, key string) (*BlockReader, error) {
 	name, locs, err := DecodeMetaLocToMetas(key)
 	if err != nil {
@@ -82,6 +93,27 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
 		return nil, err
 	}
 	for y, _ := range ids {
+		bat := batch.NewWithSize(len(idxs))
+		for i := range idxs {
+			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+		}
+		bats = append(bats, bat)
+	}
+	return bats, nil
+}
+
+func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
+	size int64, m *mpool.MPool) ([]*batch.Batch, error) {
+	blocks, err := r.reader.ReadAllMetaWithFunc(ctx, size, m, LoadZoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	bats := make([]*batch.Batch, 0)
+	ioVectors, err := r.reader.Read(ctx, blocks[0].GetExtent(), idxs, nil, nil, LoadZoneMapFunc, LoadColumnFunc)
+	if err != nil {
+		return nil, err
+	}
+	for y, _ := range blocks {
 		bat := batch.NewWithSize(len(idxs))
 		for i := range idxs {
 			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)

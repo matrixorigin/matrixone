@@ -125,20 +125,34 @@ func (r *ObjectReader) Read(ctx context.Context,
 		FilePath: r.name,
 		Entries:  make([]fileservice.IOEntry, 0, len(idxs)*len(ids)),
 	}
-	for _, id := range ids {
-		for _, block := range blocks {
-			if id == block.GetID() {
-				for _, idx := range idxs {
-					col := block.(*Block).columns[idx]
-					data.Entries = append(data.Entries, fileservice.IOEntry{
-						Offset: int64(col.GetMeta().location.Offset()),
-						Size:   int64(col.GetMeta().location.Length()),
+	if len(ids) > 0 {
+		for _, id := range ids {
+			for _, block := range blocks {
+				if id == block.GetID() {
+					for _, idx := range idxs {
+						col := block.(*Block).columns[idx]
+						data.Entries = append(data.Entries, fileservice.IOEntry{
+							Offset: int64(col.GetMeta().location.Offset()),
+							Size:   int64(col.GetMeta().location.Length()),
 
-						ToObject: readFunc(int64(col.GetMeta().location.OriginSize())),
-					})
+							ToObject: readFunc(int64(col.GetMeta().location.OriginSize())),
+						})
+					}
 				}
+				continue
 			}
-			continue
+		}
+	} else {
+		for _, block := range blocks {
+			for _, idx := range idxs {
+				col := block.(*Block).columns[idx]
+				data.Entries = append(data.Entries, fileservice.IOEntry{
+					Offset: int64(col.GetMeta().location.Offset()),
+					Size:   int64(col.GetMeta().location.Length()),
+
+					ToObject: readFunc(int64(col.GetMeta().location.OriginSize())),
+				})
+			}
 		}
 	}
 
