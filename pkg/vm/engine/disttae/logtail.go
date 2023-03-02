@@ -16,50 +16,37 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
-func consumeEntry(idx, primaryIdx int, tbl *txnTable,
-	ctx context.Context, engine *Engine, partition *Partition, state *PartitionState, e *api.Entry) error {
+func consumeEntry(
+	ctx context.Context,
+	primaryIdx int,
+	engine *Engine,
+	partition *Partition,
+	state *PartitionState,
+	e *api.Entry,
+) error {
 
 	state.HandleLogtailEntry(ctx, e, primaryIdx)
 
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {
-			vec, err := vector.ProtoVectorToVector(e.Bat.Vecs[catalog.BLOCKMETA_ID_IDX+MO_PRIMARY_OFF])
-			if err != nil {
-				return err
-			}
-			timeVec, err := vector.ProtoVectorToVector(e.Bat.Vecs[catalog.BLOCKMETA_COMMITTS_IDX+MO_PRIMARY_OFF])
-			if err != nil {
-				return err
-			}
-			vs := vector.MustTCols[uint64](vec)
-			timestamps := vector.MustTCols[types.TS](timeVec)
-			for i, v := range vs {
-				if err := tbl.parts[idx].DeleteByBlockID(ctx, timestamps[i].ToTimestamp(), v); err != nil {
-					if !moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
-						return err
-					}
-				}
-			}
-			return engine.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)
+			return nil
 		}
 		switch e.TableId {
 		case catalog.MO_TABLES_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			tbl.db.txn.engine.catalog.InsertTable(bat)
+			engine.catalog.InsertTable(bat)
 		case catalog.MO_DATABASE_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			tbl.db.txn.engine.catalog.InsertDatabase(bat)
+			engine.catalog.InsertDatabase(bat)
 		case catalog.MO_COLUMNS_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			tbl.db.txn.engine.catalog.InsertColumns(bat)
+			engine.catalog.InsertColumns(bat)
 		}
 		if primaryIdx >= 0 {
 			return partition.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
@@ -67,15 +54,15 @@ func consumeEntry(idx, primaryIdx int, tbl *txnTable,
 		return partition.Insert(ctx, primaryIdx, e.Bat, false)
 	}
 	if isMetaTable(e.TableName) {
-		return engine.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
+		return nil
 	}
 	switch e.TableId {
 	case catalog.MO_TABLES_ID:
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		tbl.db.txn.engine.catalog.DeleteTable(bat)
+		engine.catalog.DeleteTable(bat)
 	case catalog.MO_DATABASE_ID:
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		tbl.db.txn.engine.catalog.DeleteDatabase(bat)
+		engine.catalog.DeleteDatabase(bat)
 	}
 	return partition.Delete(ctx, e.Bat)
 }
