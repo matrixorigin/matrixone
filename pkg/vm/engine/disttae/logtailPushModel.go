@@ -109,42 +109,38 @@ func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.
 // records the received last log tail timestamp.
 type syncLogTailTimestamp struct {
-	minTIndex int // always be the index of min t in tList
-	tList     []timestamp.Timestamp
-	sync.RWMutex
+	tList []struct {
+		time timestamp.Timestamp
+		sync.RWMutex
+	}
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp() {
-	r.minTIndex = parallelNums
-	r.tList = make([]timestamp.Timestamp, parallelNums+1)
+	r.tList = make([]struct {
+		time timestamp.Timestamp
+		sync.RWMutex
+	}, parallelNums+1)
 }
 
 func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
-	r.RLock()
-	t := r.tList[r.minTIndex]
-	r.RUnlock()
-	return t
+	r.tList[0].RLock()
+	minT := r.tList[0].time
+	r.tList[0].RUnlock()
+	for i := 1; i < len(r.tList); i++ {
+		r.tList[i].RLock()
+		tempT := r.tList[i].time
+		r.tList[i].RUnlock()
+		if tempT.Less(minT) {
+			minT = tempT
+		}
+	}
+	return minT
 }
 
 func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp.Timestamp) {
-	r.Lock()
-	if r.tList[index].Equal(r.tList[r.minTIndex]) {
-		r.tList[index] = newTimestamp
-		for i := 0; i < index; i++ {
-			if r.tList[i].Less(r.tList[r.minTIndex]) {
-				r.minTIndex = i
-			}
-		}
-		for i := index + 1; i < len(r.tList); i++ {
-			if r.tList[i].Less(r.tList[r.minTIndex]) {
-				r.minTIndex = i
-			}
-		}
-	} else {
-		r.tList[index] = newTimestamp
-	}
-
-	r.Unlock()
+	r.tList[index].Lock()
+	r.tList[index].time = newTimestamp
+	r.tList[index].Unlock()
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
