@@ -853,6 +853,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
 				targetArgType = types.T_text.ToType()
 			}
+
+			if targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary {
+				targetArgType = types.T_blob.ToType()
+			}
 			targetType = makePlan2Type(&targetArgType)
 
 			for idx, tmpID := range nodes {

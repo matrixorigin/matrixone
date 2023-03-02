@@ -24,6 +24,9 @@ import (
 func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
+	if vectors[0].GetType().Oid == types.T_blob {
+		resultType = types.T_blob.ToType()
+	}
 	inputValues := vector.MustStrCols(inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
