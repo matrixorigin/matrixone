@@ -120,6 +120,7 @@ func GetTableMeta(ctx context.Context, tbl *table, expr *plan.Expr) error {
 			if err := tbl.db.txn.db.UpdateOfPush(ctx, tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 				return err
 			}
+			tbl.db.txn.db.inertLoad(ctx, tbl.db.databaseId, tbl.tableId, tbl)
 		} else {
 			if err := tbl.db.txn.db.UpdateOfPull(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
 				tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {

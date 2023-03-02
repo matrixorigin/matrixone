@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 func newDB(dnList []DNStore) *DB {
@@ -296,6 +298,39 @@ func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
 	}
 	db.Unlock()
 	return parts
+}
+
+func (db *DB) inertLoad(ctx context.Context, databaseId, tableId uint64,
+	tbl *table) error {
+	parts := db.getPartitions(databaseId, tableId)
+	for i, part := range parts {
+		part.Lock()
+		ckptList := part.ckptList
+		part.ckptList = nil
+		part.Unlock()
+		for _, ckpt := range ckptList {
+			entries, err := logtail.LoadCheckpointEntries(
+				ctx,
+				ckpt,
+				tbl.tableId,
+				tbl.tableName,
+				tbl.db.databaseId,
+				tbl.db.databaseName,
+				tbl.db.fs)
+			if err != nil {
+				part.Unlock()
+				return err
+			}
+			for _, entry := range entries {
+				if err = consumeEntry(i, tbl.primaryIdx, tbl, ctx,
+					db, part, entry); err != nil {
+					part.Unlock()
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (db *DB) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {

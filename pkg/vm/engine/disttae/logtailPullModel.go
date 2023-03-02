@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -25,13 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"time"
 )
 
 // updatePartitionOfPull the old method of log tail pull model.
 func updatePartitionOfPull(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	ctx context.Context, op client.TxnOperator, db *DB,
-	mvcc MVCC, dn DNStore, req api.SyncLogTailReq) error {
+	mvcc *Partition, dn DNStore, req api.SyncLogTailReq) error {
 	reqs, err := genLogTailReq(dn, req)
 	if err != nil {
 		return err
@@ -67,7 +68,7 @@ func getLogTail(ctx context.Context, op client.TxnOperator, reqs []txn.TxnReques
 }
 
 func consumeLogTailOfPull(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
-	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) (err error) {
+	ctx context.Context, db *DB, mvcc *Partition, logTail *api.SyncLogTailResp) (err error) {
 	var entries []*api.Entry
 
 	if entries, err = logtail.LoadCheckpointEntries(

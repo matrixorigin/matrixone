@@ -114,6 +114,7 @@ type Partitions []*Partition
 
 // a partition corresponds to a dn
 type Partition struct {
+	sync.Mutex
 	lock chan struct{}
 	// multi-version data of logtail, implemented with reusee's memengine
 	data             *memtable.Table[RowID, DataValue, *DataRow]
@@ -122,6 +123,8 @@ type Partition struct {
 	ts timestamp.Timestamp
 	// used for block read in PartitionReader
 	txn *Transaction
+
+	ckptList []string
 }
 
 // Transaction represents a transaction

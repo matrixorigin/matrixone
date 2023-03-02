@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,7 +26,7 @@ import (
 )
 
 func consumeEntry(idx, primaryIdx int, tbl *table,
-	ctx context.Context, db *DB, mvcc MVCC, e *api.Entry) error {
+	ctx context.Context, db *DB, part *Partition, e *api.Entry) error {
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {
 			vec, err := vector.ProtoVectorToVector(e.Bat.Vecs[catalog.BLOCKMETA_ID_IDX+MO_PRIMARY_OFF])
@@ -59,9 +60,9 @@ func consumeEntry(idx, primaryIdx int, tbl *table,
 			tbl.db.txn.catalog.InsertColumns(bat)
 		}
 		if primaryIdx >= 0 {
-			return mvcc.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
+			return part.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
 		}
-		return mvcc.Insert(ctx, primaryIdx, e.Bat, false)
+		return part.Insert(ctx, primaryIdx, e.Bat, false)
 	}
 	if isMetaTable(e.TableName) {
 		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
@@ -74,5 +75,5 @@ func consumeEntry(idx, primaryIdx int, tbl *table,
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
 		tbl.db.txn.catalog.DeleteDatabase(bat)
 	}
-	return mvcc.Delete(ctx, e.Bat)
+	return part.Delete(ctx, e.Bat)
 }
