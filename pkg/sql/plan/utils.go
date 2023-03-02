@@ -443,6 +443,35 @@ func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
 	return newFilters
 }
 
+// strict filter means col compared to const. for example col1>1
+// func(col1)=1 is not strict
+func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "=", ">", "<", ">=", "<=":
+			switch child0 := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_Col:
+				col = child0.Col
+			default:
+				return false, nil, nil
+			}
+			switch child1 := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				constExpr = child1.C
+				b = true
+				return
+			default:
+				return false, nil, nil
+			}
+		default:
+			return false, nil, nil
+		}
+	default:
+		return false, nil, nil
+	}
+}
+
 // for predicate deduction, filter must be like func(col)>1 , or (col=1) or (col=2)
 // and only 1 colRef is allowd in the filter
 func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
@@ -842,10 +871,12 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 }
 
 // handle the filter list for zonemap. rewrite and constFold
-func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+// return monotonic filters and number of nonMonotonic filters
+func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, int) {
 	if proc == nil || proc.Ctx == nil {
-		return nil
+		return nil, 0
 	}
+	num := 0
 	var newExprList []*plan.Expr
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
@@ -856,10 +887,12 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr
 		}
 		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
 			newExprList = append(newExprList, expr)
+		} else {
+			num++
 		}
 	}
 	e := colexec.RewriteFilterExprList(newExprList)
-	return e
+	return e, num
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {

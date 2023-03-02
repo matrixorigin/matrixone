@@ -86,7 +86,7 @@ func (m *MemCache) Read(
 }
 
 func (m *MemCache) cacheHit() {
-	profileAddSample()
+	FSProfileHandler.AddSample()
 }
 
 func (m *MemCache) Update(

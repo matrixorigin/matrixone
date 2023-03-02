@@ -120,7 +120,7 @@ func (d *DiskCache) Read(
 }
 
 func (d *DiskCache) cacheHit() {
-	profileAddSample()
+	FSProfileHandler.AddSample()
 }
 
 func (d *DiskCache) Update(

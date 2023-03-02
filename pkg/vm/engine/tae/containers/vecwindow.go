@@ -83,7 +83,7 @@ func (win *vectorWindow[T]) Equals(o Vector) bool {
 		}
 		var v T
 		if _, ok := any(v).([]byte); ok {
-			if !bytes.Equal(win.Get(i).([]byte), o.Get(i).([]byte)) {
+			if !bytes.Equal(win.ShallowGet(i).([]byte), o.ShallowGet(i).([]byte)) {
 				return false
 			}
 		} else if _, ok := any(v).(types.Decimal64); ok {
@@ -140,6 +140,9 @@ func (win *vectorWindow[T]) Data() []byte {
 func (win *vectorWindow[T]) Get(i int) (v any) {
 	return win.ref.Get(i + win.offset)
 }
+func (win *vectorWindow[T]) ShallowGet(i int) (v any) {
+	return win.ref.ShallowGet(i + win.offset)
+}
 
 func (win *vectorWindow[T]) Nullable() bool { return win.ref.Nullable() }
 func (win *vectorWindow[T]) HasNull() bool  { return win.ref.HasNull() }
@@ -176,13 +179,24 @@ func (win *vectorWindow[T]) Bytes() *Bytes {
 	return bs
 }
 func (win *vectorWindow[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
-	return win.ref.impl.forEachWindowWithBias(0, win.length, op, sels, win.offset)
+	return win.ref.impl.forEachWindowWithBias(0, win.length, op, sels, win.offset, false)
 }
 func (win *vectorWindow[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 	if offset+length > win.length {
 		panic("bad param")
 	}
-	return win.ref.impl.forEachWindowWithBias(offset, length, op, sels, win.offset)
+	return win.ref.impl.forEachWindowWithBias(offset, length, op, sels, win.offset, false)
+}
+
+func (win *vectorWindow[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) (err error) {
+	return win.ref.impl.forEachWindowWithBias(0, win.length, op, sels, win.offset, true)
+}
+
+func (win *vectorWindow[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	if offset+length > win.length {
+		panic("bad param")
+	}
+	return win.ref.impl.forEachWindowWithBias(offset, length, op, sels, win.offset, true)
 }
 func (win *vectorWindow[T]) WriteTo(w io.Writer) (n int64, err error) { panic("implement me") }
 func (win *vectorWindow[T]) Window(offset, length int) Vector {
