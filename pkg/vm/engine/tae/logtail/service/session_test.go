@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -31,6 +32,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
+
+func TestMain(m *testing.M) {
+	// make responseBufferSize small enough temporarily
+	// Larger buffer size would have a negative effect on CI.
+	original := responseBufferSize
+	responseBufferSize = 1024
+	ret := m.Run()
+	responseBufferSize = original
+	os.Exit(ret)
+}
 
 func TestSessionManger(t *testing.T) {
 	sm := NewSessionManager()
@@ -269,6 +280,20 @@ func (m *blockStream) Close() error {
 	return nil
 }
 
+func (m *blockStream) CreateCache(
+	ctx context.Context,
+	cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+
+func (m *blockStream) DeleteCache(cacheID uint64) {
+	panic("not implement")
+}
+
+func (m *blockStream) GetCache(cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+
 type brokenStream struct{}
 
 func mockBrokenClientSession() morpc.ClientSession {
@@ -281,6 +306,20 @@ func (m *brokenStream) Write(ctx context.Context, message morpc.Message) error {
 
 func (m *brokenStream) Close() error {
 	return nil
+}
+
+func (m *brokenStream) CreateCache(
+	ctx context.Context,
+	cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+
+func (m *brokenStream) DeleteCache(cacheID uint64) {
+	panic("not implement")
+}
+
+func (m *brokenStream) GetCache(cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
 }
 
 type normalStream struct {
@@ -301,6 +340,20 @@ func (m *normalStream) Write(ctx context.Context, message morpc.Message) error {
 
 func (m *normalStream) Close() error {
 	return nil
+}
+
+func (m *normalStream) CreateCache(
+	ctx context.Context,
+	cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+
+func (m *normalStream) DeleteCache(cacheID uint64) {
+	panic("not implement")
+}
+
+func (m *normalStream) GetCache(cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
 }
 
 type notifySessionError struct {

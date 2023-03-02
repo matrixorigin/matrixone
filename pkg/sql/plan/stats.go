@@ -43,52 +43,62 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 		if ndv < 1 {
 			ndv = 1
 		}
+		//assume all join is not cross join
+		//will fix this in the future
+		//isCrossJoin := (len(node.OnList) == 0)
+		isCrossJoin := false
+		selectivity := math.Pow(rightStats.Selectivity, math.Pow(leftStats.Selectivity, 0.5))
+
 		switch node.JoinType {
 		case plan.Node_INNER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
-				outcnt *= 0.1
+			if !isCrossJoin {
+				outcnt *= selectivity
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_LEFT:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
-				outcnt *= 0.1
+			if !isCrossJoin {
+				outcnt *= selectivity
 				outcnt += leftStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_RIGHT:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
-				outcnt *= 0.1
+			if !isCrossJoin {
+				outcnt *= selectivity
 				outcnt += rightStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_OUTER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
-				outcnt *= 0.1
+			if !isCrossJoin {
+				outcnt *= selectivity
 				outcnt += leftStats.Outcnt + rightStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_SEMI, plan.Node_ANTI:
@@ -96,6 +106,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      leftStats.Outcnt * .7,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_SINGLE, plan.Node_MARK:
@@ -103,13 +114,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      leftStats.Outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 		}
 
 	case plan.Node_AGG:
 		if len(node.GroupBy) > 0 {
 			node.Stats = &plan.Stats{
-				Outcnt:      childStats.Outcnt * 0.1,
+				Outcnt:      childStats.Outcnt * 0.2,
 				Cost:        childStats.Outcnt,
 				HashmapSize: childStats.Outcnt,
 			}
@@ -160,7 +172,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil {
-			node.Stats = builder.compCtx.Stats(node.ObjRef, HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess()))
+			expr, num := HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess())
+			node.Stats = builder.compCtx.Stats(node.ObjRef, expr)
+			if num > 0 {
+				node.Stats.Selectivity *= 0.1
+				node.Stats.Outcnt *= 0.1
+			}
 		}
 
 	default:

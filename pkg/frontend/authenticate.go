@@ -360,6 +360,8 @@ const (
 	dumpDefaultRoleID = moAdminRoleID
 
 	moCatalog = "mo_catalog"
+
+	moMysqlCompatbilityModeDefaultDb = "%!%mo_mysql_compatbility_mode_temp_db"
 )
 
 type objectType int
@@ -5291,6 +5293,11 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	addSqlIntoSet(initMoUserGrant4)
 	addSqlIntoSet(initMoUserGrant5)
 
+	//step6: add new entries to the mo_compatbility_mode
+	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
+	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, sysAccountName, moMysqlCompatbilityModeDefaultDb, configuration)
+	addSqlIntoSet(initMoMysqlCompatbilityMode)
+
 	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant
 	for _, sql := range initDataSqls {
 		err = bh.Exec(ctx, sql)
@@ -5459,6 +5466,8 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	var comment = ""
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
+	//var configuration string
+	//var sql string
 	ctx, span := trace.Debug(ctx, "createTablesInMoCatalogOfGeneralTenant")
 	defer span.End()
 
@@ -5507,6 +5516,14 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		err = moerr.NewInternalError(ctx, "get the id of tenant %s failed", ca.Name)
 		goto handleFailed
 	}
+
+	//step2.Add new entries to the mo_mysql_compatbility_mode when create a new account
+	// configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
+	// sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
+	// err = bh.Exec(ctx, sql)
+	// if err != nil {
+	// 	goto handleFailed
+	// }
 
 	newTenant = &TenantInfo{
 		Tenant:        ca.Name,
@@ -5606,6 +5623,11 @@ func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundEx
 	addSqlIntoSet(initMoUserGrant1)
 	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
+
+	//step6: add new entries to the mo_mysql_compatbility_mode
+	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
+	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
+	addSqlIntoSet(initMoMysqlCompatbilityMode)
 
 	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
 	for _, sql := range initDataSqls {
@@ -6107,10 +6129,12 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	var err error
 	var sql string
 	var erArray []ExecResult
+	var accountName string
 
 	datname := ad.DbName
 	update_config := "'" + ad.UpdateConfig + "'"
 
+	accountName = ses.GetTenantInfo().GetTenant()
 	//verify the update_config
 	if !isInvalidConfigInput(update_config) {
 		return moerr.NewInvalidInput(ctx, "invalid input %s for alter database config", update_config)
@@ -6144,8 +6168,8 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	}
 
 	//step2: update the mo_mysql_compatbility_mode of that database
-	sql = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where dat_name = "%s";`
-	sql = fmt.Sprintf(sql, update_config, datname)
+	sql = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s" and dat_name = "%s";`
+	sql = fmt.Sprintf(sql, update_config, accountName, datname)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
@@ -6188,6 +6212,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	var err error
 	var sql string
 	var erArray []ExecResult
+	var dbName string
 
 	accountName := stmt.AccountName
 	update_config := "'" + stmt.UpdateConfig + "'"
@@ -6220,7 +6245,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "there is no account %s", accountName)
+		err = moerr.NewInternalError(ctx, "Permission change %s's config denied", accountName)
 		goto handleFailed
 	}
 
@@ -6242,8 +6267,21 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 		goto handleFailed
 	}
 
-	if len(ses.GetDatabaseName()) != 0 {
-		err = changeVersion(ctx, ses, ses.GetDatabaseName())
+	dbName = ses.GetDatabaseName()
+	if len(dbName) != 0 {
+		if _, ok := bannedCatalogDatabases[dbName]; ok {
+			err = changeVersion(ctx, ses, moMysqlCompatbilityModeDefaultDb)
+			if err != nil {
+				goto handleFailed
+			}
+		} else {
+			err = changeVersion(ctx, ses, dbName)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+	} else {
+		err = changeVersion(ctx, ses, moMysqlCompatbilityModeDefaultDb)
 		if err != nil {
 			goto handleFailed
 		}
