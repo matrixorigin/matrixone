@@ -64,15 +64,15 @@ func generalInternalType(funName string, vectors []*vector.Vector, proc *process
 		} else {
 			var typ types.Type
 			bytes := []byte(inputValues[0])
-			err := types.Decode(bytes, typ)
+			err := types.Decode(bytes, &typ)
 			if err != nil {
 				return nil, err
 			}
-			isNull, val := typefunc(typ)
-			if isNull {
-				return proc.AllocScalarNullVector(resultType), nil
+			isVaild, val := typefunc(typ)
+			if isVaild {
+				return vector.NewConstFixed(resultType, inputVector.Length(), int64(val), proc.Mp()), nil
 			} else {
-				return vector.NewConstFixed(resultType, inputVector.Length(), val, proc.Mp()), nil
+				return proc.AllocScalarNullVector(resultType), nil
 			}
 		}
 	} else {
@@ -88,8 +88,8 @@ func generalInternalType(funName string, vectors []*vector.Vector, proc *process
 			if err != nil {
 				return nil, err
 			}
-			isNull, val := typefunc(typ)
-			if isNull {
+			isVaild, val := typefunc(typ)
+			if isVaild {
 				resultValues[i] = int64(val)
 			} else {
 				nulls.Add(resVector.Nsp, uint64(i))

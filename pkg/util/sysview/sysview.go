@@ -263,7 +263,7 @@ var (
 			"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
 			"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
 			"if(true, NULL, '') AS SQL_PATH," +
-			"'NO' AS DEFAULT_ENCRYPTION " +
+			"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 			"FROM mo_catalog.mo_database;",
 		"CREATE TABLE IF NOT EXISTS CHARACTER_SETS(" +
 			"CHARACTER_SET_NAME varchar(64)," +
@@ -320,8 +320,8 @@ var (
 			"if(relkind = 'v', NULL, created_time) AS CHECK_TIME," +
 			"'utf8mb4_0900_ai_ci' AS TABLE_COLLATION," +
 			"if(relkind = 'v', NULL, 0) AS CHECKSUM," +
-			"if(relkind = 'v', NULL, cast('' as varchar(256))) AS CREATE_OPTIONS," +
-			"rel_comment AS TABLE_COMMENT " +
+			"if(relkind = 'v', NULL, if(partitioned = '', '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS," +
+			"cast(rel_comment as text) AS TABLE_COMMENT " +
 			"FROM mo_catalog.mo_tables;",
 
 		//"CREATE VIEW IF NOT EXISTS TABLES AS " +

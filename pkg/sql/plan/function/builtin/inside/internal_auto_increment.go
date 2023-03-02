@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -36,6 +35,7 @@ func InternalAutoIncrement(vectors []*vector.Vector, proc *process.Process) (*ve
 			return proc.AllocScalarNullVector(resultType), nil
 		} else if !vectors[i].IsScalar() {
 			isAllConst = false
+			break
 		}
 	}
 
@@ -130,35 +130,4 @@ func InternalAutoIncrement(vectors []*vector.Vector, proc *process.Process) (*ve
 		}
 		return resVector, nil
 	}
-}
-
-// If the table contains auto_increment column, return true and get auto_increment column definition of the table.
-// If there is no auto_increment column, return false
-func getTableAutoIncrCol(engineDefs []engine.TableDef, tableName string) (bool, *plan.ColDef) {
-	if engineDefs != nil {
-		for _, def := range engineDefs {
-			if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement {
-				autoIncrCol := &plan.ColDef{
-					ColId: attr.Attr.ID,
-					Name:  attr.Attr.Name,
-					Typ: &plan.Type{
-						Id:          int32(attr.Attr.Type.Oid),
-						Width:       attr.Attr.Type.Width,
-						Precision:   attr.Attr.Type.Precision,
-						Scale:       attr.Attr.Type.Scale,
-						AutoIncr:    attr.Attr.AutoIncrement,
-						Table:       tableName,
-						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-					},
-					Primary:   attr.Attr.Primary,
-					Default:   attr.Attr.Default,
-					OnUpdate:  attr.Attr.OnUpdate,
-					Comment:   attr.Attr.Comment,
-					ClusterBy: attr.Attr.ClusterBy,
-				}
-				return true, autoIncrCol
-			}
-		}
-	}
-	return false, nil
 }

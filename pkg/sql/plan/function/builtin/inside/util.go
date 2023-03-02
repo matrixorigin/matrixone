@@ -28,13 +28,17 @@ import (
 
 func getCurrentAutoIncrement(e engine.Engine, proc *process.Process, colName string, dbName, tblName string) (uint64, error) {
 	autoIncrCaches := proc.SessionInfo.AutoIncrCaches
-	autoIncrCaches.Mu.Lock()
-	defer autoIncrCaches.Mu.Unlock()
-	if autoincrcache, ok := autoIncrCaches.AutoIncrCaches[colName]; ok {
-		return autoincrcache.CurNum, nil
+	if autoIncrCaches.AutoIncrCaches != nil {
+		autoIncrCaches.Mu.Lock()
+		defer autoIncrCaches.Mu.Unlock()
+		if autoincrcache, ok := autoIncrCaches.AutoIncrCaches[colName]; ok {
+			return autoincrcache.CurNum, nil
+		} else {
+			// Not cached yet or the cache is ran out.
+			// Need new txn for read from the table.
+			return getCurrAutoIncrWithTxn(dbName, tblName, colName, e, proc)
+		}
 	} else {
-		// Not cached yet or the cache is ran out.
-		// Need new txn for read from the table.
 		return getCurrAutoIncrWithTxn(dbName, tblName, colName, e, proc)
 	}
 }
@@ -127,6 +131,37 @@ func getTableAutoIncrValue(dbName string, colName string, eg engine.Engine, txn 
 		bat.Clean(proc.Mp())
 	}
 	return 0, nil
+}
+
+// If the table contains auto_increment column, return true and get auto_increment column definition of the table.
+// If there is no auto_increment column, return false
+func getTableAutoIncrCol(engineDefs []engine.TableDef, tableName string) (bool, *plan.ColDef) {
+	if engineDefs != nil {
+		for _, def := range engineDefs {
+			if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement {
+				autoIncrCol := &plan.ColDef{
+					ColId: attr.Attr.ID,
+					Name:  attr.Attr.Name,
+					Typ: &plan.Type{
+						Id:          int32(attr.Attr.Type.Oid),
+						Width:       attr.Attr.Type.Width,
+						Precision:   attr.Attr.Type.Precision,
+						Scale:       attr.Attr.Type.Scale,
+						AutoIncr:    attr.Attr.AutoIncrement,
+						Table:       tableName,
+						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+					},
+					Primary:   attr.Attr.Primary,
+					Default:   attr.Attr.Default,
+					OnUpdate:  attr.Attr.OnUpdate,
+					Comment:   attr.Attr.Comment,
+					ClusterBy: attr.Attr.ClusterBy,
+				}
+				return true, autoIncrCol
+			}
+		}
+	}
+	return false, nil
 }
 
 func newTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
