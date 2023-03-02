@@ -147,6 +147,17 @@ func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) ([]obj
 	return r.reader.ReadMeta(ctx, locs, m, LoadZoneMapFunc)
 }
 
+func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
+	blocks, err := r.reader.ReadAllMetaWithFunc(ctx, size, m, LoadZoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	if r.meta.End() == 0 {
+		r.meta = blocks[0].GetExtent()
+	}
+	return blocks, nil
+}
+
 func (r *BlockReader) LoadZoneMap(
 	ctx context.Context,
 	idxs []uint16,
