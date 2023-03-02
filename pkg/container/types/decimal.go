@@ -188,6 +188,14 @@ func CompareDecimal256(x Decimal256, y Decimal256) int64 {
 	return int64(x.Compare(y))
 }
 
+func (x Decimal64) Lt(y Decimal64) bool {
+	return x.Less(y)
+}
+
+func (x Decimal128) Lt(y Decimal128) bool {
+	return x.Less(y)
+}
+
 func (x Decimal64) Left(n int) (y Decimal64) {
 	return x << n
 }
