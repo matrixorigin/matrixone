@@ -59,17 +59,24 @@ func NewStdVector[T any](opts ...Options) *StdVector[T] {
 }
 
 func (vec *StdVector[T]) tryExpand(capacity int) {
+	oldn := vec.tryExpandAndManuallyDrop(capacity)
+	if oldn != nil {
+		vec.alloc.Free(oldn)
+	}
+}
+
+func (vec *StdVector[T]) tryExpandAndManuallyDrop(capacity int) []byte {
 	if vec.capacity >= capacity {
-		return
+		return nil
 	}
 	newSize := stl.SizeOfMany[T](capacity)
 	vec.capacity = capacity
 	oldn := vec.node
 	if oldn != nil && newSize <= len(oldn) {
-		return
+		return nil
 	} else if oldn == nil {
 		if newSize <= cap(vec.buf) {
-			return
+			return nil
 		}
 	}
 	newn, err := vec.alloc.Alloc(capacity * stl.Sizeof[T]())
@@ -80,9 +87,7 @@ func (vec *StdVector[T]) tryExpand(capacity int) {
 	buf = append(buf, vec.buf...)
 	vec.buf = buf
 	vec.node = newn
-	if oldn != nil {
-		vec.alloc.Free(oldn)
-	}
+	return oldn
 }
 
 func (vec *StdVector[T]) Close() {
@@ -152,6 +157,7 @@ func (vec *StdVector[T]) String() string {
 }
 
 func (vec *StdVector[T]) Append(v T) {
+	var nodeToBeFreed []byte
 	if len(vec.slice) == vec.capacity {
 		var newCap int
 		if vec.capacity < 2 {
@@ -159,11 +165,14 @@ func (vec *StdVector[T]) Append(v T) {
 		} else {
 			newCap = vec.capacity * 2
 		}
-		vec.tryExpand(newCap)
+		nodeToBeFreed = vec.tryExpandAndManuallyDrop(newCap)
 	}
 	vec.buf = append(vec.buf, unsafe.Slice((*byte)(unsafe.Pointer(&v)), int(unsafe.Sizeof(v)))...)
 	size := len(vec.slice)
 	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), size+1)
+	if nodeToBeFreed != nil {
+		vec.alloc.Free(nodeToBeFreed)
+	}
 }
 
 func (vec *StdVector[T]) Get(i int) (v T) {
@@ -210,6 +219,7 @@ func (vec *StdVector[T]) AppendMany(vals ...T) {
 	if len(vals) == 0 {
 		return
 	}
+	var nodeToBeFreed []byte
 	predictSize := len(vals) + len(vec.slice)
 	if predictSize > vec.capacity {
 		var newCap int
@@ -221,7 +231,7 @@ func (vec *StdVector[T]) AppendMany(vals ...T) {
 		if newCap < predictSize {
 			newCap = predictSize
 		}
-		vec.tryExpand(newCap)
+		nodeToBeFreed = vec.tryExpandAndManuallyDrop(newCap)
 	}
 
 	// vec.buf is the pre-allocted memory buffer. Here copy vals into the vec.buf
@@ -230,6 +240,12 @@ func (vec *StdVector[T]) AppendMany(vals ...T) {
 		int(stl.SizeOfMany[T](len(vals))))...)
 	// vec.slice shares the buffer with vec.buf. Here change the slice length
 	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), predictSize)
+
+	// `vals` could be a slice of the old node in the vec, in that case,
+	// the old node must freed AFTER appending `vals` to new node
+	if nodeToBeFreed != nil {
+		vec.alloc.Free(nodeToBeFreed)
+	}
 }
 
 func (vec *StdVector[T]) Clone(offset, length int, allocator ...*mpool.MPool) stl.Vector[T] {

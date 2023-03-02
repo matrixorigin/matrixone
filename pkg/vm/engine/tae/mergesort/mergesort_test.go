@@ -22,21 +22,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSort1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
+
+	// sort not null
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 10, false, false, nil)
-		vec2 := containers.MockVector(vecType, 10, false, true, nil)
-		vec2.Update(rand.Intn(10), types.Null{})
+		vec2 := containers.MakeVector(vecType, false)
+		for i := 0; i < 10; i++ {
+			vec2.Append(vec.Get(i))
+		}
 		vecs := []containers.Vector{vec, vec2}
-		t.Log(vec)
-		t.Log(vec2)
 		_, _ = SortBlockColumns(vecs, 0)
-		t.Log(vec)
-		t.Log(vec2)
+		require.True(t, vecs[0].Equals(vecs[1]), vecType)
+		vec.Close()
+		vec2.Close()
+	}
+
+	// sort null
+	for _, vecType := range vecTypes {
+		vec := containers.MockVector(vecType, 10, false, true, nil)
+		vec.Update(rand.Intn(10), types.Null{})
+		vec.Update(rand.Intn(10), types.Null{})
+		vec2 := containers.MakeVector(vecType, true)
+		for i := 0; i < 10; i++ {
+			vec2.Append(vec.Get(i))
+		}
+		vecs := []containers.Vector{vec, vec2}
+		_, _ = SortBlockColumns(vecs, 0)
+		require.True(t, vecs[0].Equals(vecs[1]), vecType)
 		vec.Close()
 		vec2.Close()
 	}
@@ -49,13 +67,14 @@ func TestSort2(t *testing.T) {
 		t0 := time.Now()
 		vecs := []containers.Vector{vec}
 		_, _ = SortBlockColumns(vecs, 0)
-		t.Logf("%v takes %v", vecType.String(), time.Since(t0))
+		t.Logf("%-20v takes %v", vecType.String(), time.Since(t0))
 		vec.Close()
 	}
 }
 func TestMerge1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
+	// mrege not null
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 5, false, false, nil)
 		vecs := []containers.Vector{vec}
@@ -63,25 +82,57 @@ func TestMerge1(t *testing.T) {
 		vec2 := containers.MockVector(vecType, 5, false, false, nil)
 		vecs = []containers.Vector{vec2}
 		_, _ = SortBlockColumns(vecs, 0)
-		vec3 := containers.MockVector(vecType, 5, false, true, nil)
-		vec3.Update(rand.Intn(5), types.Null{})
-		vec4 := containers.MockVector(vecType, 5, false, true, nil)
-		vec4.Update(rand.Intn(5), types.Null{})
-		t.Log(vec)
-		t.Log(vec2)
-		t.Log(vec3)
-		t.Log(vec4)
-		sortedIdx := make([]uint32, 10)
-		ret, mapping := MergeSortedColumn([]containers.Vector{vec, vec2}, &sortedIdx, []uint32{5, 5}, []uint32{5, 5})
-		ret2 := ShuffleColumn([]containers.Vector{vec3, vec4}, sortedIdx, []uint32{5, 5}, []uint32{5, 5})
-		t.Log(ret)
-		t.Log(mapping)
-		t.Log(ret2)
-		for _, v := range ret {
-			v.Close()
+		vec3 := containers.MakeVector(vecType, false)
+		for i := 0; i < 5; i++ {
+			vec3.Append(vec.Get(i))
 		}
-		for _, v := range ret2 {
-			v.Close()
+		vec4 := containers.MakeVector(vecType, false)
+		for i := 0; i < 5; i++ {
+			vec4.Append(vec2.Get(i))
+		}
+		sortedIdx := make([]uint32, 10)
+		ret, mapping := MergeSortedColumn([]containers.Vector{vec3, vec4}, &sortedIdx, []uint32{5, 5}, []uint32{5, 5})
+		ret2 := ShuffleColumn([]containers.Vector{vec, vec2}, sortedIdx, []uint32{5, 5}, []uint32{5, 5})
+		t.Log(mapping)
+		for i := range ret {
+			require.True(t, ret[i].Equals(ret2[i]), vecType, i)
+		}
+		for i := range ret {
+			ret[i].Close()
+			ret2[i].Close()
+		}
+	}
+
+	// merge null
+	for _, vecType := range vecTypes {
+		vec := containers.MockVector(vecType, 5, false, true, nil)
+		vec.Update(rand.Intn(5), types.Null{})
+		vec.Update(rand.Intn(5), types.Null{})
+		vecs := []containers.Vector{vec}
+		_, _ = SortBlockColumns(vecs, 0)
+		vec2 := containers.MockVector(vecType, 5, false, true, nil)
+		vec2.Update(rand.Intn(5), types.Null{})
+		vecs = []containers.Vector{vec2}
+		_, _ = SortBlockColumns(vecs, 0)
+
+		vec3 := containers.MakeVector(vecType, true)
+		for i := 0; i < 5; i++ {
+			vec3.Append(vec.Get(i))
+		}
+		vec4 := containers.MakeVector(vecType, true)
+		for i := 0; i < 5; i++ {
+			vec4.Append(vec2.Get(i))
+		}
+		sortedIdx := make([]uint32, 10)
+		ret, mapping := MergeSortedColumn([]containers.Vector{vec3, vec4}, &sortedIdx, []uint32{5, 5}, []uint32{5, 5})
+		ret2 := ShuffleColumn([]containers.Vector{vec, vec2}, sortedIdx, []uint32{5, 5}, []uint32{5, 5})
+		t.Log(mapping)
+		for i := range ret {
+			require.True(t, ret[i].Equals(ret2[i]), vecType, i)
+		}
+		for i := range ret {
+			ret[i].Close()
+			ret2[i].Close()
 		}
 	}
 }
@@ -94,11 +145,10 @@ func TestMerge2(t *testing.T) {
 		sortedIdx := make([]uint32, 100000)
 		t0 := time.Now()
 		ret, _ := MergeSortedColumn([]containers.Vector{vec, vec2}, &sortedIdx, []uint32{50000, 50000}, []uint32{50000, 50000})
-		t.Logf("%v takes %v", vecType, time.Since(t0))
+		t.Logf("%-20v takes %v", vecType, time.Since(t0))
 		for _, v := range ret {
 			v.Close()
 		}
-
 	}
 }
 func TestReshape1(t *testing.T) {
