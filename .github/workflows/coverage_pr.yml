@@ -107,7 +107,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           ps aux | grep 'mo-service' | grep -v 'grep' | awk '{print $2}' | xargs kill -s SIGINT
-          while(($(ps aux|grep 'mo-service' | grep -v 'grep' | awk '{print $2}'))); do echo 'mo-service kill not finished'; sleep 1s; done
+          while(( $(ps aux|grep 'mo-service' | grep -v 'grep' | awk '{print $2}') )); do let i++;if [ $i -eq 300 ]; then exit 1; fi; echo 'mo-service kill not finished......$i/300'; sleep 1s; done
           go tool covdata textfmt -i="$GITHUB_WORKSPACE/matrixone" -o ${{ env.raw_bvt_coverage }}
           cat ${{ env.raw_bvt_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" | tee ${{ env.raw_bvt_coverage_temp }} > /dev/null
           cat ${{ env.raw_ut_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" | tee ${{ env.raw_ut_coverage_temp }} > /dev/null
