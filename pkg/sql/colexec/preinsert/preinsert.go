@@ -50,12 +50,12 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		return false, err
 	}
 
-	err = genCompositePrimaryKey(bat, proc, arg.tableDef)
+	err = genCompositePrimaryKey(bat, proc, arg.TableDef)
 	if err != nil {
 		return false, err
 	}
 
-	err = genClusterBy(bat, proc, arg.tableDef)
+	err = genClusterBy(bat, proc, arg.TableDef)
 	if err != nil {
 		return false, err
 	}
@@ -65,8 +65,8 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 }
 
 func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
-	return colexec.UpdateInsertBatch(arg.eg, arg.ctx, proc,
-		arg.tableDef.Cols, bat, arg.tableDef.TblId, arg.dbName, arg.tableDef.Name)
+	return colexec.UpdateInsertBatch(arg.Eg, arg.Ctx, proc,
+		arg.TableDef.Cols, bat, arg.TableDef.TblId, arg.DbName, arg.TableDef.Name)
 }
 
 func genCompositePrimaryKey(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {

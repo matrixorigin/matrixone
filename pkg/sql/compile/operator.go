@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"strings"
 
 	"github.com/google/uuid"
@@ -465,6 +466,21 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	return &deletion.Argument{
 		DeleteCtx: delCtx,
 		Engine:    eg,
+	}, nil
+}
+
+func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
+	oldCtx := n.InsertCtx
+	ctx := proc.Ctx
+	if oldCtx.GetClusterTable().GetIsClusterTable() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+
+	return &preinsert.Argument{
+		Ctx:      ctx,
+		Eg:       eg,
+		DbName:   oldCtx.Ref.DbName,
+		TableDef: oldCtx.TableDef,
 	}, nil
 }
 

@@ -25,9 +25,11 @@ type proc = process.Process
 type eng = engine.Engine
 
 type Argument struct {
-	ctx context.Context
+	Ctx context.Context
 
-	eg       eng
-	dbName   string
-	tableDef *pb.TableDef
+	Eg       eng
+	DbName   string
+	TableDef *pb.TableDef
 }
+
+func (arg *Argument) Free(*process.Process, bool) {}

@@ -463,32 +463,10 @@ func InsertBatch(
 		return 0, err
 	}
 
-	// fill auto incr column
-	if info.hasAutoCol {
-		if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, insertBatch, uint64(ref.Obj), ref.SchemaName, tableDef.Name); err != nil {
-			return 0, err
-		}
-	}
-
 	// check new rows not null
 	err = batchDataNotNullCheck(insertBatch, tableDef, proc.Ctx)
 	if err != nil {
 		return 0, err
-	}
-
-	// append hidden columns
-	if info.hasCompositePkey {
-		err = util.FillCompositeKeyBatch(insertBatch, catalog.CPrimaryKeyColName, info.compositePkeyParts, proc)
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	if info.clusterBy != "" && util.JudgeIsCompositeClusterByColumn(info.clusterBy) {
-		err = util.FillCompositeClusterByBatch(insertBatch, info.clusterBy, proc)
-		if err != nil {
-			return 0, err
-		}
 	}
 
 	if container != nil {

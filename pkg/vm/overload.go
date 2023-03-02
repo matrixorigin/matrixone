@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -97,6 +98,8 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Update:   update.String,
 	External: external.String,
 
+	PreInsert: preinsert.String,
+
 	Minus:        minus.String,
 	Intersect:    intersect.String,
 	IntersectAll: intersectall.String,
@@ -144,6 +147,8 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Update:   update.Prepare,
 	External: external.Prepare,
 
+	PreInsert: preinsert.Prepare,
+
 	Minus:        minus.Prepare,
 	Intersect:    intersect.Prepare,
 	IntersectAll: intersectall.Prepare,
@@ -190,6 +195,8 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	Insert:   insert.Call,
 	Update:   update.Call,
 	External: external.Call,
+
+	PreInsert: preinsert.Call,
 
 	Minus:        minus.Call,
 	Intersect:    intersect.Call,

@@ -336,6 +336,11 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	case plan.Query_INSERT:
 		insertNode := qry.Nodes[qry.Steps[0]]
 		insertNode.NotCacheable = true
+		preArg, err := constructPreInsert(insertNode, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
@@ -347,6 +352,10 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			rs = c.newInsertMergeScope(arg, ss)
 			rs.Magic = MergeInsert
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.PreInsert,
+				Arg: preArg,
+			})
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
 					Tbl:         arg.InsertCtx.Source,
@@ -357,6 +366,10 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			rs = c.newMergeScope(ss)
 			rs.Magic = Insert
 			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.PreInsert,
+				Arg: preArg,
+			})
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Insert,
 				Arg: arg,
