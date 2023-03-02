@@ -29,8 +29,8 @@ import (
 )
 
 // updatePartitionOfPull the old method of log tail pull model.
-func updatePartitionOfPull(idx, primaryIdx int, tbl *table,
-	ctx context.Context, op client.TxnOperator, db *DB,
+func updatePartitionOfPull(idx, primaryIdx int, tbl *txnTable,
+	ctx context.Context, op client.TxnOperator, engine *Engine,
 	partition *Partition, dn DNStore, req api.SyncLogTailReq) error {
 	reqs, err := genLogTailReq(dn, req)
 	if err != nil {
@@ -45,7 +45,7 @@ func updatePartitionOfPull(idx, primaryIdx int, tbl *table,
 	state := curState.Copy()
 
 	for i := range logTails {
-		if err := consumeLogTailOfPull(idx, primaryIdx, tbl, ctx, db, partition, state, logTails[i]); err != nil {
+		if err := consumeLogTailOfPull(idx, primaryIdx, tbl, ctx, engine, partition, state, logTails[i]); err != nil {
 			logutil.Errorf("consume %d-%s logtail error: %v\n", tbl.tableId, tbl.tableName, err)
 			return err
 		}
@@ -75,7 +75,7 @@ func getLogTail(ctx context.Context, op client.TxnOperator, reqs []txn.TxnReques
 	return logTails, nil
 }
 
-func consumeLogTailOfPull(idx, primaryIdx int, tbl *table, ctx context.Context, db *DB, partition *Partition, state *PartitionState, logTail *api.SyncLogTailResp) (err error) {
+func consumeLogTailOfPull(idx, primaryIdx int, tbl *txnTable, ctx context.Context, engine *Engine, partition *Partition, state *PartitionState, logTail *api.SyncLogTailResp) (err error) {
 	var entries []*api.Entry
 
 	if entries, err = logtail.LoadCheckpointEntries(
@@ -85,19 +85,19 @@ func consumeLogTailOfPull(idx, primaryIdx int, tbl *table, ctx context.Context, 
 		tbl.tableName,
 		tbl.db.databaseId,
 		tbl.db.databaseName,
-		tbl.db.fs); err != nil {
+		tbl.db.txn.engine.fs); err != nil {
 		return
 	}
 	for _, e := range entries {
 		if err = consumeEntry(idx, primaryIdx, tbl, ctx,
-			db, partition, state, e); err != nil {
+			engine, partition, state, e); err != nil {
 			return
 		}
 	}
 
 	for i := 0; i < len(logTail.Commands); i++ {
 		if err = consumeEntry(idx, primaryIdx, tbl, ctx,
-			db, partition, state, logTail.Commands[i]); err != nil {
+			engine, partition, state, logTail.Commands[i]); err != nil {
 			return
 		}
 	}
