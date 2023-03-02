@@ -470,17 +470,18 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 }
 
 func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
-	oldCtx := n.InsertCtx
+	insertCtx := n.InsertCtx
 	ctx := proc.Ctx
-	if oldCtx.GetClusterTable().GetIsClusterTable() {
+	if insertCtx.GetClusterTable().GetIsClusterTable() {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
+	insertCtx.TableDef.TblId = uint64(insertCtx.Ref.Obj)
 
 	return &preinsert.Argument{
-		Ctx:      ctx,
-		Eg:       eg,
-		DbName:   oldCtx.Ref.DbName,
-		TableDef: oldCtx.TableDef,
+		Ctx:        ctx,
+		Eg:         eg,
+		SchemaName: insertCtx.Ref.SchemaName,
+		TableDef:   insertCtx.TableDef,
 	}, nil
 }
 

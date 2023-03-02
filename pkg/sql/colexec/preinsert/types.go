@@ -27,9 +27,9 @@ type eng = engine.Engine
 type Argument struct {
 	Ctx context.Context
 
-	Eg       eng
-	DbName   string
-	TableDef *pb.TableDef
+	Eg         eng
+	SchemaName string
+	TableDef   *pb.TableDef
 }
 
 func (arg *Argument) Free(*process.Process, bool) {}

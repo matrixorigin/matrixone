@@ -137,7 +137,6 @@ message ObjectRef {
 	int64 schema	= 3;
 	int64 obj		= 4;
 	string server_name	= 5;
-	string db_name		= 6;
 	string schema_name	= 7;
 	string obj_name		= 8;
 }

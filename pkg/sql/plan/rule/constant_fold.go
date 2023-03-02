@@ -129,7 +129,6 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 						Schema:     ef.F.Func.GetSchema(),
 						Obj:        ef.F.Func.GetObj(),
 						ServerName: ef.F.Func.GetServerName(),
-						DbName:     ef.F.Func.GetDbName(),
 						SchemaName: ef.F.Func.GetSchemaName(),
 						ObjName:    ef.F.Func.GetObjName(),
 					},

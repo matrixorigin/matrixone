@@ -49,7 +49,7 @@ func (aip *AutoIncrParam) SetLastInsertID(id uint64) {
 	aip.proc.SetLastInsertID(id)
 }
 
-func getNextAutoIncrNum(proc *process.Process, colDefs []*plan.ColDef, ctx context.Context, incrParam *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
+func getNextAutoIncrNum(proc *process.Process, colDefs []*plan.ColDef, incrParam *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
 	autoIncrCaches := proc.SessionInfo.AutoIncrCaches
 	autoIncrCaches.Mu.Lock()
 	defer autoIncrCaches.Mu.Unlock()
@@ -68,7 +68,7 @@ func getNextAutoIncrNum(proc *process.Process, colDefs []*plan.ColDef, ctx conte
 			if ok {
 				cur = autoincrcache.CurNum
 			}
-			curNum, maxNum, stp, err := getNextOneCache(ctx, incrParam, bat, tableID, i, name, proc.SessionInfo.AutoIncrCacheSize, cur)
+			curNum, maxNum, stp, err := getNextOneCache(incrParam, bat, i, name, proc.SessionInfo.AutoIncrCacheSize, cur)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -117,7 +117,7 @@ func renameAutoIncrCache(newname, oldname string, proc *process.Process) {
 	}
 }
 
-func getNextOneCache(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, tableID uint64, i int, name string, cachesize, curNum uint64) (uint64, uint64, uint64, error) {
+func getNextOneCache(param *AutoIncrParam, bat *batch.Batch, i int, name string, cachesize, curNum uint64) (uint64, uint64, uint64, error) {
 	var err error
 	loopCnt := 0
 loop:
@@ -153,7 +153,7 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 		tblName: tblName,
 	}
 
-	offset, step, err := getNextAutoIncrNum(proc, ColDefs, ctx, incrParam, bat, tableID)
+	offset, step, err := getNextAutoIncrNum(proc, ColDefs, incrParam, bat, tableID)
 	if err != nil {
 		return err
 	}
@@ -163,56 +163,6 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 	}
 	return nil
 }
-
-// func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch, dbName, tblName string) error {
-// 	ColDefs := p.ExplicitCols
-// 	orderColDefs(p.OrderAttrs, ColDefs, p.Columns)
-// 	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	rel, err := db.Relation(ctx, p.TblName)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	return UpdateInsertBatch(e, ctx, proc, ColDefs, bat, rel.GetTableID(ctx), dbName, tblName)
-// }
-
-// get autoincr columns values.  This function updates the auto incr table.
-// multiple txn may cause a conflicts, but we retry off band transactions.
-// func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
-// 	var err error
-// 	loopCnt := 0
-// loop:
-// 	// if fail 100 times, too bad, really unlucky one get aborted anyway.
-// 	loopCnt += 1
-// 	if loopCnt >= 100 {
-// 		return nil, nil, err
-// 	}
-// 	txn, err := NewTxn(param.eg, param.proc, param.ctx)
-// 	if err != nil {
-// 		goto loop
-// 	}
-// 	offset, step := make([]uint64, 0), make([]uint64, 0)
-// 	for i, col := range param.colDefs {
-// 		if !col.Typ.AutoIncr {
-// 			continue
-// 		}
-// 		var d, s uint64
-// 		name := fmt.Sprintf("%d_%s", tableID, col.Name)
-// 		if d, _, s, err = getOneColRangeFromAutoIncrTable(param, bat, name, i, txn, 1, 0); err != nil {
-// 			RolllbackTxn(param.eg, txn, param.ctx)
-// 			goto loop
-// 		}
-// 		offset = append(offset, d)
-// 		step = append(step, s)
-// 	}
-// 	if err = CommitTxn(param.eg, txn, param.ctx); err != nil {
-// 		goto loop
-// 	}
-// 	return offset, step, nil
-// }
 
 func getMaxnum[T constraints.Integer](vec *vector.Vector, length, maxNum, step, cacheSize uint64) uint64 {
 	vs := vector.MustTCols[T](vec)
@@ -432,8 +382,6 @@ func getRangeExpr(colName string) *plan.Expr {
 
 func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperator, mp *mpool.MPool) (uint64, uint64, *batch.Batch, error) {
 	var rds []engine.Reader
-	retbat := batch.NewWithSize(1)
-
 	rel, err := GetNewRelation(param.eg, param.dbName, catalog.AutoIncrTableName, txn, param.ctx)
 	if err != nil {
 		return 0, 0, nil, err
@@ -483,8 +431,6 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 			return 0, 0, nil, moerr.NewInternalError(param.ctx, "the mo_increment_columns col num is not two")
 		}
 
-		vs2 := vector.MustTCols[uint64](bat.Vecs[2])
-		vs3 := vector.MustTCols[uint64](bat.Vecs[3])
 		var rowIndex int64
 		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
 			str := bat.Vecs[1].GetString(rowIndex)
@@ -498,14 +444,18 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 			if err := vec.Append(rowid, false, mp); err != nil {
 				panic(err)
 			}
+			retbat := batch.NewWithSize(1)
 			retbat.SetVector(0, vec)
 			retbat.SetZs(1, mp)
+
+			vs2 := vector.MustTCols[uint64](bat.Vecs[2])
+			vs3 := vector.MustTCols[uint64](bat.Vecs[3])
 			bat.Clean(mp)
 			return vs2[rowIndex], vs3[rowIndex], retbat, nil
 		}
 		bat.Clean(mp)
 	}
-	return 0, 0, nil, nil
+	panic("unreachable")
 }
 
 func updateAutoIncrTable(param *AutoIncrParam, delBat *batch.Batch, curNum uint64, name string, txn client.TxnOperator, mp *mpool.MPool) error {

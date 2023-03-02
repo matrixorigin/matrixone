@@ -63,7 +63,6 @@ func (rule *GetParamRule) MatchNode(node *Node) bool {
 			Schema:     node.ObjRef.Schema,
 			Obj:        node.ObjRef.Obj,
 			ServerName: node.ObjRef.ServerName,
-			DbName:     node.ObjRef.DbName,
 			SchemaName: node.ObjRef.SchemaName,
 			ObjName:    node.ObjRef.ObjName,
 		})

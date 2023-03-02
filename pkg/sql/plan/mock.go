@@ -561,7 +561,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				Schema:     0,
 				Obj:        int64(tableIdx),
 				ServerName: "",
-				DbName:     "",
 				SchemaName: db,
 				ObjName:    tableName,
 			}

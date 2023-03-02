@@ -66,13 +66,12 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 
 func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
 	return colexec.UpdateInsertBatch(arg.Eg, arg.Ctx, proc,
-		arg.TableDef.Cols, bat, arg.TableDef.TblId, arg.DbName, arg.TableDef.Name)
+		arg.TableDef.Cols, bat, arg.TableDef.TblId, arg.SchemaName, arg.TableDef.Name)
 }
 
 func genCompositePrimaryKey(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
 	if tableDef.CompositePkey == nil {
 		return nil
-
 	}
 
 	return util.FillCompositeKeyBatch(bat, catalog.CPrimaryKeyColName, tableDef.Pkey.Names, proc)
@@ -83,10 +82,7 @@ func genClusterBy(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
 		return nil
 	}
 	clusterBy := tableDef.ClusterBy.Name
-	if clusterBy == "" {
-		return nil
-	}
-	if !util.JudgeIsCompositeClusterByColumn(clusterBy) {
+	if clusterBy == "" || !util.JudgeIsCompositeClusterByColumn(clusterBy) {
 		return nil
 	}
 	return util.FillCompositeClusterByBatch(bat, clusterBy, proc)
