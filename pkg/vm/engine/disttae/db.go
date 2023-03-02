@@ -34,7 +34,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	{
 		parts := make(Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(nil)
+			parts[i] = NewPartition(nil, false)
 		}
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = parts
 	}
@@ -42,7 +42,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	{
 		parts := make(Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(nil)
+			parts[i] = NewPartition(nil, false)
 		}
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = parts
 	}
@@ -50,7 +50,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	{
 		parts := make(Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(nil)
+			parts[i] = NewPartition(nil, false)
 		}
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = parts
 	}
@@ -70,6 +70,9 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done := part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF)
+		done()
 		e.catalog.InsertDatabase(bat)
 		bat.Clean(m)
 	}
@@ -98,8 +101,12 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done := part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX)
+		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
+
 		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
@@ -133,6 +140,9 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done = part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX)
+		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
 	}
@@ -160,8 +170,12 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done := part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX)
+		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
+
 		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
@@ -195,6 +209,9 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done = part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX)
+		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
 	}
@@ -222,8 +239,12 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done := part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX)
+		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
+
 		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
@@ -257,6 +278,9 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done = part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX)
+		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
 	}
@@ -271,7 +295,7 @@ func (e *Engine) getMetaPartitions(name string) Partitions {
 	if !ok { // create a new table
 		parts = make(Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(nil)
+			parts[i] = NewPartition(nil, true)
 		}
 		e.metaTables[name] = parts
 	}
@@ -285,7 +309,7 @@ func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
 	if !ok { // create a new table
 		parts = make(Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(nil)
+			parts[i] = NewPartition(nil, false)
 		}
 		e.partitions[[2]uint64{databaseId, tableId}] = parts
 	}
@@ -303,7 +327,7 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 	if !ok { // create a new table
 		parts = make(Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(nil)
+			parts[i] = NewPartition(nil, false)
 		}
 		e.partitions[[2]uint64{databaseId, tableId}] = parts
 	}

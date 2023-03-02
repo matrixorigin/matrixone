@@ -15,10 +15,13 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"runtime/trace"
+	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -33,8 +36,10 @@ func init() {
 }
 
 type PartitionState struct {
-	Rows   *btree.BTreeG[*RowEntry]
-	Blocks *btree.BTreeG[*BlockEntry]
+	// also modify the Copy method if adding fields
+	Rows         *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
+	Blocks       *btree.BTreeG[BlockEntry]
+	PrimaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 }
 
 type RowEntry struct {
@@ -42,12 +47,13 @@ type RowEntry struct {
 	RowID   types.Rowid
 	Time    types.TS
 
+	ID      int64
 	Deleted bool
-	Batch   *api.Batch
-	Offset  int
+	Batch   *batch.Batch
+	Offset  int64
 }
 
-func (r *RowEntry) Less(than *RowEntry) bool {
+func (r RowEntry) Less(than RowEntry) bool {
 	if r.BlockID < than.BlockID {
 		return true
 	}
@@ -81,7 +87,7 @@ type BlockEntry struct {
 	DeleteTime    types.TS
 }
 
-func (b *BlockEntry) Less(than *BlockEntry) bool {
+func (b BlockEntry) Less(than BlockEntry) bool {
 	if b.BlockID < than.BlockID {
 		return true
 	}
@@ -91,27 +97,45 @@ func (b *BlockEntry) Less(than *BlockEntry) bool {
 	return false
 }
 
+type PrimaryIndexEntry struct {
+	Bytes      []byte
+	RowEntryID int64
+
+	//TODO fields for validating
+}
+
+func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
+	if res := bytes.Compare(p.Bytes, than.Bytes); res < 0 {
+		return true
+	} else if res > 0 {
+		return false
+	}
+	return p.RowEntryID < than.RowEntryID
+}
+
 func NewPartitionState() *PartitionState {
 	return &PartitionState{
-		Rows:   btree.NewBTreeG((*RowEntry).Less),
-		Blocks: btree.NewBTreeG((*BlockEntry).Less),
+		Rows:         btree.NewBTreeG((RowEntry).Less),
+		Blocks:       btree.NewBTreeG((BlockEntry).Less),
+		PrimaryIndex: btree.NewBTreeG((*PrimaryIndexEntry).Less),
 	}
 }
 
 func (p *PartitionState) Copy() *PartitionState {
 	return &PartitionState{
-		Rows:   p.Rows.Copy(),
-		Blocks: p.Blocks.Copy(),
+		Rows:         p.Rows.Copy(),
+		Blocks:       p.Blocks.Copy(),
+		PrimaryIndex: p.PrimaryIndex.Copy(),
 	}
 }
 
-func (p *PartitionState) HandleLogtailEntry(ctx context.Context, entry *api.Entry) {
+func (p *PartitionState) HandleLogtailEntry(ctx context.Context, entry *api.Entry, primaryKeyIndex int) {
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if isMetaTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, entry.Bat)
 		} else {
-			p.HandleRowsInsert(ctx, entry.Bat)
+			p.HandleRowsInsert(ctx, entry.Bat, primaryKeyIndex)
 		}
 	case api.Entry_Delete:
 		if isMetaTable(entry.TableName) {
@@ -124,18 +148,24 @@ func (p *PartitionState) HandleLogtailEntry(ctx context.Context, entry *api.Entr
 	}
 }
 
-func (p *PartitionState) HandleRowsInsert(ctx context.Context, input *api.Batch) {
+var nextRowEntryID = int64(1)
+
+func (p *PartitionState) HandleRowsInsert(ctx context.Context, input *api.Batch, primaryKeyIndex int) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
 	rowIDVector := vector.MustTCols[types.Rowid](mustVectorFromProto(input.Vecs[0]))
 	timeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[1]))
+	batch, err := batch.ProtoBatchToBatch(input)
+	if err != nil {
+		panic(err)
+	}
 
 	for i, rowID := range rowIDVector {
 		trace.WithRegion(ctx, "handle a row", func() {
 
 			blockID := blockIDFromRowID(rowID)
-			pivot := &RowEntry{
+			pivot := RowEntry{
 				BlockID: blockID,
 				RowID:   rowID,
 				Time:    timeVector[i],
@@ -143,12 +173,22 @@ func (p *PartitionState) HandleRowsInsert(ctx context.Context, input *api.Batch)
 			entry, ok := p.Rows.Get(pivot)
 			if !ok {
 				entry = pivot
+				entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
 			}
 
-			entry.Batch = input
-			entry.Offset = i
+			entry.Batch = batch
+			entry.Offset = int64(i)
 
 			p.Rows.Set(entry)
+
+			if primaryKeyIndex >= 0 {
+				var bs []byte //TODO encode primary key
+				p.PrimaryIndex.Set(&PrimaryIndexEntry{
+					Bytes:      bs,
+					RowEntryID: entry.ID,
+				})
+			}
+
 		})
 	}
 
@@ -161,12 +201,16 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 
 	rowIDVector := vector.MustTCols[types.Rowid](mustVectorFromProto(input.Vecs[0]))
 	timeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[1]))
+	batch, err := batch.ProtoBatchToBatch(input)
+	if err != nil {
+		panic(err)
+	}
 
 	for i, rowID := range rowIDVector {
 		trace.WithRegion(ctx, "handle a row", func() {
 
 			blockID := blockIDFromRowID(rowID)
-			pivot := &RowEntry{
+			pivot := RowEntry{
 				BlockID: blockID,
 				RowID:   rowID,
 				Time:    timeVector[i],
@@ -174,11 +218,12 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 			entry, ok := p.Rows.Get(pivot)
 			if !ok {
 				entry = pivot
+				entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
 			}
 
 			entry.Deleted = true
-			entry.Batch = input
-			entry.Offset = i
+			entry.Batch = batch
+			entry.Offset = int64(i)
 
 			p.Rows.Set(entry)
 		})
@@ -203,7 +248,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 	for i, blockID := range blockIDVector {
 		trace.WithRegion(ctx, "handle a row", func() {
 
-			pivot := &BlockEntry{
+			pivot := BlockEntry{
 				BlockID: blockID,
 			}
 			entry, ok := p.Blocks.Get(pivot)
@@ -232,7 +277,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 			if entryStateVector[i] {
 				iter := p.Rows.Copy().Iter()
-				pivot := &RowEntry{
+				pivot := RowEntry{
 					BlockID: blockID,
 				}
 				for ok := iter.Seek(pivot); ok; ok = iter.Next() {
@@ -262,7 +307,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 		blockID := blockIDFromRowID(rowID)
 		trace.WithRegion(ctx, "handle a row", func() {
 
-			pivot := &BlockEntry{
+			pivot := BlockEntry{
 				BlockID: blockID,
 			}
 			entry, ok := p.Blocks.Get(pivot)
