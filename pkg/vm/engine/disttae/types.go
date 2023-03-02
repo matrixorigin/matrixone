@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -64,20 +63,6 @@ type DNStore = metadata.DNService
 
 type IDGenerator interface {
 	AllocateID(ctx context.Context) (uint64, error)
-}
-
-// mvcc is the core data structure of cn and is used to
-// maintain multiple versions of logtail data for a table's partition
-type MVCC interface {
-	CheckPoint(ctx context.Context, ts timestamp.Timestamp) error
-	Insert(ctx context.Context, primaryKeyIndex int, bat *api.Batch, needCheck bool) error
-	Delete(ctx context.Context, bat *api.Batch) error
-	BlockList(ctx context.Context, ts timestamp.Timestamp,
-		blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int)
-	// If blocks is empty, it means no merge operation with the files on s3 is required.
-	NewReader(ctx context.Context, readerNumber int, index memtable.Tuple, defs []engine.TableDef,
-		tableDef *plan.TableDef, skipBlocks map[uint64]uint8, blks []ModifyBlockMeta,
-		ts timestamp.Timestamp, fs fileservice.FileService, entries []Entry) ([]engine.Reader, error)
 }
 
 type Engine struct {
