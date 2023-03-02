@@ -4616,7 +4616,7 @@ func TestCastTimeToString(t *testing.T) {
 		proc       *process.Process
 		wantValues interface{}
 		wantType   types.T
-		scale  int32
+		scale      int32
 		wantScalar bool
 	}{
 		{
@@ -4625,7 +4625,7 @@ func TestCastTimeToString(t *testing.T) {
 			proc:       procs,
 			wantValues: []string{"11:22:33"},
 			wantType:   types.T_varchar,
-			scale:  0,
+			scale:      0,
 			wantScalar: true,
 		},
 		{
@@ -4634,7 +4634,7 @@ func TestCastTimeToString(t *testing.T) {
 			proc:       procs,
 			wantValues: []string{"11:22:33.00"},
 			wantType:   types.T_varchar,
-			scale:  2,
+			scale:      2,
 			wantScalar: false,
 		},
 		{
@@ -4643,7 +4643,7 @@ func TestCastTimeToString(t *testing.T) {
 			proc:       procs,
 			wantValues: []string{"11:22:33.000000"},
 			wantType:   types.T_varchar,
-			scale:  6,
+			scale:      6,
 			wantScalar: true,
 		},
 		{
@@ -4652,7 +4652,7 @@ func TestCastTimeToString(t *testing.T) {
 			proc:       procs,
 			wantValues: []string{"-01:12:23.000"},
 			wantType:   types.T_varchar,
-			scale:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 		{
@@ -4661,7 +4661,7 @@ func TestCastTimeToString(t *testing.T) {
 			proc:       procs,
 			wantValues: []string{"-01:12:23.444"},
 			wantType:   types.T_varchar,
-			scale:  3,
+			scale:      3,
 			wantScalar: false,
 		},
 		{
@@ -4670,7 +4670,7 @@ func TestCastTimeToString(t *testing.T) {
 			proc:       procs,
 			wantValues: []string{"-01:12:23.444"},
 			wantType:   types.T_char,
-			scale:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 	}
@@ -4710,7 +4710,7 @@ func TestCastStringToTime(t *testing.T) {
 		proc       *process.Process
 		wantValues interface{}
 		wantType   types.T
-		scale  int32
+		scale      int32
 		wantScalar bool
 	}{
 		{
@@ -4719,7 +4719,7 @@ func TestCastStringToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
 			wantType:   types.T_time,
-			scale:  0,
+			scale:      0,
 			wantScalar: true,
 		},
 		{
@@ -4728,7 +4728,7 @@ func TestCastStringToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 130000)},
 			wantType:   types.T_time,
-			scale:  2,
+			scale:      2,
 			wantScalar: true,
 		},
 		{
@@ -4737,7 +4737,7 @@ func TestCastStringToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
 			wantType:   types.T_time,
-			scale:  6,
+			scale:      6,
 			wantScalar: true,
 		},
 		{
@@ -4746,7 +4746,7 @@ func TestCastStringToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(true, 1, 12, 23, 0)},
 			wantType:   types.T_time,
-			scale:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 		{
@@ -4755,7 +4755,7 @@ func TestCastStringToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 1, 12, 23, 444000)},
 			wantType:   types.T_time,
-			scale:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 		{
@@ -4764,7 +4764,7 @@ func TestCastStringToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(true, 1, 12, 23, 445000)},
 			wantType:   types.T_time,
-			scale:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 	}
@@ -4798,7 +4798,7 @@ func TestCastInt64ToTime(t *testing.T) {
 		proc       *process.Process
 		wantValues interface{}
 		wantType   types.T
-		scale  int32
+		scale      int32
 		wantScalar bool
 	}{
 		{
@@ -4807,7 +4807,7 @@ func TestCastInt64ToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
 			wantType:   types.T_time,
-			scale:  0,
+			scale:      0,
 			wantScalar: false,
 		},
 		{
@@ -4816,7 +4816,7 @@ func TestCastInt64ToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(true, 22, 33, 44, 0)},
 			wantType:   types.T_time,
-			scale:  2,
+			scale:      2,
 			wantScalar: false,
 		},
 	}
@@ -4856,7 +4856,7 @@ func TestCastDecimal128ToTime(t *testing.T) {
 		proc       *process.Process
 		wantValues interface{}
 		wantType   types.T
-		scale  int32
+		scale      int32
 		wantScalar bool
 	}{
 		{
@@ -4865,7 +4865,7 @@ func TestCastDecimal128ToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 444000)},
 			wantType:   types.T_time,
-			scale:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 		{
@@ -4874,7 +4874,7 @@ func TestCastDecimal128ToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(true, 22, 33, 44, 444000)},
 			wantType:   types.T_time,
-			scale:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 	}
@@ -4918,7 +4918,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 		vecs       []*vector.Vector
 		proc       *process.Process
 		wantValues interface{}
-		scale  int32
+		scale      int32
 		wantScalar bool
 	}{
 		{
@@ -4926,7 +4926,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			vecs:       makeTempVectors("2022-12-01", true, 0, types.T_date),
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 0, 0, 0, 0)},
-			scale:  0,
+			scale:      0,
 			wantScalar: true,
 		},
 		{
@@ -4934,7 +4934,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			vecs:       makeTempVectors("2022-12-01 11:22:33", false, 0, types.T_datetime),
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
-			scale:  0,
+			scale:      0,
 			wantScalar: false,
 		},
 		{
@@ -4942,7 +4942,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			vecs:       makeTempVectors("2022-12-01 11:22:33.123456", true, 0, types.T_datetime),
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 123000)},
-			scale:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 	}

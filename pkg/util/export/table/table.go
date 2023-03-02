@@ -102,29 +102,29 @@ func (c *ColType) String(scale int) string {
 
 func StringColumn(name, comment string) Column {
 	return Column{
-		Name:      name,
-		ColType:   TVarchar,
-		Scale: 1024,
-		Default:   "",
-		Comment:   comment,
+		Name:    name,
+		ColType: TVarchar,
+		Scale:   1024,
+		Default: "",
+		Comment: comment,
 	}
 }
 func StringDefaultColumn(name, defaultVal, comment string) Column {
 	return Column{
-		Name:      name,
-		ColType:   TVarchar,
-		Scale: 1024,
-		Default:   defaultVal,
-		Comment:   comment,
+		Name:    name,
+		ColType: TVarchar,
+		Scale:   1024,
+		Default: defaultVal,
+		Comment: comment,
 	}
 }
 func StringWithScale(name string, scale int, comment string) Column {
 	return Column{
-		Name:      name,
-		ColType:   TVarchar,
-		Scale: scale,
-		Default:   "",
-		Comment:   comment,
+		Name:    name,
+		ColType: TVarchar,
+		Scale:   scale,
+		Default: "",
+		Comment: comment,
 	}
 }
 
@@ -198,10 +198,10 @@ type Column struct {
 	Name    string
 	ColType ColType
 	// Scale default 0, usually for varchar
-	Scale int
-	Default   string
-	Comment   string
-	Alias     string // only use in view
+	Scale   int
+	Default string
+	Comment string
+	Alias   string // only use in view
 }
 
 // ToCreateSql return column scheme in create sql

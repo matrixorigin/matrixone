@@ -782,11 +782,11 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 				cols = append(cols, &plan.ColDef{
 					Name: attr.Attr.Name,
 					Typ: &plan.Type{
-						Id:        int32(attr.Attr.Type.Oid),
-						Width:     attr.Attr.Type.Width,
-						Size:      attr.Attr.Type.Size,
-						Scale:     attr.Attr.Type.Scale,
-						AutoIncr:  attr.Attr.AutoIncrement,
+						Id:       int32(attr.Attr.Type.Oid),
+						Width:    attr.Attr.Type.Width,
+						Size:     attr.Attr.Type.Size,
+						Scale:    attr.Attr.Type.Scale,
+						AutoIncr: attr.Attr.AutoIncrement,
 					},
 					Primary:   attr.Attr.Primary,
 					Default:   attr.Attr.Default,
@@ -1567,7 +1567,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			c.cnList[i].Addr = ""
 		}
 	}
-	ranges, err = rel.Ranges(ctx, plan2.HandleFiltersForZM(n.FilterList, c.proc))
+	expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
+	ranges, err = rel.Ranges(ctx, expr)
 	if err != nil {
 		return nil, err
 	}
@@ -1683,10 +1684,10 @@ func joinType(ctx context.Context, n *plan.Node, ns []*plan.Node) (bool, plan.No
 
 func dupType(typ *plan.Type) types.Type {
 	return types.Type{
-		Oid:       types.T(typ.Id),
-		Size:      typ.Size,
-		Width:     typ.Width,
-		Scale:     typ.Scale,
+		Oid:   types.T(typ.Id),
+		Size:  typ.Size,
+		Width: typ.Width,
+		Scale: typ.Scale,
 	}
 }
 

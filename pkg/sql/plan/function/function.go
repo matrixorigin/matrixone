@@ -388,14 +388,14 @@ func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 		ensureBinaryOperatorWithSameScale(targets, hasSet)
 		for i := range targets {
 			if !hasSet[i] && targets[i].Oid != ScalarNull {
-				setDefaultScale(&targets[i])
+				setDefaultScale(&targets[i], sources[i])
 			}
 		}
 	}
 }
 
 // set default scale / scalar / width for a type
-func setDefaultScale(typ *types.Type) {
+func setDefaultScale(typ *types.Type, typ2 types.Type) {
 	if typ.Oid == types.T_decimal64 {
 		typ.Scale = 0
 		typ.Width = 18
@@ -404,10 +404,19 @@ func setDefaultScale(typ *types.Type) {
 		typ.Width = 38
 	} else if typ.Oid == types.T_timestamp {
 		typ.Scale = 6
+		if typ2.Oid == types.T_timestamp {
+			typ.Scale = typ2.Scale
+		}
 	} else if typ.Oid == types.T_datetime {
 		typ.Scale = 6
+		if typ2.Oid == types.T_datetime {
+			typ.Scale = typ2.Scale
+		}
 	} else if typ.Oid == types.T_time {
 		typ.Scale = 6
+		if typ2.Oid == types.T_time {
+			typ.Scale = typ2.Scale
+		}
 	}
 	typ.Size = int32(typ.Oid.TypeLen())
 }

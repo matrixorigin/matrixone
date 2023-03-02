@@ -30,7 +30,7 @@ func TestTime(t *testing.T) {
 	cases := []struct {
 		name    string
 		input   string
-		scale int32
+		scale   int32
 		isConst bool
 		testTyp types.Type
 		vecs    []*vector.Vector
@@ -41,7 +41,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDate01",
 			input:   "2022-01-01",
-			scale: 0,
+			scale:   0,
 			isConst: false,
 			testTyp: types.T_date.ToType(),
 			proc:    testutil.NewProc(),
@@ -50,7 +50,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDate02",
 			input:   "20110101",
-			scale: 0,
+			scale:   0,
 			isConst: false,
 			testTyp: types.T_date.ToType(),
 			proc:    testutil.NewProc(),
@@ -61,7 +61,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDatetime01",
 			input:   "2022-01-01 16:22:44",
-			scale: 0,
+			scale:   0,
 			isConst: false,
 			testTyp: types.T_datetime.ToType(),
 			proc:    testutil.NewProc(),
@@ -70,7 +70,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDatetime02",
 			input:   "2022-01-01 16:22:44.123456",
-			scale: 4,
+			scale:   4,
 			isConst: false,
 			testTyp: types.T_datetime.ToType(),
 			proc:    testutil.NewProc(),
@@ -82,7 +82,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDateString01",
 			input:   "20110101112233",
-			scale: 6,
+			scale:   6,
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
@@ -91,7 +91,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDateString02",
 			input:   "2022-01-01 16:22:44.1235",
-			scale: 6,
+			scale:   6,
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
@@ -100,7 +100,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDateString03",
 			input:   "2022-01-01 16:22:44",
-			scale: 6,
+			scale:   6,
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
@@ -109,7 +109,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDateString04",
 			input:   "-112233",
-			scale: 6,
+			scale:   6,
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
@@ -118,7 +118,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDateString05",
 			input:   "-233.123",
-			scale: 6,
+			scale:   6,
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
@@ -128,7 +128,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromInt64-01",
 			input:   "112233",
-			scale: 0,
+			scale:   0,
 			isConst: false,
 			testTyp: types.T_int64.ToType(),
 			proc:    testutil.NewProc(),
@@ -137,7 +137,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromInt64-02",
 			input:   "20221212112233",
-			scale: 0,
+			scale:   0,
 			isConst: false,
 			testTyp: types.T_int64.ToType(),
 			proc:    testutil.NewProc(),
@@ -146,7 +146,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromInt64-03",
 			input:   "-20221212112233",
-			scale: 0,
+			scale:   0,
 			isConst: false,
 			testTyp: types.T_int64.ToType(),
 			proc:    testutil.NewProc(),
@@ -156,7 +156,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDecimal128-01",
 			input:   "20221212112233.4444",
-			scale: 3,
+			scale:   3,
 			isConst: false,
 			testTyp: types.T_decimal128.ToType(),
 			proc:    testutil.NewProc(),
@@ -165,7 +165,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDecimal128-02",
 			input:   "20221212112233.4446",
-			scale: 3,
+			scale:   3,
 			isConst: false,
 			testTyp: types.T_decimal128.ToType(),
 			proc:    testutil.NewProc(),
@@ -174,7 +174,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDecimal128-03",
 			input:   "-20221212112233.4444",
-			scale: 3,
+			scale:   3,
 			isConst: false,
 			testTyp: types.T_decimal128.ToType(),
 			proc:    testutil.NewProc(),
@@ -183,7 +183,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDecimal128-04",
 			input:   "-20221212112233.4446",
-			scale: 3,
+			scale:   3,
 			isConst: false,
 			testTyp: types.T_decimal128.ToType(),
 			proc:    testutil.NewProc(),

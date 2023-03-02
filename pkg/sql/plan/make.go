@@ -264,10 +264,10 @@ var MakePlan2Type = makePlan2Type
 
 func makePlan2Type(typ *types.Type) *plan.Type {
 	return &plan.Type{
-		Id:        int32(typ.Oid),
-		Width:     typ.Width,
-		Size:      typ.Size,
-		Scale:     typ.Scale,
+		Id:    int32(typ.Oid),
+		Width: typ.Width,
+		Size:  typ.Size,
+		Scale: typ.Scale,
 	}
 }
 
@@ -280,10 +280,10 @@ func makeTypeByPlan2Type(typ *plan.Type) types.Type {
 		size = int32(oid.TypeLen())
 	}
 	return types.Type{
-		Oid:       types.T(typ.Id),
-		Size:      size,
-		Width:     typ.Width,
-		Scale:     typ.Scale,
+		Oid:   types.T(typ.Id),
+		Size:  size,
+		Width: typ.Width,
+		Scale: typ.Scale,
 	}
 }
 
@@ -296,9 +296,9 @@ func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 		size = int32(oid.TypeLen())
 	}
 	return types.Type{
-		Oid:       oid,
-		Size:      size,
-		Width:     expr.Typ.Width,
-		Scale:     expr.Typ.Scale,
+		Oid:   oid,
+		Size:  size,
+		Width: expr.Typ.Width,
+		Scale: expr.Typ.Scale,
 	}
 }

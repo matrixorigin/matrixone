@@ -531,7 +531,7 @@ func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.DNService, er
 	}
 
 	ms, err := memorystorage.NewMemoryStorage(
-		mpool.MustNewZero(),
+		mpool.MustNewZeroNoFixed(),
 		ck,
 		memoryengine.RandomIDGenerator,
 	)
@@ -2155,9 +2155,9 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		cols = append(cols, &plan2.ColDef{
 			Name: hideKey.Name,
 			Typ: &plan2.Type{
-				Id:        int32(hideKey.Type.Oid),
-				Width:     hideKey.Type.Width,
-				Scale:     hideKey.Type.Scale,
+				Id:    int32(hideKey.Type.Oid),
+				Width: hideKey.Type.Width,
+				Scale: hideKey.Type.Scale,
 			},
 			Primary: hideKey.Primary,
 		})
@@ -2294,10 +2294,10 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,
 			Typ: &plan2.Type{
-				Id:        int32(key.Type.Oid),
-				Width:     key.Type.Width,
-				Scale:     key.Type.Scale,
-				Size:      key.Type.Size,
+				Id:    int32(key.Type.Oid),
+				Width: key.Type.Width,
+				Scale: key.Type.Scale,
+				Size:  key.Type.Size,
 			},
 			Primary: key.Primary,
 		})
@@ -2327,10 +2327,10 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 	hideDef := &plan2.ColDef{
 		Name: hideKey.Name,
 		Typ: &plan2.Type{
-			Id:        int32(hideKey.Type.Oid),
-			Width:     hideKey.Type.Width,
-			Scale:     hideKey.Type.Scale,
-			Size:      hideKey.Type.Size,
+			Id:    int32(hideKey.Type.Oid),
+			Width: hideKey.Type.Width,
+			Scale: hideKey.Type.Scale,
+			Size:  hideKey.Type.Size,
 		},
 		Primary: hideKey.Primary,
 	}

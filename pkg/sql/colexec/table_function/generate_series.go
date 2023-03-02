@@ -124,6 +124,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		endStr := endSlice[0]
 		stepStr := stepSlice[0]
 		scale := int32(findScale(startStr, endStr))
+		rbat.Vecs[0].Typ.Scale = scale
 		start, err := types.ParseDatetime(startStr, scale)
 		if err != nil {
 			err = tryInt(startStr, endStr, stepStr, proc, rbat)

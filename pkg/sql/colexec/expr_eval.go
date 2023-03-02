@@ -227,9 +227,9 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.NewConst(types.Type{
-			Oid:       types.T(t.T.Typ.GetId()),
-			Width:     t.T.Typ.GetWidth(),
-			Scale:     t.T.Typ.GetScale(),
+			Oid:   types.T(t.T.Typ.GetId()),
+			Width: t.T.Typ.GetWidth(),
+			Scale: t.T.Typ.GetScale(),
 		}, len(bat.Zs)), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
@@ -280,9 +280,9 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.NewConst(types.Type{
-			Oid:       types.T(t.T.Typ.GetId()),
-			Width:     t.T.Typ.GetWidth(),
-			Scale:     t.T.Typ.GetScale(),
+			Oid:   types.T(t.T.Typ.GetId()),
+			Width: t.T.Typ.GetWidth(),
+			Scale: t.T.Typ.GetScale(),
 		}, len(s.Zs)), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
@@ -337,9 +337,9 @@ func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.P
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.NewConst(types.Type{
-			Oid:       types.T(t.T.Typ.GetId()),
-			Width:     t.T.Typ.GetWidth(),
-			Scale:     t.T.Typ.GetScale(),
+			Oid:   types.T(t.T.Typ.GetId()),
+			Width: t.T.Typ.GetWidth(),
+			Scale: t.T.Typ.GetScale(),
 		}, len(bat.Zs)), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
@@ -446,9 +446,9 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.NewConst(types.Type{
-			Oid:       types.T(t.T.Typ.GetId()),
-			Width:     t.T.Typ.GetWidth(),
-			Scale:     t.T.Typ.GetScale(),
+			Oid:   types.T(t.T.Typ.GetId()),
+			Width: t.T.Typ.GetWidth(),
+			Scale: t.T.Typ.GetScale(),
 		}, 1), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {

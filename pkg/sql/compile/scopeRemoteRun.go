@@ -1121,10 +1121,10 @@ func convertToPlanTypes(ts []types.Type) []*plan.Type {
 	result := make([]*plan.Type, len(ts))
 	for i, t := range ts {
 		result[i] = &plan.Type{
-			Id:        int32(t.Oid),
-			Width:     t.Width,
-			Size:      t.Size,
-			Scale:     t.Scale,
+			Id:    int32(t.Oid),
+			Width: t.Width,
+			Size:  t.Size,
+			Scale: t.Scale,
 		}
 	}
 	return result
@@ -1135,10 +1135,10 @@ func convertToTypes(ts []*plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
 		result[i] = types.Type{
-			Oid:       types.T(t.Id),
-			Width:     t.Width,
-			Size:      t.Size,
-			Scale:     t.Scale,
+			Oid:   types.T(t.Id),
+			Width: t.Width,
+			Size:  t.Size,
+			Scale: t.Scale,
 		}
 	}
 	return result

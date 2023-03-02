@@ -98,6 +98,7 @@ type Type struct {
 	Size  int32
 	Width int32
 	Scale int32
+	Precision int32
 }
 
 type Date int32

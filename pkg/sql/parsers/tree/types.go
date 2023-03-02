@@ -183,7 +183,7 @@ type T struct {
 
 type LengthScaleOpt struct {
 	DisplayWith int32
-	Scale   int32
+	Scale       int32
 }
 
 const (
@@ -250,7 +250,7 @@ var (
 
 	TYPE_TIMESTAMP = &T{InternalType: InternalType{
 		Family:             TimestampFamily,
-		Scale:          0,
+		Scale:              0,
 		TimePrecisionIsSet: false,
 		Locale:             &emptyLocale,
 		Oid:                uint32(defines.MYSQL_TYPE_TIMESTAMP),
@@ -278,7 +278,7 @@ var (
 
 	TYPE_DURATION = &T{InternalType: InternalType{
 		Family:                IntervalFamily,
-		Scale:             0,
+		Scale:                 0,
 		TimePrecisionIsSet:    false,
 		Locale:                &emptyLocale,
 		Oid:                   uint32(defines.MYSQL_TYPE_TIME),
@@ -287,7 +287,7 @@ var (
 
 	TYPE_TIME = &T{InternalType: InternalType{
 		Family:             TimeFamily,
-		Scale:          0,
+		Scale:              0,
 		TimePrecisionIsSet: false,
 		Locale:             &emptyLocale,
 		Oid:                uint32(defines.MYSQL_TYPE_TIME),
@@ -295,7 +295,7 @@ var (
 
 	TYPE_DATETIME = &T{InternalType: InternalType{
 		Family:             TimestampFamily,
-		Scale:          0,
+		Scale:              0,
 		TimePrecisionIsSet: false,
 		Locale:             &emptyLocale,
 		Oid:                uint32(defines.MYSQL_TYPE_DATETIME),

@@ -564,7 +564,7 @@ func makeDatetimeExpr(s string, p int32) *plan.Expr {
 	dt, _ := types.ParseDatetime(s, p)
 	return &plan.Expr{
 		Typ: &plan.Type{
-			Id:        int32(types.T_datetime),
+			Id:    int32(types.T_datetime),
 			Scale: p,
 		},
 		Expr: &plan2.Expr_C{

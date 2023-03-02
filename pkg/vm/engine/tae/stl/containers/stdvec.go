@@ -171,6 +171,12 @@ func (vec *StdVector[T]) Get(i int) (v T) {
 	return
 }
 
+// stdVecotr get always copy
+func (vec *StdVector[T]) ShallowGet(i int) (v T) {
+	v = vec.slice[i]
+	return
+}
+
 func (vec *StdVector[T]) Update(i int, v T) {
 	vec.slice[i] = v
 }
