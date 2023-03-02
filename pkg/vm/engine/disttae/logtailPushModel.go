@@ -16,6 +16,10 @@ package disttae
 
 import (
 	"context"
+	"sort"
+	"sync"
+	"time"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,11 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	logtail2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
-	"sort"
-	"sync"
-	"time"
 )
 
 const (
@@ -391,21 +391,26 @@ func consumeLogTailOfPush(
 	ctx context.Context,
 	idx int, tbl *txnTable,
 	engine *Engine, partition *Partition, state *PartitionState, lt *logtail.TableLogtail) (err error) {
-	var entries []*api.Entry
+	/*
+		var entries []*api.Entry
 
-	if entries, err = logtail2.LoadCheckpointEntries(
-		ctx,
-		lt.CkpLocation,
-		tbl.tableId, tbl.tableName,
-		tbl.db.databaseId, tbl.db.databaseName, tbl.db.txn.engine.fs); err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if err = consumeEntry(idx, tbl.primaryIdx, tbl, ctx,
-			engine, partition, state, entry); err != nil {
+		if entries, err = logtail2.LoadCheckpointEntries(
+			ctx,
+			lt.CkpLocation,
+			tbl.tableId, tbl.tableName,
+			tbl.db.databaseId, tbl.db.databaseName, tbl.db.txn.engine.fs); err != nil {
 			return
 		}
-	}
+		for _, entry := range entries {
+			if err = consumeEntry(idx, tbl.primaryIdx, tbl, ctx,
+				engine, partition, state, entry); err != nil {
+				return
+			}
+		}
+	*/
+	partition.Lock()
+	partition.ckptList = append(partition.ckptList, lt.CkpLocation)
+	partition.Unlock()
 
 	for i := 0; i < len(lt.Commands); i++ {
 		if err = consumeEntry(idx, tbl.primaryIdx, tbl, ctx,
