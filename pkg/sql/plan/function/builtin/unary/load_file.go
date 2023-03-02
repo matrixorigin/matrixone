@@ -36,7 +36,7 @@ func LoadFile(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 
 	}
-	Filepath := vector.MustStrCols(inputVector)[0]
+	Filepath := vector.MustStrCol(inputVector)[0]
 	fs := proc.FileService
 	r, err := ReadFromFile(Filepath, fs)
 	if err != nil {

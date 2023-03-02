@@ -24,8 +24,8 @@ import (
 func RegularSubstr(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := ivecs[0]
 	secondVector := ivecs[1]
-	firstValues := vector.MustStrCols(firstVector)
-	secondValues := vector.MustStrCols(secondVector)
+	firstValues := vector.MustStrCol(firstVector)
+	secondValues := vector.MustStrCol(secondVector)
 	rtyp := types.T_varchar.ToType()
 
 	//maxLen
@@ -50,12 +50,12 @@ func RegularSubstr(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		match_type = []string{"c"}
 
 	case 3:
-		pos = vector.MustTCols[int64](ivecs[2])
+		pos = vector.MustFixedCol[int64](ivecs[2])
 		occ = []int64{1}
 		match_type = []string{"c"}
 	case 4:
-		pos = vector.MustTCols[int64](ivecs[2])
-		occ = vector.MustTCols[int64](ivecs[3])
+		pos = vector.MustFixedCol[int64](ivecs[2])
+		occ = vector.MustFixedCol[int64](ivecs[3])
 		match_type = []string{"c"}
 	}
 

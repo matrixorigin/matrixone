@@ -191,7 +191,7 @@ func TestOctScalar(t *testing.T) {
 }
 
 func checkOctResult(t *testing.T, result *vector.Vector, expected []types.Decimal128, isScalar bool) {
-	col := vector.MustTCols[types.Decimal128](result)
+	col := vector.MustFixedCol[types.Decimal128](result)
 
 	require.Equal(t, expected, col)
 	require.Equal(t, isScalar, result.IsConst())

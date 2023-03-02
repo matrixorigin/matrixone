@@ -36,7 +36,7 @@ const (
 )
 
 func And(xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[bool](xs), vector.MustTCols[bool](ys), vector.MustTCols[bool](rs)
+	xt, yt, rt := vector.MustFixedCol[bool](xs), vector.MustFixedCol[bool](ys), vector.MustFixedCol[bool](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
@@ -54,7 +54,7 @@ func And(xs, ys, rs *vector.Vector) error {
 }
 
 func Or(xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[bool](xs), vector.MustTCols[bool](ys), vector.MustTCols[bool](rs)
+	xt, yt, rt := vector.MustFixedCol[bool](xs), vector.MustFixedCol[bool](ys), vector.MustFixedCol[bool](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
@@ -71,7 +71,7 @@ func Or(xs, ys, rs *vector.Vector) error {
 }
 
 func Xor(xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[bool](xs), vector.MustTCols[bool](ys), vector.MustTCols[bool](rs)
+	xt, yt, rt := vector.MustFixedCol[bool](xs), vector.MustFixedCol[bool](ys), vector.MustFixedCol[bool](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
@@ -89,7 +89,7 @@ func Xor(xs, ys, rs *vector.Vector) error {
 }
 
 func Not(xs, rs *vector.Vector) error {
-	xt, rt := vector.MustTCols[bool](xs), vector.MustTCols[bool](rs)
+	xt, rt := vector.MustFixedCol[bool](xs), vector.MustFixedCol[bool](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR

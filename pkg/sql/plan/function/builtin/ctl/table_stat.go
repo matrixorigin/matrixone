@@ -29,10 +29,10 @@ import (
 
 // MoTableRows returns an estimated row number of a table.
 func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vec := vector.NewVector(types.New(types.T_int64, 0, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int64, 0, 0, 0))
 	count := vecs[0].Length()
-	dbs := vector.MustStrCols(vecs[0])
-	tbls := vector.MustStrCols(vecs[1])
+	dbs := vector.MustStrCol(vecs[0])
+	tbls := vector.MustStrCol(vecs[1])
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	txn, err := proc.TxnClient.New()
 	if err != nil {
@@ -67,10 +67,10 @@ func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 // MoTableSize returns an estimated size of a table.
 func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vec := vector.NewVector(types.New(types.T_int64, 0, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int64, 0, 0, 0))
 	count := vecs[0].Length()
-	dbs := vector.MustStrCols(vecs[0])
-	tbls := vector.MustStrCols(vecs[1])
+	dbs := vector.MustStrCol(vecs[0])
+	tbls := vector.MustStrCol(vecs[1])
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	txn, err := proc.TxnClient.New()
 	if err != nil {
@@ -115,9 +115,9 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 // MoTableColMax return the max value of the column
 func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	count := vecs[0].Length()
-	dbs := vector.MustStrCols(vecs[0])
-	tbls := vector.MustStrCols(vecs[1])
-	cols := vector.MustStrCols(vecs[2])
+	dbs := vector.MustStrCol(vecs[0])
+	tbls := vector.MustStrCol(vecs[1])
+	cols := vector.MustStrCol(vecs[2])
 
 	rtyp := types.T_varchar.ToType()
 	var resultVec *vector.Vector = nil
@@ -180,7 +180,7 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 			}
 		}
 	}
-	resultVec = vector.NewVector(types.T_varchar.ToType())
+	resultVec = vector.NewVec(types.T_varchar.ToType())
 	vector.AppendStringList(resultVec, rvals, nil, proc.Mp())
 	resultVec.SetNulls(resultNsp)
 	return resultVec, nil
@@ -189,9 +189,9 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 // MoTableColMax return the max value of the column
 func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	count := vecs[0].Length()
-	dbs := vector.MustStrCols(vecs[0])
-	tbls := vector.MustStrCols(vecs[1])
-	cols := vector.MustStrCols(vecs[2])
+	dbs := vector.MustStrCol(vecs[0])
+	tbls := vector.MustStrCol(vecs[1])
+	cols := vector.MustStrCol(vecs[2])
 
 	rtyp := types.T_varchar.ToType()
 	var resultVec *vector.Vector = nil
@@ -254,7 +254,7 @@ func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 			}
 		}
 	}
-	resultVec = vector.NewVector(types.T_varchar.ToType())
+	resultVec = vector.NewVec(types.T_varchar.ToType())
 	vector.AppendStringList(resultVec, rvals, nil, proc.Mp())
 	resultVec.SetNulls(resultNsp)
 	return resultVec, nil

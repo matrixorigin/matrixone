@@ -31,7 +31,7 @@ func TestLength(t *testing.T) {
 		if srcIsScalar {
 			vectors[0] = vector.NewConstBytes(t.ToType(), []byte(src), 1, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.NewVector(t.ToType())
+			vectors[0] = vector.NewVec(t.ToType())
 			vector.AppendStringList(vectors[0], []string{src}, nil, testutil.TestUtilMp)
 		}
 		return vectors
@@ -82,7 +82,7 @@ func TestLength(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, vector.MustTCols[int64](lengthRes))
+			require.Equal(t, c.wantBytes, vector.MustFixedCol[int64](lengthRes))
 			require.Equal(t, c.wantScalar, lengthRes.IsConst())
 
 		})
@@ -96,7 +96,7 @@ func TestBlobLength(t *testing.T) {
 		if srcIsScalar {
 			inputVector = vector.NewConstBytes(inputType, src, 1, proc.Mp())
 		} else {
-			inputVector = vector.NewVector(inputType)
+			inputVector = vector.NewVec(inputType)
 			err := vector.AppendBytes(inputVector, src, false, proc.Mp())
 			if err != nil {
 				t.Fatal(err)
@@ -135,7 +135,7 @@ func TestBlobLength(t *testing.T) {
 		convey.Convey(c.name, t, func() {
 			res, err := Length([]*vector.Vector{makeBlobVector(c.ctx, c.isScalar, procs)}, procs)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(vector.MustTCols[int64](res), convey.ShouldResemble, c.want)
+			convey.So(vector.MustFixedCol[int64](res), convey.ShouldResemble, c.want)
 			convey.So(res.IsConst(), convey.ShouldEqual, c.isScalar)
 		})
 	}

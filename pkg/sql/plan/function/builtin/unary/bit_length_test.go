@@ -69,7 +69,7 @@ func TestBitLength(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := vector.MustTCols[int64](result)
+			col := vector.MustFixedCol[int64](result)
 			require.Equal(t, c.expected, col)
 			require.Equal(t, c.isScalar, result.IsConst())
 		})

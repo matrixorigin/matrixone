@@ -25,8 +25,8 @@ import (
 func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left := vectors[0]
 	right := vectors[1]
-	leftValues := vector.MustTCols[types.Date](vectors[0])
-	rightValues := vector.MustTCols[types.Date](vectors[1])
+	leftValues := vector.MustFixedCol[types.Date](vectors[0])
+	rightValues := vector.MustFixedCol[types.Date](vectors[1])
 
 	rtyp := types.T_int64.ToType()
 	if left.IsConstNull() || right.IsConstNull() {
@@ -42,13 +42,13 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		}
 		nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
 		if left.IsConst() && !right.IsConst() {
-			rvals := vector.MustTCols[int64](rvec)
+			rvals := vector.MustFixedCol[int64](rvec)
 			datediff.DateDiffLeftConst(leftValues[0], rightValues, rvals)
 		} else if !left.IsConst() && right.IsConst() {
-			rvals := vector.MustTCols[int64](rvec)
+			rvals := vector.MustFixedCol[int64](rvec)
 			datediff.DateDiffRightConst(leftValues, rightValues[0], rvals)
 		} else {
-			rvals := vector.MustTCols[int64](rvec)
+			rvals := vector.MustFixedCol[int64](rvec)
 			datediff.DateDiff(leftValues, rightValues, rvals)
 		}
 		return rvec, nil

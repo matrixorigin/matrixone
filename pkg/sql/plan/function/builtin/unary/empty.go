@@ -26,7 +26,7 @@ func Empty(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	if inputVector.IsConstNull() {
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
-	ivals := vector.MustStrCols(inputVector)
+	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConst() {
 		return vector.NewConstFixed(rtyp, len(ivals[0]) == 0, ivecs[0].Length(), proc.Mp()), nil
 	} else {
@@ -34,7 +34,7 @@ func Empty(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[bool](rvec)
+		rvals := vector.MustFixedCol[bool](rvec)
 		for i := range ivals {
 			rvals[i] = len(ivals[i]) == 0
 		}

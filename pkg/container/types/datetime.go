@@ -226,10 +226,6 @@ func Now(loc *time.Location) Datetime {
 	return Datetime(now.UnixMicro() + int64(offset)*microSecsPerSec + unixEpochMicroSecs)
 }
 
-func UTC() Datetime {
-	return Datetime(time.Now().UnixMicro() + unixEpochMicroSecs)
-}
-
 func (dt Datetime) ToDate() Date {
 	return Date((dt.sec()) / secsPerDay)
 }

@@ -25,23 +25,20 @@ import (
 
 func UnaryTilde[T constraints.Integer](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVector := ivecs[0]
-	srcValues := vector.MustTCols[T](srcVector)
-	rtyp := types.Type{
-		Oid:  types.T_uint64,
-		Size: types.T_uint64.ToType().Size,
-	}
+	srcValues := vector.MustFixedCol[T](srcVector)
+	rtyp := types.T_uint64.ToType()
 
 	if srcVector.IsConst() {
 		if srcVector.IsConstNull() {
 			return vector.NewConstNull(*srcVector.GetType(), srcVector.Length(), proc.Mp()), nil
 		}
-		return vector.NewConstFixed(*srcVector.GetType(), funcBitInversion(srcValues[0]), srcVector.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, funcBitInversion(srcValues[0]), srcVector.Length(), proc.Mp()), nil
 	} else {
 		resVector, err := proc.AllocVectorOfRows(rtyp, len(srcValues), srcVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resValues := vector.MustTCols[uint64](resVector)
+		resValues := vector.MustFixedCol[uint64](resVector)
 
 		var i uint64
 		if nulls.Any(resVector.GetNulls()) {
@@ -72,7 +69,7 @@ func funcBitInversion[T constraints.Integer](x T) uint64 {
 
 func UnaryMinus[T constraints.Signed | constraints.Float](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVector := ivecs[0]
-	srcValues := vector.MustTCols[T](srcVector)
+	srcValues := vector.MustFixedCol[T](srcVector)
 
 	if srcVector.IsConst() {
 		if srcVector.IsConstNull() {
@@ -86,7 +83,7 @@ func UnaryMinus[T constraints.Signed | constraints.Float](ivecs []*vector.Vector
 		if err != nil {
 			return nil, err
 		}
-		resValues := vector.MustTCols[T](resVector)
+		resValues := vector.MustFixedCol[T](resVector)
 		neg.NumericNeg(srcValues, resValues)
 		return resVector, nil
 	}
@@ -94,7 +91,7 @@ func UnaryMinus[T constraints.Signed | constraints.Float](ivecs []*vector.Vector
 
 func UnaryMinusDecimal64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVector := ivecs[0]
-	srcValues := vector.MustTCols[types.Decimal64](srcVector)
+	srcValues := vector.MustFixedCol[types.Decimal64](srcVector)
 
 	if srcVector.IsConst() {
 		if srcVector.IsConstNull() {
@@ -108,7 +105,7 @@ func UnaryMinusDecimal64(ivecs []*vector.Vector, proc *process.Process) (*vector
 		if err != nil {
 			return nil, err
 		}
-		resValues := vector.MustTCols[types.Decimal64](resVector)
+		resValues := vector.MustFixedCol[types.Decimal64](resVector)
 		neg.Decimal64Neg(srcValues, resValues)
 		return resVector, nil
 	}
@@ -116,7 +113,7 @@ func UnaryMinusDecimal64(ivecs []*vector.Vector, proc *process.Process) (*vector
 
 func UnaryMinusDecimal128(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVector := ivecs[0]
-	srcValues := vector.MustTCols[types.Decimal128](srcVector)
+	srcValues := vector.MustFixedCol[types.Decimal128](srcVector)
 
 	if srcVector.IsConst() {
 		if srcVector.IsConstNull() {
@@ -130,7 +127,7 @@ func UnaryMinusDecimal128(ivecs []*vector.Vector, proc *process.Process) (*vecto
 		if err != nil {
 			return nil, err
 		}
-		resValues := vector.MustTCols[types.Decimal128](resVector)
+		resValues := vector.MustFixedCol[types.Decimal128](resVector)
 		// XXX should pass in nulls
 		neg.Decimal128Neg(srcValues, resValues)
 		return resVector, nil

@@ -207,7 +207,7 @@ func (gc *GroupConcat) Grows(n int, m *mpool.MPool) error {
 
 // Eval method calculates and returns the final result of the aggregate function.
 func (gc *GroupConcat) Eval(m *mpool.MPool) (*vector.Vector, error) {
-	vec := vector.NewVector(gc.OutputType())
+	vec := vector.NewVec(gc.OutputType())
 	nsp := nulls.NewWithSize(gc.groups)
 	vec.SetNulls(nsp)
 	for _, v := range gc.res {
@@ -401,54 +401,54 @@ func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
-		flag := vector.MustTCols[bool](vec)[int64(rowIndex)]
+		flag := vector.MustFixedCol[bool](vec)[int64(rowIndex)]
 		if flag {
 			return "1", nil
 		}
 		return "0", nil
 	case types.T_int8:
-		return fmt.Sprintf("%v", vector.MustTCols[int8](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.MustFixedCol[int8](vec)[int64(rowIndex)]), nil
 	case types.T_int16:
-		return fmt.Sprintf("%v", vector.MustTCols[int16](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.MustFixedCol[int16](vec)[int64(rowIndex)]), nil
 	case types.T_int32:
-		return fmt.Sprintf("%v", vector.MustTCols[int32](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.MustFixedCol[int32](vec)[int64(rowIndex)]), nil
 	case types.T_int64:
-		return fmt.Sprintf("%v", vector.MustTCols[int64](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.MustFixedCol[int64](vec)[int64(rowIndex)]), nil
 	case types.T_uint8:
-		return fmt.Sprintf("%v", vector.MustTCols[uint8](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.MustFixedCol[uint8](vec)[int64(rowIndex)]), nil
 	case types.T_uint16:
-		return fmt.Sprintf("%v", vector.MustTCols[uint16](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.MustFixedCol[uint16](vec)[int64(rowIndex)]), nil
 	case types.T_uint32:
-		return fmt.Sprintf("%v", vector.MustTCols[uint32](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.MustFixedCol[uint32](vec)[int64(rowIndex)]), nil
 	case types.T_uint64:
-		return fmt.Sprintf("%v", vector.MustTCols[uint64](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.MustFixedCol[uint64](vec)[int64(rowIndex)]), nil
 	case types.T_float32:
-		return fmt.Sprintf("%v", vector.MustTCols[float32](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.MustFixedCol[float32](vec)[int64(rowIndex)]), nil
 	case types.T_float64:
-		return fmt.Sprintf("%v", vector.MustTCols[float64](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.MustFixedCol[float64](vec)[int64(rowIndex)]), nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
-		return vector.MustStrCols(vec)[int64(rowIndex)], nil
+		return vector.MustStrCol(vec)[int64(rowIndex)], nil
 	case types.T_decimal64:
-		val := vector.MustTCols[types.Decimal64](vec)[int64(rowIndex)]
+		val := vector.MustFixedCol[types.Decimal64](vec)[int64(rowIndex)]
 		return val.String(), nil
 	case types.T_decimal128:
-		val := vector.MustTCols[types.Decimal128](vec)[int64(rowIndex)]
+		val := vector.MustFixedCol[types.Decimal128](vec)[int64(rowIndex)]
 		return val.String(), nil
 	case types.T_json:
-		val := vec.GetBytes(rowIndex)
+		val := vec.GetBytesAt(rowIndex)
 		byteJson := types.DecodeJson(val)
 		return byteJson.String(), nil
 	case types.T_uuid:
-		val := vector.MustTCols[types.Uuid](vec)[int64(rowIndex)]
+		val := vector.MustFixedCol[types.Uuid](vec)[int64(rowIndex)]
 		return val.ToString(), nil
 	case types.T_date:
-		val := vector.MustTCols[types.Date](vec)[int64(rowIndex)]
+		val := vector.MustFixedCol[types.Date](vec)[int64(rowIndex)]
 		return val.String(), nil
 	case types.T_time:
-		val := vector.MustTCols[types.Time](vec)[int64(rowIndex)]
+		val := vector.MustFixedCol[types.Time](vec)[int64(rowIndex)]
 		return val.String(), nil
 	case types.T_datetime:
-		val := vector.MustTCols[types.Datetime](vec)[int64(rowIndex)]
+		val := vector.MustFixedCol[types.Datetime](vec)[int64(rowIndex)]
 		return val.String(), nil
 	default:
 		return "", nil

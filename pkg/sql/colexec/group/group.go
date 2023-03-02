@@ -99,7 +99,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		if len(ctr.aggVecs) == 0 && len(ctr.multiVecs) == 0 {
 			b := batch.NewWithSize(len(ap.Types))
 			for i := range b.Vecs {
-				b.Vecs[i] = vector.NewVector(ap.Types[i])
+				b.Vecs[i] = vector.NewVec(ap.Types[i])
 			}
 			proc.SetInputBatch(b)
 			if _, err := ctr.process(ap, proc, anal, isFirst, isLast); err != nil {
@@ -262,7 +262,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		ctr.bat.Zs = proc.Mp().GetSels()
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
-			ctr.bat.Vecs[i] = vector.NewVector(*vec.GetType())
+			ctr.bat.Vecs[i] = vector.NewVec(*vec.GetType())
 			switch vec.GetType().TypeSize() {
 			case 1:
 				size += 1 + 1
@@ -380,7 +380,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 
 func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) error {
 	mSels := make([][]int64, index.MaxLowCardinality+1)
-	poses := vector.MustTCols[uint16](ctr.idx.GetPoses())
+	poses := vector.MustFixedCol[uint16](ctr.idx.GetPoses())
 	for k, v := range poses {
 		if len(mSels[v]) == 0 {
 			mSels[v] = make([]int64, 0, 64)

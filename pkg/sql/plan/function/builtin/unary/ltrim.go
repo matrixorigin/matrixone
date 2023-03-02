@@ -26,19 +26,17 @@ func Ltrim(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	inputVector := ivecs[0]
 	rtyp := types.T_varchar.ToType()
 	// totalCount - spaceCount is the total bytes need for the ltrim-ed string
-	ivals := vector.MustStrCols(inputVector)
-	if inputVector.IsConst() {
-		if inputVector.IsConstNull() {
-			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
-		}
-		rvals := make([]string, 1)
-		ltrim.Ltrim(ivals, rvals)
-		vec := vector.NewConstBytes(rtyp, []byte(rvals[0]), ivecs[0].Length(), proc.Mp())
-		return vec, nil
+	ivals := vector.MustStrCol(inputVector)
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	} else if inputVector.IsConst() {
+		var rvals [1]string
+		ltrim.Ltrim(ivals, rvals[:])
+		return vector.NewConstBytes(rtyp, []byte(rvals[0]), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvals := make([]string, len(ivals))
 		ltrim.Ltrim(ivals, rvals)
-		rvec := vector.NewVector(rtyp)
+		rvec := vector.NewVec(rtyp)
 		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
 		nulls.Set(rvec.GetNulls(), inputVector.GetNulls())
 		return rvec, nil

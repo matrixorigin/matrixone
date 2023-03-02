@@ -123,9 +123,9 @@ func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) er
 	vec := vecs[0]
 	hasNull := vec.GetNulls().Contains(uint64(sel))
 	if vec.GetType().IsString() {
-		a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytes(int(sel))).(T1), a.vs[i], z, a.es[i], hasNull)
+		a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(int(sel))).(T1), a.vs[i], z, a.es[i], hasNull)
 	} else {
-		a.vs[i], a.es[i] = a.fill(i, vector.MustTCols[T1](vec)[sel], a.vs[i], z, a.es[i], hasNull)
+		a.vs[i], a.es[i] = a.fill(i, vector.MustFixedCol[T1](vec)[sel], a.vs[i], z, a.es[i], hasNull)
 	}
 	return nil
 }
@@ -140,15 +140,15 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 			}
 			j := vps[i] - 1
 			if !vec.IsConst() {
-				a.vs[j], a.es[j] = a.fill(int64(j), (any)(vec.GetBytes(i+int(start))).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+				a.vs[j], a.es[j] = a.fill(int64(j), (any)(vec.GetBytesAt(i+int(start))).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 			} else {
-				a.vs[j], a.es[j] = a.fill(int64(j), (any)(vec.GetBytes(0)).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+				a.vs[j], a.es[j] = a.fill(int64(j), (any)(vec.GetBytesAt(0)).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 			}
 
 		}
 		return nil
 	}
-	vs := vector.MustTCols[T1](vec)
+	vs := vector.MustFixedCol[T1](vec)
 	if a.batchFill != nil {
 		if err := a.batchFill(a.vs, vs, start, int64(len(os)), vps, zs, vec.GetNulls()); err != nil {
 			return err
@@ -198,15 +198,15 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 		for j := 0; j < len; j++ {
 			hasNull := vec.GetNulls().Contains(uint64(j))
 			if !vec.IsConst() {
-				a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytes(j)).(T1), a.vs[i], zs[j], a.es[i], hasNull)
+				a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(j)).(T1), a.vs[i], zs[j], a.es[i], hasNull)
 			} else {
-				a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytes(0)).(T1), a.vs[i], zs[j], a.es[i], hasNull)
+				a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(0)).(T1), a.vs[i], zs[j], a.es[i], hasNull)
 			}
 		}
 
 		return nil
 	}
-	vs := vector.MustTCols[T1](vec)
+	vs := vector.MustFixedCol[T1](vec)
 	for j, v := range vs {
 		hasNull := vec.GetNulls().Contains(uint64(j))
 		a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
@@ -255,7 +255,7 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		}
 	}
 	if a.otyp.IsString() {
-		vec := vector.NewVector(a.otyp)
+		vec := vector.NewVec(a.otyp)
 		vec.SetNulls(nsp)
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
@@ -267,8 +267,8 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		}
 		return vec, nil
 	}
-	vec := vector.NewVector(a.otyp)
-	vector.AppendList(vec, a.eval(a.vs), nil, m)
+	vec := vector.NewVec(a.otyp)
+	vector.AppendFixedList(vec, a.eval(a.vs), nil, m)
 	vec.SetNulls(nsp)
 	return vec, nil
 }

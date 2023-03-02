@@ -30,7 +30,7 @@ func Test_Pi(t *testing.T) {
 		vec, err := Pi(nil, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(vec.GetNulls().Np, convey.ShouldBeNil)
-		data := vector.MustTCols[float64](vec)
+		data := vector.MustFixedCol[float64](vec)
 		ok := (data != nil)
 		if !ok {
 			log.Fatal(moerr.NewInternalError(context.TODO(), "the Pi function return value type is not []float64"))

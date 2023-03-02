@@ -23,7 +23,7 @@ import (
 func DateToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
-	ivals := vector.MustTCols[types.Date](inputVector)
+	ivals := vector.MustFixedCol[types.Date](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -34,7 +34,7 @@ func DateToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vec
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Timestamp](rvec)
+		rvals := vector.MustFixedCol[types.Timestamp](rvec)
 		for i := range ivals {
 			rvals[i] = ivals[i].ToTimestamp(proc.SessionInfo.TimeZone)
 		}
@@ -45,7 +45,7 @@ func DateToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vec
 func DatetimeToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_timestamp, Precision: inputVector.GetType().Precision, Size: 8}
-	ivals := vector.MustTCols[types.Datetime](inputVector)
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -56,7 +56,7 @@ func DatetimeToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Timestamp](rvec)
+		rvals := vector.MustFixedCol[types.Timestamp](rvec)
 		for i := range ivals {
 			rvals[i] = ivals[i].ToTimestamp(proc.SessionInfo.TimeZone)
 		}
@@ -71,7 +71,7 @@ func TimestampToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vecto
 func DateStringToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
-	ivals := vector.MustStrCols(inputVector)
+	ivals := vector.MustStrCol(inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
@@ -87,7 +87,7 @@ func DateStringToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vect
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Timestamp](rvec)
+		rvals := vector.MustFixedCol[types.Timestamp](rvec)
 		for i := range ivals {
 			rvals[i], err = types.ParseTimestamp(proc.SessionInfo.TimeZone, ivals[i], 6)
 			if err != nil {

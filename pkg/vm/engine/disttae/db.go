@@ -119,7 +119,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool, catalogCache *cache.Cata
 			}
 			if bat.Vecs[0] == nil {
 				for i, vec := range bat0.Vecs {
-					bat.Vecs[i] = vector.NewVector(*vec.GetType())
+					bat.Vecs[i] = vector.NewVec(*vec.GetType())
 				}
 			}
 			for i, vec := range bat0.Vecs {
@@ -180,7 +180,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool, catalogCache *cache.Cata
 			}
 			if bat.Vecs[0] == nil {
 				for i, vec := range bat0.Vecs {
-					bat.Vecs[i] = vector.NewVector(*vec.GetType())
+					bat.Vecs[i] = vector.NewVec(*vec.GetType())
 				}
 			}
 			for i, vec := range bat0.Vecs {
@@ -241,7 +241,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool, catalogCache *cache.Cata
 			}
 			if bat.Vecs[0] == nil {
 				for i, vec := range bat0.Vecs {
-					bat.Vecs[i] = vector.NewVector(*vec.GetType())
+					bat.Vecs[i] = vector.NewVec(*vec.GetType())
 				}
 			}
 			for i, vec := range bat0.Vecs {

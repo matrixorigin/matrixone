@@ -185,11 +185,10 @@ func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 // these are the rules of multi-cols
 // for one col, just give the value bytes
 func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int, lenCols int) {
-	area := vec.GetArea()
-	vs := vector.MustTCols[types.Varlena](vec)
+	constNull := vec.IsConstNull()
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
-			bytes := vs[i+start].GetByteSlice(area)
+			bytes := vec.GetBytesAt(i + start)
 			if lenCols > 1 {
 				// for "a"，"bc" and "ab","c", we need to distinct
 				// this is not null value
@@ -204,12 +203,12 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int, len
 	} else {
 		nsp := vec.GetNulls()
 		for i := 0; i < n; i++ {
-			hasNull := nsp.Contains(uint64(i + start))
+			hasNull := constNull || nsp.Contains(uint64(i+start))
 			if m.hasNull {
 				if hasNull {
 					m.keys[i] = append(m.keys[i], byte(1))
 				} else {
-					bytes := vs[i+start].GetByteSlice(area)
+					bytes := vec.GetBytesAt(i + start)
 					if lenCols > 1 {
 						// for "a"，"bc" and "ab","c", we need to distinct
 						// this is not null value
@@ -226,7 +225,7 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int, len
 					m.zValues[i] = 0
 					continue
 				}
-				bytes := vs[i+start].GetByteSlice(area)
+				bytes := vec.GetBytesAt(i + start)
 				if lenCols > 1 {
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// this is not null value
@@ -254,6 +253,7 @@ func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, s
 			data = unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), (n+start)*sz)
 		}
 	}
+	constNull := vec.IsConstNull()
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
 			bytes := data[(i+start)*sz : (i+start+1)*sz]
@@ -271,7 +271,7 @@ func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, s
 	} else {
 		nsp := vec.GetNulls()
 		for i := 0; i < n; i++ {
-			isNull := nsp.Contains(uint64(i + start))
+			isNull := constNull || nsp.Contains(uint64(i+start))
 			if m.hasNull {
 				if isNull {
 					m.keys[i] = append(m.keys[i], byte(1))

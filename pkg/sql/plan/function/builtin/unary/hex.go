@@ -26,7 +26,7 @@ import (
 func HexString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
-	ivals := vector.MustStrCols(inputVector)
+	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -37,7 +37,7 @@ func HexString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	} else {
 		rvals := make([]string, len(ivals))
 		HexEncodeString(ivals, rvals)
-		vec := vector.NewVector(rtyp)
+		vec := vector.NewVec(rtyp)
 		vector.AppendStringList(vec, rvals, nil, proc.Mp())
 		return vec, nil
 	}
@@ -46,7 +46,7 @@ func HexString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 func HexInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_varchar.ToType()
-	ivals := vector.MustTCols[int64](inputVector)
+	ivals := vector.MustFixedCol[int64](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -57,7 +57,7 @@ func HexInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	} else {
 		rvals := make([]string, len(ivals))
 		HexEncodeInt64(ivals, rvals)
-		vec := vector.NewVector(rtyp)
+		vec := vector.NewVec(rtyp)
 		vector.AppendStringList(vec, rvals, nil, proc.Mp())
 		return vec, nil
 	}

@@ -211,7 +211,7 @@ func TestTime(t *testing.T) {
 				result, err = DateStringToTime(vec, c.proc)
 			}
 			require.NoError(t, err)
-			require.Equal(t, c.want, vector.MustTCols[types.Time](result))
+			require.Equal(t, c.want, vector.MustFixedCol[types.Time](result))
 		})
 	}
 
@@ -268,8 +268,8 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 				return nil, moerr.ErrInvalidInput
 			}
 			input = append(input, tmp)
-			vec[0] = vector.NewVector(typ)
-			vector.AppendList(vec[0], input, nil, testutil.TestUtilMp)
+			vec[0] = vector.NewVec(typ)
+			vector.AppendFixedList(vec[0], input, nil, testutil.TestUtilMp)
 
 		case types.T_date:
 			vec[0] = testutil.MakeDateVector(input, nil)

@@ -743,13 +743,13 @@ var builtins = map[int]Functions{
 			{
 				Index:     0,
 				Args:      []types.T{types.T_date},
-				ReturnTyp: types.T_uint8,
+				ReturnTyp: types.T_int64,
 				Fn:        unary.DateToWeekday,
 			},
 			{
 				Index:     1,
 				Args:      []types.T{types.T_datetime},
-				ReturnTyp: types.T_uint8,
+				ReturnTyp: types.T_int64,
 				Fn:        unary.DatetimeToWeekday,
 			},
 		},
@@ -762,19 +762,19 @@ var builtins = map[int]Functions{
 			{
 				Index:     0,
 				Args:      []types.T{types.T_date},
-				ReturnTyp: types.T_uint16,
+				ReturnTyp: types.T_int64,
 				Fn:        unary.DateToYear,
 			},
 			{
 				Index:     1,
 				Args:      []types.T{types.T_datetime},
-				ReturnTyp: types.T_uint16,
+				ReturnTyp: types.T_int64,
 				Fn:        unary.DatetimeToYear,
 			},
 			{
 				Index:     2,
 				Args:      []types.T{types.T_varchar},
-				ReturnTyp: types.T_uint16,
+				ReturnTyp: types.T_int64,
 				Fn:        unary.DateStringToYear,
 			},
 		},
@@ -1300,7 +1300,7 @@ var builtins = map[int]Functions{
 			{
 				Index:     0,
 				Args:      []types.T{},
-				ReturnTyp: types.T_datetime,
+				ReturnTyp: types.T_timestamp,
 				Fn:        multi.UTCTimestamp,
 			},
 		},

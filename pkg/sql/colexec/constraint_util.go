@@ -233,9 +233,9 @@ func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *pro
 }
 
 func filterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.Batch {
-	retVec := vector.NewVector(types.T_Rowid.ToType())
+	retVec := vector.NewVec(types.T_Rowid.ToType())
 	rowIdMap := make(map[types.Rowid]struct{})
-	for i, r := range vector.MustTCols[types.Rowid](bat.Vecs[idx]) {
+	for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
 		if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
 			rowIdMap[r] = struct{}{}
 		}
@@ -246,7 +246,7 @@ func filterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.
 		rowIdList[i] = rowId
 		i++
 	}
-	vector.AppendList(retVec, rowIdList, nil, proc.Mp())
+	vector.AppendFixedList(retVec, rowIdList, nil, proc.Mp())
 	retBatch := batch.New(true, []string{catalog.Row_ID})
 	retBatch.SetZs(retVec.Length(), proc.Mp())
 	retBatch.SetVector(0, retVec)
@@ -259,7 +259,7 @@ func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int
 	foundRowId := false
 	for i, idx := range idxList {
 		if bat.Vecs[idx].GetType().Oid == types.T_Rowid {
-			for j, r := range vector.MustTCols[types.Rowid](bat.Vecs[idx]) {
+			for j, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
 				if _, exist := rowIdMap[r]; exist {
 					rowSkip = append(rowSkip, true)
 				} else if bat.Vecs[idx].GetNulls().Contains(uint64(j)) {
@@ -283,7 +283,7 @@ func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int
 	}
 
 	// get delete batch
-	delVec := vector.NewVector(types.T_Rowid.ToType())
+	delVec := vector.NewVec(types.T_Rowid.ToType())
 	rowIdList := make([]types.Rowid, len(rowIdMap))
 	i := 0
 	for rowId := range rowIdMap {
@@ -291,7 +291,7 @@ func filterRowIdForUpdate(proc *process.Process, bat *batch.Batch, idxList []int
 		i++
 	}
 	mp := proc.Mp()
-	vector.AppendList(delVec, rowIdList, nil, mp)
+	vector.AppendFixedList(delVec, rowIdList, nil, mp)
 	delBatch := batch.New(true, []string{catalog.Row_ID})
 	delBatch.SetVector(0, delVec)
 	delBatch.SetZs(batLen, mp)
@@ -354,7 +354,7 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 		}
 
 		if fromVec.IsConst() {
-			toVec = vector.NewVector(*bat.Vecs[idx].GetType())
+			toVec = vector.NewVec(*bat.Vecs[idx].GetType())
 			if fromVec.IsConstNull() {
 				for j := 0; j < batLen; j++ {
 					err := vector.AppendFixed(toVec, 0, true, proc.Mp())
@@ -377,7 +377,7 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 					return nil, err
 				}
 			} else {
-				toVec = vector.NewVector(*fromVec.GetType())
+				toVec = vector.NewVec(*fromVec.GetType())
 				for j := 0; j < fromVec.Length(); j++ {
 					if !rowSkip[j] {
 						toVec.UnionOne(fromVec, int64(j), proc.Mp())

@@ -79,7 +79,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
 	for i := range arg.Attrs {
-		rbat.Vecs[i] = vector.NewVector(dupType(plan.MakePlan2Type(startVec.GetType())))
+		rbat.Vecs[i] = vector.NewVec(dupType(plan.MakePlan2Type(startVec.GetType())))
 	}
 	if len(arg.Args) == 3 {
 		stepVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
@@ -116,9 +116,9 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if stepVec == nil {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series must specify step")
 		}
-		startSlice := vector.MustStrCols(startVec)
-		endSlice := vector.MustStrCols(endVec)
-		stepSlice := vector.MustStrCols(stepVec)
+		startSlice := vector.MustStrCol(startVec)
+		endSlice := vector.MustStrCol(endVec)
+		stepSlice := vector.MustStrCol(stepVec)
 		startStr := startSlice[0]
 		endStr := endSlice[0]
 		stepStr := stepSlice[0]
@@ -282,12 +282,12 @@ func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn 
 	var (
 		start, end, step T
 	)
-	startSlice := vector.MustTCols[T](startVec)
-	endSlice := vector.MustTCols[T](endVec)
+	startSlice := vector.MustFixedCol[T](startVec)
+	endSlice := vector.MustFixedCol[T](endVec)
 	start = startSlice[0]
 	end = endSlice[0]
 	if stepVec != nil {
-		stepSlice := vector.MustTCols[T](stepVec)
+		stepSlice := vector.MustFixedCol[T](stepVec)
 		step = stepSlice[0]
 	} else {
 		if start < end {
@@ -319,14 +319,14 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, toString bool, pro
 		start, end types.Datetime
 		step       string
 	)
-	startSlice := vector.MustTCols[types.Datetime](startVec)
-	endSlice := vector.MustTCols[types.Datetime](endVec)
+	startSlice := vector.MustFixedCol[types.Datetime](startVec)
+	endSlice := vector.MustFixedCol[types.Datetime](endVec)
 	start = startSlice[0]
 	end = endSlice[0]
 	if stepVec == nil {
 		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime must specify step")
 	}
-	stepSlice := vector.MustStrCols(stepVec)
+	stepSlice := vector.MustStrCol(stepVec)
 	step = stepSlice[0]
 	res, err := generateDatetime(proc.Ctx, start, end, step, startVec.GetType().Precision)
 	if err != nil {

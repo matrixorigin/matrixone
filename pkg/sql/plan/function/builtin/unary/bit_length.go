@@ -24,7 +24,7 @@ import (
 func BitLengthFunc(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_int64.ToType()
-	ivals := vector.MustBytesCols(inputVector)
+	ivals := vector.MustBytesCol(inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -38,7 +38,7 @@ func BitLengthFunc(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[int64](rvec)
+		rvals := vector.MustFixedCol[int64](rvec)
 		bit_length.StrBitLength(ivals, rvals)
 		return rvec, nil
 	}

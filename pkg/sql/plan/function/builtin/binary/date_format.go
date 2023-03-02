@@ -90,23 +90,23 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	}
 
 	// get the format string.
-	formatMask := string(formatVector.GetString(0))
+	formatMask := string(formatVector.GetStringAt(0))
 
 	if dateVector.IsConst() {
 		// XXX Null handling maybe broken.
-		datetimes := vector.MustTCols[types.Datetime](dateVector)
+		datetimes := vector.MustFixedCol[types.Datetime](dateVector)
 		resCol, err := CalcDateFromat(proc.Ctx, datetimes, formatMask, dateVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		return vector.NewConstBytes(rtyp, []byte(resCol[0]), dateVector.Length(), proc.Mp()), nil
 	} else {
-		datetimes := vector.MustTCols[types.Datetime](dateVector)
+		datetimes := vector.MustFixedCol[types.Datetime](dateVector)
 		resCol, err := CalcDateFromat(proc.Ctx, datetimes, formatMask, dateVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		rvec := vector.NewVector(rtyp)
+		rvec := vector.NewVec(rtyp)
 		nulls.Set(rvec.GetNulls(), dateVector.GetNulls())
 		vector.AppendStringList(rvec, resCol, nil, proc.Mp())
 		return rvec, nil

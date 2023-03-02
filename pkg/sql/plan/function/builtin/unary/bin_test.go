@@ -37,7 +37,7 @@ func TestBinUint8(t *testing.T) {
 	tempC := make([]string, 8)
 
 	for i := 0; i < vecLen; i++ {
-		tempC[i] = resultV.GetString(i)
+		tempC[i] = resultV.GetStringAt(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
 }
@@ -57,7 +57,7 @@ func TestBinUint16(t *testing.T) {
 	tempC := make([]string, 8)
 
 	for i := 0; i < vecLen; i++ {
-		tempC[i] = resultV.GetString(i)
+		tempC[i] = resultV.GetStringAt(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
 }
@@ -77,7 +77,7 @@ func TestBinUint32(t *testing.T) {
 	tempC := make([]string, 8)
 
 	for i := 0; i < vecLen; i++ {
-		tempC[i] = resultV.GetString(i)
+		tempC[i] = resultV.GetStringAt(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
 }
@@ -96,7 +96,7 @@ func TestBinUint64(t *testing.T) {
 	tempC := make([]string, 8)
 
 	for i := 0; i < vecLen; i++ {
-		tempC[i] = resultV.GetString(i)
+		tempC[i] = resultV.GetStringAt(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
 }
@@ -116,7 +116,7 @@ func TestBinInt8(t *testing.T) {
 	tempC := make([]string, 7)
 
 	for i := 0; i < vecLen; i++ {
-		tempC[i] = resultV.GetString(i)
+		tempC[i] = resultV.GetStringAt(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000"}, tempC)
 }
@@ -136,7 +136,7 @@ func TestBinInt16(t *testing.T) {
 	tempC := make([]string, 8)
 
 	for i := 0; i < vecLen; i++ {
-		tempC[i] = resultV.GetString(i)
+		tempC[i] = resultV.GetStringAt(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
 }
@@ -156,7 +156,7 @@ func TestBinInt32(t *testing.T) {
 	tempC := make([]string, 8)
 
 	for i := 0; i < vecLen; i++ {
-		tempC[i] = resultV.GetString(i)
+		tempC[i] = resultV.GetStringAt(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
 }
@@ -176,7 +176,7 @@ func TestBinInt64(t *testing.T) {
 	tempC := make([]string, 8)
 
 	for i := 0; i < vecLen; i++ {
-		tempC[i] = resultV.GetString(i)
+		tempC[i] = resultV.GetStringAt(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
 }
@@ -196,7 +196,7 @@ func TestBinFloat32(t *testing.T) {
 	tempC := make([]string, 8)
 
 	for i := 0; i < vecLen; i++ {
-		tempC[i] = resultV.GetString(i)
+		tempC[i] = resultV.GetStringAt(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
 }
@@ -215,7 +215,7 @@ func TestBinFloat64(t *testing.T) {
 	tempC := make([]string, 8)
 
 	for i := 0; i < vecLen; i++ {
-		tempC[i] = resultV.GetString(i)
+		tempC[i] = resultV.GetStringAt(i)
 	}
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
 }
@@ -235,7 +235,7 @@ func TestBinNegativeInt(t *testing.T) {
 	tempC := make([]string, 8)
 
 	for i := 0; i < vecLen; i++ {
-		tempC[i] = resultV.GetString(i)
+		tempC[i] = resultV.GetStringAt(i)
 	}
 	require.Equal(t, []string{"1111111111111111111111111111111111111111111111111111111111111110",
 		"1111111111111111111111111111111111111111111111111111111111111100",

@@ -22,19 +22,18 @@ import (
 
 func DateToYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.T_uint16.ToType()
-	ivals := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsConst() {
-		if inputVector.IsConstNull() {
-			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
-		}
-		return vector.NewConstFixed(rtyp, ivals[0].Year(), ivecs[0].Length(), proc.Mp()), nil
+	rtyp := types.T_int64.ToType()
+	ivals := vector.MustFixedCol[types.Date](inputVector)
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	} else if inputVector.IsConst() {
+		return vector.NewConstFixed(rtyp, int64(ivals[0].Year()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint16](rvec)
+		rvals := vector.MustFixedCol[int64](rvec)
 		doDateToYear(ivals, rvals)
 		return rvec, nil
 	}
@@ -42,19 +41,18 @@ func DateToYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 func DatetimeToYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.T_uint16.ToType()
-	ivals := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsConst() {
-		if inputVector.IsConstNull() {
-			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
-		}
-		return vector.NewConstFixed(rtyp, ivals[0].Year(), ivecs[0].Length(), proc.Mp()), nil
+	rtyp := types.T_int64.ToType()
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	} else if inputVector.IsConst() {
+		return vector.NewConstFixed(rtyp, int64(ivals[0].Year()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint16](rvec)
+		rvals := vector.MustFixedCol[int64](rvec)
 		doDatetimeToYear(ivals, rvals)
 		return rvec, nil
 	}
@@ -62,13 +60,12 @@ func DatetimeToYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 
 func DateStringToYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.T_uint16.ToType()
-	ivals := vector.MustStrCols(inputVector)
-	if inputVector.IsConst() {
-		if inputVector.IsConstNull() {
-			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
-		}
-		var rvals [1]uint16
+	rtyp := types.T_int64.ToType()
+	ivals := vector.MustStrCol(inputVector)
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	} else if inputVector.IsConst() {
+		var rvals [1]int64
 		doDateStringToYear(ivals, rvals[:])
 		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
@@ -76,33 +73,33 @@ func DateStringToYear(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint16](rvec)
+		rvals := vector.MustFixedCol[int64](rvec)
 		doDateStringToYear(ivals, rvals)
 		return rvec, nil
 	}
 }
 
-func doDateToYear(xs []types.Date, rs []uint16) []uint16 {
+func doDateToYear(xs []types.Date, rs []int64) []int64 {
 	for i, x := range xs {
-		rs[i] = x.Year()
+		rs[i] = int64(x.Year())
 	}
 	return rs
 }
 
-func doDatetimeToYear(xs []types.Datetime, rs []uint16) []uint16 {
+func doDatetimeToYear(xs []types.Datetime, rs []int64) []int64 {
 	for i, x := range xs {
-		rs[i] = x.Year()
+		rs[i] = int64(x.Year())
 	}
 	return rs
 }
 
-func doDateStringToYear(xs []string, rs []uint16) []uint16 {
+func doDateStringToYear(xs []string, rs []int64) []int64 {
 	for i, str := range xs {
 		d, e := types.ParseDateCast(str)
 		if e != nil {
 			panic(e)
 		}
-		rs[i] = d.Year()
+		rs[i] = int64(d.Year())
 	}
 	return rs
 }

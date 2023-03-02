@@ -94,7 +94,7 @@ func TestLikeVarchar(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, vector.MustTCols[bool](likeRes))
+			require.Equal(t, c.wantBytes, vector.MustFixedCol[bool](likeRes))
 		})
 	}
 }
@@ -186,7 +186,7 @@ func TestLikeVarchar2(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, vector.MustTCols[bool](likeRes))
+			require.Equal(t, c.wantBytes, vector.MustFixedCol[bool](likeRes))
 			require.Equal(t, c.wantScalar, likeRes.IsConst())
 		})
 	}
@@ -197,7 +197,7 @@ func makeStrVec(s string, isConst bool, n int) *vector.Vector {
 		vec := vector.NewConstBytes(types.T_varchar.ToType(), []byte(s), 1, testutil.TestUtilMp)
 		return vec
 	} else {
-		vec := vector.NewVector(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType())
 		vector.AppendStringList(vec, []string{s}, nil, testutil.TestUtilMp)
 		return vec
 	}

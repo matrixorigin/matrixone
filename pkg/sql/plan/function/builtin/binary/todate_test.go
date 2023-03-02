@@ -31,7 +31,7 @@ func TestToDate(t *testing.T) {
 	proc := testutil.NewProc()
 	outputVec, err := ToDate(inputVecs, proc)
 	require.NoError(t, err)
-	require.Equal(t, []types.Date{types.DateFromCalendar(2020, 1, 3), types.DateFromCalendar(2019, 1, 2)}, vector.MustTCols[types.Date](outputVec)[:2])
+	require.Equal(t, []types.Date{types.DateFromCalendar(2020, 1, 3), types.DateFromCalendar(2019, 1, 2)}, vector.MustFixedCol[types.Date](outputVec)[:2])
 	require.True(t, nulls.Contains(outputVec.GetNulls(), 2))
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"01032020", "01022019", ""}, []uint64{2})
@@ -40,7 +40,7 @@ func TestToDate(t *testing.T) {
 	proc = testutil.NewProc()
 	outputVec, err = ToDate(inputVecs, proc)
 	require.NoError(t, err)
-	require.Equal(t, []types.Date{types.DateFromCalendar(2020, 1, 3), types.DateFromCalendar(2019, 1, 2)}, vector.MustTCols[types.Date](outputVec)[:2])
+	require.Equal(t, []types.Date{types.DateFromCalendar(2020, 1, 3), types.DateFromCalendar(2019, 1, 2)}, vector.MustFixedCol[types.Date](outputVec)[:2])
 	require.True(t, nulls.Contains(outputVec.GetNulls(), 2))
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"03012020", "02012019", ""}, []uint64{2})
@@ -49,7 +49,7 @@ func TestToDate(t *testing.T) {
 	proc = testutil.NewProc()
 	outputVec, err = ToDate(inputVecs, proc)
 	require.NoError(t, err)
-	require.Equal(t, []types.Date{types.DateFromCalendar(2020, 1, 3), types.DateFromCalendar(2019, 1, 2)}, vector.MustTCols[types.Date](outputVec)[:2])
+	require.Equal(t, []types.Date{types.DateFromCalendar(2020, 1, 3), types.DateFromCalendar(2019, 1, 2)}, vector.MustFixedCol[types.Date](outputVec)[:2])
 	require.True(t, nulls.Contains(outputVec.GetNulls(), 2))
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"01-03-2020", "01-02-2019", ""}, []uint64{2})
@@ -58,7 +58,7 @@ func TestToDate(t *testing.T) {
 	proc = testutil.NewProc()
 	outputVec, err = ToDate(inputVecs, proc)
 	require.NoError(t, err)
-	require.Equal(t, []types.Date{types.DateFromCalendar(2020, 1, 3), types.DateFromCalendar(2019, 1, 2)}, vector.MustTCols[types.Date](outputVec)[:2])
+	require.Equal(t, []types.Date{types.DateFromCalendar(2020, 1, 3), types.DateFromCalendar(2019, 1, 2)}, vector.MustFixedCol[types.Date](outputVec)[:2])
 	require.True(t, nulls.Contains(outputVec.GetNulls(), 2))
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"03-01-2020", "02-01-2019", ""}, []uint64{2})
@@ -67,7 +67,7 @@ func TestToDate(t *testing.T) {
 	proc = testutil.NewProc()
 	outputVec, err = ToDate(inputVecs, proc)
 	require.NoError(t, err)
-	require.Equal(t, []types.Date{types.DateFromCalendar(2020, 1, 3), types.DateFromCalendar(2019, 1, 2)}, vector.MustTCols[types.Date](outputVec)[:2])
+	require.Equal(t, []types.Date{types.DateFromCalendar(2020, 1, 3), types.DateFromCalendar(2019, 1, 2)}, vector.MustFixedCol[types.Date](outputVec)[:2])
 	require.True(t, nulls.Contains(outputVec.GetNulls(), 2))
 
 	inputVec0 = testutil.MakeVarcharVector([]string{"32-01-2020", "02-01-2019", ""}, []uint64{2})

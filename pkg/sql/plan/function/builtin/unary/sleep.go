@@ -39,7 +39,7 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 		err = moerr.NewInvalidArg(proc.Ctx, "sleep", "input contains null")
 		return
 	}
-	sleepSlice := vector.MustTCols[T](inputs)
+	sleepSlice := vector.MustFixedCol[T](inputs)
 	if checkNegative(sleepSlice) {
 		err = moerr.NewInvalidArg(proc.Ctx, "sleep", "input contains negative")
 		return
@@ -63,7 +63,7 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 		if err != nil {
 			return
 		}
-		result := vector.MustTCols[uint8](rs)
+		result := vector.MustFixedCol[uint8](rs)
 		for i := 0; i < length; i++ {
 			select {
 			case <-time.After(sleepNano):
@@ -81,7 +81,7 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 	if err != nil {
 		return
 	}
-	result := vector.MustTCols[uint8](rs)
+	result := vector.MustFixedCol[uint8](rs)
 	for i, sleepSeconds := range sleepSlice {
 		sleepNano := time.Nanosecond * time.Duration(sleepSeconds*1e9)
 		select {

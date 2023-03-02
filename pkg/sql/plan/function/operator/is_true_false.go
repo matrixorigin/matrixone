@@ -44,7 +44,7 @@ func funcIs(vectors []*vector.Vector, proc *process.Process, nullValue bool, eqB
 		return vector.NewConstFixed(retType, nullValue, input.Length(), proc.Mp()), nil
 	}
 	if input.IsConst() {
-		col := vector.MustTCols[bool](input)
+		col := vector.MustFixedCol[bool](input)
 		return vector.NewConstFixed(retType, col[0] == eqBool, input.Length(), proc.Mp()), nil
 	} else {
 		vlen := input.Length()
@@ -52,8 +52,8 @@ func funcIs(vectors []*vector.Vector, proc *process.Process, nullValue bool, eqB
 		if err != nil {
 			return nil, err
 		}
-		vals := vector.MustTCols[bool](rvec)
-		olds := vector.MustTCols[bool](input)
+		vals := vector.MustFixedCol[bool](rvec)
+		olds := vector.MustFixedCol[bool](input)
 		for i := range vals {
 			if nulls.Contains(input.GetNulls(), uint64(i)) {
 				vals[i] = nullValue

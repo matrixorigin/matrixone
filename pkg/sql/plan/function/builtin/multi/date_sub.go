@@ -27,9 +27,9 @@ import (
 func DateSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	startVec := ivecs[0]
 	diffVec := ivecs[1]
-	starts := vector.MustTCols[types.Date](ivecs[0])
-	diffs := vector.MustTCols[int64](ivecs[1])
-	unit := vector.MustTCols[int64](ivecs[2])[0]
+	starts := vector.MustFixedCol[types.Date](ivecs[0])
+	diffs := vector.MustFixedCol[int64](ivecs[1])
+	unit := vector.MustFixedCol[int64](ivecs[2])[0]
 
 	rtyp := types.T_date.ToType()
 	if startVec.IsConstNull() || diffVec.IsConstNull() {
@@ -46,7 +46,7 @@ func DateSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 			return nil, err
 		}
 		nulls.Or(startVec.GetNulls(), diffVec.GetNulls(), rvec.GetNulls())
-		rvals := vector.MustTCols[types.Date](rvec)
+		rvals := vector.MustFixedCol[types.Date](rvec)
 		if startVec.IsConst() && !diffVec.IsConst() {
 			for i := range diffs {
 				if rvec.GetNulls().Contains(uint64(i)) {
@@ -85,9 +85,9 @@ func DateSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 func TimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	startVec := ivecs[0]
 	diffVec := ivecs[1]
-	starts := vector.MustTCols[types.Time](ivecs[0])
-	diffs := vector.MustTCols[int64](ivecs[1])
-	unit := vector.MustTCols[int64](ivecs[2])[0]
+	starts := vector.MustFixedCol[types.Time](ivecs[0])
+	diffs := vector.MustFixedCol[int64](ivecs[1])
+	unit := vector.MustFixedCol[int64](ivecs[2])[0]
 
 	precision := startVec.GetType().Precision
 	switch types.IntervalType(unit) {
@@ -95,7 +95,7 @@ func TimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		precision = 6
 	}
 
-	rtyp := types.New(types.T_datetime, 0, 0, precision)
+	rtyp := types.New(types.T_time, 0, 0, precision)
 
 	if startVec.IsConstNull() || diffVec.IsConstNull() {
 		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
@@ -111,7 +111,7 @@ func TimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 			return nil, err
 		}
 		nulls.Or(startVec.GetNulls(), diffVec.GetNulls(), rvec.GetNulls())
-		rvals := vector.MustTCols[types.Time](rvec)
+		rvals := vector.MustFixedCol[types.Time](rvec)
 		if startVec.IsConst() && !diffVec.IsConst() {
 			for i := range diffs {
 				if rvec.GetNulls().Contains(uint64(i)) {
@@ -150,9 +150,9 @@ func TimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 func DatetimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	startVec := ivecs[0]
 	diffVec := ivecs[1]
-	starts := vector.MustTCols[types.Datetime](ivecs[0])
-	diffs := vector.MustTCols[int64](ivecs[1])
-	unit := vector.MustTCols[int64](ivecs[2])[0]
+	starts := vector.MustFixedCol[types.Datetime](ivecs[0])
+	diffs := vector.MustFixedCol[int64](ivecs[1])
+	unit := vector.MustFixedCol[int64](ivecs[2])[0]
 
 	precision := startVec.GetType().Precision
 	switch types.IntervalType(unit) {
@@ -176,7 +176,7 @@ func DatetimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 			return nil, err
 		}
 		nulls.Or(startVec.GetNulls(), diffVec.GetNulls(), rvec.GetNulls())
-		rvals := vector.MustTCols[types.Datetime](rvec)
+		rvals := vector.MustFixedCol[types.Datetime](rvec)
 		if startVec.IsConst() && !diffVec.IsConst() {
 			for i := range diffs {
 				if rvec.GetNulls().Contains(uint64(i)) {
@@ -215,9 +215,9 @@ func DatetimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 func DateStringSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	startVec := ivecs[0]
 	diffVec := ivecs[1]
-	starts := vector.MustStrCols(ivecs[0])
-	diffs := vector.MustTCols[int64](ivecs[1])
-	unit := vector.MustTCols[int64](ivecs[2])[0]
+	starts := vector.MustStrCol(ivecs[0])
+	diffs := vector.MustFixedCol[int64](ivecs[1])
+	unit := vector.MustFixedCol[int64](ivecs[2])[0]
 
 	rtyp := types.New(types.T_datetime, 0, 0, 6)
 
@@ -235,7 +235,7 @@ func DateStringSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 			return nil, err
 		}
 		nulls.Or(startVec.GetNulls(), diffVec.GetNulls(), rvec.GetNulls())
-		rvals := vector.MustTCols[types.Datetime](rvec)
+		rvals := vector.MustFixedCol[types.Datetime](rvec)
 		if startVec.IsConst() && !diffVec.IsConst() {
 			for i := range diffs {
 				if rvec.GetNulls().Contains(uint64(i)) {
@@ -274,9 +274,9 @@ func DateStringSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 func TimestampSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	startVec := ivecs[0]
 	diffVec := ivecs[1]
-	starts := vector.MustTCols[types.Timestamp](ivecs[0])
-	diffs := vector.MustTCols[int64](ivecs[1])
-	unit := vector.MustTCols[int64](ivecs[2])[0]
+	starts := vector.MustFixedCol[types.Timestamp](ivecs[0])
+	diffs := vector.MustFixedCol[int64](ivecs[1])
+	unit := vector.MustFixedCol[int64](ivecs[2])[0]
 
 	precision := startVec.GetType().Precision
 	switch types.IntervalType(unit) {
@@ -284,7 +284,7 @@ func TimestampSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector
 		precision = 6
 	}
 
-	rtyp := types.New(types.T_datetime, 0, 0, precision)
+	rtyp := types.New(types.T_timestamp, 0, 0, precision)
 
 	if startVec.IsConstNull() || diffVec.IsConstNull() {
 		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
@@ -300,7 +300,7 @@ func TimestampSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector
 			return nil, err
 		}
 		nulls.Or(startVec.GetNulls(), diffVec.GetNulls(), rvec.GetNulls())
-		rvals := vector.MustTCols[types.Timestamp](rvec)
+		rvals := vector.MustFixedCol[types.Timestamp](rvec)
 		if startVec.IsConst() && !diffVec.IsConst() {
 			for i := range diffs {
 				if rvec.GetNulls().Contains(uint64(i)) {
@@ -401,6 +401,6 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit 
 	if success {
 		return dt.ToTimestamp(loc), nil
 	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}
 }

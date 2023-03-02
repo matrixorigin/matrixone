@@ -35,7 +35,7 @@ func NotRegMatch(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 func generalRegMatch(ivecs []*vector.Vector, proc *process.Process, isReg bool) (*vector.Vector, error) {
 	left, right := ivecs[0], ivecs[1]
 	rtyp := types.T_bool.ToType()
-	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
+	leftValues, rightValues := vector.MustStrCol(left), vector.MustStrCol(right)
 	switch {
 	case left.IsConstNull() || right.IsConstNull():
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -51,7 +51,7 @@ func generalRegMatch(ivecs []*vector.Vector, proc *process.Process, isReg bool) 
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[bool](rvec)
+		rvals := vector.MustFixedCol[bool](rvec)
 		err = regMatchWithLeftConst(leftValues, rightValues, rvals, isReg)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "The Regular Expression have invalid parameter")
@@ -62,7 +62,7 @@ func generalRegMatch(ivecs []*vector.Vector, proc *process.Process, isReg bool) 
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[bool](rvec)
+		rvals := vector.MustFixedCol[bool](rvec)
 		err = regMatchWithRightConst(leftValues, rightValues, rvals, isReg)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "The Regular Expression have invalid parameter")
@@ -73,7 +73,7 @@ func generalRegMatch(ivecs []*vector.Vector, proc *process.Process, isReg bool) 
 	if err != nil {
 		return nil, err
 	}
-	rvals := vector.MustTCols[bool](rvec)
+	rvals := vector.MustFixedCol[bool](rvec)
 	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
 	err = regMatchWithAll(leftValues, rightValues, rvals, isReg)
 	if err != nil {

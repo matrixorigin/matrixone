@@ -30,29 +30,29 @@ import (
 func castConstAsInt64(ctx context.Context, vec *vector.Vector, idx int64) (int64, error) {
 	switch vec.GetType().Oid {
 	case types.T_uint8:
-		return int64(vector.MustTCols[uint8](vec)[idx]), nil
+		return int64(vector.MustFixedCol[uint8](vec)[idx]), nil
 	case types.T_uint16:
-		return int64(vector.MustTCols[uint16](vec)[idx]), nil
+		return int64(vector.MustFixedCol[uint16](vec)[idx]), nil
 	case types.T_uint32:
-		return int64(vector.MustTCols[uint32](vec)[idx]), nil
+		return int64(vector.MustFixedCol[uint32](vec)[idx]), nil
 	case types.T_uint64:
-		val := vector.MustTCols[uint64](vec)[idx]
+		val := vector.MustFixedCol[uint64](vec)[idx]
 		if val > uint64(math.MaxInt64) {
 			return 0, moerr.NewInvalidArg(ctx, "function substring(str, start, lenth)", val)
 		}
 		return int64(val), nil
 	case types.T_int8:
-		return int64(vector.MustTCols[int8](vec)[idx]), nil
+		return int64(vector.MustFixedCol[int8](vec)[idx]), nil
 	case types.T_int16:
-		return int64(vector.MustTCols[int16](vec)[idx]), nil
+		return int64(vector.MustFixedCol[int16](vec)[idx]), nil
 	case types.T_int32:
-		return int64(vector.MustTCols[int32](vec)[idx]), nil
+		return int64(vector.MustFixedCol[int32](vec)[idx]), nil
 	case types.T_int64:
-		return int64(vector.MustTCols[int64](vec)[idx]), nil
+		return int64(vector.MustFixedCol[int64](vec)[idx]), nil
 	case types.T_float32:
-		return int64(vector.MustTCols[float32](vec)[idx]), nil
+		return int64(vector.MustFixedCol[float32](vec)[idx]), nil
 	case types.T_float64:
-		val := vector.MustTCols[float64](vec)[idx]
+		val := vector.MustFixedCol[float64](vec)[idx]
 		if val > float64(math.MaxInt64) {
 			return 0, moerr.NewInvalidArg(ctx, "function substring(str, start, lenth)", val)
 		}
@@ -73,25 +73,25 @@ func numSliceToI64[T types.BuiltinNumber](input []T) []int64 {
 func castTVecAsInt64(vec *vector.Vector) []int64 {
 	switch vec.GetType().Oid {
 	case types.T_uint8:
-		return numSliceToI64(vector.MustTCols[uint8](vec))
+		return numSliceToI64(vector.MustFixedCol[uint8](vec))
 	case types.T_uint16:
-		return numSliceToI64(vector.MustTCols[uint16](vec))
+		return numSliceToI64(vector.MustFixedCol[uint16](vec))
 	case types.T_uint32:
-		return numSliceToI64(vector.MustTCols[uint32](vec))
+		return numSliceToI64(vector.MustFixedCol[uint32](vec))
 	case types.T_uint64:
-		return numSliceToI64(vector.MustTCols[uint64](vec))
+		return numSliceToI64(vector.MustFixedCol[uint64](vec))
 	case types.T_int8:
-		return numSliceToI64(vector.MustTCols[int8](vec))
+		return numSliceToI64(vector.MustFixedCol[int8](vec))
 	case types.T_int16:
-		return numSliceToI64(vector.MustTCols[int16](vec))
+		return numSliceToI64(vector.MustFixedCol[int16](vec))
 	case types.T_int32:
-		return numSliceToI64(vector.MustTCols[int32](vec))
+		return numSliceToI64(vector.MustFixedCol[int32](vec))
 	case types.T_int64:
-		return numSliceToI64(vector.MustTCols[int64](vec))
+		return numSliceToI64(vector.MustFixedCol[int64](vec))
 	case types.T_float32:
-		return numSliceToI64(vector.MustTCols[float32](vec))
+		return numSliceToI64(vector.MustFixedCol[float32](vec))
 	case types.T_float64:
-		return numSliceToI64(vector.MustTCols[float64](vec))
+		return numSliceToI64(vector.MustFixedCol[float64](vec))
 	default:
 		panic("castTVecAsInt64 failed, unknown type")
 	}
@@ -140,7 +140,7 @@ func substrSrcConst(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 	}
 
 	// XXX if this vector is const, then it is not expanded.  Really?
-	columnSrcCol := vector.MustStrCols(srcVector)
+	columnSrcCol := vector.MustStrCol(srcVector)
 
 	// request new memory space for result column
 	rows := calcResultVectorRows(ivecs)
@@ -197,8 +197,9 @@ func substrSrcConst(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 				columnLengthCol := castTVecAsInt64(lengthVector)
 				cs := []bool{ivecs[0].IsConst(), ivecs[1].IsConst(), ivecs[2].IsConst()}
 				substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
-				vec := vector.NewVector(*srcVector.GetType())
+				vec := vector.NewVec(*srcVector.GetType())
 				vector.AppendStringList(vec, results, nil, proc.Mp())
+				vec.SetNulls(resultNsp)
 				return vec, nil
 			}
 		}
@@ -208,8 +209,9 @@ func substrSrcConst(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 			columnStartCol := castTVecAsInt64(ivecs[1])
 			cs := []bool{ivecs[0].IsConst(), ivecs[1].IsConst()}
 			substring.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, cs)
-			vec := vector.NewVector(*srcVector.GetType())
+			vec := vector.NewVec(*srcVector.GetType())
 			vector.AppendStringList(vec, results, nil, proc.Mp())
+			vec.SetNulls(resultNsp)
 			return vec, nil
 		} else {
 			//Substring column with length parameter
@@ -217,8 +219,9 @@ func substrSrcConst(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 			columnLengthCol := castTVecAsInt64(ivecs[2])
 			cs := []bool{ivecs[0].IsConst(), ivecs[1].IsConst(), ivecs[2].IsConst()}
 			substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
-			vec := vector.NewVector(*srcVector.GetType())
+			vec := vector.NewVec(*srcVector.GetType())
 			vector.AppendStringList(vec, results, nil, proc.Mp())
+			vec.SetNulls(resultNsp)
 			return vec, nil
 		}
 	}
@@ -229,7 +232,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 	var paramNum = len(inputVecs)
 	srcVector := inputVecs[0]
 	startVector := inputVecs[1]
-	columnSrcCol := vector.MustStrCols(srcVector)
+	columnSrcCol := vector.MustStrCol(srcVector)
 
 	// request new memory space for result column
 	results := make([]string, len(columnSrcCol))
@@ -258,8 +261,9 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 				//startValue == 0
 				substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results)
 			}
-			vec := vector.NewVector(*srcVector.GetType())
+			vec := vector.NewVec(*srcVector.GetType())
 			vector.AppendStringList(vec, results, nil, proc.Mp())
+			vec.SetNulls(resultNsp)
 			return vec, nil
 		} else { //has third parameter
 			lengthVector := inputVecs[2]
@@ -283,7 +287,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 					//startValue == 0
 					substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, results)
 				}
-				vec := vector.NewVector(*srcVector.GetType())
+				vec := vector.NewVec(*srcVector.GetType())
 				vector.AppendStringList(vec, results, nil, proc.Mp())
 				return vec, nil
 			} else {
@@ -291,8 +295,9 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 				columnLengthCol := castTVecAsInt64(inputVecs[2])
 				cs := []bool{inputVecs[0].IsConst(), inputVecs[1].IsConst(), inputVecs[2].IsConst()}
 				substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
-				vec := vector.NewVector(*srcVector.GetType())
+				vec := vector.NewVec(*srcVector.GetType())
 				vector.AppendStringList(vec, results, nil, proc.Mp())
+				vec.SetNulls(resultNsp)
 				return vec, nil
 			}
 		}
@@ -302,16 +307,18 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			columnStartCol := castTVecAsInt64(inputVecs[1])
 			cs := []bool{inputVecs[0].IsConst(), inputVecs[1].IsConst()}
 			substring.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, cs)
-			vec := vector.NewVector(*srcVector.GetType())
+			vec := vector.NewVec(*srcVector.GetType())
 			vector.AppendStringList(vec, results, nil, proc.Mp())
+			vec.SetNulls(resultNsp)
 			return vec, nil
 		} else {
 			columnStartCol := castTVecAsInt64(inputVecs[1])
 			columnLengthCol := castTVecAsInt64(inputVecs[2])
 			cs := []bool{inputVecs[0].IsConst(), inputVecs[1].IsConst(), inputVecs[2].IsConst()}
 			substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
-			vec := vector.NewVector(*srcVector.GetType())
+			vec := vector.NewVec(*srcVector.GetType())
 			vector.AppendStringList(vec, results, nil, proc.Mp())
+			vec.SetNulls(resultNsp)
 			return vec, nil
 		}
 	}

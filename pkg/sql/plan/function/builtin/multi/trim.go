@@ -51,7 +51,7 @@ func trimTrailing(src, cuts string) string {
 }
 
 func Trim(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	tp := strings.ToLower(vector.MustStrCols(parameters[0])[0])
+	tp := strings.ToLower(vector.MustStrCol(parameters[0])[0])
 	switch tp {
 	case "both":
 		return trim(parameters[1:], result, length, trimBoth)

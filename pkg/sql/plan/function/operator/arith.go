@@ -46,7 +46,7 @@ func Arith[T1 arithT, T2 arithT](ivecs []*vector.Vector, proc *process.Process, 
 		return vector.NewConstNull(typ, left.Length(), proc.Mp()), nil
 	}
 
-	leftValues, rightValues := vector.MustTCols[T1](left), vector.MustTCols[T1](right)
+	leftValues, rightValues := vector.MustFixedCol[T1](left), vector.MustFixedCol[T1](right)
 
 	if left.IsConst() && right.IsConst() {
 		var dval T2

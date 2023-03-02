@@ -110,7 +110,7 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 	})
 	for _, entry := range entries {
 		if entry.typ == DELETE {
-			vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for _, v := range vs {
 				id, offset := catalog.DecodeRowid(v)
 				deletes[id] = append(deletes[id], int(offset))
@@ -526,7 +526,7 @@ func (p *Partition) NewReader(
 			inserts = append(inserts, entry.bat)
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-				vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					deletes[v] = 0
 				}

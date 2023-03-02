@@ -40,7 +40,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[bool](vec)[i],
+			Value:  vector.MustFixedCol[bool](vec)[i],
 		}
 		return
 
@@ -54,7 +54,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[int8](vec)[i],
+			Value:  vector.MustFixedCol[int8](vec)[i],
 		}
 		return
 
@@ -68,7 +68,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[int16](vec)[i],
+			Value:  vector.MustFixedCol[int16](vec)[i],
 		}
 		return
 
@@ -82,7 +82,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[int32](vec)[i],
+			Value:  vector.MustFixedCol[int32](vec)[i],
 		}
 		return
 
@@ -96,7 +96,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[int64](vec)[i],
+			Value:  vector.MustFixedCol[int64](vec)[i],
 		}
 		return
 
@@ -110,7 +110,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[uint8](vec)[i],
+			Value:  vector.MustFixedCol[uint8](vec)[i],
 		}
 		return
 
@@ -124,7 +124,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[uint16](vec)[i],
+			Value:  vector.MustFixedCol[uint16](vec)[i],
 		}
 		return
 
@@ -138,7 +138,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[uint32](vec)[i],
+			Value:  vector.MustFixedCol[uint32](vec)[i],
 		}
 		return
 
@@ -152,7 +152,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[uint64](vec)[i],
+			Value:  vector.MustFixedCol[uint64](vec)[i],
 		}
 		return
 
@@ -166,7 +166,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[float32](vec)[i],
+			Value:  vector.MustFixedCol[float32](vec)[i],
 		}
 		return
 
@@ -180,7 +180,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[float64](vec)[i],
+			Value:  vector.MustFixedCol[float64](vec)[i],
 		}
 		return
 
@@ -194,7 +194,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[[]any](vec)[i],
+			Value:  vector.MustFixedCol[[]any](vec)[i],
 		}
 		return
 
@@ -208,7 +208,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.GetBytes(i),
+			Value:  vec.GetBytesAt(i),
 		}
 		return
 
@@ -223,7 +223,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[types.Date](vec)[i],
+			Value:  vector.MustFixedCol[types.Date](vec)[i],
 		}
 		return
 
@@ -238,7 +238,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[types.Time](vec)[i],
+			Value:  vector.MustFixedCol[types.Time](vec)[i],
 		}
 		return
 
@@ -253,7 +253,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[types.Datetime](vec)[i],
+			Value:  vector.MustFixedCol[types.Datetime](vec)[i],
 		}
 		return
 
@@ -268,7 +268,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[types.Timestamp](vec)[i],
+			Value:  vector.MustFixedCol[types.Timestamp](vec)[i],
 		}
 		return
 
@@ -283,7 +283,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[types.Decimal64](vec)[i],
+			Value:  vector.MustFixedCol[types.Decimal64](vec)[i],
 		}
 		return
 
@@ -298,7 +298,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[types.Decimal128](vec)[i],
+			Value:  vector.MustFixedCol[types.Decimal128](vec)[i],
 		}
 		return
 
@@ -313,7 +313,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[types.TS](vec)[i],
+			Value:  vector.MustFixedCol[types.TS](vec)[i],
 		}
 		return
 
@@ -328,7 +328,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[types.Rowid](vec)[i],
+			Value:  vector.MustFixedCol[types.Rowid](vec)[i],
 		}
 		return
 
@@ -343,7 +343,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vector.MustTCols[types.Uuid](vec)[i],
+			Value:  vector.MustFixedCol[types.Uuid](vec)[i],
 		}
 		return
 

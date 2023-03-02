@@ -171,15 +171,15 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 	if err != nil {
 		return nil, err
 	}
-	rscols := vector.MustTCols[T](rs)
+	rscols := vector.MustFixedCol[T](rs)
 
 	flag := make([]bool, l) // if flag[i] is false, it couldn't adapt to any case
 
 	for i := 0; i < len(vs)-1; i += 2 {
 		whenv := vs[i]
 		thenv := vs[i+1]
-		whencols := vector.MustTCols[bool](whenv)
-		thencols := vector.MustTCols[T](thenv)
+		whencols := vector.MustFixedCol[bool](whenv)
+		thencols := vector.MustFixedCol[T](thenv)
 		switch {
 		case whenv.IsConst() && thenv.IsConst():
 			if !whenv.IsConstNull() && whencols[0] {
@@ -277,7 +277,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 		nulls.Add(rs.GetNulls(), temp...)
 	} else {
 		ev := vs[len(vs)-1]
-		ecols := vector.MustTCols[T](ev)
+		ecols := vector.MustFixedCol[T](ev)
 		if ev.IsConst() {
 			for i := 0; i < l; i++ {
 				if !flag[i] {
@@ -322,8 +322,8 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 	for i := 0; i < len(vs)-1; i += 2 {
 		whenv := vs[i]
 		thenv := vs[i+1]
-		whencols := vector.MustTCols[bool](whenv)
-		thencols := vector.MustStrCols(thenv)
+		whencols := vector.MustFixedCol[bool](whenv)
+		thencols := vector.MustStrCol(thenv)
 		switch {
 		case whenv.IsConst() && thenv.IsConst():
 			if !whenv.IsConstNull() && whencols[0] {
@@ -402,7 +402,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 		}
 	} else {
 		ev := vs[len(vs)-1]
-		ecols := vector.MustStrCols(ev)
+		ecols := vector.MustStrCol(ev)
 		if ev.IsConst() {
 			for idx := range results {
 				if !flag[idx] {
@@ -423,7 +423,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 			}
 		}
 	}
-	vec := vector.NewVector(typ)
+	vec := vector.NewVec(typ)
 	vector.AppendStringList(vec, results, nil, proc.Mp())
 	return vec, nil
 }

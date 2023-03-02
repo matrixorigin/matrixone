@@ -24,8 +24,8 @@ import (
 func RegularInstr(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := ivecs[0]
 	secondVector := ivecs[1]
-	firstValues := vector.MustStrCols(firstVector)
-	secondValues := vector.MustStrCols(secondVector)
+	firstValues := vector.MustStrCol(firstVector)
+	secondValues := vector.MustStrCol(secondVector)
 	rtyp := types.T_int64.ToType()
 
 	//maxLen
@@ -52,19 +52,19 @@ func RegularInstr(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector
 		match_type = []string{"c"}
 
 	case 3:
-		pos = vector.MustTCols[int64](ivecs[2])
+		pos = vector.MustFixedCol[int64](ivecs[2])
 		occ = []int64{1}
 		opt = []uint8{0}
 		match_type = []string{"c"}
 	case 4:
-		pos = vector.MustTCols[int64](ivecs[2])
-		occ = vector.MustTCols[int64](ivecs[3])
+		pos = vector.MustFixedCol[int64](ivecs[2])
+		occ = vector.MustFixedCol[int64](ivecs[3])
 		opt = []uint8{0}
 		match_type = []string{"c"}
 	case 5:
-		pos = vector.MustTCols[int64](ivecs[2])
-		occ = vector.MustTCols[int64](ivecs[3])
-		opt = vector.MustTCols[uint8](ivecs[4])
+		pos = vector.MustFixedCol[int64](ivecs[2])
+		occ = vector.MustFixedCol[int64](ivecs[3])
+		opt = vector.MustFixedCol[uint8](ivecs[4])
 		match_type = []string{"c"}
 	}
 
@@ -76,7 +76,7 @@ func RegularInstr(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	if err != nil {
 		return nil, err
 	}
-	rvals := vector.MustTCols[int64](rvec)
+	rvals := vector.MustFixedCol[int64](rvec)
 	err = regular.RegularInstrWithArrays(firstValues, secondValues, pos, occ, opt, match_type, firstVector.GetNulls(), secondVector.GetNulls(), rvec.GetNulls(), rvals, maxLen)
 	if err != nil {
 		return nil, err

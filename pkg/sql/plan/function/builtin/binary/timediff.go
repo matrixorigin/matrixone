@@ -26,8 +26,8 @@ func TimeDiff[T timediff.DiffT](vectors []*vector.Vector, proc *process.Process)
 	//input vectors
 	firstVector := vectors[0]
 	secondVector := vectors[1]
-	firstValues := vector.MustTCols[T](firstVector)
-	secondValues := vector.MustTCols[T](secondVector)
+	firstValues := vector.MustFixedCol[T](firstVector)
+	secondValues := vector.MustFixedCol[T](secondVector)
 	rtyp := types.T_time.ToType()
 
 	resultPrecision := firstVector.GetType().Precision
@@ -50,7 +50,7 @@ func TimeDiff[T timediff.DiffT](vectors []*vector.Vector, proc *process.Process)
 		return nil, err
 	}
 
-	rs := vector.MustTCols[types.Time](rvec)
+	rs := vector.MustFixedCol[types.Time](rvec)
 	nulls.Or(firstVector.GetNulls(), secondVector.GetNulls(), rvec.GetNulls())
 	if err = timediff.TimeDiffWithTimeFn(firstValues, secondValues, rs); err != nil {
 		return nil, err

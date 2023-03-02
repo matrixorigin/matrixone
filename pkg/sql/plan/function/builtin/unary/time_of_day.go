@@ -23,7 +23,7 @@ import (
 func DatetimeToHour(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_uint8.ToType()
-	ivals := vector.MustTCols[types.Datetime](inputVector)
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -34,7 +34,7 @@ func DatetimeToHour(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		if err != nil {
 			return nil, err
 		}
-		rs := vector.MustTCols[uint8](rvec)
+		rs := vector.MustFixedCol[uint8](rvec)
 		for i, v := range ivals {
 			if !rvec.GetNulls().Contains(uint64(i)) {
 				rs[i] = uint8(v.Hour())
@@ -47,7 +47,7 @@ func DatetimeToHour(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 func TimestampToHour(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_uint8.ToType()
-	ivals := vector.MustTCols[types.Timestamp](inputVector)
+	ivals := vector.MustFixedCol[types.Timestamp](inputVector)
 	dtvals := make([]types.Datetime, len(ivals))
 	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, ivals, dtvals); err != nil {
 		return nil, err
@@ -62,7 +62,7 @@ func TimestampToHour(ivecs []*vector.Vector, proc *process.Process) (*vector.Vec
 		if err != nil {
 			return nil, err
 		}
-		rs := vector.MustTCols[uint8](rvec)
+		rs := vector.MustFixedCol[uint8](rvec)
 		for i, v := range dtvals {
 			if !rvec.GetNulls().Contains(uint64(i)) {
 				rs[i] = uint8(v.Hour())
@@ -75,7 +75,7 @@ func TimestampToHour(ivecs []*vector.Vector, proc *process.Process) (*vector.Vec
 func DatetimeToMinute(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_uint8.ToType()
-	ivals := vector.MustTCols[types.Datetime](inputVector)
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
@@ -87,7 +87,7 @@ func DatetimeToMinute(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		if err != nil {
 			return nil, err
 		}
-		rs := vector.MustTCols[uint8](rvec)
+		rs := vector.MustFixedCol[uint8](rvec)
 		for i, v := range ivals {
 			if !rvec.GetNulls().Contains(uint64(i)) {
 				rs[i] = uint8(v.Minute())
@@ -100,7 +100,7 @@ func DatetimeToMinute(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 func TimestampToMinute(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_uint8.ToType()
-	ivals := vector.MustTCols[types.Timestamp](inputVector)
+	ivals := vector.MustFixedCol[types.Timestamp](inputVector)
 	dtvals := make([]types.Datetime, len(ivals))
 	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, ivals, dtvals); err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func TimestampToMinute(ivecs []*vector.Vector, proc *process.Process) (*vector.V
 		if err != nil {
 			return nil, err
 		}
-		rs := vector.MustTCols[uint8](rvec)
+		rs := vector.MustFixedCol[uint8](rvec)
 		for i, v := range dtvals {
 			if !rvec.GetNulls().Contains(uint64(i)) {
 				rs[i] = uint8(v.Minute())
@@ -128,7 +128,7 @@ func TimestampToMinute(ivecs []*vector.Vector, proc *process.Process) (*vector.V
 func DatetimeToSecond(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_uint8.ToType()
-	ivals := vector.MustTCols[types.Datetime](inputVector)
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -139,7 +139,7 @@ func DatetimeToSecond(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		if err != nil {
 			return nil, err
 		}
-		rs := vector.MustTCols[uint8](rvec)
+		rs := vector.MustFixedCol[uint8](rvec)
 		for i, v := range ivals {
 			if !rvec.GetNulls().Contains(uint64(i)) {
 				rs[i] = uint8(v.Sec())
@@ -152,7 +152,7 @@ func DatetimeToSecond(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 func TimestampToSecond(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_uint8.ToType()
-	ivals := vector.MustTCols[types.Timestamp](inputVector)
+	ivals := vector.MustFixedCol[types.Timestamp](inputVector)
 	dtvals := make([]types.Datetime, len(ivals))
 	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, ivals, dtvals); err != nil {
 		return nil, err
@@ -167,7 +167,7 @@ func TimestampToSecond(ivecs []*vector.Vector, proc *process.Process) (*vector.V
 		if err != nil {
 			return nil, err
 		}
-		rs := vector.MustTCols[uint8](rvec)
+		rs := vector.MustFixedCol[uint8](rvec)
 		for i, v := range dtvals {
 			if !rvec.GetNulls().Contains(uint64(i)) {
 				rs[i] = uint8(v.Sec())

@@ -185,10 +185,10 @@ concat_ws(split_part(s1, delim, count1), hehaha32789, ABCNSLK)
 hehaha32789ABCNSLK
 SELECT empty(split_part(s1,delim,count1)) FROM split_part_01;
 empty(split_part(s1, delim, count1))
-0
+false
 null
 null
-0
+false
 null
 null
 null

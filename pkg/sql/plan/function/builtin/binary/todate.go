@@ -32,8 +32,8 @@ func ToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	if ivecs[0].IsConstNull() || ivecs[1].IsConstNull() {
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
-	ivals := vector.MustStrCols(ivecs[0])
-	format := ivecs[1].GetString(0)
+	ivals := vector.MustStrCol(ivecs[0])
+	format := ivecs[1].GetStringAt(0)
 	if ivecs[0].IsConst() && ivecs[1].IsConst() {
 		result, err := ToDateInputBytes(proc.Ctx, ivals[0], format)
 		if err != nil {
@@ -45,7 +45,7 @@ func ToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Date](rvec)
+		rvals := vector.MustFixedCol[types.Date](rvec)
 		for i := range ivals {
 			if rvec.GetNulls().Contains(uint64(i)) {
 				continue

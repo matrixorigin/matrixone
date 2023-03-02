@@ -156,8 +156,8 @@ func (container *WriteS3Container) resetMetaLocBat() {
 	// vecs[1] store relative block metadata
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
 	metaLocBat := batch.New(true, attrs)
-	metaLocBat.Vecs[0] = vector.NewVector(types.Type{Oid: types.T(types.T_uint16)})
-	metaLocBat.Vecs[1] = vector.NewVector(types.New(types.T_varchar,
+	metaLocBat.Vecs[0] = vector.NewVec(types.Type{Oid: types.T(types.T_uint16)})
+	metaLocBat.Vecs[1] = vector.NewVec(types.New(types.T_varchar,
 		types.MaxVarcharLen, 0, 0))
 
 	container.metaLocBat = metaLocBat
@@ -206,14 +206,14 @@ func (container *WriteS3Container) Put(bat *batch.Batch, idx int) int {
 
 func GetFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T) {
 	for i := range bats {
-		cols = append(cols, vector.GetFixedVectorValues[T](bats[i].Vecs[idx]))
+		cols = append(cols, vector.ExpandFixedCol[T](bats[i].Vecs[idx]))
 	}
 	return
 }
 
 func GetStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
 	for i := range bats {
-		cols = append(cols, vector.GetStrVectorValues(bats[i].Vecs[idx]))
+		cols = append(cols, vector.ExpandStrCol(bats[i].Vecs[idx]))
 	}
 	return
 }
@@ -351,7 +351,7 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 	copy(attrs, bat.Attrs)
 	newBat := batch.New(true, attrs)
 	for i := range bat.Vecs {
-		newBat.Vecs[i] = vector.NewVector(*bat.Vecs[i].GetType())
+		newBat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 	}
 	return newBat
 }
@@ -391,7 +391,7 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 	}
 	ovec := bat.GetVector(int32(sortIndex[0]))
 	if ovec.GetType().IsString() {
-		strCol = vector.MustStrCols(ovec)
+		strCol = vector.MustStrCol(ovec)
 	} else {
 		strCol = nil
 	}
@@ -405,7 +405,7 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 		ps = partition.Partition(sels, ds, ps, ovec)
 		vec := bat.Vecs[sortIndex[i]]
 		if vec.GetType().IsString() {
-			strCol = vector.MustStrCols(vec)
+			strCol = vector.MustStrCol(vec)
 		} else {
 			strCol = nil
 		}

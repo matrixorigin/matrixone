@@ -24,7 +24,7 @@ import (
 func CurrentTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultPrecision := int32(6)
 	if len(ivecs) == 1 {
-		resultPrecision = int32(vector.MustTCols[int64](ivecs[0])[0])
+		resultPrecision = int32(vector.MustFixedCol[int64](ivecs[0])[0])
 	}
 	rtyp := types.Type{Oid: types.T_timestamp, Size: 8, Precision: resultPrecision}
 	resultValue := types.UnixNanoToTimestamp(proc.UnixTime)

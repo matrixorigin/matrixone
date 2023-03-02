@@ -23,7 +23,7 @@ import (
 func DateToWeek(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_uint8.ToType()
-	ivals := vector.MustTCols[types.Date](inputVector)
+	ivals := vector.MustFixedCol[types.Date](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -34,7 +34,7 @@ func DateToWeek(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint8](rvec)
+		rvals := vector.MustFixedCol[uint8](rvec)
 		for i := range ivals {
 			rvals[i] = ivals[i].WeekOfYear2()
 		}
@@ -45,7 +45,7 @@ func DateToWeek(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 func DatetimeToWeek(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_uint8, Size: 1}
-	ivals := vector.MustTCols[types.Datetime](inputVector)
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -56,7 +56,7 @@ func DatetimeToWeek(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint8](rvec)
+		rvals := vector.MustFixedCol[uint8](rvec)
 		for i := range ivals {
 			rvals[i] = ivals[i].ToDate().WeekOfYear2()
 		}

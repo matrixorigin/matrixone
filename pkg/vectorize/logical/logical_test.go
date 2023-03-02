@@ -36,7 +36,7 @@ func TestAnd(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{true, false, false, false, false, true}, cols)
 }
 
@@ -58,7 +58,7 @@ func TestAnd2(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{false, false, false, false, false, false, false, false, false, false}, cols)
 	require.Equal(t, []uint64{3, 5}, cv.GetNulls().Np.ToArray())
 }
@@ -76,7 +76,7 @@ func TestOr(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{true, false, true, true, true, true}, cols)
 }
 
@@ -98,7 +98,7 @@ func TestOr2(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{true, true, true, true, true, true, true, true, true, true}, cols)
 	require.Equal(t, []uint64{3, 7}, cv.GetNulls().Np.ToArray())
 }
@@ -116,7 +116,7 @@ func TestXor(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{false, false, true, true, true, false}, cols)
 }
 
@@ -138,7 +138,7 @@ func TestXor2(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{true, true, true, true, true, true, true, true, true, true}, cols)
 	require.Equal(t, []uint64{3, 5, 7}, cv.GetNulls().Np.ToArray())
 }
@@ -154,7 +154,7 @@ func TestNot(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{false, true, true, false, false}, cols)
 }
 
@@ -170,7 +170,7 @@ func TestNot2(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{false, true, true, false, false}, cols)
 	require.Equal(t, []uint64{5}, cv.GetNulls().Np.ToArray())
 }
@@ -186,6 +186,6 @@ func TestNot3(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{false}, cols)
 }

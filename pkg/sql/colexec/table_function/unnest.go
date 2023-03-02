@@ -138,11 +138,11 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if !pathVec.IsConst() || !outerVec.IsConst() {
 		return false, moerr.NewInvalidInput(proc.Ctx, "unnest: second and third arguments must be scalar")
 	}
-	path, err = types.ParseStringToPath(pathVec.GetString(0))
+	path, err = types.ParseStringToPath(pathVec.GetStringAt(0))
 	if err != nil {
 		return false, err
 	}
-	outer = vector.MustTCols[bool](outerVec)[0]
+	outer = vector.MustFixedCol[bool](outerVec)[0]
 	param := unnestParam{}
 	if err = json.Unmarshal(arg.Params, &param); err != nil {
 		return false, err
@@ -171,11 +171,11 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
 	for i := range arg.Rets {
-		rbat.Vecs[i] = vector.NewVector(dupType(arg.Rets[i].Typ))
+		rbat.Vecs[i] = vector.NewVec(dupType(arg.Rets[i].Typ))
 	}
 
 	if jsonVec.IsConst() {
-		json, err = fn(jsonVec.GetBytes(0))
+		json, err = fn(jsonVec.GetBytesAt(0))
 		if err != nil {
 			return nil, err
 		}
@@ -190,7 +190,7 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 		rbat.InitZsOne(len(ures))
 		return rbat, nil
 	}
-	jsonSlice := vector.MustBytesCols(jsonVec)
+	jsonSlice := vector.ExpandBytesCol(jsonVec)
 	rows := 0
 	for i := range jsonSlice {
 		json, err = fn(jsonSlice[i])

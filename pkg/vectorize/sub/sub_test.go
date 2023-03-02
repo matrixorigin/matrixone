@@ -78,7 +78,7 @@ func TestF32Sub(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[float32](cv)
+	res := vector.MustFixedCol[float32](cv)
 	for i := 0; i < 2; i++ {
 		//fmt.Printf("%+v - %+v \n", as[i], bs[i])
 		//fmt.Printf("actual res:%+v\n", res[i])
@@ -107,7 +107,7 @@ func TestDec64Sub(t *testing.T) {
 		t.Fatalf("decimal64 sub failed")
 	}
 
-	res := vector.MustTCols[types.Decimal64](cv)
+	res := vector.MustFixedCol[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
 		d, _ := types.Decimal64_FromInt64(as[i]-bs[i], 64, 0)
 		if !res[i].Eq(d) {
@@ -134,7 +134,7 @@ func TestDec128Sub(t *testing.T) {
 		t.Fatalf("decimal128 sub failed")
 	}
 
-	res := vector.MustTCols[types.Decimal128](cv)
+	res := vector.MustFixedCol[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
 		d, _ := types.Decimal128_FromInt64(as[i]-bs[i], 64, 0)
 		if !res[i].Eq(d) {
@@ -161,7 +161,7 @@ func TestDec64SubOfOppNumber(t *testing.T) {
 		t.Fatalf("decimal64 add failed")
 	}
 
-	res := vector.MustTCols[types.Decimal64](cv)
+	res := vector.MustFixedCol[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
 		d, _ := types.Decimal64_FromInt64(as[i]-bs[i], 64, 0)
 		if !res[i].Eq(d) {
@@ -188,7 +188,7 @@ func TestDec128SubOfOppNumber(t *testing.T) {
 		t.Fatalf("decimal128 sub failed")
 	}
 
-	res := vector.MustTCols[types.Decimal128](cv)
+	res := vector.MustFixedCol[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
 		d, _ := types.Decimal128_FromInt64(as[i]-bs[i], 64, 0)
 		if !res[i].Eq(d) {
@@ -246,7 +246,7 @@ func TestDec128SubByFloat64(t *testing.T) {
 				t.Fatalf("decimal128 sub failed")
 			}
 
-			res := vector.MustTCols[types.Decimal128](cv)
+			res := vector.MustFixedCol[types.Decimal128](cv)
 			d, _ := types.Decimal128_FromFloat64(c.want, 64, 4)
 			if !res[0].Eq(d) {
 				t.Fatalf("decimal128 sub wrong result")
@@ -469,7 +469,7 @@ func TestDatetimeDesc(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			DatetimeSub(c.vecs[0], c.vecs[1], c.vecs[2])
-			require.Equal(t, c.want, vector.MustTCols[int64](c.vecs[2])[0])
+			require.Equal(t, c.want, vector.MustFixedCol[int64](c.vecs[2])[0])
 		})
 	}
 }

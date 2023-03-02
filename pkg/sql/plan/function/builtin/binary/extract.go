@@ -16,6 +16,7 @@ package binary
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/extract"
@@ -67,7 +68,7 @@ func ExtractFromString(vectors []*vector.Vector, proc *process.Process) (*vector
 func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
 	rtyp := types.T_uint32.ToType()
-	leftValues, rightValues := vector.MustStrCols(left), vector.MustTCols[types.Date](right)
+	leftValues, rightValues := vector.MustStrCol(left), vector.MustFixedCol[types.Date](right)
 	switch {
 	case left.IsConstNull() || right.IsConstNull():
 		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
@@ -84,12 +85,13 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint32](rvec)
+		rvals := vector.MustFixedCol[uint32](rvec)
 		unit := leftValues[0]
 		_, err = extract.ExtractFromDate(unit, rightValues, rvals)
 		if err != nil {
 			return nil, err
 		}
+		nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
 		return rvec, nil
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
@@ -99,7 +101,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
 	rtyp := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
-	leftValues, rightValues := vector.MustStrCols(left), vector.MustTCols[types.Datetime](right)
+	leftValues, rightValues := vector.MustStrCol(left), vector.MustFixedCol[types.Datetime](right)
 	switch {
 	case left.IsConstNull() || right.IsConstNull():
 		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
@@ -118,9 +120,10 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.NewVector(rtyp)
-		vector.AppendStringList(vec, rvals, nil, proc.Mp())
-		return vec, nil
+		rvec := vector.NewVec(rtyp)
+		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
+		nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
+		return rvec, nil
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
 	}

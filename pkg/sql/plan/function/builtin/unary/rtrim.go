@@ -15,6 +15,7 @@
 package unary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/rtrim"
@@ -24,20 +25,20 @@ import (
 func Rtrim(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_varchar.ToType()
-	ivals := vector.MustStrCols(inputVector)
+	ivals := vector.MustStrCol(inputVector)
 
-	if inputVector.IsConst() {
-		if inputVector.IsConstNull() {
-			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
-		}
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	} else if inputVector.IsConst() {
 		var rvals [1]string
 		rtrim.Rtrim(ivals, rvals[:])
 		return vector.NewConstBytes(rtyp, []byte(rvals[0]), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvals := make([]string, len(ivals))
 		rtrim.Rtrim(ivals, rvals)
-		vec := vector.NewVector(rtyp)
-		vector.AppendStringList(vec, rvals, nil, proc.Mp())
-		return vec, nil
+		rvec := vector.NewVec(rtyp)
+		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
+		nulls.Set(rvec.GetNulls(), inputVector.GetNulls())
+		return rvec, nil
 	}
 }

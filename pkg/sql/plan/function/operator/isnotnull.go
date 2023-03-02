@@ -36,7 +36,7 @@ func IsNotNull(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		if err != nil {
 			return nil, err
 		}
-		vals := vector.MustTCols[bool](vec)
+		vals := vector.MustFixedCol[bool](vec)
 		for i := range vals {
 			if nulls.Contains(input.GetNulls(), uint64(i)) {
 				vals[i] = false

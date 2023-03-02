@@ -25,8 +25,8 @@ import (
 func RegularLike(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := ivecs[0]
 	secondVector := ivecs[1]
-	firstValues := vector.MustStrCols(firstVector)
-	secondValues := vector.MustStrCols(secondVector)
+	firstValues := vector.MustStrCol(firstVector)
+	secondValues := vector.MustStrCol(secondVector)
 	rtyp := types.T_bool.ToType()
 
 	var thirdNsp *nulls.Nulls
@@ -48,7 +48,7 @@ func RegularLike(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 	case 2:
 		match_type = []string{"c"}
 	case 3:
-		match_type = vector.MustStrCols(ivecs[2])
+		match_type = vector.MustStrCol(ivecs[2])
 		if ivecs[2].IsConstNull() {
 			return vector.NewConstNull(rtyp, maxLen, proc.Mp()), nil
 		}
@@ -62,7 +62,7 @@ func RegularLike(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 	if err != nil {
 		return nil, err
 	}
-	rvals := vector.MustTCols[bool](rvec)
+	rvals := vector.MustFixedCol[bool](rvec)
 	err = regular.RegularLikeWithArrays(firstValues, secondValues, match_type, firstVector.GetNulls(), secondVector.GetNulls(), thirdNsp, rvec.GetNulls(), rvals, maxLen)
 	if err != nil {
 		return nil, err

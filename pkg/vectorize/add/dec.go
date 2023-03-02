@@ -39,9 +39,9 @@ func dec128PtrToC(p *types.Decimal128) *C.int64_t {
 }
 
 func Decimal64VecAdd(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal64](xs)
-	yt := vector.MustTCols[types.Decimal64](ys)
-	rt := vector.MustTCols[types.Decimal64](rs)
+	xt := vector.MustFixedCol[types.Decimal64](xs)
+	yt := vector.MustFixedCol[types.Decimal64](ys)
+	rt := vector.MustFixedCol[types.Decimal64](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
@@ -59,9 +59,9 @@ func Decimal64VecAdd(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal128VecAdd(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal128](xs)
-	yt := vector.MustTCols[types.Decimal128](ys)
-	rt := vector.MustTCols[types.Decimal128](rs)
+	xt := vector.MustFixedCol[types.Decimal128](xs)
+	yt := vector.MustFixedCol[types.Decimal128](ys)
+	rt := vector.MustFixedCol[types.Decimal128](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR

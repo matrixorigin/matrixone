@@ -26,7 +26,7 @@ func Length(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	if inputVector.IsConstNull() {
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
-	ivals := vector.MustStrCols(inputVector)
+	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConst() {
 		return vector.NewConstFixed(rtyp, int64(len(ivals[0])), ivecs[0].Length(), proc.Mp()), nil
 	} else {
@@ -34,7 +34,7 @@ func Length(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[int64](rvec)
+		rvals := vector.MustFixedCol[int64](rvec)
 		strLength(ivals, rvals)
 		return rvec, nil
 	}

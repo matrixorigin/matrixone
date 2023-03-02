@@ -135,7 +135,7 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 		input := vs[i]
 		if input.IsConst() {
 			if !input.IsConstNull() {
-				cols := vector.MustTCols[T](input)
+				cols := vector.MustFixedCol[T](input)
 				r := vector.NewConstFixed(t, cols[0], vecLen, proc.Mp())
 				r.GetType().Precision = input.GetType().Precision
 				r.GetType().Width = input.GetType().Width
@@ -153,7 +153,7 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 	if err != nil {
 		return nil, err
 	}
-	rsCols := vector.MustTCols[T](rs)
+	rsCols := vector.MustFixedCol[T](rs)
 
 	rs.SetNulls(nulls.NewWithSize(vecLen))
 	rs.GetNulls().Np.AddRange(0, uint64(vecLen))
@@ -166,7 +166,7 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 		if input.IsConstNull() {
 			continue
 		}
-		cols := vector.MustTCols[T](input)
+		cols := vector.MustFixedCol[T](input)
 		if input.IsConst() {
 			for j := 0; j < vecLen; j++ {
 				if rs.GetNulls().Contains(uint64(j)) {
@@ -221,7 +221,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 		input := vs[i]
 		if input.IsConst() {
 			if !input.IsConstNull() {
-				cols := vector.MustStrCols(input)
+				cols := vector.MustStrCol(input)
 				vec := vector.NewConstBytes(typ, []byte(cols[0]), vecLen, proc.Mp())
 				return vec, nil
 			}
@@ -240,7 +240,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 		if input.IsConstNull() {
 			continue
 		}
-		cols := vector.MustStrCols(input)
+		cols := vector.MustStrCol(input)
 		if input.IsConst() {
 			for j := 0; j < vecLen; j++ {
 				if nsp.Contains(uint64(j)) {
@@ -280,7 +280,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			}
 		}
 	}
-	vec := vector.NewVector(typ)
+	vec := vector.NewVec(typ)
 	vector.AppendStringList(vec, rs, nil, proc.Mp())
 	vec.SetNulls(nsp)
 	return vec, nil

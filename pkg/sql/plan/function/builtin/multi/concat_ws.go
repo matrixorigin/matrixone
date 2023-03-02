@@ -44,7 +44,7 @@ func Concat_ws(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 			}
 			inputCleaned = append(inputCleaned, ivecs[i])
 		}
-		separator := ivecs[0].GetString(0)
+		separator := ivecs[0].GetStringAt(0)
 		if AllConst {
 			return concatWsWithConstSeparatorAllConst(inputCleaned, separator, proc.Mp())
 		}
@@ -75,7 +75,7 @@ func Concat_ws(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 }
 
 func concatWs(inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
-	separators := vector.MustStrCols(separator)
+	separators := vector.MustStrCol(separator)
 	length := len(separators)
 	rtyp := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	resultNsp := new(nulls.Nulls)
@@ -88,7 +88,7 @@ func concatWs(inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsC
 				if len(rvals[i]) > 0 {
 					rvals[i] += separators[i]
 				}
-				rvals[i] += inputCleaned[j].GetString(0)
+				rvals[i] += inputCleaned[j].GetStringAt(0)
 			} else {
 				if nulls.Contains(inputCleaned[j].GetNulls(), uint64(i)) {
 					continue
@@ -97,20 +97,20 @@ func concatWs(inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsC
 				if len(rvals[i]) > 0 {
 					rvals[i] += separators[i]
 				}
-				rvals[i] += inputCleaned[j].GetString(i)
+				rvals[i] += inputCleaned[j].GetStringAt(i)
 			}
 		}
 		if allNull {
 			nulls.Add(resultNsp, uint64(i))
 		}
 	}
-	rvec := vector.NewVector(rtyp)
+	rvec := vector.NewVec(rtyp)
 	vector.AppendStringList(rvec, rvals, nil, proc.Mp())
 	return rvec, nil
 }
 
 func concatWsAllConst(inputCleaned []*vector.Vector, separator *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	separators := vector.MustStrCols(separator)
+	separators := vector.MustStrCol(separator)
 	length := len(separators)
 	rtyp := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	resultNsp := new(nulls.Nulls)
@@ -122,13 +122,13 @@ func concatWsAllConst(inputCleaned []*vector.Vector, separator *vector.Vector, p
 				rvals[i] += separators[i]
 			}
 			allNull = false
-			rvals[i] += inputCleaned[j].GetString(0)
+			rvals[i] += inputCleaned[j].GetStringAt(0)
 		}
 		if allNull { // this check is redundant
 			nulls.Add(resultNsp, uint64(i))
 		}
 	}
-	rvec := vector.NewVector(rtyp)
+	rvec := vector.NewVec(rtyp)
 	vector.AppendStringList(rvec, rvals, nil, proc.Mp())
 	return rvec, nil
 }
@@ -138,14 +138,14 @@ func concatWsWithConstSeparatorAllConst(inputCleaned []*vector.Vector, separator
 	rtyp := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	res := ""
 	for i := range inputCleaned {
-		res = res + inputCleaned[i].GetString(0)
+		res = res + inputCleaned[i].GetStringAt(0)
 		if i+1 == len(inputCleaned) {
 			break
 		} else {
 			res += separator
 		}
 	}
-	vec := vector.NewVector(rtyp)
+	vec := vector.NewVec(rtyp)
 	vector.AppendBytes(vec, []byte(res), res == "", mp)
 	return vec, nil
 }
@@ -154,7 +154,7 @@ func concatWsWithConstSeparatorAllConst(inputCleaned []*vector.Vector, separator
 func concatWsWithConstSeparator(inputCleaned []*vector.Vector, separator string, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
 	length := 0
 	for i := range inputCleaned {
-		inputI := vector.MustBytesCols(inputCleaned[i])
+		inputI := vector.MustBytesCol(inputCleaned[i])
 		lengthI := len(inputI)
 		if lengthI == 0 {
 			length = 0 // this means that one column that needs to be concatenated is empty
@@ -177,7 +177,7 @@ func concatWsWithConstSeparator(inputCleaned []*vector.Vector, separator string,
 					rvals[i] += separator
 				}
 				allNull = false
-				rvals[i] += inputCleaned[j].GetString(0)
+				rvals[i] += inputCleaned[j].GetStringAt(0)
 			} else {
 				if nulls.Contains(inputCleaned[j].GetNulls(), uint64(i)) {
 					continue
@@ -186,14 +186,14 @@ func concatWsWithConstSeparator(inputCleaned []*vector.Vector, separator string,
 					rvals[i] += separator
 				}
 				allNull = false
-				rvals[i] += inputCleaned[j].GetString(i)
+				rvals[i] += inputCleaned[j].GetStringAt(i)
 			}
 		}
 		if allNull {
 			nulls.Add(resultNsp, uint64(i))
 		}
 	}
-	rvec := vector.NewVector(rtyp)
+	rvec := vector.NewVec(rtyp)
 	vector.AppendStringList(rvec, rvals, nil, proc.Mp())
 	return rvec, nil
 }

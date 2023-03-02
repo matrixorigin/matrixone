@@ -38,7 +38,7 @@ func Instr(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, er
 		ret = vector.NewConstNull(rtyp, v1.Length(), proc.Mp())
 		return
 	}
-	s1, s2 := vector.MustStrCols(v1), vector.MustStrCols(v2)
+	s1, s2 := vector.MustStrCol(v1), vector.MustStrCol(v2)
 	if v1.IsConst() && v2.IsConst() {
 		str, substr := s1[0], s2[0]
 		ret = vector.NewConstFixed(rtyp, instr.Single(str, substr), v1.Length(), proc.Mp())
@@ -48,7 +48,7 @@ func Instr(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, er
 	if err != nil {
 		return
 	}
-	rs := vector.MustTCols[int64](ret)
+	rs := vector.MustFixedCol[int64](ret)
 	instr.Instr(s1, s2, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls()}, rs, ret.GetNulls())
 	return
 }

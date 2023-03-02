@@ -24,7 +24,7 @@ import (
 func DateToDay(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_uint8, Size: 1}
-	ivals := vector.MustTCols[types.Date](inputVector)
+	ivals := vector.MustFixedCol[types.Date](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -37,7 +37,7 @@ func DateToDay(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint8](rvec)
+		rvals := vector.MustFixedCol[uint8](rvec)
 		day.DateToDay(ivals, rvals)
 		return rvec, nil
 	}
@@ -46,7 +46,7 @@ func DateToDay(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 func DatetimeToDay(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_uint8, Size: 1}
-	ivals := vector.MustTCols[types.Datetime](inputVector)
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -59,7 +59,7 @@ func DatetimeToDay(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint8](rvec)
+		rvals := vector.MustFixedCol[uint8](rvec)
 		day.DatetimeToDay(ivals, rvals)
 		return rvec, nil
 	}

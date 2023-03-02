@@ -47,7 +47,7 @@ func JsonUnquote(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vect
 		return
 	}
 	if vec.IsConst() {
-		v := vector.MustBytesCols(vec)[0]
+		v := vector.MustBytesCol(vec)[0]
 		var r string
 		r, err = fSingle(v)
 		if err != nil {
@@ -60,8 +60,8 @@ func JsonUnquote(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vect
 	if err != nil {
 		return nil, err
 	}
-	rs := vector.MustStrCols(vec)
-	xs := vector.MustBytesCols(vec)
+	rs := vector.MustStrCol(vec)
+	xs := vector.MustBytesCol(vec)
 	rs, err = fBacth(xs, rs, ret.GetNulls())
 	if err != nil {
 		return nil, err

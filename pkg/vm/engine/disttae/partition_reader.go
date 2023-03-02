@@ -78,7 +78,7 @@ func (blockBatch *BlockBatch) hasRows() bool {
 }
 
 func (blockBatch *BlockBatch) setBat(bat *batch.Batch) {
-	blockBatch.metas = vector.MustStrCols(bat.Vecs[0])
+	blockBatch.metas = vector.MustStrCol(bat.Vecs[0])
 	blockBatch.idx = 0
 	blockBatch.length = len(blockBatch.metas)
 }
@@ -147,7 +147,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			rbat.SetAttributes(colNames)
 			rbat.Cnt = 1
 			for i, e := range ivec.Entries {
-				rbat.Vecs[i] = vector.NewVector(p.typsMap[colNames[i]])
+				rbat.Vecs[i] = vector.NewVec(p.typsMap[colNames[i]])
 				if err = rbat.Vecs[i].UnmarshalBinary(e.Object.([]byte)); err != nil {
 					return nil, err
 				}
@@ -160,7 +160,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			b := batch.NewWithSize(len(colNames))
 			b.SetAttributes(colNames)
 			for i, name := range colNames {
-				b.Vecs[i] = vector.NewVector(p.typsMap[name])
+				b.Vecs[i] = vector.NewVec(p.typsMap[name])
 			}
 			if _, err := b.Append(ctx, mp, bat); err != nil {
 				return nil, err
@@ -171,7 +171,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	b := batch.NewWithSize(len(colNames))
 	b.SetAttributes(colNames)
 	for i, name := range colNames {
-		b.Vecs[i] = vector.NewVector(p.typsMap[name])
+		b.Vecs[i] = vector.NewVec(p.typsMap[name])
 	}
 	rows := 0
 	if len(p.index) > 0 {

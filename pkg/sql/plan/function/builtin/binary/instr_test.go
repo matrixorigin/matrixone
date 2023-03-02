@@ -63,7 +63,7 @@ func TestInstr(t *testing.T) {
 		}
 		v, err := Instr([]*vector.Vector{inVec, subVec}, proc)
 		require.NoError(t, err)
-		vSlice := vector.MustTCols[int64](v)
+		vSlice := vector.MustFixedCol[int64](v)
 		require.Equal(t, k.wants, vSlice)
 		if inVec.IsConst() {
 			inVec.GetNulls().Set(0)

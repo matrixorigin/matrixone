@@ -22,7 +22,7 @@ import (
 )
 
 func UTCTimestamp(_ []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtyp := types.T_datetime.ToType()
+	rtyp := types.T_timestamp.ToType()
 	rvec := vector.NewConstFixed(rtyp, get_timestamp.GetUTCTimestamp(), 1, proc.Mp())
 	return rvec, nil
 }

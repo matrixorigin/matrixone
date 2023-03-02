@@ -25,9 +25,9 @@ func RegularReplace(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 	firstVector := ivecs[0]
 	secondVector := ivecs[1]
 	thirdVector := ivecs[2]
-	firstValues := vector.MustStrCols(firstVector)
-	secondValues := vector.MustStrCols(secondVector)
-	thirdValues := vector.MustStrCols(thirdVector)
+	firstValues := vector.MustStrCol(firstVector)
+	secondValues := vector.MustStrCol(secondVector)
+	thirdValues := vector.MustStrCol(thirdVector)
 	rtyp := types.T_varchar.ToType()
 
 	//maxLen
@@ -52,12 +52,12 @@ func RegularReplace(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		match_type = []string{"c"}
 
 	case 4:
-		pos = vector.MustTCols[int64](ivecs[3])
+		pos = vector.MustFixedCol[int64](ivecs[3])
 		occ = []int64{0}
 		match_type = []string{"c"}
 	case 5:
-		pos = vector.MustTCols[int64](ivecs[3])
-		occ = vector.MustTCols[int64](ivecs[4])
+		pos = vector.MustFixedCol[int64](ivecs[3])
+		occ = vector.MustFixedCol[int64](ivecs[4])
 		match_type = []string{"c"}
 	}
 

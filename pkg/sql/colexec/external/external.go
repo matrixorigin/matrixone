@@ -265,7 +265,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 	}
 	fileListTmp := make([]string, 0)
 	fileSizeTmp := make([]int64, 0)
-	bs := vector.MustTCols[bool](vec)
+	bs := vector.MustFixedCol[bool](vec)
 	for i := 0; i < len(bs); i++ {
 		if bs[i] {
 			fileListTmp = append(fileListTmp, fileList[i])
@@ -655,7 +655,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 			}
 		} else if catalog.ContainExternalHidenCol(param.Attrs[i]) {
 			if rows == 0 {
-				vecTmp = vector.NewVector(makeType(param.OriginCols, 0))
+				vecTmp = vector.NewVec(makeType(param.OriginCols, 0))
 				err = vecTmp.UnmarshalBinary(vec.Entries[i].Object.([]byte))
 				if err != nil {
 					return nil, err
@@ -673,7 +673,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 				}
 			}
 		} else {
-			vecTmp = vector.NewVector(*bat.Vecs[i].GetType())
+			vecTmp = vector.NewVec(*bat.Vecs[i].GetType())
 			err = vecTmp.UnmarshalBinary(vec.Entries[i].Object.([]byte))
 			if err != nil {
 				return nil, err
@@ -1055,7 +1055,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		isNullOrEmpty = isNullOrEmpty || (getNullFlag(param, param.Attrs[colIdx], field))
 		switch id {
 		case types.T_bool:
-			cols := vector.MustTCols[bool](vec)
+			cols := vector.MustFixedCol[bool](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1068,7 +1068,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				}
 			}
 		case types.T_int8:
-			cols := vector.MustTCols[int8](vec)
+			cols := vector.MustFixedCol[int8](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1089,7 +1089,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				}
 			}
 		case types.T_int16:
-			cols := vector.MustTCols[int16](vec)
+			cols := vector.MustFixedCol[int16](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1110,7 +1110,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				}
 			}
 		case types.T_int32:
-			cols := vector.MustTCols[int32](vec)
+			cols := vector.MustFixedCol[int32](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1131,7 +1131,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				}
 			}
 		case types.T_int64:
-			cols := vector.MustTCols[int64](vec)
+			cols := vector.MustFixedCol[int64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1152,7 +1152,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				}
 			}
 		case types.T_uint8:
-			cols := vector.MustTCols[uint8](vec)
+			cols := vector.MustFixedCol[uint8](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1173,7 +1173,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				}
 			}
 		case types.T_uint16:
-			cols := vector.MustTCols[uint16](vec)
+			cols := vector.MustFixedCol[uint16](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1194,7 +1194,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				}
 			}
 		case types.T_uint32:
-			cols := vector.MustTCols[uint32](vec)
+			cols := vector.MustFixedCol[uint32](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1215,7 +1215,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				}
 			}
 		case types.T_uint64:
-			cols := vector.MustTCols[uint64](vec)
+			cols := vector.MustFixedCol[uint64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1236,7 +1236,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				}
 			}
 		case types.T_float32:
-			cols := vector.MustTCols[float32](vec)
+			cols := vector.MustFixedCol[float32](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1258,7 +1258,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				cols[rowIdx] = float32(d.ToFloat64())
 			}
 		case types.T_float64:
-			cols := vector.MustTCols[float64](vec)
+			cols := vector.MustFixedCol[float64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1318,7 +1318,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				}
 			}
 		case types.T_date:
-			cols := vector.MustTCols[types.Date](vec)
+			cols := vector.MustFixedCol[types.Date](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1330,7 +1330,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				cols[rowIdx] = d
 			}
 		case types.T_time:
-			cols := vector.MustTCols[types.Time](vec)
+			cols := vector.MustFixedCol[types.Time](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1342,7 +1342,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				cols[rowIdx] = d
 			}
 		case types.T_datetime:
-			cols := vector.MustTCols[types.Datetime](vec)
+			cols := vector.MustFixedCol[types.Datetime](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1354,7 +1354,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				cols[rowIdx] = d
 			}
 		case types.T_decimal64:
-			cols := vector.MustTCols[types.Decimal64](vec)
+			cols := vector.MustFixedCol[types.Decimal64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1369,7 +1369,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				cols[rowIdx] = d
 			}
 		case types.T_decimal128:
-			cols := vector.MustTCols[types.Decimal128](vec)
+			cols := vector.MustFixedCol[types.Decimal128](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1384,7 +1384,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				cols[rowIdx] = d
 			}
 		case types.T_timestamp:
-			cols := vector.MustTCols[types.Timestamp](vec)
+			cols := vector.MustFixedCol[types.Timestamp](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {
@@ -1397,7 +1397,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				cols[rowIdx] = d
 			}
 		case types.T_uuid:
-			cols := vector.MustTCols[types.Uuid](vec)
+			cols := vector.MustFixedCol[types.Uuid](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			} else {

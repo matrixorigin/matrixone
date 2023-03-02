@@ -33,7 +33,7 @@ func JsonQuote(ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vecto
 		ret = vector.NewConstNull(rtyp, vec.Length(), proc.Mp())
 		return
 	}
-	vs := vector.MustStrCols(vec)
+	vs := vector.MustStrCol(vec)
 	if vec.IsConst() {
 		var dt []byte
 		dt, err = json_quote.Single(vs[0])
@@ -47,7 +47,7 @@ func JsonQuote(ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vecto
 	if err != nil {
 		return
 	}
-	rs := vector.MustBytesCols(ret)
+	rs := vector.MustBytesCol(ret)
 	rs, err = json_quote.Batch(vs, rs, ret.GetNulls())
 	if err != nil {
 		return

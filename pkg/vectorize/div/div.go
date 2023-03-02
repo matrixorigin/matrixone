@@ -37,7 +37,7 @@ const (
 )
 
 func NumericDivFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
@@ -55,7 +55,7 @@ func NumericDivFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 }
 
 func NumericIntegerDivFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[int64](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[int64](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR

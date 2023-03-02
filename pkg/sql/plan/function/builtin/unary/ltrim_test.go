@@ -35,7 +35,7 @@ func Test_Ltrim(t *testing.T) {
 			log.Fatal(err)
 		}
 
-		data := vector.MustStrCols(vec)
+		data := vector.MustStrCol(vec)
 		compVec := []string{"123", "123", "123 ", "8 ", "8 a ", ""}
 		compNsp := []int64{5}
 

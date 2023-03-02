@@ -123,8 +123,8 @@ var (
 			}
 			ds[i] = d
 		}
-		vec := vector.NewVector(types.T_date.ToType())
-		vector.AppendList(vec, ds, nil, TestUtilMp)
+		vec := vector.NewVec(types.T_date.ToType())
+		vector.AppendFixedList(vec, ds, nil, TestUtilMp)
 		vec.SetNulls(ns)
 		return vec
 	}
@@ -142,8 +142,8 @@ var (
 			}
 			ds[i] = d
 		}
-		vec := vector.NewVector(types.T_time.ToType())
-		vector.AppendList(vec, ds, nil, TestUtilMp)
+		vec := vector.NewVec(types.T_time.ToType())
+		vector.AppendFixedList(vec, ds, nil, TestUtilMp)
 		vec.SetNulls(ns)
 		return vec
 	}
@@ -161,8 +161,8 @@ var (
 			}
 			ds[i] = d
 		}
-		vec := vector.NewVector(types.T_datetime.ToType())
-		vector.AppendList(vec, ds, nil, TestUtilMp)
+		vec := vector.NewVec(types.T_datetime.ToType())
+		vector.AppendFixedList(vec, ds, nil, TestUtilMp)
 		vec.SetNulls(ns)
 		return vec
 	}
@@ -180,16 +180,16 @@ var (
 			}
 			ds[i] = d
 		}
-		vec := vector.NewVector(types.T_timestamp.ToType())
-		vector.AppendList(vec, ds, nil, TestUtilMp)
+		vec := vector.NewVec(types.T_timestamp.ToType())
+		vector.AppendFixedList(vec, ds, nil, TestUtilMp)
 		vec.SetNulls(ns)
 		return vec
 	}
 
 	MakeUuidVector = func(values []types.Uuid, nsp []uint64) *vector.Vector {
 		ns := nulls.Build(len(values), nsp...)
-		vec := vector.NewVector(uuidType)
-		vector.AppendList(vec, values, nil, TestUtilMp)
+		vec := vector.NewVec(uuidType)
+		vector.AppendFixedList(vec, values, nil, TestUtilMp)
 		vec.SetNulls(ns)
 		return vec
 	}
@@ -207,8 +207,8 @@ var (
 			}
 			ds[i] = d
 		}
-		vec := vector.NewVector(types.T_uuid.ToType())
-		vector.AppendList(vec, ds, nil, TestUtilMp)
+		vec := vector.NewVec(types.T_uuid.ToType())
+		vector.AppendFixedList(vec, ds, nil, TestUtilMp)
 		vec.SetNulls(ns)
 		return vec
 	}
@@ -333,19 +333,19 @@ var (
 )
 
 func makeVector[T types.FixedSizeT](values []T, nsp []uint64, typ types.Type) *vector.Vector {
-	vec := vector.NewVector(typ)
-	vector.AppendList(vec, values, nil, TestUtilMp)
+	vec := vector.NewVec(typ)
+	vector.AppendFixedList(vec, values, nil, TestUtilMp)
 	vec.SetNulls(nulls.Build(len(values), nsp...))
 	return vec
 }
 
 func makeStringVector(values []string, nsp []uint64, typ types.Type) *vector.Vector {
 	if nsp == nil {
-		vec := vector.NewVector(typ)
+		vec := vector.NewVec(typ)
 		vector.AppendStringList(vec, values, nil, TestUtilMp)
 		return vec
 	} else {
-		vec := vector.NewVector(typ)
+		vec := vector.NewVec(typ)
 		vector.AppendStringList(vec, values, nil, TestUtilMp)
 		vec.SetNulls(nulls.Build(len(values), nsp...))
 		return vec

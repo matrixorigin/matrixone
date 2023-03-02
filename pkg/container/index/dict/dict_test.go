@@ -28,7 +28,7 @@ func TestCardinality(t *testing.T) {
 	require.NoError(t, err)
 	defer dict.Free()
 
-	vector.AppendList(dict.unique, []int64{5, 2, 3, 7}, nil, dict.m)
+	vector.AppendFixedList(dict.unique, []int64{5, 2, 3, 7}, nil, dict.m)
 	require.Equal(t, uint64(4), dict.Cardinality())
 }
 
@@ -37,8 +37,8 @@ func TestInsertBatchFixedLen(t *testing.T) {
 	require.NoError(t, err)
 	defer dict.Free()
 
-	v0 := vector.NewVector(types.Type{Oid: types.T_int64})
-	vector.AppendList(v0, []int64{5, 2, 3, 7, 3, 2}, nil, dict.m)
+	v0 := vector.NewVec(types.Type{Oid: types.T_int64})
+	vector.AppendFixedList(v0, []int64{5, 2, 3, 7, 3, 2}, nil, dict.m)
 
 	ips, err := dict.InsertBatch(v0)
 	require.NoError(t, err)
@@ -49,8 +49,8 @@ func TestInsertBatchFixedLen(t *testing.T) {
 	require.Equal(t, uint16(3), ips[4])
 	require.Equal(t, uint16(2), ips[5])
 
-	v1 := vector.NewVector(types.Type{Oid: types.T_int64})
-	vector.AppendList(v1, []int64{4, 2, 1, 5}, nil, dict.m)
+	v1 := vector.NewVec(types.Type{Oid: types.T_int64})
+	vector.AppendFixedList(v1, []int64{4, 2, 1, 5}, nil, dict.m)
 
 	ips, err = dict.InsertBatch(v1)
 	require.NoError(t, err)
@@ -65,8 +65,8 @@ func TestFindBatchFixedLen(t *testing.T) {
 	require.NoError(t, err)
 	defer dict.Free()
 
-	v0 := vector.NewVector(types.Type{Oid: types.T_int32})
-	vector.AppendList(v0, []int32{5, 2, 3, 7, 1, 4}, nil, dict.m)
+	v0 := vector.NewVec(types.Type{Oid: types.T_int32})
+	vector.AppendFixedList(v0, []int32{5, 2, 3, 7, 1, 4}, nil, dict.m)
 
 	ips, err := dict.InsertBatch(v0)
 	require.NoError(t, err)
@@ -77,8 +77,8 @@ func TestFindBatchFixedLen(t *testing.T) {
 	require.Equal(t, uint16(5), ips[4])
 	require.Equal(t, uint16(6), ips[5])
 
-	v1 := vector.NewVector(types.Type{Oid: types.T_int32})
-	vector.AppendList(v1, []int32{7, 3, 8, 4, 6, 3}, nil, dict.m)
+	v1 := vector.NewVec(types.Type{Oid: types.T_int32})
+	vector.AppendFixedList(v1, []int32{7, 3, 8, 4, 6, 3}, nil, dict.m)
 
 	poses := dict.FindBatch(v1)
 	require.Equal(t, uint16(4), poses[0])
@@ -94,8 +94,8 @@ func TestFindDataFixedLen(t *testing.T) {
 	require.NoError(t, err)
 	defer dict.Free()
 
-	v0 := vector.NewVector(types.Type{Oid: types.T_int32})
-	vector.AppendList(v0, []int32{5, 3, 1, 7, 1, 3}, nil, dict.m)
+	v0 := vector.NewVec(types.Type{Oid: types.T_int32})
+	vector.AppendFixedList(v0, []int32{5, 3, 1, 7, 1, 3}, nil, dict.m)
 
 	ips, err := dict.InsertBatch(v0)
 	require.NoError(t, err)
@@ -107,16 +107,16 @@ func TestFindDataFixedLen(t *testing.T) {
 	require.Equal(t, uint16(2), ips[5])
 
 	data := dict.FindData(1)
-	require.Equal(t, int32(5), vector.MustTCols[int32](data)[0])
+	require.Equal(t, int32(5), vector.MustFixedCol[int32](data)[0])
 
 	data = dict.FindData(2)
-	require.Equal(t, int32(3), vector.MustTCols[int32](data)[0])
+	require.Equal(t, int32(3), vector.MustFixedCol[int32](data)[0])
 
 	data = dict.FindData(3)
-	require.Equal(t, int32(1), vector.MustTCols[int32](data)[0])
+	require.Equal(t, int32(1), vector.MustFixedCol[int32](data)[0])
 
 	data = dict.FindData(4)
-	require.Equal(t, int32(7), vector.MustTCols[int32](data)[0])
+	require.Equal(t, int32(7), vector.MustFixedCol[int32](data)[0])
 }
 
 func TestInsertLargeDataFixedLen(t *testing.T) {
@@ -124,14 +124,14 @@ func TestInsertLargeDataFixedLen(t *testing.T) {
 	require.NoError(t, err)
 	defer dict.Free()
 
-	v0 := vector.NewVector(types.Type{Oid: types.T_int32})
+	v0 := vector.NewVec(types.Type{Oid: types.T_int32})
 	v0.PreExtend(100000, dict.m)
 	v0.SetLength(100000)
 
 	i := 0
 	for j := 1; j <= 10000; j++ {
 		for cnt := 0; cnt < 10; cnt++ {
-			vector.MustTCols[int32](v0)[i] = int32(j)
+			vector.MustFixedCol[int32](v0)[i] = int32(j)
 			i++
 		}
 	}
@@ -153,7 +153,7 @@ func TestInsertBatchVarLen(t *testing.T) {
 	require.NoError(t, err)
 	defer dict.Free()
 
-	v0 := vector.NewVector(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+	v0 := vector.NewVec(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, vector.AppendBytesList(v0, [][]byte{
 		[]byte("hello"),
 		[]byte("My"),
@@ -170,7 +170,7 @@ func TestInsertBatchVarLen(t *testing.T) {
 	require.Equal(t, uint16(4), ips[3])
 	require.Equal(t, uint16(5), ips[4])
 
-	v1 := vector.NewVector(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+	v1 := vector.NewVec(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, vector.AppendBytesList(v1, [][]byte{
 		[]byte("Tom"),
 		[]byte("is"),
@@ -191,7 +191,7 @@ func TestFindBatchVarLen(t *testing.T) {
 	require.NoError(t, err)
 	defer dict.Free()
 
-	v0 := vector.NewVector(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+	v0 := vector.NewVec(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, vector.AppendBytesList(v0, [][]byte{
 		[]byte("hello"),
 		[]byte("My"),
@@ -208,7 +208,7 @@ func TestFindBatchVarLen(t *testing.T) {
 	require.Equal(t, uint16(4), ips[3])
 	require.Equal(t, uint16(5), ips[4])
 
-	v1 := vector.NewVector(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+	v1 := vector.NewVec(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, vector.AppendBytesList(v1, [][]byte{
 		[]byte("Jack"),
 		[]byte("is"),
@@ -230,7 +230,7 @@ func TestFindDataVarLen(t *testing.T) {
 	require.NoError(t, err)
 	defer dict.Free()
 
-	v0 := vector.NewVector(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
+	v0 := vector.NewVec(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen})
 	require.NoError(t, vector.AppendBytesList(v0, [][]byte{
 		[]byte("thisisalonglonglonglongstring"),
 		[]byte("My"),
@@ -252,19 +252,19 @@ func TestFindDataVarLen(t *testing.T) {
 	require.Equal(t, uint16(5), ips[6])
 
 	data := dict.FindData(1)
-	require.Equal(t, []byte("thisisalonglonglonglongstring"), data.GetBytes(0))
+	require.Equal(t, []byte("thisisalonglonglonglongstring"), data.GetBytesAt(0))
 
 	data = dict.FindData(2)
-	require.Equal(t, []byte("My"), data.GetBytes(0))
+	require.Equal(t, []byte("My"), data.GetBytesAt(0))
 
 	data = dict.FindData(3)
-	require.Equal(t, []byte("name"), data.GetBytes(0))
+	require.Equal(t, []byte("name"), data.GetBytesAt(0))
 
 	data = dict.FindData(4)
-	require.Equal(t, []byte("is"), data.GetBytes(0))
+	require.Equal(t, []byte("is"), data.GetBytesAt(0))
 
 	data = dict.FindData(5)
-	require.Equal(t, []byte("Tom"), data.GetBytes(0))
+	require.Equal(t, []byte("Tom"), data.GetBytesAt(0))
 }
 
 func newTestDict(typ types.Type) (*Dict, error) {

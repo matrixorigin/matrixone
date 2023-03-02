@@ -614,257 +614,135 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	timeZone := ses.GetTimeZone()
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		if !nulls.Any(vec.GetNulls()) {
-			row[i] = types.DecodeJson(vec.GetBytes(rowIndex))
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) {
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) {
-				row[i] = nil
-			} else {
-				row[i] = types.DecodeJson(vec.GetBytes(rowIndex))
-			}
+			row[i] = types.DecodeJson(vec.GetBytesAt(rowIndex))
 		}
 	case types.T_bool:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[bool](vec)
-			row[i] = vs[rowIndex]
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[bool](vec)
-				row[i] = vs[rowIndex]
-			}
+			row[i] = vector.GetFixedAt[bool](vec, rowIndex)
 		}
 	case types.T_int8:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[int8](vec)
-			row[i] = vs[rowIndex]
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[int8](vec)
-				row[i] = vs[rowIndex]
-			}
+			row[i] = vector.GetFixedAt[int8](vec, rowIndex)
 		}
 	case types.T_uint8:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[uint8](vec)
-			row[i] = vs[rowIndex]
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[uint8](vec)
-				row[i] = vs[rowIndex]
-			}
+			row[i] = vector.GetFixedAt[uint8](vec, rowIndex)
 		}
 	case types.T_int16:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[int16](vec)
-			row[i] = vs[rowIndex]
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[int16](vec)
-				row[i] = vs[rowIndex]
-			}
+			row[i] = vector.GetFixedAt[int16](vec, rowIndex)
 		}
 	case types.T_uint16:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[uint16](vec)
-			row[i] = vs[rowIndex]
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[uint16](vec)
-				row[i] = vs[rowIndex]
-			}
+			row[i] = vector.GetFixedAt[uint16](vec, rowIndex)
 		}
 	case types.T_int32:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[int32](vec)
-			row[i] = vs[rowIndex]
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[int32](vec)
-				row[i] = vs[rowIndex]
-			}
+			row[i] = vector.GetFixedAt[int32](vec, rowIndex)
 		}
 	case types.T_uint32:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[uint32](vec)
-			row[i] = vs[rowIndex]
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[uint32](vec)
-				row[i] = vs[rowIndex]
-			}
+			row[i] = vector.GetFixedAt[uint32](vec, rowIndex)
 		}
 	case types.T_int64:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[int64](vec)
-			row[i] = vs[rowIndex]
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[int64](vec)
-				row[i] = vs[rowIndex]
-			}
+			row[i] = vector.GetFixedAt[int64](vec, rowIndex)
 		}
 	case types.T_uint64:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[uint64](vec)
-			row[i] = vs[rowIndex]
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[uint64](vec)
-				row[i] = vs[rowIndex]
-			}
+			row[i] = vector.GetFixedAt[uint64](vec, rowIndex)
 		}
 	case types.T_float32:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[float32](vec)
-			row[i] = formatFloatNum(vs[rowIndex], *vec.GetType())
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[float32](vec)
-				row[i] = formatFloatNum(vs[rowIndex], *vec.GetType())
-			}
+			row[i] = formatFloatNum(vector.GetFixedAt[float32](vec, rowIndex), *vec.GetType())
 		}
 	case types.T_float64:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[float64](vec)
-			row[i] = formatFloatNum(vs[rowIndex], *vec.GetType())
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[float64](vec)
-				row[i] = formatFloatNum(vs[rowIndex], *vec.GetType())
-			}
+			row[i] = formatFloatNum(vector.GetFixedAt[float64](vec, rowIndex), *vec.GetType())
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			row[i] = vec.GetBytes(rowIndex)
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				row[i] = vec.GetBytes(rowIndex)
-			}
+			row[i] = vec.GetBytesAt(rowIndex)
 		}
 	case types.T_date:
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[types.Date](vec)
-			row[i] = vs[rowIndex]
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[types.Date](vec)
-				row[i] = vs[rowIndex]
-			}
+			row[i] = vector.GetFixedAt[types.Date](vec, rowIndex)
 		}
 	case types.T_datetime:
 		precision := vec.GetType().Precision
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[types.Datetime](vec)
-			row[i] = vs[rowIndex].String2(precision)
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[types.Datetime](vec)
-				row[i] = vs[rowIndex].String2(precision)
-			}
+			row[i] = vector.GetFixedAt[types.Datetime](vec, rowIndex).String2(precision)
 		}
 	case types.T_time:
 		precision := vec.GetType().Precision
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[types.Time](vec)
-			row[i] = vs[rowIndex].String2(precision)
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[types.Time](vec)
-				row[i] = vs[rowIndex].String2(precision)
-			}
+			row[i] = vector.GetFixedAt[types.Time](vec, rowIndex).String2(precision)
 		}
 	case types.T_timestamp:
 		precision := vec.GetType().Precision
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[types.Timestamp](vec)
-			row[i] = vs[rowIndex].String2(timeZone, precision)
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[types.Timestamp](vec)
-				row[i] = vs[rowIndex].String2(timeZone, precision)
-			}
+			row[i] = vector.GetFixedAt[types.Timestamp](vec, rowIndex).String2(timeZone, precision)
 		}
 	case types.T_decimal64:
 		scale := vec.GetType().Scale
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[types.Decimal64](vec)
-			row[i] = vs[rowIndex].ToStringWithScale(scale)
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) {
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) {
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[types.Decimal64](vec)
-				row[i] = vs[rowIndex].ToStringWithScale(scale)
-			}
+			row[i] = vector.GetFixedAt[types.Decimal64](vec, rowIndex).ToStringWithScale(scale)
 		}
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
-		if !nulls.Any(vec.GetNulls()) { //all data in this column are not null
-			vs := vector.MustTCols[types.Decimal128](vec)
-			row[i] = vs[rowIndex].ToStringWithScale(scale)
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) {
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) {
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[types.Decimal128](vec)
-				row[i] = vs[rowIndex].ToStringWithScale(scale)
-			}
+			row[i] = vector.GetFixedAt[types.Decimal128](vec, rowIndex).ToStringWithScale(scale)
 		}
 	case types.T_uuid:
-		if !nulls.Any(vec.GetNulls()) {
-			vs := vector.MustTCols[types.Uuid](vec)
-			row[i] = vs[rowIndex].ToString()
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[types.Uuid](vec)
-				row[i] = vs[rowIndex].ToString()
-			}
+			row[i] = vector.GetFixedAt[types.Uuid](vec, rowIndex).ToString()
 		}
 	case types.T_Rowid:
-		if !nulls.Any(vec.GetNulls()) {
-			vs := vector.MustTCols[types.Rowid](vec)
-			row[i] = vs[rowIndex]
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
+			row[i] = nil
 		} else {
-			if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vector.MustTCols[types.Rowid](vec)
-				row[i] = vs[rowIndex]
-			}
+			row[i] = vector.GetFixedAt[types.Rowid](vec, rowIndex)
 		}
 	default:
 		logErrorf(ses.GetConciseProfile(), "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
@@ -1075,7 +953,7 @@ func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tre
 					if j != 0 {
 						buf.WriteString(", ")
 					}
-					buf.WriteString(rbat.GetVector(int32(j)).GetString(i))
+					buf.WriteString(rbat.GetVector(int32(j)).GetStringAt(i))
 				}
 				buf.WriteString(")")
 			}
@@ -1482,7 +1360,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		if err != nil {
 			return err
 		}
-		bs := vector.MustTCols[bool](vec)
+		bs := vector.MustFixedCol[bool](vec)
 		sels := proc.Mp().GetSels()
 		for i, b := range bs {
 			if b {
@@ -1491,8 +1369,8 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		}
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCols(bat.Vecs[0])
-		v1 := vector.MustStrCols(bat.Vecs[1])
+		v0 := vector.MustStrCol(bat.Vecs[0])
+		v1 := vector.MustStrCol(bat.Vecs[1])
 		rows = rows[:len(v0)]
 		for i := range v0 {
 			rows[i][0] = v0[i]
@@ -1546,9 +1424,9 @@ func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error)
 		v0[i] = row[0].(string)
 		v1[i] = fmt.Sprintf("%v", row[1])
 	}
-	bat.Vecs[0] = vector.NewVector(typ)
+	bat.Vecs[0] = vector.NewVec(typ)
 	vector.AppendStringList(bat.Vecs[0], v0, nil, ses.GetMemPool())
-	bat.Vecs[1] = vector.NewVector(typ)
+	bat.Vecs[1] = vector.NewVec(typ)
 	vector.AppendStringList(bat.Vecs[1], v1, nil, ses.GetMemPool())
 	return bat, nil
 }
@@ -1948,7 +1826,7 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 		count++
 	}
 	vs = vs[:count]
-	vec := vector.NewVector(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType())
 	vector.AppendBytesList(vec, vs, nil, session.GetMemPool())
 	bat.Vecs[0] = vec
 	bat.InitZsOne(count)

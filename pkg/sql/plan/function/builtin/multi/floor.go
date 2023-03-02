@@ -35,7 +35,7 @@ func FloorInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 
 // Parse string to float instead of int.
 func FloorStr(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	values := vector.MustStrCols(vecs[0])
+	values := vector.MustStrCol(vecs[0])
 	floatvector, err := proc.AllocVectorOfRows(types.T_float64.ToType(), 0, nil)
 	if err != nil {
 		return nil, err

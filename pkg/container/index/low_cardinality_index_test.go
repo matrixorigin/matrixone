@@ -28,7 +28,7 @@ func TestInsertWithNulls(t *testing.T) {
 	require.NoError(t, err)
 
 	// test data = ["a", "b", NULL, "a", "c", NULL, "c", "b", "a", NULL]
-	v := vector.NewVector(types.T_varchar.ToType())
+	v := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(v, []byte("a"), false, idx.m))
 	require.NoError(t, vector.AppendBytes(v, []byte("b"), false, idx.m))
 	require.NoError(t, vector.AppendBytes(v, []byte(""), true, idx.m))
@@ -43,15 +43,15 @@ func TestInsertWithNulls(t *testing.T) {
 	// dict = ["a"->1, "b"->2, "c"->3]
 	require.NoError(t, idx.InsertBatch(v))
 
-	require.Equal(t, []string{"a", "b", "c"}, vector.MustStrCols(idx.dict.GetUnique()))
-	require.Equal(t, []uint16{1, 2, 0, 1, 3, 0, 3, 2, 1, 0}, vector.MustTCols[uint16](idx.poses))
+	require.Equal(t, []string{"a", "b", "c"}, vector.MustStrCol(idx.dict.GetUnique()))
+	require.Equal(t, []uint16{1, 2, 0, 1, 3, 0, 3, 2, 1, 0}, vector.MustFixedCol[uint16](idx.poses))
 }
 
 func TestEncode(t *testing.T) {
 	idx, err := newTestIndex(types.T_varchar.ToType())
 	require.NoError(t, err)
 
-	v0 := vector.NewVector(types.T_varchar.ToType())
+	v0 := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytesList(v0, [][]byte{
 		[]byte("hello"),
 		[]byte("My"),
@@ -63,7 +63,7 @@ func TestEncode(t *testing.T) {
 	err = idx.InsertBatch(v0)
 	require.NoError(t, err)
 
-	v1 := vector.NewVector(types.T_varchar.ToType())
+	v1 := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytesList(v1, [][]byte{
 		[]byte("Jack"),
 		[]byte("is"),
@@ -73,10 +73,10 @@ func TestEncode(t *testing.T) {
 		[]byte("Tom"),
 	}, nil, idx.m))
 
-	enc := vector.NewVector(types.T_uint16.ToType())
+	enc := vector.NewVec(types.T_uint16.ToType())
 	err = idx.Encode(enc, v1)
 	require.NoError(t, err)
-	col := vector.MustTCols[uint16](enc)
+	col := vector.MustFixedCol[uint16](enc)
 	require.Equal(t, uint16(0), col[0])
 	require.Equal(t, uint16(4), col[1])
 	require.Equal(t, uint16(2), col[2])

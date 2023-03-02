@@ -84,6 +84,10 @@ func (ts Timestamp) Unix() int64 {
 	return (int64(ts) - unixEpochMicroSecs) / microSecsPerSec
 }
 
+func UTC() Timestamp {
+	return Timestamp(time.Now().UnixMicro() + unixEpochMicroSecs)
+}
+
 func (ts Timestamp) UnixToFloat() float64 {
 	return float64(int64(ts)-unixEpochMicroSecs) / microSecsPerSec
 }

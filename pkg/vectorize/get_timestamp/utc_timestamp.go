@@ -16,13 +16,13 @@ package get_timestamp
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 var (
-	GetUTCTimestamp func() types.Datetime
+	GetUTCTimestamp func() types.Timestamp
 )
 
 func init() {
 	GetUTCTimestamp = getUTCTimestamp
 }
 
-func getUTCTimestamp() types.Datetime {
+func getUTCTimestamp() types.Timestamp {
 	return types.UTC()
 }

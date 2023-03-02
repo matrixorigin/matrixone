@@ -235,7 +235,7 @@ func (txn *Transaction) WriteBatch(
 	bat.Cnt = 1
 	if typ == INSERT {
 		len := bat.Length()
-		vec := vector.NewVector(types.New(types.T_Rowid, 0, 0, 0))
+		vec := vector.NewVec(types.New(types.T_Rowid, 0, 0, 0))
 		for i := 0; i < len; i++ {
 			if err := vector.AppendFixed(vec, txn.genRowId(), false,
 				txn.proc.Mp()); err != nil {
@@ -577,7 +577,7 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 		if err != nil {
 			return nil, err
 		}
-		bs := vector.MustTCols[bool](vec)
+		bs := vector.MustFixedCol[bool](vec)
 		if vec.IsConst() {
 			if !bs[0] {
 				bat.Shrink(nil)
@@ -611,7 +611,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	}()
 
 	mp := make(map[types.Rowid]uint8)
-	rowids := vector.MustTCols[types.Rowid](bat.GetVector(0))
+	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
 	for _, rowid := range rowids {
 		mp[rowid] = 0
 		// update workspace
@@ -626,7 +626,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		for j, e := range txn.writes[i] {
 			sels = sels[:0]
 			if e.tableId == tableId && e.databaseId == databaseId {
-				vs := vector.MustTCols[types.Rowid](e.bat.GetVector(0))
+				vs := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
 				for k, v := range vs {
 					if _, ok := mp[v]; !ok {
 						sels = append(sels, int64(k))

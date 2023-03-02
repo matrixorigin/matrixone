@@ -84,7 +84,7 @@ func OpBitLeftShiftFun[T opBitT](args []*vector.Vector, proc *process.Process) (
 }
 
 func goOpBitGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	if xs.IsConst() {
 		if nulls.Any(ys.GetNulls()) {
 			for i, y := range yt {

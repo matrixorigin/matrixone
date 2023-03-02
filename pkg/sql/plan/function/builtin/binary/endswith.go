@@ -26,7 +26,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	left, right := vectors[0], vectors[1]
 	// XXX Why result type is uint8, not bool?
 	rtyp := types.Type{Oid: types.T_uint8, Size: 1}
-	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
+	leftValues, rightValues := vector.MustStrCol(left), vector.MustStrCol(right)
 	switch {
 	case left.IsConstNull() || right.IsConstNull():
 		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
@@ -39,7 +39,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint8](rvec)
+		rvals := vector.MustFixedCol[uint8](rvec)
 		endswith.EndsWithLeftConst(leftValues, rightValues, rvals)
 		return rvec, nil
 	case !left.IsConst() && right.IsConst():
@@ -47,7 +47,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint8](rvec)
+		rvals := vector.MustFixedCol[uint8](rvec)
 		endswith.EndsWithRightConst(leftValues, rightValues, rvals)
 		return rvec, nil
 	}
@@ -57,7 +57,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		return nil, err
 	}
 	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
-	rvals := vector.MustTCols[uint8](rvec)
+	rvals := vector.MustFixedCol[uint8](rvec)
 	endswith.EndsWith(leftValues, rightValues, rvals)
 	return rvec, nil
 }

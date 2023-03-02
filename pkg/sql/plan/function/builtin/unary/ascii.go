@@ -50,7 +50,7 @@ func AsciiInt[T types.Ints](ivecs []*vector.Vector, proc *process.Process) (ret 
 	}
 	start := intStartMap[vec.GetType().Oid]
 	if vec.IsConst() {
-		v := vector.MustTCols[T](vec)[0]
+		v := vector.MustFixedCol[T](vec)[0]
 		ret = vector.NewConstFixed(rtyp, ascii.IntSingle(int64(v), start), vec.Length(), proc.Mp())
 		return
 	}
@@ -58,8 +58,8 @@ func AsciiInt[T types.Ints](ivecs []*vector.Vector, proc *process.Process) (ret 
 	if err != nil {
 		return
 	}
-	rs := vector.MustTCols[uint8](ret)
-	vs := vector.MustTCols[T](vec)
+	rs := vector.MustFixedCol[uint8](ret)
+	vs := vector.MustFixedCol[T](vec)
 	ascii.IntBatch(vs, start, rs, ret.GetNulls())
 	return
 }
@@ -78,7 +78,7 @@ func AsciiUint[T types.UInts](ivecs []*vector.Vector, proc *process.Process) (re
 	}
 	start := uintStartMap[vec.GetType().Oid]
 	if vec.IsConst() {
-		v := vector.MustTCols[T](vec)[0]
+		v := vector.MustFixedCol[T](vec)[0]
 		ret = vector.NewConstFixed(rtyp, ascii.UintSingle(uint64(v), start), vec.Length(), proc.Mp())
 		return
 	}
@@ -86,8 +86,8 @@ func AsciiUint[T types.UInts](ivecs []*vector.Vector, proc *process.Process) (re
 	if err != nil {
 		return
 	}
-	rs := vector.MustTCols[uint8](ret)
-	vs := vector.MustTCols[T](vec)
+	rs := vector.MustFixedCol[uint8](ret)
+	vs := vector.MustFixedCol[T](vec)
 	ascii.UintBatch(vs, start, rs, ret.GetNulls())
 	return
 }
@@ -105,7 +105,7 @@ func AsciiString(ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vec
 		return
 	}
 	if vec.IsConst() {
-		v := vector.MustBytesCols(vec)[0]
+		v := vector.MustBytesCol(vec)[0]
 		ret = vector.NewConstFixed(rtyp, ascii.StringSingle(v), vec.Length(), proc.Mp())
 		return
 	}
@@ -113,8 +113,8 @@ func AsciiString(ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vec
 	if err != nil {
 		return
 	}
-	rs := vector.MustTCols[uint8](ret)
-	vs := vector.MustBytesCols(vec)
+	rs := vector.MustFixedCol[uint8](ret)
+	vs := vector.MustBytesCol(vec)
 	ascii.StringBatch(vs, rs, ret.GetNulls())
 	return
 }

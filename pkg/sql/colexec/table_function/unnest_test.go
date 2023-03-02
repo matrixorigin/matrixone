@@ -196,7 +196,7 @@ func TestUnnestCall(t *testing.T) {
 func makeUnnestBatch(jsons []string, typ types.T, fn func(str string) ([]byte, error), proc *process.Process) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"a"})
 	for i := range bat.Vecs {
-		bat.Vecs[i] = vector.NewVector(types.Type{
+		bat.Vecs[i] = vector.NewVec(types.Type{
 			Oid:   typ,
 			Width: 256,
 		})

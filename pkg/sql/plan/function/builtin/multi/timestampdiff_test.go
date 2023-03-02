@@ -147,7 +147,7 @@ func TestDateDiff(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, vector.MustTCols[int64](date)[0])
+			require.Equal(t, c.want, vector.MustFixedCol[int64](date)[0])
 		})
 	}
 }

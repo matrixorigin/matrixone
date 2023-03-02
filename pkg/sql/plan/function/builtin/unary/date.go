@@ -32,7 +32,7 @@ func DatetimeToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
 
-	ivals := vector.MustTCols[types.Datetime](inputVector)
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		var rvals [1]types.Date
 		date.DatetimeToDate(ivals, rvals[:])
@@ -42,7 +42,7 @@ func DatetimeToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Date](rvec)
+		rvals := vector.MustFixedCol[types.Date](rvec)
 		date.DatetimeToDate(ivals, rvals)
 		return rvec, nil
 	}
@@ -55,7 +55,7 @@ func TimeToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
 
-	ivals := vector.MustTCols[types.Time](inputVector)
+	ivals := vector.MustFixedCol[types.Time](inputVector)
 	if inputVector.IsConst() {
 		var rvals [1]types.Date
 		date.TimeToDate(ivals, rvals[:])
@@ -65,7 +65,7 @@ func TimeToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Date](rvec)
+		rvals := vector.MustFixedCol[types.Date](rvec)
 		date.TimeToDate(ivals, rvals)
 		return rvec, nil
 	}
@@ -78,7 +78,7 @@ func DateStringToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
 
-	ivals := vector.MustStrCols(inputVector)
+	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConst() {
 		var rvals [1]types.Date
 		_, err := date.DateStringToDate(ivals, rvals[:])
@@ -91,7 +91,7 @@ func DateStringToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Date](rvec)
+		rvals := vector.MustFixedCol[types.Date](rvec)
 		_, err = date.DateStringToDate(ivals, rvals)
 		return rvec, err
 	}
@@ -100,7 +100,7 @@ func DateStringToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 func TimesToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_date, Size: 4}
-	ivals := vector.MustStrCols(inputVector)
+	ivals := vector.MustStrCol(inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
@@ -117,7 +117,7 @@ func TimesToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Date](rvec)
+		rvals := vector.MustFixedCol[types.Date](rvec)
 		_, err = date.DateStringToDate(ivals, rvals)
 		return rvec, err
 	}

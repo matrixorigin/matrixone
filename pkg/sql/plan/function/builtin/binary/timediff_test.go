@@ -101,7 +101,7 @@ func TestTimeDiffInTime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, vector.MustTCols[types.Time](c.want), vector.MustTCols[types.Time](diff))
+			require.Equal(t, vector.MustFixedCol[types.Time](c.want), vector.MustFixedCol[types.Time](diff))
 		})
 	}
 }
@@ -176,7 +176,7 @@ func TestTimeDiffInDateTime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, vector.MustTCols[types.Time](c.want), vector.MustTCols[types.Time](diff))
+			require.Equal(t, vector.MustFixedCol[types.Time](c.want), vector.MustFixedCol[types.Time](diff))
 		})
 	}
 }
@@ -187,9 +187,9 @@ func makeDateTimeVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.
 	firstDate, _ := types.ParseDatetime(firstStr, 0)
 	secondDate, _ := types.ParseDatetime(secondStr, 0)
 
-	vec[0] = vector.NewVector(types.T_datetime.ToType())
+	vec[0] = vector.NewVec(types.T_datetime.ToType())
 	vector.AppendFixed(vec[0], firstDate, false, mp)
-	vec[1] = vector.NewVector(types.T_datetime.ToType())
+	vec[1] = vector.NewVec(types.T_datetime.ToType())
 	vector.AppendFixed(vec[1], secondDate, false, mp)
 	return vec
 }
@@ -200,9 +200,9 @@ func makeTimeVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.Vect
 	firstDate, _ := types.ParseTime(firstStr, 0)
 	secondDate, _ := types.ParseTime(secondStr, 0)
 
-	vec[0] = vector.NewVector(types.T_time.ToType())
+	vec[0] = vector.NewVec(types.T_time.ToType())
 	vector.AppendFixed(vec[0], firstDate, false, mp)
-	vec[1] = vector.NewVector(types.T_time.ToType())
+	vec[1] = vector.NewVec(types.T_time.ToType())
 	vector.AppendFixed(vec[1], secondDate, false, mp)
 	return vec
 }
@@ -210,7 +210,7 @@ func makeTimeVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.Vect
 func makeResultVector(res string, proc *process.Process) *vector.Vector {
 
 	resData, _ := types.ParseTime(res, 0)
-	vec := vector.NewVector(types.T_time.ToType())
+	vec := vector.NewVec(types.T_time.ToType())
 	vector.AppendFixed(vec, resData, false, proc.Mp())
 	return vec
 }

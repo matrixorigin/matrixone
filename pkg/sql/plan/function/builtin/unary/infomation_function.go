@@ -54,11 +54,11 @@ func adapter(ivecs []*vector.Vector,
 		}
 		//step 4: fill the result vector
 		if result == nil {
-			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+			return vector.NewConstNull(rtyp, 1, proc.Mp()), nil
 		} else if rtyp.IsString() {
-			return vector.NewConstBytes(rtyp, []byte(svals[0]), ivecs[0].Length(), proc.Mp()), nil
+			return vector.NewConstBytes(rtyp, []byte(svals[0]), 1, proc.Mp()), nil
 		} else {
-			return vector.NewConstFixed(rtyp, uvals[0], ivecs[0].Length(), proc.Mp()), nil
+			return vector.NewConstFixed(rtyp, uvals[0], 1, proc.Mp()), nil
 		}
 	}
 	return nil, moerr.NewInternalError(proc.Ctx, "the parameter is invalid")
@@ -242,7 +242,7 @@ func LastQueryID(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 				return nil, nil
 			}
 			result := params[0].([]string)
-			loc := vector.MustTCols[int64](vectors[0])[0]
+			loc := vector.MustFixedCol[int64](vectors[0])[0]
 			idx, err := makeQueryIdIdx(loc, cnt, proc)
 			if err != nil {
 				return nil, err

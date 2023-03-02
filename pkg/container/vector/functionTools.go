@@ -57,7 +57,7 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeT](v *Vector) FunctionP
 			sourceVector: v,
 		}
 	}
-	cols := MustTCols[T](v)
+	cols := MustFixedCol[T](v)
 	if v.IsConst() {
 		return &FunctionParameterScalar[T]{
 			typ:          *t,
@@ -302,7 +302,7 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, len
 	if isConst {
 		v = NewConstNull(typ, 0, mp)
 	} else {
-		v = NewVector(typ)
+		v = NewVec(typ)
 	}
 
 	switch typ.Oid {

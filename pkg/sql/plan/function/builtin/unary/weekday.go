@@ -22,21 +22,21 @@ import (
 
 func DateToWeekday(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_uint8, Size: 8}
-	ivals := vector.MustTCols[types.Date](inputVector)
+	rtyp := types.Type{Oid: types.T_int64, Size: 8}
+	ivals := vector.MustFixedCol[types.Date](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConstFixed(rtyp, uint8(ivals[0].DayOfWeek2()), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, int64(ivals[0].DayOfWeek2()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint8](rvec)
+		rvals := vector.MustFixedCol[int64](rvec)
 		for i := range ivals {
-			rvals[i] = uint8(ivals[i].DayOfWeek2())
+			rvals[i] = int64(ivals[i].DayOfWeek2())
 		}
 		return rvec, nil
 	}
@@ -44,21 +44,21 @@ func DateToWeekday(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 
 func DatetimeToWeekday(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_uint8, Size: 8}
-	ivals := vector.MustTCols[types.Datetime](inputVector)
+	rtyp := types.Type{Oid: types.T_int64, Size: 8}
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		return vector.NewConstFixed(rtyp, uint8(ivals[0].DayOfWeek2()), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, int64(ivals[0].DayOfWeek2()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint8](rvec)
+		rvals := vector.MustFixedCol[int64](rvec)
 		for i := range ivals {
-			rvals[i] = uint8(ivals[i].DayOfWeek2())
+			rvals[i] = int64(ivals[i].DayOfWeek2())
 		}
 		return rvec, nil
 	}

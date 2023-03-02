@@ -36,10 +36,10 @@ func ShowVisibleBin(vec []*vector.Vector, proc *process.Process) (*vector.Vector
 		return nil, moerr.NewInvalidInput(proc.Ctx, "show visible bin, the second argument must be a scalar")
 	}
 	var err error
-	tpSlice := vector.MustTCols[uint8](vec[1])
-	srcSlice := vector.MustBytesCols(vec[0])
+	tpSlice := vector.MustFixedCol[uint8](vec[1])
+	srcSlice := vector.MustBytesCol(vec[0])
 	tp := tpSlice[0]
-	resultVec := vector.NewVector(types.T_varchar.ToType())
+	resultVec := vector.NewVec(types.T_varchar.ToType())
 	defer func() {
 		if err != nil {
 			resultVec.Free(proc.Mp())

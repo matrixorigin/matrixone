@@ -28,7 +28,7 @@ func SpaceNumber[T types.BuiltinNumber](ivecs []*vector.Vector, proc *process.Pr
 	if inputVector.IsConstNull() {
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
-	ivals := vector.MustTCols[T](inputVector)
+	ivals := vector.MustFixedCol[T](inputVector)
 	if inputVector.IsConst() {
 		var results [1]string
 		_, err := space.FillSpacesNumber(ivals, results[:])
@@ -43,7 +43,7 @@ func SpaceNumber[T types.BuiltinNumber](ivecs []*vector.Vector, proc *process.Pr
 	if _, err := space.FillSpacesNumber(ivals, results); err != nil {
 		return nil, err
 	}
-	rvec := vector.NewVector(rtyp)
+	rvec := vector.NewVec(rtyp)
 	vector.AppendStringList(rvec, results, nil, proc.Mp())
 	nulls.Set(rvec.GetNulls(), inputVector.GetNulls())
 	return rvec, nil

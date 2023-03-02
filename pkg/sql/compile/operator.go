@@ -787,7 +787,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 	defer vec.Free(proc.Mp())
 	return &limit.Argument{
-		Limit: uint64(vector.MustTCols[int64](vec)[0]),
+		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
@@ -803,7 +803,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 			if len(f.F.Args) > 1 {
 				// vec is separator
 				vec, _ := colexec.EvalExpr(constBat, proc, f.F.Args[len(f.F.Args)-1])
-				sepa := vec.GetString(0)
+				sepa := vec.GetStringAt(0)
 				multiaggs[lenMultiAggs] = group_concat.Argument{
 					Dist:      distinct,
 					GroupExpr: f.F.Args[:len(f.F.Args)-1],
@@ -950,7 +950,7 @@ func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argu
 	}
 	defer vec.Free(proc.Mp())
 	return &mergeoffset.Argument{
-		Offset: uint64(vector.MustTCols[int64](vec)[0]),
+		Offset: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
@@ -961,7 +961,7 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 	}
 	defer vec.Free(proc.Mp())
 	return &mergelimit.Argument{
-		Limit: uint64(vector.MustTCols[int64](vec)[0]),
+		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 

@@ -34,7 +34,7 @@ func TestLn(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[float64](cv)
+	cols := vector.MustFixedCol[float64](cv)
 	require.Equal(t, []float64{0.0, 0.0, 1.0, 10.0, 100.0, 99.0, -1}, cols)
 }
 
@@ -49,7 +49,7 @@ func TestExP(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[float64](cv)
+	cols := vector.MustFixedCol[float64](cv)
 	require.Equal(t, []float64{math.Exp(-1), math.Exp(0), math.Exp(1), math.Exp(2), math.Exp(10), math.Exp(100)}, cols)
 }
 
@@ -64,7 +64,7 @@ func TestSin(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[float64](cv)
+	cols := vector.MustFixedCol[float64](cv)
 	require.Equal(t, []float64{-1, 0, 1}, cols)
 }
 
@@ -79,7 +79,7 @@ func TestCos(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[float64](cv)
+	cols := vector.MustFixedCol[float64](cv)
 	require.Equal(t, []float64{-1, 1, -1}, cols)
 }
 
@@ -94,7 +94,7 @@ func TestTan(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[float64](cv)
+	cols := vector.MustFixedCol[float64](cv)
 	require.Equal(t, []float64{0}, cols)
 }
 
@@ -109,7 +109,7 @@ func TestSinh(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[float64](cv)
+	cols := vector.MustFixedCol[float64](cv)
 	require.Equal(t, []float64{0}, cols)
 }
 
@@ -124,7 +124,7 @@ func TestAcos(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[float64](cv)
+	cols := vector.MustFixedCol[float64](cv)
 	require.Equal(t, []float64{0}, cols)
 }
 
@@ -139,7 +139,7 @@ func TestAtan(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[float64](cv)
+	cols := vector.MustFixedCol[float64](cv)
 	require.Equal(t, []float64{0}, cols)
 }
 
@@ -154,7 +154,7 @@ func TestAtanWithTwoArg(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[float64](ovec)
+	cols := vector.MustFixedCol[float64](ovec)
 	require.Equal(t, []float64{-0.7853981633974483, 0, -0.7853981633974483, 0.7853981633974483, -0.7853981633974483, 0.7853981633974483}, cols)
 
 }

@@ -109,7 +109,7 @@ func NeDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector,
 // IN operator
 func INGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	leftVec, rightVec := args[0], args[1]
-	left, right := vector.MustTCols[T](leftVec), vector.MustTCols[T](rightVec)
+	left, right := vector.MustFixedCol[T](leftVec), vector.MustFixedCol[T](rightVec)
 	lenLeft := len(left)
 	lenRight := len(right)
 	if leftVec.IsConst() {
@@ -122,7 +122,7 @@ func INGeneral[T compareT](args []*vector.Vector, proc *process.Process) (*vecto
 		}
 	}
 	retVec := allocateBoolVector(lenLeft, proc)
-	ret := vector.MustTCols[bool](retVec)
+	ret := vector.MustFixedCol[bool](retVec)
 	for i := 0; i < lenLeft; i++ {
 		if _, ok := inMap[left[i]]; ok {
 			ret[i] = true
@@ -149,7 +149,7 @@ func INString(args []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		}
 	}
 	retVec := allocateBoolVector(lenLeft, proc)
-	ret := vector.MustTCols[bool](retVec)
+	ret := vector.MustFixedCol[bool](retVec)
 	for i := 0; i < lenLeft; i++ {
 		if _, ok := inMap[left[i].GetString(area1)]; ok {
 			ret[i] = true
@@ -162,7 +162,7 @@ func INString(args []*vector.Vector, proc *process.Process) (*vector.Vector, err
 // NOT IN operator
 func NotINGeneral[T compareT](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	leftVec, rightVec := ivecs[0], ivecs[1]
-	left, right := vector.MustTCols[T](leftVec), vector.MustTCols[T](rightVec)
+	left, right := vector.MustFixedCol[T](leftVec), vector.MustFixedCol[T](rightVec)
 	lenLeft := len(left)
 	lenRight := len(right)
 	if leftVec.IsConst() {
@@ -178,7 +178,7 @@ func NotINGeneral[T compareT](ivecs []*vector.Vector, proc *process.Process) (*v
 		}
 	}
 	retVec := allocateBoolVector(lenLeft, proc)
-	ret := vector.MustTCols[bool](retVec)
+	ret := vector.MustFixedCol[bool](retVec)
 	for i := 0; i < lenLeft; i++ {
 		if _, ok := notInMap[left[i]]; !ok {
 			ret[i] = true
@@ -208,7 +208,7 @@ func NotINString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		}
 	}
 	retVec := allocateBoolVector(lenLeft, proc)
-	ret := vector.MustTCols[bool](retVec)
+	ret := vector.MustFixedCol[bool](retVec)
 	for i := 0; i < lenLeft; i++ {
 		if _, ok := inMap[left[i].GetString(area1)]; !ok {
 			ret[i] = true
@@ -312,7 +312,7 @@ func CompareValenaInline(ivecs []*vector.Vector, proc *process.Process) (*vector
 		length = v2.Length()
 	}
 	vec := allocateBoolVector(length, proc)
-	veccol := vector.MustTCols[bool](vec)
+	veccol := vector.MustFixedCol[bool](vec)
 
 	if !v1.IsConst() && !v2.IsConst() {
 		for i := 0; i < length; i++ {
@@ -347,16 +347,16 @@ func CompareString(ivecs []*vector.Vector, fn compStringFn, proc *process.Proces
 	}
 
 	if v1.IsConst() && v2.IsConst() {
-		col1, col2 := vector.MustBytesCols(v1), vector.MustBytesCols(v2)
+		col1, col2 := vector.MustBytesCol(v1), vector.MustBytesCol(v2)
 		return vector.NewConstFixed(boolType, fn(col1[0], col2[0], v1.GetType().Width, v2.GetType().Width), v1.Length(), proc.Mp()), nil
 	}
 
 	if v1.IsConst() {
-		col1 := vector.MustBytesCols(v1)
+		col1 := vector.MustBytesCol(v1)
 		col2, area := vector.MustVarlenaRawData(v2)
 		length := v2.Length()
 		vec := allocateBoolVector(length, proc)
-		veccol := vector.MustTCols[bool](vec)
+		veccol := vector.MustFixedCol[bool](vec)
 		if v2.GetArea() == nil {
 			for i := range veccol {
 				veccol[i] = fn(col1[0], (&col2[i]).ByteSlice(), v1.GetType().Width, v2.GetType().Width)
@@ -372,10 +372,10 @@ func CompareString(ivecs []*vector.Vector, fn compStringFn, proc *process.Proces
 
 	if v2.IsConst() {
 		col1, area := vector.MustVarlenaRawData(v1)
-		col2 := vector.MustBytesCols(v2)
+		col2 := vector.MustBytesCol(v2)
 		length := v1.Length()
 		vec := allocateBoolVector(length, proc)
-		veccol := vector.MustTCols[bool](vec)
+		veccol := vector.MustFixedCol[bool](vec)
 		if v1.GetArea() == nil {
 			for i := range veccol {
 				veccol[i] = fn((&col1[i]).ByteSlice(), col2[0], v1.GetType().Width, v2.GetType().Width)
@@ -394,7 +394,7 @@ func CompareString(ivecs []*vector.Vector, fn compStringFn, proc *process.Proces
 	col2, area2 := vector.MustVarlenaRawData(v2)
 	length := v1.Length()
 	vec := allocateBoolVector(length, proc)
-	veccol := vector.MustTCols[bool](vec)
+	veccol := vector.MustFixedCol[bool](vec)
 	if v1.GetArea() == nil && v2.GetArea() == nil {
 		for i := range veccol {
 			veccol[i] = fn((&col1[i]).ByteSlice(), (&col2[i]).ByteSlice(), v1.GetType().Width, v2.GetType().Width)
@@ -468,7 +468,7 @@ func CompareUuidNe(v1, v2 [16]byte) bool {
 func CompareUuid(ivecs []*vector.Vector, fn compUuidFn, proc *process.Process) (*vector.Vector, error) {
 	v1, v2 := ivecs[0], ivecs[1]
 	//col1, col2 := vector.MustBytesCols(v1), vector.MustBytesCols(v2)
-	col1, col2 := vector.MustTCols[types.Uuid](v1), vector.MustTCols[types.Uuid](v2)
+	col1, col2 := vector.MustFixedCol[types.Uuid](v1), vector.MustFixedCol[types.Uuid](v2)
 	if v1.IsConstNull() || v2.IsConstNull() {
 		return handleScalarNull(v1, v2, proc)
 	}
@@ -481,7 +481,7 @@ func CompareUuid(ivecs []*vector.Vector, fn compUuidFn, proc *process.Process) (
 	if v1.IsConst() {
 		length := v2.Length()
 		vec := allocateBoolVector(length, proc)
-		veccol := vector.MustTCols[bool](vec)
+		veccol := vector.MustFixedCol[bool](vec)
 		for i := range veccol {
 			veccol[i] = fn(col1[0], col2[i])
 		}
@@ -492,7 +492,7 @@ func CompareUuid(ivecs []*vector.Vector, fn compUuidFn, proc *process.Process) (
 	if v2.IsConst() {
 		length := v1.Length()
 		vec := allocateBoolVector(length, proc)
-		veccol := vector.MustTCols[bool](vec)
+		veccol := vector.MustFixedCol[bool](vec)
 		for i := range veccol {
 			veccol[i] = fn(col1[i], col2[0])
 		}
@@ -503,7 +503,7 @@ func CompareUuid(ivecs []*vector.Vector, fn compUuidFn, proc *process.Process) (
 	// Vec Vec
 	length := v1.Length()
 	vec := allocateBoolVector(length, proc)
-	veccol := vector.MustTCols[bool](vec)
+	veccol := vector.MustFixedCol[bool](vec)
 	for i := range veccol {
 		veccol[i] = fn(col1[i], col2[i])
 	}

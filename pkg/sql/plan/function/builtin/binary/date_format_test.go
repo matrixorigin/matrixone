@@ -661,7 +661,7 @@ func TestDateFormatWithScalar(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, []byte(c.expect), formatVec.GetBytes(0))
+			require.Equal(t, []byte(c.expect), formatVec.GetBytesAt(0))
 		})
 	}
 }

@@ -215,7 +215,7 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 // }
 
 func getMaxnum[T constraints.Integer](vec *vector.Vector, length, maxNum, step, cacheSize uint64) uint64 {
-	vs := vector.MustTCols[T](vec)
+	vs := vector.MustFixedCol[T](vec)
 	rowIndex := uint64(0)
 	storeNum := maxNum
 	for rowIndex = 0; rowIndex < length; rowIndex++ {
@@ -240,7 +240,7 @@ func getMaxnum[T constraints.Integer](vec *vector.Vector, length, maxNum, step, 
 }
 
 func updateVector[T constraints.Integer](vec *vector.Vector, length, curNum, stepNum uint64) {
-	vs := vector.MustTCols[T](vec)
+	vs := vector.MustFixedCol[T](vec)
 	rowIndex := uint64(0)
 	for rowIndex = 0; rowIndex < length; rowIndex++ {
 		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) {
@@ -483,18 +483,18 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 			return 0, 0, nil, moerr.NewInternalError(param.ctx, "the mo_increment_columns col num is not two")
 		}
 
-		vs2 := vector.MustTCols[uint64](bat.Vecs[2])
-		vs3 := vector.MustTCols[uint64](bat.Vecs[3])
+		vs2 := vector.MustFixedCol[uint64](bat.Vecs[2])
+		vs3 := vector.MustFixedCol[uint64](bat.Vecs[3])
 		var rowIndex int64
 		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
-			str := vector.MustStrCols(bat.Vecs[1])[rowIndex]
+			str := vector.MustStrCol(bat.Vecs[1])[rowIndex]
 			if str == colName {
 				break
 			}
 		}
 		if rowIndex < int64(bat.Length()) {
-			vec := vector.NewVector(*bat.GetVector(0).GetType())
-			rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIndex]
+			vec := vector.NewVec(*bat.GetVector(0).GetType())
+			rowid := vector.MustFixedCol[types.Rowid](bat.GetVector(0))[rowIndex]
 			if err := vector.AppendFixed(vec, rowid, false, mp); err != nil {
 				panic(err)
 			}
@@ -529,11 +529,11 @@ func updateAutoIncrTable(param *AutoIncrParam, delBat *batch.Batch, curNum uint6
 }
 
 func makeAutoIncrBatch(name string, num, step uint64, mp *mpool.MPool) *batch.Batch {
-	vec := vector.NewVector(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType())
 	vector.AppendBytes(vec, []byte(name), false, mp)
-	vec2 := vector.NewVector(types.T_uint64.ToType())
+	vec2 := vector.NewVec(types.T_uint64.ToType())
 	vector.AppendFixed(vec2, num, false, mp)
-	vec3 := vector.NewVector(types.T_uint64.ToType())
+	vec3 := vector.NewVec(types.T_uint64.ToType())
 	vector.AppendFixed(vec3, step, false, mp)
 	bat := batch.NewWithSize(3)
 	bat.SetAttributes(catalog.AutoIncrColumnNames[1:])
@@ -582,15 +582,15 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 		}
 		var rowIndex int64
 		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
-			str := vector.MustStrCols(bat.Vecs[1])[rowIndex]
+			str := vector.MustStrCol(bat.Vecs[1])[rowIndex]
 			if str == colName {
-				currentNum := vector.MustTCols[uint64](bat.Vecs[2])[rowIndex : rowIndex+1]
+				currentNum := vector.MustFixedCol[uint64](bat.Vecs[2])[rowIndex : rowIndex+1]
 				/* XXX dangerous operation
 				retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
 				retbat.Vecs[0].Col = vector.MustTCols[types.Rowid](retbat.Vecs[0])[rowIndex : rowIndex+1]
 				*/
-				vec := vector.NewVector(*bat.GetVector(0).GetType())
-				rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIndex]
+				vec := vector.NewVec(*bat.GetVector(0).GetType())
+				rowid := vector.MustFixedCol[types.Rowid](bat.GetVector(0))[rowIndex]
 				if err := vector.AppendFixed(vec, rowid, false, mp); err != nil {
 					panic(err)
 				}

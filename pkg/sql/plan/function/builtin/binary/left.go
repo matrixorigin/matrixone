@@ -28,8 +28,8 @@ func Left(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if leftVec.IsConstNull() || rightVec.IsConstNull() {
 		return vector.NewConstNull(*leftVec.GetType(), leftVec.Length(), proc.Mp()), nil
 	}
-	strValues := vector.MustStrCols(leftVec)
-	lengthValues := vector.MustTCols[int64](rightVec)
+	strValues := vector.MustStrCol(leftVec)
+	lengthValues := vector.MustFixedCol[int64](rightVec)
 
 	if leftVec.IsConst() && rightVec.IsConst() {
 		var rvals [1]string
@@ -38,14 +38,14 @@ func Left(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	} else if leftVec.IsConst() && !rightVec.IsConst() {
 		rvals := make([]string, len(lengthValues))
 		left.LeftLeftConst(strValues, lengthValues, rvals)
-		rvec := vector.NewVector(*leftVec.GetType())
+		rvec := vector.NewVec(*leftVec.GetType())
 		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
 		nulls.Set(rvec.GetNulls(), rightVec.GetNulls())
 		return rvec, nil
 	} else if !leftVec.IsConst() && rightVec.IsConst() {
 		rvals := make([]string, len(strValues))
 		left.LeftRightConst(strValues, lengthValues, rvals)
-		rvec := vector.NewVector(*leftVec.GetType())
+		rvec := vector.NewVec(*leftVec.GetType())
 		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
 		nulls.Set(rvec.GetNulls(), leftVec.GetNulls())
 		return rvec, nil
@@ -54,7 +54,7 @@ func Left(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		left.Left(strValues, lengthValues, rvals)
 		resultNsp := nulls.NewWithSize(len(strValues))
 		nulls.Or(leftVec.GetNulls(), rightVec.GetNulls(), resultNsp)
-		rvec := vector.NewVector(*leftVec.GetType())
+		rvec := vector.NewVec(*leftVec.GetType())
 		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
 		rvec.SetNulls(resultNsp)
 		return rvec, nil

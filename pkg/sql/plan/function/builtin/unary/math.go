@@ -92,7 +92,7 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if vs[0].IsConstNull() {
 		return vector.NewConstNull(*vs[0].GetType(), vs[0].Length(), proc.Mp()), nil
 	}
-	vals := vector.MustTCols[float64](vs[0])
+	vals := vector.MustFixedCol[float64](vs[0])
 	for i := range vals {
 		if vals[i] == float64(1) {
 			return nil, moerr.NewInvalidArg(proc.Ctx, "log base", 1)

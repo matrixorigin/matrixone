@@ -256,7 +256,7 @@ func (c *compare[T]) Vector() *vector.Vector {
 func (c *compare[T]) Set(idx int, vec *vector.Vector) {
 	c.vs[idx] = vec
 	c.ns[idx] = vec.GetNulls()
-	c.xs[idx] = vector.MustTCols[T](vec)
+	c.xs[idx] = vector.ExpandFixedCol[T](vec)
 }
 
 func (c *compare[T]) Compare(veci, vecj int, vi, vj int64) int {

@@ -27,7 +27,7 @@ import (
 
 func Like(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := ivecs[0], ivecs[1]
-	lvs, rvs := vector.MustStrCols(lv), vector.MustBytesCols(rv)
+	lvs, rvs := vector.MustStrCol(lv), vector.MustBytesCol(rv)
 	rtyp := types.T_bool.ToType()
 
 	if lv.IsConstNull() || rv.IsConstNull() {
@@ -50,8 +50,8 @@ func Like(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 				return nil, err
 			}
 		}
-		vec := vector.NewVector(rtyp)
-		vector.AppendList(vec, rs, nil, proc.Mp())
+		vec := vector.NewVec(rtyp)
+		vector.AppendFixedList(vec, rs, nil, proc.Mp())
 		return vec, nil
 	case lv.IsConst() && rv.IsConst(): // in our design, this case should deal while pruning extends.
 		ok, err := like.BtConstAndConst(lvs[0], rvs[0])
@@ -64,8 +64,8 @@ func Like(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.NewVector(rtyp)
-		vector.AppendList(vec, rs, nil, proc.Mp())
+		vec := vector.NewVec(rtyp)
+		vector.AppendFixedList(vec, rs, nil, proc.Mp())
 		return vec, nil
 	case !lv.IsConst() && !rv.IsConst():
 		var nsp *nulls.Nulls
@@ -93,8 +93,8 @@ func Like(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 				return nil, err
 			}
 		}
-		vec := vector.NewVector(rtyp)
-		vector.AppendList(vec, rs, nil, proc.Mp())
+		vec := vector.NewVec(rtyp)
+		vector.AppendFixedList(vec, rs, nil, proc.Mp())
 		return vec, nil
 	}
 	return nil, moerr.NewInternalError(proc.Ctx, "unexpected case for LIKE operator")
@@ -102,7 +102,7 @@ func Like(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
 func ILike(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := ivecs[0], ivecs[1]
-	lvs, rvs := vector.MustStrCols(lv), vector.MustBytesCols(rv)
+	lvs, rvs := vector.MustStrCol(lv), vector.MustBytesCol(rv)
 	for i := range lvs {
 		lvs[i] = strings.ToLower(lvs[i])
 	}
@@ -131,8 +131,8 @@ func ILike(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 				return nil, err
 			}
 		}
-		rv := vector.NewVector(rtyp)
-		vector.AppendList(rv, rs, nil, proc.Mp())
+		rv := vector.NewVec(rtyp)
+		vector.AppendFixedList(rv, rs, nil, proc.Mp())
 		nulls.Set(rv.GetNulls(), lv.GetNulls())
 		return rv, nil
 	case lv.IsConst() && rv.IsConst(): // in our design, this case should deal while pruning extends.
@@ -147,8 +147,8 @@ func ILike(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 		if err != nil {
 			return nil, err
 		}
-		rv := vector.NewVector(rtyp)
-		vector.AppendList(rv, rs, nil, proc.Mp())
+		rv := vector.NewVec(rtyp)
+		vector.AppendFixedList(rv, rs, nil, proc.Mp())
 		nulls.Set(rv.GetNulls(), lv.GetNulls())
 		return rv, nil
 	case !lv.IsConst() && !rv.IsConst():
@@ -177,8 +177,8 @@ func ILike(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 				return nil, err
 			}
 		}
-		rv := vector.NewVector(rtyp)
-		vector.AppendList(rv, rs, nil, proc.Mp())
+		rv := vector.NewVec(rtyp)
+		vector.AppendFixedList(rv, rs, nil, proc.Mp())
 		rv.SetNulls(nsp)
 		return rv, nil
 	}

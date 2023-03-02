@@ -2407,21 +2407,21 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 		return nil, "", err
 	}
 	// cols
-	vec := vector.NewVector(catalog.MetaColTypes[catalog.COLUMNS_IDX])
+	vec := vector.NewVec(catalog.MetaColTypes[catalog.COLUMNS_IDX])
 	if err = vec.UnmarshalBinary(iov.Entries[0].Object.([]byte)); err != nil {
 		return nil, "", err
 	}
-	def := vector.MustStrCols(vec)[0]
+	def := vector.MustStrCol(vec)[0]
 	r := &plan.ResultColDef{}
 	if err = r.Unmarshal([]byte(def)); err != nil {
 		return nil, "", err
 	}
 	// paths
-	vec = vector.NewVector(catalog.MetaColTypes[catalog.RESULT_PATH_IDX])
+	vec = vector.NewVec(catalog.MetaColTypes[catalog.RESULT_PATH_IDX])
 	if err = vec.UnmarshalBinary(iov.Entries[1].Object.([]byte)); err != nil {
 		return nil, "", err
 	}
-	str := vector.MustStrCols(vec)[0]
+	str := vector.MustStrCol(vec)[0]
 	return r.ResultCols, str, nil
 }
 

@@ -158,7 +158,7 @@ func TestLpadVarchar(t *testing.T) {
 				ret := nulls.Contains(lpad.GetNulls(), 0)
 				require.Equal(t, ret, true)
 			} else {
-				require.Equal(t, c.wantBytes, lpad.GetBytes(0))
+				require.Equal(t, c.wantBytes, lpad.GetBytesAt(0))
 			}
 
 		})

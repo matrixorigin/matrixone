@@ -78,8 +78,9 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 		case types.T_datetime:
 			typ.Precision = 6
 		}
-		vec := vector.NewVector(typ)
+		vec := vector.NewVec(typ)
 		vec.PreExtend(batchSize, pool)
+		vec.SetLength(batchSize)
 		//vec.SetOriginal(false)
 		batch.Vecs[i] = vec
 	}
@@ -191,7 +192,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 		vec := bat.Vecs[colIdx]
 		switch id {
 		case types.T_int64:
-			cols := vector.MustTCols[int64](vec)
+			cols := vector.MustFixedCol[int64](vec)
 			switch t := field.(type) {
 			case int32:
 				cols[rowIdx] = (int64)(field.(int32))
@@ -201,7 +202,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 				panic(moerr.NewInternalError(ctx, "not Support integer type %v", t))
 			}
 		case types.T_uint64:
-			cols := vector.MustTCols[uint64](vec)
+			cols := vector.MustFixedCol[uint64](vec)
 			switch t := field.(type) {
 			case int32:
 				cols[rowIdx] = (uint64)(field.(int32))
@@ -215,7 +216,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 				panic(moerr.NewInternalError(ctx, "not Support integer type %v", t))
 			}
 		case types.T_float64:
-			cols := vector.MustTCols[float64](vec)
+			cols := vector.MustFixedCol[float64](vec)
 
 			switch t := field.(type) {
 			case float64:
@@ -253,7 +254,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 			}
 
 		case types.T_datetime:
-			cols := vector.MustTCols[types.Datetime](vec)
+			cols := vector.MustFixedCol[types.Datetime](vec)
 			switch t := field.(type) {
 			case time.Time:
 				datetimeStr := Time2DatetimeString(field.(time.Time))
@@ -391,22 +392,22 @@ func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 	typ := vec.GetType()
 	switch typ.Oid {
 	case types.T_int64:
-		cols := vector.MustTCols[int64](vec)
+		cols := vector.MustFixedCol[int64](vec)
 		return len(cols), nil
 	case types.T_uint64:
-		cols := vector.MustTCols[uint64](vec)
+		cols := vector.MustFixedCol[uint64](vec)
 		return len(cols), nil
 	case types.T_float64:
-		cols := vector.MustTCols[float64](vec)
+		cols := vector.MustFixedCol[float64](vec)
 		return len(cols), nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		cols := vector.MustTCols[types.Varlena](vec)
+		cols := vector.MustFixedCol[types.Varlena](vec)
 		return len(cols), nil
 	case types.T_json:
-		cols := vector.MustTCols[types.Varlena](vec)
+		cols := vector.MustFixedCol[types.Varlena](vec)
 		return len(cols), nil
 	case types.T_datetime:
-		cols := vector.MustTCols[types.Datetime](vec)
+		cols := vector.MustFixedCol[types.Datetime](vec)
 		return len(cols), nil
 	default:
 		return 0, moerr.NewInternalError(ctx, "the value type %d is not support now", *vec.GetType())
@@ -417,13 +418,13 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 	typ := vec.GetType()
 	switch typ.Oid {
 	case types.T_int64:
-		cols := vector.MustTCols[int64](vec)
+		cols := vector.MustFixedCol[int64](vec)
 		return fmt.Sprintf("%d", cols[rowIdx]), nil
 	case types.T_uint64:
-		cols := vector.MustTCols[uint64](vec)
+		cols := vector.MustFixedCol[uint64](vec)
 		return fmt.Sprintf("%d", cols[rowIdx]), nil
 	case types.T_float64:
-		cols := vector.MustTCols[float64](vec)
+		cols := vector.MustFixedCol[float64](vec)
 		return fmt.Sprintf("%f", cols[rowIdx]), nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		cols, area := vector.MustVarlenaRawData(vec)
@@ -434,7 +435,7 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 		bjson := types.DecodeJson(val)
 		return bjson.String(), nil
 	case types.T_datetime:
-		cols := vector.MustTCols[types.Datetime](vec)
+		cols := vector.MustFixedCol[types.Datetime](vec)
 		return Time2DatetimeString(cols[rowIdx].ConvertToGoTime(time.Local)), nil
 	default:
 		return "", moerr.NewInternalError(ctx, "the value type %d is not support now", *vec.GetType())
@@ -448,7 +449,7 @@ func Time2DatetimeString(t time.Time) string {
 }
 
 func newVector(tye types.Type, buf []byte) *vector.Vector {
-	vector := vector.NewVector(tye)
+	vector := vector.NewVec(tye)
 	vector.UnmarshalBinary(buf)
 	return vector
 }

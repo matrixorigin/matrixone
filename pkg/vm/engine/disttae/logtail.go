@@ -111,8 +111,8 @@ func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 			if err != nil {
 				return err
 			}
-			vs := vector.MustTCols[uint64](vec)
-			timestamps := vector.MustTCols[types.TS](timeVec)
+			vs := vector.MustFixedCol[uint64](vec)
+			timestamps := vector.MustFixedCol[types.TS](timeVec)
 			for i, v := range vs {
 				if err := tbl.parts[idx].DeleteByBlockID(ctx, timestamps[i].ToTimestamp(), v); err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {

@@ -17,6 +17,7 @@ package vector
 import (
 	"context"
 	"strings"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -27,10 +28,10 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-func MustTCols[T any](v *Vector) []T {
+func MustFixedCol[T any](v *Vector) []T {
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
-	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
+	if v.GetType().Oid == types.T_any || len(v.rawData) == 0 {
 		return nil
 	}
 	if v.class == CONSTANT {
@@ -39,11 +40,11 @@ func MustTCols[T any](v *Vector) []T {
 	return v.col.([]T)[:v.length]
 }
 
-func MustBytesCols(v *Vector) [][]byte {
-	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
+func MustBytesCol(v *Vector) [][]byte {
+	if v.GetType().Oid == types.T_any || len(v.rawData) == 0 {
 		return nil
 	}
-	varcol := MustTCols[types.Varlena](v)
+	varcol := MustFixedCol[types.Varlena](v)
 	if v.class == CONSTANT {
 		return [][]byte{(&varcol[0]).GetByteSlice(v.area)}
 	} else {
@@ -55,11 +56,11 @@ func MustBytesCols(v *Vector) [][]byte {
 	}
 }
 
-func MustStrCols(v *Vector) []string {
-	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
+func MustStrCol(v *Vector) []string {
+	if v.GetType().Oid == types.T_any || len(v.rawData) == 0 {
 		return nil
 	}
-	varcol := MustTCols[types.Varlena](v)
+	varcol := MustFixedCol[types.Varlena](v)
 	if v.class == CONSTANT {
 		return []string{(&varcol[0]).GetString(v.area)}
 	} else {
@@ -71,9 +72,70 @@ func MustStrCols(v *Vector) []string {
 	}
 }
 
+// ExpandFixedCol decode data and return decoded []T.
+// For const/scalar vector we expand and return newly allocated slice.
+func ExpandFixedCol[T any](v *Vector) []T {
+	if v.IsConst() {
+		cols := v.col.([]T)
+		vs := make([]T, v.Length())
+		for i := range vs {
+			vs[i] = cols[0]
+		}
+		return vs
+	}
+	return MustFixedCol[T](v)
+}
+
+func ExpandStrCol(v *Vector) []string {
+	if v.IsConst() {
+		vs := make([]string, v.Length())
+		if !v.IsConstNull() {
+			cols := v.col.([]types.Varlena)
+			ss := cols[0].GetString(v.area)
+			for i := range vs {
+				vs[i] = ss
+			}
+		}
+		return vs
+	}
+	return MustStrCol(v)
+}
+
+func ExpandBytesCol(v *Vector) [][]byte {
+	if v.IsConst() {
+		cols := v.col.([]types.Varlena)
+		ss := cols[0].GetByteSlice(v.area)
+		vs := make([][]byte, v.Length())
+		for i := range vs {
+			vs[i] = ss
+		}
+		return vs
+	}
+	return MustBytesCol(v)
+}
+
 func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
-	data = MustTCols[types.Varlena](v)
+	data = MustFixedCol[types.Varlena](v)
 	area = v.area
+	return
+}
+
+func FromDNVector(typ types.Type, header []types.Varlena, storage []byte) (vec *Vector, err error) {
+	vec = NewVec(typ)
+	vec.selfManaged = true
+	if typ.IsString() {
+		vec.col = header
+		if len(header) > 0 {
+			vec.rawData = unsafe.Slice((*byte)(unsafe.Pointer(&header[0])), typ.TypeSize()*cap(header))
+		}
+		vec.area = storage
+		vec.capacity = cap(header)
+		vec.length = len(header)
+	} else {
+		vec.rawData = storage
+		vec.length = len(storage) / typ.TypeSize()
+		vec.setupColFromData()
+	}
 	return
 }
 
@@ -81,11 +143,11 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 func extend(v *Vector, rows int, m *mpool.MPool) error {
 	if tgtCap := v.length + rows; tgtCap > v.capacity {
 		sz := v.typ.TypeSize()
-		ndata, err := m.Grow(v.data, tgtCap*sz)
+		ndata, err := m.Grow(v.rawData, tgtCap*sz)
 		if err != nil {
 			return err
 		}
-		v.data = ndata[:cap(ndata)]
+		v.rawData = ndata[:cap(ndata)]
 		v.setupColFromData()
 	}
 	return nil
@@ -143,7 +205,7 @@ func (v *Vector) setupColFromData() {
 		}
 	}
 	tlen := v.GetType().TypeSize()
-	v.capacity = cap(v.data) / tlen
+	v.capacity = cap(v.rawData) / tlen
 }
 
 func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
@@ -159,15 +221,16 @@ func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
 		IsConst:  vec.IsConst(),
 		Len:      uint32(vec.length),
 		Type:     TypeToProtoType(vec.typ),
-		Data:     vec.data[:vec.length*sz],
+		Data:     vec.rawData[:vec.length*sz],
 	}, nil
 }
 
 func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	rvec := &Vector{
-		area:   vec.Area,
-		length: int(vec.Len),
-		typ:    ProtoTypeToType(vec.Type),
+		area:        vec.Area,
+		length:      int(vec.Len),
+		typ:         ProtoTypeToType(vec.Type),
+		selfManaged: true,
 	}
 	if vec.IsConst {
 		rvec.class = CONSTANT
@@ -178,7 +241,7 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	if err := rvec.nsp.Read(vec.Nsp); err != nil {
 		return nil, err
 	}
-	rvec.data = vec.Data
+	rvec.rawData = vec.Data
 	rvec.setupColFromData()
 	return rvec, nil
 }
@@ -263,8 +326,8 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 }
 
 func checkNumberIntersect[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp](v1, v2 *Vector) (bool, error) {
-	cols1 := MustTCols[T](v1)
-	cols2 := MustTCols[T](v2)
+	cols1 := MustFixedCol[T](v1)
+	cols2 := MustFixedCol[T](v2)
 	return checkIntersect(cols1, cols2, func(i1, i2 T) bool {
 		return i1 >= i2
 	}, func(i1, i2 T) bool {
@@ -273,14 +336,14 @@ func checkNumberIntersect[T constraints.Integer | constraints.Float | types.Date
 }
 
 func checkStrIntersect(v1, v2 *Vector, gtFun compFn[string], ltFun compFn[string]) (bool, error) {
-	cols1 := MustStrCols(v1)
-	cols2 := MustStrCols(v2)
+	cols1 := MustStrCol(v1)
+	cols2 := MustStrCol(v2)
 	return checkIntersect(cols1, cols2, gtFun, ltFun)
 }
 
 func checkGeneralIntersect[T compT](v1, v2 *Vector, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
-	cols1 := MustTCols[T](v1)
-	cols2 := MustTCols[T](v2)
+	cols1 := MustFixedCol[T](v1)
+	cols2 := MustFixedCol[T](v2)
 	return checkIntersect(cols1, cols2, gtFun, ltFun)
 }
 
@@ -482,8 +545,8 @@ func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) b
 	if nulls.Any(vec1.nsp) || nulls.Any(vec2.nsp) {
 		return true
 	}
-	cols1 := MustTCols[T](vec1)
-	cols2 := MustTCols[T](vec2)
+	cols1 := MustFixedCol[T](vec1)
+	cols2 := MustFixedCol[T](vec2)
 	return compareCheckAnyResultIsTrue(cols1, cols2, fn)
 }
 
@@ -497,8 +560,8 @@ func runStrCompareCheckAnyResultIsTrue(vec1, vec2 *Vector, fn compFn[string]) bo
 		return true
 	}
 
-	cols1 := MustStrCols(vec1)
-	cols2 := MustStrCols(vec2)
+	cols1 := MustStrCol(vec1)
+	cols2 := MustStrCol(vec2)
 	return compareCheckAnyResultIsTrue(cols1, cols2, fn)
 }
 

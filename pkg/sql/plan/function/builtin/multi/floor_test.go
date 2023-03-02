@@ -36,7 +36,7 @@ func Test_FloorUint64(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data := vector.MustTCols[uint64](vec)
+		data := vector.MustFixedCol[uint64](vec)
 		ok := (data != nil)
 		if !ok {
 			log.Fatal(moerr.NewInternalError(proc.Ctx, "the AbsUint64 function return value type is not []uint64"))
@@ -75,7 +75,7 @@ func Test_FloorInt64(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data := vector.MustTCols[int64](vec)
+		data := vector.MustFixedCol[int64](vec)
 		ok := (data != nil)
 		if !ok {
 			log.Fatal(moerr.NewInternalError(proc.Ctx, "the AbsUint64 function return value type is not []int64"))
@@ -114,7 +114,7 @@ func Test_FloorFloat64(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data := vector.MustTCols[float64](vec)
+		data := vector.MustFixedCol[float64](vec)
 		ok := (data != nil)
 		if !ok {
 			log.Fatal(moerr.NewInternalError(proc.Ctx, "the AbsUint64 function return value type is not []int64"))

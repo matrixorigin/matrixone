@@ -37,8 +37,8 @@ const (
 )
 
 func NumericMultSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
-	xt, yt := vector.MustTCols[T](xs), vector.MustTCols[T](ys)
-	rt := vector.MustTCols[T](rs)
+	xt, yt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys)
+	rt := vector.MustFixedCol[T](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
@@ -56,7 +56,7 @@ func NumericMultSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 }
 
 func NumericMultUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
@@ -74,7 +74,7 @@ func NumericMultUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) erro
 }
 
 func NumericMultFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR

@@ -180,73 +180,73 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 	case types.T_bool:
 		return &plan.Const{
 			Value: &plan.Const_Bval{
-				Bval: vector.MustTCols[bool](vec)[0],
+				Bval: vector.MustFixedCol[bool](vec)[0],
 			},
 		}
 	case types.T_int8:
 		return &plan.Const{
 			Value: &plan.Const_I8Val{
-				I8Val: int32(vector.MustTCols[int8](vec)[0]),
+				I8Val: int32(vector.MustFixedCol[int8](vec)[0]),
 			},
 		}
 	case types.T_int16:
 		return &plan.Const{
 			Value: &plan.Const_I16Val{
-				I16Val: int32(vector.MustTCols[int16](vec)[0]),
+				I16Val: int32(vector.MustFixedCol[int16](vec)[0]),
 			},
 		}
 	case types.T_int32:
 		return &plan.Const{
 			Value: &plan.Const_I32Val{
-				I32Val: vector.MustTCols[int32](vec)[0],
+				I32Val: vector.MustFixedCol[int32](vec)[0],
 			},
 		}
 	case types.T_int64:
 		return &plan.Const{
 			Value: &plan.Const_I64Val{
-				I64Val: vector.MustTCols[int64](vec)[0],
+				I64Val: vector.MustFixedCol[int64](vec)[0],
 			},
 		}
 	case types.T_uint8:
 		return &plan.Const{
 			Value: &plan.Const_U8Val{
-				U8Val: uint32(vector.MustTCols[uint8](vec)[0]),
+				U8Val: uint32(vector.MustFixedCol[uint8](vec)[0]),
 			},
 		}
 	case types.T_uint16:
 		return &plan.Const{
 			Value: &plan.Const_U16Val{
-				U16Val: uint32(vector.MustTCols[uint16](vec)[0]),
+				U16Val: uint32(vector.MustFixedCol[uint16](vec)[0]),
 			},
 		}
 	case types.T_uint32:
 		return &plan.Const{
 			Value: &plan.Const_U32Val{
-				U32Val: vector.MustTCols[uint32](vec)[0],
+				U32Val: vector.MustFixedCol[uint32](vec)[0],
 			},
 		}
 	case types.T_uint64:
 		return &plan.Const{
 			Value: &plan.Const_U64Val{
-				U64Val: vector.MustTCols[uint64](vec)[0],
+				U64Val: vector.MustFixedCol[uint64](vec)[0],
 			},
 		}
 	case types.T_float32:
 		return &plan.Const{
 			Value: &plan.Const_Fval{
-				Fval: vector.MustTCols[float32](vec)[0],
+				Fval: vector.MustFixedCol[float32](vec)[0],
 			},
 		}
 	case types.T_float64:
 		return &plan.Const{
 			Value: &plan.Const_Dval{
-				Dval: vector.MustTCols[float64](vec)[0],
+				Dval: vector.MustFixedCol[float64](vec)[0],
 			},
 		}
 	case types.T_varchar, types.T_char, types.T_text, types.T_blob:
 		return &plan.Const{
 			Value: &plan.Const_Sval{
-				Sval: vec.GetString(0),
+				Sval: vec.GetStringAt(0),
 			},
 		}
 	case types.T_json:
@@ -255,19 +255,19 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 		}
 		return &plan.Const{
 			Value: &plan.Const_Sval{
-				Sval: vec.GetString(0),
+				Sval: vec.GetStringAt(0),
 			},
 		}
 	case types.T_timestamp:
 		return &plan.Const{
 			Value: &plan.Const_Timestampval{
-				Timestampval: int64(vector.MustTCols[types.Timestamp](vec)[0]),
+				Timestampval: int64(vector.MustFixedCol[types.Timestamp](vec)[0]),
 			},
 		}
 	case types.T_date:
 		return &plan.Const{
 			Value: &plan.Const_Dateval{
-				Dateval: int32(vector.MustTCols[types.Date](vec)[0]),
+				Dateval: int32(vector.MustFixedCol[types.Date](vec)[0]),
 			},
 		}
 	case types.T_time:
@@ -276,7 +276,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 		}
 		return &plan.Const{
 			Value: &plan.Const_Timeval{
-				Timeval: int64(vector.MustTCols[types.Time](vec)[0]),
+				Timeval: int64(vector.MustFixedCol[types.Time](vec)[0]),
 			},
 		}
 	case types.T_datetime:
@@ -285,7 +285,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 		}
 		return &plan.Const{
 			Value: &plan.Const_Datetimeval{
-				Datetimeval: int64(vector.MustTCols[types.Datetime](vec)[0]),
+				Datetimeval: int64(vector.MustFixedCol[types.Datetime](vec)[0]),
 			},
 		}
 	case types.T_decimal64:
@@ -294,7 +294,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 		}
 		return &plan.Const{
 			Value: &plan.Const_Decimal64Val{
-				Decimal64Val: &plan.Decimal64{A: types.Decimal64ToInt64Raw(vector.MustTCols[types.Decimal64](vec)[0])},
+				Decimal64Val: &plan.Decimal64{A: types.Decimal64ToInt64Raw(vector.MustFixedCol[types.Decimal64](vec)[0])},
 			},
 		}
 	case types.T_decimal128:
@@ -302,7 +302,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 			return nil
 		}
 		decimalValue := &plan.Decimal128{}
-		decimalValue.A, decimalValue.B = types.Decimal128ToInt64Raw(vector.MustTCols[types.Decimal128](vec)[0])
+		decimalValue.A, decimalValue.B = types.Decimal128ToInt64Raw(vector.MustFixedCol[types.Decimal128](vec)[0])
 		return &plan.Const{Value: &plan.Const_Decimal128Val{Decimal128Val: decimalValue}}
 	default:
 		return nil

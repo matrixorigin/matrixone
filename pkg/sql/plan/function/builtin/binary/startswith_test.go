@@ -50,7 +50,7 @@ func Test_StartsWith(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data := vector.MustTCols[uint8](vec)
+		data := vector.MustFixedCol[uint8](vec)
 		ok := (data != nil)
 		if !ok {
 			log.Fatal(moerr.NewInternalError(proc.Ctx, "the Startswith function return value type is not []uint8"))

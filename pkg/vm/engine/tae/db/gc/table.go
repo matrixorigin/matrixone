@@ -314,7 +314,7 @@ func (t *GCTable) replayData(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		pkgVec := vector.NewVector(types[i])
+		pkgVec := vector.NewVec(types[i])
 		v := make([]byte, len(colData.Entries[0].Object.([]byte)))
 		copy(v, colData.Entries[0].Object.([]byte))
 		if err = pkgVec.UnmarshalBinary(v); err != nil {

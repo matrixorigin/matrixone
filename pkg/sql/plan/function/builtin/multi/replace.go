@@ -25,9 +25,9 @@ func Replace(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	firstVector := ivecs[0]
 	secondVector := ivecs[1]
 	thirdVector := ivecs[2]
-	firstValues := vector.MustStrCols(firstVector)
-	secondValues := vector.MustStrCols(secondVector)
-	thirdValues := vector.MustStrCols(thirdVector)
+	firstValues := vector.MustStrCol(firstVector)
+	secondValues := vector.MustStrCol(secondVector)
+	thirdValues := vector.MustStrCol(thirdVector)
 	rtyp := types.T_varchar.ToType()
 
 	//maxLen

@@ -49,7 +49,7 @@ func NumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 }
 
 func cNumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
@@ -67,7 +67,7 @@ func cNumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 }
 
 func goNumericAddSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	if xs.IsConst() {
 		for i, y := range yt {
 			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
@@ -106,7 +106,7 @@ func NumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error
 }
 
 func cNumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
@@ -124,7 +124,7 @@ func cNumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) erro
 }
 
 func goNumericAddUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	if xs.IsConst() {
 		for i, y := range yt {
 			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
@@ -163,7 +163,7 @@ func NumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 }
 
 func cNumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	flag := 0
 	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
@@ -181,7 +181,7 @@ func cNumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 }
 
 func goNumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	if xs.IsConst() {
 		for i, y := range yt {
 			if !nulls.Contains(rs.GetNulls(), uint64(i)) {

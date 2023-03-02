@@ -29,21 +29,21 @@ func Format(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	}
 
 	//get the first arg number
-	numberCols := vector.MustStrCols(ivecs[0])
+	numberCols := vector.MustStrCol(ivecs[0])
 	//get the second arg precision
-	precisionCols := vector.MustStrCols(ivecs[1])
+	precisionCols := vector.MustStrCol(ivecs[1])
 	//get the third arg locale
 	var localeCols []string
 	if paramNum == 2 || ivecs[2].IsConstNull() {
 		localeCols = []string{"en_US"}
 	} else {
-		localeCols = vector.MustStrCols(ivecs[2])
+		localeCols = vector.MustStrCol(ivecs[2])
 	}
 
 	//calcute rows
 	rowCount := ivecs[0].Length()
 
-	var resultVec *vector.Vector = nil
+	var rvec *vector.Vector = nil
 	rvals := make([]string, rowCount)
 	resultNsp := nulls.NewWithSize(rowCount)
 
@@ -62,8 +62,9 @@ func Format(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	if err != nil {
 		return nil, err
 	}
-	resultVec = vector.NewVector(types.T_varchar.ToType())
-	vector.AppendStringList(resultVec, rvals, nil, proc.Mp())
+	rvec = vector.NewVec(types.T_varchar.ToType())
+	vector.AppendStringList(rvec, rvals, nil, proc.Mp())
+	rvec.SetNulls(ivecs[0].GetNulls().Clone())
 
-	return resultVec, nil
+	return rvec, nil
 }

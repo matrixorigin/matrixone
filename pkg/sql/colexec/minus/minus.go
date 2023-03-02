@@ -152,7 +152,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 
 		ctr.bat = batch.NewWithSize(len(bat.Vecs))
 		for i := range bat.Vecs {
-			ctr.bat.Vecs[i] = vector.NewVector(*bat.Vecs[i].GetType())
+			ctr.bat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 		}
 
 		count := bat.Vecs[0].Length()

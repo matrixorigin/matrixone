@@ -60,15 +60,15 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if !vec.GetType().IsBoolean() {
 		return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 	}
-	bs := vector.MustTCols[bool](vec)
+	bs := vector.MustFixedCol[bool](vec)
 	if vec.IsConst() {
-		if !bs[0] {
+		if vec.IsConstNull() || !bs[0] {
 			bat.Shrink(nil)
 		}
 	} else {
 		sels := proc.Mp().GetSels()
 		for i, b := range bs {
-			if b {
+			if b && !vec.GetNulls().Contains(uint64(i)) {
 				sels = append(sels, int64(i))
 			}
 		}

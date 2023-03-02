@@ -28,7 +28,7 @@ var (
 	v1         = testutil.NewStringVector(10, types.T_varchar.ToType(), mp, false, []string{"a,b,c", "a,b,c", "a,b,c", "a,b,c", "a,b,c", "a,b,c", "a,b,c", "a,b,c", "a,b,c", "a,b,c"})
 	v2         = testutil.NewStringVector(10, types.T_varchar.ToType(), mp, false, []string{",", ",", ",", ",", ",", ",", ",", ",", ",", ","})
 	v3         = testutil.NewUInt32Vector(10, types.T_uint32.ToType(), mp, false, []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
-	s1, s2, s3 = vector.MustStrCols(v1), vector.MustStrCols(v2), vector.MustTCols[uint32](v3)
+	s1, s2, s3 = vector.MustStrCol(v1), vector.MustStrCol(v2), vector.MustFixedCol[uint32](v3)
 )
 
 func TestSplitSingle(t *testing.T) {

@@ -25,22 +25,22 @@ import (
 )
 
 func makeInt64Vector(values []int64, nsp []uint64) *vector.Vector {
-	vec := vector.NewVector(types.T_int64.ToType())
-	vector.AppendList(vec, values, nil, testutil.TestUtilMp)
+	vec := vector.NewVec(types.T_int64.ToType())
+	vector.AppendFixedList(vec, values, nil, testutil.TestUtilMp)
 	vec.SetNulls(nulls.Build(len(values), nsp...))
 	return vec
 }
 
 func makeUint64Vector(values []uint64, nsp []uint64) *vector.Vector {
-	vec := vector.NewVector(types.T_uint64.ToType())
-	vector.AppendList(vec, values, nil, testutil.TestUtilMp)
+	vec := vector.NewVec(types.T_uint64.ToType())
+	vector.AppendFixedList(vec, values, nil, testutil.TestUtilMp)
 	vec.SetNulls(nulls.Build(len(values), nsp...))
 	return vec
 }
 
 func makeFloat64Vector(values []float64, nsp []uint64) *vector.Vector {
-	vec := vector.NewVector(types.T_float64.ToType())
-	vector.AppendList(vec, values, nil, testutil.TestUtilMp)
+	vec := vector.NewVec(types.T_float64.ToType())
+	vector.AppendFixedList(vec, values, nil, testutil.TestUtilMp)
 	vec.SetNulls(nulls.Build(len(values), nsp...))
 	return vec
 }
@@ -50,10 +50,10 @@ func TestSpaceUint64(t *testing.T) {
 	proc := testutil.NewProc()
 	output, err := SpaceNumber[uint64]([]*vector.Vector{inputVector}, proc)
 	require.NoError(t, err)
-	require.Equal(t, output.GetString(0), " ")
-	require.Equal(t, output.GetString(1), "  ")
-	require.Equal(t, output.GetString(2), "   ")
-	require.Equal(t, output.GetString(3), "")
+	require.Equal(t, output.GetStringAt(0), " ")
+	require.Equal(t, output.GetStringAt(1), "  ")
+	require.Equal(t, output.GetStringAt(2), "   ")
+	require.Equal(t, output.GetStringAt(3), "")
 	require.True(t, nulls.Contains(output.GetNulls(), 4))
 }
 
@@ -62,10 +62,10 @@ func TestSpaceInt64(t *testing.T) {
 	proc := testutil.NewProc()
 	output, err := SpaceNumber[int64]([]*vector.Vector{inputVector}, proc)
 	require.NoError(t, err)
-	require.Equal(t, output.GetString(0), " ")
-	require.Equal(t, output.GetString(1), "  ")
-	require.Equal(t, output.GetString(2), "   ")
-	require.Equal(t, output.GetString(3), "")
+	require.Equal(t, output.GetStringAt(0), " ")
+	require.Equal(t, output.GetStringAt(1), "  ")
+	require.Equal(t, output.GetStringAt(2), "   ")
+	require.Equal(t, output.GetStringAt(3), "")
 	// XXX should have failed instead returning null
 	require.True(t, nulls.Contains(output.GetNulls(), 4))
 }
@@ -75,10 +75,10 @@ func TestSpaceFloat64(t *testing.T) {
 	proc := testutil.NewProc()
 	output, err := SpaceNumber[float64]([]*vector.Vector{inputVector}, proc)
 	require.NoError(t, err)
-	require.Equal(t, output.GetString(0), " ")
-	require.Equal(t, output.GetString(1), " ")
-	require.Equal(t, output.GetString(2), "   ")
-	require.Equal(t, output.GetString(3), "")
+	require.Equal(t, output.GetStringAt(0), " ")
+	require.Equal(t, output.GetStringAt(1), " ")
+	require.Equal(t, output.GetStringAt(2), "   ")
+	require.Equal(t, output.GetStringAt(3), "")
 	// XXX should have failed instead returning null
 	require.True(t, nulls.Contains(output.GetNulls(), 4))
 }

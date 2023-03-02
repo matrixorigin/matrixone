@@ -45,7 +45,7 @@ func generalBin[T binT](ivecs []*vector.Vector, proc *process.Process, cb binFun
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
 		var rs [1]string
-		err := cb(vector.MustTCols[T](inputVector), rs[:], proc)
+		err := cb(vector.MustFixedCol[T](inputVector), rs[:], proc)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "The input value is out of range")
 		}
@@ -56,7 +56,7 @@ func generalBin[T binT](ivecs []*vector.Vector, proc *process.Process, cb binFun
 			return nil, err
 		}
 		rs := make([]string, inputVector.Length())
-		err = cb(vector.MustTCols[T](inputVector), rs, proc)
+		err = cb(vector.MustFixedCol[T](inputVector), rs, proc)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "The input value is out of range")
 		}

@@ -46,7 +46,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.NewVector(typ)
+		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
 
 	return nil
@@ -156,7 +156,7 @@ func (ctr *container) indexBuild() error {
 	//      => poses = [1, 2, 1, 3, 2, 3, 1, 1]
 	// sels = [[0, 2, 6, 7], [1, 4], [3, 5]]
 	ctr.sels = make([][]int32, index.MaxLowCardinality)
-	poses := vector.MustTCols[uint16](ctr.idx.GetPoses())
+	poses := vector.MustFixedCol[uint16](ctr.idx.GetPoses())
 	for k, v := range poses {
 		if v == 0 {
 			continue

@@ -26,7 +26,7 @@ import (
 func Oct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_decimal128, Size: 16}
-	ivals := vector.MustTCols[T](inputVector)
+	ivals := vector.MustFixedCol[T](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -42,7 +42,7 @@ func Oct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, pr
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Decimal128](rvec)
+		rvals := vector.MustFixedCol[types.Decimal128](rvec)
 		_, err = oct.Oct(ivals, rvals)
 		if err != nil {
 			return nil, err
@@ -54,7 +54,7 @@ func Oct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, pr
 func OctFloat[T constraints.Float](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_decimal128, Size: 16}
-	ivals := vector.MustTCols[T](inputVector)
+	ivals := vector.MustFixedCol[T](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -70,7 +70,7 @@ func OctFloat[T constraints.Float](ivecs []*vector.Vector, proc *process.Process
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Decimal128](rvec)
+		rvals := vector.MustFixedCol[types.Decimal128](rvec)
 		_, err = oct.OctFloat(ivals, rvals)
 		if err != nil {
 			return nil, moerr.NewInternalError(proc.Ctx, "the input value is out of integer range")

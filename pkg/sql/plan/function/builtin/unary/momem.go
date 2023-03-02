@@ -28,7 +28,7 @@ func MoMemUsage(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 	inputVector := ivecs[0]
 	rtyp := types.T_varchar.ToType()
-	ivals := vector.MustStrCols(inputVector)
+	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -47,7 +47,7 @@ func moMemUsageCmd(cmd string, ivecs []*vector.Vector, proc *process.Process) (*
 	}
 	inputVector := ivecs[0]
 	rtyp := types.T_varchar.ToType()
-	ivals := vector.MustStrCols(inputVector)
+	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil

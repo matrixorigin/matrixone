@@ -31,7 +31,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v int8
 
-		vs := vector.MustTCols[int8](vec)
+		vs := vector.MustFixedCol[int8](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -55,7 +55,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v int16
 
-		vs := vector.MustTCols[int16](vec)
+		vs := vector.MustFixedCol[int16](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -79,7 +79,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v int32
 
-		vs := vector.MustTCols[int32](vec)
+		vs := vector.MustFixedCol[int32](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -103,7 +103,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v types.Date
 
-		vs := vector.MustTCols[types.Date](vec)
+		vs := vector.MustFixedCol[types.Date](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -127,7 +127,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v int64
 
-		vs := vector.MustTCols[int64](vec)
+		vs := vector.MustFixedCol[int64](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -151,7 +151,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v types.Datetime
 
-		vs := vector.MustTCols[types.Datetime](vec)
+		vs := vector.MustFixedCol[types.Datetime](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -175,7 +175,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v types.Time
 
-		vs := vector.MustTCols[types.Time](vec)
+		vs := vector.MustFixedCol[types.Time](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -200,7 +200,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v uint8
 
-		vs := vector.MustTCols[uint8](vec)
+		vs := vector.MustFixedCol[uint8](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -224,7 +224,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v uint16
 
-		vs := vector.MustTCols[uint16](vec)
+		vs := vector.MustFixedCol[uint16](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -248,7 +248,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v uint32
 
-		vs := vector.MustTCols[uint32](vec)
+		vs := vector.MustFixedCol[uint32](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -272,7 +272,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v uint64
 
-		vs := vector.MustTCols[uint64](vec)
+		vs := vector.MustFixedCol[uint64](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -296,7 +296,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v float32
 
-		vs := vector.MustTCols[float32](vec)
+		vs := vector.MustFixedCol[float32](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -320,7 +320,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var n bool
 		var v float64
 
-		vs := vector.MustTCols[float64](vec)
+		vs := vector.MustFixedCol[float64](vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]
@@ -343,7 +343,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 	case types.T_char, types.T_varchar, types.T_json:
 		var n bool
 		var v string
-		vs := vector.MustStrCols(vec)
+		vs := vector.MustStrCol(vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
 				w := vs[sel]

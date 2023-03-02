@@ -25,7 +25,7 @@ import (
 func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
 	rtyp := types.Type{Oid: types.T_uint8, Size: 1}
-	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
+	leftValues, rightValues := vector.MustStrCol(left), vector.MustStrCol(right)
 	switch {
 	case left.IsConstNull() || right.IsConstNull():
 		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
@@ -38,7 +38,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint8](rvec)
+		rvals := vector.MustFixedCol[uint8](rvec)
 		startswith.StartsWithLeftConst(leftValues[0], rightValues, rvals)
 		return rvec, nil
 	case !left.IsConst() && right.IsConst():
@@ -46,7 +46,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint8](rvec)
+		rvals := vector.MustFixedCol[uint8](rvec)
 		startswith.StartsWithRightConst(leftValues, rightValues[0], rvals)
 		return rvec, nil
 	}
@@ -54,7 +54,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	if err != nil {
 		return nil, err
 	}
-	rvals := vector.MustTCols[uint8](rvec)
+	rvals := vector.MustFixedCol[uint8](rvec)
 	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
 	startswith.StartsWith(leftValues, rightValues, rvals)
 	return rvec, nil

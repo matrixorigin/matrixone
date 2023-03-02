@@ -63,8 +63,8 @@ func UnixtimeCase(t *testing.T, typ types.T, src types.Timestamp, res int64, isN
 				t.Fatal(err)
 			}
 			if !c.wantNull {
-				if !reflect.DeepEqual(c.wantBytes, vector.MustTCols[int64](plus)) {
-					t.Errorf("unixtimestamp() want %v but got %v", c.wantBytes, vector.MustTCols[int64](plus))
+				if !reflect.DeepEqual(c.wantBytes, vector.MustFixedCol[int64](plus)) {
+					t.Errorf("unixtimestamp() want %v but got %v", c.wantBytes, vector.MustFixedCol[int64](plus))
 				}
 			}
 			require.Equal(t, c.wantNull, plus.IsConstNull())
@@ -99,7 +99,7 @@ func TestUnixTimestampVarcharToFloat64(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cols := vector.MustTCols[float64](resVec)
+			cols := vector.MustFixedCol[float64](resVec)
 			require.Equal(t, tt.expect, cols[0])
 		})
 	}

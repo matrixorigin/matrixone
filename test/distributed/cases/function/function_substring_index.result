@@ -168,15 +168,15 @@ concat_ws(substring_index(s1, delim, count1), hehaha32789, ABCNSLK)
 hehaha32789新年快乐，身体健康，万事如意ABCNSLK
 SELECT empty(substring_index(s1,delim,count1)) FROM substring_index_01;
 empty(substring_index(s1, delim, count1))
-0
-0
-0
-0
-0
-0
-1
-1
-1
+false
+false
+false
+false
+false
+false
+true
+true
+true
 null
 SELECT substring(substring_index(s1,delim,count1),1,5) FROM substring_index_01;
 substring(substring_index(s1, delim, count1), 1, 5)

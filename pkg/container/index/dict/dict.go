@@ -43,12 +43,12 @@ func New(typ types.Type, m *mpool.MPool) (*Dict, error) {
 		if idx, err = newFixedReverseIndex(m); err != nil {
 			return nil, err
 		}
-		d.unique = vector.NewVector(types.T_uint64.ToType())
+		d.unique = vector.NewVec(types.T_uint64.ToType())
 	} else {
 		if idx, err = newVarReverseIndex(m); err != nil {
 			return nil, err
 		}
-		d.unique = vector.NewVector(types.T_varchar.ToType())
+		d.unique = vector.NewVec(types.T_varchar.ToType())
 	}
 
 	d.idx = idx
@@ -145,56 +145,56 @@ func (d *Dict) encodeFixedData(data *vector.Vector) []uint64 {
 	us := make([]uint64, data.Length())
 	switch d.typ.Oid {
 	case types.T_bool:
-		col := vector.MustTCols[bool](data)
+		col := vector.MustFixedCol[bool](data)
 		for i, v := range col {
 			if v {
 				us[i] = 1
 			}
 		}
 	case types.T_int32:
-		col := vector.MustTCols[int32](data)
+		col := vector.MustFixedCol[int32](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_int64:
-		col := vector.MustTCols[int64](data)
+		col := vector.MustFixedCol[int64](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_uint32:
-		col := vector.MustTCols[uint32](data)
+		col := vector.MustFixedCol[uint32](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_uint64:
-		copy(us, vector.MustTCols[uint64](data))
+		copy(us, vector.MustFixedCol[uint64](data))
 	case types.T_float32:
-		col := vector.MustTCols[float32](data)
+		col := vector.MustFixedCol[float32](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_float64:
-		col := vector.MustTCols[float64](data)
+		col := vector.MustFixedCol[float64](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_decimal64:
-		col := vector.MustTCols[types.Decimal64](data)
+		col := vector.MustFixedCol[types.Decimal64](data)
 		for i, v := range col {
 			us[i] = types.DecodeUint64(types.EncodeDecimal64(&v))
 		}
 	case types.T_date:
-		col := vector.MustTCols[types.Date](data)
+		col := vector.MustFixedCol[types.Date](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_datetime:
-		col := vector.MustTCols[types.Datetime](data)
+		col := vector.MustFixedCol[types.Datetime](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_timestamp:
-		col := vector.MustTCols[types.Timestamp](data)
+		col := vector.MustFixedCol[types.Timestamp](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
@@ -203,7 +203,7 @@ func (d *Dict) encodeFixedData(data *vector.Vector) []uint64 {
 }
 
 func (d *Dict) encodeVarData(data *vector.Vector) [][]byte {
-	return vector.MustBytesCols(data)
+	return vector.MustBytesCol(data)
 }
 
 func (d *Dict) findFixedData(pos int) *vector.Vector {
@@ -245,9 +245,9 @@ func (d *Dict) findVarData(pos int) *vector.Vector {
 }
 
 func (d *Dict) getFixedData(n int) uint64 {
-	return vector.MustTCols[uint64](d.unique)[n-1]
+	return vector.MustFixedCol[uint64](d.unique)[n-1]
 }
 
 func (d *Dict) getVarData(n int) []byte {
-	return d.unique.GetBytes(n - 1)
+	return d.unique.GetBytesAt(n - 1)
 }

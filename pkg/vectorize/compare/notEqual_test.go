@@ -42,7 +42,7 @@ func TestI32Ne(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("%+v != %+v : %v \n", as[i], bs[i], res[i])
 		assert.Equal(t, as[i] != bs[i], res[i])
@@ -67,7 +67,7 @@ func TestU32Ne(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("%+v != %+v : %v \n", as[i], bs[i], res[i])
 		assert.Equal(t, as[i] != bs[i], res[i])
@@ -91,7 +91,7 @@ func TestF32Ne(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 2; i++ {
 		fmt.Printf("%+v != %+v : %v \n", as[i], bs[i], res[i])
 		assert.Equal(t, as[i] != bs[i], res[i])
@@ -115,7 +115,7 @@ func TestF64Ne(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 2; i++ {
 		fmt.Printf("%+v != %+v : %v \n", as[i], bs[i], res[i])
 		assert.Equal(t, as[i] != bs[i], res[i])
@@ -139,7 +139,7 @@ func TestBoolNe(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 2; i++ {
 		fmt.Printf("%+v != %+v : %v \n", as[i], bs[i], res[i])
 		assert.Equal(t, as[i] != bs[i], res[i])
@@ -164,7 +164,7 @@ func TestDec64Ne(t *testing.T) {
 		t.Fatalf("decimal64 not equal failed")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("%+v != %+v : %v \n", as[i], bs[i], res[i])
 		assert.Equal(t, as[i] != bs[i], res[i])
@@ -189,7 +189,7 @@ func TestDec128Ne(t *testing.T) {
 		t.Fatalf("decimal128 not equal failed")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("%+v != %+v : %v \n", as[i], bs[i], res[i])
 		assert.Equal(t, as[i] != bs[i], res[i])

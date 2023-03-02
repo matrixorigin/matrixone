@@ -40,7 +40,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.NewVector(typ)
+		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
 	return nil
 }
@@ -131,7 +131,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
 		if rp.Rel != 0 {
-			rbat.Vecs[i] = vector.NewVector(*ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 	ctr.cleanEvalVectors(proc.Mp())
@@ -175,7 +175,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						rbat.Clean(proc.Mp())
 						return err
 					}
-					bs := vector.MustTCols[bool](vec)
+					bs := vector.MustFixedCol[bool](vec)
 					if bs[0] {
 						if matched {
 							vec.Free(proc.Mp())

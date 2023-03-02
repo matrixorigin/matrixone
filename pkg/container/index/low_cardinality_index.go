@@ -60,7 +60,7 @@ func New(typ types.Type, m *mpool.MPool) (*LowCardinalityIndex, error) {
 		typ:   typ,
 		m:     m,
 		dict:  d,
-		poses: vector.NewVector(types.T_uint16.ToType()),
+		poses: vector.NewVec(types.T_uint16.ToType()),
 		ref:   1,
 	}, nil
 }
@@ -83,7 +83,7 @@ func (idx *LowCardinalityIndex) DupEmpty() *LowCardinalityIndex {
 		typ:   idx.typ,
 		m:     idx.m,
 		dict:  idx.dict.Dup(),
-		poses: vector.NewVector(types.T_uint16.ToType()),
+		poses: vector.NewVec(types.T_uint16.ToType()),
 		ref:   1,
 	}
 }
@@ -128,13 +128,13 @@ func (idx *LowCardinalityIndex) InsertBatch(data *vector.Vector) error {
 		}
 	}
 
-	return vector.AppendList(idx.poses, ips, nil, idx.m)
+	return vector.AppendFixedList(idx.poses, ips, nil, idx.m)
 }
 
 // Encode uses the dictionary of the current index to encode the original data.
 func (idx *LowCardinalityIndex) Encode(dst, src *vector.Vector) error {
 	poses := idx.dict.FindBatch(src)
-	return vector.AppendList(dst, poses, nil, idx.m)
+	return vector.AppendFixedList(dst, poses, nil, idx.m)
 }
 
 func (idx *LowCardinalityIndex) Free() {

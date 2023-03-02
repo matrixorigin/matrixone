@@ -312,17 +312,17 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 		}
 		bat := batch.NewWithSize(len(idxs))
 		for i, e := range iov.Entries {
-			bat.Vecs[i] = vector.NewVector(catalog.MetaColTypes[idxs[i]])
+			bat.Vecs[i] = vector.NewVec(catalog.MetaColTypes[idxs[i]])
 			if err = bat.Vecs[i].UnmarshalBinary(e.Object.([]byte)); err != nil {
 				return err
 			}
 		}
-		p := vector.MustStrCols(bat.Vecs[0])[0]
+		p := vector.MustStrCol(bat.Vecs[0])[0]
 		pn := &plan.Plan{}
 		if err = pn.Unmarshal([]byte(p)); err != nil {
 			return err
 		}
-		a := vector.MustStrCols(bat.Vecs[1])[0]
+		a := vector.MustStrCol(bat.Vecs[1])[0]
 		var ast tree.Statement
 		if ast, err = simpleAstUnmarshal([]byte(a)); err != nil {
 			return err
@@ -424,7 +424,7 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	bat := batch.NewWithSize(len(catalog.MetaColTypes))
 	bat.SetAttributes(catalog.MetaColNames)
 	for i, t := range catalog.MetaColTypes {
-		bat.Vecs[i] = vector.NewVector(t)
+		bat.Vecs[i] = vector.NewVec(t)
 	}
 	if err = vector.AppendFixed(bat.Vecs[catalog.QUERY_ID_IDX], types.Uuid(m.QueryId), false, mp); err != nil {
 		return nil, err
@@ -584,7 +584,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 			}
 			//read every column
 			for colIndex, entry := range ioVector.Entries {
-				tmpBatch.Vecs[colIndex] = vector.NewVector(typs[colIndex])
+				tmpBatch.Vecs[colIndex] = vector.NewVec(typs[colIndex])
 				err = tmpBatch.Vecs[colIndex].UnmarshalBinaryWithMpool(entry.Object.([]byte), ses.GetMemPool())
 				if err != nil {
 					return err
@@ -660,12 +660,12 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	if err != nil {
 		return nil, err
 	}
-	vec := vector.NewVector(catalog.MetaColTypes[catalog.COLUMNS_IDX])
+	vec := vector.NewVec(catalog.MetaColTypes[catalog.COLUMNS_IDX])
 	defer vec.Free(ses.GetMemPool())
 	if err = vec.UnmarshalBinaryWithMpool(iov.Entries[0].Object.([]byte), ses.GetMemPool()); err != nil {
 		return nil, err
 	}
-	def := vector.MustStrCols(vec)[0]
+	def := vector.MustStrCol(vec)[0]
 	r := &plan.ResultColDef{}
 	if err = r.Unmarshal([]byte(def)); err != nil {
 		return nil, err

@@ -29,36 +29,34 @@ func SubStrIndex(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		return vector.NewConstNull(*ivecs[0].GetType(), ivecs[0].Length(), proc.Mp()), nil
 	}
 	//get the first arg str
-	sourceCols := vector.MustStrCols(ivecs[0])
+	sourceCols := vector.MustStrCol(ivecs[0])
 	//get the second arg delim
-	delimCols := vector.MustStrCols(ivecs[1])
+	delimCols := vector.MustStrCol(ivecs[1])
 	//get the third arg count
 	countCols := getCount(ivecs[2])
 
 	//calcute rows
 	rowCount := ivecs[0].Length()
 
-	var resultVec *vector.Vector = nil
 	rvals := make([]string, rowCount)
-	resultNsp := nulls.NewWithSize(rowCount)
-
-	// set null row
-	nulls.Or(ivecs[0].GetNulls(), ivecs[1].GetNulls(), resultNsp)
-	nulls.Or(ivecs[2].GetNulls(), resultNsp, resultNsp)
 
 	constVectors := []bool{ivecs[0].IsConst(), ivecs[1].IsConst(), ivecs[2].IsConst()}
 	//get result values
 	substrindex.SubStrIndex(sourceCols, delimCols, countCols, rowCount, constVectors, rvals)
-	resultVec = vector.NewVector(types.T_varchar.ToType())
-	vector.AppendStringList(resultVec, rvals, nil, proc.Mp())
+	rvec := vector.NewVec(types.T_varchar.ToType())
+	vector.AppendStringList(rvec, rvals, nil, proc.Mp())
 
-	return resultVec, nil
+	// set null row
+	nulls.Or(ivecs[0].GetNulls(), ivecs[1].GetNulls(), rvec.GetNulls())
+	nulls.Or(ivecs[2].GetNulls(), rvec.GetNulls(), rvec.GetNulls())
+
+	return rvec, nil
 }
 
 func getCount(vec *vector.Vector) []int64 {
 	switch vec.GetType().Oid {
 	case types.T_float64:
-		vs := vector.MustTCols[float64](vec)
+		vs := vector.MustFixedCol[float64](vec)
 		res := make([]int64, 0, len(vs))
 		for _, v := range vs {
 			if v > float64(math.MaxInt64) {
@@ -71,7 +69,7 @@ func getCount(vec *vector.Vector) []int64 {
 		}
 		return res
 	case types.T_uint64:
-		vs := vector.MustTCols[uint64](vec)
+		vs := vector.MustFixedCol[uint64](vec)
 		res := make([]int64, 0, len(vs))
 		for _, v := range vs {
 			if v > uint64(math.MaxInt64) {

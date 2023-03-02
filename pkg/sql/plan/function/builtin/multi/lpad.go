@@ -31,9 +31,9 @@ func Lpad(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		return vector.NewConstNull(rtyp, srcVec.Length(), proc.Mp()), nil
 	}
 
-	srcVals := vector.MustStrCols(srcVec)
-	tgtLenVals := vector.MustTCols[int64](tgtLenVec)
-	padVals := vector.MustStrCols(padVec)
+	srcVals := vector.MustStrCol(srcVec)
+	tgtLenVals := vector.MustFixedCol[int64](tgtLenVec)
+	padVals := vector.MustStrCol(padVec)
 	if srcVec.IsConst() && tgtLenVec.IsConst() && padVec.IsConst() {
 		rval, isNull := doLpad(srcVals[0], tgtLenVals[0], padVals[0])
 		if isNull {
@@ -62,18 +62,17 @@ func Lpad(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		}
 
 		for i := 0; i < srcVec.Length(); i++ {
+			if !rvec.GetNulls().Contains(uint64(i)) {
+				rval, isNull := doLpad(srcVals[srcIdx], tgtLenVals[tgtLenIdx], padVals[padIdx])
+				if isNull {
+					rvec.GetNulls().Set(uint64(i))
+				} else {
+					vector.SetBytesAt(rvec, i, []byte(rval), proc.Mp())
+				}
+			}
 			srcIdx += srcInc
 			tgtLenIdx += tgtLenInc
 			padIdx += padInc
-			if rvec.GetNulls().Contains(uint64(i)) {
-				continue
-			}
-			rval, isNull := doLpad(srcVals[srcIdx], tgtLenVals[tgtLenIdx], padVals[padIdx])
-			if isNull {
-				rvec.GetNulls().Set(uint64(i))
-			} else {
-				vector.SetBytesAt(rvec, i, []byte(rval), proc.Mp())
-			}
 		}
 		return rvec, nil
 	}

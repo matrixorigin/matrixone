@@ -44,30 +44,31 @@ func concatWithAllConst(ivecs []*vector.Vector, proc *process.Process) (*vector.
 	vct := types.T_varchar.ToType()
 	res := ""
 	for i := range ivecs {
-		res += ivecs[i].GetString(0)
+		res += ivecs[i].GetStringAt(0)
 	}
 	return vector.NewConstBytes(vct, []byte(res), ivecs[0].Length(), proc.Mp()), nil
 }
 
 func concatWithSomeCols(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	length := ivecs[0].Length()
-	vct := types.T_varchar.ToType()
-	nsp := new(nulls.Nulls)
+	rtyp := types.T_varchar.ToType()
+	rvec := vector.NewVec(rtyp)
+	for i := range ivecs {
+		nulls.Or(ivecs[i].GetNulls(), rvec.GetNulls(), rvec.GetNulls())
+	}
 	val := make([]string, length)
 	for i := 0; i < length; i++ {
+		if nulls.Contains(rvec.GetNulls(), uint64(i)) {
+			continue
+		}
 		for j := range ivecs {
-			if nulls.Contains(ivecs[j].GetNulls(), uint64(i)) {
-				nulls.Add(nsp, uint64(i))
-				break
-			}
 			if ivecs[j].IsConst() {
-				val[i] += ivecs[j].GetString(0)
+				val[i] += ivecs[j].GetStringAt(0)
 			} else {
-				val[i] += ivecs[j].GetString(i)
+				val[i] += ivecs[j].GetStringAt(i)
 			}
 		}
 	}
-	vec := vector.NewVector(vct)
-	vector.AppendStringList(vec, val, nil, proc.Mp())
-	return vec, nil
+	vector.AppendStringList(rvec, val, nil, proc.Mp())
+	return rvec, nil
 }

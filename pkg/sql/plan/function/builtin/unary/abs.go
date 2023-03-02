@@ -25,7 +25,7 @@ import (
 func AbsUInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_uint64.ToType()
-	ivals := vector.MustTCols[uint64](inputVector)
+	ivals := vector.MustFixedCol[uint64](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -38,7 +38,7 @@ func AbsUInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[uint64](rvec)
+		rvals := vector.MustFixedCol[uint64](rvec)
 		abs.AbsUint64(ivals, rvals)
 		return rvec, nil
 	}
@@ -48,7 +48,7 @@ func AbsUInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 func AbsInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_int64.ToType()
-	ivals := vector.MustTCols[int64](inputVector)
+	ivals := vector.MustFixedCol[int64](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -61,7 +61,7 @@ func AbsInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[int64](rvec)
+		rvals := vector.MustFixedCol[int64](rvec)
 		abs.AbsInt64(ivals, rvals)
 		return rvec, nil
 	}
@@ -71,7 +71,7 @@ func AbsInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 func AbsFloat64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_float64.ToType()
-	ivals := vector.MustTCols[float64](inputVector)
+	ivals := vector.MustFixedCol[float64](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -84,7 +84,7 @@ func AbsFloat64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[float64](rvec)
+		rvals := vector.MustFixedCol[float64](rvec)
 		abs.AbsFloat64(ivals, rvals)
 		return rvec, nil
 	}
@@ -93,7 +93,7 @@ func AbsFloat64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 func AbsDecimal128(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := *inputVector.GetType()
-	ivals := vector.MustTCols[types.Decimal128](inputVector)
+	ivals := vector.MustFixedCol[types.Decimal128](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -106,7 +106,7 @@ func AbsDecimal128(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Decimal128](rvec)
+		rvals := vector.MustFixedCol[types.Decimal128](rvec)
 		abs.AbsDecimal128(ivals, rvals)
 		return rvec, nil
 	}

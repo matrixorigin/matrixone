@@ -256,7 +256,7 @@ func newVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 }
 
 func newInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int8) *vector.Vector {
-	vec := vector.NewVector(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -280,7 +280,7 @@ func newInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int8
 }
 
 func newInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int16) *vector.Vector {
-	vec := vector.NewVector(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -304,7 +304,7 @@ func newInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int
 }
 
 func newInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int32) *vector.Vector {
-	vec := vector.NewVector(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -328,7 +328,7 @@ func newInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int
 }
 
 func newInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int64) *vector.Vector {
-	vec := vector.NewVector(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -352,7 +352,7 @@ func newInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int
 }
 
 func newUInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []uint32) *vector.Vector {
-	vec := vector.NewVector(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -376,7 +376,7 @@ func newUInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []ui
 }
 
 func newDecimal64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Decimal64) *vector.Vector {
-	vec := vector.NewVector(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -402,7 +402,7 @@ func newDecimal64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs [
 }
 
 func newDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Decimal128) *vector.Vector {
-	vec := vector.NewVector(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -427,7 +427,7 @@ func newDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs 
 }
 
 func newStringVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
-	vec := vector.NewVector(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, []byte(vs[i]), false, m); err != nil {

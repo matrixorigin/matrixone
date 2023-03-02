@@ -23,8 +23,8 @@ import (
 )
 
 func Acos(arg, result *vector.Vector) error {
-	argCol := vector.MustTCols[float64](arg)
-	resCol := vector.MustTCols[float64](result)
+	argCol := vector.MustFixedCol[float64](arg)
+	resCol := vector.MustFixedCol[float64](result)
 	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
 		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
@@ -41,8 +41,8 @@ func Acos(arg, result *vector.Vector) error {
 }
 
 func Atan(arg, result *vector.Vector) error {
-	argCol := vector.MustTCols[float64](arg)
-	resCol := vector.MustTCols[float64](result)
+	argCol := vector.MustFixedCol[float64](arg)
+	resCol := vector.MustFixedCol[float64](result)
 	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
 		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
@@ -53,9 +53,9 @@ func Atan(arg, result *vector.Vector) error {
 }
 
 func AtanWithTwoArg(firstArg, secondArg, result *vector.Vector) error {
-	firstCol := vector.MustTCols[float64](firstArg)
-	secondCol := vector.MustTCols[float64](secondArg)
-	resCol := vector.MustTCols[float64](result)
+	firstCol := vector.MustFixedCol[float64](firstArg)
+	secondCol := vector.MustFixedCol[float64](secondArg)
+	resCol := vector.MustFixedCol[float64](result)
 	for i, v := range firstCol {
 		if v == 0 {
 			return moerr.NewInvalidArgNoCtx("Atan first input", 0)
@@ -66,8 +66,8 @@ func AtanWithTwoArg(firstArg, secondArg, result *vector.Vector) error {
 }
 
 func Cos(arg, result *vector.Vector) error {
-	argCol := vector.MustTCols[float64](arg)
-	resCol := vector.MustTCols[float64](result)
+	argCol := vector.MustFixedCol[float64](arg)
+	resCol := vector.MustFixedCol[float64](result)
 	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
 		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
@@ -78,8 +78,8 @@ func Cos(arg, result *vector.Vector) error {
 }
 
 func Cot(arg, result *vector.Vector) error {
-	argCol := vector.MustTCols[float64](arg)
-	resCol := vector.MustTCols[float64](result)
+	argCol := vector.MustFixedCol[float64](arg)
+	resCol := vector.MustFixedCol[float64](result)
 	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
 		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
@@ -94,8 +94,8 @@ func Cot(arg, result *vector.Vector) error {
 }
 
 func Exp(arg, result *vector.Vector) error {
-	argCol := vector.MustTCols[float64](arg)
-	resCol := vector.MustTCols[float64](result)
+	argCol := vector.MustFixedCol[float64](arg)
+	resCol := vector.MustFixedCol[float64](result)
 	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
 		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
@@ -106,8 +106,8 @@ func Exp(arg, result *vector.Vector) error {
 }
 
 func Ln(arg, result *vector.Vector) error {
-	argCol := vector.MustTCols[float64](arg)
-	resCol := vector.MustTCols[float64](result)
+	argCol := vector.MustFixedCol[float64](arg)
+	resCol := vector.MustFixedCol[float64](result)
 	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
 		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
@@ -122,8 +122,8 @@ func Ln(arg, result *vector.Vector) error {
 }
 
 func Sin(arg, result *vector.Vector) error {
-	argCol := vector.MustTCols[float64](arg)
-	resCol := vector.MustTCols[float64](result)
+	argCol := vector.MustFixedCol[float64](arg)
+	resCol := vector.MustFixedCol[float64](result)
 	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
 		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
@@ -134,8 +134,8 @@ func Sin(arg, result *vector.Vector) error {
 }
 
 func Sinh(arg, result *vector.Vector) error {
-	argCol := vector.MustTCols[float64](arg)
-	resCol := vector.MustTCols[float64](result)
+	argCol := vector.MustFixedCol[float64](arg)
+	resCol := vector.MustFixedCol[float64](result)
 	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
 		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {
@@ -150,8 +150,8 @@ func Sinh(arg, result *vector.Vector) error {
 }
 
 func Tan(arg, result *vector.Vector) error {
-	argCol := vector.MustTCols[float64](arg)
-	resCol := vector.MustTCols[float64](result)
+	argCol := vector.MustFixedCol[float64](arg)
+	resCol := vector.MustFixedCol[float64](result)
 	nulls.Set(result.GetNulls(), arg.GetNulls())
 	for i, v := range argCol {
 		if !nulls.Contains(arg.GetNulls(), (uint64)(i)) {

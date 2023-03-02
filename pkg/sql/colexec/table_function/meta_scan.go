@@ -47,7 +47,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	uuid := vector.MustTCols[types.Uuid](v)[0]
+	uuid := vector.MustFixedCol[types.Uuid](v)[0]
 	// get file size
 	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid.ToString())
 	e, err := proc.FileService.StatFile(proc.Ctx, path)
@@ -83,7 +83,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	rbat.SetAttributes(catalog.MetaColNames)
 	rbat.Cnt = 1
 	for i, e := range iov.Entries {
-		rbat.Vecs[i] = vector.NewVector(catalog.MetaColTypes[idxs[i]])
+		rbat.Vecs[i] = vector.NewVec(catalog.MetaColTypes[idxs[i]])
 		if err = rbat.Vecs[i].UnmarshalBinary(e.Object.([]byte)); err != nil {
 			return false, err
 		}

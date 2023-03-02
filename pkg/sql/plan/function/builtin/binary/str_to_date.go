@@ -44,10 +44,10 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 	}
 	// get the format string.
-	formatMask := formatVector.GetString(0)
+	formatMask := formatVector.GetStringAt(0)
 
 	if dateVector.IsConst() {
-		datestr := dateVector.GetString(0)
+		datestr := dateVector.GetStringAt(0)
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
 		success := strToDate(proc.Ctx, time, datestr, formatMask, ctx)
@@ -57,7 +57,7 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		} else {
 			if types.ValidDate(int32(time.year), time.month, time.day) {
 				resCol := types.DateFromCalendar(int32(time.year), time.month, time.day)
-				vec := vector.NewVector(rtyp)
+				vec := vector.NewVec(rtyp)
 				vector.AppendFixed(vec, resCol, false, proc.Mp())
 				return vec, nil
 			} else {
@@ -66,14 +66,14 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			}
 		}
 	} else {
-		datestrs := vector.MustStrCols(dateVector)
+		datestrs := vector.MustStrCol(dateVector)
 		rNsp := dateVector.GetNulls().Clone()
 		resCol, err := calcStrToDate(proc.Ctx, datestrs, formatMask, dateVector.GetNulls(), rNsp)
 		if err != nil {
 			return nil, err
 		}
-		rvec := vector.NewVector(rtyp)
-		vector.AppendList(rvec, resCol, nil, proc.Mp())
+		rvec := vector.NewVec(rtyp)
+		vector.AppendFixedList(rvec, resCol, nil, proc.Mp())
 		rvec.SetNulls(rNsp)
 		return rvec, nil
 	}
@@ -92,10 +92,10 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 	}
 	// get the format string.
-	formatMask := formatVector.GetString(0)
+	formatMask := formatVector.GetStringAt(0)
 
 	if dateVector.IsConst() {
-		datetimestr := dateVector.GetString(0)
+		datetimestr := dateVector.GetStringAt(0)
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
 		success := strToDate(proc.Ctx, time, datetimestr, formatMask, ctx)
@@ -105,7 +105,7 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		} else {
 			if types.ValidDatetime(int32(time.year), time.month, time.day) && types.ValidTimeInDay(time.hour, time.minute, time.second) {
 				resCol := types.DatetimeFromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
-				vec := vector.NewVector(rtyp)
+				vec := vector.NewVec(rtyp)
 				vector.AppendFixed(vec, resCol, false, proc.Mp())
 				return vec, nil
 			} else {
@@ -114,14 +114,14 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 			}
 		}
 	} else {
-		datetimestrs := vector.MustStrCols(dateVector)
+		datetimestrs := vector.MustStrCol(dateVector)
 		rNsp := dateVector.GetNulls().Clone()
 		resCol, err := calcStrToDatetime(proc.Ctx, datetimestrs, formatMask, dateVector.GetNulls(), rNsp)
 		if err != nil {
 			return nil, err
 		}
-		rvec := vector.NewVector(rtyp)
-		vector.AppendList(rvec, resCol, nil, proc.Mp())
+		rvec := vector.NewVec(rtyp)
+		vector.AppendFixedList(rvec, resCol, nil, proc.Mp())
 		rvec.SetNulls(rNsp)
 		return rvec, nil
 	}
@@ -140,10 +140,10 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 	}
 	// get the format string.
-	formatMask := formatVector.GetString(0)
+	formatMask := formatVector.GetStringAt(0)
 
 	if dateVector.IsConst() {
-		timestr := dateVector.GetString(0)
+		timestr := dateVector.GetStringAt(0)
 
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
@@ -154,7 +154,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		} else {
 			if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
 				resCol := types.TimeFromClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
-				vec := vector.NewVector(rtyp)
+				vec := vector.NewVec(rtyp)
 				vector.AppendFixed(vec, resCol, false, proc.Mp())
 				return vec, nil
 			} else {
@@ -163,14 +163,14 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			}
 		}
 	} else {
-		timestrs := vector.MustStrCols(dateVector)
+		timestrs := vector.MustStrCol(dateVector)
 		rNsp := dateVector.GetNulls().Clone()
 		resCol, err := calcStrToTime(proc.Ctx, timestrs, formatMask, dateVector.GetNulls(), rNsp)
 		if err != nil {
 			return nil, err
 		}
-		rvec := vector.NewVector(rtyp)
-		vector.AppendList(rvec, resCol, nil, proc.Mp())
+		rvec := vector.NewVec(rtyp)
+		vector.AppendFixedList(rvec, resCol, nil, proc.Mp())
 		rvec.SetNulls(rNsp)
 		return rvec, nil
 	}

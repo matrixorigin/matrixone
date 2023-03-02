@@ -29,7 +29,7 @@ func DatetimeToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 	inputVector := ivecs[0]
 	inputPrecision := inputVector.GetType().Precision
 	rtyp := types.Type{Oid: types.T_time, Size: 8, Precision: inputPrecision}
-	ivals := vector.MustTCols[types.Datetime](inputVector)
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -42,7 +42,7 @@ func DatetimeToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Time](rvec)
+		rvals := vector.MustFixedCol[types.Time](rvec)
 		time.DatetimeToTime(ivals, rvals, inputPrecision)
 		return rvec, nil
 	}
@@ -51,7 +51,7 @@ func DatetimeToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 func DateToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_time, Size: 8}
-	ivals := vector.MustTCols[types.Date](inputVector)
+	ivals := vector.MustFixedCol[types.Date](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
@@ -64,7 +64,7 @@ func DateToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Time](rvec)
+		rvals := vector.MustFixedCol[types.Time](rvec)
 		time.DateToTime(ivals, rvals)
 		return rvec, nil
 	}
@@ -73,7 +73,7 @@ func DateToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 func DateStringToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_time, Size: 8}
-	ivals := vector.MustStrCols(inputVector)
+	ivals := vector.MustStrCol(inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
@@ -87,7 +87,7 @@ func DateStringToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Time](rvec)
+		rvals := vector.MustFixedCol[types.Time](rvec)
 		_, err = time.DateStringToTime(ivals, rvals)
 		return rvec, err
 	}
@@ -96,7 +96,7 @@ func DateStringToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 func Int64ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_time, Size: 8}
-	ivals := vector.MustTCols[int64](inputVector)
+	ivals := vector.MustFixedCol[int64](inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
@@ -110,7 +110,7 @@ func Int64ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Time](rvec)
+		rvals := vector.MustFixedCol[types.Time](rvec)
 		_, err = time.Int64ToTime(ivals, rvals)
 		return rvec, err
 	}
@@ -119,7 +119,7 @@ func Int64ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 func Decimal128ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.Type{Oid: types.T_time, Size: 8, Precision: inputVector.GetType().Scale}
-	ivals := vector.MustTCols[types.Decimal128](inputVector)
+	ivals := vector.MustFixedCol[types.Decimal128](inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
@@ -133,7 +133,7 @@ func Decimal128ToTime(ivecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		if err != nil {
 			return nil, err
 		}
-		rvals := vector.MustTCols[types.Time](rvec)
+		rvals := vector.MustFixedCol[types.Time](rvec)
 		_, err = time.Decimal128ToTime(ivals, rvals)
 		return rvec, err
 	}

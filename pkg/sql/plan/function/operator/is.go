@@ -30,23 +30,23 @@ func Is(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if !rv.IsConst() || rv.IsConstNull() {
 		return nil, moerr.NewInternalError(proc.Ctx, "second parameter of IS must be TRUE or FALSE")
 	}
-	right := vector.MustTCols[bool](rv)[0]
+	right := vector.MustFixedCol[bool](rv)[0]
 
 	if lv.IsConst() {
 		if lv.IsConstNull() {
 			return vector.NewConstFixed(rtyp, false, ivecs[0].Length(), proc.Mp()), nil
 		} else {
-			lefts := vector.MustTCols[bool](lv)
+			lefts := vector.MustFixedCol[bool](lv)
 			return vector.NewConstFixed(rtyp, lefts[0] == right, ivecs[0].Length(), proc.Mp()), nil
 		}
 	} else {
-		lefts := vector.MustTCols[bool](lv)
+		lefts := vector.MustFixedCol[bool](lv)
 		l := len(lefts)
 		vec, err := proc.AllocVectorOfRows(*lv.GetType(), l, lv.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		col := vector.MustTCols[bool](vec)
+		col := vector.MustFixedCol[bool](vec)
 		for i := range lefts {
 			if nulls.Contains(lv.GetNulls(), uint64(i)) {
 				col[i] = false

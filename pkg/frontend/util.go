@@ -303,53 +303,53 @@ func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
-		return vector.MustTCols[bool](vec)[0], nil
+		return vector.MustFixedCol[bool](vec)[0], nil
 	case types.T_int8:
-		return vector.MustTCols[int8](vec)[0], nil
+		return vector.MustFixedCol[int8](vec)[0], nil
 	case types.T_int16:
-		return vector.MustTCols[int16](vec)[0], nil
+		return vector.MustFixedCol[int16](vec)[0], nil
 	case types.T_int32:
-		return vector.MustTCols[int32](vec)[0], nil
+		return vector.MustFixedCol[int32](vec)[0], nil
 	case types.T_int64:
-		return vector.MustTCols[int64](vec)[0], nil
+		return vector.MustFixedCol[int64](vec)[0], nil
 	case types.T_uint8:
-		return vector.MustTCols[uint8](vec)[0], nil
+		return vector.MustFixedCol[uint8](vec)[0], nil
 	case types.T_uint16:
-		return vector.MustTCols[uint16](vec)[0], nil
+		return vector.MustFixedCol[uint16](vec)[0], nil
 	case types.T_uint32:
-		return vector.MustTCols[uint32](vec)[0], nil
+		return vector.MustFixedCol[uint32](vec)[0], nil
 	case types.T_uint64:
-		return vector.MustTCols[uint64](vec)[0], nil
+		return vector.MustFixedCol[uint64](vec)[0], nil
 	case types.T_float32:
-		return vector.MustTCols[float32](vec)[0], nil
+		return vector.MustFixedCol[float32](vec)[0], nil
 	case types.T_float64:
-		return vector.MustTCols[float64](vec)[0], nil
+		return vector.MustFixedCol[float64](vec)[0], nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
-		return vec.GetString(0), nil
+		return vec.GetStringAt(0), nil
 	case types.T_decimal64:
-		val := vector.MustTCols[types.Decimal64](vec)[0]
+		val := vector.MustFixedCol[types.Decimal64](vec)[0]
 		return val.String(), nil
 	case types.T_decimal128:
-		val := vector.MustTCols[types.Decimal128](vec)[0]
+		val := vector.MustFixedCol[types.Decimal128](vec)[0]
 		return val.String(), nil
 	case types.T_json:
-		val := vec.GetBytes(0)
+		val := vec.GetBytesAt(0)
 		byteJson := types.DecodeJson(val)
 		return byteJson.String(), nil
 	case types.T_uuid:
-		val := vector.MustTCols[types.Uuid](vec)[0]
+		val := vector.MustFixedCol[types.Uuid](vec)[0]
 		return val.ToString(), nil
 	case types.T_date:
-		val := vector.MustTCols[types.Date](vec)[0]
+		val := vector.MustFixedCol[types.Date](vec)[0]
 		return val.String(), nil
 	case types.T_time:
-		val := vector.MustTCols[types.Time](vec)[0]
+		val := vector.MustFixedCol[types.Time](vec)[0]
 		return val.String(), nil
 	case types.T_datetime:
-		val := vector.MustTCols[types.Datetime](vec)[0]
+		val := vector.MustFixedCol[types.Datetime](vec)[0]
 		return val.String(), nil
 	case types.T_timestamp:
-		val := vector.MustTCols[types.Timestamp](vec)[0]
+		val := vector.MustFixedCol[types.Timestamp](vec)[0]
 		return val.String2(ses.GetTimeZone(), vec.GetType().Precision), nil
 	default:
 		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.GetType().Oid.String())
@@ -474,68 +474,68 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 	rbat := batch.NewWithSize(bat.VectorCount())
 	rbat.InitZsOne(bat.Length())
 	for i := 0; i < rbat.VectorCount(); i++ {
-		rbat.Vecs[i] = vector.NewVector(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}) //TODO: check size
+		rbat.Vecs[i] = vector.NewVec(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}) //TODO: check size
 		rs := make([]string, bat.Length())
 		switch bat.Vecs[i].GetType().Oid {
 		case types.T_bool:
-			xs := vector.MustTCols[bool](bat.Vecs[i])
+			xs := vector.MustFixedCol[bool](bat.Vecs[i])
 			rs, err = dumpUtils.ParseBool(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		case types.T_int8:
-			xs := vector.MustTCols[int8](bat.Vecs[i])
+			xs := vector.MustFixedCol[int8](bat.Vecs[i])
 			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		case types.T_int16:
-			xs := vector.MustTCols[int16](bat.Vecs[i])
+			xs := vector.MustFixedCol[int16](bat.Vecs[i])
 			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		case types.T_int32:
-			xs := vector.MustTCols[int32](bat.Vecs[i])
+			xs := vector.MustFixedCol[int32](bat.Vecs[i])
 			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		case types.T_int64:
-			xs := vector.MustTCols[int64](bat.Vecs[i])
+			xs := vector.MustFixedCol[int64](bat.Vecs[i])
 			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 
 		case types.T_uint8:
-			xs := vector.MustTCols[uint8](bat.Vecs[i])
+			xs := vector.MustFixedCol[uint8](bat.Vecs[i])
 			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		case types.T_uint16:
-			xs := vector.MustTCols[uint16](bat.Vecs[i])
+			xs := vector.MustFixedCol[uint16](bat.Vecs[i])
 			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		case types.T_uint32:
-			xs := vector.MustTCols[uint32](bat.Vecs[i])
+			xs := vector.MustFixedCol[uint32](bat.Vecs[i])
 			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 
 		case types.T_uint64:
-			xs := vector.MustTCols[uint64](bat.Vecs[i])
+			xs := vector.MustFixedCol[uint64](bat.Vecs[i])
 			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		case types.T_float32:
-			xs := vector.MustTCols[float32](bat.Vecs[i])
+			xs := vector.MustFixedCol[float32](bat.Vecs[i])
 			rs, err = dumpUtils.ParseFloats(xs, bat.GetVector(int32(i)).GetNulls(), rs, 32)
 		case types.T_float64:
-			xs := vector.MustTCols[float64](bat.Vecs[i])
+			xs := vector.MustFixedCol[float64](bat.Vecs[i])
 			rs, err = dumpUtils.ParseFloats(xs, bat.GetVector(int32(i)).GetNulls(), rs, 64)
 		case types.T_decimal64:
-			xs := vector.MustTCols[types.Decimal64](bat.Vecs[i])
+			xs := vector.MustFixedCol[types.Decimal64](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal64])
 		case types.T_decimal128:
-			xs := vector.MustTCols[types.Decimal128](bat.Vecs[i])
+			xs := vector.MustFixedCol[types.Decimal128](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal128])
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-			xs := vector.MustStrCols(bat.Vecs[i])
+			xs := vector.MustStrCol(bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[string])
 		case types.T_json:
-			xs := vector.MustBytesCols(bat.Vecs[i])
+			xs := vector.MustBytesCol(bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.JsonParser)
 
 		case types.T_timestamp:
-			xs := vector.MustTCols[types.Timestamp](bat.Vecs[i])
+			xs := vector.MustFixedCol[types.Timestamp](bat.Vecs[i])
 			rs, err = dumpUtils.ParseTimeStamp(xs, bat.GetVector(int32(i)).GetNulls(), rs, loc, bat.GetVector(int32(i)).GetType().Precision)
 		case types.T_datetime:
-			xs := vector.MustTCols[types.Datetime](bat.Vecs[i])
+			xs := vector.MustFixedCol[types.Datetime](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Datetime])
 		case types.T_date:
-			xs := vector.MustTCols[types.Date](bat.Vecs[i])
+			xs := vector.MustFixedCol[types.Date](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Date])
 		case types.T_uuid:
-			xs := vector.MustTCols[types.Uuid](bat.Vecs[i])
+			xs := vector.MustFixedCol[types.Uuid](bat.Vecs[i])
 			rs, err = dumpUtils.ParseUuid(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		default:
 			err = moerr.NewNotSupported(ctx, "type %v", bat.Vecs[i].GetType().String())

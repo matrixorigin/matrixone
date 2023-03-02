@@ -37,7 +37,7 @@ func UUID(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		}
 		results[i] = id.String()
 	}
-	rvec := vector.NewVector(types.T_varchar.ToType())
+	rvec := vector.NewVec(types.T_varchar.ToType())
 	vector.AppendStringList(rvec, results, nil, proc.Mp())
 	return rvec, nil
 }
