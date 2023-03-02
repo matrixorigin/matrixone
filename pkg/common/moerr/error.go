@@ -176,6 +176,8 @@ const (
 	ErrDeadLockDetected uint16 = 20701
 	// ErrLockTableBindChanged lockservice and lock table bind changed
 	ErrLockTableBindChanged uint16 = 20702
+	// ErrLockTableNotFound lock table not found on remote lock service instance
+	ErrLockTableNotFound uint16 = 20703
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -308,6 +310,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
 	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind chaged"},
+	ErrLockTableNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -892,6 +895,14 @@ func NewAppendableBlockNotFound(ctx context.Context) *Error {
 
 func NewDeadLockDetected(ctx context.Context) *Error {
 	return newError(ctx, ErrDeadLockDetected)
+}
+
+func NewLockTableBindChanged(ctx context.Context) *Error {
+	return newError(ctx, ErrLockTableBindChanged)
+}
+
+func NewLockTableNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrLockTableNotFound)
 }
 
 var contextFunc atomic.Value

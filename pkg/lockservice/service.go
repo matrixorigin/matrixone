@@ -18,10 +18,12 @@ import (
 	"context"
 	"sync"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 )
 
 type activeTxnHolder interface {
-	getActiveTxn(txnID []byte, create bool) *activeTxn
+	getActiveTxn(txnID []byte, create bool, remote bool) *activeTxn
 	deleteActiveTxn(txnID []byte) *activeTxn
 }
 
@@ -42,7 +44,8 @@ func newMapBasedTxnHandler(fsp *fixedSlicePool) activeTxnHolder {
 
 func (h *mapBasedTxnHolder) getActiveTxn(
 	txnID []byte,
-	create bool) *activeTxn {
+	create bool,
+	remote bool) *activeTxn {
 	txnKey := unsafeByteSliceToString(txnID)
 	h.mu.RLock()
 	if v, ok := h.mu.activeTxns[txnKey]; ok {
@@ -57,6 +60,7 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	txn := newActiveTxn(txnID, txnKey, h.fsp)
+	txn.remote = remote
 	h.mu.activeTxns[txnKey] = txn
 	return txn
 }
@@ -79,7 +83,7 @@ type service struct {
 	deadlockDetector *detector
 }
 
-func NewLockService() LockService {
+func NewLockService(cfg morpc.Config) LockService {
 	l := &service{
 		// FIXME: config
 		fsp: newFixedSlicePool(1024 * 1024),
@@ -96,7 +100,7 @@ func (s *service) Lock(
 	rows [][]byte,
 	txnID []byte,
 	options LockOptions) error {
-	txn := s.activeTxns.getActiveTxn(txnID, true)
+	txn := s.activeTxns.getActiveTxn(txnID, true, false)
 	l := s.getLockTable(tableID)
 	if err := l.lock(ctx, txn, rows, options); err != nil {
 		return err
@@ -124,7 +128,7 @@ func (s *service) Close() error {
 }
 
 func (s *service) fetchTxnWaitingList(txnID []byte, waiters *waiters) bool {
-	txn := s.activeTxns.getActiveTxn(txnID, false)
+	txn := s.activeTxns.getActiveTxn(txnID, false, false)
 	// the active txn closed
 	if txn == nil {
 		return true
@@ -134,7 +138,7 @@ func (s *service) fetchTxnWaitingList(txnID []byte, waiters *waiters) bool {
 }
 
 func (s *service) abortDeadlockTxn(txnID []byte) {
-	txn := s.activeTxns.getActiveTxn(txnID, false)
+	txn := s.activeTxns.getActiveTxn(txnID, false, false)
 	// the active txn closed
 	if txn == nil {
 		return

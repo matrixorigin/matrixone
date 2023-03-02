@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 )
@@ -100,7 +101,7 @@ func TestTwoTxsDeadlock(t *testing.T) {
 func runDeadlock(t *testing.T, row1, row2 rowToLock) {
 	txnA := []byte("txnA")
 	txnB := []byte("txnB")
-	l := NewLockService()
+	l := NewLockService(morpc.Config{})
 	ctx := context.Background()
 	option := LockOptions{
 		Granularity: pb.Granularity_Row,

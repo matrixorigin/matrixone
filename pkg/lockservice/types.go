@@ -28,6 +28,8 @@ var (
 	ErrDeadLockDetected = moerr.NewDeadLockDetectedNoCtx()
 	// ErrLockTableBindChanged lock table and lock service bind changed
 	ErrLockTableBindChanged = moerr.NewLockTableBindChangedNoCtx()
+	// ErrLockTableNotFound lock table not found on remote lock service
+	ErrLockTableNotFound = moerr.NewLockTableNotFoundNoCtx()
 )
 
 // LockStorage the store that holds the locks, a storage instance is corresponding to
@@ -103,6 +105,8 @@ type lockTable interface {
 	unlock(ctx context.Context, txn *activeTxn, ls *cowSlice) error
 	// getLock get a lock, it will keep retrying until the context times out when it encounters an error.
 	getLock(ctx context.Context, key []byte) (Lock, bool)
+	// getBind returns lock table binding
+	getBind() pb.LockTable
 	// close close the locktable
 	close()
 }
@@ -137,25 +141,13 @@ type LockTableAllocator interface {
 // LockTableKeeper is used to keep a heartbeat with the LockTableAllocator to keep the
 // LockTable bind. And get the changed info of LockTable and LockService bind.
 type LockTableKeeper interface {
-	// Add add a new LockTable to keepalive.
-	Add(pb.LockTable)
-	// Changed lock table bind changed notify, if a lock table bind changed, all related
-	// transactions must be abort
-	Changed() chan pb.LockTable
 	// Close close the keeper
 	Close() error
 }
 
-// KeepaliveSender is used to send keepalive message to LockTableAllocator.
-type KeepaliveSender interface {
-	// Keep send locktables keepalive messages, if lockTable version changed, the return
-	// []pb.LockTable will include these.
-	Keep(context.Context, []pb.LockTable) ([]pb.LockTable, error)
-	// Close close the sender
-	Close() error
-}
-
 // Client is used to send lock table operations to other service.
+// 1. lock service <-> lock service
+// 2. lock service <-> lock table allocator
 type Client interface {
 	// Send send request to other lock service, and wait for a response synchronously.
 	Send(context.Context, *pb.Request) (*pb.Response, error)

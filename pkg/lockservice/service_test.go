@@ -24,13 +24,14 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRowLock(t *testing.T) {
-	l := NewLockService()
+	l := NewLockService(morpc.Config{})
 	ctx := context.Background()
 	option := LockOptions{
 		Granularity: pb.Granularity_Row,
@@ -61,7 +62,7 @@ func TestRowLock(t *testing.T) {
 }
 
 func TestMultipleRowLocks(t *testing.T) {
-	l := NewLockService()
+	l := NewLockService(morpc.Config{})
 	ctx := context.Background()
 	option := LockOptions{
 		Granularity: pb.Granularity_Row,
@@ -88,7 +89,7 @@ func TestMultipleRowLocks(t *testing.T) {
 }
 
 func TestCtxCancelWhileWaiting(t *testing.T) {
-	l := NewLockService()
+	l := NewLockService(morpc.Config{})
 	ctx, cancel := context.WithCancel(context.Background())
 	option := pb.LockOptions{
 		Granularity: pb.Granularity_Row,
@@ -110,7 +111,7 @@ func TestCtxCancelWhileWaiting(t *testing.T) {
 }
 
 func TestDeadLock(t *testing.T) {
-	l := NewLockService().(*service)
+	l := NewLockService(morpc.Config{}).(*service)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -151,7 +152,7 @@ func TestDeadLock(t *testing.T) {
 }
 
 func TestDeadLockWithRange(t *testing.T) {
-	l := NewLockService().(*service)
+	l := NewLockService(morpc.Config{}).(*service)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -231,7 +232,7 @@ func maybeAddTestLockWithDeadlock(t *testing.T,
 }
 
 func TestRangeLock(t *testing.T) {
-	l := NewLockService()
+	l := NewLockService(morpc.Config{})
 	ctx := context.Background()
 	option := LockOptions{
 		Granularity: pb.Granularity_Row,
@@ -262,7 +263,7 @@ func TestRangeLock(t *testing.T) {
 }
 
 func TestMultipleRangeLocks(t *testing.T) {
-	l := NewLockService()
+	l := NewLockService(morpc.Config{})
 	ctx := context.Background()
 	option := LockOptions{
 		Granularity: pb.Granularity_Row,
@@ -293,7 +294,7 @@ func TestMultipleRangeLocks(t *testing.T) {
 
 func BenchmarkMultipleRowLock(b *testing.B) {
 	b.Run("lock-service", func(b *testing.B) {
-		l := NewLockService()
+		l := NewLockService(morpc.Config{})
 		ctx := context.Background()
 		option := LockOptions{
 			Granularity: pb.Granularity_Row,
@@ -327,7 +328,7 @@ var rowID atomic.Uint64
 
 func runBenchmark(b *testing.B, name string, t uint64) {
 	b.Run(name, func(b *testing.B) {
-		l := NewLockService()
+		l := NewLockService(morpc.Config{})
 		getTableID := func() uint64 {
 			if t == 1 {
 				return 0

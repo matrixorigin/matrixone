@@ -15,75 +15,35 @@
 package lockservice
 
 import (
+	"context"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestKeeper(t *testing.T) {
-	interval := time.Millisecond * 100
-	c := make(chan pb.LockTable, 2)
-	n := 0
-	runKeeperTest(
+	runRPCTests(
 		t,
-		interval,
-		c,
-		func(lt pb.LockTable) bool {
-			n++
-			return n <= 2
-		},
-		func(k *lockTableKeeper) {
-			k.Add(pb.LockTable{})
-			for {
-				select {
-				case <-time.After(time.Second * 10):
-					assert.Fail(t, "missing keep")
-				default:
-					if len(c) == 2 {
-						return
+		func(c Client, s Server) {
+			n := 0
+			cc := make(chan struct{})
+			s.RegisterMethodHandler(
+				pb.Method_Keepalive,
+				func(ctx context.Context, r1 *lock.Request, r2 *lock.Response) error {
+					n++
+					if n == 10 {
+						close(cc)
 					}
-					time.Sleep(interval)
-				}
-			}
-		})
-}
-
-func TestGetLockTables(t *testing.T) {
-	runKeeperTest(
-		t,
-		time.Minute,
-		nil,
-		func(lt pb.LockTable) bool {
-			return false
+					return nil
+				})
+			k := NewLockTableKeeper("s1", c, time.Millisecond*10)
+			defer func() {
+				assert.NoError(t, k.Close())
+			}()
+			<-cc
 		},
-		func(k *lockTableKeeper) {
-			var values []pb.LockTable
-			values = k.getLockTables(values)
-			assert.Empty(t, values)
-
-			k.Add(pb.LockTable{})
-			values = k.getLockTables(values)
-			assert.Equal(t, 1, len(values))
-
-			k.Add(pb.LockTable{Table: 1})
-			values = k.getLockTables(values)
-			assert.Equal(t, 2, len(values))
-		})
-}
-
-func runKeeperTest(
-	t *testing.T,
-	interval time.Duration,
-	c chan pb.LockTable,
-	filter func(pb.LockTable) bool,
-	fn func(*lockTableKeeper)) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	k := NewLockTableKeeper(newChannelBasedSender(c, filter), interval)
-	defer func() {
-		assert.NoError(t, k.Close())
-	}()
-	fn(k.(*lockTableKeeper))
+	)
 }

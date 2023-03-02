@@ -62,47 +62,59 @@ message LockTable {
 // Method lock table operations
 enum Method {
   // Lock lock
-  Lock    = 0;
+  Lock      = 0;
   // Write transaction write
-  Unlock  = 1;
+  Unlock    = 1;
+  // Heartbeat heartbeat
+  Heartbeat = 2;
+  // GetBind get or create lock table bind from lock table allocator
+  GetBind   = 3;
+  // Keepalive keepalive the lock table bind on lock table allocator
+  Keepalive = 4;
 }
 
 // Request is used to send a request for a LockTable related operation to another 
 // service.
 message Request {
   // RequestID request id
-  uint64        RequestID = 1;
-  // ServiceID send to service
-  string        ServiceID = 2;
+  uint64        RequestID    = 1;
+  // LockTable lock target table
+  LockTable     LockTable    = 2 [(gogoproto.nullable) = false];
   // Method request type
-  Method        Method    = 3;
+  Method        Method       = 3;
   // Lock lock request
-  LockRequest   Lock      = 4 [(gogoproto.nullable) = false];
+  LockRequest   Lock         = 4 [(gogoproto.nullable) = false];
   // Unlock unlock request
-  UnlockRequest Unlock    = 5 [(gogoproto.nullable) = false];
+  UnlockRequest Unlock       = 5 [(gogoproto.nullable) = false];
+  // GetBindRequest get bind request
+  GetBindRequest GetBind     = 6 [(gogoproto.nullable) = false];
+  // KeepaliveRequest keepalive request
+  KeepaliveRequest Keepalive = 7 [(gogoproto.nullable) = false];
 }
 
 // Response response
 message Response {
     // RequestID corresponding request id
-    uint64         RequestID = 1;
+    uint64            RequestID   = 1;
     // Error we use this field to send moerr from service to another cn. Set with 
     // moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
-    bytes          Error     = 2;
+    bytes             Error       = 2;
     // NewBind lock table and lockservice bind changed
-    LockTable      NewBind   = 3;
+    LockTable         NewBind     = 3;
     // LockResponse lock response
-    LockResponse   Lock      = 4;
+    LockResponse      Lock        = 4;
     // UnlockResponse unlock response 
-    UnlockResponse Unlock    = 5;
+    UnlockResponse    Unlock      = 5;
+    // GetBindResponse get bind request
+    GetBindResponse   GetBind     = 6 [(gogoproto.nullable) = false];
+    // KeepaliveResponse keepalive request
+    KeepaliveResponse Keepalive   = 7 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
 message LockRequest {
   bytes           TxnID     = 1;
   repeated  bytes Rows      = 2;
-  // LockTable lock target table
-  LockTable       LockTable = 3 [(gogoproto.nullable) = false];
   // LockOptions lock options
   LockOptions     Options   = 4 [(gogoproto.nullable) = false];
 }
@@ -120,4 +132,25 @@ message UnlockRequest {
 // UnlockResponse unlock response
 message UnlockResponse {
 
+}
+
+// GetBindRequest get bind request from allocator request. Send from cn to dn
+message GetBindRequest {
+  string ServiceID = 1;
+  uint64 Table     = 2;
+}
+
+// GetBindResponse get bind request from allocator response
+message GetBindResponse {
+  LockTable LockTable = 2 [(gogoproto.nullable) = false];
+}
+
+// KeepaliveRequest keep lock table bind request. Send from cn to dn
+message KeepaliveRequest {
+  string ServiceID = 1;
+}
+
+// KeepaliveResponse keep lock table bind response
+message KeepaliveResponse {
+  bool OK = 1;
 }

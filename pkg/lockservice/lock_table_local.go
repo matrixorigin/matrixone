@@ -100,6 +100,11 @@ func (l *localLockTable) getLock(ctx context.Context, key []byte) (Lock, bool) {
 	return l.mu.store.Get(key)
 }
 
+func (l *localLockTable) getBind() pb.LockTable {
+	// TODO: implement
+	return pb.LockTable{}
+}
+
 func (l *localLockTable) close() {
 	l.mu.Lock()
 	defer l.mu.Unlock()

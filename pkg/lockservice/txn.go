@@ -34,6 +34,7 @@ type activeTxn struct {
 	fsp           *fixedSlicePool
 	blockedWaiter *waiter
 	holdLocks     map[uint64]*cowSlice
+	remote        bool
 }
 
 func newActiveTxn(
@@ -77,6 +78,7 @@ func (txn *activeTxn) close(lockTableFunc func(uint64) lockTable) {
 	txn.txnID = nil
 	txn.txnKey = ""
 	txn.blockedWaiter = nil
+	txn.remote = false
 	txnPool.Put(txn)
 }
 

@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ func TestGetWithNoBind(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(a *lockTableAllocator) {
+		func(_ Client, a *lockTableAllocator) {
 			assert.Equal(t,
 				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, Version: 1},
 				a.Get("s1", 1))
@@ -44,7 +45,7 @@ func TestGetWithBinded(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(a *lockTableAllocator) {
+		func(_ Client, a *lockTableAllocator) {
 			// register s1 first
 			a.Get("s1", 1)
 			assert.Equal(t,
@@ -57,7 +58,7 @@ func TestGetWithBindInvalid(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(a *lockTableAllocator) {
+		func(_ Client, a *lockTableAllocator) {
 			// register s1 first
 			a.Get("s1", 1)
 			a.disableTableBinds(a.getServiceBinds("s1"))
@@ -71,7 +72,7 @@ func TestGetWithBindAndServiceBothInvalid(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(a *lockTableAllocator) {
+		func(_ Client, a *lockTableAllocator) {
 			// invalid table 1 bind
 			a.Get("s1", 1)
 			a.disableTableBinds(a.getServiceBinds("s1"))
@@ -90,7 +91,7 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Millisecond,
-		func(a *lockTableAllocator) {
+		func(_ Client, a *lockTableAllocator) {
 			a.Get("s1", 1)
 			time.Sleep(time.Millisecond * 10)
 			binds := a.getServiceBinds("s1")
@@ -109,32 +110,25 @@ func TestKeepaliveBind(t *testing.T) {
 	interval := time.Millisecond * 100
 	runLockTableAllocatorTest(
 		t,
-		time.Millisecond*100,
-		func(a *lockTableAllocator) {
-			c := make(chan pb.LockTable)
-			defer close(c)
-			go func() {
-				for l := range c {
-					assert.True(t, a.Keepalive(l.ServiceID))
-				}
-			}()
-			s := newChannelBasedSender(c, nil)
-			k := NewLockTableKeeper(s, interval/5)
-			k.Add(a.Get("s1", 1))
+		interval,
+		func(c Client, a *lockTableAllocator) {
+			a.Get("s1", 1)
+			k := NewLockTableKeeper("s1", c, interval/5)
 
-			time.Sleep(interval * 2)
 			binds := a.getServiceBinds("s1")
 			assert.NotNil(t, binds)
 
-			assert.NoError(t, k.Close())
+			time.Sleep(interval * 2)
+			binds = a.getServiceBinds("s1")
+			assert.NotNil(t, binds)
 
+			assert.NoError(t, k.Close())
 			time.Sleep(interval * 2)
 			a.mu.Lock()
 			assert.Equal(t,
 				pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, Valid: false},
 				a.mu.lockTables[1])
 			a.mu.Unlock()
-
 			assert.False(t, a.Keepalive("s1"))
 		})
 }
@@ -143,7 +137,7 @@ func TestValid(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(a *lockTableAllocator) {
+		func(_ Client, a *lockTableAllocator) {
 			b := a.Get("s1", 1)
 			assert.True(t, a.Valid([]pb.LockTable{b}))
 		})
@@ -153,7 +147,7 @@ func TestValidWithServiceInvalid(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(a *lockTableAllocator) {
+		func(_ Client, a *lockTableAllocator) {
 			b := a.Get("s1", 1)
 			b.ServiceID = "s2"
 			assert.False(t, a.Valid([]pb.LockTable{b}))
@@ -164,7 +158,7 @@ func TestValidWithVersionChanged(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(a *lockTableAllocator) {
+		func(_ Client, a *lockTableAllocator) {
 			b := a.Get("s1", 1)
 			b.Version++
 			assert.False(t, a.Valid([]pb.LockTable{b}))
@@ -215,11 +209,28 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 func runLockTableAllocatorTest(
 	t *testing.T,
 	timeout time.Duration,
-	fn func(*lockTableAllocator)) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	a := NewLockTableAllocator(timeout)
-	defer func() {
-		assert.NoError(t, a.Close())
-	}()
-	fn(a.(*lockTableAllocator))
+	fn func(Client, *lockTableAllocator)) {
+
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			a := NewLockTableAllocator(timeout)
+			defer func() {
+				assert.NoError(t, a.Close())
+			}()
+			s.RegisterMethodHandler(
+				pb.Method_Keepalive,
+				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
+					r2.Keepalive.OK = a.Keepalive(r1.Keepalive.ServiceID)
+					return nil
+				})
+			s.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
+					r2.GetBind.LockTable = a.Get(r1.GetBind.ServiceID, r1.GetBind.Table)
+					return nil
+				})
+			fn(c, a.(*lockTableAllocator))
+		},
+	)
 }

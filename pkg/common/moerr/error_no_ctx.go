@@ -280,6 +280,10 @@ func NewLockTableBindChangedNoCtx() *Error {
 	return newError(Context(), ErrLockTableBindChanged)
 }
 
+func NewLockTableNotFoundNoCtx() *Error {
+	return newError(Context(), ErrLockTableNotFound)
+}
+
 func NewUDFAlreadyExistsNoCtx(f string) *Error {
 	return newError(Context(), ErrFunctionAlreadyExists, f)
 }

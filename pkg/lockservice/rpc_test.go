@@ -49,7 +49,10 @@ func TestRPCSend(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 			defer cancel()
-			resp, err := c.Send(ctx, &lock.Request{ServiceID: "s1", Method: lock.Method_Lock})
+			resp, err := c.Send(ctx,
+				&lock.Request{
+					LockTable: lock.LockTable{ServiceID: "s1"},
+					Method:    lock.Method_Lock})
 			require.NoError(t, err)
 			assert.NotNil(t, resp)
 		},
@@ -71,7 +74,9 @@ func TestMOErrorCanHandled(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 			defer cancel()
-			resp, err := c.Send(ctx, &lock.Request{ServiceID: "s1", Method: lock.Method_Lock})
+			resp, err := c.Send(ctx, &lock.Request{
+				LockTable: lock.LockTable{ServiceID: "s1"},
+				Method:    lock.Method_Lock})
 			require.Error(t, err)
 			require.Nil(t, resp)
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected))
@@ -94,7 +99,9 @@ func TestRequestCanBeFilter(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 			defer cancel()
-			resp, err := c.Send(ctx, &lock.Request{ServiceID: "s1", Method: lock.Method_Lock})
+			resp, err := c.Send(ctx, &lock.Request{
+				LockTable: lock.LockTable{ServiceID: "s1"},
+				Method:    lock.Method_Lock})
 			require.Error(t, err)
 			require.Nil(t, resp)
 			require.Equal(t, err, ctx.Err())
@@ -119,7 +126,9 @@ func TestLockTableBindChanged(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 			defer cancel()
-			resp, err := c.Send(ctx, &lock.Request{ServiceID: "s1", Method: lock.Method_Lock})
+			resp, err := c.Send(ctx, &lock.Request{
+				LockTable: lock.LockTable{ServiceID: "s1"},
+				Method:    lock.Method_Lock})
 			require.NoError(t, err)
 			require.NotNil(t, resp.NewBind)
 			assert.Equal(t, lock.LockTable{ServiceID: "s1"}, *resp.NewBind)

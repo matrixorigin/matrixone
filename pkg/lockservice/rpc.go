@@ -69,11 +69,25 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 	defer span.End()
 
 	var address string
-	c.cluster.GetCNService(clusterservice.NewServiceIDSelector(request.ServiceID),
-		func(s metadata.CNService) bool {
-			address = s.LockServiceAddress
-			return false
-		})
+	switch request.Method {
+	case pb.Method_Lock, pb.Method_Unlock, pb.Method_Heartbeat:
+		c.cluster.GetCNService(
+			clusterservice.NewServiceIDSelector(
+				request.LockTable.ServiceID),
+			func(s metadata.CNService) bool {
+				address = s.LockServiceAddress
+				return false
+			})
+	default:
+		c.cluster.GetDNService(
+			clusterservice.NewSelector(),
+			func(d metadata.DNService) bool {
+				// address = d.
+				return false
+			})
+
+	}
+
 	f, err := c.client.Send(ctx, address, request)
 	if err != nil {
 		return nil, err

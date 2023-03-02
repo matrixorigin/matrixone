@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -40,17 +39,23 @@ type remoteLockTable struct {
 
 func newRemoteLockTable(
 	binding pb.LockTable,
+	heartbeatInterval time.Duration,
 	client Client) *remoteLockTable {
 	tag := "remote-lock-table"
 	logger := runtime.ProcessLevelRuntime().Logger().
 		Named(tag).
 		With(zap.String("binding", binding.DebugString()))
 	l := &remoteLockTable{
-		logger:  logger,
-		binding: binding,
+		logger:            logger,
+		client:            client,
+		binding:           binding,
+		heartbeatInterval: heartbeatInterval,
 		stopper: stopper.NewStopper(tag,
 			stopper.WithLogger(logger.RawLogger())),
 		retryC: make(chan []byte, 1024),
+	}
+	if err := l.stopper.RunTask(l.backgroundTask); err != nil {
+		panic(err)
 	}
 	return l
 }
@@ -66,10 +71,9 @@ func (l *remoteLockTable) lock(
 	req := acquireRequest()
 	defer releaseRequest(req)
 
-	req.ServiceID = l.binding.ServiceID
+	req.LockTable = l.binding
 	req.Method = pb.Method_Lock
 	req.Lock.Options = options
-	req.Lock.LockTable = l.binding
 	req.Lock.TxnID = txn.txnID
 	req.Lock.Rows = rows
 
@@ -86,7 +90,18 @@ func (l *remoteLockTable) unlock(
 	ctx context.Context,
 	txn *activeTxn,
 	ls *cowSlice) error {
+	// if error returned it will retry
 	return l.doUnlock(ctx, txn.txnID)
+}
+
+func (l *remoteLockTable) getBind() pb.LockTable {
+	// TODO: implement
+	return pb.LockTable{}
+}
+
+func (l *remoteLockTable) close() {
+	l.stopper.Stop()
+	close(l.retryC)
 }
 
 func (l *remoteLockTable) addToRetry(id []byte) {
@@ -106,23 +121,39 @@ func (l *remoteLockTable) backgroundTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			l.doHeartbeat()
+			ctx2, cancel := context.WithTimeout(ctx, l.heartbeatInterval)
+			if err := l.doHeartbeat(ctx2); err != nil {
+				l.logger.Error("failed to heartbeat",
+					zap.Error(err))
+			}
+			cancel()
 			timer.Reset(l.heartbeatInterval)
 		case txnID := <-l.retryC:
 			ctx2, cancel := context.WithTimeout(ctx, l.heartbeatInterval)
 			if err := l.doUnlock(ctx2, txnID); err != nil {
-				if l.logger.Enabled(zap.DebugLevel) {
-					l.logger.Debug("failed to retry unlock txn",
-						zap.ByteString("txn-id", txnID))
-				}
+				l.logger.Error("failed to retry unlock txn",
+					zap.ByteString("txn-id", txnID),
+					zap.Error(err))
 			}
 			cancel()
 		}
 	}
 }
 
-func (l *remoteLockTable) doHeartbeat() {
+func (l *remoteLockTable) doHeartbeat(ctx context.Context) error {
+	req := acquireRequest()
+	defer releaseRequest(req)
 
+	req.Method = pb.Method_Heartbeat
+	req.LockTable = l.binding
+
+	resp, err := l.client.Send(ctx, req)
+	if err == nil {
+		// TODO: handle bind changed
+		releaseResponse(resp)
+		return nil
+	}
+	return err
 }
 
 func (l *remoteLockTable) doUnlock(ctx context.Context, id []byte) error {
@@ -130,7 +161,7 @@ func (l *remoteLockTable) doUnlock(ctx context.Context, id []byte) error {
 	defer releaseRequest(req)
 
 	req.Method = pb.Method_Unlock
-	req.ServiceID = l.binding.ServiceID
+	req.LockTable = l.binding
 	req.Unlock.TxnID = id
 
 	resp, err := l.client.Send(ctx, req)
@@ -146,18 +177,79 @@ func (l *remoteLockTable) doUnlock(ctx context.Context, id []byte) error {
 
 type lockTableServer struct {
 	logger        *log.MOLogger
+	txnHolder     activeTxnHolder
+	server        Server
 	lockTableFunc func(uint64) lockTable
-	mu            struct {
-		sync.RWMutex
-		remoteActiveTxns map[string]string
+}
+
+func newLockTableServer(
+	server Server,
+	txnHolder activeTxnHolder) *lockTableServer {
+	l := &lockTableServer{
+		logger: runtime.ProcessLevelRuntime().Logger(),
+		server: server,
 	}
+	l.initHandler()
+	return l
 }
 
-func newLockTableServer(server Server) *lockTableServer {
+func (s *lockTableServer) initHandler() {
+	s.server.RegisterMethodHandler(pb.Method_Lock,
+		s.handleRemoteLock)
+	s.server.RegisterMethodHandler(pb.Method_Unlock,
+		s.handleRemoteUnlock)
+	s.server.RegisterMethodHandler(pb.Method_Heartbeat,
+		s.handleRemoteUnlock)
+}
+
+func (s *lockTableServer) handleRemoteLock(
+	ctx context.Context,
+	req *pb.Request,
+	resp *pb.Response) error {
+	l, err := s.getLocalLockTable(req, resp)
+	if err != nil ||
+		l == nil {
+		return err
+	}
+	txn := s.txnHolder.getActiveTxn(req.Lock.TxnID, true, true)
+	return l.lock(ctx, txn, req.Lock.Rows, req.Lock.Options)
+}
+
+func (s *lockTableServer) handleRemoteUnlock(
+	ctx context.Context,
+	req *pb.Request,
+	resp *pb.Response) error {
+	l, err := s.getLocalLockTable(req, resp)
+	if err != nil ||
+		l == nil {
+		return err
+	}
 	return nil
 }
 
-func (s *lockTableServer) handleRemoteLock(context.Context, *pb.Request, *pb.Response) error {
-
+func (s *lockTableServer) handleRemoteHeartbeat(
+	ctx context.Context,
+	req *pb.Request,
+	resp *pb.Response) error {
+	l, err := s.getLocalLockTable(req, resp)
+	if err != nil ||
+		l == nil {
+		return err
+	}
 	return nil
+}
+
+func (s *lockTableServer) getLocalLockTable(
+	req *pb.Request,
+	resp *pb.Response) (lockTable, error) {
+	l := s.lockTableFunc(req.LockTable.Table)
+	if l == nil {
+		return nil, ErrLockTableNotFound
+	}
+	bind := l.getBind()
+	if bind.Changed(req.LockTable) {
+		resp.NewBind = &bind
+		return nil, nil
+	}
+	return l, nil
 }

@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -27,126 +26,67 @@ import (
 )
 
 type lockTableKeeper struct {
-	logger   *log.MOLogger
-	sender   KeepaliveSender
-	stopper  *stopper.Stopper
-	interval time.Duration
-	changedC chan pb.LockTable
-	mu       struct {
-		sync.Mutex
-		lockTables map[uint64]pb.LockTable
-		changed    bool
-	}
+	logger    *log.MOLogger
+	serviceID string
+	sender    Client
+	stopper   *stopper.Stopper
+	interval  time.Duration
 }
 
 // NewLockTableKeeper create a locktable keeper, an internal timer is started
 // to send a keepalive request to the lockTableAllocator every interval, so this
 // interval needs to be much smaller than the real lockTableAllocator's timeout.
 func NewLockTableKeeper(
-	sender KeepaliveSender,
+	serviceID string,
+	sender Client,
 	interval time.Duration) LockTableKeeper {
 	logger := runtime.ProcessLevelRuntime().Logger()
 	tag := "lock-table-keeper"
 	s := &lockTableKeeper{
-		logger:   logger.Named(tag),
-		sender:   sender,
-		changedC: make(chan pb.LockTable, 1024),
+		logger:    logger.Named(tag),
+		serviceID: serviceID,
+		sender:    sender,
 		stopper: stopper.NewStopper(tag,
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 	}
-	s.mu.lockTables = make(map[uint64]pb.LockTable)
 	if err := s.stopper.RunTask(s.send); err != nil {
 		panic(err)
 	}
 	return s
 }
 
-func (k *lockTableKeeper) Add(value pb.LockTable) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if _, ok := k.mu.lockTables[value.Table]; ok {
-		if k.logger.Enabled(zap.DebugLevel) {
-			k.logger.Debug("lock table already added",
-				zap.String("lock-table", value.DebugString()))
-		}
-		return
-	}
-	k.mu.lockTables[value.Table] = value
-	k.mu.changed = true
-	if k.logger.Enabled(zap.DebugLevel) {
-		k.logger.Debug("lock table added",
-			zap.String("lock-table", value.DebugString()))
-	}
-}
-
 func (k *lockTableKeeper) Close() error {
 	k.stopper.Stop()
-	close(k.changedC)
-	return k.sender.Close()
-}
-
-func (k *lockTableKeeper) Changed() chan pb.LockTable {
-	return k.changedC
+	return nil
 }
 
 func (k *lockTableKeeper) send(ctx context.Context) {
 	timer := time.NewTimer(k.interval)
 	defer timer.Stop()
 
-	var values []pb.LockTable
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			values = k.doSend(ctx, values)
+			k.doSend(ctx)
 			timer.Reset(k.interval)
 		}
 	}
 }
 
-func (k *lockTableKeeper) doSend(ctx context.Context, values []pb.LockTable) []pb.LockTable {
-	values = k.getLockTables(values)
-	if len(values) > 0 {
-		ctx, cancel := context.WithTimeout(ctx, k.interval)
-		defer cancel()
-		changed, err := k.sender.Keep(ctx, values)
-		if err != nil {
-			k.logger.Error("failed to send keepalive request", zap.Error(err))
-			return values
-		}
-		if len(changed) > 0 {
-			k.lockTablesChanged(changed)
-		}
-	}
-	return values
-}
+func (k *lockTableKeeper) doSend(ctx context.Context) {
+	req := acquireRequest()
+	defer releaseRequest(req)
 
-func (k *lockTableKeeper) getLockTables(values []pb.LockTable) []pb.LockTable {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if !k.mu.changed {
-		return values
-	}
-	values = values[:0]
-	for _, v := range k.mu.lockTables {
-		values = append(values, v)
-	}
-	k.mu.changed = false
-	return values
-}
+	req.Method = pb.Method_Keepalive
+	req.Keepalive.ServiceID = k.serviceID
 
-func (k *lockTableKeeper) lockTablesChanged(changed []pb.LockTable) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	for _, v := range changed {
-		o := k.mu.lockTables[v.Table]
-		delete(k.mu.lockTables, v.Table)
-		if k.logger.Enabled(zap.DebugLevel) {
-			k.logger.Debug("lock table changed",
-				zap.String("old", v.DebugString()),
-				zap.String("new", o.DebugString()))
-		}
+	ctx, cancel := context.WithTimeout(ctx, k.interval)
+	defer cancel()
+	_, err := k.sender.Send(ctx, req)
+	if err != nil {
+		k.logger.Error("failed to send keepalive request",
+			zap.Error(err))
 	}
-	k.mu.changed = true
 }
