@@ -1295,6 +1295,120 @@ func Copy(v, w *Vector, vi, wi int64, m *mpool.MPool) error {
 	return nil
 }
 
+// GetUnionOneFunction: A more sensible function for copying elements,
+// which avoids having to do type conversions and type judgements every time you append.
+func GetUnionOneFunction(typ types.Type, m *mpool.MPool) func(v, w *Vector, sel int64) error {
+	switch typ.Oid {
+	case types.T_bool:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[bool](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_int8:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[int8](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_int16:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[int16](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_int32:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[int32](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_int64:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[int64](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_uint8:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[uint8](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_uint16:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[uint16](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_uint32:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[bool](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_uint64:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[uint64](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_float32:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[float32](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_float64:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[float64](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_date:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Date](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_datetime:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Datetime](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_time:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Time](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_timestamp:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Timestamp](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_decimal64:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Decimal64](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_decimal128:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Decimal128](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_uuid:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Uuid](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_TS:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.TS](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_Rowid:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Rowid](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Varlena](w)
+			return appendOneBytes(v, ws[sel].GetByteSlice(w.area), nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.GetUnionOneFunction", typ))
+	}
+}
+
 // XXX Old UnionOne is FUBAR
 // It is simply append.   We do not go through appendOne interface because
 // we don't want to horrible type switch.
