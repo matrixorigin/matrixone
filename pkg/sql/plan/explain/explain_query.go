@@ -262,8 +262,8 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		return moerr.NewInternalError(ctx, "explain graphData data is null")
 	} else {
 		// time
-		gtimeConsumed := NewStatisticValue(TimeConsumed, "us")
-		gwaitTime := NewStatisticValue(WaitTime, "us")
+		gtimeConsumed := NewStatisticValue(TimeConsumed, "ns")
+		gwaitTime := NewStatisticValue(WaitTime, "ns")
 
 		// Throughput
 		ginputRows := NewStatisticValue(InputRows, "count")

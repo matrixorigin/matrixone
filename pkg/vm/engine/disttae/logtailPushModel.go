@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -56,12 +55,19 @@ const (
 	defaultTimeOutToSubscribeTable = 2 * time.Minute
 )
 
+// to ensure we can pass the SCA for unused code.
+var subscribedT subscribedTable
+var _ = subscribedT.setTableUnsubscribe
+var testLogTailSubscriber logTailSubscriber
+var _ = testLogTailSubscriber.unSubscribeTable
+
 type subscribeID struct {
 	db  uint64
 	tbl uint64
 }
 
-// subscribedTable records cn table subscribe status.
+// subscribedTable used to record table subscribed status.
+// only if m[table T] = true, T has been subscribed.
 type subscribedTable struct {
 	m     map[subscribeID]bool
 	mutex sync.RWMutex
@@ -86,6 +92,14 @@ func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
 	s.mutex.Unlock()
 }
 
+func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
+	s.mutex.Lock()
+	delete(s.m, subscribeID{dbId, tblId})
+	s.mutex.Unlock()
+}
+
+// syncLogTailTimestamp is a global log tail timestamp for a cn node.
+// records the received last log tail timestamp.
 type syncLogTailTimestamp struct {
 	t timestamp.Timestamp
 	sync.RWMutex
@@ -130,77 +144,22 @@ func (r *syncLogTailTimestamp) blockUntilTxnTimeIsLegal(
 	}
 }
 
+// logTailSubscriber is responsible for
+// sending subscribe request and unsubscribe request to dn.
 type logTailSubscriber struct {
 	dnNodeID      int
 	logTailClient *service.LogtailClient
 }
 
-func (s *logTailSubscriber) subscribeTable(
-	ctx context.Context, tblId api.TableID) error {
-	// set a default deadline for ctx if it doesn't have.
-	if _, ok := ctx.Deadline(); !ok {
-		newCtx, cancel := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
-		_ = cancel
-		return s.logTailClient.Subscribe(newCtx, tblId)
-	}
-	return s.logTailClient.Subscribe(ctx, tblId)
+type logTailSubscriberResponse struct {
+	response *service.LogtailResponse
+	err      error
 }
 
-// to ensure we can pass the SCA for unused code.
-var testLogTailSubscriber logTailSubscriber
-var _ = testLogTailSubscriber.unSubscribeTable
-
-// XXX There is no place to use the method unsubscribe now.
-// we will make a good way to unsubscribe table if the table was unused for a long time next pr.
-func (s *logTailSubscriber) unSubscribeTable(
-	ctx context.Context, tblId api.TableID) error {
-	// set a default deadline for ctx if it doesn't have.
-	if _, ok := ctx.Deadline(); !ok {
-		newCtx, cancel := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
-		_ = cancel
-		return s.logTailClient.Unsubscribe(newCtx, tblId)
-	}
-	return s.logTailClient.Unsubscribe(ctx, tblId)
-}
-
-func (e *Engine) SetPushModelFlag(turnOn bool) {
-	e.usePushModel = turnOn
-	// XXX it's really stupid but can avoid changing lots of codes to
-	// deliver the disttaeEngine.
-	e.db.cnE = e
-}
-
-func (e *Engine) UsePushModelOrNot() bool {
-	return e.usePushModel
-}
-
-func (e *Engine) InitLogTailPushModel(
-	ctx context.Context) error {
-	e.receiveLogTailTime.initLogTailTimestamp()
-	e.subscribed.initTableSubscribeRecord()
-	if err := e.initTableLogTailSubscriber(); err != nil {
-		return err
-	}
-	e.StartToReceiveTableLogTail()
-	if err := e.connectToLogTailServer(ctx); err != nil {
-		return err
-	}
-	e.SetPushModelFlag(true)
-	return nil
-}
-
-func (e *Engine) initTableLogTailSubscriber() error {
-	var err error
-	// close the old rpc client.
-	if e.subscriber != nil {
-		if err := e.subscriber.logTailClient.Close(); err != nil {
-			return err
-		}
-	}
-	e.subscriber = new(logTailSubscriber)
+func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	// XXX we assume that we have only 1 dn now.
-	e.subscriber.dnNodeID = 0
-	dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
+	s.dnNodeID = 0
+
 	// XXX generate a rpc client and new a stream.
 	// we should hide these code into NewClient method next day.
 	codec := morpc.NewMessageCodec(func() morpc.Message {
@@ -221,17 +180,84 @@ func (e *Engine) initTableLogTailSubscriber() error {
 		return err1
 	}
 
-	s, err2 := c.NewStream(dnLogTailServerBackend, true)
+	stream, err2 := c.NewStream(serviceAddr, true)
 	if err2 != nil {
 		return err2
 	}
 	// new the log tail client.
-	e.subscriber.logTailClient, err = service.NewLogtailClient(s,
+	s.logTailClient, err = service.NewLogtailClient(stream,
 		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
 	return err
 }
 
-func (e *Engine) connectToLogTailServer(
+func (s *logTailSubscriber) subscribeTable(
+	ctx context.Context, tblId api.TableID) error {
+	// set a default deadline for ctx if it doesn't have.
+	if _, ok := ctx.Deadline(); !ok {
+		newCtx, cancel := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
+		_ = cancel
+		return s.logTailClient.Subscribe(newCtx, tblId)
+	}
+	return s.logTailClient.Subscribe(ctx, tblId)
+}
+
+// XXX There is not a good place to use the method unsubscribe now.
+// should make a good way to unsubscribe table once a table was unused for a long time.
+func (s *logTailSubscriber) unSubscribeTable(
+	ctx context.Context, tblId api.TableID) error {
+	// set a default deadline for ctx if it doesn't have.
+	if _, ok := ctx.Deadline(); !ok {
+		newCtx, cancel := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
+		_ = cancel
+		return s.logTailClient.Unsubscribe(newCtx, tblId)
+	}
+	return s.logTailClient.Unsubscribe(ctx, tblId)
+}
+
+func (s *logTailSubscriber) receiveResponse() logTailSubscriberResponse {
+	r, err := s.logTailClient.Receive()
+	return logTailSubscriberResponse{
+		response: r,
+		err:      err,
+	}
+}
+
+func (e *Engine) SetPushModelFlag(turnOn bool) {
+	e.usePushModel = turnOn
+}
+
+func (e *Engine) UsePushModelOrNot() bool {
+	return e.usePushModel
+}
+
+func (e *Engine) InitLogTailPushModel(
+	ctx context.Context) error {
+	e.receiveLogTailTime.initLogTailTimestamp()
+	e.subscribed.initTableSubscribeRecord()
+	if err := e.initTableLogTailSubscriber(); err != nil {
+		return err
+	}
+	e.StartToReceiveTableLogTail()
+	if err := e.firstTimeConnectToLogTailServer(ctx); err != nil {
+		return err
+	}
+	e.SetPushModelFlag(true)
+	return nil
+}
+
+func (e *Engine) initTableLogTailSubscriber() error {
+	// close the old rpc client.
+	if e.subscriber != nil {
+		if err := e.subscriber.logTailClient.Close(); err != nil {
+			return err
+		}
+	}
+	e.subscriber = new(logTailSubscriber)
+	dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
+	return e.subscriber.init(dnLogTailServerBackend)
+}
+
+func (e *Engine) firstTimeConnectToLogTailServer(
 	ctx context.Context) error {
 	var err error
 	// push subscription to Table `mo_database`, `mo_table`, `mo_column` of mo_catalog.
@@ -262,8 +288,8 @@ func (e *Engine) connectToLogTailServer(
 func (e *Engine) tryToGetTableLogTail(
 	ctx context.Context,
 	dbId, tblId uint64) error {
-	// subscribe table if it has never been subscribed.
-	// and poll to check if we receive the log.
+	// if table has been subscribed, just return.
+	// if not, subscribe it and poll to check if we receive the log.
 	if !e.subscribed.getTableSubscribe(dbId, tblId) {
 		if err := e.subscriber.subscribeTable(ctx,
 			api.TableID{DbId: dbId, TbId: tblId}); err != nil {
@@ -282,19 +308,12 @@ func (e *Engine) tryToGetTableLogTail(
 }
 
 func (e *Engine) StartToReceiveTableLogTail() {
-	type response struct {
-		r   *service.LogtailResponse
-		err error
-	}
-	generateResponse := func(ltR *service.LogtailResponse, err error) response {
-		return response{r: ltR, err: err}
-	}
 	// set up a background routine to receive table log.
 	// if lost connection with log tail server. it should reconnect.
 	go func() {
 		ctx := context.TODO()
 		for {
-			ch := make(chan response, 1)
+			ch := make(chan logTailSubscriberResponse, 1)
 			reconect := false
 			for {
 				if reconect {
@@ -306,24 +325,23 @@ func (e *Engine) StartToReceiveTableLogTail() {
 				case <-deadline.Done():
 					reconect = true
 					continue
-				case ch <- generateResponse(e.subscriber.logTailClient.Receive()):
+				case ch <- e.subscriber.receiveResponse():
 					cancel()
 				}
 
 				resp := <-ch
 				if resp.err != nil {
 					// decoded error or rpc err. should reconnect soon.
-					logutil.Error(
-						fmt.Sprintf("receive a error from dn log tail server, err is %s",
-							resp.err.Error()))
+					logutil.Errorf("receive a error from dn log tail server, err is %s", resp.err.Error())
 					reconect = true
 					break
 				}
 
 				subscriber := e.subscriber
+				response := resp.response
 				switch {
-				case resp.r.GetSubscribeResponse() != nil:
-					logTail := resp.r.GetSubscribeResponse().GetLogtail()
+				case response.GetSubscribeResponse() != nil:
+					logTail := response.GetSubscribeResponse().GetLogtail()
 					logTs := logTail.GetTs()
 					if err := updatePartitionOfPush(ctx, subscriber.dnNodeID, e, &logTail, *logTs); err != nil {
 						logutil.Errorf("update partition failed. err is %s", err)
@@ -334,9 +352,9 @@ func (e *Engine) StartToReceiveTableLogTail() {
 					e.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
 					e.receiveLogTailTime.updateTimestamp(*logTs)
 
-				case resp.r.GetUpdateResponse() != nil:
-					logLists := resp.r.GetUpdateResponse().GetLogtailList()
-					to := resp.r.GetUpdateResponse().GetTo()
+				case response.GetUpdateResponse() != nil:
+					logLists := response.GetUpdateResponse().GetLogtailList()
+					to := response.GetUpdateResponse().GetTo()
 
 					// the purpose of sorting is to put log of mo.db, mo.table, mo.column first.
 					// ensure the consistency with the pull process.
@@ -354,8 +372,7 @@ func (e *Engine) StartToReceiveTableLogTail() {
 					}
 
 				default:
-					// errResponse and unSubscribeResponse.
-					// we have no need to handle these now.
+					// errResponse and unSubscribeResponse. we have no need to handle these now.
 					//case resp.r.GetError() != nil:
 					//case resp.r.GetUnsubscribeResponse() != nil:
 				}
@@ -369,7 +386,7 @@ func (e *Engine) StartToReceiveTableLogTail() {
 					logutil.Error("rebuild the cn log tail client failed.")
 					continue
 				}
-				if err := e.connectToLogTailServer(ctx); err == nil {
+				if err := e.firstTimeConnectToLogTailServer(ctx); err == nil {
 					logutil.Info("reconnect to dn log tail server succeed.")
 					break
 				}
@@ -388,18 +405,20 @@ func updatePartitionOfPush(
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
-	partitions := e.db.getPartitions(dbId, tblId)
+	partitions := e.getPartitions(dbId, tblId)
 	partition := partitions[dnId]
 
+	curState := partition.state.Load()
+	state := curState.Copy()
+
 	key := e.catalog.GetTableById(dbId, tblId)
-	tbl := &table{
-		db: &database{
+	tbl := &txnTable{
+		db: &txnDatabase{
 			databaseId:   dbId,
 			databaseName: "",
 			txn: &Transaction{
-				catalog: e.catalog,
+				engine: e,
 			},
-			fs: e.fs,
 		},
 		parts:        partitions,
 		tableId:      key.Id,
@@ -417,39 +436,45 @@ func updatePartitionOfPush(
 	}
 
 	if err = consumeLogTailOfPush(ctx,
-		dnId, tbl, e.db, partition, tl); err != nil {
+		dnId, tbl, e, partition, state, tl); err != nil {
 		logutil.Errorf("consume %d-%s log tail error: %v\n", tbl.tableId, tbl.tableName, err)
 		return err
 	}
+
+	if !partition.state.CompareAndSwap(curState, state) {
+		panic("concurrent mutation")
+	}
+
 	<-partition.lock
 	partition.ts = *tl.Ts
 	partition.lock <- struct{}{}
+
 	return nil
 }
 
 func consumeLogTailOfPush(
 	ctx context.Context,
-	idx int, tbl *table,
-	db *DB, mvcc MVCC, lt *logtail.TableLogtail) (err error) {
+	idx int, tbl *txnTable,
+	engine *Engine, partition *Partition, state *PartitionState, lt *logtail.TableLogtail) (err error) {
 	var entries []*api.Entry
 
 	if entries, err = logtail2.LoadCheckpointEntries(
 		ctx,
 		lt.CkpLocation,
 		tbl.tableId, tbl.tableName,
-		tbl.db.databaseId, tbl.db.databaseName, tbl.db.fs); err != nil {
+		tbl.db.databaseId, tbl.db.databaseName, tbl.db.txn.engine.fs); err != nil {
 		return
 	}
 	for _, entry := range entries {
 		if err = consumeEntry(idx, tbl.primaryIdx, tbl, ctx,
-			db, mvcc, entry); err != nil {
+			engine, partition, state, entry); err != nil {
 			return
 		}
 	}
 
 	for i := 0; i < len(lt.Commands); i++ {
 		if err = consumeEntry(idx, tbl.primaryIdx, tbl, ctx,
-			db, mvcc, &lt.Commands[i]); err != nil {
+			engine, partition, state, &lt.Commands[i]); err != nil {
 			return
 		}
 	}
@@ -475,31 +500,4 @@ func (ls logList) Sort() {
 
 func compareTableIdLess(i1, i2 uint64) bool {
 	return i1 < i2
-}
-
-var _ = debugToPrintLogList
-
-func debugToPrintLogList(ls []logtail.TableLogtail) string {
-	if len(ls) == 0 {
-		return ""
-	}
-	str := "log list are:\n"
-	for i, l := range ls {
-		did, tid := l.Table.DbId, l.Table.TbId
-		str += fmt.Sprintf("\t log: %d, dn: %d, tbl: %d\n", i, did, tid)
-		if len(l.Commands) > 0 {
-			str += "\tcommands are :\n"
-		}
-		for j, command := range l.Commands {
-			typ := "insert"
-			if command.EntryType == 1 {
-				typ = "delete"
-			} else if command.EntryType == 2 {
-				typ = "update"
-			}
-			str += fmt.Sprintf("\t\t %d: [dnName: %s, tableName: %s, typ: %s]\n",
-				j, command.DatabaseName, command.TableName, typ)
-		}
-	}
-	return str
 }

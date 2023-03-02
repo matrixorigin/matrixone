@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,37 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package uuids
+package types
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import "bytes"
 
-type sortElem struct {
-	data types.Uuid
-	idx  uint32
+func (r Rowid) Less(than Rowid) bool {
+	return bytes.Compare(r[:], than[:]) < 0
 }
 
-type sortSlice []sortElem
-
-func (x sortSlice) Less(i, j int) bool {
-	return x[i].data.Lt(x[j].data)
-}
-
-func (x sortSlice) Swap(i, j int) {
-	x[i], x[j] = x[j], x[i]
-}
-
-type heapElem struct {
-	data types.Uuid
-	src  uint32
-	next uint32
-}
-
-type heapSlice []heapElem
-
-func (x heapSlice) Less(i, j int) bool {
-	return x[i].data.Lt(x[j].data)
-}
-
-func (x heapSlice) Swap(i, j int) {
-	x[i], x[j] = x[j], x[i]
+func (r Rowid) Equal(to Rowid) bool {
+	return bytes.Equal(r[:], to[:])
 }
