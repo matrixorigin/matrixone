@@ -100,10 +100,18 @@ func TestService(t *testing.T) {
 	/* ---- wait subscription response via logtail client ---- */
 	{
 		t.Log("wait subscription response via logtail client")
-		resp, err := logtailClient.Receive()
-		require.NoError(t, err)
-		require.NotNil(t, resp.GetSubscribeResponse())
-		require.Equal(t, tableA.String(), resp.GetSubscribeResponse().Logtail.Table.String())
+		for {
+			resp, err := logtailClient.Receive()
+			require.NoError(t, err)
+			require.Nil(t, resp.GetError())
+			if resp.GetSubscribeResponse() != nil {
+				require.Equal(t, tableA.String(), resp.GetSubscribeResponse().Logtail.Table.String())
+				break
+			}
+			if resp.GetUpdateResponse() != nil {
+				require.Equal(t, 0, len(resp.GetUpdateResponse().LogtailList))
+			}
+		}
 	}
 
 	/* ---- wait update response via logtail client ---- */

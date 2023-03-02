@@ -24,8 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
-func consumeEntry(idx, primaryIdx int, tbl *table,
-	ctx context.Context, db *DB, partition *Partition, state *PartitionState, e *api.Entry) error {
+func consumeEntry(idx, primaryIdx int, tbl *txnTable,
+	ctx context.Context, engine *Engine, partition *Partition, state *PartitionState, e *api.Entry) error {
 
 	state.HandleLogtailEntry(ctx, e)
 
@@ -48,18 +48,18 @@ func consumeEntry(idx, primaryIdx int, tbl *table,
 					}
 				}
 			}
-			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)
+			return engine.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)
 		}
 		switch e.TableId {
 		case catalog.MO_TABLES_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			tbl.db.txn.catalog.InsertTable(bat)
+			tbl.db.txn.engine.catalog.InsertTable(bat)
 		case catalog.MO_DATABASE_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			tbl.db.txn.catalog.InsertDatabase(bat)
+			tbl.db.txn.engine.catalog.InsertDatabase(bat)
 		case catalog.MO_COLUMNS_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			tbl.db.txn.catalog.InsertColumns(bat)
+			tbl.db.txn.engine.catalog.InsertColumns(bat)
 		}
 		if primaryIdx >= 0 {
 			return partition.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
@@ -67,15 +67,15 @@ func consumeEntry(idx, primaryIdx int, tbl *table,
 		return partition.Insert(ctx, primaryIdx, e.Bat, false)
 	}
 	if isMetaTable(e.TableName) {
-		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
+		return engine.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
 	}
 	switch e.TableId {
 	case catalog.MO_TABLES_ID:
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		tbl.db.txn.catalog.DeleteTable(bat)
+		tbl.db.txn.engine.catalog.DeleteTable(bat)
 	case catalog.MO_DATABASE_ID:
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		tbl.db.txn.catalog.DeleteDatabase(bat)
+		tbl.db.txn.engine.catalog.DeleteDatabase(bat)
 	}
 	return partition.Delete(ctx, e.Bat)
 }
