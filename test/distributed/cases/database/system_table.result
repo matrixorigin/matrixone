@@ -184,7 +184,7 @@ no such table information_schema.TRIGGERS
 show columns from `TABLES`;
 no such table information_schema.TABLES
 drop table is exists t2;
-create table t2 (b int, a int);
+create table t2(b int, a int);
 desc t2;
 Field    Type    Null    Key    Default    Extra    Comment
 b     INT(32)   YES        null
