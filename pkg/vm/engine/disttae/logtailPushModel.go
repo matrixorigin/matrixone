@@ -55,6 +55,14 @@ const (
 	defaultTimeOutToSubscribeTable = 2 * time.Minute
 )
 
+const (
+	// routine number to consume log tail.
+	parallelNums = 2
+
+	// each routine's log tail buffer size.
+	bufferLength = 100
+)
+
 // to ensure we can pass the SCA for unused code.
 var subscribedT subscribedTable
 var _ = subscribedT.setTableUnsubscribe
@@ -101,24 +109,41 @@ func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.
 // records the received last log tail timestamp.
 type syncLogTailTimestamp struct {
-	t timestamp.Timestamp
+	minTIndex int // always be the index of min t in tList
+	tList     []timestamp.Timestamp
 	sync.RWMutex
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp() {
-	r.updateTimestamp(timestamp.Timestamp{})
+	r.minTIndex = parallelNums
+	r.tList = make([]timestamp.Timestamp, parallelNums+1)
 }
 
 func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
 	r.RLock()
-	t := r.t
+	t := r.tList[r.minTIndex]
 	r.RUnlock()
 	return t
 }
 
-func (r *syncLogTailTimestamp) updateTimestamp(newTimestamp timestamp.Timestamp) {
+func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp.Timestamp) {
 	r.Lock()
-	r.t = newTimestamp
+	if r.tList[index].Equal(r.tList[r.minTIndex]) {
+		r.tList[index] = newTimestamp
+		for i := 0; i < index; i++ {
+			if r.tList[i].Less(r.tList[r.minTIndex]) {
+				r.minTIndex = i
+			}
+		}
+		for i := index + 1; i < len(r.tList); i++ {
+			if r.tList[i].Less(r.tList[r.minTIndex]) {
+				r.minTIndex = i
+			}
+		}
+	} else {
+		r.tList[index] = newTimestamp
+	}
+
 	r.Unlock()
 }
 
@@ -237,7 +262,7 @@ func (e *Engine) InitLogTailPushModel(
 	if err := e.initTableLogTailSubscriber(); err != nil {
 		return err
 	}
-	e.StartToReceiveTableLogTail()
+	e.ParallelToReceiveTableLogTail()
 	if err := e.firstTimeConnectToLogTailServer(ctx); err != nil {
 		return err
 	}
@@ -305,96 +330,6 @@ func (e *Engine) tryToGetTableLogTail(
 	}
 	// XXX we can move the subscribe-status-check here.
 	return nil
-}
-
-func (e *Engine) StartToReceiveTableLogTail() {
-	// set up a background routine to receive table log.
-	// if lost connection with log tail server. it should reconnect.
-	go func() {
-		ctx := context.TODO()
-		for {
-			ch := make(chan logTailSubscriberResponse, 1)
-			reconect := false
-			for {
-				if reconect {
-					break
-				}
-
-				deadline, cancel := context.WithTimeout(ctx, maxTimeToWaitServerResponse)
-				select {
-				case <-deadline.Done():
-					reconect = true
-					continue
-				case ch <- e.subscriber.receiveResponse():
-					cancel()
-				}
-
-				resp := <-ch
-				if resp.err != nil {
-					// decoded error or rpc err. should reconnect soon.
-					logutil.Errorf("receive a error from dn log tail server, err is %s", resp.err.Error())
-					reconect = true
-					break
-				}
-
-				subscriber := e.subscriber
-				response := resp.response
-				switch {
-				case response.GetSubscribeResponse() != nil:
-					logTail := response.GetSubscribeResponse().GetLogtail()
-					logTs := logTail.GetTs()
-					if err := updatePartitionOfPush(ctx, subscriber.dnNodeID, e, &logTail, *logTs); err != nil {
-						logutil.Errorf("update partition failed. err is %s", err)
-						reconect = true
-						break
-					}
-					tbl := logTail.GetTable()
-					e.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
-					e.receiveLogTailTime.updateTimestamp(*logTs)
-
-				case response.GetUpdateResponse() != nil:
-					logLists := response.GetUpdateResponse().GetLogtailList()
-					to := response.GetUpdateResponse().GetTo()
-
-					// the purpose of sorting is to put log of mo.db, mo.table, mo.column first.
-					// ensure the consistency with the pull process.
-					logList(logLists).Sort()
-
-					for _, l := range logLists {
-						if err := updatePartitionOfPush(ctx, subscriber.dnNodeID, e, &l, *l.Ts); err != nil {
-							logutil.Errorf("update partition failed. err is %s", err)
-							reconect = true
-							break
-						}
-					}
-					if !reconect {
-						e.receiveLogTailTime.updateTimestamp(*to)
-					}
-
-				default:
-					// errResponse and unSubscribeResponse. we have no need to handle these now.
-					//case resp.r.GetError() != nil:
-					//case resp.r.GetUnsubscribeResponse() != nil:
-				}
-			}
-
-			// reconnect to log tail server.
-			e.receiveLogTailTime.initLogTailTimestamp()
-			e.subscribed.initTableSubscribeRecord()
-			for {
-				if err := e.initTableLogTailSubscriber(); err != nil {
-					logutil.Error("rebuild the cn log tail client failed.")
-					continue
-				}
-				if err := e.firstTimeConnectToLogTailServer(ctx); err == nil {
-					logutil.Info("reconnect to dn log tail server succeed.")
-					break
-				}
-				logutil.Error("reconnect to dn log tail server failed.")
-				time.Sleep(periodToReconnectDnLogServer)
-			}
-		}
-	}()
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
