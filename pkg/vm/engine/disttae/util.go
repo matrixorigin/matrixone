@@ -137,30 +137,26 @@ func fetchZonemapAndRowsFromBlockInfo(
 	blockInfo catalog.BlockInfo,
 	fs fileservice.FileService,
 	m *mpool.MPool) ([][64]byte, uint32, error) {
-	name, extent, rows := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
+	_, extent, rows := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
 	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
-	reader, err := objectio.NewObjectReader(name, fs)
+	reader, err := blockio.NewBlockReader(fs, blockInfo.MetaLoc)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	obs, err := reader.ReadMeta(ctx, []objectio.Extent{extent}, m)
+	obs, err := reader.LoadZoneMaps(ctx, idxs, []uint32{extent.Id()}, m)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	for i, idx := range idxs {
-		column, err := obs[0].GetColumn(idx)
+	for i := range idxs {
+		obs[0][i].Marshal()
+		bytes, err := obs[0][i].Marshal()
 		if err != nil {
 			return nil, 0, err
 		}
-		data, err := column.GetIndex(ctx, objectio.ZoneMapType, m)
-		if err != nil {
-			return nil, 0, err
-		}
-		bytes := data.(*objectio.ZoneMap).GetData()
 		copy(zonemapList[i][:], bytes[:])
 	}
 
