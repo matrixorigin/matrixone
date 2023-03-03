@@ -47,10 +47,10 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (bool, error) {
 	bat := proc.Reg.InputBatch
 	anal.Input(bat, isFirst)
 	if bat == nil {
+		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	if len(bat.Zs) == 0 {
-		proc.SetInputBatch(nil)
 		return false, nil
 	}
 
@@ -58,7 +58,6 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
 	bat.Clean(proc.Mp())
