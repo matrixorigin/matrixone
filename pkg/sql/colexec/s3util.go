@@ -38,11 +38,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type WriteS3Container struct {
+type S3Writer struct {
 	// in fact, len(sortIndex) is 1 at most.
-	sortIndex        []int
-	nameToNullablity map[string]bool
-	pk               map[string]bool
+	sortIndex         []int
+	nameToNullability map[string]bool
+	pk                map[string]bool
 
 	writer  objectio.Writer
 	lengths []uint64
@@ -72,7 +72,7 @@ const (
 	WriteS3Threshold uint64 = 64 * mpool.MB
 )
 
-func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
+func NewS3Writer(tableDef *plan.TableDef) *S3Writer {
 	unique_nums := 0
 	for _, idx := range tableDef.Indexes {
 		if idx.Unique {
@@ -80,10 +80,10 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 		}
 	}
 
-	container := &WriteS3Container{
-		sortIndex:        make([]int, 0, 1),
-		pk:               make(map[string]bool),
-		nameToNullablity: make(map[string]bool),
+	container := &S3Writer{
+		sortIndex:         make([]int, 0, 1),
+		pk:                make(map[string]bool),
+		nameToNullability: make(map[string]bool),
 		// main table and unique tables
 		buffers:         make([]*batch.Batch, unique_nums+1),
 		tableBatches:    make([][]*batch.Batch, unique_nums+1),
@@ -118,14 +118,14 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 
 	// get NameNullAbility
 	for _, def := range tableDef.Cols {
-		container.nameToNullablity[def.Name] = def.Default.NullAbility
+		container.nameToNullability[def.Name] = def.Default.NullAbility
 		if def.Primary {
 			container.pk[def.Name] = true
 		}
 	}
 	if tableDef.CompositePkey != nil {
 		def := tableDef.CompositePkey
-		container.nameToNullablity[def.Name] = def.Default.NullAbility
+		container.nameToNullability[def.Name] = def.Default.NullAbility
 		container.pk[def.Name] = true
 	}
 
@@ -134,7 +134,7 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 	//		if indexdef.Unique {
 	//			for j := range indexdef.Field.Cols {
 	//				coldef := indexdef.Field.Cols[j]
-	//				container.nameToNullablity[coldef.Name] = coldef.Default.NullAbility
+	//				container.nameToNullability[coldef.Name] = coldef.Default.NullAbility
 	//			}
 	//		} else {
 	//			continue
@@ -143,14 +143,14 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 	//}
 
 	if tableDef.ClusterBy != nil {
-		container.nameToNullablity[tableDef.ClusterBy.Name] = true
+		container.nameToNullability[tableDef.ClusterBy.Name] = true
 	}
 	container.resetMetaLocBat()
 
 	return container
 }
 
-func (container *WriteS3Container) resetMetaLocBat() {
+func (container *S3Writer) resetMetaLocBat() {
 	// A simple explanation of the two vectors held by metaLocBat
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
@@ -163,7 +163,7 @@ func (container *WriteS3Container) resetMetaLocBat() {
 	container.metaLocBat = metaLocBat
 }
 
-func (container *WriteS3Container) WriteEnd(proc *process.Process) {
+func (container *S3Writer) WriteEnd(proc *process.Process) {
 	if container.metaLocBat.Vecs[0].Length() > 0 {
 		container.metaLocBat.SetZs(container.metaLocBat.Vecs[0].Length(), proc.GetMPool())
 		proc.SetInputBatch(container.metaLocBat)
@@ -171,7 +171,7 @@ func (container *WriteS3Container) WriteEnd(proc *process.Process) {
 	}
 }
 
-func (container *WriteS3Container) WriteS3CacheBatch(proc *process.Process) error {
+func (container *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 	for i := range container.tableBatches {
 		if container.tableBatchSizes[i] > 0 {
 			if err := container.MergeBlock(i, len(container.tableBatches[i]), proc); err != nil {
@@ -183,7 +183,7 @@ func (container *WriteS3Container) WriteS3CacheBatch(proc *process.Process) erro
 	return nil
 }
 
-func (container *WriteS3Container) InitBuffers(bat *batch.Batch, idx int) {
+func (container *S3Writer) InitBuffers(bat *batch.Batch, idx int) {
 	if container.buffers[idx] == nil {
 		container.buffers[idx] = getNewBatch(bat)
 	}
@@ -193,7 +193,7 @@ func (container *WriteS3Container) InitBuffers(bat *batch.Batch, idx int) {
 // 1: the tableBatches[idx] is over threshold
 // 0: the tableBatches[idx] is equal to threshold
 // -1: the tableBatches[idx] is less than threshold
-func (container *WriteS3Container) Put(bat *batch.Batch, idx int) int {
+func (container *S3Writer) Put(bat *batch.Batch, idx int) int {
 	container.tableBatchSizes[idx] += uint64(bat.Size())
 	container.tableBatches[idx] = append(container.tableBatches[idx], bat)
 	if container.tableBatchSizes[idx] == WriteS3Threshold {
@@ -219,7 +219,7 @@ func GetStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
 }
 
 // len(sortIndex) is always only one.
-func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process.Process) error {
+func (container *S3Writer) MergeBlock(idx int, length int, proc *process.Process) error {
 	bats := container.tableBatches[idx][:length]
 	sortIdx := -1
 	for i := range bats {
@@ -332,7 +332,7 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 
 // the first pr for cn-write-s3 logic of insert will result this:
 // and now we need to change it, there will be 64Mb data in one seg.
-func (container *WriteS3Container) WriteS3Batch(bat *batch.Batch, proc *process.Process, idx int) error {
+func (container *S3Writer) WriteS3Batch(bat *batch.Batch, proc *process.Process, idx int) error {
 	container.InitBuffers(bat, idx)
 	res := container.Put(bat, idx)
 	switch res {
@@ -356,7 +356,7 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 	return newBat
 }
 
-func GenerateWriter(container *WriteS3Container, proc *process.Process) error {
+func GenerateWriter(container *S3Writer, proc *process.Process) error {
 	segId, err := Srv.GenerateSegment()
 
 	if err != nil {
@@ -423,7 +423,7 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 
 // WriteBlock WriteBlock writes one batch to a buffer and generate related indexes for this batch
 // For more information, please refer to the comment about func Write in Writer interface
-func WriteBlock(container *WriteS3Container, bat *batch.Batch, proc *process.Process) error {
+func WriteBlock(container *S3Writer, bat *batch.Batch, proc *process.Process) error {
 	fd, err := container.writer.Write(bat)
 
 	if err != nil {
@@ -441,9 +441,9 @@ func WriteBlock(container *WriteS3Container, bat *batch.Batch, proc *process.Pro
 
 // GenerateIndex generates relative indexes for the batch writed directly to s3 from cn
 // For more information, please refer to the comment about func WriteIndex in Writer interface
-func GenerateIndex(container *WriteS3Container, fd objectio.BlockObject, objectWriter objectio.Writer, bat *batch.Batch) error {
+func GenerateIndex(container *S3Writer, fd objectio.BlockObject, objectWriter objectio.Writer, bat *batch.Batch) error {
 	for i, mvec := range bat.Vecs {
-		err := getIndexDataFromVec(fd, objectWriter, uint16(i), mvec, container.nameToNullablity[bat.Attrs[i]], container.pk[bat.Attrs[i]])
+		err := getIndexDataFromVec(fd, objectWriter, uint16(i), mvec, container.nameToNullability[bat.Attrs[i]], container.pk[bat.Attrs[i]])
 		if err != nil {
 			return err
 		}
@@ -489,7 +489,7 @@ func getIndexDataFromVec(block objectio.BlockObject, writer objectio.Writer,
 
 // WriteEndBlocks WriteEndBlocks write batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
-func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int) error {
+func WriteEndBlocks(container *S3Writer, proc *process.Process, idx int) error {
 	blocks, err := container.writer.WriteEnd(proc.Ctx)
 	if err != nil {
 		return err

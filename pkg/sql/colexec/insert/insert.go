@@ -16,7 +16,6 @@ package insert
 
 import (
 	"bytes"
-	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -34,7 +33,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	if ap.IsRemote {
-		container := colexec.NewWriteS3Container(ap.InsertCtx.TableDef)
+		container := colexec.NewS3Writer(ap.InsertCtx.TableDef)
 		ap.Container = container
 	}
 	return nil
@@ -45,7 +44,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	var affectedRows uint64
 	t1 := time.Now()
 	insertArg := arg.(*Argument)
-	bat := proc.Reg.InputBatch
+	bat := proc.InputBatch()
 	if bat == nil {
 		if insertArg.IsRemote {
 			// handle the last Batch that batchSize less than DefaultBlockMaxRows
@@ -73,8 +72,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	insertRows := func() error {
 		var affectedRow uint64
 
-		affectedRow, err = colexec.InsertBatch(insertArg.Container, insertArg.Engine, proc, bat, insertCtx.Source,
-			insertCtx.Ref, insertCtx.TableDef, insertCtx.ParentIdx, insertCtx.UniqueSource)
+		affectedRow, err = colexec.InsertBatch(insertArg.Container, proc, bat, insertCtx.Source,
+			insertCtx.TableDef, insertCtx.ParentIdx, insertCtx.UniqueSource)
 		if err != nil {
 			return err
 		}
@@ -150,9 +149,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 
 	if insertArg.IsRemote {
+		err = insertArg.Container.WriteS3CacheBatch(proc)
+		if err != nil {
+			return false, err
+		}
 		insertArg.Container.WriteEnd(proc)
 	}
-	fmt.Println("affectedRows", affectedRows)
 	atomic.AddUint64(&insertArg.Affected, affectedRows)
 	return false, nil
 }

@@ -32,7 +32,7 @@ type Argument struct {
 	Affected  uint64
 	Engine    engine.Engine
 	IsRemote  bool // mark if this insert is cn2s3 directly
-	Container *colexec.WriteS3Container
+	Container *colexec.S3Writer
 	InsertCtx *InsertCtx
 }
 
