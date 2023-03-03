@@ -66,11 +66,7 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 	return data, nil
 }
 
-func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, m *mpool.MPool) (IndexData, error) {
-	return cb.GetIndexWithFunc(ctx, dataType, newDecompressToObject, m)
-}
-
-func (cb *ColumnBlock) GetIndexWithFunc(ctx context.Context, dataType IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) (IndexData, error) {
+func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) (IndexData, error) {
 	if dataType == ZoneMapType {
 		return &cb.meta.zoneMap, nil
 	} else if dataType == BloomFilterType {

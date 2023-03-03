@@ -105,9 +105,21 @@ func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
 
 func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 	size int64, m *mpool.MPool) ([]*batch.Batch, error) {
-	blocks, err := r.reader.ReadAllMetaWithFunc(ctx, size, m, LoadZoneMapFunc)
+	blocks, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
+	}
+	if blocks[0].GetExtent().End() == 0 {
+		return nil, nil
+	}
+	if len(idxs) == 0 {
+		meta := blocks[0].GetMeta()
+		header := meta.GetHeader()
+		idxs = make([]uint16, header.GetColumnCount())
+		for i := range idxs {
+			idxs[i] = uint16(i)
+			i++
+		}
 	}
 	bats := make([]*batch.Batch, 0)
 	ioVectors, err := r.reader.Read(ctx, blocks[0].GetExtent(), idxs, nil, nil, LoadZoneMapFunc, LoadColumnFunc)
@@ -149,7 +161,7 @@ func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) ([]obj
 }
 
 func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
-	blocks, err := r.reader.ReadAllMetaWithFunc(ctx, size, m, LoadZoneMapFunc)
+	blocks, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +182,7 @@ func (r *BlockReader) LoadZoneMap(
 		if err != nil {
 			return nil, err
 		}
-		zm, err := column.GetIndex(ctx, objectio.ZoneMapType, m)
+		zm, err := column.GetIndex(ctx, objectio.ZoneMapType, nil, m)
 		if err != nil {
 			return nil, err
 		}
@@ -194,7 +206,7 @@ func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 		if err != nil {
 			return nil, err
 		}
-		bf, err := column.GetIndexWithFunc(ctx, objectio.BloomFilterType, LoadBloomFilterFunc, m)
+		bf, err := column.GetIndex(ctx, objectio.BloomFilterType, LoadBloomFilterFunc, m)
 		if err != nil {
 			return nil, err
 		}
@@ -203,7 +215,7 @@ func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
 	return blocksBloomFilters, nil
 }
 
-func (r *BlockReader) LoadColumnsByTS(ctx context.Context, idxs []uint16, info catalog.BlockInfo,
+func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info catalog.BlockInfo,
 	ts timestamp.Timestamp, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(idxs))
 	return bat, nil

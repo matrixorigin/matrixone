@@ -163,25 +163,7 @@ func (r *ObjectReader) Read(ctx context.Context,
 	return data, nil
 }
 
-func (r *ObjectReader) ReadIndex(ctx context.Context, extent Extent,
-	idxs []uint16, typ IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) ([]IndexData, error) {
-	/*block := r.blocks[0]
-	indexes := make([]IndexData, 0)
-	for _, idx := range idxs {
-		col := block.(*Block).columns[idx]
-		index, err := col.GetIndexWithFunc(ctx, typ, readFunc, m)
-		if err != nil {
-			return nil, err
-		}
-		indexes = append(indexes, index)
-	}*/
-	return nil, nil
-}
-
-func (r *ObjectReader) ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool) ([]BlockObject, error) {
-	return r.ReadAllMetaWithFunc(ctx, fileSize, m, nil)
-}
-func (r *ObjectReader) ReadAllMetaWithFunc(ctx context.Context,
+func (r *ObjectReader) ReadAllMeta(ctx context.Context,
 	fileSize int64, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) ([]BlockObject, error) {
 	footer, err := r.readFooter(ctx, fileSize, m)
 	if err != nil {

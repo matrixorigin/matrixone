@@ -375,11 +375,11 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 
 // ReadTable reads an s3 file and replays a GCTable in memory
 func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
-	reader, err := objectio.NewObjectReader(name, fs.Service)
+	reader, err := blockio.NewFileReader(fs.Service, name)
 	if err != nil {
 		return err
 	}
-	bs, err := reader.ReadAllMeta(ctx, size, common.DefaultAllocator)
+	bs, err := reader.LoadAllBlocks(ctx, size, common.DefaultAllocator)
 	if err != nil {
 		return err
 	}

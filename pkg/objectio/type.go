@@ -68,13 +68,8 @@ type Reader interface {
 	// extent is location of the block meta
 	ReadMeta(ctx context.Context, extent []Extent, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) ([]BlockObject, error)
 
-	// ReadIndex is the index data of the read columns
-	ReadIndex(ctx context.Context, extent Extent,
-		idxs []uint16, typ IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) ([]IndexData, error)
-
 	// ReadAllMeta is read the meta of all blocks in an object
-	ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool) ([]BlockObject, error)
-	ReadAllMetaWithFunc(ctx context.Context, fileSize int64, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) ([]BlockObject, error)
+	ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool, ZMUnmarshalFunc ZoneMapUnmarshalFunc) ([]BlockObject, error)
 }
 
 // BlockObject is a batch written to fileservice
@@ -103,9 +98,7 @@ type ColumnObject interface {
 	GetData(ctx context.Context, m *mpool.MPool) (*fileservice.IOVector, error)
 
 	// GetIndex gets the index of ColumnObject
-	GetIndex(ctx context.Context, dataType IndexDataType, m *mpool.MPool) (IndexData, error)
-
-	GetIndexWithFunc(ctx context.Context, dataType IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) (IndexData, error)
+	GetIndex(ctx context.Context, dataType IndexDataType, readFunc ReadObjectFunc, m *mpool.MPool) (IndexData, error)
 
 	// GetMeta gets the metadata of ColumnObject
 	GetMeta() *ColumnMeta
