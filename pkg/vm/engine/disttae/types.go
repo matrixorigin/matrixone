@@ -99,7 +99,8 @@ type Partition struct {
 	// last updated timestamp
 	ts timestamp.Timestamp
 	// used for block read in PartitionReader
-	txn *Transaction
+	txn    *Transaction
+	isMeta bool
 }
 
 // Transaction represents a transaction

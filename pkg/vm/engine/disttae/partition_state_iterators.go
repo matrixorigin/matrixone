@@ -21,7 +21,7 @@ import (
 
 type partitionStateRowsIter struct {
 	ts           types.TS
-	iter         btree.GenericIter[*RowEntry]
+	iter         btree.GenericIter[RowEntry]
 	firstCalled  bool
 	lastRowID    types.Rowid
 	checkBlockID bool
@@ -30,7 +30,8 @@ type partitionStateRowsIter struct {
 }
 
 func (p *PartitionState) NewRowsIter(ts types.TS, blockID *uint64, iterDeleted bool) *partitionStateRowsIter {
-	iter := p.Rows.Copy().Iter()
+	rows := p.Rows.Copy()
+	iter := rows.Iter()
 	ret := &partitionStateRowsIter{
 		ts:          ts,
 		iter:        iter,
@@ -48,7 +49,7 @@ func (p *partitionStateRowsIter) Next() bool {
 
 		if !p.firstCalled {
 			if p.checkBlockID {
-				if !p.iter.Seek(&RowEntry{
+				if !p.iter.Seek(RowEntry{
 					BlockID: p.blockID,
 				}) {
 					return false
@@ -90,7 +91,7 @@ func (p *partitionStateRowsIter) Next() bool {
 	}
 }
 
-func (p *partitionStateRowsIter) Entry() *RowEntry {
+func (p *partitionStateRowsIter) Entry() RowEntry {
 	return p.iter.Item()
 }
 

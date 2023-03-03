@@ -1356,7 +1356,7 @@ func GetUnionOneFunction(typ types.Type, m *mpool.MPool) func(v, w *Vector, sel 
 		}
 	case types.T_uint32:
 		return func(v, w *Vector, sel int64) error {
-			ws := MustTCols[bool](w)
+			ws := MustTCols[uint32](w)
 			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
 		}
 	case types.T_uint64:
@@ -1419,7 +1419,7 @@ func GetUnionOneFunction(typ types.Type, m *mpool.MPool) func(v, w *Vector, sel 
 			ws := MustTCols[types.Rowid](w)
 			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
 		}
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		return func(v, w *Vector, sel int64) error {
 			ws := MustTCols[types.Varlena](w)
 			return appendOneBytes(v, ws[sel].GetByteSlice(w.area), nulls.Contains(w.Nsp, uint64(sel)), m)
