@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -2527,7 +2528,14 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 	//logutil.Debugf("-->bh:%s", sql)
-	err := bh.mce.GetDoQueryFunc()(ctx, sql)
+	statements, err := mysql.Parse(ctx, sql)
+	if err != nil {
+		return err
+	}
+	if len(statements) > 1 {
+		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
+	}
+	err = bh.mce.GetDoQueryFunc()(ctx, sql)
 	if err != nil {
 		return err
 	}

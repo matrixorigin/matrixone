@@ -4509,6 +4509,9 @@ func getAccountId(ctx context.Context) uint32 {
 
 func changeVersion(ctx context.Context, ses *Session, db string) error {
 	var err error
+	if _, ok := bannedCatalogDatabases[db]; ok {
+		return err
+	}
 	version, _ := GetVersionCompatbility(ctx, ses, db)
 	if ses.GetTenantInfo() != nil {
 		ses.GetTenantInfo().SetVersion(version)
