@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"runtime"
 	"strings"
@@ -2292,15 +2293,11 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	if err != nil {
 		return nil, "", err
 	}
-	bs, err := reader.LoadAllBlocks(proc.Ctx, e.Size, proc.Mp())
-	if err != nil {
-		return nil, "", err
-	}
 	idxs := make([]uint16, 2)
 	idxs[0] = catalog.COLUMNS_IDX
 	idxs[1] = catalog.RESULT_PATH_IDX
 	// read meta's data
-	bats, err := reader.LoadColumns(proc.Ctx, idxs, []uint32{bs[0].GetExtent().Id()}, proc.Mp())
+	bats, err := reader.LoadAllColumns(proc.Ctx, idxs, e.Size, common.DefaultAllocator)
 	if err != nil {
 		return nil, "", err
 	}

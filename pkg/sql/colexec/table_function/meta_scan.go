@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -58,10 +59,6 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	bs, err := reader.LoadAllBlocks(proc.Ctx, e.Size, proc.Mp())
-	if err != nil {
-		return false, err
-	}
 	var idxs []uint16
 	for i, name := range catalog.MetaColNames {
 		for _, attr := range arg.Attrs {
@@ -71,7 +68,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		}
 	}
 	// read meta's data
-	bats, err := reader.LoadColumns(proc.Ctx, idxs, []uint32{bs[0].GetExtent().Id()}, proc.Mp())
+	bats, err := reader.LoadAllColumns(proc.Ctx, idxs, e.Size, common.DefaultAllocator)
 	if err != nil {
 		return false, err
 	}

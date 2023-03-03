@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"time"
 
@@ -300,12 +301,8 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 		if err != nil {
 			return err
 		}
-		bs, err := reader.LoadAllBlocks(requestCtx, e.Size, ses.mp)
-		if err != nil {
-			return err
-		}
 		idxs := []uint16{catalog.PLAN_IDX, catalog.AST_IDX}
-		bats, err := reader.LoadColumns(requestCtx, idxs, []uint32{bs[0].GetExtent().Id()}, ses.mp)
+		bats, err := reader.LoadAllColumns(requestCtx, idxs, e.Size, common.DefaultAllocator)
 		if err != nil {
 			return err
 		}
@@ -639,14 +636,10 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	if err != nil {
 		return nil, err
 	}
-	bs, err := reader.LoadAllBlocks(ctx, e.Size, ses.GetMemPool())
-	if err != nil {
-		return nil, err
-	}
 	idxs := make([]uint16, 1)
 	idxs[0] = catalog.COLUMNS_IDX
 	// read meta's data
-	bats, err := reader.LoadColumns(ctx, idxs, []uint32{bs[0].GetExtent().Id()}, ses.GetMemPool())
+	bats, err := reader.LoadAllColumns(ctx, idxs, e.Size, common.DefaultAllocator)
 	if err != nil {
 		return nil, err
 	}
