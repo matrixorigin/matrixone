@@ -15,9 +15,72 @@
 package plan
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
+	"sort"
 )
+
+func estimateFilterWeight(ctx context.Context, expr *plan.Expr, w float64) float64 {
+	switch expr.Typ.Id {
+	case int32(types.T_decimal64):
+		w += 64
+	case int32(types.T_decimal128):
+		w += 128
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text), int32(types.T_json):
+		w += 4
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcImpl := exprImpl.F
+		switch funcImpl.Func.GetObjName() {
+		case "like":
+			w += 10
+		case "in":
+			w += 5
+		case "<", "<=":
+			w += 1.1
+		default:
+			w += 1
+		}
+		for _, child := range exprImpl.F.Args {
+			w += estimateFilterWeight(ctx, child, 0)
+		}
+	}
+	if CheckExprIsMonotonic(ctx, expr) {
+		//this is a monotonic filter
+		//calc selectivity is too heavy now. will change this in the future
+		w *= 0.1
+	}
+	return w
+}
+
+func SortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			SortFilterListByStats(ctx, child, builder)
+		}
+	}
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		if node.ObjRef != nil && len(node.FilterList) > 1 {
+			bat := batch.NewWithSize(0)
+			bat.Zs = []int64{1}
+			for i := range node.FilterList {
+				expr, _ := ConstantFold(bat, DeepCopyExpr(node.FilterList[i]), builder.compCtx.GetProcess())
+				if expr != nil {
+					node.FilterList[i] = expr
+				}
+			}
+			sort.Slice(node.FilterList, func(i, j int) bool {
+				return estimateFilterWeight(builder.GetContext(), node.FilterList[i], 0) <= estimateFilterWeight(builder.GetContext(), node.FilterList[j], 0)
+			})
+		}
+	}
+}
 
 func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 	node := builder.qry.Nodes[nodeID]
@@ -43,52 +106,62 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 		if ndv < 1 {
 			ndv = 1
 		}
+		//assume all join is not cross join
+		//will fix this in the future
+		//isCrossJoin := (len(node.OnList) == 0)
+		isCrossJoin := false
+		selectivity := math.Pow(rightStats.Selectivity, math.Pow(leftStats.Selectivity, 0.5))
+
 		switch node.JoinType {
 		case plan.Node_INNER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
-				outcnt *= 0.1
+			if !isCrossJoin {
+				outcnt *= selectivity
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_LEFT:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
-				outcnt *= 0.1
+			if !isCrossJoin {
+				outcnt *= selectivity
 				outcnt += leftStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_RIGHT:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
-				outcnt *= 0.1
+			if !isCrossJoin {
+				outcnt *= selectivity
 				outcnt += rightStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_OUTER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if len(node.OnList) > 0 {
-				outcnt *= 0.1
+			if !isCrossJoin {
+				outcnt *= selectivity
 				outcnt += leftStats.Outcnt + rightStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_SEMI, plan.Node_ANTI:
@@ -96,6 +169,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      leftStats.Outcnt * .7,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 
 		case plan.Node_SINGLE, plan.Node_MARK:
@@ -103,13 +177,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      leftStats.Outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity,
 			}
 		}
 
 	case plan.Node_AGG:
 		if len(node.GroupBy) > 0 {
 			node.Stats = &plan.Stats{
-				Outcnt:      childStats.Outcnt * 0.1,
+				Outcnt:      childStats.Outcnt * 0.2,
 				Cost:        childStats.Outcnt,
 				HashmapSize: childStats.Outcnt,
 			}
@@ -160,7 +235,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil {
-			node.Stats = builder.compCtx.Stats(node.ObjRef, HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess()))
+			expr, num := HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess())
+			node.Stats = builder.compCtx.Stats(node.ObjRef, expr)
+			//if there is non monotonic filters
+			if num > 0 {
+				node.Stats.Selectivity *= 0.1
+				node.Stats.Outcnt *= 0.1
+			}
 		}
 
 	default:

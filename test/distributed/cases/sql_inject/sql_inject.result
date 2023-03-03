@@ -1,0 +1,6 @@
+drop user `foo"; drop table foo; select "1`;
+internal error: Exec() can run one statement at one time. but get '3' statements now, sql = select user_id,authentication_string,default_role from mo_catalog.mo_user where user_name = "foo"; drop table foo; select "1";
+create role 'foo"; drop table foo; select "1';
+internal error: Exec() can run one statement at one time. but get '3' statements now, sql = select role_id from mo_catalog.mo_role where role_name = "foo"; drop table foo; select "1";
+alter database `foo"; drop table foo; select "1` set mysql_compatbility_mode = '{"lower_case_table_names": 1}';
+internal error: Exec() can run one statement at one time. but get '3' statements now, sql = select datname from mo_catalog.mo_database where datname = "foo"; drop table foo; select "1";

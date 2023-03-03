@@ -871,10 +871,12 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 }
 
 // handle the filter list for zonemap. rewrite and constFold
-func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+// return monotonic filters and number of nonMonotonic filters
+func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, int) {
 	if proc == nil || proc.Ctx == nil {
-		return nil
+		return nil, 0
 	}
+	num := 0
 	var newExprList []*plan.Expr
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
@@ -885,10 +887,12 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr
 		}
 		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
 			newExprList = append(newExprList, expr)
+		} else {
+			num++
 		}
 	}
 	e := colexec.RewriteFilterExprList(newExprList)
-	return e
+	return e, num
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
@@ -1098,6 +1102,20 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 				return false
 			}
 		case types.T_text:
+			return true
+		default:
+			return false
+		}
+
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		switch columnT.Oid {
+		case types.T_binary, types.T_varbinary:
+			if constT.Width <= columnT.Width {
+				return true
+			} else {
+				return false
+			}
+		case types.T_blob:
 			return true
 		default:
 			return false
