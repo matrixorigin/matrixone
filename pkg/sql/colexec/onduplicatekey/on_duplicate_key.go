@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,25 +38,33 @@ func Prepare(_ *proc, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
-	defer analyze(idx, proc)()
+func Call(idx int, proc *proc, x any, isFirst, isLast bool) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 
 	arg := x.(*Argument)
 	bat := proc.Reg.InputBatch
+	anal.Input(bat, isFirst)
 	if bat == nil {
 		return true, nil
 	}
 	if len(bat.Zs) == 0 {
+		proc.SetInputBatch(nil)
 		return false, nil
 	}
 
-	bat, err := resetInsertBatchForOnduplicateKey(proc, bat, arg)
+	rbat, err := resetInsertBatchForOnduplicateKey(proc, bat, arg)
 	if err != nil {
 		return false, err
 	}
 
-	proc.SetInputBatch(bat)
-	return true, nil
+	rbat.Zs = bat.Zs
+	bat.Zs = nil
+	bat.Clean(proc.Mp())
+	anal.Output(rbat, isLast)
+	proc.SetInputBatch(rbat)
+	return false, nil
 }
 
 func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch.Batch, insertArg *Argument) (*batch.Batch, error) {
@@ -291,12 +298,4 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, insertBatch *ba
 	}
 
 	return -1, "", nil
-}
-
-func analyze(idx int, proc *proc) func() {
-	t := time.Now()
-	return func() {
-		anal := proc.GetAnalyze(idx)
-		anal.AddInsertTime(t)
-	}
 }
