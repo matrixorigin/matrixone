@@ -39,7 +39,7 @@ type PartitionReader struct {
 	deletes              map[types.Rowid]uint8
 	skipBlocks           map[uint64]uint8
 	iter                 partitionIter
-	newIter              *partitionStateRowsIter
+	newIter              partitionStateIter
 	sourceBatchNameIndex map[string]int
 
 	// the following attributes are used to support cn2s3

@@ -354,6 +354,7 @@ func (p *Partition) NewReader(
 	txn *Transaction,
 	readerNumber int,
 	index memtable.Tuple,
+	encodedPrimaryKey []byte,
 	defs []engine.TableDef,
 	tableDef *plan.TableDef,
 	skipBlocks map[uint64]uint8,
@@ -398,7 +399,9 @@ func (p *Partition) NewReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
-	var newIter *partitionStateRowsIter
+	//TODO handle encodedPrimaryKey
+
+	var newIter partitionStateIter
 	var iter partitionIter
 	if len(index) == 0 {
 		// skip primary key indexing read
@@ -408,6 +411,13 @@ func (p *Partition) NewReader(
 			nil,
 			false,
 		)
+
+	} else if len(encodedPrimaryKey) > 0 {
+		newIter = p.state.Load().NewPrimaryKeyIter(
+			types.TimestampToTS(ts),
+			encodedPrimaryKey,
+		)
+
 	} else {
 		t := memtable.Time{
 			Timestamp: ts,

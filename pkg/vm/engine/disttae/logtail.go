@@ -31,7 +31,7 @@ func consumeEntry(
 	e *api.Entry,
 ) error {
 
-	state.HandleLogtailEntry(ctx, e, primaryIdx)
+	state.HandleLogtailEntry(ctx, e, primaryIdx, engine.mp)
 
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {

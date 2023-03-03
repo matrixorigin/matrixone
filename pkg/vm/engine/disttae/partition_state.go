@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -106,7 +107,9 @@ type PrimaryIndexEntry struct {
 	Bytes      []byte
 	RowEntryID int64
 
-	//TODO fields for validating
+	// fields for validating
+	BlockID uint64
+	RowID   types.Rowid
 }
 
 func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
@@ -165,13 +168,18 @@ func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 	return false
 }
 
-func (p *PartitionState) HandleLogtailEntry(ctx context.Context, entry *api.Entry, primaryKeyIndex int) {
+func (p *PartitionState) HandleLogtailEntry(
+	ctx context.Context,
+	entry *api.Entry,
+	primaryKeyIndex int,
+	pool *mpool.MPool,
+) {
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if isMetaTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, entry.Bat)
 		} else {
-			p.HandleRowsInsert(ctx, entry.Bat, primaryKeyIndex)
+			p.HandleRowsInsert(ctx, entry.Bat, primaryKeyIndex, pool)
 		}
 	case api.Entry_Delete:
 		if isMetaTable(entry.TableName) {
@@ -186,7 +194,12 @@ func (p *PartitionState) HandleLogtailEntry(ctx context.Context, entry *api.Entr
 
 var nextRowEntryID = int64(1)
 
-func (p *PartitionState) HandleRowsInsert(ctx context.Context, input *api.Batch, primaryKeyIndex int) {
+func (p *PartitionState) HandleRowsInsert(
+	ctx context.Context,
+	input *api.Batch,
+	primaryKeyIndex int,
+	pool *mpool.MPool,
+) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
@@ -195,6 +208,13 @@ func (p *PartitionState) HandleRowsInsert(ctx context.Context, input *api.Batch,
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
+	}
+	var primaryKeyBytesSet [][]byte
+	if primaryKeyIndex >= 0 {
+		primaryKeyBytesSet = encodePrimaryKeyVector(
+			batch.Vecs[2+primaryKeyIndex],
+			pool,
+		)
 	}
 
 	for i, rowID := range rowIDVector {
@@ -217,11 +237,12 @@ func (p *PartitionState) HandleRowsInsert(ctx context.Context, input *api.Batch,
 
 			p.Rows.Set(entry)
 
-			if primaryKeyIndex >= 0 {
-				var bs []byte //TODO encode primary key
+			if primaryKeyIndex >= 0 && len(primaryKeyBytesSet[i]) > 0 {
 				p.PrimaryIndex.Set(&PrimaryIndexEntry{
-					Bytes:      bs,
+					Bytes:      primaryKeyBytesSet[i],
 					RowEntryID: entry.ID,
+					BlockID:    blockID,
+					RowID:      rowID,
 				})
 			}
 

@@ -536,23 +536,27 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 
 func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
+
 	var index memtable.Tuple
-	/*
-		// consider halloween problem
-		if int64(tbl.db.txn.statementId)-1 > 0 {
-			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
-		}
-	*/
+	var encodedPrimaryKey []byte
 	if tbl.primaryIdx >= 0 && expr != nil {
 		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
 		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
 		if ok {
+			encodedPrimaryKey = encodePrimaryKey(v, tbl.db.txn.engine.mp)
 			index = memtable.Tuple{
 				index_PrimaryKey,
 				memtable.ToOrdered(v),
 			}
 		}
 	}
+
+	/*
+		// consider halloween problem
+		if int64(tbl.db.txn.statementId)-1 > 0 {
+			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
+		}
+	*/
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
@@ -564,6 +568,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		}
 	}
 	tbl.db.txn.Unlock()
+
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
@@ -577,6 +582,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 			tbl.db.txn,
 			num,
 			index,
+			encodedPrimaryKey,
 			tbl.defs,
 			tbl.tableDef,
 			tbl.skipBlocks,
@@ -588,9 +594,11 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		}
 		mrds[i].rds = append(mrds[i].rds, rds0...)
 	}
+
 	for i := range rds {
 		rds[i] = &mrds[i]
 	}
+
 	return rds, nil
 }
 
