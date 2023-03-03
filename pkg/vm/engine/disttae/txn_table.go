@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
@@ -84,9 +84,11 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		}
 	}
 
+	states := tbl.parts.Snapshot()
+
 	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-	for _, partition := range tbl.parts {
-		iter := partition.state.Load().NewRowsIter(ts, nil, false)
+	for _, state := range states {
+		iter := state.NewRowsIter(ts, nil, false)
 		for iter.Next() {
 			entry := iter.Entry()
 			if _, ok := deletes[entry.RowID]; ok {
@@ -179,9 +181,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
 		}
 	*/
-	//if tbl.tableName == "t" {
-	//	fmt.Printf("txn time is %v\n", tbl.db.txn.meta.SnapshotTS)
-	//}
 
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	for i := range tbl.db.txn.writes {
@@ -209,6 +208,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 	}
 	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
 
+	states := tbl.parts.Snapshot()
+
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range tbl.dnList {
@@ -232,7 +233,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 
 			for _, blockID := range ids {
 				ts := types.TimestampToTS(ts)
-				iter := tbl.parts[i].state.Load().NewRowsIter(ts, &blockID, true)
+				iter := states[i].NewRowsIter(ts, &blockID, true)
 				for iter.Next() {
 					entry := iter.Entry()
 					id, offset := catalog.DecodeRowid(entry.RowID)
@@ -536,23 +537,27 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 
 func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
-	var index memtable.Tuple
+
+	var index memorytable.Tuple
+	var encodedPrimaryKey []byte
+	if tbl.primaryIdx >= 0 && expr != nil {
+		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
+		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
+		if ok {
+			encodedPrimaryKey = encodePrimaryKey(v, tbl.db.txn.engine.mp)
+			index = memorytable.Tuple{
+				index_PrimaryKey,
+				memorytable.ToOrdered(v),
+			}
+		}
+	}
+
 	/*
 		// consider halloween problem
 		if int64(tbl.db.txn.statementId)-1 > 0 {
 			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
 		}
 	*/
-	if tbl.primaryIdx >= 0 && expr != nil {
-		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
-		if ok {
-			index = memtable.Tuple{
-				index_PrimaryKey,
-				memtable.ToOrdered(v),
-			}
-		}
-	}
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
@@ -564,6 +569,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		}
 	}
 	tbl.db.txn.Unlock()
+
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
@@ -572,17 +578,25 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		if tbl.meta != nil {
 			blks = tbl.meta.modifedBlocks[i]
 		}
-		tbl.parts[i].txn = tbl.db.txn
-		rds0, err := tbl.parts[i].NewReader(ctx, num, index, tbl.defs, tbl.tableDef,
-			tbl.skipBlocks, blks, tbl.db.txn.meta.SnapshotTS, tbl.db.txn.engine.fs, writes)
+		rds0, err := tbl.newReader(
+			ctx,
+			i,
+			num,
+			index,
+			encodedPrimaryKey,
+			blks,
+			writes,
+		)
 		if err != nil {
 			return nil, err
 		}
 		mrds[i].rds = append(mrds[i].rds, rds0...)
 	}
+
 	for i := range rds {
 		rds[i] = &mrds[i]
 	}
+
 	return rds, nil
 }
 
@@ -640,4 +654,139 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 		}
 	}
 	return rds, nil
+}
+
+func (tbl *txnTable) newReader(
+	ctx context.Context,
+	partitionIndex int,
+	readerNumber int,
+	index memorytable.Tuple,
+	encodedPrimaryKey []byte,
+	blks []ModifyBlockMeta,
+	entries []Entry,
+) ([]engine.Reader, error) {
+
+	txn := tbl.db.txn
+	ts := txn.meta.SnapshotTS
+	fs := txn.engine.fs
+
+	inserts := make([]*batch.Batch, 0, len(entries))
+	deletes := make(map[types.Rowid]uint8)
+	for _, entry := range entries {
+		if entry.typ == INSERT {
+			inserts = append(inserts, entry.bat)
+		} else {
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = 0
+				}
+			}
+		}
+	}
+
+	readers := make([]engine.Reader, readerNumber)
+
+	mp := make(map[string]types.Type)
+	colIdxMp := make(map[string]int)
+	if tbl.tableDef != nil {
+		for i := range tbl.tableDef.Cols {
+			colIdxMp[tbl.tableDef.Cols[i].Name] = i
+		}
+	}
+
+	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0, 0)
+	for _, def := range tbl.defs {
+		attr, ok := def.(*engine.AttributeDef)
+		if !ok {
+			continue
+		}
+		mp[attr.Attr.Name] = attr.Attr.Type
+	}
+
+	var iter partitionStateIter
+	if len(encodedPrimaryKey) > 0 {
+		iter = tbl.parts[partitionIndex].state.Load().NewPrimaryKeyIter(
+			types.TimestampToTS(ts),
+			encodedPrimaryKey,
+		)
+	} else {
+		iter = tbl.parts[partitionIndex].state.Load().NewRowsIter(
+			types.TimestampToTS(ts),
+			nil,
+			false,
+		)
+	}
+
+	partReader := &PartitionReader{
+		typsMap:         mp,
+		inserts:         inserts,
+		deletes:         deletes,
+		skipBlocks:      tbl.skipBlocks,
+		iter:            iter,
+		colIdxMp:        colIdxMp,
+		extendId2s3File: make(map[string]int),
+		s3FileService:   fs,
+		procMPool:       txn.proc.GetMPool(),
+	}
+	readers[0] = partReader
+
+	if readerNumber == 1 {
+		for i := range blks {
+			readers = append(readers, &blockMergeReader{
+				fs:       fs,
+				ts:       ts,
+				ctx:      ctx,
+				tableDef: tbl.tableDef,
+				sels:     make([]int64, 0, 1024),
+				blks:     []ModifyBlockMeta{blks[i]},
+			})
+		}
+		return []engine.Reader{&mergeReader{readers}}, nil
+	}
+
+	if len(blks) < readerNumber-1 {
+		for i := range blks {
+			readers[i+1] = &blockMergeReader{
+				fs:       fs,
+				ts:       ts,
+				ctx:      ctx,
+				tableDef: tbl.tableDef,
+				sels:     make([]int64, 0, 1024),
+				blks:     []ModifyBlockMeta{blks[i]},
+			}
+		}
+		for j := len(blks) + 1; j < readerNumber; j++ {
+			readers[j] = &emptyReader{}
+		}
+		return readers, nil
+	}
+
+	step := len(blks) / (readerNumber - 1)
+	if step < 1 {
+		step = 1
+	}
+	for i := 1; i < readerNumber; i++ {
+		if i == readerNumber-1 {
+			readers[i] = &blockMergeReader{
+				fs:       fs,
+				ts:       ts,
+				ctx:      ctx,
+				tableDef: tbl.tableDef,
+				blks:     blks[(i-1)*step:],
+				sels:     make([]int64, 0, 1024),
+			}
+		} else {
+			readers[i] = &blockMergeReader{
+				fs:       fs,
+				ts:       ts,
+				ctx:      ctx,
+				tableDef: tbl.tableDef,
+				blks:     blks[(i-1)*step : i*step],
+				sels:     make([]int64, 0, 1024),
+			}
+		}
+	}
+
+	return readers, nil
 }
