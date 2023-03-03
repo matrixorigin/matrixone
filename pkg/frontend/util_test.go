@@ -460,31 +460,30 @@ func TestGetSimpleExprValue(t *testing.T) {
 			want    interface{}
 		}
 
-		dec1 := types.MustDecimal128FromString("1.0")
-		dec2 := types.MustDecimal128FromString("-1.0")
-		dec3 := types.MustDecimal128FromString("-1.2345670")
+		dec1 := types.MustDecimal64FromString("1.0")
+		dec2 := types.MustDecimal64FromString("-1.0")
+		dec3 := types.MustDecimal64FromString("-1.2345670")
 
 		kases := []args{
-			{"set @@x=1.0", false, plan.MakePlan2Decimal128ExprWithType(dec1, &plan.Type{
-				Id:          int32(types.T_decimal128),
-				Width:       34,
+			{"set @@x=1.0", false, plan.MakePlan2Decimal64ExprWithType(dec1, &plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       16,
 				Scale:       1,
-				Precision:   34,
+				Precision:   16,
 				NotNullable: true,
 			})},
-			{"set @@x=-1.0", false, plan.MakePlan2Decimal128ExprWithType(dec2, &plan.Type{
-				Id:          int32(types.T_decimal128),
-				Width:       34,
+			{"set @@x=-1.0", false, plan.MakePlan2Decimal64ExprWithType(dec2, &plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       16,
 				Scale:       1,
-				Precision:   34,
+				Precision:   16,
 				NotNullable: true,
 			})},
-			{"set @@x=-1.2345670", false, plan.MakePlan2Decimal128ExprWithType(dec3, &plan.Type{
-				Id:          int32(types.T_decimal128),
-				Width:       34,
+			{"set @@x=-1.2345670", false, plan.MakePlan2Decimal64ExprWithType(dec3, &plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       16,
 				Scale:       7,
-				Precision:   34,
-				Size:        16,
+				Precision:   16,
 				NotNullable: true,
 			})},
 		}
