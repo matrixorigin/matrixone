@@ -2750,7 +2750,6 @@ func decimal128ToDecimal128(
 	var dft types.Decimal128
 	fromtype := from.GetType()
 	totype := to.GetType()
-	fmt.Println(fromtype.Scale, totype.Scale)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {

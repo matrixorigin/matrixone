@@ -1582,10 +1582,6 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 }
 
 func ParseDecimal128(x string, precision, scale int32) (y Decimal128, err error) {
-	strn := len(x)
-	for i := 0; i < strn; i++ {
-		fmt.Println(int(x[i]))
-	}
 	if precision > 38 {
 		precision = 38
 	}
