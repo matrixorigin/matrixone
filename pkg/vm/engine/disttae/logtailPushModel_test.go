@@ -16,11 +16,12 @@ package disttae
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // the sort func should ensure that:
@@ -44,12 +45,14 @@ func TestLogList_Sort(t *testing.T) {
 	}
 }
 
+/*
 // should ensure syncLogTailTimestamp can get time or set time without any trace.
 // and will not cause any deadlock.
 func TestSyncLogTailTimestamp(t *testing.T) {
 	// Not now.
 	t.Skip()
 }
+*/
 
 // should ensure that subscribe and unsubscribe methods are effective.
 func TestSubscribedTable(t *testing.T) {
