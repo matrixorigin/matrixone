@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"io"
 
@@ -38,7 +39,7 @@ type BlockReader struct {
 	meta   objectio.Extent
 }
 
-func NewBlockReader(service fileservice.FileService, key string) (*BlockReader, error) {
+func NewBlockReader(service fileservice.FileService, key string) (dataio.Reader, error) {
 	name, _, meta, _, err := DecodeLocation(key)
 	if err != nil {
 		return nil, err
@@ -65,8 +66,8 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 	}, nil
 }
 
-func NewCheckPointReader(service fileservice.FileService, key string) (*BlockReader, error) {
-	name, locs, err := DecodeMetaLocToMetas(key)
+func NewCheckPointReader(service fileservice.FileService, key string) (dataio.Reader, error) {
+	name, locs, err := DecodeLocationToMetas(key)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +141,7 @@ func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
 }
 
 func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
-	_, locs, err := DecodeMetaLocToMetas(r.key)
+	_, locs, err := DecodeLocationToMetas(r.key)
 	if err != nil {
 		return nil, err
 	}

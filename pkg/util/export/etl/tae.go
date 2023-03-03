@@ -153,7 +153,7 @@ func (w *TAEWriter) writeBatch() error {
 			return err
 		}
 	}
-	_, err := w.writer.WriteBlockAndZoneMap(batch, w.idxs)
+	_, err := w.writer.WriteBatch(batch)
 	if err != nil {
 		return err
 	}

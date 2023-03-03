@@ -125,7 +125,10 @@ func readColumnBatchByMetaloc(
 	pool *mpool.MPool) (*containers.Batch, error) {
 	var bat *containers.Batch
 	var err error
-	_, extent, rows := DecodeMetaLoc(info.MetaLoc)
+	_, _, extent, rows, err := DecodeLocation(info.MetaLoc)
+	if err != nil {
+		return nil, err
+	}
 	idxsWithouRowid := make([]uint16, 0, len(colIdxs))
 	var rowidData containers.Vector
 	// sift rowid column
@@ -223,13 +226,16 @@ func readDeleteBatchByDeltaloc(ctx context.Context, deltaloc string, fs fileserv
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
 	//colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
 
-	_, extent, _ := DecodeMetaLoc(deltaloc)
+	_, id, _, _, err := DecodeLocation(deltaloc)
+	if err != nil {
+		return nil, err
+	}
 	reader, err := NewBlockReader(fs, deltaloc)
 	if err != nil {
 		return nil, err
 	}
 
-	ioResult, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, []uint32{extent.Id()}, nil)
+	ioResult, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, []uint32{id}, nil)
 	if err != nil {
 		return nil, err
 	}

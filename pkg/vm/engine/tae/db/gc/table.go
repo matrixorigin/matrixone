@@ -130,7 +130,7 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 			BlockID:   blkID,
 			PartID:    uint32(dbid),
 		}
-		name, _, _ := blockio.DecodeMetaLoc(metaLoc)
+		name, _, _, _, _ := blockio.DecodeLocation(metaLoc)
 		t.addBlock(id, name)
 	}
 	for i := 0; i < del.Length(); i++ {
@@ -146,7 +146,7 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 			BlockID:   rowIDToU64(blkID),
 			PartID:    uint32(dbid),
 		}
-		name, _, _ := blockio.DecodeMetaLoc(metaLoc)
+		name, _, _, _, _ := blockio.DecodeLocation(metaLoc)
 		t.deleteBlock(id, name)
 	}
 	_, _, _, del, delTxn = data.GetTblBatchs()

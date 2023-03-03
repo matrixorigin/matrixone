@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -30,7 +31,7 @@ import (
 type BfReader struct {
 	bfKey  string
 	idx    uint16
-	reader *blockio.BlockReader
+	reader dataio.Reader
 	typ    types.Type
 }
 
@@ -52,7 +53,7 @@ func NewBfReader(
 }
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	_, extent, _ := blockio.DecodeMetaLoc(r.bfKey)
+	_, _, extent, _, _ := blockio.DecodeLocation(r.bfKey)
 	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, []uint32{extent.Id()}, nil)
 	if err != nil {
 		// TODOa: Error Handling?

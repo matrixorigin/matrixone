@@ -470,7 +470,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	if err != nil {
 		return
 	}
-	location := blockio.EncodeMetalocFromMetas(filename, blks)
+	location := blockio.EncodeLocationFromMetas(filename, blks)
 	entry.SetLocation(location)
 	return
 }
@@ -493,7 +493,7 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	if err != nil {
 		return
 	}
-	location := blockio.EncodeMetalocFromMetas(filename, blks)
+	location := blockio.EncodeLocationFromMetas(filename, blks)
 	entry.SetLocation(location)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)

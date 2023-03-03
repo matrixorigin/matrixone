@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"time"
 
@@ -460,7 +461,7 @@ func LoadBlkColumnsByMeta(
 	colNames []string,
 	nullables []bool,
 	block objectio.BlockObject,
-	reader *blockio.BlockReader) (*containers.Batch, error) {
+	reader dataio.Reader) (*containers.Batch, error) {
 	bat := containers.NewBatch()
 	if block.GetExtent().End() == 0 {
 		return bat, nil
@@ -495,7 +496,7 @@ func BlkColumnByMetaLoadJob(
 	colNames []string,
 	nullables []bool,
 	block objectio.BlockObject,
-	reader *blockio.BlockReader,
+	reader dataio.Reader,
 ) *tasks.Job {
 	exec := func(_ context.Context) (result *tasks.JobResult) {
 		bat, err := LoadBlkColumnsByMeta(cxt, colTypes, colNames, nullables, block, reader)
@@ -511,7 +512,7 @@ func BlkColumnByMetaLoadJob(
 // There need a global io pool
 func (data *CheckpointData) ReadFrom(
 	ctx context.Context,
-	reader *blockio.BlockReader,
+	reader dataio.Reader,
 	scheduler tasks.JobScheduler,
 	m *mpool.MPool) (err error) {
 	metas, err := reader.LoadBlocksMeta(ctx, m)

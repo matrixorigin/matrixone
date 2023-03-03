@@ -430,7 +430,7 @@ func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int)
 		return err
 	}
 	for j := range blocks {
-		metaLoc, err := blockio.EncodeMetaLocWithObject(
+		metaLoc, err := blockio.EncodeLocation(
 			blocks[0].GetExtent(),
 			uint32(container.lengths[j]),
 			blocks,
@@ -446,7 +446,7 @@ func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int)
 	// 		return err
 	// 	}
 	// 	for j := range blocks {
-	// 		metaLoc, err := blockio.EncodeMetaLocWithObject(
+	// 		metaLoc, err := blockio.EncodeLocation(
 	// 			blocks[0].GetExtent(),
 	// 			uint32(container.unique_lengths[i][j]),
 	// 			blocks,

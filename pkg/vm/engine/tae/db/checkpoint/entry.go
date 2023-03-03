@@ -191,7 +191,7 @@ func (e *CheckpointEntry) GCMetadata(fs *objectio.ObjectFS) error {
 }
 
 func (e *CheckpointEntry) GCEntry(fs *objectio.ObjectFS) error {
-	fileName, _, err := blockio.DecodeMetaLocToMetas(e.location)
+	fileName, _, err := blockio.DecodeLocationToMetas(e.location)
 	defer logutil.Infof("GC checkpoint metadata %v, err %v", e.String(), err)
 	if err != nil {
 		return err

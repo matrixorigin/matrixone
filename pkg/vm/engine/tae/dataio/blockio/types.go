@@ -61,8 +61,25 @@ func DecodeGCMetadataFileName(name string) (start, end types.TS, ext string) {
 	return
 }
 
-// EncodeMetaLocWithObject Generate a metaloc from an object file
-func EncodeMetaLocWithObject(
+func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
+	objectSize := uint32(0)
+	for _, block := range blocks {
+		meta := block.GetMeta()
+		header := meta.GetHeader()
+		count := header.GetColumnCount()
+		for i := 0; i < int(count); i++ {
+			col, err := block.GetColumn(uint16(i))
+			if err != nil {
+				return 0, err
+			}
+			objectSize += col.GetMeta().GetLocation().Length()
+		}
+	}
+	return objectSize, nil
+}
+
+// EncodeLocation Generate a metaloc from an object file
+func EncodeLocation(
 	extent objectio.Extent,
 	rows uint32,
 	blocks []objectio.BlockObject) (string, error) {
@@ -85,51 +102,6 @@ func EncodeMetaLocWithObject(
 	return metaLoc, nil
 }
 
-func DecodeMetaLoc(metaLoc string) (string, objectio.Extent, uint32) {
-	info := strings.Split(metaLoc, ":")
-	name := info[0]
-	location := strings.Split(info[1], "_")
-	offset, err := strconv.ParseUint(location[0], 10, 32)
-	if err != nil {
-		panic(any(err))
-	}
-	size, err := strconv.ParseUint(location[1], 10, 32)
-	if err != nil {
-		panic(any(err))
-	}
-	osize, err := strconv.ParseUint(location[2], 10, 32)
-	if err != nil {
-		panic(any(err))
-	}
-	id, err := strconv.ParseUint(location[3], 10, 32)
-	if err != nil {
-		panic(any(err))
-	}
-	rows, err := strconv.ParseUint(info[2], 10, 32)
-	if err != nil {
-		panic(any(err))
-	}
-	extent := objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
-	return name, extent, uint32(rows)
-}
-
-func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
-	objectSize := uint32(0)
-	for _, block := range blocks {
-		meta := block.GetMeta()
-		header := meta.GetHeader()
-		count := header.GetColumnCount()
-		for i := 0; i < int(count); i++ {
-			col, err := block.GetColumn(uint16(i))
-			if err != nil {
-				return 0, err
-			}
-			objectSize += col.GetMeta().GetLocation().Length()
-		}
-	}
-	return objectSize, nil
-}
-
 func DecodeLocation(metaLoc string) (name string, id uint32, extent objectio.Extent, rows uint32, err error) {
 	info := strings.Split(metaLoc, ":")
 	name = info[0]
@@ -144,7 +116,7 @@ func DecodeLocation(metaLoc string) (name string, id uint32, extent objectio.Ext
 	}
 	osize, err := strconv.ParseUint(location[2], 10, 32)
 	if err != nil {
-		panic(any(err))
+		return
 	}
 	num, err := strconv.ParseUint(location[3], 10, 32)
 	if err != nil {
@@ -158,19 +130,4 @@ func DecodeLocation(metaLoc string) (name string, id uint32, extent objectio.Ext
 	rows = uint32(r)
 	extent = objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
 	return
-}
-
-func EncodeLocation(
-	name string,
-	extent objectio.Extent,
-	rows uint32) (string, error) {
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d_%d:%d",
-		name,
-		extent.Offset(),
-		extent.Length(),
-		extent.OriginSize(),
-		extent.Id(),
-		rows,
-	)
-	return metaLoc, nil
 }

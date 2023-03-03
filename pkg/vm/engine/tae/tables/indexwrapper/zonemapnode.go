@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -31,7 +32,7 @@ import (
 type ZmReader struct {
 	metaKey string
 	idx     uint16
-	reader  *blockio.BlockReader
+	reader  dataio.Reader
 }
 
 func NewZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
@@ -44,7 +45,7 @@ func NewZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *object
 }
 
 func (r *ZmReader) getZoneMap() (*index.ZoneMap, error) {
-	_, extent, _ := blockio.DecodeMetaLoc(r.metaKey)
+	_, _, extent, _, _ := blockio.DecodeLocation(r.metaKey)
 	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, []uint32{extent.Id()}, nil)
 	if err != nil {
 		// TODOa: Error Handling?

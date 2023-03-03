@@ -137,7 +137,10 @@ func fetchZonemapAndRowsFromBlockInfo(
 	blockInfo catalog.BlockInfo,
 	fs fileservice.FileService,
 	m *mpool.MPool) ([][64]byte, uint32, error) {
-	_, extent, rows := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
+	_, _, extent, rows, err := blockio.DecodeLocation(blockInfo.MetaLoc)
+	if err != nil {
+		return nil, 0, err
+	}
 	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3

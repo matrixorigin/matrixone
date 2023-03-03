@@ -2,15 +2,12 @@ package dataio
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"strconv"
-	"strings"
 )
 
 // Reader is the only interface that mo provides for CN/DN/ETL... modules to read data
@@ -63,49 +60,4 @@ type Writer interface {
 	// Sync is to write multiple batches written to the buffer to the fileservice at one time
 	// objectio.Extent is the address offset information of all block metadata stored in an object.
 	Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error)
-}
-
-func DecodeLocation(metaLoc string) (name string, id uint32, extent objectio.Extent, rows uint32, err error) {
-	info := strings.Split(metaLoc, ":")
-	name = info[0]
-	location := strings.Split(info[1], "_")
-	offset, err := strconv.ParseUint(location[0], 10, 32)
-	if err != nil {
-		return
-	}
-	size, err := strconv.ParseUint(location[1], 10, 32)
-	if err != nil {
-		return
-	}
-	osize, err := strconv.ParseUint(location[2], 10, 32)
-	if err != nil {
-		panic(any(err))
-	}
-	num, err := strconv.ParseUint(location[3], 10, 32)
-	if err != nil {
-		return
-	}
-	id = uint32(num)
-	r, err := strconv.ParseUint(info[2], 10, 32)
-	if err != nil {
-		return
-	}
-	rows = uint32(r)
-	extent = objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
-	return
-}
-
-func EncodeLocation(
-	name string,
-	extent objectio.Extent,
-	rows uint32) (string, error) {
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d_%d:%d",
-		name,
-		extent.Offset(),
-		extent.Length(),
-		extent.OriginSize(),
-		extent.Id(),
-		rows,
-	)
-	return metaLoc, nil
 }

@@ -109,13 +109,13 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	blocks, _, err := writer.Sync(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
-	metaLoc1, err := blockio.EncodeMetaLocWithObject(
+	metaLoc1, err := blockio.EncodeLocation(
 		blocks[0].GetExtent(),
 		uint32(taeBats[0].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	metaLoc2, err := blockio.EncodeMetaLocWithObject(
+	metaLoc2, err := blockio.EncodeLocation(
 		blocks[1].GetExtent(),
 		uint32(taeBats[1].Vecs[0].Length()),
 		blocks,
@@ -133,7 +133,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	blocks, _, err = writer.Sync(context.Background())
 	assert.Equal(t, 1, len(blocks))
 	assert.Nil(t, err)
-	metaLoc3, err := blockio.EncodeMetaLocWithObject(
+	metaLoc3, err := blockio.EncodeLocation(
 		blocks[0].GetExtent(),
 		uint32(taeBats[3].Vecs[0].Length()),
 		blocks,
@@ -302,25 +302,25 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	blocks, _, err = writer.Sync(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, len(hideBats), len(blocks))
-	delLoc1, err := blockio.EncodeMetaLocWithObject(
+	delLoc1, err := blockio.EncodeLocation(
 		blocks[0].GetExtent(),
 		uint32(hideBats[0].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	delLoc2, err := blockio.EncodeMetaLocWithObject(
+	delLoc2, err := blockio.EncodeLocation(
 		blocks[1].GetExtent(),
 		uint32(hideBats[1].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	delLoc3, err := blockio.EncodeMetaLocWithObject(
+	delLoc3, err := blockio.EncodeLocation(
 		blocks[2].GetExtent(),
 		uint32(hideBats[2].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	delLoc4, err := blockio.EncodeMetaLocWithObject(
+	delLoc4, err := blockio.EncodeLocation(
 		blocks[3].GetExtent(),
 		uint32(hideBats[3].Vecs[0].Length()),
 		blocks,

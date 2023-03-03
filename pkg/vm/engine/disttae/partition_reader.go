@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -49,7 +50,7 @@ type PartitionReader struct {
 
 	// the following attributes are used to support cn2s3
 	s3FileService   fileservice.FileService
-	s3BlockReader   *blockio.BlockReader
+	s3BlockReader   dataio.Reader
 	extendId2s3File map[string]int
 	// used to get idx of sepcified col
 	colIdxMp        map[string]int
@@ -133,7 +134,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					return nil, err
 				}
 			}
-			_, extent, _ := blockio.DecodeMetaLoc(metaLoc)
+			_, _, extent, _, _ := blockio.DecodeLocation(metaLoc)
 			for _, name := range colNames {
 				if name == catalog.Row_ID {
 					return nil, moerr.NewInternalError(ctx, "The current version does not support modifying the data read from s3 within a transaction")
