@@ -493,3 +493,11 @@ func (p *Partition) NewReader(
 	}
 	return readers, nil
 }
+
+func (p Partitions) Snapshot() []*PartitionState {
+	ret := make([]*PartitionState, 0, len(p))
+	for _, partition := range p {
+		ret = append(ret, partition.state.Load())
+	}
+	return ret
+}
