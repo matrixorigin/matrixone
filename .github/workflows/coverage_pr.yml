@@ -83,7 +83,7 @@ jobs:
           distribution: 'adopt'
           architecture: x64
 
-      - name: Start Test Service
+      - name: Start BVT Test Service
         if: ${{ steps.ut-pr.outputs.paths != '' }}
         timeout-minutes: 10
         run: |
@@ -106,6 +106,9 @@ jobs:
         if: ${{ steps.ut-pr.outputs.paths != '' }}
         run: |
           cd $GITHUB_WORKSPACE/matrixone
+          ps -aux | grep 'mo-service' | grep -v 'grep' | awk '{print $2}' | xargs kill -s SIGINT
+          i=1 && while [ -n "$(ps -aux|grep 'mo-service' | grep -v 'grep' | awk '{print $2}')" ] && [ $i -le 300 ]; do echo "mo-service kill not finished......$i/300"; i=$(($i+1)); sleep 1s; done
+          if [ $i -gt 300 ]; then echo 'stop mo-service failed...'; exit 1; else echo 'stop mo-service successed...'; fi
           go tool covdata textfmt -i="$GITHUB_WORKSPACE/matrixone" -o ${{ env.raw_bvt_coverage }}
           cat ${{ env.raw_bvt_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" | tee ${{ env.raw_bvt_coverage_temp }} > /dev/null
           cat ${{ env.raw_ut_coverage }} | grep "${{ steps.ut-pr.outputs.files }}" | tee ${{ env.raw_ut_coverage_temp }} > /dev/null

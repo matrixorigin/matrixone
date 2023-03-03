@@ -25,6 +25,13 @@ import (
 // todo(broccoli): revise this, maybe rewrite this? at least clean up the logic
 func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
+	// If any binary type exists return binary type.
+	for _, v := range vectors {
+		if v.GetType().Oid == types.T_binary || v.GetType().Oid == types.T_varbinary || v.GetType().Oid == types.T_blob {
+			resultType = types.Type{Oid: types.T_blob, Size: types.VarlenaSize}
+			break
+		}
+	}
 	if vectors[0].IsScalar() {
 		if vectors[0].ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
@@ -46,9 +53,9 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		}
 		separator := vectors[0].GetString(0)
 		if AllConst {
-			return concatWsWithConstSeparatorAllConst(inputCleaned, separator, proc.Mp())
+			return concatWsWithConstSeparatorAllConst(resultType, inputCleaned, separator, proc.Mp())
 		}
-		return concatWsWithConstSeparator(inputCleaned, separator, vectorIsConst, proc)
+		return concatWsWithConstSeparator(resultType, inputCleaned, separator, vectorIsConst, proc)
 	} else {
 		vectorIsConst := make([]bool, 0)
 		inputCleaned := make([]*vector.Vector, 0) // no NULL const vectors
@@ -67,17 +74,16 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		}
 		separator := vectors[0]
 		if AllConst {
-			return concatWsAllConst(inputCleaned, separator, proc)
+			return concatWsAllConst(resultType, inputCleaned, separator, proc)
 		} else {
-			return concatWs(inputCleaned, separator, vectorIsConst, proc)
+			return concatWs(resultType, inputCleaned, separator, vectorIsConst, proc)
 		}
 	}
 }
 
-func concatWs(inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
+func concatWs(resultType types.Type, inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
 	separators := vector.MustStrCols(separator)
 	length := len(separators)
-	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	resultNsp := new(nulls.Nulls)
 	resultValues := make([]string, length)
 	for i := 0; i < length; i++ {
@@ -108,10 +114,9 @@ func concatWs(inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsC
 	return resultVector, nil
 }
 
-func concatWsAllConst(inputCleaned []*vector.Vector, separator *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func concatWsAllConst(resultType types.Type, inputCleaned []*vector.Vector, separator *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	separators := vector.MustStrCols(separator)
 	length := len(separators)
-	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	resultNsp := new(nulls.Nulls)
 	resultValues := make([]string, length)
 	for i := 0; i < length; i++ {
@@ -132,8 +137,7 @@ func concatWsAllConst(inputCleaned []*vector.Vector, separator *vector.Vector, p
 }
 
 // the inputs are guaranteed to be scalar non-NULL
-func concatWsWithConstSeparatorAllConst(inputCleaned []*vector.Vector, separator string, mp *mpool.MPool) (*vector.Vector, error) {
-	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
+func concatWsWithConstSeparatorAllConst(resultType types.Type, inputCleaned []*vector.Vector, separator string, mp *mpool.MPool) (*vector.Vector, error) {
 	res := ""
 	for i := range inputCleaned {
 		res = res + inputCleaned[i].GetString(0)
@@ -147,7 +151,7 @@ func concatWsWithConstSeparatorAllConst(inputCleaned []*vector.Vector, separator
 }
 
 // inputCleaned does not have NULL const
-func concatWsWithConstSeparator(inputCleaned []*vector.Vector, separator string, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
+func concatWsWithConstSeparator(resultType types.Type, inputCleaned []*vector.Vector, separator string, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
 	length := 0
 	for i := range inputCleaned {
 		inputI := vector.MustBytesCols(inputCleaned[i])
@@ -161,7 +165,6 @@ func concatWsWithConstSeparator(inputCleaned []*vector.Vector, separator string,
 		}
 	}
 
-	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	resultNsp := new(nulls.Nulls)
 	resultValues := make([]string, length)
 

@@ -1031,11 +1031,10 @@ func isMetaTable(name string) bool {
 
 func genBlockMetas(
 	ctx context.Context,
-	rows [][]any,
+	blockInfos []catalog.BlockInfo,
 	columnLength int,
 	fs fileservice.FileService,
 	m *mpool.MPool, prefetch bool) ([]BlockMeta, error) {
-	blockInfos := catalog.GenBlockInfo(rows)
 	{
 		mp := make(map[uint64]catalog.BlockInfo) // block list
 		for i := range blockInfos {
@@ -1243,6 +1242,8 @@ func transferSval(v string, oid types.T) (bool, any) {
 	case types.T_char, types.T_varchar:
 		return true, []byte(v)
 	case types.T_text, types.T_blob:
+		return true, []byte(v)
+	case types.T_binary, types.T_varbinary:
 		return true, []byte(v)
 	case types.T_uuid:
 		var uv types.Uuid

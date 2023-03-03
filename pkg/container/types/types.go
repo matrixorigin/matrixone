@@ -61,10 +61,12 @@ const (
 	T_interval  T = 54
 
 	// string family
-	T_char    T = 60
-	T_varchar T = 61
-	T_json    T = 62
-	T_uuid    T = 63
+	T_char      T = 60
+	T_varchar   T = 61
+	T_json      T = 62
+	T_uuid      T = 63
+	T_binary    T = 64
+	T_varbinary T = 65
 
 	// blobs
 	T_blob T = 70
@@ -191,6 +193,9 @@ var Types map[string]T = map[string]T{
 	"char":    T_char,
 	"varchar": T_varchar,
 
+	"binary":    T_binary,
+	"varbinary": T_varbinary,
+
 	"json": T_json,
 	"text": T_text,
 	"blob": T_blob,
@@ -213,7 +218,7 @@ func New(oid T, width, scale, precision int32) Type {
 
 func CharsetType(oid T) uint8 {
 	switch oid {
-	case T_blob:
+	case T_blob, T_varbinary, T_binary:
 		// binary charset
 		return 1
 	default:
@@ -293,6 +298,10 @@ func (t Type) DescString() string {
 		return fmt.Sprintf("CHAR(%d)", t.Width)
 	case T_varchar:
 		return fmt.Sprintf("VARCHAR(%d)", t.Width)
+	case T_binary:
+		return fmt.Sprintf("BINARY(%d)", t.Width)
+	case T_varbinary:
+		return fmt.Sprintf("VARBINARY(%d)", t.Width)
 	case T_decimal64:
 		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	case T_decimal128:
@@ -356,6 +365,12 @@ func (t T) ToType() Type {
 	case T_varchar:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarcharLen
+	case T_binary:
+		typ.Size = VarlenaSize
+		typ.Width = MaxBinaryLen
+	case T_varbinary:
+		typ.Size = VarlenaSize
+		typ.Width = MaxVarBinaryLen
 	case T_any:
 		// XXX I don't know about this one ...
 		typ.Size = 0
@@ -403,6 +418,10 @@ func (t T) String() string {
 		return "CHAR"
 	case T_varchar:
 		return "VARCHAR"
+	case T_binary:
+		return "BINARY"
+	case T_varbinary:
+		return "VARBINARY"
 	case T_json:
 		return "JSON"
 	case T_tuple:
@@ -458,6 +477,10 @@ func (t T) OidString() string {
 		return "T_char"
 	case T_varchar:
 		return "T_varchar"
+	case T_binary:
+		return "T_binary"
+	case T_varbinary:
+		return "T_varbinary"
 	case T_date:
 		return "T_date"
 	case T_datetime:
@@ -507,7 +530,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -548,7 +571,7 @@ func (t T) FixedLength() int {
 		return TxnTsSize
 	case T_Rowid:
 		return RowidSize
-	case T_char, T_varchar, T_blob, T_json, T_text:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return -24
 	}
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknow type %d", t)))
@@ -588,7 +611,7 @@ func IsFloat(t T) bool {
 
 // isString: return true if the types.T is string type
 func IsString(t T) bool {
-	if t == T_char || t == T_varchar || t == T_blob || t == T_text {
+	if t == T_char || t == T_varchar || t == T_blob || t == T_text || t == T_binary || t == T_varbinary {
 		return true
 	}
 	return false

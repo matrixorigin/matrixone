@@ -70,6 +70,9 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done := part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF)
+		done()
 		e.catalog.InsertDatabase(bat)
 		bat.Clean(m)
 	}
@@ -98,8 +101,12 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done := part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX)
+		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
+
 		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
@@ -133,6 +140,9 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done = part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX)
+		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
 	}
@@ -160,8 +170,12 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done := part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX)
+		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
+
 		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
@@ -195,6 +209,9 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done = part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX)
+		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
 	}
@@ -222,8 +239,12 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done := part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX)
+		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
+
 		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
@@ -257,25 +278,14 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
+		state, done = part.MutateState()
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX)
+		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
 	}
 
 	return nil
-}
-
-func (e *Engine) getMetaPartitions(name string) Partitions {
-	e.Lock()
-	defer e.Unlock()
-	parts, ok := e.metaTables[name]
-	if !ok { // create a new table
-		parts = make(Partitions, len(e.dnMap))
-		for i := range parts {
-			parts[i] = NewPartition(nil)
-		}
-		e.metaTables[name] = parts
-	}
-	return parts
 }
 
 func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
@@ -309,7 +319,7 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 	}
 	e.Unlock()
 
-	for i, dn := range dnList {
+	for _, dn := range dnList {
 		part := parts[e.dnMap[dn.ServiceID]]
 
 		select {
@@ -324,7 +334,7 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 		}
 
 		if err := updatePartitionOfPull(
-			i, primaryIdx, tbl, ctx, op, e, part, dn,
+			primaryIdx, tbl, ctx, op, e, part, parts, dn,
 			genSyncLogTailReq(part.ts, ts, databaseId, tableId),
 		); err != nil {
 			part.lock <- struct{}{}

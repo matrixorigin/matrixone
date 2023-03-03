@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -89,6 +88,16 @@ func (d *DataRow) UniqueIndexes() []memtable.Tuple {
 
 func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("unimplemented")
+}
+
+func (p *Partition) MutateState() (*PartitionState, func()) {
+	curState := p.state.Load()
+	state := curState.Copy()
+	return state, func() {
+		if !p.state.CompareAndSwap(curState, state) {
+			panic("concurrent mutation")
+		}
+	}
 }
 
 func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) bool {
@@ -342,25 +351,18 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 
 func (p *Partition) NewReader(
 	ctx context.Context,
+	txn *Transaction,
 	readerNumber int,
 	index memtable.Tuple,
 	defs []engine.TableDef,
 	tableDef *plan.TableDef,
 	skipBlocks map[uint64]uint8,
 	blks []ModifyBlockMeta,
-	ts timestamp.Timestamp,
-	fs fileservice.FileService,
 	entries []Entry,
 ) ([]engine.Reader, error) {
 
-	t := memtable.Time{
-		Timestamp: ts,
-	}
-	tx := memtable.NewTransaction(
-		newMemTableTransactionID(),
-		t,
-		memtable.SnapshotIsolation,
-	)
+	ts := txn.meta.SnapshotTS
+	fs := txn.engine.fs
 
 	inserts := make([]*batch.Batch, 0, len(entries))
 	deletes := make(map[types.Rowid]uint8)
@@ -396,27 +398,39 @@ func (p *Partition) NewReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
+	var newIter *partitionStateRowsIter
 	var iter partitionIter
-	if len(index) > 0 {
-		iter = p.data.NewIndexIter(tx, index, index)
+	if len(index) == 0 {
+		// skip primary key indexing read
+		//TODO migrate to new iter
+		newIter = p.state.Load().NewRowsIter(
+			types.TimestampToTS(ts),
+			nil,
+			false,
+		)
 	} else {
+		t := memtable.Time{
+			Timestamp: ts,
+		}
+		tx := memtable.NewTransaction(
+			newMemTableTransactionID(),
+			t,
+			memtable.SnapshotIsolation,
+		)
 		iter = p.data.NewIter(tx)
 	}
 
 	partReader := &PartitionReader{
 		typsMap:         mp,
-		readTime:        t,
-		tx:              tx,
 		inserts:         inserts,
 		deletes:         deletes,
 		skipBlocks:      skipBlocks,
 		iter:            iter,
+		newIter:         newIter,
 		colIdxMp:        colIdxMp,
 		extendId2s3File: make(map[string]int),
 		s3FileService:   fs,
-	}
-	if p.txn != nil {
-		partReader.proc = p.txn.proc
+		procMPool:       txn.proc.GetMPool(),
 	}
 	readers[0] = partReader
 	if readerNumber == 1 {
@@ -474,4 +488,12 @@ func (p *Partition) NewReader(
 		}
 	}
 	return readers, nil
+}
+
+func (p Partitions) Snapshot() []*PartitionState {
+	ret := make([]*PartitionState, 0, len(p))
+	for _, partition := range p {
+		ret = append(ret, partition.state.Load())
+	}
+	return ret
 }
