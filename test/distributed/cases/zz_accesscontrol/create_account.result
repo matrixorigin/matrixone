@@ -23,9 +23,9 @@ drop account if exists account_1;
 drop account if exists aaa;
 drop account if exists account;
 create account `test@123456` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+internal error: the name "test@123456" is invalid
 select account_name from mo_catalog.mo_account where account_name='test@123456';
 account_name
-test@123456
 create account testaccount ADMIN_NAME 'admin@123' IDENTIFIED BY 'yyyy_1234@126.com';
 select account_name from mo_catalog.mo_account where account_name='testaccount';
 account_name
@@ -55,29 +55,29 @@ select account_name from mo_catalog.mo_account where account_name='fast';
 account_name
 fast
 create account `ab.cd` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+internal error: the name "ab.cd" is invalid
 select account_name from mo_catalog.mo_account where account_name='ab.cd';
 account_name
-ab.cd
 create account `test/123` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+internal error: the name "test/123" is invalid
 select account_name from mo_catalog.mo_account where account_name='test/123';
 account_name
-test/123
 create account `test%` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+internal error: the name "test%" is invalid
 select account_name from mo_catalog.mo_account where account_name='test%';
 account_name
-test%
 create account `123` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select account_name from mo_catalog.mo_account where account_name='123';
 account_name
 123
 create account `非常` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+internal error: the name "非常" is invalid
 select account_name from mo_catalog.mo_account where account_name='非常';
 account_name
-非常
 create account `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff` admin_name `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffffdddddd` IDENTIFIED BY '1111111111111111111111111111111111111111111111111111111';
+internal error: the name "abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff" is invalid
 select account_name from mo_catalog.mo_account where account_name='abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff';
 account_name
-abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff
 create account ` user_strip_01 ` ADMIN_NAME " admin " IDENTIFIED BY " 123456 ";
 select account_name from mo_catalog.mo_account where account_name='user_strip_01';
 account_name
@@ -149,14 +149,14 @@ create account account_1 admin_name='admin' identified by '123456';
 show databases;
 Database
 mo_catalog
-system_metrics
 system
+system_metrics
 information_schema
 mysql
 use mo_catalog;
 show tables;
-tables_in_mo_catalog
-mo_columns
+Tables_in_mo_catalog
+mo_tables
 mo_user
 mo_role
 mo_user_grant
@@ -164,8 +164,8 @@ mo_role_grant
 mo_role_privs
 mo_user_defined_function
 mo_mysql_compatbility_mode
-mo_tables
 mo_database
+mo_columns
 select user_name,authentication_string,owner from mo_user;
 user_name    authentication_string    owner
 admin    123456    0

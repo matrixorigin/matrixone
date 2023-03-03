@@ -57,6 +57,13 @@ func (impl *nullableVecImpl[T]) Get(i int) (v any) {
 	return impl.derived.stlvec.Get(i)
 }
 
+func (impl *nullableVecImpl[T]) ShallowGet(i int) (v any) {
+	if impl.IsNull(i) {
+		return types.Null{}
+	}
+	return impl.derived.stlvec.ShallowGet(i)
+}
+
 // Modification
 func (impl *nullableVecImpl[T]) Update(i int, v any) {
 	impl.tryCOW()
@@ -199,12 +206,12 @@ func (impl *nullableVecImpl[T]) String() string {
 }
 
 func (impl *nullableVecImpl[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-	return impl.forEachWindowWithBias(offset, length, op, sels, 0)
+	return impl.forEachWindowWithBias(offset, length, op, sels, 0, false)
 }
 
-func (impl *nullableVecImpl[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int) (err error) {
+func (impl *nullableVecImpl[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
 	if !impl.HasNull() {
-		return impl.vecBase.forEachWindowWithBias(offset, length, op, sels, bias)
+		return impl.vecBase.forEachWindowWithBias(offset, length, op, sels, bias, shallow)
 	}
 	var v T
 	if _, ok := any(v).([]byte); !ok {
@@ -247,7 +254,12 @@ func (impl *nullableVecImpl[T]) forEachWindowWithBias(offset, length int, op ItO
 
 	if sels == nil || sels.IsEmpty() {
 		for i := offset; i < offset+length; i++ {
-			elem := impl.Get(i + bias)
+			var elem any
+			if shallow {
+				elem = impl.ShallowGet(i + bias)
+			} else {
+				elem = impl.Get(i + bias)
+			}
 			if err = op(elem, i); err != nil {
 				break
 			}
@@ -263,7 +275,12 @@ func (impl *nullableVecImpl[T]) forEachWindowWithBias(offset, length int, op ItO
 		} else if int(idx) >= end {
 			break
 		}
-		elem := impl.Get(int(idx) + bias)
+		var elem any
+		if shallow {
+			elem = impl.ShallowGet(int(idx) + bias)
+		} else {
+			elem = impl.Get(int(idx) + bias)
+		}
 		if err = op(elem, int(idx)); err != nil {
 			break
 		}

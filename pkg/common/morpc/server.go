@@ -411,12 +411,15 @@ type clientSession struct {
 	receivedStreamSequences map[uint64]uint32
 	// streaming id -> last sent sequence, multi-stream access in multi-goroutines if
 	// the tcp connection is shared. But no concurrent in one stream.
-	sentStreamSequences sync.Map
-	cancel              context.CancelFunc
-	ctx                 context.Context
-	mu                  struct {
+	sentStreamSequences   sync.Map
+	cancel                context.CancelFunc
+	ctx                   context.Context
+	checkTimeoutCacheOnce sync.Once
+	closedC               chan struct{}
+	mu                    struct {
 		sync.RWMutex
 		closed bool
+		caches map[uint64]cacheWithContext
 	}
 }
 
@@ -425,7 +428,8 @@ func newClientSession(
 	codec Codec,
 	newFutureFunc func() *Future) *clientSession {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &clientSession{
+	cs := &clientSession{
+		closedC:                 make(chan struct{}),
 		codec:                   codec,
 		c:                       make(chan *Future, 32),
 		receivedStreamSequences: make(map[uint64]uint32),
@@ -434,6 +438,8 @@ func newClientSession(
 		cancel:                  cancel,
 		newFutureFunc:           newFutureFunc,
 	}
+	cs.mu.caches = make(map[uint64]cacheWithContext)
+	return cs
 }
 
 func (cs *clientSession) Close() error {
@@ -442,13 +448,19 @@ func (cs *clientSession) Close() error {
 	if cs.mu.closed {
 		return nil
 	}
-
+	close(cs.closedC)
 	close(cs.c)
 	cs.mu.closed = true
+	for _, c := range cs.mu.caches {
+		c.cache.Close()
+	}
+	cs.mu.caches = nil
 	return cs.conn.Close()
 }
 
-func (cs *clientSession) Write(ctx context.Context, response Message) error {
+func (cs *clientSession) Write(
+	ctx context.Context,
+	response Message) error {
 	if err := cs.codec.Valid(response); err != nil {
 		return err
 	}
@@ -479,11 +491,39 @@ func (cs *clientSession) Write(ctx context.Context, response Message) error {
 	return f.waitSendCompleted()
 }
 
+func (cs *clientSession) startCheckCacheTimeout() {
+	cs.checkTimeoutCacheOnce.Do(cs.checkCacheTimeout)
+}
+
+func (cs *clientSession) checkCacheTimeout() {
+	go func() {
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
+		for {
+			select {
+			case <-cs.closedC:
+				return
+			case <-timer.C:
+				cs.mu.Lock()
+				for k, c := range cs.mu.caches {
+					if c.closeIfTimeout() {
+						delete(cs.mu.caches, k)
+					}
+				}
+				cs.mu.Unlock()
+				timer.Reset(time.Second)
+			}
+		}
+	}()
+}
+
 func (cs *clientSession) cancelWrite() {
 	cs.cancel()
 }
 
-func (cs *clientSession) validateStreamRequest(id uint64, sequence uint32) bool {
+func (cs *clientSession) validateStreamRequest(
+	id uint64,
+	sequence uint32) bool {
 	expectSequence := cs.receivedStreamSequences[id] + 1
 	if sequence != expectSequence {
 		return false
@@ -493,4 +533,64 @@ func (cs *clientSession) validateStreamRequest(id uint64, sequence uint32) bool 
 		cs.sentStreamSequences.Store(id, uint32(0))
 	}
 	return true
+}
+
+func (cs *clientSession) CreateCache(
+	ctx context.Context,
+	cacheID uint64) (MessageCache, error) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	if cs.mu.closed {
+		return nil, moerr.NewClientClosedNoCtx()
+	}
+
+	v, ok := cs.mu.caches[cacheID]
+	if !ok {
+		v = cacheWithContext{ctx: ctx, cache: newCache()}
+		cs.mu.caches[cacheID] = v
+		cs.startCheckCacheTimeout()
+	}
+	return v.cache, nil
+}
+
+func (cs *clientSession) DeleteCache(cacheID uint64) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	if cs.mu.closed {
+		return
+	}
+	if c, ok := cs.mu.caches[cacheID]; ok {
+		c.cache.Close()
+		delete(cs.mu.caches, cacheID)
+	}
+}
+
+func (cs *clientSession) GetCache(cacheID uint64) (MessageCache, error) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+
+	if cs.mu.closed {
+		return nil, moerr.NewClientClosedNoCtx()
+	}
+
+	if c, ok := cs.mu.caches[cacheID]; ok {
+		return c.cache, nil
+	}
+	return nil, nil
+}
+
+type cacheWithContext struct {
+	ctx   context.Context
+	cache MessageCache
+}
+
+func (c cacheWithContext) closeIfTimeout() bool {
+	select {
+	case <-c.ctx.Done():
+		return true
+	default:
+		return false
+	}
 }
