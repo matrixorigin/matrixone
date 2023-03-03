@@ -135,6 +135,8 @@ func (vec *vector[T]) Extend(src Vector) {
 }
 
 func (vec *vector[T]) Update(i int, v any) {
+	//TODO: Upon update, we promote the memory.
+	vec.tryPromoting()
 	UpdateValue(vec.downstreamVector, uint32(i), v)
 }
 
