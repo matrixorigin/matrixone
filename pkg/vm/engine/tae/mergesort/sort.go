@@ -5,10 +5,10 @@
 //go:generate go run genzfunc.go
 
 // Package sort provides primitives for sorting slices and user-defined collections.
-package uuids
+package mergesort
 
 // insertionSort sorts data[a:b] using insertion sort.
-func insertionSort(data sortSlice, a, b int) {
+func insertionSort[T any](data SortSlice[T], a, b int) {
 	for i := a + 1; i < b; i++ {
 		for j := i; j > a && data.Less(j, j-1); j-- {
 			data.Swap(j, j-1)
@@ -18,7 +18,7 @@ func insertionSort(data sortSlice, a, b int) {
 
 // siftDown implements the heap property on data[lo:hi].
 // first is an offset into the array where the root of the heap lies.
-func siftDown(data sortSlice, lo, hi, first int) {
+func siftDown[T any](data SortSlice[T], lo, hi, first int) {
 	root := lo
 	for {
 		child := 2*root + 1
@@ -36,7 +36,7 @@ func siftDown(data sortSlice, lo, hi, first int) {
 	}
 }
 
-func heapSort(data sortSlice, a, b int) {
+func heapSort[T any](data SortSlice[T], a, b int) {
 	first := a
 	lo := 0
 	hi := b - a
@@ -57,7 +57,7 @@ func heapSort(data sortSlice, a, b int) {
 // ``Engineering a Sort Function,'' SP&E November 1993.
 
 // medianOfThree moves the median of the three values data[m0], data[m1], data[m2] into data[m1].
-func medianOfThree(data sortSlice, m1, m0, m2 int) {
+func medianOfThree[T any](data SortSlice[T], m1, m0, m2 int) {
 	// sort 3 elements
 	if data.Less(m1, m0) {
 		data.Swap(m1, m0)
@@ -79,7 +79,7 @@ func medianOfThree(data sortSlice, m1, m0, m2 int) {
 // 	}
 // }
 
-func doPivot(data sortSlice, lo, hi int) (midlo, midhi int) {
+func doPivot[T any](data SortSlice[T], lo, hi int) (midlo, midhi int) {
 	m := int(uint(lo+hi) >> 1) // Written like this to avoid integer overflow.
 	if hi-lo > 40 {
 		// Tukey's ``Ninther,'' median of three medians of three.
@@ -166,7 +166,7 @@ func doPivot(data sortSlice, lo, hi int) (midlo, midhi int) {
 	return b - 1, c
 }
 
-func quickSort(data sortSlice, a, b, maxDepth int) {
+func quickSort[T any](data SortSlice[T], a, b, maxDepth int) {
 	for b-a > 12 { // Use ShellSort for slices <= 12 elements
 		if maxDepth == 0 {
 			heapSort(data, a, b)
@@ -384,7 +384,7 @@ Calls to Swap Operator(n * log^2(n) - (t^2+t)/2*n) = Operator(n * log^2(n))
 // Sort sorts data.
 // It makes one call to data.Len to determine n and Operator(n*log(n)) calls to
 // data.Less and data.Swap. The sort is not guaranteed to be stable.
-func sortUnstable(data sortSlice) {
-	n := len(data)
+func sortUnstable[T any](data SortSlice[T]) {
+	n := len(data.AsSlice())
 	quickSort(data, 0, n, maxDepth(n))
 }

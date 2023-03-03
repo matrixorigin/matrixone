@@ -123,6 +123,10 @@ func newCount(typ types.Type, dist bool, isStar bool) Agg[any] {
 		return newGenericCount[[]byte](typ, dist, isStar)
 	case types.T_text:
 		return newGenericCount[[]byte](typ, dist, isStar)
+	case types.T_binary:
+		return newGenericCount[[]byte](typ, dist, isStar)
+	case types.T_varbinary:
+		return newGenericCount[[]byte](typ, dist, isStar)
 	case types.T_date:
 		return newGenericCount[types.Date](typ, dist, isStar)
 	case types.T_datetime:
@@ -168,6 +172,10 @@ func newAnyValue(typ types.Type, dist bool) Agg[any] {
 	case types.T_char:
 		return newGenericAnyValue[[]byte](typ, dist)
 	case types.T_varchar:
+		return newGenericAnyValue[[]byte](typ, dist)
+	case types.T_binary:
+		return newGenericAnyValue[[]byte](typ, dist)
+	case types.T_varbinary:
 		return newGenericAnyValue[[]byte](typ, dist)
 	case types.T_blob:
 		return newGenericAnyValue[[]byte](typ, dist)
@@ -295,6 +303,18 @@ func newMax(typ types.Type, dist bool) Agg[any] {
 		return newGenericMax[float32](typ, dist)
 	case types.T_float64:
 		return newGenericMax[float64](typ, dist)
+	case types.T_binary:
+		aggPriv := NewStrMax()
+		if dist {
+			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	case types.T_varbinary:
+		aggPriv := NewStrMax()
+		if dist {
+			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_char:
 		aggPriv := NewStrMax()
 		if dist {
@@ -377,6 +397,18 @@ func newMin(typ types.Type, dist bool) Agg[any] {
 		return newGenericMin[float32](typ, dist)
 	case types.T_float64:
 		return newGenericMin[float64](typ, dist)
+	case types.T_binary:
+		aggPriv := NewStrMin()
+		if dist {
+			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	case types.T_varbinary:
+		aggPriv := NewStrMin()
+		if dist {
+			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_char:
 		aggPriv := NewStrMin()
 		if dist {
@@ -463,6 +495,10 @@ func newApprox(typ types.Type, dist bool) Agg[any] {
 		return newGenericApproxcd[[]byte](typ, dist)
 	case types.T_text:
 		return newGenericApproxcd[[]byte](typ, dist)
+	case types.T_binary:
+		return newGenericApproxcd[[]byte](typ, dist)
+	case types.T_varbinary:
+		return newGenericApproxcd[[]byte](typ, dist)
 	case types.T_date:
 		return newGenericApproxcd[types.Date](typ, dist)
 	case types.T_datetime:
@@ -503,6 +539,12 @@ func newBitOr(typ types.Type, dist bool) Agg[any] {
 		return newGenericBitOr[float32](typ, dist)
 	case types.T_float64:
 		return newGenericBitOr[float64](typ, dist)
+	case types.T_binary, types.T_varbinary:
+		aggPriv := NewBitOrBinary()
+		if dist {
+			return NewUnaryDistAgg(AggregateBitOr, aggPriv, false, typ, BitOrReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateBitOr, aggPriv, false, typ, BitOrReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for bitor", typ))
 }
@@ -529,6 +571,13 @@ func newBitXor(typ types.Type, dist bool) Agg[any] {
 		return newGenericBitXor[float32](typ, dist)
 	case types.T_float64:
 		return newGenericBitXor[float64](typ, dist)
+	case types.T_binary, types.T_varbinary:
+		aggPriv := NewBitXorBinary()
+		if dist {
+			return NewUnaryDistAgg(AggregateBitXor, aggPriv, false, typ, BitXorReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateBitXor, aggPriv, false, typ, BitXorReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for bitxor", typ))
 }
@@ -555,6 +604,12 @@ func newBitAnd(typ types.Type, dist bool) Agg[any] {
 		return newGenericBitAnd[float32](typ, dist)
 	case types.T_float64:
 		return newGenericBitAnd[float64](typ, dist)
+	case types.T_binary, types.T_varbinary:
+		aggPriv := NewBitAndBinary()
+		if dist {
+			return NewUnaryDistAgg(AggregateBitAnd, aggPriv, false, typ, BitAndReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateBitAnd, aggPriv, false, typ, BitAndReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for bitand", typ))
 }

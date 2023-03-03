@@ -15,23 +15,19 @@
 package agg
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type BitAnd[T1 types.Ints | types.UInts | types.Floats] struct {
 }
 
 func BitAndReturnType(typs []types.Type) types.Type {
-	switch typs[0].Oid {
-	case types.T_float32, types.T_float64:
-		return types.New(types.T_uint64, 0, 0, 0)
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		return types.New(types.T_uint64, 0, 0, 0)
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		return types.New(types.T_uint64, 0, 0, 0)
+	if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary {
+		return typs[0]
 	}
-	return types.Type{}
+	return types.New(types.T_uint64, 0, 0, 0)
 }
 
 func NewBitAnd[T1 types.Ints | types.UInts | types.Floats]() *BitAnd[T1] {
@@ -77,5 +73,55 @@ func (ba *BitAnd[T1]) MarshalBinary() ([]byte, error) {
 }
 
 func (ba *BitAnd[T1]) UnmarshalBinary(data []byte) error {
+	return nil
+}
+
+type BitAndBinary struct {
+}
+
+func NewBitAndBinary() *BitAndBinary {
+	return &BitAndBinary{}
+}
+
+func (bab *BitAndBinary) Grows(_ int) {
+}
+
+func (bab *BitAndBinary) Eval(vs [][]byte) [][]byte {
+	return vs
+}
+
+func (bab *BitAndBinary) Merge(gNum1, gNum2 int64, v1, v2 []byte, empty1, empty2 bool, _ any) ([]byte, bool) {
+	if empty1 {
+		return v2, empty2
+	}
+	if empty2 {
+		return v1, empty1
+	}
+
+	result := make([]byte, len(v1))
+	types.BitAnd(result, v1, v2)
+
+	return result, false
+}
+
+func (bab *BitAndBinary) Fill(gNum int64, v1, v2 []byte, _ int64, isNew, isNull bool) ([]byte, bool) {
+	if isNull {
+		return v2, isNew
+	}
+	if isNew {
+		return v1, !isNew
+	}
+
+	result := make([]byte, len(v1))
+	types.BitAnd(result, v1, v2)
+
+	return result, false
+}
+
+func (bab *BitAndBinary) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (bab *BitAndBinary) UnmarshalBinary(data []byte) error {
 	return nil
 }
