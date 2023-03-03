@@ -80,22 +80,35 @@ func GetClusterByColumnOrder(cbName, colName string) int {
 	return -1
 }
 
-func FillCompositeClusterByBatch(bat *batch.Batch, cbName string, proc *process.Process) {
+// build the clusterBy key's vector of the cluster table according to the composite column name, and append the result vector to batch
+// cbName: column name of composite column
+func FillCompositeClusterByBatch(bat *batch.Batch, cbName string, proc *process.Process) error {
 	names := SplitCompositeClusterByColumnName(cbName)
-	cCBVecMap := make(map[string]*vector.Vector)
+	return FillCompositeKeyBatch(bat, cbName, names, proc)
+}
+
+// build the vector of the composite key, and append the result vector to batch
+// ckeyName: column name of composite column
+// keyParts: parts of the composite column
+func FillCompositeKeyBatch(bat *batch.Batch, ckeyName string, keyParts []string, proc *process.Process) error {
+	cCBVectorMap := make(map[string]*vector.Vector)
 	for num, attrName := range bat.Attrs {
-		for _, name := range names {
-			if attrName == name {
-				cCBVecMap[name] = bat.Vecs[num]
+		for _, elem := range keyParts {
+			if attrName == elem {
+				cCBVectorMap[elem] = bat.Vecs[num]
 			}
 		}
 	}
 	vs := make([]*vector.Vector, 0)
-	for _, name := range names {
-		v := cCBVecMap[name]
+	for _, elem := range keyParts {
+		v := cCBVectorMap[elem]
 		vs = append(vs, v)
 	}
-	vec, _ := multi.Serial(vs, proc)
-	bat.Attrs = append(bat.Attrs, cbName)
+	vec, err := multi.Serial(vs, proc)
+	if err != nil {
+		return err
+	}
+	bat.Attrs = append(bat.Attrs, ckeyName)
 	bat.Vecs = append(bat.Vecs, vec)
+	return nil
 }

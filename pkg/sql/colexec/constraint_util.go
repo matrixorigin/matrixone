@@ -31,13 +31,14 @@ import (
 )
 
 type tableInfo struct {
-	hasAutoCol      bool
-	pkPos           int
-	updateNameToPos map[string]int
-	compositePkey   string
-	clusterBy       string
-	attrs           []string
-	idxList         []int32
+	hasAutoCol         bool
+	pkPos              int
+	updateNameToPos    map[string]int
+	hasCompositePkey   bool     // Whether the table contains composite primary key
+	compositePkeyParts []string // Part name of composite primary key
+	clusterBy          string
+	attrs              []string
+	idxList            []int32
 }
 
 func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int32, rels []engine.Relation) (uint64, error) {
@@ -122,11 +123,23 @@ func FilterAndUpdateByRowId(
 			}
 
 			//  append hidden columns
-			if info.compositePkey != "" {
-				util.FillCompositeClusterByBatch(updateBatch, info.compositePkey, proc)
+			//if info.compositePkey != "" {
+			//	util.FillCompositeClusterByBatch(updateBatch, info.compositePkey, proc)
+			//}
+
+			// append hidden columns
+			if info.hasCompositePkey {
+				err = util.FillCompositeKeyBatch(updateBatch, catalog.CPrimaryKeyColName, info.compositePkeyParts, proc)
+				if err != nil {
+					return 0, err
+				}
 			}
+
 			if info.clusterBy != "" && util.JudgeIsCompositeClusterByColumn(info.clusterBy) {
-				util.FillCompositeClusterByBatch(updateBatch, info.clusterBy, proc)
+				err = util.FillCompositeClusterByBatch(updateBatch, info.clusterBy, proc)
+				if err != nil {
+					return 0, err
+				}
 			}
 
 			// write unique key table
@@ -380,17 +393,20 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 
 func getInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int32) *tableInfo {
 	info := &tableInfo{
-		hasAutoCol:      false,
-		pkPos:           -1,
-		updateNameToPos: make(map[string]int),
-		compositePkey:   "",
-		clusterBy:       "",
-		attrs:           make([]string, 0, len(tableDef.Cols)),
-		idxList:         make([]int32, 0, len(tableDef.Cols)),
+		hasAutoCol:         false,
+		pkPos:              -1,
+		updateNameToPos:    make(map[string]int),
+		hasCompositePkey:   false,
+		compositePkeyParts: make([]string, 0),
+		clusterBy:          "",
+		attrs:              make([]string, 0, len(tableDef.Cols)),
+		idxList:            make([]int32, 0, len(tableDef.Cols)),
 	}
 	if tableDef.CompositePkey != nil {
-		info.compositePkey = tableDef.CompositePkey.Name
+		info.hasCompositePkey = true
+		info.compositePkeyParts = tableDef.Pkey.Names
 	}
+
 	if tableDef.ClusterBy != nil {
 		info.clusterBy = tableDef.ClusterBy.Name
 	}
@@ -403,7 +419,7 @@ func getInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int
 				info.hasAutoCol = true
 			}
 		}
-		if info.compositePkey == "" && col.Name != catalog.Row_ID && col.Primary {
+		if !info.hasCompositePkey && col.Name != catalog.Row_ID && col.Primary {
 			info.pkPos = j
 		}
 		if col.Name != catalog.Row_ID {
@@ -413,7 +429,7 @@ func getInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int
 			pos++
 		}
 	}
-	if info.compositePkey != "" {
+	if info.hasCompositePkey {
 		info.pkPos = pos
 	}
 
@@ -461,11 +477,18 @@ func InsertBatch(
 	}
 
 	// append hidden columns
-	if info.compositePkey != "" {
-		util.FillCompositeClusterByBatch(insertBatch, info.compositePkey, proc)
+	if info.hasCompositePkey {
+		err = util.FillCompositeKeyBatch(insertBatch, catalog.CPrimaryKeyColName, info.compositePkeyParts, proc)
+		if err != nil {
+			return 0, err
+		}
 	}
+
 	if info.clusterBy != "" && util.JudgeIsCompositeClusterByColumn(info.clusterBy) {
-		util.FillCompositeClusterByBatch(insertBatch, info.clusterBy, proc)
+		err = util.FillCompositeClusterByBatch(insertBatch, info.clusterBy, proc)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	if container != nil {
@@ -500,9 +523,10 @@ func InsertBatch(
 
 func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx context.Context) error {
 	compNameMap := make(map[string]struct{})
-	if tableDef.CompositePkey != nil {
-		names := util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)
-		for _, name := range names {
+
+	// judge whether the table contains composite primary key
+	if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
+		for _, name := range tableDef.Pkey.Names {
 			compNameMap[name] = struct{}{}
 		}
 	}

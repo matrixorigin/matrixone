@@ -68,7 +68,7 @@ func (index *immutableIndex) BatchDedup(
 	skipfn func(row uint32) (err error),
 ) (keyselects *roaring.Bitmap, err error) {
 	if keys.Length() == 1 {
-		err = index.Dedup(keys.Get(0), skipfn)
+		err = index.Dedup(keys.ShallowGet(0), skipfn)
 		return
 	}
 	exist := index.zmReader.FastContainsAny(keys)

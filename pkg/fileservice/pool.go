@@ -14,23 +14,25 @@
 
 package fileservice
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+	_ "unsafe"
+)
 
 type Pool[T any] struct {
 	newFunc  func() T
 	pool     []_PoolElem[T]
-	capacity int32
-	n        int32
+	capacity uint32
 }
 
 type _PoolElem[T any] struct {
-	Taken int32
+	Taken uint32
 	Put   func()
 	Value T
 }
 
 func NewPool[T any](
-	capacity int32,
+	capacity uint32,
 	newFunc func() T,
 ) *Pool[T] {
 
@@ -39,12 +41,12 @@ func NewPool[T any](
 		newFunc:  newFunc,
 	}
 
-	for i := int32(0); i < capacity; i++ {
+	for i := uint32(0); i < capacity; i++ {
 		i := i
 		pool.pool = append(pool.pool, _PoolElem[T]{
 			Value: newFunc(),
 			Put: func() {
-				if !atomic.CompareAndSwapInt32(&pool.pool[i].Taken, 1, 0) {
+				if !atomic.CompareAndSwapUint32(&pool.pool[i].Taken, 1, 0) {
 					panic("bad put")
 				}
 			},
@@ -56,8 +58,8 @@ func NewPool[T any](
 
 func (p *Pool[T]) Get() (value T, put func()) {
 	for i := 0; i < 4; i++ {
-		idx := atomic.AddInt32(&p.n, 1) % p.capacity
-		if atomic.CompareAndSwapInt32(&p.pool[idx].Taken, 0, 1) {
+		idx := fastrand() % p.capacity
+		if atomic.CompareAndSwapUint32(&p.pool[idx].Taken, 0, 1) {
 			value = p.pool[idx].Value
 			put = p.pool[idx].Put
 			return
@@ -76,3 +78,6 @@ var bytesPoolDefaultBlockSize = NewPool(
 		return make([]byte, _DefaultBlockSize)
 	},
 )
+
+//go:linkname fastrand runtime.fastrand
+func fastrand() uint32

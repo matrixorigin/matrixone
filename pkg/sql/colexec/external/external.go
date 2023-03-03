@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"io"
 	"math"
 	"os"
@@ -53,13 +54,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
 	"github.com/pierrec/lz4"
 )
 
 var (
-	ONE_BATCH_MAX_ROW  = 40000
+	ONE_BATCH_MAX_ROW  = int(options.DefaultBlockMaxRows)
 	S3_PARALLEL_MAXNUM = 10
 )
 
@@ -72,6 +74,8 @@ func String(arg any, buf *bytes.Buffer) {
 }
 
 func Prepare(proc *process.Process, arg any) error {
+	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
+	defer span.End()
 	param := arg.(*Argument).Es
 	if proc.Lim.MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
@@ -119,6 +123,8 @@ func Prepare(proc *process.Process, arg any) error {
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
+	defer span.End()
 	select {
 	case <-proc.Ctx.Done():
 		proc.SetInputBatch(nil)
@@ -146,7 +152,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
-	bat, err := ScanFileData(param, proc)
+	bat, err := ScanFileData(ctx, param, proc)
 	if err != nil {
 		param.Fileparam.End = true
 		return false, err
@@ -238,7 +244,9 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 	return bat
 }
 
-func filterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+	_, span := trace.Start(ctx, "filterByAccountAndFilename")
+	defer span.End()
 	filterList := make([]*plan.Expr, 0)
 	filterList2 := make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
@@ -270,8 +278,8 @@ func filterByAccountAndFilename(node *plan.Node, proc *process.Process, fileList
 	return fileListTmp, fileSizeTmp, nil
 }
 
-func FilterFileList(node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
-	return filterByAccountAndFilename(node, proc, fileList, fileSize)
+func FilterFileList(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+	return filterByAccountAndFilename(ctx, node, proc, fileList, fileSize)
 }
 
 func IsSysTable(dbName string, tableName string) bool {
@@ -557,10 +565,12 @@ func GetSimdcsvReader(param *ExternalParam, proc *process.Process) (*ParseLineHa
 	return plh, nil
 }
 
-func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	var bat *batch.Batch
 	var err error
 	var cnt int
+	_, span := trace.Start(ctx, "ScanCsvFile")
+	defer span.End()
 	if param.plh == nil {
 		param.IgnoreLine = param.IgnoreLineTag
 		param.plh, err = GetSimdcsvReader(param, proc)
@@ -609,7 +619,9 @@ func ScanCsvFile(param *ExternalParam, proc *process.Process) (*batch.Batch, err
 	return bat, nil
 }
 
-func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) (*batch.Batch, error) {
+func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) (*batch.Batch, error) {
+	ctx, span := trace.Start(ctx, "getBatchFromZonemapFile")
+	defer span.End()
 	bat := makeBatch(param, 0, proc.Mp())
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		return bat, nil
@@ -628,7 +640,7 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 		}
 	}
 
-	bats, err := objectReader.LoadColumns(param.Ctx, idxs, []uint32{param.Zoneparam.bs[param.Zoneparam.offset].GetExtent().Id()}, proc.GetMPool())
+	bats, err := objectReader.LoadColumns(ctx, idxs, []uint32{param.Zoneparam.bs[param.Zoneparam.offset].GetExtent().Id()}, proc.GetMPool())
 	if err != nil {
 		return nil, err
 	}
@@ -686,7 +698,9 @@ func getBatchFromZonemapFile(param *ExternalParam, proc *process.Process, object
 	return bat, nil
 }
 
-func needRead(param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) bool {
+func needRead(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) bool {
+	_, span := trace.Start(ctx, "needRead")
+	defer span.End()
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		return true
 	}
@@ -747,7 +761,7 @@ func needRead(param *ExternalParam, proc *process.Process, objectReader *blockio
 	return ifNeed
 }
 
-func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, objectReader *blockio.BlockReader) (*batch.Batch, error) {
+func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, size int64, objectReader *blockio.BlockReader) (*batch.Batch, error) {
 	var err error
 	if param.Extern.QueryResult {
 		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, size, proc.GetMPool())
@@ -768,16 +782,16 @@ func getZonemapBatch(param *ExternalParam, proc *process.Process, size int64, ob
 	}
 
 	if param.Filter.exprMono {
-		for !needRead(param, proc, objectReader) {
+		for !needRead(ctx, param, proc, objectReader) {
 			param.Zoneparam.offset++
 		}
-		return getBatchFromZonemapFile(param, proc, objectReader)
+		return getBatchFromZonemapFile(ctx, param, proc, objectReader)
 	} else {
-		return getBatchFromZonemapFile(param, proc, objectReader)
+		return getBatchFromZonemapFile(ctx, param, proc, objectReader)
 	}
 }
 
-func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+func ScanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	if param.Filter.blockReader == nil || param.Extern.QueryResult {
 		dir, _ := filepath.Split(param.Fileparam.Filepath)
 		var service fileservice.FileService
@@ -812,6 +826,9 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 		if !ok && param.Extern.QueryResult {
 			e, err := service.StatFile(proc.Ctx, param.Fileparam.Filepath)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					return nil, moerr.NewQueryIdNotFound(ctx, param.Fileparam.Filepath)
+				}
 				return nil, err
 			}
 			param.Filter.File2Size[param.Fileparam.Filepath] = e.Size
@@ -836,7 +853,7 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx("can' t find the filepath %s", param.Fileparam.Filepath)
 	}
-	bat, err := getZonemapBatch(param, proc, size, param.Filter.blockReader)
+	bat, err := getZonemapBatch(ctx, param, proc, size, param.Filter.blockReader)
 	if err != nil {
 		return nil, err
 	}
@@ -855,11 +872,11 @@ func ScanZonemapFile(param *ExternalParam, proc *process.Process) (*batch.Batch,
 }
 
 // ScanFileData read batch data from external file
-func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+func ScanFileData(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	if strings.HasSuffix(param.Fileparam.Filepath, ".tae") || param.Extern.QueryResult {
-		return ScanZonemapFile(param, proc)
+		return ScanZonemapFile(ctx, param, proc)
 	} else {
-		return ScanCsvFile(param, proc)
+		return ScanCsvFile(ctx, param, proc)
 	}
 }
 
@@ -1020,12 +1037,14 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		}
 		field := getStrFromLine(Line, colIdx, param)
 		id := types.T(param.Cols[colIdx].Typ.Id)
-		if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob && id != types.T_text {
+		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
+			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {
 			field = strings.TrimSpace(field)
 		}
 		vec := bat.Vecs[colIdx]
 		isNullOrEmpty := field == NULL_FLAG
-		if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob && id != types.T_text {
+		if id != types.T_char && id != types.T_varchar &&
+			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text {
 			isNullOrEmpty = isNullOrEmpty || len(field) == 0
 		}
 		isNullOrEmpty = isNullOrEmpty || (getNullFlag(param, param.Attrs[colIdx], field))
@@ -1255,7 +1274,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				}
 				cols[rowIdx] = d.ToFloat64()
 			}
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {

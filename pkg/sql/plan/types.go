@@ -74,6 +74,8 @@ type CompilerContext interface {
 	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	// get the list of the account id
 	ResolveAccountIds(accountNames []string) ([]uint32, error)
+	// get the relevant information of udf
+	ResolveUdf(name string, args []*Expr) (string, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
 	// get the definition of hide key
@@ -236,6 +238,11 @@ type DefaultBinder struct {
 	cols []string
 }
 
+type UpdateBinder struct {
+	baseBinder
+	cols []*ColDef
+}
+
 type TableBinder struct {
 	baseBinder
 }
@@ -278,6 +285,7 @@ var _ Binder = (*HavingBinder)(nil)
 var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*PartitionBinder)(nil)
+var _ Binder = (*UpdateBinder)(nil)
 
 const (
 	NotFound      int32 = math.MaxInt32

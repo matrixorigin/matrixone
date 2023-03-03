@@ -295,6 +295,9 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
 		e, err := f.StatFile(requestCtx, path)
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				return moerr.NewQueryIdNotFound(requestCtx, id)
+			}
 			return err
 		}
 		reader, err := blockio.NewFileReader(f, path)
@@ -629,6 +632,9 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
 	e, err := ses.GetParameterUnit().FileService.StatFile(ctx, metaFile)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, moerr.NewQueryIdNotFound(ctx, queryId)
+		}
 		return nil, err
 	}
 	// read meta's meta
@@ -667,6 +673,9 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 	for i, file := range fileList {
 		e, err := ses.GetParameterUnit().FileService.StatFile(ctx, file)
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				return nil, moerr.NewQueryIdNotFound(ctx, queryId)
+			}
 			return nil, err
 		}
 		rti = append(rti, resultFileInfo{

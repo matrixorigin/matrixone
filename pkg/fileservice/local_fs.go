@@ -40,7 +40,8 @@ type LocalFS struct {
 	sync.RWMutex
 	dirFiles map[string]*os.File
 
-	memCache *MemCache
+	memCache    *MemCache
+	asyncUpdate bool
 }
 
 var _ FileService = new(LocalFS)
@@ -100,9 +101,10 @@ func NewLocalFS(
 	}
 
 	fs := &LocalFS{
-		name:     name,
-		rootPath: rootPath,
-		dirFiles: make(map[string]*os.File),
+		name:        name,
+		rootPath:    rootPath,
+		dirFiles:    make(map[string]*os.File),
+		asyncUpdate: true,
 	}
 	if memCacheCapacity > 0 {
 		fs.memCache = NewMemCache(memCacheCapacity)
@@ -145,6 +147,8 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 		return ctx.Err()
 	default:
 	}
+
+	FSProfileHandler.AddSample()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
@@ -234,7 +238,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			if err != nil {
 				return
 			}
-			err = l.memCache.Update(ctx, vector)
+			err = l.memCache.Update(ctx, vector, l.asyncUpdate)
 		}()
 	}
 
@@ -249,6 +253,8 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 	if vector.allDone() {
 		return nil
 	}
+
+	FSProfileHandler.AddSample()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
@@ -413,6 +419,8 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 	default:
 	}
 
+	FSProfileHandler.AddSample()
+
 	path, err := ParsePathAtService(dirPath, l.name)
 	if err != nil {
 		return nil, err
@@ -472,6 +480,8 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 	default:
 	}
 
+	FSProfileHandler.AddSample()
+
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
@@ -504,6 +514,8 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 		return ctx.Err()
 	default:
 	}
+
+	FSProfileHandler.AddSample()
 
 	for _, filePath := range filePaths {
 		if err := l.deleteSingle(ctx, filePath); err != nil {
@@ -651,6 +663,8 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 	default:
 	}
 
+	FSProfileHandler.AddSample()
+
 	// write
 	for _, entry := range entries {
 
@@ -716,6 +730,10 @@ func (l *LocalFS) CacheStats() *CacheStats {
 		return l.memCache.CacheStats()
 	}
 	return nil
+}
+
+func (l *LocalFS) SetAsyncUpdate(b bool) {
+	l.asyncUpdate = b
 }
 
 func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
