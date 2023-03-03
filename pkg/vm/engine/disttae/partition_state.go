@@ -17,12 +17,10 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"net/http"
 	"runtime/trace"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -56,21 +54,18 @@ type RowEntry struct {
 }
 
 func (r RowEntry) Less(than RowEntry) bool {
-	// asc
 	if r.BlockID < than.BlockID {
 		return true
 	}
 	if than.BlockID < r.BlockID {
 		return false
 	}
-	// asc
 	if r.RowID.Less(than.RowID) {
 		return true
 	}
 	if than.RowID.Less(r.RowID) {
 		return false
 	}
-	// desc
 	if than.Time.Less(r.Time) {
 		return true
 	}
@@ -81,10 +76,15 @@ func (r RowEntry) Less(than RowEntry) bool {
 }
 
 type BlockEntry struct {
-	catalog.BlockInfo
+	BlockID uint64
 
-	CreateTime types.TS
-	DeleteTime types.TS
+	MetaLocation  string
+	DeltaLocation string
+	SegmentID     uint64
+	Sorted        bool
+	CreateTime    types.TS
+	CommitTime    types.TS
+	DeleteTime    types.TS
 }
 
 func (b BlockEntry) Less(than BlockEntry) bool {
@@ -95,11 +95,6 @@ func (b BlockEntry) Less(than BlockEntry) bool {
 		return false
 	}
 	return false
-}
-
-func (b *BlockEntry) Visible(ts types.TS) bool {
-	return b.CreateTime.LessEq(ts) &&
-		(b.DeleteTime.IsEmpty() || ts.Less(b.DeleteTime))
 }
 
 type PrimaryIndexEntry struct {
@@ -132,37 +127,6 @@ func (p *PartitionState) Copy() *PartitionState {
 		Blocks:       p.Blocks.Copy(),
 		PrimaryIndex: p.PrimaryIndex.Copy(),
 	}
-}
-
-func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
-	iter := p.Rows.Iter()
-	defer iter.Release()
-
-	blockID := blockIDFromRowID(rowID)
-	for ok := iter.Seek(RowEntry{
-		BlockID: blockID,
-		RowID:   rowID,
-		Time:    ts,
-	}); ok; ok = iter.Next() {
-		entry := iter.Item()
-		if entry.BlockID != blockID {
-			break
-		}
-		if entry.RowID != rowID {
-			break
-		}
-		if entry.Time.Greater(ts) {
-			// not visible
-			continue
-		}
-		if entry.Deleted {
-			// deleted
-			return false
-		}
-		return true
-	}
-
-	return false
 }
 
 func (p *PartitionState) HandleLogtailEntry(ctx context.Context, entry *api.Entry, primaryKeyIndex int) {
@@ -285,9 +249,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 		trace.WithRegion(ctx, "handle a row", func() {
 
 			pivot := BlockEntry{
-				BlockInfo: catalog.BlockInfo{
-					BlockID: blockID,
-				},
+				BlockID: blockID,
 			}
 			entry, ok := p.Blocks.Get(pivot)
 			if !ok {
@@ -295,10 +257,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			}
 
 			if location := metaLocationVector[i]; location != "" {
-				entry.MetaLoc = location
+				entry.MetaLocation = location
 			}
 			if location := deltaLocationVector[i]; location != "" {
-				entry.DeltaLoc = location
+				entry.DeltaLocation = location
 			}
 			if id := segmentIDVector[i]; id > 0 {
 				entry.SegmentID = id
@@ -308,9 +270,8 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 				entry.CreateTime = t
 			}
 			if t := commitTimeVector[i]; !t.IsEmpty() {
-				entry.CommitTs = t
+				entry.CommitTime = t
 			}
-			entry.EntryState = entryStateVector[i]
 
 			p.Blocks.Set(entry)
 
@@ -343,17 +304,15 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	deleteTimeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[1]))
 
 	for i, rowID := range rowIDVector {
-		blockID := types.DecodeUint64(rowID[:8])
+		blockID := blockIDFromRowID(rowID)
 		trace.WithRegion(ctx, "handle a row", func() {
 
 			pivot := BlockEntry{
-				BlockInfo: catalog.BlockInfo{
-					BlockID: blockID,
-				},
+				BlockID: blockID,
 			}
 			entry, ok := p.Blocks.Get(pivot)
 			if !ok {
-				panic(fmt.Sprintf("invalid block id. %x", rowID))
+				entry = pivot
 			}
 
 			entry.DeleteTime = deleteTimeVector[i]
