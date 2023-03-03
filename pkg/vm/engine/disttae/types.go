@@ -96,9 +96,7 @@ type Partition struct {
 	state            atomic.Pointer[PartitionState]
 	columnsIndexDefs []ColumnsIndexDef
 	// last updated timestamp
-	ts timestamp.Timestamp
-	// used for block read in PartitionReader
-	txn    *Transaction
+	ts     timestamp.Timestamp
 	isMeta bool
 }
 
