@@ -77,7 +77,6 @@ type Engine struct {
 	txnHeap *transactionHeap
 
 	dnMap      map[string]int
-	metaTables map[string]Partitions
 	partitions map[[2]uint64]Partitions
 
 	// XXX related to cn push model
@@ -98,9 +97,6 @@ type Partition struct {
 	columnsIndexDefs []ColumnsIndexDef
 	// last updated timestamp
 	ts timestamp.Timestamp
-	// used for block read in PartitionReader
-	txn    *Transaction
-	isMeta bool
 }
 
 // Transaction represents a transaction

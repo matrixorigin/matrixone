@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -36,7 +35,6 @@ import (
 
 func NewPartition(
 	columnsIndexDefs []ColumnsIndexDef,
-	isMeta bool,
 ) *Partition {
 	lock := make(chan struct{}, 1)
 	lock <- struct{}{}
@@ -44,7 +42,6 @@ func NewPartition(
 		lock:             lock,
 		data:             memtable.NewTable[RowID, DataValue, *DataRow](),
 		columnsIndexDefs: columnsIndexDefs,
-		isMeta:           isMeta,
 	}
 	ret.state.Store(NewPartitionState())
 	return ret
@@ -354,16 +351,18 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 
 func (p *Partition) NewReader(
 	ctx context.Context,
+	txn *Transaction,
 	readerNumber int,
 	index memtable.Tuple,
 	defs []engine.TableDef,
 	tableDef *plan.TableDef,
 	skipBlocks map[uint64]uint8,
 	blks []ModifyBlockMeta,
-	ts timestamp.Timestamp,
-	fs fileservice.FileService,
 	entries []Entry,
 ) ([]engine.Reader, error) {
+
+	ts := txn.meta.SnapshotTS
+	fs := txn.engine.fs
 
 	inserts := make([]*batch.Batch, 0, len(entries))
 	deletes := make(map[types.Rowid]uint8)
@@ -401,9 +400,8 @@ func (p *Partition) NewReader(
 
 	var newIter *partitionStateRowsIter
 	var iter partitionIter
-	if len(index) == 0 && !p.isMeta {
+	if len(index) == 0 {
 		// skip primary key indexing read
-		// and meta partition read
 		//TODO migrate to new iter
 		newIter = p.state.Load().NewRowsIter(
 			types.TimestampToTS(ts),
@@ -432,9 +430,7 @@ func (p *Partition) NewReader(
 		colIdxMp:        colIdxMp,
 		extendId2s3File: make(map[string]int),
 		s3FileService:   fs,
-	}
-	if p.txn != nil {
-		partReader.procMPool = p.txn.proc.GetMPool()
+		procMPool:       txn.proc.GetMPool(),
 	}
 	readers[0] = partReader
 	if readerNumber == 1 {
@@ -492,4 +488,12 @@ func (p *Partition) NewReader(
 		}
 	}
 	return readers, nil
+}
+
+func (p Partitions) Snapshot() []*PartitionState {
+	ret := make([]*PartitionState, 0, len(p))
+	for _, partition := range p {
+		ret = append(ret, partition.state.Load())
+	}
+	return ret
 }
