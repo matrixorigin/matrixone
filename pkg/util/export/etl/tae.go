@@ -17,6 +17,9 @@ package etl
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"strconv"
-	"time"
 )
 
 const BatchSize = 8192
@@ -113,7 +114,8 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 				return moerr.NewInternalError(w.ctx, "the input value is not float64 type for column %d: %v, err: %s", colIdx, field, err)
 			}
 			elems[colIdx] = val
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar,
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			elems[colIdx] = field
 		case types.T_json:
 			elems[colIdx] = field
@@ -222,7 +224,8 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 			default:
 				panic(moerr.NewInternalError(ctx, "not Support float64 type %v", t))
 			}
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar,
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			switch t := field.(type) {
 			case string:
 				err := vector.SetStringAt(vec, rowIdx, field.(string), mp)
@@ -398,7 +401,8 @@ func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 	case types.T_float64:
 		cols := vector.MustTCols[float64](vec)
 		return len(cols), nil
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		cols := vector.MustTCols[types.Varlena](vec)
 		return len(cols), nil
 	case types.T_json:
@@ -424,7 +428,8 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 	case types.T_float64:
 		cols := vector.MustTCols[float64](vec)
 		return fmt.Sprintf("%f", cols[rowIdx]), nil
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		cols, area := vector.MustVarlenaRawData(vec)
 		return cols[rowIdx].GetString(area), nil
 	case types.T_json:

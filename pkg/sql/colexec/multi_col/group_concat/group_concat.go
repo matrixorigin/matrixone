@@ -125,6 +125,9 @@ func (gc *GroupConcat) Dup() agg.Agg[any] {
 // Type return the type of the agg's result.
 func (gc *GroupConcat) OutputType() types.Type {
 	typ := types.T_text.ToType()
+	if gc.ityp[0].Oid == types.T_binary || gc.ityp[0].Oid == types.T_varbinary || gc.ityp[0].Oid == types.T_blob {
+		typ = types.T_blob.ToType()
+	}
 	// set to largest length
 	typ.Width = types.MaxVarcharLen
 	return typ
@@ -426,7 +429,7 @@ func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 		return fmt.Sprintf("%v", vector.GetValueAt[float32](vec, int64(rowIndex))), nil
 	case types.T_float64:
 		return fmt.Sprintf("%v", vector.GetValueAt[float64](vec, int64(rowIndex))), nil
-	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
 		return vec.GetString(int64(rowIndex)), nil
 	case types.T_decimal64:
 		val := vector.GetValueAt[types.Decimal64](vec, int64(rowIndex))

@@ -207,7 +207,8 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewDecimal128Vector(n, typ, m, random, vs)
 		}
 		return NewDecimal128Vector(n, typ, m, random, nil)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		if vs, ok := Values.([]string); ok {
 			return NewStringVector(n, typ, m, random, vs)
 		}

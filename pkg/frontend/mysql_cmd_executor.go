@@ -755,7 +755,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 				row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			row[i] = vec.GetBytes(rowIndex)
 		} else {
@@ -2035,6 +2035,12 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 		setColFlag(c)
 		setColLength(c, col.Typ.Width)
 		setCharacter(c)
+
+		// For binary/varbinary with mysql_type_varchar.Change the charset.
+		if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
+			c.SetCharset(0x3f)
+		}
+
 		c.SetDecimal(uint8(col.Typ.Scale))
 		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
@@ -4382,6 +4388,10 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_char:
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varchar:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_binary:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_varbinary:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_date:
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)

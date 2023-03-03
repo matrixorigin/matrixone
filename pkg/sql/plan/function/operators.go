@@ -39,6 +39,20 @@ func initOperators() {
 
 // operators contains the operator function indexed by function id.
 var operators = map[int]Functions{
+	BINARY: {
+		Id:     BINARY,
+		Flag:   plan.Function_PRODUCE_NO_NULL,
+		Layout: CAST_EXPRESSION,
+		Overloads: []Function{
+			{
+				Args: []types.T{
+					types.T_varchar,
+				},
+				ReturnTyp: types.T_binary,
+				Fn:        operator.Binary,
+			},
+		},
+	},
 	ISTRUE: {
 		Id:     ISTRUE,
 		Flag:   plan.Function_PRODUCE_NO_NULL,
@@ -514,6 +528,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_int64,
 				Fn:        operator.OpBitXorFun[int64],
 			},
+			{
+				Index: 1,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_binary,
+				Fn:        operator.OpBinaryBitXor,
+			},
+			{
+				Index: 2,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_varbinary,
+				Fn:        operator.OpBinaryBitXor,
+			},
 		},
 	},
 
@@ -531,6 +563,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_int64,
 				Fn:        operator.OpBitOrFun[int64],
 			},
+			{
+				Index: 1,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_binary,
+				Fn:        operator.OpBinaryBitOr,
+			},
+			{
+				Index: 2,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_varbinary,
+				Fn:        operator.OpBinaryBitOr,
+			},
 		},
 	},
 
@@ -547,6 +597,24 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_int64,
 				Fn:        operator.OpBitAndFun[int64],
+			},
+			{
+				Index: 1,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_binary,
+				Fn:        operator.OpBinaryBitAnd,
+			},
+			{
+				Index: 2,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_varbinary,
+				Fn:        operator.OpBinaryBitAnd,
 			},
 		},
 	},
@@ -815,6 +883,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.EqString,
 			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_binary,
+				Fn:        operator.EqString,
+			},
+			{
+				Index: 24,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_varbinary,
+				Fn:        operator.EqString,
+			},
 		},
 	},
 
@@ -1021,6 +1107,24 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.INGeneral[types.Time],
+			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INString,
 			},
 		},
 	},
@@ -1229,6 +1333,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.NotINGeneral[types.Time],
 			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINString,
+			},
 		},
 	},
 
@@ -1435,6 +1557,24 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.GtGeneral[types.Time],
+			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GtString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GtString,
 			},
 		},
 	},
@@ -1643,6 +1783,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.GeGeneral[types.Time],
 			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GeString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GeString,
+			},
 		},
 	},
 
@@ -1849,6 +2007,24 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.LtGeneral[types.Time],
+			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LtString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LtString,
 			},
 		},
 	},
@@ -2057,6 +2233,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.LeGeneral[types.Time],
 			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LeString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LeString,
+			},
 		},
 	},
 
@@ -2263,6 +2457,24 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.NeGeneral[types.Time],
+			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NeString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NeString,
 			},
 		},
 	},

@@ -24,6 +24,12 @@ import (
 func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
+	for _, v := range vectors {
+		if v.GetType().Oid == types.T_blob {
+			resultType = types.T_blob.ToType()
+			break
+		}
+	}
 	inputValues := vector.MustStrCols(inputVector)
 
 	if inputVector.IsScalar() {

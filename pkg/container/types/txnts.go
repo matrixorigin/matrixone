@@ -369,6 +369,18 @@ func MockColTypes(colCnt int) (ct []Type) {
 		case 17:
 			typ = T_decimal128.ToType()
 			typ.Width = 128
+		case 18:
+			typ = Type{
+				Oid:   T_binary,
+				Size:  24,
+				Width: 100,
+			}
+		case 19:
+			typ = Type{
+				Oid:   T_varbinary,
+				Size:  24,
+				Width: 100,
+			}
 		}
 		ct = append(ct, typ)
 	}

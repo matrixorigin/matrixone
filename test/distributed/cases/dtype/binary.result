@@ -1,0 +1,29 @@
+drop table if exists t1;
+create table t1(a binary(2));
+insert into t1 values(null);
+select * from t1;
+a
+NULL
+insert into t1 values("时");
+select * from t1;
+a
+NULL
+æ¶
+insert into t1 values(rpad("1", 500, "1"));
+internal error: Can't cast column from VARCHAR type to BINARY type because of one or more values in that column. Src length 500 is larger than Dest length 2
+delete from t1 where a="时";
+insert into t1 values("6");
+insert into t1 values("66");
+insert into t1 values("6");
+select * from t1 where a != '6\0';
+a
+66
+insert into t1 values("65");
+select * from t1 where a > '6 ';
+a
+65
+66
+select * from t1 where a = '6';
+a
+select * from t1 where a = '6 ';
+a
