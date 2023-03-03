@@ -1107,6 +1107,20 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return false
 		}
 
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		switch columnT.Oid {
+		case types.T_binary, types.T_varbinary:
+			if constT.Width <= columnT.Width {
+				return true
+			} else {
+				return false
+			}
+		case types.T_blob:
+			return true
+		default:
+			return false
+		}
+
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
 		if !valOk {

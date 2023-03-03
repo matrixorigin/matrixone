@@ -334,7 +334,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
-			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) {
+			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
+				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 				if colType.GetWidth() > types.MaxStringSize {
 					return moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
 				}
