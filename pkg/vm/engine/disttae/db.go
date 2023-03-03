@@ -319,7 +319,7 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 	}
 	e.Unlock()
 
-	for i, dn := range dnList {
+	for _, dn := range dnList {
 		part := parts[e.dnMap[dn.ServiceID]]
 
 		select {
@@ -334,7 +334,7 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 		}
 
 		if err := updatePartitionOfPull(
-			i, primaryIdx, tbl, ctx, op, e, part, dn,
+			primaryIdx, tbl, ctx, op, e, part, parts, dn,
 			genSyncLogTailReq(part.ts, ts, databaseId, tableId),
 		); err != nil {
 			part.lock <- struct{}{}

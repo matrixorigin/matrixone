@@ -22,8 +22,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
-func consumeEntry(idx, primaryIdx int, tbl *txnTable,
-	ctx context.Context, engine *Engine, partition *Partition, state *PartitionState, e *api.Entry) error {
+func consumeEntry(
+	ctx context.Context,
+	primaryIdx int,
+	engine *Engine,
+	partition *Partition,
+	state *PartitionState,
+	e *api.Entry,
+) error {
 
 	state.HandleLogtailEntry(ctx, e, primaryIdx)
 
@@ -34,13 +40,13 @@ func consumeEntry(idx, primaryIdx int, tbl *txnTable,
 		switch e.TableId {
 		case catalog.MO_TABLES_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			tbl.db.txn.engine.catalog.InsertTable(bat)
+			engine.catalog.InsertTable(bat)
 		case catalog.MO_DATABASE_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			tbl.db.txn.engine.catalog.InsertDatabase(bat)
+			engine.catalog.InsertDatabase(bat)
 		case catalog.MO_COLUMNS_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			tbl.db.txn.engine.catalog.InsertColumns(bat)
+			engine.catalog.InsertColumns(bat)
 		}
 		if primaryIdx >= 0 {
 			return partition.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
@@ -53,10 +59,10 @@ func consumeEntry(idx, primaryIdx int, tbl *txnTable,
 	switch e.TableId {
 	case catalog.MO_TABLES_ID:
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		tbl.db.txn.engine.catalog.DeleteTable(bat)
+		engine.catalog.DeleteTable(bat)
 	case catalog.MO_DATABASE_ID:
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		tbl.db.txn.engine.catalog.DeleteDatabase(bat)
+		engine.catalog.DeleteDatabase(bat)
 	}
 	return partition.Delete(ctx, e.Bat)
 }
