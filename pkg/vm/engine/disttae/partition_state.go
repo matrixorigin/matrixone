@@ -131,6 +131,36 @@ func (p *PartitionState) Copy() *PartitionState {
 	}
 }
 
+func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
+	iter := p.Rows.Iter()
+	defer iter.Release()
+
+	blockID := blockIDFromRowID(rowID)
+	for ok := iter.Seek(RowEntry{
+		BlockID: blockID,
+		RowID:   rowID,
+	}); ok; ok = iter.Next() {
+		entry := iter.Item()
+		if entry.BlockID != blockID {
+			break
+		}
+		if entry.RowID != rowID {
+			break
+		}
+		if entry.Time.Greater(ts) {
+			// not visible
+			continue
+		}
+		if entry.Deleted {
+			// deleted
+			return false
+		}
+		return true
+	}
+
+	return false
+}
+
 func (p *PartitionState) HandleLogtailEntry(ctx context.Context, entry *api.Entry, primaryKeyIndex int) {
 	switch entry.EntryType {
 	case api.Entry_Insert:
