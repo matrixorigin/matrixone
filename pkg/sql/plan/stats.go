@@ -260,10 +260,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Selectivity: childStats.Selectivity,
 			}
 		} else if node.Stats == nil {
-			node.Stats = &plan.Stats{
-				Outcnt: 1000,
-				Cost:   1000000,
-			}
+			node.Stats = DefaultStats()
 		}
 	}
 }
