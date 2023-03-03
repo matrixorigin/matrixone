@@ -41,8 +41,7 @@ func updatePartitionOfPull(idx, primaryIdx int, tbl *txnTable,
 		return err
 	}
 
-	curState := partition.state.Load()
-	state := curState.Copy()
+	state, doneMutate := partition.MutateState()
 
 	for i := range logTails {
 		if err := consumeLogTailOfPull(idx, primaryIdx, tbl, ctx, engine, partition, state, logTails[i]); err != nil {
@@ -51,9 +50,7 @@ func updatePartitionOfPull(idx, primaryIdx int, tbl *txnTable,
 		}
 	}
 
-	if !partition.state.CompareAndSwap(curState, state) {
-		panic("concurrent mutation")
-	}
+	doneMutate()
 
 	return nil
 }

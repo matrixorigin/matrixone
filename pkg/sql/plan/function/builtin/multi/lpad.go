@@ -39,6 +39,12 @@ func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
 		return proc.AllocScalarNullVector(vecs[0].Typ), nil
 	}
+	resultType := types.T_varchar.ToType()
+	for _, v := range vecs {
+		if v.GetType().Oid == types.T_blob {
+			resultType = types.T_blob.ToType()
+		}
+	}
 	sourceStr := vector.MustStrCols(vecs[ParameterSourceString]) //Get the first arg
 
 	//characters length not bytes length
@@ -58,7 +64,7 @@ func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 
 	fillLpad(sourceStr, lengthsOfChars, padStr, rowCount, constVectors, resultValues, resultNUll, inputNulls)
 
-	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNUll, proc.Mp())
+	resultVec = vector.NewWithStrings(resultType, resultValues, resultNUll, proc.Mp())
 	return resultVec, nil
 }
 

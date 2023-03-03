@@ -1,9 +1,9 @@
 SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
 character_set_name    default_collate_name    description    maxlen
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
-table_catalog    table_schema    table_name    column_name    ordinal_position    column_default    is_nullable    data_type    character_maximum_length    character_octet_length    numeric_precision    numeric_scale    datetime_precision    character_set_name    collation_name    column_type    column_key    extra    PRIVILEGES    column_comment    generation_expression    srs_id
-def    mo_catalog    mo_tables    rel_id    1    null    NO    BIGINT UNSIGNED    90    90    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(0)    PRI        select,insert,update,references            0
-def    mo_catalog    mo_tables    relname    2    null    NO    VARCHAR    94    94    0    0    0    utf8    utf8_bin    VARCHAR(5000)            select,insert,update,references            0
+table_catalog    table_schema    table_name    column_name    ordinal_position    column_default    is_nullable    data_type    character_maximum_length    character_octet_length    numeric_precision    numeric_scale    datetime_precision    character_set_name    collation_name    column_type    column_key    extra    privileges    column_comment    generation_expression    srs_id
+def    mo_catalog    mo_tables    rel_id    1    null    NO    BIGINT UNSIGNED    null    null    null    null    null    null    null    BIGINT UNSIGNED(0)    PRI        select,insert,update,references            null
+def    mo_catalog    mo_tables    relname    2    null    NO    VARCHAR    5000    120000    null    null    null    utf8    utf8_bin    VARCHAR(5000)            select,insert,update,references            null
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 constraint_catalog    constraint_schema    constraint_name    table_catalog    table_schema    table_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_schema    referenced_table_name    referenced_column_name
 SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;
@@ -12,7 +12,7 @@ SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
 query_id    seq    state    duration    cpu_user    cpu_system    context_voluntary    context_involuntary    block_ops_in    block_ops_out    messages_sent    messages_received    page_faults_major    page_faults_minor    swaps    source_function    source_file    source_line
 SELECT * FROM `information_schema`.`schemata` where schema_name = 'information_schema';
 catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
-def    information_schema    utf8mb4    utf8mb4_0900_ai_ci        NO
+def    information_schema    utf8mb4    utf8mb4_0900_ai_ci    null    NO
 SELECT * FROM `information_schema`.`triggers` LIMIT 0,1000;
 trigger_catalog    trigger_schema    trigger_name    event_manipulation    event_object_catalog    event_object_schema    event_object_table    action_order    action_condition    action_statement    action_orientation    action_timing    action_reference_old_table    action_reference_new_table    action_reference_old_row    action_reference_new_row    created    sql_mode    definer    character_set_client    collation_connection    database_collation
 SELECT * FROM `information_schema`.`user_privileges` LIMIT 0,1000;
@@ -153,6 +153,7 @@ schemata
 character_sets
 triggers
 tables
+views
 engines
 routines
 parameters
