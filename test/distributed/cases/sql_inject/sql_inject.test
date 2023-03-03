@@ -1,0 +1,3 @@
+drop user `foo"; drop table foo; select "1`;
+create role 'foo"; drop table foo; select "1';
+alter database `foo"; drop table foo; select "1` set mysql_compatbility_mode = '{"lower_case_table_names": 1}';

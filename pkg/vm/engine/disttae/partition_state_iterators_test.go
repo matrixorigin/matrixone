@@ -78,7 +78,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
 			},
-		})
+		}, -1)
 	}
 
 	for i := 0; i < num; i++ {
@@ -112,7 +112,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
 			},
-		})
+		}, -1)
 	}
 
 	for i := 0; i < num; i++ {

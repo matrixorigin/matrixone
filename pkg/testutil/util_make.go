@@ -86,6 +86,14 @@ var (
 		return makeStringVector(values, nsp, varcharType)
 	}
 
+	MakeBinaryVector = func(values []string, nsp []uint64) *vector.Vector {
+		return makeStringVector(values, nsp, binaryType)
+	}
+
+	MakeVarbinaryVector = func(values []string, nsp []uint64) *vector.Vector {
+		return makeStringVector(values, nsp, varbinaryType)
+	}
+
 	MakeBlobVector = func(values []string, nsp []uint64) *vector.Vector {
 		return makeStringVector(values, nsp, blobType)
 	}
