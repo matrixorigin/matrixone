@@ -37,13 +37,6 @@ const (
 	RIGHT_IS_SCALAR = 2
 )
 
-func dec64PtrToC(p *types.Decimal64) *C.int64_t {
-	return (*C.int64_t)(unsafe.Pointer(p))
-}
-func dec128PtrToC(p *types.Decimal128) *C.int64_t {
-	return (*C.int64_t)(unsafe.Pointer(p))
-}
-
 func GetScalarFlag(xs, ys, rs *vector.Vector) int {
 	flag := 0
 	if xs.IsScalar() {
