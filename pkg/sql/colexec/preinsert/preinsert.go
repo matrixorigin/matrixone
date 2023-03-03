@@ -33,12 +33,15 @@ func Prepare(_ *proc, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
-	defer analyze(idx, proc)()
+func Call(idx int, proc *proc, x any, _, isLast bool) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 
 	arg := x.(*Argument)
 	bat := proc.InputBatch()
 	if bat == nil {
+		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	if len(bat.Zs) == 0 {
@@ -60,8 +63,9 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		return false, err
 	}
 
+	anal.Output(bat, isLast)
 	proc.SetInputBatch(bat)
-	return true, nil
+	return false, nil
 }
 
 func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {

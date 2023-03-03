@@ -149,10 +149,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 
 	if insertArg.IsRemote {
-		err = insertArg.Container.WriteS3CacheBatch(proc)
-		if err != nil {
-			return false, err
-		}
 		insertArg.Container.WriteEnd(proc)
 	}
 	atomic.AddUint64(&insertArg.Affected, affectedRows)
