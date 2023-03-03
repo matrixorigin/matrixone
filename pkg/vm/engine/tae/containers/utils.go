@@ -22,6 +22,7 @@ import (
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -268,8 +269,6 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	return bats
 }
 
-var mockMp = common.DefaultAllocator
-
 func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 	vec := movec.New(typ)
 	switch typ.Oid {
@@ -406,30 +405,6 @@ func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 		panic("not support")
 	}
 	return vec
-}
-
-func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, v any) {
-	_, isNull := v.(types.Null)
-	if isNull {
-		nulls.Add(vec.Nsp, uint64(row))
-	} else {
-		movec.SetTAt(vec, int(row), v.(T))
-		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
-			vec.Nsp.Np.Remove(uint64(row))
-		}
-	}
-}
-
-func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
-	_, isNull := v.(types.Null)
-	if isNull {
-		nulls.Add(vec.Nsp, uint64(row))
-	} else {
-		movec.SetBytesAt(vec, int(row), v.([]byte), mockMp)
-		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
-			vec.Nsp.Np.Remove(uint64(row))
-		}
-	}
 }
 
 func AppendFixedValue[T types.FixedSizeT](vec *movec.Vector, v any) {
