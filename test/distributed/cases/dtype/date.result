@@ -129,7 +129,7 @@ id	id >= 20200102
 2020-01-01	false	
 2022-01-02	true	
 SELECT id, 1.1 <= '2020-01-01' FROM t_date;
-invalid argument decimal128, bad value 2020-01-01
+invalid argument DECIMAL64, bad value 2020-01-01
 SELECT id, id = 202020101 FROM t_date;
 id	id = 202020101
 2020-01-01	false	
