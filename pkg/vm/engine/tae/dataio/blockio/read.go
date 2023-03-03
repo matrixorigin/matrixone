@@ -183,11 +183,13 @@ func readColumnBatchByMetaloc(
 		return nil, err
 	}
 
+	entry := ioResult[0].Vecs
 	for i, typ := range colTyps {
 		if typ.Oid == types.T_Rowid {
 			bat.AddVector(colNames[i], rowidData)
 		} else {
-			bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(ioResult[0].Vecs[i], colNulls[i]))
+			bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(entry[0], colNulls[i]))
+			entry = entry[1:]
 		}
 	}
 	lenVecs := len(ioResult[0].Vecs)
