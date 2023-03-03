@@ -71,6 +71,7 @@ func New(
 		txnHeap:    &transactionHeap{},
 		txns:       make(map[string]*Transaction),
 		dnMap:      dnMap,
+		metaTables: make(map[string]Partitions),
 		partitions: make(map[[2]uint64]Partitions),
 	}
 
