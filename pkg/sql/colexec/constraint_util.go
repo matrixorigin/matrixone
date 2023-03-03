@@ -427,6 +427,9 @@ func getInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int
 	}
 	if info.hasCompositePkey {
 		info.pkPos = pos
+		info.attrs = append(info.attrs, tableDef.CompositePkey.Name)
+		info.idxList = append(info.idxList, int32(pos))
+		info.updateNameToPos[tableDef.CompositePkey.Name] = pos
 	}
 
 	return info
@@ -505,7 +508,7 @@ func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx con
 		}
 	}
 
-	for j := range tmpBat.Vecs {
+	for j := range tableDef.Cols {
 		nsp := tmpBat.Vecs[j].Nsp
 		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility {
 			if nulls.Any(nsp) {
