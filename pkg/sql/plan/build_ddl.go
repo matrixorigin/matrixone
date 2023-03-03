@@ -1288,8 +1288,11 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 	uniqueTableName := make(map[string]bool)
 
 	//get session id
-	sessionID := ctx.GetProcess().Id
-	sessionIDbytes := []byte(sessionID)
+	var sessionIDbytes []byte
+	if ctx.GetProcess() != nil {
+		sessionID := ctx.GetProcess().Id
+		sessionIDbytes = []byte(sessionID)
+	}
 
 	//get rows from 0 to ^uint64(0)
 	rangeMax := make([]byte, 8)
