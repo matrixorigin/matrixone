@@ -483,7 +483,8 @@ func (r *Row) Reset() {
 			r.Columns[idx] = uint64(0)
 		case types.T_float64:
 			r.Columns[idx] = float64(0)
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar,
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			r.Columns[idx] = typ.Default
 		case types.T_json:
 			r.Columns[idx] = typ.Default
@@ -531,7 +532,8 @@ func (r *Row) ToStrings() []string {
 			col[idx] = fmt.Sprintf("%d", r.Columns[idx].(uint64))
 		case types.T_float64:
 			col[idx] = fmt.Sprintf("%.1f", r.Columns[idx].(float64))
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar,
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			col[idx] = r.Columns[idx].(string) // default val can see Row.Reset
 		case types.T_json:
 			val := r.Columns[idx].(string)
@@ -594,7 +596,8 @@ func (r *Row) Size() (size int64) {
 			size += 8
 		case types.T_float64:
 			size += 8
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar,
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			size += int64(len(r.Columns[idx].(string)))
 		case types.T_json:
 			size += int64(len(r.Columns[idx].(string)))

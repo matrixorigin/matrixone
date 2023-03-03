@@ -324,7 +324,8 @@ func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 		return vector.GetValueAt[float32](vec, 0), nil
 	case types.T_float64:
 		return vector.GetValueAt[float64](vec, 0), nil
-	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_binary,
+		types.T_varbinary, types.T_text, types.T_blob:
 		return vec.GetString(0), nil
 	case types.T_decimal64:
 		val := vector.GetValueAt[types.Decimal64](vec, 0)
@@ -518,7 +519,7 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 		case types.T_decimal128:
 			xs := vector.MustTCols[types.Decimal128](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal128])
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 			xs := vector.MustStrCols(bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[string])
 		case types.T_json:

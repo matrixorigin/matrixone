@@ -633,6 +633,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(requestCtx context.Context, stmt *
 				pos = newPos
 				vars[i] = math.Float64frombits(val)
 
+			// Binary/varbinary has mysql_type_varchar.
 			case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_DECIMAL,
 				defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_SET, defines.MYSQL_TYPE_GEOMETRY, defines.MYSQL_TYPE_BIT:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
@@ -1908,7 +1909,10 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 				default:
 				}
 			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
+
+		// Binary/varbinary will be sent out as varchar type.
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
+			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
 			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
@@ -2085,7 +2089,9 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 					data = mp.appendStringLenEncOfInt64(data, value)
 				}
 			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+		// Binary/varbinary will be sent out as varchar type.
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
+			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
 			} else {

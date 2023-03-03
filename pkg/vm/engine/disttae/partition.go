@@ -36,6 +36,7 @@ import (
 
 func NewPartition(
 	columnsIndexDefs []ColumnsIndexDef,
+	isMeta bool,
 ) *Partition {
 	lock := make(chan struct{}, 1)
 	lock <- struct{}{}
@@ -43,6 +44,7 @@ func NewPartition(
 		lock:             lock,
 		data:             memtable.NewTable[RowID, DataValue, *DataRow](),
 		columnsIndexDefs: columnsIndexDefs,
+		isMeta:           isMeta,
 	}
 	ret.state.Store(NewPartitionState())
 	return ret
@@ -89,6 +91,16 @@ func (d *DataRow) UniqueIndexes() []memtable.Tuple {
 
 func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("unimplemented")
+}
+
+func (p *Partition) MutateState() (*PartitionState, func()) {
+	curState := p.state.Load()
+	state := curState.Copy()
+	return state, func() {
+		if !p.state.CompareAndSwap(curState, state) {
+			panic("concurrent mutation")
+		}
+	}
 }
 
 func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) bool {
@@ -353,15 +365,6 @@ func (p *Partition) NewReader(
 	entries []Entry,
 ) ([]engine.Reader, error) {
 
-	t := memtable.Time{
-		Timestamp: ts,
-	}
-	tx := memtable.NewTransaction(
-		newMemTableTransactionID(),
-		t,
-		memtable.SnapshotIsolation,
-	)
-
 	inserts := make([]*batch.Batch, 0, len(entries))
 	deletes := make(map[types.Rowid]uint8)
 	for _, entry := range entries {
@@ -396,27 +399,42 @@ func (p *Partition) NewReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
+	var newIter *partitionStateRowsIter
 	var iter partitionIter
-	if len(index) > 0 {
-		iter = p.data.NewIndexIter(tx, index, index)
+	if len(index) == 0 && !p.isMeta {
+		// skip primary key indexing read
+		// and meta partition read
+		//TODO migrate to new iter
+		newIter = p.state.Load().NewRowsIter(
+			types.TimestampToTS(ts),
+			nil,
+			false,
+		)
 	} else {
+		t := memtable.Time{
+			Timestamp: ts,
+		}
+		tx := memtable.NewTransaction(
+			newMemTableTransactionID(),
+			t,
+			memtable.SnapshotIsolation,
+		)
 		iter = p.data.NewIter(tx)
 	}
 
 	partReader := &PartitionReader{
 		typsMap:         mp,
-		readTime:        t,
-		tx:              tx,
 		inserts:         inserts,
 		deletes:         deletes,
 		skipBlocks:      skipBlocks,
 		iter:            iter,
+		newIter:         newIter,
 		colIdxMp:        colIdxMp,
 		extendId2s3File: make(map[string]int),
 		s3FileService:   fs,
 	}
 	if p.txn != nil {
-		partReader.proc = p.txn.proc
+		partReader.procMPool = p.txn.proc.GetMPool()
 	}
 	readers[0] = partReader
 	if readerNumber == 1 {

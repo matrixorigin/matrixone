@@ -808,7 +808,8 @@ func findRowByPkValue(vec *vector.Vector, v any) int {
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx].Ge(val)
 		})
-	case types.T_char, types.T_text, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_varchar, types.T_json, types.T_blob:
 		// rows := vector.MustStrCols(vec)
 		// val := string(v.([]byte))
 		// return sort.SearchStrings(rows, val)

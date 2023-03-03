@@ -22,7 +22,7 @@ invalid argument function dayofyear, bad value [BIGINT]
 SELECT dayofyear(1340124) as dayofyear;
 invalid argument function dayofyear, bad value [BIGINT]
 SELECT dayofyear(0.45133) as dayofyear;
-invalid argument function dayofyear, bad value [DECIMAL128]
+invalid argument function dayofyear, bad value [DECIMAL64]
 SELECT dayofyear(10) as dayofyear;
 invalid argument function dayofyear, bad value [BIGINT]
 SELECT dayofyear(1=1) as dayofyear;

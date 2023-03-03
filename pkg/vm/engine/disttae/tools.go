@@ -1244,6 +1244,8 @@ func transferSval(v string, oid types.T) (bool, any) {
 		return true, []byte(v)
 	case types.T_text, types.T_blob:
 		return true, []byte(v)
+	case types.T_binary, types.T_varbinary:
+		return true, []byte(v)
 	case types.T_uuid:
 		var uv types.Uuid
 		copy(uv[:], []byte(v)[:])

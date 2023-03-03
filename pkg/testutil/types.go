@@ -34,6 +34,8 @@ var (
 	float64Type    = types.T_float64.ToType()
 	charType       = types.T_char.ToType()
 	varcharType    = types.T_varchar.ToType()
+	binaryType     = types.T_binary.ToType()
+	varbinaryType  = types.T_varbinary.ToType()
 	decimal64Type  = types.T_decimal64.ToType()
 	decimal128Type = types.T_decimal128.ToType()
 	dateType       = types.T_date.ToType()

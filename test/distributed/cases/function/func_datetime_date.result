@@ -1,9 +1,9 @@
 SELECT DATE(0.0124);
-invalid argument operator cast, bad value [DECIMAL128 DATE]
+invalid argument operator cast, bad value [DECIMAL64 DATE]
 SELECT DATE("2112123");
 Data truncation: data out of range: data type date, '2112123'
 SELECT DATE(1231241.4513);
-invalid argument operator cast, bad value [DECIMAL128 DATE]
+invalid argument operator cast, bad value [DECIMAL64 DATE]
 SELECT DATE("2017-06-15");
 DATE("2017-06-15")
 2017-06-15

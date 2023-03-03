@@ -28,11 +28,21 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 	if err != nil {
 		return nil, err
 	}
-	typ := &plan.Type{
-		Id:          int32(types.T_decimal128),
-		Width:       34,
-		Scale:       scale,
-		NotNullable: true,
+	var typ *plan.Type
+	if scale < types.DECIMAL64_WIDTH && len(v) < types.DECIMAL64_WIDTH {
+		typ = &plan.Type{
+			Id:          int32(types.T_decimal64),
+			Width:       types.DECIMAL64_WIDTH,
+			Scale:       scale,
+			NotNullable: true,
+		}
+	} else {
+		typ = &plan.Type{
+			Id:          int32(types.T_decimal128),
+			Width:       types.DECIMAL128_WIDTH,
+			Scale:       scale,
+			NotNullable: true,
+		}
 	}
 	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
 }
