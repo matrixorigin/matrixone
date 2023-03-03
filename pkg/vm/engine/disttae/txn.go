@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"strings"
 	"time"
