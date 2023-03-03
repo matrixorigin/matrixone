@@ -99,7 +99,7 @@ func FillCompositeKeyBatch(bat *batch.Batch, ckeyName string, keyParts []string,
 			}
 		}
 	}
-	vs := make([]*vector.Vector, 0)
+	vs := make([]*vector.Vector, 0, len(keyParts))
 	for _, elem := range keyParts {
 		v := cCBVectorMap[elem]
 		vs = append(vs, v)

@@ -33,7 +33,7 @@ func Prepare(_ *proc, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *proc, x any, _, isLast bool) (bool, error) {
+func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	defer analyze(idx, proc)()
 
 	arg := x.(*Argument)
@@ -44,6 +44,13 @@ func Call(idx int, proc *proc, x any, _, isLast bool) (bool, error) {
 	}
 	if len(bat.Zs) == 0 {
 		return false, nil
+	}
+	bat.Attrs = make([]string, 0, len(arg.TableDef.Cols))
+	for _, col := range arg.TableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		bat.Attrs = append(bat.Attrs, col.Name)
 	}
 
 	err := genAutoIncrCol(bat, proc, arg)
