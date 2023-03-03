@@ -4,14 +4,14 @@ insert into __mo_t1 values(1);
 select * from __mo_t1;
 a
 1
-use system;
+/* cloud_nonuser */ use system;/* cloud_user */show tables;
 select sleep(15);
 sleep(15)
 0
 select statement, sql_source_type from statement_info where user="dump" order by request_at desc limit 5;
 statement    sql_source_type
 select sleep(15)    external_sql
-use system    external_sql
+show tables    cloud_user_sql
+use system    cloud_nonuser_sql
 select * from __mo_t1    external_sql
 insert into __mo_t1 values (1)    external_sql
-create table __mo_t1 (a int)    cloud_nonuser_sql
