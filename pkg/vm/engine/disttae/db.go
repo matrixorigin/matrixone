@@ -34,7 +34,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	{
 		parts := make(Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(nil)
+			parts[i] = NewPartition(nil, false)
 		}
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = parts
 	}
@@ -42,7 +42,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	{
 		parts := make(Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(nil)
+			parts[i] = NewPartition(nil, false)
 		}
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = parts
 	}
@@ -50,7 +50,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	{
 		parts := make(Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(nil)
+			parts[i] = NewPartition(nil, false)
 		}
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = parts
 	}
@@ -288,6 +288,20 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	return nil
 }
 
+func (e *Engine) getMetaPartitions(name string) Partitions {
+	e.Lock()
+	defer e.Unlock()
+	parts, ok := e.metaTables[name]
+	if !ok { // create a new table
+		parts = make(Partitions, len(e.dnMap))
+		for i := range parts {
+			parts[i] = NewPartition(nil, true)
+		}
+		e.metaTables[name] = parts
+	}
+	return parts
+}
+
 func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
 	e.Lock()
 	defer e.Unlock()
@@ -295,7 +309,7 @@ func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
 	if !ok { // create a new table
 		parts = make(Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(nil)
+			parts[i] = NewPartition(nil, false)
 		}
 		e.partitions[[2]uint64{databaseId, tableId}] = parts
 	}
@@ -313,13 +327,13 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 	if !ok { // create a new table
 		parts = make(Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition(nil)
+			parts[i] = NewPartition(nil, false)
 		}
 		e.partitions[[2]uint64{databaseId, tableId}] = parts
 	}
 	e.Unlock()
 
-	for _, dn := range dnList {
+	for i, dn := range dnList {
 		part := parts[e.dnMap[dn.ServiceID]]
 
 		select {
@@ -334,7 +348,7 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 		}
 
 		if err := updatePartitionOfPull(
-			primaryIdx, tbl, ctx, op, e, part, parts, dn,
+			i, primaryIdx, tbl, ctx, op, e, part, dn,
 			genSyncLogTailReq(part.ts, ts, databaseId, tableId),
 		); err != nil {
 			part.lock <- struct{}{}

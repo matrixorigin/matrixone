@@ -63,7 +63,7 @@ func (tbl *txnTable) updateMeta(ctx context.Context, expr *plan.Expr) error {
 		}
 
 		columnLength := len(tbl.tableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
-		meta, err := tbl.db.txn.getTableMeta(ctx, tbl.db.databaseId, tbl.tableId, true, columnLength, false)
+		meta, err := tbl.db.txn.getTableMeta(ctx, tbl.db.databaseId, genMetaTableName(tbl.tableId), true, columnLength, false)
 		if err != nil {
 			return err
 		}
