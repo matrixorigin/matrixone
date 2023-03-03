@@ -1299,6 +1299,19 @@ func Copy(v, w *Vector, vi, wi int64, m *mpool.MPool) error {
 			}
 		}
 	}
+
+	if w.Nsp != nil {
+		if v.Nsp == nil {
+			v.Nsp = nulls.Build(v.Length())
+		}
+		if w.Nsp.Contains(uint64(wi)) {
+			v.Nsp.Set(uint64(vi))
+		} else if v.Nsp.Contains(uint64(vi)) {
+			v.Nsp.Np.Remove(uint64(vi))
+		}
+	} else if v.Nsp != nil {
+		v.Nsp.Np.Remove(uint64(vi))
+	}
 	return nil
 }
 
