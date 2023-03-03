@@ -34,9 +34,7 @@ func Prepare(_ *proc, _ any) error {
 }
 
 func Call(idx int, proc *proc, x any, _, isLast bool) (bool, error) {
-	anal := proc.GetAnalyze(idx)
-	anal.Start()
-	defer anal.Stop()
+	defer analyze(idx, proc)()
 
 	arg := x.(*Argument)
 	bat := proc.InputBatch()
@@ -63,7 +61,6 @@ func Call(idx int, proc *proc, x any, _, isLast bool) (bool, error) {
 		return false, err
 	}
 
-	anal.Output(bat, isLast)
 	proc.SetInputBatch(bat)
 	return false, nil
 }
@@ -94,8 +91,10 @@ func genClusterBy(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
 
 func analyze(idx int, proc *proc) func() {
 	t := time.Now()
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
 	return func() {
-		anal := proc.GetAnalyze(idx)
+		anal.Stop()
 		anal.AddInsertTime(t)
 	}
 }
