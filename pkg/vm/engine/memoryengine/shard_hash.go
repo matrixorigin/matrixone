@@ -463,7 +463,8 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		return
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar,
+		types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		if vec.IsScalarNull() {
 			value = Nullable{
 				IsNull: true,

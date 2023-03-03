@@ -1568,7 +1568,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			c.cnList[i].Addr = ""
 		}
 	}
-	ranges, err = rel.Ranges(ctx, plan2.HandleFiltersForZM(n.FilterList, c.proc))
+	expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
+	ranges, err = rel.Ranges(ctx, expr)
 	if err != nil {
 		return nil, err
 	}
@@ -1768,7 +1769,8 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 			vec.Append(vector.MustTCols[float32](tmp)[0], false, proc.Mp())
 		case types.T_float64:
 			vec.Append(vector.MustTCols[float64](tmp)[0], false, proc.Mp())
-		case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_json,
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			vec.Append(vector.MustBytesCols(tmp)[0], false, proc.Mp())
 		case types.T_date:
 			vec.Append(vector.MustTCols[types.Date](tmp)[0], false, proc.Mp())

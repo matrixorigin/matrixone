@@ -24,8 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
-func consumeEntry(idx, primaryIdx int, tbl *table,
-	ctx context.Context, db *DB, mvcc MVCC, e *api.Entry) error {
+func consumeEntry(idx, primaryIdx int, tbl *txnTable,
+	ctx context.Context, engine *Engine, partition *Partition, state *PartitionState, e *api.Entry) error {
+
+	state.HandleLogtailEntry(ctx, e, primaryIdx)
+
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {
 			vec, err := vector.ProtoVectorToVector(e.Bat.Vecs[catalog.BLOCKMETA_ID_IDX+MO_PRIMARY_OFF])
@@ -45,34 +48,34 @@ func consumeEntry(idx, primaryIdx int, tbl *table,
 					}
 				}
 			}
-			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)
+			return engine.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)
 		}
 		switch e.TableId {
 		case catalog.MO_TABLES_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			tbl.db.txn.catalog.InsertTable(bat)
+			tbl.db.txn.engine.catalog.InsertTable(bat)
 		case catalog.MO_DATABASE_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			tbl.db.txn.catalog.InsertDatabase(bat)
+			tbl.db.txn.engine.catalog.InsertDatabase(bat)
 		case catalog.MO_COLUMNS_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			tbl.db.txn.catalog.InsertColumns(bat)
+			tbl.db.txn.engine.catalog.InsertColumns(bat)
 		}
 		if primaryIdx >= 0 {
-			return mvcc.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
+			return partition.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
 		}
-		return mvcc.Insert(ctx, primaryIdx, e.Bat, false)
+		return partition.Insert(ctx, primaryIdx, e.Bat, false)
 	}
 	if isMetaTable(e.TableName) {
-		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
+		return engine.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
 	}
 	switch e.TableId {
 	case catalog.MO_TABLES_ID:
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		tbl.db.txn.catalog.DeleteTable(bat)
+		tbl.db.txn.engine.catalog.DeleteTable(bat)
 	case catalog.MO_DATABASE_ID:
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		tbl.db.txn.catalog.DeleteDatabase(bat)
+		tbl.db.txn.engine.catalog.DeleteDatabase(bat)
 	}
-	return mvcc.Delete(ctx, e.Bat)
+	return partition.Delete(ctx, e.Bat)
 }

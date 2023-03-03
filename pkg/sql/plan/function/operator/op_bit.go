@@ -16,6 +16,7 @@ package operator
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -51,6 +52,93 @@ func opBitLeftShift[T opBitT](v1, v2 T) T {
 		return 0
 	}
 	return v1 << v2
+}
+
+func OpBinaryBitAnd(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return opBinaryBitAll(args, proc, types.BitAnd)
+}
+
+func OpBinaryBitOr(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return opBinaryBitAll(args, proc, types.BitOr)
+}
+
+func OpBinaryBitXor(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return opBinaryBitAll(args, proc, types.BitXor)
+}
+
+func makeRsbytes(vc *vector.Vector, values, rsbytes [][]byte) {
+	for i := range rsbytes {
+		if nulls.Contains(vc.Nsp, uint64(i)) {
+			rsbytes[i] = make([]byte, 0)
+			continue
+		}
+		rsbytes[i] = make([]byte, len(values[i]))
+	}
+}
+
+func opBinaryBitAll(args []*vector.Vector, proc *process.Process, opt func([]byte, []byte, []byte)) (*vector.Vector, error) {
+	left, right := args[0], args[1]
+	leftValues, rightValues := vector.MustBytesCols(left), vector.MustBytesCols(right)
+
+	maxLen := vector.Length(left)
+	if vector.Length(right) > maxLen {
+		maxLen = vector.Length(right)
+	}
+
+	if left.IsScalarNull() || right.IsScalarNull() {
+		return proc.AllocScalarNullVector(types.T_varbinary.ToType()), nil
+	}
+	resultVector, err := proc.AllocVectorOfRows(types.T_varbinary.ToType(), 0, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	rsbytes := make([][]byte, maxLen)
+
+	// Get bytes length.
+	if vector.Length(right) > vector.Length(left) {
+		maxLen = vector.Length(right)
+		makeRsbytes(right, rightValues, rsbytes)
+	} else {
+		maxLen = vector.Length(left)
+		makeRsbytes(left, leftValues, rsbytes)
+	}
+
+	for i := range rsbytes {
+		rsbytes[i] = make([]byte, len(leftValues[0]))
+	}
+
+	if vector.Length(right) == 1 {
+		for i := 0; i < maxLen; i++ {
+			// Nulls determine.
+			if nulls.Contains(left.Nsp, uint64(i)) || nulls.Contains(right.Nsp, 0) {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			opt(rsbytes[i], leftValues[i], rightValues[0])
+		}
+		vector.AppendBytes(resultVector, rsbytes, proc.Mp())
+	} else if vector.Length(left) == 1 {
+		for i := 0; i < maxLen; i++ {
+			if nulls.Contains(left.Nsp, 0) || nulls.Contains(right.Nsp, uint64(i)) {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			opt(rsbytes[i], leftValues[0], rightValues[i])
+		}
+		vector.AppendBytes(resultVector, rsbytes, proc.Mp())
+	} else {
+		for i := 0; i < maxLen; i++ {
+			if nulls.Contains(left.Nsp, uint64(i)) || nulls.Contains(right.Nsp, uint64(i)) {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			opt(rsbytes[i], leftValues[i], rightValues[i])
+		}
+		vector.AppendBytes(resultVector, rsbytes, proc.Mp())
+	}
+
+	return resultVector, nil
 }
 
 func OpBitAndFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
