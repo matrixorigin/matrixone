@@ -32,7 +32,7 @@ show columns from `TABLES`;
 drop database if exists test;
 create database test;
 use test;
-drop table is exists t2;
+drop table if exists t2;
 create table t2(b int, a int);
 desc t2;
 drop table t2;
