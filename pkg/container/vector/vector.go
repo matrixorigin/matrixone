@@ -467,7 +467,7 @@ func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
 		return toConstVector[types.TS](v, row, length, mp)
 	case types.T_Rowid:
 		return toConstVector[types.Rowid](v, row, length, mp)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		if nulls.Contains(v.nsp, uint64(row)) {
 			return NewConstNull(v.typ, length, mp)
 		} else {
@@ -555,7 +555,7 @@ func (v *Vector) Shrink(sels []int64) {
 			shrinkFixed[float32](v, sels)
 		case types.T_float64:
 			shrinkFixed[float64](v, sels)
-		case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 			// XXX shrink varlena, but did not shrink area.  For our vector, this
 			// may well be the right thing.  If want to shrink area as well, we
 			// have to copy each varlena value and swizzle pointer.
@@ -614,7 +614,7 @@ func (v *Vector) Shuffle(sels []int64, m *mpool.MPool) error {
 		shuffleFixed[float32](v, sels, m)
 	case types.T_float64:
 		shuffleFixed[float64](v, sels, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		shuffleFixed[types.Varlena](v, sels, m)
 	case types.T_date:
 		shuffleFixed[types.Date](v, sels, m)
@@ -669,6 +669,120 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, m *mpool.MPool) error {
 	return nil
 }
 
+// GetUnionOneFunction: A more sensible function for copying elements,
+// which avoids having to do type conversions and type judgements every time you append.
+func GetUnionOneFunction(typ types.Type, m *mpool.MPool) func(v, w *Vector, sel int64) error {
+	switch typ.Oid {
+	case types.T_bool:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[bool](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_int8:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[int8](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_int16:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[int16](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_int32:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[int32](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_int64:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[int64](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_uint8:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[uint8](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_uint16:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[uint16](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_uint32:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[bool](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_uint64:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[uint64](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_float32:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[float32](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_float64:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[float64](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_date:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.Date](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_datetime:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.Datetime](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_time:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.Time](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_timestamp:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.Timestamp](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_decimal64:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.Decimal64](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_decimal128:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.Decimal128](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_uuid:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.Uuid](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_TS:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.TS](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_Rowid:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.Rowid](w)
+			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustFixedCol[types.Varlena](w)
+			return appendOneBytes(v, ws[sel].GetByteSlice(w.area), nulls.Contains(w.nsp, uint64(sel)), m)
+		}
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.GetUnionOneFunction", typ))
+	}
+}
+
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	if w.class == CONSTANT {
@@ -702,7 +816,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		return AppendFixed(v, MustFixedCol[float32](w)[sel], false, mp)
 	case types.T_float64:
 		return AppendFixed(v, MustFixedCol[float64](w)[sel], false, mp)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		ws := MustFixedCol[types.Varlena](w)
 		return AppendBytes(v, ws[sel].GetByteSlice(w.area), false, mp)
 	case types.T_date:
@@ -761,7 +875,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 		return AppendMultiFixed(v, MustFixedCol[float32](w)[sel], false, cnt, mp)
 	case types.T_float64:
 		return AppendMultiFixed(v, MustFixedCol[float64](w)[sel], false, cnt, mp)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		ws := MustFixedCol[types.Varlena](w)
 		return AppendMultiBytes(v, ws[sel].GetByteSlice(w.area), false, cnt, mp)
 	case types.T_date:
@@ -863,7 +977,7 @@ func (v *Vector) String() string {
 		return vecToString[types.TS](v)
 	case types.T_Rowid:
 		return vecToString[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		col := MustStrCol(v)
 		if len(col) == 1 {
 			if nulls.Contains(v.nsp, 0) {
@@ -922,51 +1036,51 @@ func AppendAny(vec *Vector, val any, isNull bool, m *mpool.MPool) error {
 	}
 
 	if isNull {
-		return appendOne(vec, 0, true, m)
+		return appendOneFixed(vec, 0, true, m)
 	}
 
 	switch vec.typ.Oid {
 	case types.T_bool:
-		return appendOne(vec, val.(bool), false, m)
+		return appendOneFixed(vec, val.(bool), false, m)
 	case types.T_int8:
-		return appendOne(vec, val.(int8), false, m)
+		return appendOneFixed(vec, val.(int8), false, m)
 	case types.T_int16:
-		return appendOne(vec, val.(int16), false, m)
+		return appendOneFixed(vec, val.(int16), false, m)
 	case types.T_int32:
-		return appendOne(vec, val.(int32), false, m)
+		return appendOneFixed(vec, val.(int32), false, m)
 	case types.T_int64:
-		return appendOne(vec, val.(int64), false, m)
+		return appendOneFixed(vec, val.(int64), false, m)
 	case types.T_uint8:
-		return appendOne(vec, val.(uint8), false, m)
+		return appendOneFixed(vec, val.(uint8), false, m)
 	case types.T_uint16:
-		return appendOne(vec, val.(uint16), false, m)
+		return appendOneFixed(vec, val.(uint16), false, m)
 	case types.T_uint32:
-		return appendOne(vec, val.(uint32), false, m)
+		return appendOneFixed(vec, val.(uint32), false, m)
 	case types.T_uint64:
-		return appendOne(vec, val.(uint64), false, m)
+		return appendOneFixed(vec, val.(uint64), false, m)
 	case types.T_float32:
-		return appendOne(vec, val.(float32), false, m)
+		return appendOneFixed(vec, val.(float32), false, m)
 	case types.T_float64:
-		return appendOne(vec, val.(float64), false, m)
+		return appendOneFixed(vec, val.(float64), false, m)
 	case types.T_date:
-		return appendOne(vec, val.(types.Date), false, m)
+		return appendOneFixed(vec, val.(types.Date), false, m)
 	case types.T_datetime:
-		return appendOne(vec, val.(types.Datetime), false, m)
+		return appendOneFixed(vec, val.(types.Datetime), false, m)
 	case types.T_time:
-		return appendOne(vec, val.(types.Time), false, m)
+		return appendOneFixed(vec, val.(types.Time), false, m)
 	case types.T_timestamp:
-		return appendOne(vec, val.(types.Timestamp), false, m)
+		return appendOneFixed(vec, val.(types.Timestamp), false, m)
 	case types.T_decimal64:
-		return appendOne(vec, val.(types.Decimal64), false, m)
+		return appendOneFixed(vec, val.(types.Decimal64), false, m)
 	case types.T_decimal128:
-		return appendOne(vec, val.(types.Decimal128), false, m)
+		return appendOneFixed(vec, val.(types.Decimal128), false, m)
 	case types.T_uuid:
-		return appendOne(vec, val.(types.Uuid), false, m)
+		return appendOneFixed(vec, val.(types.Uuid), false, m)
 	case types.T_TS:
-		return appendOne(vec, val.(types.TS), false, m)
+		return appendOneFixed(vec, val.(types.TS), false, m)
 	case types.T_Rowid:
-		return appendOne(vec, val.(types.Rowid), false, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+		return appendOneFixed(vec, val.(types.Rowid), false, m)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		return appendOneBytes(vec, val.([]byte), false, m)
 	}
 	return nil
@@ -976,7 +1090,7 @@ func AppendFixed[T any](vec *Vector, val T, isNull bool, m *mpool.MPool) error {
 	if m == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
-	return appendOne(vec, val, isNull, m)
+	return appendOneFixed(vec, val, isNull, m)
 }
 
 func AppendBytes(vec *Vector, val []byte, isNull bool, m *mpool.MPool) error {
@@ -1030,7 +1144,7 @@ func AppendStringList(v *Vector, ws []string, isNulls []bool, m *mpool.MPool) er
 	return appendStringList(v, ws, isNulls, m)
 }
 
-func appendOne[T any](vec *Vector, val T, isNull bool, m *mpool.MPool) error {
+func appendOneFixed[T any](vec *Vector, val T, isNull bool, m *mpool.MPool) error {
 	if err := extend(vec, 1, m); err != nil {
 		return err
 	}
@@ -1050,13 +1164,13 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, m *mpool.MPool) error 
 	var va types.Varlena
 
 	if isNull {
-		return appendOne(vec, va, true, m)
+		return appendOneFixed(vec, va, true, m)
 	} else {
 		va, vec.area, err = types.BuildVarlena(val, vec.area, m)
 		if err != nil {
 			return err
 		}
-		return appendOne(vec, va, false, m)
+		return appendOneFixed(vec, va, false, m)
 	}
 }
 
@@ -1253,7 +1367,7 @@ func GetInitConstVal(typ types.Type) any {
 	case types.T_Rowid:
 		var emptyRowid [types.RowidSize]byte
 		return emptyRowid[:]
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_json, types.T_text:
 		var emptyVarlena [types.VarlenaSize]byte
 		return emptyVarlena[:]
 	default:
@@ -1331,7 +1445,7 @@ func CopyConst(toVec, fromVec *Vector, length int, m *mpool.MPool) error {
 			AppendFixed(toVec, item, false, m)
 		}
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		item := MustBytesCol(fromVec)[0]
 		for i := 0; i < length; i++ {
 			AppendBytes(toVec, item, false, m)

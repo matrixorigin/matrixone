@@ -315,7 +315,7 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 		}, func(t1, t2 types.Uuid) bool {
 			return t1.Le(t2)
 		})
-	case types.T_varchar, types.T_char, types.T_text:
+	case types.T_varchar, types.T_binary, types.T_varbinary, types.T_char, types.T_text:
 		return checkStrIntersect(v, vec, func(t1, t2 string) bool {
 			return strings.Compare(t1, t2) >= 0
 		}, func(t1, t2 string) bool {
@@ -477,7 +477,7 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector
 				return t1.Le(t2)
 			}), nil
 		}
-	case types.T_varchar, types.T_char:
+	case types.T_varchar, types.T_binary, types.T_varbinary, types.T_char:
 		switch funName {
 		case ">":
 			return runStrCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {

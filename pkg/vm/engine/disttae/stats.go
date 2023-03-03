@@ -45,11 +45,11 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 	if sortOrder == 0 {
 		return outCnt * 0.95
 	} else if sortOrder == 1 {
-		return outCnt * 0.75
+		return outCnt * 0.7
 	} else if sortOrder == 2 {
-		return outCnt * 0.55
+		return outCnt * 0.25
 	} else {
-		return outCnt * 0.35
+		return outCnt * 0.1
 	}
 
 }
@@ -178,7 +178,7 @@ func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64)
 	if distinctValNum <= 1 {
 		return 1 // only one value
 	} else if distinctValNum == 2 {
-		return 2 / coefficient //if only 1 block, ndv is 20. if many block
+		return 2 / coefficient
 	} else if distinctValNum <= 10 && distinctValNum/blockNumTotal < 0.2 {
 		return distinctValNum / coefficient
 	}

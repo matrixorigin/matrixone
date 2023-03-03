@@ -16,6 +16,7 @@ package operator
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -51,6 +52,51 @@ func opBitLeftShift[T opBitT](v1, v2 T) T {
 		return 0
 	}
 	return v1 << v2
+}
+
+func OpBinaryBitAnd(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return opBinaryBitAll(args, proc, types.BitAnd)
+}
+
+func OpBinaryBitOr(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return opBinaryBitAll(args, proc, types.BitOr)
+}
+
+func OpBinaryBitXor(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return opBinaryBitAll(args, proc, types.BitXor)
+}
+
+func opBinaryBitAll(ivecs []*vector.Vector, proc *process.Process, opt func([]byte, []byte, []byte)) (*vector.Vector, error) {
+	left, right := ivecs[0], ivecs[1]
+
+	rtyp := left.GetType()
+	if left.IsConstNull() || right.IsConstNull() {
+		return vector.NewConstNull(*rtyp, left.Length(), proc.Mp()), nil
+	}
+
+	var rval [types.MaxBinaryLen]byte
+
+	if left.IsConst() && right.IsConst() {
+		val0 := left.GetBytesAt(0)
+		opt(rval[:], val0, right.GetBytesAt(0))
+		return vector.NewConstBytes(*rtyp, rval[:len(val0)], left.Length(), proc.Mp()), nil
+	}
+
+	rvec, err := proc.AllocVectorOfRows(*rtyp, 0, nil)
+	if err != nil {
+		return nil, err
+	}
+	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
+
+	for i := 0; i < left.Length(); i++ {
+		if !rvec.GetNulls().Contains(uint64(i)) {
+			val0 := left.GetBytesAt(i)
+			opt(rval[:], val0, right.GetBytesAt(i))
+			vector.SetBytesAt(rvec, i, rval[:len(val0)], proc.Mp())
+		}
+	}
+
+	return rvec, nil
 }
 
 func OpBitAndFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

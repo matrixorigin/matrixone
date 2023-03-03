@@ -458,7 +458,8 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, want, get)
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		r := vector.GenerateFunctionStrParameter(v)
 		s := vector.GenerateFunctionStrParameter(vExpected)
 		for i = 0; i < uint64(fc.fnLength); i++ {
@@ -629,7 +630,7 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_timestamp:
 		values := val.([]types.Timestamp)
 		vector.AppendFixedList(vec, values, nil, mp)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		values := val.([]string)
 		vector.AppendStringList(vec, values, nil, mp)
 	case types.T_uuid:

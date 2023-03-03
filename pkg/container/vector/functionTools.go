@@ -306,7 +306,7 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, len
 	}
 
 	switch typ.Oid {
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		// IF STRING type.
 		return newResultFunc[types.Varlena](v, mp)
 	case types.T_json:

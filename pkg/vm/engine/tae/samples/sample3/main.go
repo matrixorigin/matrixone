@@ -137,7 +137,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		m := mpool.MustNewZero()
+		m := mpool.MustNewZeroNoFixed()
 		readProc := func(reader engine.Reader) {
 			defer wg.Done()
 			for {

@@ -424,6 +424,10 @@ func MustNewNoFixed(tag string) *MPool {
 	return mp
 }
 
+func MustNewZeroNoFixed() *MPool {
+	return MustNewNoFixed("must_new_zero_no_fixed")
+}
+
 func (mp *MPool) Report() string {
 	ret := fmt.Sprintf("    mpool stats: %s", mp.Stats().Report("        "))
 	return ret

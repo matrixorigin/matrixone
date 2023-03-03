@@ -42,6 +42,35 @@ func TestSize(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestGetUnionOneFunction(t *testing.T) {
+	{ // test const vector
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_int8.ToType())
+		w := NewVec(types.T_int8.ToType())
+		err := AppendFixed(w, int8(0), false, mp)
+		require.NoError(t, err)
+		uf := GetUnionOneFunction(*w.GetType(), mp)
+		err = uf(v, w, 0)
+		require.NoError(t, err)
+		w.Free(mp)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // test const vector
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_varchar.ToType())
+		w := NewVec(types.T_varchar.ToType())
+		err := AppendBytes(w, []byte("x"), false, mp)
+		require.NoError(t, err)
+		uf := GetUnionOneFunction(*w.GetType(), mp)
+		err = uf(v, w, 0)
+		require.NoError(t, err)
+		w.Free(mp)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+}
+
 func TestConst(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewConstNull(types.New(types.T_int8, 0, 0, 0), 1, mp)

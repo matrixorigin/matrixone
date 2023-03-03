@@ -25,7 +25,10 @@ import (
 func Ltrim(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_varchar.ToType()
-	// totalCount - spaceCount is the total bytes need for the ltrim-ed string
+	if inputVector.GetType().Oid == types.T_blob {
+		rtyp = types.T_blob.ToType()
+	}
+
 	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConstNull() {
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil

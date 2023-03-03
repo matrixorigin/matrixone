@@ -25,8 +25,11 @@ import (
 func Rtrim(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.T_varchar.ToType()
-	ivals := vector.MustStrCol(inputVector)
+	if inputVector.GetType().Oid == types.T_blob {
+		rtyp = types.T_blob.ToType()
+	}
 
+	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConstNull() {
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	} else if inputVector.IsConst() {

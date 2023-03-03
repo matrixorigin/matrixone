@@ -324,7 +324,7 @@ func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 		return vector.MustFixedCol[float32](vec)[0], nil
 	case types.T_float64:
 		return vector.MustFixedCol[float64](vec)[0], nil
-	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
 		return vec.GetStringAt(0), nil
 	case types.T_decimal64:
 		val := vector.MustFixedCol[types.Decimal64](vec)[0]
@@ -474,7 +474,7 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 	rbat := batch.NewWithSize(bat.VectorCount())
 	rbat.InitZsOne(bat.Length())
 	for i := 0; i < rbat.VectorCount(); i++ {
-		rbat.Vecs[i] = vector.NewVec(types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}) //TODO: check size
+		rbat.Vecs[i] = vector.NewVec(types.T_varchar.ToType()) //TODO: check size
 		rs := make([]string, bat.Length())
 		switch bat.Vecs[i].GetType().Oid {
 		case types.T_bool:
@@ -518,7 +518,7 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 		case types.T_decimal128:
 			xs := vector.MustFixedCol[types.Decimal128](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal128])
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			xs := vector.MustStrCol(bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[string])
 		case types.T_json:

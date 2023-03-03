@@ -23,7 +23,7 @@ weekday
 SELECT weekday(1340124) as weekday;
 invalid argument function weekday, bad value [BIGINT]
 SELECT weekday(0.45133) as weekday;
-invalid argument function weekday, bad value [DECIMAL128]
+invalid argument function weekday, bad value [DECIMAL64]
 SELECT weekday(10) as weekday;
 invalid argument function weekday, bad value [BIGINT]
 SELECT weekday(1=1) as weekday;

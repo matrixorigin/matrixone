@@ -32,7 +32,7 @@ import (
 type internalVector interface {
 	Vector
 	forEachWindowWithBias(offset, length int, op ItOp,
-		sels *roaring.Bitmap, bias int) (err error)
+		sels *roaring.Bitmap, bias int, shallow bool) (err error)
 }
 
 type vector[T any] struct {
@@ -88,7 +88,7 @@ func (vec *vector[T]) Equals(o Vector) bool {
 		}
 		var v T
 		if _, ok := any(v).([]byte); ok {
-			if !bytes.Equal(vec.Get(i).([]byte), o.Get(i).([]byte)) {
+			if !bytes.Equal(vec.ShallowGet(i).([]byte), o.ShallowGet(i).([]byte)) {
 				return false
 			}
 		} else if _, ok := any(v).(types.Decimal64); ok {
@@ -171,6 +171,7 @@ func (vec *vector[T]) SlicePtr() unsafe.Pointer {
 }
 
 func (vec *vector[T]) Get(i int) (v any)               { return vec.impl.Get(i) }
+func (vec *vector[T]) ShallowGet(i int) (v any)        { return vec.impl.ShallowGet(i) }
 func (vec *vector[T]) Update(i int, v any)             { vec.impl.Update(i, v) }
 func (vec *vector[T]) Delete(i int)                    { vec.impl.Delete(i) }
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) { vec.impl.Compact(deletes) }
@@ -396,6 +397,14 @@ func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
 
 func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 	return vec.impl.ForeachWindow(offset, length, op, sels)
+}
+
+func (vec *vector[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) (err error) {
+	return vec.impl.ForeachWindowShallow(0, vec.Length(), op, sels)
+}
+
+func (vec *vector[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	return vec.impl.ForeachWindowShallow(offset, length, op, sels)
 }
 
 func (vec *vector[T]) GetView() (view VectorView) {

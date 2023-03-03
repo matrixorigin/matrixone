@@ -40,6 +40,7 @@ var (
 	constFType          = types.Type{Oid: types.T_float32}
 	constDType          = types.Type{Oid: types.T_float64}
 	constSType          = types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
+	constBinType        = types.Type{Oid: types.T_blob}
 	constDateType       = types.Type{Oid: types.T_date}
 	constTimeType       = types.Type{Oid: types.T_time}
 	constDatetimeType   = types.Type{Oid: types.T_datetime}
@@ -198,7 +199,16 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 			vec = vector.NewConstFixed(constTimestampTypes[pre], types.Timestamp(t.C.GetTimestampval()), length, proc.Mp())
 		case *plan.Const_Sval:
 			sval := t.C.GetSval()
-			vec = vector.NewConstBytes(constSType, []byte(sval), length, proc.Mp())
+			// Distingush binary with non-binary string.
+			if expr.Typ != nil {
+				if expr.Typ.Id == int32(types.T_binary) || expr.Typ.Id == int32(types.T_varbinary) || expr.Typ.Id == int32(types.T_blob) {
+					vec = vector.NewConstBytes(constBinType, []byte(sval), length, proc.Mp())
+				} else {
+					vec = vector.NewConstBytes(constSType, []byte(sval), length, proc.Mp())
+				}
+			} else {
+				vec = vector.NewConstBytes(constSType, []byte(sval), length, proc.Mp())
+			}
 		case *plan.Const_Defaultval:
 			defaultVal := t.C.GetDefaultval()
 			vec = vector.NewConstFixed(constBType, defaultVal, length, proc.Mp())

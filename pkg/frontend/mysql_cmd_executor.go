@@ -685,7 +685,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		} else {
 			row[i] = formatFloatNum(vector.GetFixedAt[float64](vec, rowIndex), *vec.GetType())
 		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) { //is null
 			row[i] = nil
 		} else {
@@ -1916,6 +1916,12 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 		setColFlag(c)
 		setColLength(c, col.Typ.Width)
 		setCharacter(c)
+
+		// For binary/varbinary with mysql_type_varchar.Change the charset.
+		if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
+			c.SetCharset(0x3f)
+		}
+
 		c.SetDecimal(uint8(col.Typ.Scale))
 		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
@@ -2061,7 +2067,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		tempEngine := memoryengine.New(
 			requestCtx,
 			memoryengine.NewDefaultShardPolicy(
-				mpool.MustNewZero(),
+				mpool.MustNewZeroNoFixed(),
 			),
 			memoryengine.RandomIDGenerator,
 			clusterservice.NewMOCluster(
@@ -4263,6 +4269,10 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_char:
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varchar:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_binary:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_varbinary:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_date:
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)

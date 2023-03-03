@@ -78,7 +78,7 @@ func (gc *GroupConcat) MarshalBinary() (data []byte, err error) {
 func (gc *GroupConcat) UnmarshalBinary(data []byte) error {
 	eg := &EncodeGroupConcat{}
 	types.Decode(data, eg)
-	m := mpool.MustNewZero()
+	m := mpool.MustNewZeroNoFixed()
 	da1, err := m.Alloc(len(eg.inserts_strData))
 	if err != nil {
 		return err
@@ -125,6 +125,9 @@ func (gc *GroupConcat) Dup() agg.Agg[any] {
 // Type return the type of the agg's result.
 func (gc *GroupConcat) OutputType() types.Type {
 	typ := types.T_text.ToType()
+	if gc.ityp[0].Oid == types.T_binary || gc.ityp[0].Oid == types.T_varbinary || gc.ityp[0].Oid == types.T_blob {
+		typ = types.T_blob.ToType()
+	}
 	// set to largest length
 	typ.Width = types.MaxVarcharLen
 	return typ
@@ -401,54 +404,54 @@ func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
-		flag := vector.MustFixedCol[bool](vec)[int64(rowIndex)]
+		flag := vector.GetFixedAt[bool](vec, rowIndex)
 		if flag {
 			return "1", nil
 		}
 		return "0", nil
 	case types.T_int8:
-		return fmt.Sprintf("%v", vector.MustFixedCol[int8](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[int8](vec, rowIndex)), nil
 	case types.T_int16:
-		return fmt.Sprintf("%v", vector.MustFixedCol[int16](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[int16](vec, rowIndex)), nil
 	case types.T_int32:
-		return fmt.Sprintf("%v", vector.MustFixedCol[int32](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[int32](vec, rowIndex)), nil
 	case types.T_int64:
-		return fmt.Sprintf("%v", vector.MustFixedCol[int64](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[int64](vec, rowIndex)), nil
 	case types.T_uint8:
-		return fmt.Sprintf("%v", vector.MustFixedCol[uint8](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint8](vec, rowIndex)), nil
 	case types.T_uint16:
-		return fmt.Sprintf("%v", vector.MustFixedCol[uint16](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint16](vec, rowIndex)), nil
 	case types.T_uint32:
-		return fmt.Sprintf("%v", vector.MustFixedCol[uint32](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint32](vec, rowIndex)), nil
 	case types.T_uint64:
-		return fmt.Sprintf("%v", vector.MustFixedCol[uint64](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint64](vec, rowIndex)), nil
 	case types.T_float32:
-		return fmt.Sprintf("%v", vector.MustFixedCol[float32](vec)[int64(rowIndex)]), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[float32](vec, rowIndex)), nil
 	case types.T_float64:
-		return fmt.Sprintf("%v", vector.MustFixedCol[float64](vec)[int64(rowIndex)]), nil
-	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
-		return vector.MustStrCol(vec)[int64(rowIndex)], nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[float64](vec, rowIndex)), nil
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+		return vec.GetStringAt(rowIndex), nil
 	case types.T_decimal64:
-		val := vector.MustFixedCol[types.Decimal64](vec)[int64(rowIndex)]
+		val := vector.GetFixedAt[types.Decimal64](vec, rowIndex)
 		return val.String(), nil
 	case types.T_decimal128:
-		val := vector.MustFixedCol[types.Decimal128](vec)[int64(rowIndex)]
+		val := vector.GetFixedAt[types.Decimal128](vec, rowIndex)
 		return val.String(), nil
 	case types.T_json:
 		val := vec.GetBytesAt(rowIndex)
 		byteJson := types.DecodeJson(val)
 		return byteJson.String(), nil
 	case types.T_uuid:
-		val := vector.MustFixedCol[types.Uuid](vec)[int64(rowIndex)]
+		val := vector.GetFixedAt[types.Uuid](vec, rowIndex)
 		return val.ToString(), nil
 	case types.T_date:
-		val := vector.MustFixedCol[types.Date](vec)[int64(rowIndex)]
+		val := vector.GetFixedAt[types.Date](vec, rowIndex)
 		return val.String(), nil
 	case types.T_time:
-		val := vector.MustFixedCol[types.Time](vec)[int64(rowIndex)]
+		val := vector.GetFixedAt[types.Time](vec, rowIndex)
 		return val.String(), nil
 	case types.T_datetime:
-		val := vector.MustFixedCol[types.Datetime](vec)[int64(rowIndex)]
+		val := vector.GetFixedAt[types.Datetime](vec, rowIndex)
 		return val.String(), nil
 	default:
 		return "", nil

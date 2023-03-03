@@ -283,7 +283,7 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 					ps[i].EncodeDecimal128(b)
 				}
 			}
-		case types.T_json, types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			vs := vector.MustStrCol(v)
 			for i := range vs {
 				if nulls.Contains(v.GetNulls(), uint64(i)) {
@@ -482,7 +482,7 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
-	case types.T_json, types.T_char, types.T_varchar, types.T_blob:
+	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob:
 		s := vector.MustBytesCol(v)
 		ns := make([][]byte, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
@@ -670,7 +670,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 		}
 		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
-	case types.T_json, types.T_char, types.T_varchar, types.T_blob:
+	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob:
 		s := vector.MustBytesCol(v)
 		ns := make([][]byte, 0)
 		for i, b := range s {
