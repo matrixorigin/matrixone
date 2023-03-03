@@ -131,7 +131,7 @@ func TestVariance(t *testing.T) {
 
 			input:    []int64{14314, 15314, 14394, 124314},
 			inputNsp: nil,
-			expected: []float64{2254.078699999999},
+			expected: []float64{2254.078700000000},
 
 			testMarshal: false,
 		},
