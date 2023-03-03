@@ -144,7 +144,7 @@ func Int64ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 
 func Decimal128ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_time, Size: 8, Precision: inputVector.Typ.Scale}
+	resultType := types.Type{Oid: types.T_time, Size: 8, Scale: inputVector.Typ.Scale}
 	inputValues := vector.MustTCols[types.Decimal128](inputVector)
 
 	if inputVector.IsScalar() {
@@ -153,7 +153,7 @@ func Decimal128ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]types.Time, 1)
-		result, err := time.Decimal128ToTime(inputValues, resultValues)
+		result, err := time.Decimal128ToTime(inputValues, resultValues, resultType.Scale)
 		vector.SetCol(resultVector, result)
 		return resultVector, err
 	} else {
@@ -162,7 +162,7 @@ func Decimal128ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.
 			return nil, err
 		}
 		resultValues := vector.MustTCols[types.Time](resultVector)
-		_, err = time.Decimal128ToTime(inputValues, resultValues)
+		_, err = time.Decimal128ToTime(inputValues, resultValues, resultType.Scale)
 		return resultVector, err
 	}
 }

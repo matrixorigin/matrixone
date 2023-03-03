@@ -226,14 +226,16 @@ func ParseInt64ToTime(input int64, precision int32) (Time, error) {
 	return ParseTime(s, precision)
 }
 
-func ParseDecimal64lToTime(input Decimal64, precision int32) (Time, error) {
-	s := input.ToStringWithScale(precision)
-	return ParseTime(s, precision)
+func ParseDecimal64lToTime(input Decimal64, scale1, scale2 int32) (Time, error) {
+	input, _ = input.Scale(scale2 - scale1)
+	s := input.Format(scale2)
+	return ParseTime(s, scale2)
 }
 
-func ParseDecimal128lToTime(input Decimal128, precision int32) (Time, error) {
-	s := input.ToStringWithScale(precision)
-	return ParseTime(s, precision)
+func ParseDecimal128lToTime(input Decimal128, scale1, scale2 int32) (Time, error) {
+	input, _ = input.Scale(scale2 - scale1)
+	s := input.Format(scale2)
+	return ParseTime(s, scale2)
 }
 
 func (t Time) ToInt64() int64 {
@@ -246,9 +248,9 @@ func (t Time) ToInt64() int64 {
 	return trans
 }
 
-func (t Time) ToDecimal64(ctx context.Context, width, precision int32) (Decimal64, error) {
-	tToStr := t.NumericString(precision)
-	ret, err := ParseStringToDecimal64(tToStr, width, precision, false)
+func (t Time) ToDecimal64(ctx context.Context, precision, scale int32) (Decimal64, error) {
+	tToStr := t.NumericString(scale)
+	ret, err := ParseDecimal64(tToStr, precision, scale)
 	if err != nil {
 		return ret, moerr.NewInternalError(ctx, "exsit time cant't cast to decimal64")
 	}
@@ -256,9 +258,9 @@ func (t Time) ToDecimal64(ctx context.Context, width, precision int32) (Decimal6
 	return ret, nil
 }
 
-func (t Time) ToDecimal128(ctx context.Context, width, precision int32) (Decimal128, error) {
-	tToStr := t.NumericString(precision)
-	ret, err := ParseStringToDecimal128(tToStr, width, precision, false)
+func (t Time) ToDecimal128(ctx context.Context, precision, scale int32) (Decimal128, error) {
+	tToStr := t.NumericString(scale)
+	ret, err := ParseDecimal128(tToStr, precision, scale)
 	if err != nil {
 		return ret, moerr.NewInternalError(ctx, "exsit time cant't cast to decimal128")
 	}

@@ -50,6 +50,7 @@ const (
 	// numeric/decimals
 	T_decimal64  T = 32
 	T_decimal128 T = 33
+	T_decimal256 T = 34
 
 	// pseudo numerics, not used
 
@@ -109,8 +110,17 @@ type Datetime int64
 type Timestamp int64
 type Time int64
 
-type Decimal64 [8]byte
-type Decimal128 [16]byte
+type Decimal64 uint64
+type Decimal128 struct {
+	B0_63   uint64
+	B64_127 uint64
+}
+type Decimal256 struct {
+	B0_63    uint64
+	B64_127  uint64
+	B128_191 uint64
+	B192_255 uint64
+}
 
 type Varlena [VarlenaSize]byte
 
@@ -151,7 +161,7 @@ type OrderedT interface {
 }
 
 type Decimal interface {
-	Decimal64 | Decimal128
+	Decimal64 | Decimal128 | Decimal256
 }
 
 // FixedSized types in our type system.   Esp, Varlena.
@@ -180,6 +190,7 @@ var Types map[string]T = map[string]T{
 
 	"decimal64":  T_decimal64,
 	"decimal128": T_decimal128,
+	"decimal256": T_decimal256,
 
 	"float":  T_float32,
 	"double": T_float64,
@@ -303,9 +314,9 @@ func (t Type) DescString() string {
 	case T_varbinary:
 		return fmt.Sprintf("VARBINARY(%d)", t.Width)
 	case T_decimal64:
-		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
+		return fmt.Sprintf("DECIMAL(%d,%d)", t.Precision, t.Scale)
 	case T_decimal128:
-		return fmt.Sprintf("DECIAML(%d,%d)", t.Width, t.Scale)
+		return fmt.Sprintf("DECIAML(%d,%d)", t.Precision, t.Scale)
 	}
 	return t.Oid.String()
 }
@@ -347,10 +358,15 @@ func (t T) ToType() Type {
 		typ.Size = 4
 	case T_float64:
 		typ.Size = 8
+		typ.Precision = 18
 	case T_decimal64:
 		typ.Size = 8
+		typ.Precision = 38
 	case T_decimal128:
 		typ.Size = 16
+		typ.Precision = 76
+	case T_decimal256:
+		typ.Size = 32
 	case T_uuid:
 		typ.Size = 16
 	case T_TS:
@@ -430,6 +446,8 @@ func (t T) String() string {
 		return "DECIMAL64"
 	case T_decimal128:
 		return "DECIMAL128"
+	case T_decimal256:
+		return "DECIMAL256"
 	case T_blob:
 		return "BLOB"
 	case T_text:
@@ -493,6 +511,8 @@ func (t T) OidString() string {
 		return "T_decimal64"
 	case T_decimal128:
 		return "T_decimal128"
+	case T_decimal256:
+		return "T_decimal256"
 	case T_blob:
 		return "T_blob"
 	case T_text:
@@ -536,6 +556,8 @@ func (t T) TypeLen() int {
 		return 8
 	case T_decimal128:
 		return 16
+	case T_decimal256:
+		return 32
 	case T_uuid:
 		return 16
 	case T_TS:
@@ -565,6 +587,8 @@ func (t T) FixedLength() int {
 		return 8
 	case T_decimal128:
 		return 16
+	case T_decimal256:
+		return 32
 	case T_uuid:
 		return 16
 	case T_TS:
@@ -626,7 +650,7 @@ func IsDateRelate(t T) bool {
 
 // IsDecimal: return true if the types.T is decimal64 or decimal128
 func IsDecimal(t T) bool {
-	if t == T_decimal64 || t == T_decimal128 {
+	if t == T_decimal64 || t == T_decimal128 || t == T_decimal256 {
 		return true
 	}
 	return false

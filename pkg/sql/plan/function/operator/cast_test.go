@@ -1895,7 +1895,7 @@ func TestCastSpecial4(t *testing.T) {
 		return vectors
 	}
 	resType := types.T_decimal128.ToType()
-	decimal128 := types.Decimal128FromInt32(123)
+	decimal128 := types.Decimal128{B0_63: 123, B64_127: 0}
 	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
@@ -2270,8 +2270,8 @@ func TestCastFloatAsDecimal(t *testing.T) {
 		return vecs
 	}
 	leftType := types.Type{Oid: types.T_float32, Size: 8}
-	rightType := types.Type{Oid: types.T_decimal64, Size: 8, Scale: 2, Width: 16}
-	d, _ := types.Decimal64FromFloat64(123.0, 5, 1)
+	rightType := types.Type{Oid: types.T_decimal64, Size: 8, Scale: 1, Precision: 18}
+	d := types.Decimal64(1230)
 
 	cases := []struct {
 		name      string
@@ -2313,7 +2313,7 @@ func TestCastDecimalAsString(t *testing.T) {
 	}{
 		{
 			name: "TEST01",
-			vecs: makeTempVectors([]types.Decimal64{types.Decimal64FromInt32(1230)}, leftType, rightType),
+			vecs: makeTempVectors([]types.Decimal64{types.Decimal64(1230)}, leftType, rightType),
 			proc: testutil.NewProc(),
 			wantBytes: [][]byte{
 				{0x31, 0x32, 0x33, 0x30},
@@ -2382,8 +2382,8 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 	//decimal(20, 5)
 	destType := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
 
-	d64_33333300 := types.Decimal64FromInt32(333333000)
-	d128_33333300 := types.Decimal128FromInt32(333333000)
+	d64_33333300 := types.Decimal64(333333000)
+	d128_33333300 := types.Decimal128{B0_63: 333333000, B64_127: 0}
 
 	procs := testutil.NewProc()
 	cases := []struct {
@@ -2455,17 +2455,17 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 	}{
 		{
 			name:       "TEST01", //cast(333.33300 as decimal(10, 4))
-			vecs:       makeTempVector(types.Decimal64FromInt32(33333300), leftType, true, destType),
+			vecs:       makeTempVector(types.Decimal64(33333300), leftType, true, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal64{types.Decimal64FromInt32(33333300)},
+			wantBytes:  []types.Decimal64{types.Decimal64(33333300)},
 			wantType:   destType,
 			wantScalar: true,
 		},
 		{
 			name:       "TEST02", //cast(333.33300 as decimal(10, 4))
-			vecs:       makeTempVector(types.Decimal64FromInt32(33333300), leftType, false, destType),
+			vecs:       makeTempVector(types.Decimal64(33333300), leftType, false, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal64{types.Decimal64FromInt32(33333300)},
+			wantBytes:  []types.Decimal64{types.Decimal64(33333300)},
 			wantType:   destType,
 			wantScalar: false,
 		},
@@ -2512,17 +2512,17 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 	}{
 		{
 			name:       "TEST01", //cast(333.33300 as decimal(20, 5))
-			vecs:       makeTempVector(types.Decimal128FromInt32(33333300), leftType, true, destType),
+			vecs:       makeTempVector(types.Decimal128{B0_63: 33333300, B64_127: 0}, leftType, true, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal128{types.Decimal128FromInt32(33333300)},
+			wantBytes:  []types.Decimal128{{B0_63: 33333300, B64_127: 0}},
 			wantType:   destType,
 			wantScalar: true,
 		},
 		{
 			name:       "Test02",
-			vecs:       makeTempVector(types.Decimal128FromInt32(33333300), leftType, false, destType),
+			vecs:       makeTempVector(types.Decimal128{B0_63: 33333300, B64_127: 0}, leftType, false, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal128{types.Decimal128FromInt32(33333300)},
+			wantBytes:  []types.Decimal128{{B0_63: 33333300, B64_127: 0}},
 			wantType:   destType,
 			wantScalar: false,
 		},
@@ -4837,8 +4837,8 @@ func TestCastInt64ToTime(t *testing.T) {
 func TestCastDecimal128ToTime(t *testing.T) {
 	makeTempVectors := func(dcmStr string, isScalar bool, destType types.T) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
-		dcm, _ := types.Decimal128_FromString(dcmStr)
-		dcmType := types.Type{Oid: types.T_decimal128, Size: 8, Width: 34, Scale: 6}
+		dcm, dcmscale, _ := types.Parse128(dcmStr)
+		dcmType := types.Type{Oid: types.T_decimal128, Size: 16, Precision: 38, Scale: dcmscale}
 
 		if isScalar {
 			vectors[0] = vector.NewConstFixed(dcmType, 1, dcm, testutil.TestUtilMp)
@@ -4872,7 +4872,7 @@ func TestCastDecimal128ToTime(t *testing.T) {
 			name:       "Test02",
 			vecs:       makeTempVectors("-223344.4445", true, types.T_time),
 			proc:       procs,
-			wantValues: []types.Time{types.TimeFromClock(true, 22, 33, 44, 444000)},
+			wantValues: []types.Time{types.TimeFromClock(true, 22, 33, 44, 445000)},
 			wantType:   types.T_time,
 			precision:  3,
 			wantScalar: true,

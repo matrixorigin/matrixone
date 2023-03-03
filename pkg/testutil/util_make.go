@@ -103,7 +103,7 @@ var (
 	MakeDecimal64Vector = func(values []int64, nsp []uint64, _ types.Type) *vector.Vector {
 		cols := make([]types.Decimal64, len(values))
 		for i, v := range values {
-			d, _ := types.InitDecimal64(v, 64, 0)
+			d := types.Decimal64(v)
 			cols[i] = d
 		}
 		return makeVector(cols, nsp, decimal64Type)
@@ -112,7 +112,10 @@ var (
 	MakeDecimal128Vector = func(values []int64, nsp []uint64, _ types.Type) *vector.Vector {
 		cols := make([]types.Decimal128, len(values))
 		for i, v := range values {
-			d, _ := types.InitDecimal128(v, 64, 0)
+			d := types.Decimal128{B0_63: uint64(v), B64_127: 0}
+			if v < 0 {
+				d.B64_127 = ^d.B64_127
+			}
 			cols[i] = d
 		}
 		return makeVector(cols, nsp, decimal128Type)
@@ -300,26 +303,27 @@ var (
 	}
 
 	MakeScalarDecimal64 = func(v int64, length int, _ types.Type) *vector.Vector {
-		d, _ := types.InitDecimal64(v, 64, 0)
+		d := types.Decimal64(v)
 		return vector.NewConstFixed(decimal64Type, length, d, TestUtilMp)
 	}
 
 	MakeScalarDecimal128 = func(v uint64, length int, _ types.Type) *vector.Vector {
-		d, _ := types.InitDecimal128UsingUint(v, 64, 0)
+		d := types.Decimal128{B0_63: uint64(v), B64_127: 0}
 		return vector.NewConstFixed(decimal64Type, length, d, TestUtilMp)
 	}
 
-	MakeScalarDecimal128ByFloat64 = func(v float64, length int, _ types.Type) *vector.Vector {
+	MakeScalarDecimal128ByFloat64 = func(v float64, length int, typ types.Type) *vector.Vector {
 		val := fmt.Sprintf("%f", v)
-		_, scale, err := types.ParseStringToDecimal128WithoutTable(val)
+		_, scale, err := types.Parse128(val)
+		typ.Scale = scale
 		if err != nil {
 			panic(err)
 		}
-		dec128Val, err := types.ParseStringToDecimal128(val, 34, scale, false)
+		dec128Val, err := types.ParseDecimal128(val, 38, scale)
 		if err != nil {
 			panic(err)
 		}
-		return vector.NewConstFixed(decimal128Type, length, dec128Val, TestUtilMp)
+		return vector.NewConstFixed(typ, length, dec128Val, TestUtilMp)
 	}
 )
 
@@ -348,17 +352,17 @@ func makeScalarString(value string, length int, typ types.Type) *vector.Vector {
 func MakeDecimal64ArrByInt64Arr(input []int64) []types.Decimal64 {
 	ret := make([]types.Decimal64, len(input))
 	for i, v := range input {
-		d, _ := types.InitDecimal64(v, 64, 0)
+		d := types.Decimal64(v)
 		ret[i] = d
 	}
 
 	return ret
 }
 
-func MakeDecimal64ArrByFloat64Arr(input []float64) []types.Decimal64 {
+func MakeDecimal64ArrByFloat64Arr(input []float64, scale int32) []types.Decimal64 {
 	ret := make([]types.Decimal64, len(input))
 	for i, v := range input {
-		d, _ := types.Decimal64FromFloat64(v, 64, 10)
+		d, _ := types.Decimal64FromFloat64(v, 18, scale)
 		ret[i] = d
 	}
 
@@ -368,17 +372,20 @@ func MakeDecimal64ArrByFloat64Arr(input []float64) []types.Decimal64 {
 func MakeDecimal128ArrByInt64Arr(input []int64) []types.Decimal128 {
 	ret := make([]types.Decimal128, len(input))
 	for i, v := range input {
-		d, _ := types.InitDecimal128(v, 64, 0)
+		d := types.Decimal128{B0_63: uint64(v), B64_127: 0}
+		if v < 0 {
+			d.B64_127 = ^d.B64_127
+		}
 		ret[i] = d
 	}
 
 	return ret
 }
 
-func MakeDecimal128ArrByFloat64Arr(input []float64) []types.Decimal128 {
+func MakeDecimal128ArrByFloat64Arr(input []float64, scale int32) []types.Decimal128 {
 	ret := make([]types.Decimal128, len(input))
 	for i, v := range input {
-		d, _ := types.Decimal128FromFloat64(v, 64, 10)
+		d, _ := types.Decimal128FromFloat64(v, 38, scale)
 		ret[i] = d
 	}
 

@@ -136,10 +136,10 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			return &plan.Type{Id: int32(types.T_timestamp), Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
-			if n.InternalType.DisplayWith > 15 {
-				return &plan.Type{Id: int32(types.T_decimal128), Size: 16, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
+			if n.InternalType.DisplayWith > 16 {
+				return &plan.Type{Id: int32(types.T_decimal128), Size: 16, Precision: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
 			}
-			return &plan.Type{Id: int32(types.T_decimal64), Size: 8, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
+			return &plan.Type{Id: int32(types.T_decimal64), Size: 8, Precision: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_BOOL:
 			return &plan.Type{Id: int32(types.T_bool), Size: 1}, nil
 		case defines.MYSQL_TYPE_BLOB:

@@ -820,26 +820,26 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		scale := vec.Typ.Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Decimal64)
-			row[i] = vs[rowIndex].ToStringWithScale(scale)
+			row[i] = vs[rowIndex].Format(scale)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Decimal64)
-				row[i] = vs[rowIndex].ToStringWithScale(scale)
+				row[i] = vs[rowIndex].Format(scale)
 			}
 		}
 	case types.T_decimal128:
 		scale := vec.Typ.Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Decimal128)
-			row[i] = vs[rowIndex].ToStringWithScale(scale)
+			row[i] = vs[rowIndex].Format(scale)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Decimal128)
-				row[i] = vs[rowIndex].ToStringWithScale(scale)
+				row[i] = vs[rowIndex].Format(scale)
 			}
 		}
 	case types.T_uuid:

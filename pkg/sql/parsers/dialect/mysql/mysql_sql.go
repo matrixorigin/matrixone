@@ -17234,7 +17234,7 @@ yydefault:
 //line mysql_sql.y:8051
 		{
 			yyLOCAL = tree.LengthScaleOpt{
-				DisplayWith: 34, // this is the default precision for decimal
+				DisplayWith: 38, // this is the default precision for decimal
 				Precision:   0,
 			}
 		}

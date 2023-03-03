@@ -19,15 +19,15 @@ import (
 )
 
 var (
-	UnixTimestampToInt        func([]types.Timestamp, []int64) []int64
-	UnixTimestampToFloat      func([]types.Timestamp, []float64) []float64
-	UnixTimestampToDecimal128 func([]types.Timestamp, []types.Decimal128) ([]types.Decimal128, error)
+	UnixTimestampToInt       func([]types.Timestamp, []int64) []int64
+	UnixTimestampToFloat     func([]types.Timestamp, []float64) []float64
+	UnixTimestampToDecimal64 func([]types.Timestamp, []types.Decimal64) ([]types.Decimal64, error)
 )
 
 func init() {
 	UnixTimestampToInt = unixTimestampToInt
 	UnixTimestampToFloat = unixTimestampToFloat
-	UnixTimestampToDecimal128 = unixTimestampToDecimal128
+	UnixTimestampToDecimal64 = unixTimestampToDecimal64
 }
 
 func unixTimestampToInt(xs []types.Timestamp, rs []int64) []int64 {
@@ -44,7 +44,7 @@ func unixTimestampToFloat(xs []types.Timestamp, rs []float64) []float64 {
 	return rs
 }
 
-func unixTimestampToDecimal128(xs []types.Timestamp, rs []types.Decimal128) ([]types.Decimal128, error) {
+func unixTimestampToDecimal64(xs []types.Timestamp, rs []types.Decimal64) ([]types.Decimal64, error) {
 	for i := range xs {
 		res, err := xs[i].UnixToDecimal128()
 		if err != nil {

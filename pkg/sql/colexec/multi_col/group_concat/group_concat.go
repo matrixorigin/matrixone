@@ -433,10 +433,10 @@ func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 		return vec.GetString(int64(rowIndex)), nil
 	case types.T_decimal64:
 		val := vector.GetValueAt[types.Decimal64](vec, int64(rowIndex))
-		return val.String(), nil
+		return val.Format(vec.Typ.Scale), nil
 	case types.T_decimal128:
 		val := vector.GetValueAt[types.Decimal128](vec, int64(rowIndex))
-		return val.String(), nil
+		return val.Format(vec.Typ.Scale), nil
 	case types.T_json:
 		val := vec.GetBytes(int64(rowIndex))
 		byteJson := types.DecodeJson(val)

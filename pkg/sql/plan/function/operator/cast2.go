@@ -1250,10 +1250,7 @@ func decimal64ToOthers(ctx context.Context,
 		return decimal64ToUnsigned(ctx, source, rs, 64, length)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		v := source.GetSourceVector()
-		v.Typ = toType
-		rs.SetFromParameter(source)
-		return nil
+		return decimal64ToDecimal64(source, rs, length)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return decimal64ToDecimal128(source, rs, length)
@@ -1289,10 +1286,7 @@ func decimal128ToOthers(ctx context.Context,
 		return decimal128ToDecimal64(ctx, source, rs, length)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		v := source.GetSourceVector()
-		v.Typ = toType
-		rs.SetFromParameter(source)
-		return nil
+		return decimal128ToDecimal128(ctx, source, rs, length)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return decimal128ToFloat(ctx, source, rs, length, 32)
@@ -1571,8 +1565,7 @@ func signedToDecimal64[T1 constraints.Signed](
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
-	toType := to.GetType()
-
+	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1580,11 +1573,8 @@ func signedToDecimal64[T1 constraints.Signed](
 				return err
 			}
 		} else {
-			result, err := types.Decimal64_FromInt64(int64(v), toType.Width, toType.Scale)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
+			result, _ := types.Decimal64(uint64(v)).Scale(totype.Scale)
+			if err := to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -1598,8 +1588,7 @@ func signedToDecimal128[T1 constraints.Signed](
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
-	toType := to.GetType()
-
+	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1607,11 +1596,12 @@ func signedToDecimal128[T1 constraints.Signed](
 				return err
 			}
 		} else {
-			result, err := types.Decimal128_FromInt64(int64(v), toType.Width, toType.Scale)
-			if err != nil {
-				return err
+			result := types.Decimal128{B0_63: uint64(v), B64_127: 0}
+			if v < 0 {
+				result.B64_127 = ^result.B64_127
 			}
-			if err = to.Append(result, false); err != nil {
+			result, _ = result.Scale(totype.Scale)
+			if err := to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -1625,8 +1615,7 @@ func unsignedToDecimal64[T1 constraints.Unsigned](
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
-	toType := to.GetType()
-
+	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1634,11 +1623,9 @@ func unsignedToDecimal64[T1 constraints.Unsigned](
 				return err
 			}
 		} else {
-			result, err := types.Decimal64_FromUint64(uint64(v), toType.Width, toType.Scale)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
+			result := types.Decimal64(uint64(v))
+			result, _ = result.Scale(totype.Scale)
+			if err := to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -1652,8 +1639,7 @@ func unsignedToDecimal128[T1 constraints.Unsigned](
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
-	toType := to.GetType()
-
+	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -1661,11 +1647,9 @@ func unsignedToDecimal128[T1 constraints.Unsigned](
 				return err
 			}
 		} else {
-			result, err := types.Decimal128_FromUint64(uint64(v), toType.Width, toType.Scale)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
+			result := types.Decimal128{B0_63: uint64(v), B64_127: 0}
+			result, _ = result.Scale(totype.Scale)
+			if err := to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -1688,7 +1672,7 @@ func floatToDecimal64[T constraints.Float](
 				return err
 			}
 		} else {
-			result64, err := types.Decimal64_FromFloat64(float64(v), toType.Width, toType.Scale)
+			result64, err := types.Decimal64FromFloat64(float64(v), toType.Precision, toType.Scale)
 			if err != nil {
 				return err
 			}
@@ -1715,7 +1699,7 @@ func floatToDecimal128[T constraints.Float](
 				return err
 			}
 		} else {
-			result128, err := types.Decimal128_FromFloat64(float64(v), toType.Width, toType.Scale)
+			result128, err := types.Decimal128FromFloat64(float64(v), toType.Precision, toType.Scale)
 			if err != nil {
 				return err
 			}
@@ -2380,7 +2364,7 @@ func timeToDecimal128(
 				return err
 			}
 		} else {
-			result, err := v.ToDecimal128(ctx, totype.Width, fromType.Precision)
+			result, err := v.ToDecimal128(ctx, totype.Precision, fromType.Precision)
 			if err != nil {
 				return err
 			}
@@ -2406,7 +2390,7 @@ func decimal64ToInt64(
 				return err
 			}
 		} else {
-			xStr := v.ToStringWithScale(fromTyp.Scale)
+			xStr := v.Format(fromTyp.Scale)
 			floatRepresentation, err := strconv.ParseFloat(xStr, 64)
 			if err != nil {
 				return err
@@ -2429,6 +2413,7 @@ func decimal128ToSigned[T constraints.Signed](
 	to *vector.FunctionResult[T], bitSize int, length int) error {
 	var i uint64
 	l := uint64(length)
+	fromTyp := from.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2436,7 +2421,8 @@ func decimal128ToSigned[T constraints.Signed](
 				return err
 			}
 		} else {
-			xStr := v.ToStringWithScale(0)
+			x, _ := v.Scale(-fromTyp.Scale)
+			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, bitSize)
 			if err != nil {
 				return moerr.NewOutOfRange(ctx,
@@ -2467,7 +2453,7 @@ func decimal64ToUnsigned[T constraints.Unsigned](
 				return err
 			}
 		} else {
-			xStr := v.ToStringWithScale(fromType.Scale)
+			xStr := v.Format(fromType.Scale)
 			xStr = strings.Split(xStr, ".")[0]
 			result, err := strconv.ParseUint(xStr, 10, bitSize)
 			if err != nil {
@@ -2499,7 +2485,7 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 				return err
 			}
 		} else {
-			xStr := v.ToStringWithScale(fromType.Scale)
+			xStr := v.Format(fromType.Scale)
 			xStr = strings.Split(xStr, ".")[0]
 			result, err := strconv.ParseUint(xStr, 10, bitSize)
 			if err != nil {
@@ -2529,7 +2515,7 @@ func decimal64ToTime(
 				return err
 			}
 		} else {
-			result, err := types.ParseDecimal64lToTime(v, totype.Precision)
+			result, err := types.ParseDecimal64lToTime(v, totype.Scale, totype.Precision)
 			if err != nil {
 				return err
 			}
@@ -2554,7 +2540,7 @@ func decimal128ToTime(
 				return err
 			}
 		} else {
-			result, err := types.ParseDecimal128lToTime(v, totype.Precision)
+			result, err := types.ParseDecimal128lToTime(v, totype.Scale, totype.Precision)
 			if err != nil {
 				return err
 			}
@@ -2578,7 +2564,7 @@ func decimal64ToTimestamp(
 				return err
 			}
 		} else {
-			ts := types.Timestamp(v.ToInt64())
+			ts := types.Timestamp(int64(v))
 			if err := to.Append(ts, false); err != nil {
 				return err
 			}
@@ -2599,7 +2585,7 @@ func decimal128ToTimestamp(
 				return err
 			}
 		} else {
-			ts := types.Timestamp(v.ToInt64())
+			ts := types.Timestamp(int64(v.B0_63))
 			if err := to.Append(ts, false); err != nil {
 				return err
 			}
@@ -2623,7 +2609,7 @@ func decimal64ToFloat[T constraints.Float](
 				return err
 			}
 		} else {
-			xStr := v.ToStringWithScale(fromType.Scale)
+			xStr := v.Format(fromType.Scale)
 			result, err := strconv.ParseFloat(xStr, bitSize)
 			if err != nil {
 				return moerr.NewOutOfRange(ctx, "float32", "value '%v'", xStr)
@@ -2651,12 +2637,40 @@ func decimal128ToFloat[T constraints.Float](
 				return err
 			}
 		} else {
-			xStr := v.ToStringWithScale(fromType.Scale)
+			xStr := v.Format(fromType.Scale)
 			result, err := strconv.ParseFloat(xStr, bitSize)
 			if err != nil {
 				return moerr.NewOutOfRange(ctx, "float32", "value '%v'", xStr)
 			}
 			if err = to.Append(T(result), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal64ToDecimal64(
+	from vector.FunctionParameterWrapper[types.Decimal64],
+	to *vector.FunctionResult[types.Decimal64], length int) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal64
+	fromtype := from.GetType()
+	totype := to.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			dec := v.Format(fromtype.Scale)
+			result, err := types.ParseDecimal64(dec, totype.Precision, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -2670,11 +2684,8 @@ func decimal64ToDecimal128(
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
+	fromtype := from.GetType()
 	totype := to.GetType()
-	{
-		v := to.GetResultVector()
-		v.Typ.Scale = from.GetType().Scale
-	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2682,8 +2693,12 @@ func decimal64ToDecimal128(
 				return err
 			}
 		} else {
-			result, err := types.Decimal128_FromDecimal64WithScale(
-				v, totype.Width, totype.Scale)
+			fromdec := types.Decimal128{B0_63: uint64(v), B64_127: 0}
+			if v.Sign() {
+				fromdec.B64_127 = ^fromdec.B64_127
+			}
+			dec := fromdec.Format(fromtype.Scale)
+			result, err := types.ParseDecimal128(dec, totype.Precision, totype.Scale)
 			if err != nil {
 				return err
 			}
@@ -2704,6 +2719,7 @@ func decimal128ToDecimal64(
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
+	fromtype := from.GetType()
 	totype := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2712,10 +2728,40 @@ func decimal128ToDecimal64(
 				return err
 			}
 		} else {
-			result, err := v.ToDecimal64(totype.Width, totype.Scale)
+			dec := v.Format(fromtype.Scale)
+			result, err := types.ParseDecimal64(dec, totype.Precision, totype.Scale)
 			if err != nil {
-				// XXX so ...
-				return moerr.NewOutOfRange(ctx, "dec64", "value '%v'", v)
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal128ToDecimal128(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal128],
+	to *vector.FunctionResult[types.Decimal128], length int) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal128
+	fromtype := from.GetType()
+	totype := to.GetType()
+	fmt.Println(fromtype.Scale, totype.Scale)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			dec := v.Format(fromtype.Scale)
+			result, err := types.ParseDecimal128(dec, totype.Precision, totype.Scale)
+			if err != nil {
+				return err
 			}
 			if err = to.Append(result, false); err != nil {
 				return err
@@ -2738,13 +2784,7 @@ func decimal64ToStr(
 				return err
 			}
 		} else {
-			result := []byte(v.ToStringWithScale(fromType.Scale))
-			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
-				add0 := int(toType.Width) - len(result)
-				for ; add0 != 0; add0-- {
-					result = append(result, 0)
-				}
-			}
+			result := []byte(v.Format(fromType.Scale))
 			if err := to.AppendStr(result, false); err != nil {
 				return err
 			}
@@ -2766,13 +2806,7 @@ func decimal128ToStr(
 				return err
 			}
 		} else {
-			result := []byte(v.ToStringWithScale(fromType.Scale))
-			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
-				add0 := int(toType.Width) - len(result)
-				for ; add0 != 0; add0-- {
-					result = append(result, 0)
-				}
-			}
+			result := []byte(v.Format(fromType.Scale))
 			if err := to.AppendStr(result, false); err != nil {
 				return err
 			}
@@ -2937,13 +2971,22 @@ func strToDecimal64(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			result, err := types.ParseStringToDecimal64(
-				s, totype.Width, totype.Scale, isb)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
-				return err
+			if !isb {
+				result, err := types.ParseDecimal64(s, totype.Precision, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
+			} else {
+				result, err := types.ParseDecimal64FromByte(s, totype.Precision, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -2967,13 +3010,22 @@ func strToDecimal128(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			result, err := types.ParseStringToDecimal128(
-				s, totype.Width, totype.Scale, isb)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
-				return err
+			if !isb {
+				result, err := types.ParseDecimal128(s, totype.Precision, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
+			} else {
+				result, err := types.ParseDecimal128FromByte(s, totype.Precision, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
 			}
 		}
 	}

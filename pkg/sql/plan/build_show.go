@@ -127,7 +127,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		typ := types.Type{Oid: types.T(col.Typ.Id)}
 		typeStr := typ.String()
 		if types.IsDecimal(typ.Oid) { //after decimal fix,remove this
-			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
+			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Precision, col.Typ.Scale)
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
 			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {

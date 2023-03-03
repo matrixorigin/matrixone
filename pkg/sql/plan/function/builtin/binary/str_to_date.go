@@ -57,7 +57,7 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		} else {
 			if types.ValidDate(int32(time.year), time.month, time.day) {
 				resCol := types.DateFromCalendar(int32(time.year), time.month, time.day)
-				return vector.NewConstFixed[types.Date](resultType, 1, resCol, proc.Mp()), nil
+				return vector.NewConstFixed(resultType, 1, resCol, proc.Mp()), nil
 			} else {
 				// should be null
 				return proc.AllocScalarNullVector(resultType), nil
@@ -70,7 +70,7 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.NewWithFixed[types.Date](resultType, resCol, rNsp, proc.Mp())
+		resultVector := vector.NewWithFixed(resultType, resCol, rNsp, proc.Mp())
 		nulls.Set(resultVector.Nsp, dateVector.Nsp)
 		return resultVector, nil
 	}
@@ -102,7 +102,7 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		} else {
 			if types.ValidDatetime(int32(time.year), time.month, time.day) && types.ValidTimeInDay(time.hour, time.minute, time.second) {
 				resCol := types.DatetimeFromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
-				return vector.NewConstFixed[types.Datetime](resultType, 1, resCol, proc.Mp()), nil
+				return vector.NewConstFixed(resultType, 1, resCol, proc.Mp()), nil
 			} else {
 				// should be null
 				return proc.AllocScalarNullVector(resultType), nil
@@ -115,7 +115,7 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.NewWithFixed[types.Datetime](resultType, resCol, nulls.NewWithSize(len(resCol)), proc.Mp())
+		resultVector := vector.NewWithFixed(resultType, resCol, nulls.NewWithSize(len(resCol)), proc.Mp())
 		nulls.Set(resultVector.Nsp, dateVector.Nsp)
 		return resultVector, nil
 	}
@@ -148,7 +148,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		} else {
 			if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
 				resCol := types.TimeFromClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
-				return vector.NewConstFixed[types.Time](resultType, 1, resCol, proc.Mp()), nil
+				return vector.NewConstFixed(resultType, 1, resCol, proc.Mp()), nil
 			} else {
 				// should be null
 				return proc.AllocScalarNullVector(resultType), nil
@@ -161,7 +161,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.NewWithFixed[types.Time](resultType, resCol, nulls.NewWithSize(len(resCol)), proc.Mp())
+		resultVector := vector.NewWithFixed(resultType, resCol, nulls.NewWithSize(len(resCol)), proc.Mp())
 		nulls.Set(resultVector.Nsp, dateVector.Nsp)
 		return resultVector, nil
 	}

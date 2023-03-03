@@ -228,11 +228,13 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 			}
 			vec[0] = vector.NewConstFixed(types.T_int64.ToType(), 1, data, testutil.TestUtilMp)
 		case types.T_decimal128:
-			data, err := types.ParseStringToDecimal128(str, 34, precision, false)
+			data, scale, err := types.Parse128(str)
+			data, _ = data.Scale(precision - scale)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
 			vec[0] = vector.NewConstFixed(types.T_decimal128.ToType(), 1, data, testutil.TestUtilMp)
+			vec[0].Typ.Scale = precision
 		case types.T_date:
 			data, err := types.ParseDateCast(str)
 			if err != nil {
@@ -263,13 +265,14 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 			vec[0] = testutil.MakeInt64Vector(input, nil)
 		case types.T_decimal128:
 			input := make([]types.Decimal128, 0)
-			tmp, err := types.ParseStringToDecimal128(str, 34, precision, false)
+			tmp, scale, err := types.Parse128(str)
+			tmp, _ = tmp.Scale(precision - scale)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
 			input = append(input, tmp)
 			vec[0] = vector.NewWithFixed(typ, input, nil, testutil.TestUtilMp)
-
+			vec[0].Typ.Scale = precision
 		case types.T_date:
 			vec[0] = testutil.MakeDateVector(input, nil)
 		case types.T_datetime:

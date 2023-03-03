@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -80,6 +81,7 @@ func TestCompile(t *testing.T) {
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+	fmt.Println("!!!")
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
 		c := New("", "test", tc.sql, "", context.TODO(), tc.e, tc.proc, tc.stmt)
