@@ -408,8 +408,7 @@ func updatePartitionOfPush(
 	partitions := e.getPartitions(dbId, tblId)
 	partition := partitions[dnId]
 
-	curState := partition.state.Load()
-	state := curState.Copy()
+	state, doneMutate := partition.MutateState()
 
 	key := e.catalog.GetTableById(dbId, tblId)
 	tbl := &txnTable{
@@ -441,9 +440,7 @@ func updatePartitionOfPush(
 		return err
 	}
 
-	if !partition.state.CompareAndSwap(curState, state) {
-		panic("concurrent mutation")
-	}
+	doneMutate()
 
 	<-partition.lock
 	partition.ts = *tl.Ts
