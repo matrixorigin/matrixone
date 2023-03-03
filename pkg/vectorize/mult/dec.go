@@ -22,19 +22,9 @@ package mult
 */
 import "C"
 import (
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
-
-func dec64PtrToC(p *types.Decimal64) *C.int64_t {
-	return (*C.int64_t)(unsafe.Pointer(p))
-}
-
-func dec128PtrToC(p *types.Decimal128) *C.int64_t {
-	return (*C.int64_t)(unsafe.Pointer(p))
-}
 
 func Decimal64VecMult(xs, ys, rs *vector.Vector) (err error) {
 	xt := vector.MustTCols[types.Decimal64](xs)
