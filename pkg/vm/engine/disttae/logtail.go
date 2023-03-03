@@ -27,7 +27,7 @@ import (
 func consumeEntry(idx, primaryIdx int, tbl *txnTable,
 	ctx context.Context, engine *Engine, partition *Partition, state *PartitionState, e *api.Entry) error {
 
-	state.HandleLogtailEntry(ctx, e)
+	state.HandleLogtailEntry(ctx, e, primaryIdx)
 
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {

@@ -38,7 +38,7 @@ func BenchmarkPartitionInsert(b *testing.B) {
 		b.Run(fmt.Sprintf("num-rows-%v", numRows), func(b *testing.B) {
 
 			mp := mpool.MustNewZero()
-			partition := NewPartition(nil)
+			partition := NewPartition(nil, false)
 			v0 := make([]types.Rowid, numRows)
 			v1 := make([]types.TS, numRows)
 			v2 := make([]int64, numRows)
