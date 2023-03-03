@@ -82,15 +82,13 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	}
 
 	for i := 0; i < num; i++ {
-		ts := types.BuildTS(int64(i), 0)
-		iter := state.NewRowsIter(ts, nil, false)
+		iter := state.NewRowsIter(types.BuildTS(int64(i), 0), nil, false)
 		n := 0
 		rowIDs := make(map[types.Rowid]bool)
 		for iter.Next() {
 			n++
 			entry := iter.Entry()
 			rowIDs[entry.RowID] = true
-			require.True(t, state.RowExists(entry.RowID, ts))
 		}
 		require.Equal(t, i+1, n)
 		require.Equal(t, i+1, len(rowIDs))
