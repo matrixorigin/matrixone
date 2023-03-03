@@ -691,7 +691,6 @@ func (h *transactionHeap) Pop() any {
 // needRead determine if a block needs to be read
 func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
 	var err error
-	logutil.Infof("needRead is %v", blkInfo)
 	if expr == nil {
 		return true
 	}

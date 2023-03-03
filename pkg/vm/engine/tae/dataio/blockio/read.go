@@ -63,7 +63,8 @@ func BlockRead(
 		if vec.Allocated() > 0 {
 			bat.Vecs[i] = containers.CopyToMoVec(vec)
 		} else {
-			bat.Vecs[i] = containers.UnmarshalToMoVec(vec)
+			bat.Vecs[i] = containers.CopyToMoVec(vec)
+			//bat.Vecs[i] = containers.UnmarshalToMoVec(vec)
 		}
 		vec.Close()
 	}
