@@ -394,11 +394,11 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		} else if dimensions[i].pkSelRate > dimensions[j].pkSelRate {
 			return false
 		} else {
-			//if math.Abs(dimensions[i].selectivity-dimensions[j].selectivity) > 0.01 {
-			//	return dimensions[i].selectivity < dimensions[j].selectivity
-			//} else {
-			return dimensions[i].node.Stats.Outcnt < dimensions[j].node.Stats.Outcnt
-			//}
+			if math.Abs(dimensions[i].node.Stats.Selectivity-dimensions[j].node.Stats.Selectivity) > 0.01 {
+				return dimensions[i].node.Stats.Selectivity < dimensions[j].node.Stats.Selectivity
+			} else {
+				return dimensions[i].node.Stats.Outcnt < dimensions[j].node.Stats.Outcnt
+			}
 		}
 	})
 
