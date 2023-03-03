@@ -58,8 +58,6 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
 	bat.Clean(proc.Mp())
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
