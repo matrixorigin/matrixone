@@ -508,7 +508,10 @@ func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx con
 		}
 	}
 
-	for j := range tableDef.Cols {
+	for j := range tmpBat.Vecs {
+		if j >= len(tableDef.Cols) {
+			break
+		}
 		nsp := tmpBat.Vecs[j].Nsp
 		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility {
 			if nulls.Any(nsp) {
