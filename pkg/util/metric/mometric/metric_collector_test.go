@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metric
+package mometric
 
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"regexp"
 	"testing"
 	"time"
@@ -28,10 +29,10 @@ import (
 )
 
 func init() {
-	m1 := &SubSystem{"m1", "", false}
-	m2 := &SubSystem{"m2", "", false}
-	AllSubSystem[m1.Name] = m1
-	AllSubSystem[m2.Name] = m2
+	m1 := &metric.SubSystem{"m1", "", false}
+	m2 := &metric.SubSystem{"m2", "", false}
+	metric.AllSubSystem[m1.Name] = m1
+	metric.AllSubSystem[m2.Name] = m2
 }
 
 type dummySqlExecutor struct {

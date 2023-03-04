@@ -195,6 +195,16 @@ func (r *rawHist) CollectorToProm() prom.Collector {
 	return r.compat_inner.(prom.Collector)
 }
 
+// WithExporter only for test, should call before Registry) MustRegister
+func (r *rawHist) WithExporter(e *ExporterHolder) {
+	r.exporter = e
+}
+
+// WithNowFunction only for test, should call before Registry) MustRegister
+func (r *rawHist) WithNowFunction(now func() int64) {
+	r.now = now
+}
+
 // RawHistVec is a Collector that bundles a set of RawHist that all share the
 // same Desc, but have different values for their variable labels. It can be
 // used as a factory for a series of Observers

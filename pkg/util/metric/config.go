@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/config"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 )
 
@@ -32,11 +31,6 @@ var (
 	configExportToProm    int32 = EnvOrDefaultBool("MO_METRIC_EXPORT_TO_PROM", 1)
 	configForceReinit     int32 = EnvOrDefaultBool("MO_METRIC_DROP_AND_INIT", 0) // TODO: find a better way to init metrics and remove this one
 )
-
-func initConfigByParamaterUnit(SV *config.ObservabilityParameters) {
-	SetExportToProm(SV.EnableMetricToProm)
-	SetGatherInterval(time.Second * time.Duration(SV.MetricGatherInterval))
-}
 
 func EnvOrDefaultBool(key string, defaultValue int32) int32 {
 	val, ok := os.LookupEnv(key)
