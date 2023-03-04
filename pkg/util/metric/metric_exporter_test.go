@@ -97,9 +97,9 @@ func TestExporter(t *testing.T) {
 	var exp *metricExporter
 
 	withModifiedConfig(func() {
-		defer setGatherInterval(setGatherInterval(20 * time.Millisecond))
-		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		defer setExportToProm(setExportToProm(false))
+		defer SetGatherInterval(SetGatherInterval(20 * time.Millisecond))
+		defer SetRawHistBufLimit(SetRawHistBufLimit(5))
+		defer SetExportToProm(SetExportToProm(false))
 		reg := prom.NewRegistry()
 		iexp := newMetricExporter(reg, dumCollect, "node_uuid", "monolithic")
 		exp = iexp.(*metricExporter)
@@ -111,7 +111,7 @@ func TestExporter(t *testing.T) {
 		g := prom.NewGauge(prom.GaugeOpts{Subsystem: "test", Name: "test_gauge"})
 		reg.MustRegister(g)
 		h := NewRawHist(prom.HistogramOpts{Subsystem: "test", Name: "test_hist"})
-		h.exporter = &iexp
+		h.exporter = NewExportHolder(iexp)
 		h.now = dumClock
 		reg.MustRegister(h)
 

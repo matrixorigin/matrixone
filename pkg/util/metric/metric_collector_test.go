@@ -30,8 +30,8 @@ import (
 func init() {
 	m1 := &SubSystem{"m1", "", false}
 	m2 := &SubSystem{"m2", "", false}
-	allSubSystem[m1.Name] = m1
-	allSubSystem[m2.Name] = m2
+	AllSubSystem[m1.Name] = m1
+	AllSubSystem[m2.Name] = m2
 }
 
 type dummySqlExecutor struct {

@@ -42,3 +42,21 @@ func registerAllMetrics() {
 		mustRegister(c)
 	}
 }
+
+type SubSystem struct {
+	Name              string
+	Comment           string
+	SupportUserAccess bool
+}
+
+var SubSystemSql = &SubSystem{"sql", "base on query action", true}
+var SubSystemServer = &SubSystem{"server", "MO Server status, observe from inside", true}
+var SubSystemProcess = &SubSystem{"process", "MO process status", false}
+var SubSystemSys = &SubSystem{"sys", "OS status", false}
+
+var AllSubSystem = map[string]*SubSystem{
+	SubSystemSql.Name:     SubSystemSql,
+	SubSystemServer.Name:  SubSystemServer,
+	SubSystemProcess.Name: SubSystemProcess,
+	SubSystemSys.Name:     SubSystemSys,
+}

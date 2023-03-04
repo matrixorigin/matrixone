@@ -36,37 +36,6 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-const (
-	MetricDBConst    = "system_metrics"
-	sqlCreateDBConst = "create database if not exists " + MetricDBConst
-	sqlDropDBConst   = "drop database if exists " + MetricDBConst
-	ALL_IN_ONE_MODE  = "monolithic"
-)
-
-var (
-	lblNodeConst  = "node"
-	lblRoleConst  = "role"
-	lblValueConst = "value"
-	lblTimeConst  = "collecttime"
-	occupiedLbls  = map[string]struct{}{lblTimeConst: {}, lblValueConst: {}, lblNodeConst: {}, lblRoleConst: {}}
-)
-
-type Collector interface {
-	prom.Collector
-	// cancelToProm remove the cost introduced by being compatible with prometheus
-	CancelToProm()
-	// collectorForProm returns a collector used in prometheus scrape registry
-	CollectorToProm() prom.Collector
-}
-
-type selfAsPromCollector struct {
-	self prom.Collector
-}
-
-func (s *selfAsPromCollector) init(self prom.Collector)        { s.self = self }
-func (s *selfAsPromCollector) CancelToProm()                   {}
-func (s *selfAsPromCollector) CollectorToProm() prom.Collector { return s.self }
-
 type statusServer struct {
 	*http.Server
 	sync.WaitGroup
@@ -116,7 +85,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	moCollector.Start(serviceCtx)
 	moExporter.Start(serviceCtx)
 
-	if getExportToProm() {
+	if GetExportToProm() {
 		// http.HandleFunc("/query", makeDebugHandleFunc(ieFactory))
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(prom.DefaultGatherer, promhttp.HandlerOpts{}))
@@ -170,7 +139,7 @@ func mustRegiterToProm(collector prom.Collector) {
 
 func mustRegister(collector Collector) {
 	registry.MustRegister(collector)
-	if getExportToProm() {
+	if GetExportToProm() {
 		mustRegiterToProm(collector.CollectorToProm())
 	} else {
 		collector.CancelToProm()
@@ -191,7 +160,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 			panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
 		}
 	}
-	if getForceInit() {
+	if GetForceInit() {
 		mustExec(sqlDropDBConst)
 	}
 	mustExec(sqlCreateDBConst)
@@ -278,38 +247,6 @@ func newDescExtra(desc *prom.Desc) *descExtra {
 	varLblCnt := len(strings.Split(str, " "))
 	labels := prom.MakeLabelPairs(desc, make([]string, varLblCnt))
 	return &descExtra{orig: desc, fqName: fqName, labels: labels}
-}
-
-func mustValidLbls(name string, consts prom.Labels, vars []string) {
-	mustNotOccupied := func(lblName string) {
-		if _, ok := occupiedLbls[strings.ToLower(lblName)]; ok {
-			panic(fmt.Sprintf("%s contains a occupied label: %s", name, lblName))
-		}
-	}
-	for k := range consts {
-		mustNotOccupied(k)
-	}
-	for _, v := range vars {
-		mustNotOccupied(v)
-	}
-}
-
-type SubSystem struct {
-	Name              string
-	Comment           string
-	SupportUserAccess bool
-}
-
-var SubSystemSql = &SubSystem{"sql", "base on query action", true}
-var SubSystemServer = &SubSystem{"server", "MO Server status, observe from inside", true}
-var SubSystemProcess = &SubSystem{"process", "MO process status", false}
-var SubSystemSys = &SubSystem{"sys", "OS status", false}
-
-var allSubSystem = map[string]*SubSystem{
-	SubSystemSql.Name:     SubSystemSql,
-	SubSystemServer.Name:  SubSystemServer,
-	SubSystemProcess.Name: SubSystemProcess,
-	SubSystemSys.Name:     SubSystemSys,
 }
 
 type InitOptions struct {
@@ -403,7 +340,7 @@ func NewMetricViewWithLabels(ctx context.Context, tbl string, lbls []string) *ta
 	var options []table.ViewOption
 	// check SubSystem
 	var subSystem *SubSystem = nil
-	for _, ss := range allSubSystem {
+	for _, ss := range AllSubSystem {
 		if strings.Index(tbl, ss.Name) == 0 {
 			subSystem = ss
 			break

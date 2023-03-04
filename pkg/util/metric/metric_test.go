@@ -46,8 +46,8 @@ func TestMetric(t *testing.T) {
 		SV.BatchProcessor = FileService
 		SV.MetricExportInterval = 1
 		SV.MetricMultiTable = true
-		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
-		defer setRawHistBufLimit(setRawHistBufLimit(5))
+		defer SetGatherInterval(SetGatherInterval(30 * time.Millisecond))
+		defer SetRawHistBufLimit(SetRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 
@@ -102,8 +102,8 @@ func TestMetricNoProm(t *testing.T) {
 		SV.BatchProcessor = FileService
 		SV.MetricMultiTable = true
 
-		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
-		defer setRawHistBufLimit(setRawHistBufLimit(5))
+		defer SetGatherInterval(SetGatherInterval(30 * time.Millisecond))
+		defer SetRawHistBufLimit(SetRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 
@@ -159,8 +159,8 @@ func TestMetricSingleTable(t *testing.T) {
 		SV.BatchProcessor = FileService
 		SV.MetricExportInterval = 1
 		SV.MetricMultiTable = false
-		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
-		defer setRawHistBufLimit(setRawHistBufLimit(5))
+		defer SetGatherInterval(SetGatherInterval(30 * time.Millisecond))
+		defer SetRawHistBufLimit(SetRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 

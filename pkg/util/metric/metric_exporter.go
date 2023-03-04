@@ -58,7 +58,7 @@ func newMetricExporter(gather prom.Gatherer, collector MetricCollector, node, ro
 
 func (e *metricExporter) ExportMetricFamily(ctx context.Context, mf *pb.MetricFamily) error {
 	// already batched RawHist metric will be send immediately
-	if isFullBatchRawHist(mf) {
+	if IsFullBatchRawHist(mf) {
 		mfs := []*pb.MetricFamily{mf}
 		mfs = e.prepareSend(mfs)
 		e.send(mfs)
@@ -89,7 +89,7 @@ func (e *metricExporter) Start(inputCtx context.Context) bool {
 	e.stopWg.Add(1)
 	go func() {
 		defer e.stopWg.Done()
-		ticker := time.NewTicker(getGatherInterval())
+		ticker := time.NewTicker(GetGatherInterval())
 		defer ticker.Stop()
 		for {
 			select {
