@@ -199,10 +199,6 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 		n += sn
 	}
 
-	if sn, err = WriteUint32Array(w, cmd.mapping); err != nil {
-		return
-	}
-	n += sn
 	if sn, err = WriteUint32Array(w, cmd.toAddr); err != nil {
 		return
 	}
@@ -278,10 +274,6 @@ func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
 		n += sn
 	}
 
-	if cmd.mapping, sn, err = ReadUint32Array(r); err != nil {
-		return
-	}
-	n += sn
 	if cmd.toAddr, sn, err = ReadUint32Array(r); err != nil {
 		return
 	}
@@ -340,7 +332,7 @@ func (cmd *mergeBlocksCmd) VerboseString() string {
 	for _, blk := range cmd.createdBlks {
 		s = fmt.Sprintf("%s %s", s, blk.BlockString())
 	}
-	s = fmt.Sprintf("%s ];FromFormat=%v;ToFormat=%v;Mapping=%v", s, cmd.fromAddr, cmd.toAddr, cmd.mapping)
+	s = fmt.Sprintf("%s ];FromFormat=%v;ToFormat=%v", s, cmd.fromAddr, cmd.toAddr)
 	return s
 }
 func (cmd *mergeBlocksCmd) ApplyCommit()                  {}

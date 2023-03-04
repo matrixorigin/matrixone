@@ -18,7 +18,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -27,23 +29,23 @@ import (
 
 // Engine is an engine.Engine impl
 type Engine struct {
-	shardPolicy       ShardPolicy
-	getClusterDetails engine.GetClusterDetailsFunc
-	idGenerator       IDGenerator
+	shardPolicy ShardPolicy
+	idGenerator IDGenerator
+	cluster     clusterservice.MOCluster
 }
 
 func New(
 	ctx context.Context,
 	shardPolicy ShardPolicy,
-	getClusterDetails engine.GetClusterDetailsFunc,
 	idGenerator IDGenerator,
+	cluster clusterservice.MOCluster,
 ) *Engine {
 	_ = ctx
 
 	engine := &Engine{
-		shardPolicy:       shardPolicy,
-		getClusterDetails: getClusterDetails,
-		idGenerator:       idGenerator,
+		shardPolicy: shardPolicy,
+		idGenerator: idGenerator,
+		cluster:     cluster,
 	}
 
 	return engine
@@ -163,20 +165,17 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 }
 
 func (e *Engine) Nodes() (engine.Nodes, error) {
-	clusterDetails, err := e.getClusterDetails()
-	if err != nil {
-		return nil, err
-	}
-
 	var nodes engine.Nodes
-	for _, store := range clusterDetails.CNStores {
-		nodes = append(nodes, engine.Node{
-			Mcpu: 1,
-			Id:   store.UUID,
-			Addr: store.ServiceAddress,
+	cluster := clusterservice.GetMOCluster()
+	cluster.GetCNService(clusterservice.NewSelector(),
+		func(c metadata.CNService) bool {
+			nodes = append(nodes, engine.Node{
+				Mcpu: 1,
+				Id:   c.ServiceID,
+				Addr: c.PipelineServiceAddress,
+			})
+			return true
 		})
-	}
-
 	return nodes, nil
 }
 
@@ -191,4 +190,14 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
 	return "", "", nil, moerr.NewNYI(ctx, "interface GetRelationById is not implemented")
+}
+
+func getDNServices(cluster clusterservice.MOCluster) []metadata.DNService {
+	var values []metadata.DNService
+	cluster.GetDNService(clusterservice.NewSelector(),
+		func(d metadata.DNService) bool {
+			values = append(values, d)
+			return true
+		})
+	return values
 }

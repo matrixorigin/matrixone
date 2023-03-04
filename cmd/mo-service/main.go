@@ -70,6 +70,10 @@ func main() {
 	if *allocsProfilePathFlag != "" {
 		defer writeAllocsProfile()
 	}
+	if *fileServiceProfilePathFlag != "" {
+		stop := startFileServiceProfile()
+		defer stop()
+	}
 	if *httpListenAddr != "" {
 		go func() {
 			http.ListenAndServe(*httpListenAddr, nil)
@@ -175,7 +179,7 @@ func startCNService(
 			panic(err)
 		}
 		// TODO: global client need to refactor
-		err = cnclient.NewCNClient(&cnclient.ClientConfig{})
+		err = cnclient.NewCNClient(&cnclient.ClientConfig{RPC: cfg.getCNServiceConfig().RPC})
 		if err != nil {
 			panic(err)
 		}

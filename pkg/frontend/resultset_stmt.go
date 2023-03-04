@@ -128,8 +128,6 @@ func (sec *ShowColumnsExecutor) Setup(ctx context.Context, ses *Session) error {
 	if err != nil {
 		return err
 	}
-	ses.SetShowStmtType(ShowColumns)
-	ses.SetData(nil)
 	return err
 }
 

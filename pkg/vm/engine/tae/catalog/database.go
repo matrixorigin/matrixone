@@ -382,7 +382,6 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 			e.catalog.AddColumnCnt(-1 * len(table.schema.ColDefs))
 		}
 	}()
-	// table.Close()
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(table.String()))
 	e.Lock()
@@ -399,26 +398,6 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		delete(e.entries, table.GetID())
 	}
 	return
-}
-
-func (e *DBEntry) Close() {
-	tbls := e.getAllTablesLocked()
-	for _, tbl := range tbls {
-		err := e.RemoveEntry(tbl)
-		if err != nil {
-			panic(err)
-		}
-	}
-}
-
-func (e *DBEntry) getAllTablesLocked() []*TableEntry {
-	tbls := make([]*TableEntry, 0)
-	it := e.MakeTableIt(false)
-	for it.Valid() {
-		tbls = append(tbls, it.Get().GetPayload())
-		it.Next()
-	}
-	return tbls
 }
 
 // Catalog entry is created in following steps:

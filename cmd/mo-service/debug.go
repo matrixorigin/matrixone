@@ -28,13 +28,15 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 var (
-	cpuProfilePathFlag    = flag.String("cpu-profile", "", "write cpu profile to the specified file")
-	allocsProfilePathFlag = flag.String("allocs-profile", "", "write allocs profile to the specified file")
-	httpListenAddr        = flag.String("debug-http", "", "http server listen address")
+	cpuProfilePathFlag         = flag.String("cpu-profile", "", "write cpu profile to the specified file")
+	allocsProfilePathFlag      = flag.String("allocs-profile", "", "write allocs profile to the specified file")
+	fileServiceProfilePathFlag = flag.String("file-service-profile", "", "write file service profile to the specified file")
+	httpListenAddr             = flag.String("debug-http", "", "http server listen address")
 )
 
 func startCPUProfile() func() {
@@ -75,6 +77,23 @@ func writeAllocsProfile() {
 		panic(err)
 	}
 	logutil.Infof("Allocs profile written to %s", profilePath)
+}
+
+func startFileServiceProfile() func() {
+	filePath := *fileServiceProfilePathFlag
+	if filePath == "" {
+		filePath = "file-service-profile"
+	}
+	f, err := os.Create(filePath)
+	if err != nil {
+		panic(err)
+	}
+	stop := fileservice.FSProfileHandler.StartProfile(f)
+	logutil.Infof("File service profiling enabled, writing to %s", filePath)
+	return func() {
+		stop()
+		f.Close()
+	}
 }
 
 func init() {
@@ -239,6 +258,10 @@ func init() {
 		}
 
 	})
+
+	// file service profile
+	http.Handle("/debug/fs/", fileservice.FSProfileHandler)
+
 }
 
 type positionInfo struct {

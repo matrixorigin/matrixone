@@ -60,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
@@ -81,11 +82,13 @@ func CnServerMessageHandler(
 	ctx context.Context,
 	message morpc.Message,
 	cs morpc.ClientSession,
-	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message,
-	getClusterDetails engine.GetClusterDetailsFunc) error {
+	storeEngine engine.Engine,
+	fileService fileservice.FileService,
+	cli client.TxnClient,
+	messageAcquirer func() morpc.Message) error {
 	// new a receiver to receive message and write back result.
 	receiver := newMessageReceiverOnServer(ctx, message,
-		cs, messageAcquirer, storeEngine, fileService, cli, getClusterDetails)
+		cs, messageAcquirer, storeEngine, fileService, cli)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(receiver)
@@ -120,12 +123,16 @@ func cnMessageHandle(receiver messageReceiverOnServer) error {
 				break
 			}
 		}
+
+		doneCh := make(chan struct{})
 		info := process.WrapCs{
-			MsgId: receiver.messageId,
-			Uid:   opUuid,
-			Cs:    receiver.clientSession,
+			MsgId:  receiver.messageId,
+			Uid:    opUuid,
+			Cs:     receiver.clientSession,
+			DoneCh: doneCh,
 		}
 		ch <- info
+		<-doneCh
 		return nil
 
 	case pipeline.PipelineMessage:
@@ -163,6 +170,7 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		if err != nil {
 			return err
 		}
+
 		m := val.(*pipeline.Message)
 
 		if errInfo, get := m.TryToGetMoErr(); get {
@@ -180,9 +188,6 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 			return nil
 		}
 		// XXX some order check just for safety ?
-		if m.Checksum != crc32.ChecksumIEEE(m.Data) {
-			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
-		}
 		if sequence != m.Sequence {
 			return moerr.NewInternalErrorNoCtx("Packages passed by morpc are out of order")
 		}
@@ -192,6 +197,10 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		if m.WaitingNextToMerge() {
 			continue
 		}
+		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
+			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
+		}
+
 		bat, err := decodeBatch(c.proc.Mp(), dataBuffer)
 		if err != nil {
 			return err
@@ -561,22 +570,20 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			IsRemote: t.IsRemote,
-			Affected: t.Affected,
-			// TargetColDefs:  t.TargetColDefs,
-			// TableID:        t.TableID,
-			// CPkeyColDef:    t.CPkeyColDef,
-			// DBName:         t.DBName,
-			// TableName:      t.TableName,
-			// ClusterTable:   t.ClusterTable,
-			// ClusterByDef:   t.ClusterByDef,
-			// UniqueIndexDef: t.UniqueIndexDef,
-			// HasAutoCol:     t.HasAutoCol,
+			IsRemote:     t.IsRemote,
+			Affected:     t.Affected,
 			Ref:          t.InsertCtx.Ref,
 			TableDef:     t.InsertCtx.TableDef,
-			Idx:          t.InsertCtx.Idx,
 			ClusterTable: t.InsertCtx.ClusterTable,
 			ParentIdx:    t.InsertCtx.ParentIdx,
+		}
+	case *onduplicatekey.Argument:
+		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
+			Affected:        t.Affected,
+			Ref:             t.Ref,
+			TableDef:        t.TableDef,
+			OnDuplicateIdx:  t.OnDuplicateIdx,
+			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
@@ -826,12 +833,20 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Affected: t.Affected,
 			IsRemote: t.IsRemote,
 			InsertCtx: &insert.InsertCtx{
-				Idx:          t.Idx,
 				Ref:          t.Ref,
 				TableDef:     t.TableDef,
 				ParentIdx:    t.ParentIdx,
 				ClusterTable: t.ClusterTable,
 			},
+		}
+	case vm.OnDuplicateKey:
+		t := opr.GetOnDuplicateKey()
+		v.Arg = &onduplicatekey.Argument{
+			Affected:        t.Affected,
+			Ref:             t.Ref,
+			TableDef:        t.TableDef,
+			OnDuplicateIdx:  t.OnDuplicateIdx,
+			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
 	case vm.Anti:
 		t := opr.GetAnti()
@@ -900,6 +915,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Result:     convertToResultPos(t.RelList, t.ColList),
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
+
 	case vm.Limit:
 		v.Arg = &limit.Argument{Limit: opr.Limit}
 	case vm.LoopAnti:

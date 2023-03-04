@@ -15,9 +15,10 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"io"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -98,7 +99,8 @@ func InsertOp[T comparable](
 func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 	vec := containers.MakeVector(kType, false)
 	switch kType.Oid {
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		for k := range idx.tree {
 			vec.Append([]byte(k.(string)))
 		}
@@ -114,7 +116,8 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 	vec := containers.MakeVector(kType, false)
 	var vecs []containers.Vector
 	switch kType.Oid {
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		for k := range idx.tree {
 			if vec.Length() > int(txnbase.MaxNodeRows) {
 				vecs = append(vecs, vec)
@@ -237,7 +240,8 @@ func (idx *simpleTableIndex) BatchInsert(
 		return InsertOp[types.TS](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_Rowid:
 		return InsertOp[types.Rowid](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		vs := col.Bytes()
 		if dedupInput {
 			set := make(map[string]bool)
@@ -329,7 +333,8 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 	case types.T_Rowid:
 		vals := col.Slice()
 		return DedupOp[types.Rowid](colType, attr, vals, idx.tree)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		bs := col.Bytes()
 		for i := 0; i < col.Length(); i++ {
 			v := string(bs.GetVarValueAt(i))

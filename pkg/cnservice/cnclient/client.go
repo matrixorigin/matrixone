@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
 
 // client each node will hold only one client.
@@ -91,6 +92,8 @@ type ClientConfig struct {
 	// related buffer size.
 	ReadBufferSize  int
 	WriteBufferSize int
+	// RPC rpc config
+	RPC rpc.Config
 }
 
 var (
@@ -110,7 +113,8 @@ func NewCNClient(cfg *ClientConfig) error {
 	client = &CNClient{config: cfg}
 	client.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
 
-	codec := morpc.NewMessageCodec(client.acquireMessage)
+	codec := morpc.NewMessageCodec(client.acquireMessage,
+		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)))
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),

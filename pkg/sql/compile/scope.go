@@ -16,11 +16,12 @@ package compile
 
 import (
 	"context"
-	"strings"
+	"hash/crc32"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -168,7 +169,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		len(c.addr) == 0 || strings.Split(c.addr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+		len(c.addr) == 0 || isCurrentCN(s.NodeInfo.Addr, c.addr) {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
@@ -427,6 +428,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 					},
 				})
 			}
+		case vm.Output:
 		default:
 			for i := range ss {
 				ss[i].Instructions = append(ss[i].Instructions, dupInstruction(&in, nil))
@@ -484,26 +486,46 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	}
 }
 
+//func dupScopeList(ss []*Scope) []*Scope {
+//rs := make([]*Scope, len(ss))
+//for i := range rs {
+//rs[i] = dupScope(ss[i])
+//}
+//return rs
+//}
+
+//func dupScope(s *Scope) *Scope {
+//regMap := make(map[*process.WaitRegister]*process.WaitRegister)
+
+//newScope, err := copyScope(s, regMap)
+//if err != nil {
+//return nil
+//}
+//err = fillInstructionsByCopyScope(newScope, s, regMap)
+//if err != nil {
+//return nil
+//}
+//return newScope
+//}
+
 func dupScopeList(ss []*Scope) []*Scope {
 	rs := make([]*Scope, len(ss))
-	for i := range rs {
-		rs[i] = dupScope(ss[i])
+	regMap := make(map[*process.WaitRegister]*process.WaitRegister)
+	var err error
+	for i := range ss {
+		rs[i], err = copyScope(ss[i], regMap)
+		if err != nil {
+			return nil
+		}
+	}
+
+	for i := range ss {
+		err = fillInstructionsByCopyScope(rs[i], ss[i], regMap)
+		if err != nil {
+			return nil
+		}
 	}
 	return rs
-}
-
-func dupScope(s *Scope) *Scope {
-	regMap := make(map[*process.WaitRegister]*process.WaitRegister)
-
-	newScope, err := copyScope(s, regMap)
-	if err != nil {
-		return nil
-	}
-	err = fillInstructionsByCopyScope(newScope, s, regMap)
-	if err != nil {
-		return nil
-	}
-	return newScope
 }
 
 func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRegister) (*Scope, error) {
@@ -523,6 +545,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 			Addr: srcScope.NodeInfo.Addr,
 			Data: make([][]byte, len(srcScope.NodeInfo.Data)),
 		},
+		RemoteReceivRegInfos: srcScope.RemoteReceivRegInfos,
 	}
 
 	// copy node.Data
@@ -551,7 +574,7 @@ func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRe
 		}
 	}
 
-	newScope.Proc = process.NewFromProc(srcScope.Proc, srcScope.Proc.Ctx, len(srcScope.PreScopes))
+	newScope.Proc = process.NewFromProc(srcScope.Proc, srcScope.Proc.Ctx, len(srcScope.Proc.Reg.MergeReceivers))
 	for i := range srcScope.Proc.Reg.MergeReceivers {
 		regMap[srcScope.Proc.Reg.MergeReceivers[i]] = newScope.Proc.Reg.MergeReceivers[i]
 	}
@@ -583,26 +606,21 @@ func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
 }
 
 func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
-	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
-	if err != nil {
-		panic(err)
-	}
-
 	for _, rr := range s.RemoteReceivRegInfos {
 		go func(info RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
-			c, cancel := context.WithTimeout(context.Background(), time.Second*10000)
-			_ = cancel
-
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
+				reg.Ch <- nil
 				errChan <- errStream
 				return
 			}
 			defer func(streamSender morpc.Stream) {
-				// TODO: should close the channel or not?
+				close(reg.Ch)
 				_ = streamSender.Close()
 			}(streamSender)
 
+			c, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			_ = cancel
 			message := cnclient.AcquireMessage()
 			{
 				message.Id = streamSender.ID()
@@ -610,59 +628,76 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 				message.Uuid = info.Uuid[:]
 			}
 			if errSend := streamSender.Send(c, message); errSend != nil {
+				reg.Ch <- nil
 				errChan <- errSend
 				return
 			}
 
 			messagesReceive, errReceive := streamSender.Receive()
 			if errReceive != nil {
+				reg.Ch <- nil
 				errChan <- errReceive
 				return
 			}
 
-			var val morpc.Message
-			var dataBuffer []byte
-			for {
-				select {
-				case <-c.Done():
-					errChan <- nil
-					return
-				case val = <-messagesReceive:
-				}
-
-				// TODO: what val = nil means?
-				if val == nil {
-					reg.Ch <- nil
-					close(reg.Ch)
-					errChan <- nil
-					return
-				}
-
-				m := val.(*pbpipeline.Message)
-
-				if m.IsEndMessage() {
-					reg.Ch <- nil
-					close(reg.Ch)
-					errChan <- nil
-					return
-				}
-
-				dataBuffer = append(dataBuffer, m.Data...)
-
-				if m.BatcWaitingNextToMerge() {
-					continue
-				}
-
-				bat, err := decodeBatch(mp, dataBuffer)
-				if err != nil {
-					errChan <- err
-					return
-				}
-				reg.Ch <- bat
-				dataBuffer = nil
+			if err := receiveMsgAndForward(c, messagesReceive, reg.Ch, mp); err != nil {
+				reg.Ch <- nil
+				errChan <- err
+				return
 			}
-		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], mp)
+			reg.Ch <- nil
+			errChan <- nil
+		}(rr, s.Proc.Reg.MergeReceivers[rr.Idx], s.Proc.GetMPool())
 	}
 
 	return nil
+}
+
+func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, forwardCh chan *batch.Batch, mp *mpool.MPool) error {
+	var val morpc.Message
+	var dataBuffer []byte
+	var ok bool
+	for {
+		select {
+		case <-ctx.Done():
+			return moerr.NewRPCTimeout(ctx)
+		case val, ok = <-receiveCh:
+		}
+
+		if val == nil || !ok {
+			return moerr.NewStreamClosedNoCtx()
+		}
+
+		m, ok := val.(*pbpipeline.Message)
+		if !ok {
+			panic("unexpected message type for cn-server")
+		}
+
+		// receive an end message from remote
+		if err := pbpipeline.GetMessageErrorInfo(m); err != nil {
+			return err
+		}
+
+		// end message
+		if m.IsEndMessage() {
+			return nil
+		}
+
+		// normal receive
+		dataBuffer = append(dataBuffer, m.Data...)
+		switch m.GetSid() {
+		case pbpipeline.BatchWaitingNext:
+			continue
+		case pbpipeline.BatchEnd:
+			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
+				return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
+			}
+			bat, err := decodeBatch(mp, dataBuffer)
+			if err != nil {
+				return err
+			}
+			forwardCh <- bat
+			dataBuffer = nil
+		}
+	}
 }

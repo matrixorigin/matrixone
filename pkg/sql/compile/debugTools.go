@@ -196,7 +196,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 					}
 				}
 				switch arg.FuncId {
-				case dispatch.SendToAllFunc:
+				case dispatch.SendToAllFunc, dispatch.SendToAllLocalFunc:
 					str += fmt.Sprintf(" to all of MergeReceiver [%s].", chs)
 				case dispatch.SendToAnyLocalFunc:
 					str += fmt.Sprintf(" to any of MergeReceiver [%s].", chs)
@@ -204,7 +204,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 					str += fmt.Sprintf(" unknow type dispatch [%s].", chs)
 				}
 
-				if len(arg.RemoteRegs) != 0 {
+				if arg.FuncId == dispatch.SendToAllFunc && len(arg.RemoteRegs) != 0 {
 					remoteChs := ""
 					for i, reg := range arg.RemoteRegs {
 						if i != 0 {

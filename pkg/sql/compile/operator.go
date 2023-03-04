@@ -17,7 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -55,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
@@ -290,12 +293,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.HashBuild:
 		t := sourceIns.Arg.(*hashbuild.Argument)
 		res.Arg = &hashbuild.Argument{
-			NeedHashMap: t.NeedHashMap,
-			NeedExpr:    t.NeedExpr,
-			Ibucket:     t.Ibucket,
-			Nbucket:     t.Nbucket,
-			Typs:        t.Typs,
-			Conditions:  t.Conditions,
+			NeedHashMap:    t.NeedHashMap,
+			NeedExpr:       t.NeedExpr,
+			NeedSelectList: t.NeedSelectList,
+			Ibucket:        t.Ibucket,
+			Nbucket:        t.Nbucket,
+			Typs:           t.Typs,
+			Conditions:     t.Conditions,
 		}
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
@@ -465,6 +469,29 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	}, nil
 }
 
+func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Process) (*onduplicatekey.Argument, error) {
+	oldCtx := n.InsertCtx
+	ctx := proc.Ctx
+	if oldCtx.GetClusterTable().GetIsClusterTable() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
+	if err != nil {
+		return nil, err
+	}
+
+	return &onduplicatekey.Argument{
+		Engine:   eg,
+		Ref:      oldCtx.Ref,
+		TableDef: oldCtx.TableDef,
+
+		OnDuplicateIdx:  oldCtx.OnDuplicateIdx,
+		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
+		Source:          originRel,
+		UniqueSource:    indexRels,
+	}, nil
+}
+
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
 	oldCtx := n.InsertCtx
 	ctx := proc.Ctx
@@ -472,7 +499,6 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
 	newCtx := &insert.InsertCtx{
-		Idx:      oldCtx.Idx,
 		Ref:      oldCtx.Ref,
 		TableDef: oldCtx.TableDef,
 
@@ -867,7 +893,7 @@ func constructIntersect(n *plan.Node, proc *process.Process, ibucket, nbucket in
 	}
 }
 
-func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argument {
+func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Argument {
 	arg := new(dispatch.Argument)
 	arg.LocalRegs = regs
 	if all {
@@ -881,45 +907,51 @@ func constructDispatch(all bool, regs []*process.WaitRegister) *dispatch.Argumen
 
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
-//func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
-//arg := new(dispatch.Argument)
-//arg.FuncId = dispatch.SendToAllFunc
+func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, proc *process.Process) *dispatch.Argument {
+	arg := new(dispatch.Argument)
 
-//scopeLen := len(ss)
-//arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
-//arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
+	scopeLen := len(ss)
+	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
+	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
 
-//for _, s := range ss {
-//if s.IsEnd {
-//continue
-//}
+	hasRemote := false
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
 
-//if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
-//strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
-//// Local reg.
-//// Put them into arg.LocalRegs
-//arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
-//} else {
-//// Remote reg.
-//// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
-//newUuid := uuid.New()
+		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
+			strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+			// Local reg.
+			// Put them into arg.LocalRegs
+			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
+		} else {
+			// Remote reg.
+			// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
+			hasRemote = true
+			newUuid := uuid.New()
 
-//arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
-//Uuid:     newUuid,
-//NodeAddr: s.NodeInfo.Addr,
-//})
-//colexec.Srv.PutNotifyChIntoUuidMap(newUuid, proc.DispatchNotifyCh)
+			arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
+				Uuid:     newUuid,
+				NodeAddr: s.NodeInfo.Addr,
+			})
 
-//s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
-//Idx:      idx,
-//Uuid:     newUuid,
-//FromAddr: currentCNAddr,
-//})
-//}
-//}
+			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
+				Idx:      idx,
+				Uuid:     newUuid,
+				FromAddr: currentCNAddr,
+			})
+		}
+	}
 
-//return arg
-//}
+	if hasRemote {
+		arg.FuncId = dispatch.SendToAllFunc
+	} else {
+		arg.FuncId = dispatch.SendToAllLocalFunc
+	}
+
+	return arg
+}
 
 func constructMergeGroup(_ *plan.Node, needEval bool) *mergegroup.Argument {
 	return &mergegroup.Argument{
@@ -1060,23 +1092,26 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 	case vm.Mark:
 		arg := in.Arg.(*mark.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
+			NeedHashMap:    true,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+			Conditions:     arg.Conditions[1],
 		}
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
+			NeedHashMap:    true,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+			Conditions:     arg.Conditions[1],
 		}
 	case vm.Left:
 		arg := in.Arg.(*left.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
+			NeedHashMap:    true,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+			Conditions:     arg.Conditions[1],
 		}
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
@@ -1088,51 +1123,59 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 	case vm.Single:
 		arg := in.Arg.(*single.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
+			NeedHashMap:    true,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
+			Conditions:     arg.Conditions[1],
 		}
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopJoin:
 		arg := in.Arg.(*loopjoin.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopLeft:
 		arg := in.Arg.(*loopleft.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopSemi:
 		arg := in.Arg.(*loopsemi.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopSingle:
 		arg := in.Arg.(*loopsingle.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 	case vm.LoopMark:
 		arg := in.Arg.(*loopmark.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
+			NeedHashMap:    false,
+			NeedSelectList: true,
+			Typs:           arg.Typs,
 		}
 
 	default:

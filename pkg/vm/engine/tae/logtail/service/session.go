@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +35,15 @@ const (
 	TableOnSubscription TableState = iota
 	TableSubscribed
 	TableNotFound
+)
+
+var (
+	// responseBufferSize is the size of buffer channel.
+	// We couldn't set this size to an unlimited value,
+	// because channel's memory is allocated according to the specified size.
+	// NOTE: we afford 1GiB heap memory for this buffer channel's own.
+	// but items within the channel would consume extra heap memory.
+	responseBufferSize = 1024 * 1024 * 1024 / int(unsafe.Sizeof(message{}))
 )
 
 // SessionManager manages all client sessions.
@@ -91,7 +101,7 @@ func (sm *SessionManager) ListSession() []*Session {
 
 // message describes response to be sent.
 type message struct {
-	sendCtx  context.Context
+	timeout  time.Duration
 	response *LogtailResponse
 }
 
@@ -184,19 +194,20 @@ func NewSession(
 	ss := &Session{
 		sessionCtx:  ctx,
 		cancelFunc:  cancel,
-		logger:      logger,
+		logger:      logger.With(zap.Uint64("stream-id", stream.streamID)),
 		sendTimeout: sendTimeout,
 		responses:   responses,
 		notifier:    notifier,
 		stream:      stream,
 		poisionTime: poisionTime,
-		sendChan:    make(chan message, 16), // buffer response for morpc client session
+		sendChan:    make(chan message, responseBufferSize), // buffer response for morpc client session
 		tables:      make(map[TableID]TableState),
 	}
 
 	sender := func() {
 		defer ss.wg.Done()
 
+		sizeMarker := 0
 		for {
 			select {
 			case <-ss.sessionCtx.Done():
@@ -209,9 +220,21 @@ func NewSession(
 					return
 				}
 
+				// FIXME: update with metrics
+				// log real buffer size every 1024*1024 change
+				stride := 1024 * 1024
+				realSize := len(ss.sendChan)
+				if (realSize-sizeMarker) == stride || (realSize-sizeMarker) == -stride {
+					sizeMarker = realSize
+					ss.logger.Info("logtail response waiting to be sent", zap.Int("size", realSize))
+				}
+
 				sendFunc := func() error {
 					defer ss.responses.Release(msg.response)
-					return ss.stream.write(msg.sendCtx, msg.response)
+
+					ctx, cancel := context.WithTimeout(ss.sessionCtx, msg.timeout)
+					defer cancel()
+					return ss.stream.write(ctx, msg.response)
 				}
 
 				if err := sendFunc(); err != nil {
@@ -318,6 +341,8 @@ func (ss *Session) AdvanceState(id TableID) {
 func (ss *Session) SendErrorResponse(
 	sendCtx context.Context, table api.TableID, code uint16, message string,
 ) error {
+	ss.logger.Debug("send error response", zap.Any("table", table), zap.Uint16("code", code), zap.String("message", message))
+
 	resp := ss.responses.Acquire()
 	resp.Response = newErrorResponse(table, code, message)
 	return ss.SendResponse(sendCtx, resp)
@@ -327,6 +352,8 @@ func (ss *Session) SendErrorResponse(
 func (ss *Session) SendSubscriptionResponse(
 	sendCtx context.Context, tail logtail.TableLogtail,
 ) error {
+	ss.logger.Debug("send subscription response", zap.Any("table", tail.Table), zap.String("To", tail.Ts.String()))
+
 	resp := ss.responses.Acquire()
 	resp.Response = newSubscritpionResponse(tail)
 	return ss.SendResponse(sendCtx, resp)
@@ -336,6 +363,8 @@ func (ss *Session) SendSubscriptionResponse(
 func (ss *Session) SendUnsubscriptionResponse(
 	sendCtx context.Context, table api.TableID,
 ) error {
+	ss.logger.Debug("send unsubscription response", zap.Any("table", table))
+
 	resp := ss.responses.Acquire()
 	resp.Response = newUnsubscriptionResponse(table)
 	return ss.SendResponse(sendCtx, resp)
@@ -345,6 +374,8 @@ func (ss *Session) SendUnsubscriptionResponse(
 func (ss *Session) SendUpdateResponse(
 	sendCtx context.Context, from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
 ) error {
+	ss.logger.Debug("send additional logtail", zap.Any("From", from.String()), zap.String("To", to.String()), zap.Int("tables", len(tails)))
+
 	resp := ss.responses.Acquire()
 	resp.Response = newUpdateResponse(from, to, tails...)
 	return ss.SendResponse(sendCtx, resp)
@@ -377,7 +408,7 @@ func (ss *Session) SendResponse(
 			ss.logger.Error("fail to close poision morpc client session", zap.Error(err))
 		}
 		return moerr.NewStreamClosedNoCtx()
-	case ss.sendChan <- message{sendCtx: sendCtx, response: response}:
+	case ss.sendChan <- message{timeout: ContextTimeout(sendCtx, ss.sendTimeout), response: response}:
 		return nil
 	}
 }
