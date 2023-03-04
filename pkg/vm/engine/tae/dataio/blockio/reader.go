@@ -113,9 +113,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 		return nil, nil
 	}
 	if len(idxs) == 0 {
-		meta := blocks[0].GetMeta()
-		header := meta.GetHeader()
-		idxs = make([]uint16, header.GetColumnCount())
+		idxs = make([]uint16, blocks[0].GetColumnCount())
 		for i := range idxs {
 			idxs[i] = uint16(i)
 			i++

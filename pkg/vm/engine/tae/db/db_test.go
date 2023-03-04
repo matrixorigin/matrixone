@@ -4042,51 +4042,54 @@ func TestBlockRead(t *testing.T) {
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
-		context.Background(), info, len(schema.ColDefs),
-		columns, colIdxs, colTyps, colNulls,
+		context.Background(), info, colIdxs, colTyps,
 		beforeDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b1.Close()
-	assert.Equal(t, columns, b1.Attrs)
 	assert.Equal(t, len(columns), len(b1.Vecs))
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
 	b2, err := blockio.BlockReadInner(
-		context.Background(), info, len(schema.ColDefs),
-		columns, colIdxs, colTyps, colNulls,
+		context.Background(), info, colIdxs, colTyps,
 		afterFirstDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b2.Close()
-	assert.Equal(t, columns, b2.Attrs)
-	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 19, b2.Vecs[0].Length())
 	b3, err := blockio.BlockReadInner(
-		context.Background(), info, len(schema.ColDefs),
-		columns, colIdxs, colTyps, colNulls,
+		context.Background(), info, colIdxs, colTyps,
 		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b3.Close()
-	assert.Equal(t, columns, b2.Attrs)
 	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 16, b3.Vecs[0].Length())
 
 	// read rowid column only
 	b4, err := blockio.BlockReadInner(
-		context.Background(), info, len(schema.ColDefs),
-		[]string{catalog.AttrRowID},
+		context.Background(), info,
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
-		[]bool{false},
 		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b4.Close()
-	assert.Equal(t, []string{catalog.AttrRowID}, b4.Attrs)
 	assert.Equal(t, 1, len(b4.Vecs))
 	assert.Equal(t, 16, b4.Vecs[0].Length())
+
+	// read rowid column only
+	info.EntryState = false
+	b5, err := blockio.BlockReadInner(
+		context.Background(), info,
+		[]uint16{2},
+		[]types.Type{types.T_Rowid.ToType()},
+		afterSecondDel, fs, pool,
+	)
+	assert.NoError(t, err)
+	defer b5.Close()
+	assert.Equal(t, 1, len(b5.Vecs))
+	assert.Equal(t, 16, b5.Vecs[0].Length())
 }
 
 func TestCompactDeltaBlk(t *testing.T) {

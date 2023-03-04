@@ -88,6 +88,10 @@ func (b *Block) GetID() uint32 {
 	return b.id
 }
 
+func (b *Block) GetColumnCount() uint16 {
+	return b.header.columnCount
+}
+
 func (b *Block) MarshalMeta() ([]byte, error) {
 	var (
 		err    error

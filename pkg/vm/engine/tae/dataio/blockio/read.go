@@ -153,10 +153,10 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		}()
 	}
 
-	loadBlock := func() ([]*batch.Batch, error) {
-		if len(colIndexes) == 1 && ok {
+	loadBlock := func(idxes []uint16) ([]*batch.Batch, error) {
+		if len(idxes) == 0 && ok {
 			// only read rowid column on non appendable block, return early
-			bat.AddVector(fmt.Sprintf("%d", 0), rowIdVec)
+			bat.AddVector(catalog.AttrRowID, rowIdVec)
 			return nil, nil
 		}
 		bats, err := reader.LoadColumns(ctx, idxes, []uint32{id}, m)
@@ -182,10 +182,11 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		if err != nil {
 			return err
 		}
-		colCount := len(blocks)
-		idxes = append(idxes, uint16(colCount-2)) // committs
-		idxes = append(idxes, uint16(colCount-1)) // aborted
-		bats, err := loadBlock()
+
+		colCount := blocks[0].GetColumnCount()
+		idxes = append(idxes, colCount-2) // committs
+		idxes = append(idxes, colCount-1) // aborted
+		bats, err := loadBlock(idxes)
 		if err != nil {
 			return err
 		}
@@ -214,7 +215,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	if info.EntryState {
 		err = loadAppendBlock()
 	} else {
-		_, err = loadBlock()
+		_, err = loadBlock(idxes)
 	}
 
 	if err != nil {

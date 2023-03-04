@@ -88,6 +88,8 @@ type BlockObject interface {
 
 	// GetID is to get the serial number of the block in the object
 	GetID() uint32
+
+	GetColumnCount() uint16
 }
 
 // ColumnObject is a vector in a batch written to fileservice
