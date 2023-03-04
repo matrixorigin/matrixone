@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -40,6 +41,10 @@ const (
 
 	// minimal duration to detect slow morpc stream
 	minStreamPoisionTime = 5 * time.Millisecond
+)
+
+var (
+	StatisticsLogInterval = 10 * time.Second
 )
 
 // TableID is type for api.TableID
@@ -136,6 +141,7 @@ type LogtailServer struct {
 	rootCtx    context.Context
 	cancelFunc context.CancelFunc
 	stopper    *stopper.Stopper
+	stats      *serverStatistics
 }
 
 // NewLogtailServer initializes a server for logtail push model.
@@ -153,6 +159,7 @@ func NewLogtailServer(
 		errChan:    make(chan sessionError),
 		subChan:    make(chan subscription, 10),
 		logtail:    logtail,
+		stats:      newServerStatistics(),
 	}
 
 	for _, opt := range opts {
@@ -240,18 +247,20 @@ func (s *LogtailServer) onMessage(
 
 	if req := msg.GetSubscribeTable(); req != nil {
 		logger.Debug("on subscription", zap.Any("request", req))
+		s.stats.subscriptionRequestInc()
 		return s.onSubscription(ctx, stream, req)
 	}
 
 	if req := msg.GetUnsubscribeTable(); req != nil {
 		logger.Debug("on unsubscription", zap.Any("request", req))
+		s.stats.unsubscriptionRequestInc()
 		return s.onUnsubscription(ctx, stream, req)
 	}
 
 	return moerr.NewInvalidArg(ctx, "request", msg)
 }
 
-// onSubscription handls subscription.
+// onSubscription handles subscription.
 func (s *LogtailServer) onSubscription(
 	sendCtx context.Context, stream morpcStream, req *logtail.SubscribeRequest,
 ) error {
@@ -361,12 +370,18 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 	publishTicker := time.NewTicker(s.cfg.LogtailCollectInterval)
 	defer publishTicker.Stop()
 
+	logTicker := time.NewTicker(StatisticsLogInterval)
+	defer logTicker.Stop()
+
 	risk := 0
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Error("stop subscription handler", zap.Error(ctx.Err()))
 			return
+
+		case <-logTicker.C:
+			logger.Info("logtail server statistics", zap.String("statistics", s.Stats()))
 
 		case sub, ok := <-s.subChan:
 			if !ok {
@@ -485,4 +500,8 @@ func (s *LogtailServer) Start() error {
 	}
 
 	return s.rpc.Start()
+}
+
+func (s *LogtailServer) Stats() string {
+	return fmt.Sprintf("%s, %s, %s", s.ssmgr.Stats(), s.subscribed.Stats(), s.stats.Stats())
 }

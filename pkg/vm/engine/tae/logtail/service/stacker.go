@@ -15,6 +15,7 @@
 package service
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -31,6 +32,13 @@ func NewTableStacker() *TableStacker {
 	return &TableStacker{
 		tables: make(map[TableID]*tableInfo),
 	}
+}
+
+func (s *TableStacker) Stats() string {
+	s.RLock()
+	defer s.RUnlock()
+
+	return fmt.Sprintf("Table=%d", len(s.tables))
 }
 
 // ListTable takes a snapshot for all registered tables.

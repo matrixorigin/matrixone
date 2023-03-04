@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 	"unsafe"
@@ -57,6 +58,13 @@ func NewSessionManager() *SessionManager {
 	return &SessionManager{
 		clients: make(map[morpcStream]*Session),
 	}
+}
+
+func (sm *SessionManager) Stats() string {
+	sm.RLock()
+	defer sm.RUnlock()
+
+	return fmt.Sprintf("Session=%d", len(sm.clients))
 }
 
 // GetSession constructs a session for new morpc.ClientSession.
@@ -174,6 +182,8 @@ type Session struct {
 
 	mu     sync.RWMutex
 	tables map[TableID]TableState
+
+	stats *sessionStatistics
 }
 
 type SessionErrorNotifier interface {
@@ -202,10 +212,14 @@ func NewSession(
 		poisionTime: poisionTime,
 		sendChan:    make(chan message, responseBufferSize), // buffer response for morpc client session
 		tables:      make(map[TableID]TableState),
+		stats:       newSessionStatistics(),
 	}
 
 	sender := func() {
 		defer ss.wg.Done()
+
+		logTicker := time.NewTicker(StatisticsLogInterval)
+		defer logTicker.Stop()
 
 		sizeMarker := 0
 		for {
@@ -214,11 +228,16 @@ func NewSession(
 				ss.logger.Error("stop session sender", zap.Error(ss.sessionCtx.Err()))
 				return
 
+			case <-logTicker.C:
+				ss.logger.Info("logtail session statistics", zap.String("statistics", ss.Stats()))
+
 			case msg, ok := <-ss.sendChan:
 				if !ok {
 					ss.logger.Info("session sender channel closed")
 					return
 				}
+
+				ss.stats.bufferGaugeDec()
 
 				// FIXME: update with metrics
 				// log real buffer size every 1024*1024 change
@@ -252,6 +271,10 @@ func NewSession(
 	return ss
 }
 
+func (ss *Session) Stats() string {
+	return ss.stats.Stats()
+}
+
 // Drop closes sender goroutine.
 func (ss *Session) PostClean() {
 	ss.cancelFunc()
@@ -269,6 +292,7 @@ func (ss *Session) Register(id TableID, table api.TableID) bool {
 		return true
 	}
 	ss.tables[id] = TableOnSubscription
+	ss.stats.tableGaugeInc()
 	return false
 }
 
@@ -282,6 +306,7 @@ func (ss *Session) Unregister(id TableID) TableState {
 		return TableNotFound
 	}
 	delete(ss.tables, id)
+	ss.stats.tableGaugeDec()
 	return state
 }
 
@@ -342,6 +367,7 @@ func (ss *Session) SendErrorResponse(
 	sendCtx context.Context, table api.TableID, code uint16, message string,
 ) error {
 	ss.logger.Debug("send error response", zap.Any("table", table), zap.Uint16("code", code), zap.String("message", message))
+	ss.stats.errorResponseInc()
 
 	resp := ss.responses.Acquire()
 	resp.Response = newErrorResponse(table, code, message)
@@ -353,6 +379,7 @@ func (ss *Session) SendSubscriptionResponse(
 	sendCtx context.Context, tail logtail.TableLogtail,
 ) error {
 	ss.logger.Debug("send subscription response", zap.Any("table", tail.Table), zap.String("To", tail.Ts.String()))
+	ss.stats.subscriptionResponseInc()
 
 	resp := ss.responses.Acquire()
 	resp.Response = newSubscritpionResponse(tail)
@@ -364,6 +391,7 @@ func (ss *Session) SendUnsubscriptionResponse(
 	sendCtx context.Context, table api.TableID,
 ) error {
 	ss.logger.Debug("send unsubscription response", zap.Any("table", table))
+	ss.stats.unsubscriptionResponseInc()
 
 	resp := ss.responses.Acquire()
 	resp.Response = newUnsubscriptionResponse(table)
@@ -375,6 +403,7 @@ func (ss *Session) SendUpdateResponse(
 	sendCtx context.Context, from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
 ) error {
 	ss.logger.Debug("send additional logtail", zap.Any("From", from.String()), zap.String("To", to.String()), zap.Int("tables", len(tails)))
+	ss.stats.updateResponseInc()
 
 	resp := ss.responses.Acquire()
 	resp.Response = newUpdateResponse(from, to, tails...)
@@ -409,12 +438,12 @@ func (ss *Session) SendResponse(
 		}
 		return moerr.NewStreamClosedNoCtx()
 	case ss.sendChan <- message{timeout: ContextTimeout(sendCtx, ss.sendTimeout), response: response}:
+		ss.stats.bufferGaugeInc()
 		return nil
 	}
 }
 
 // newUnsubscriptionResponse constructs response for unsubscription.
-// go:inline
 func newUnsubscriptionResponse(
 	table api.TableID,
 ) *logtail.LogtailResponse_UnsubscribeResponse {
@@ -426,7 +455,6 @@ func newUnsubscriptionResponse(
 }
 
 // newUpdateResponse constructs response for publishment.
-// go:inline
 func newUpdateResponse(
 	from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
 ) *logtail.LogtailResponse_UpdateResponse {
@@ -440,7 +468,6 @@ func newUpdateResponse(
 }
 
 // newSubscritpionResponse constructs response for subscription.
-// go:inline
 func newSubscritpionResponse(
 	tail logtail.TableLogtail,
 ) *logtail.LogtailResponse_SubscribeResponse {
@@ -452,7 +479,6 @@ func newSubscritpionResponse(
 }
 
 // newErrorResponse constructs response for error condition.
-// go:inline
 func newErrorResponse(
 	table api.TableID, code uint16, message string,
 ) *logtail.LogtailResponse_Error {
