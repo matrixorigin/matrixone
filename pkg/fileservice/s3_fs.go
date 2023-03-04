@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"io"
 	"math"
 	stdhttp "net/http"
@@ -328,8 +329,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	default:
 	}
 
-	ctx, span := trace.Start(ctx, "S3FS.Read")
-	defer span.End()
+	metric.S3ReadCounter().Inc()
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
@@ -371,8 +371,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		return nil
 	}
 
-	ctx, span := trace.Start(ctx, "S3FS.read")
-	defer span.End()
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err

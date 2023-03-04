@@ -34,6 +34,9 @@ var initCollectors = []Collector{
 	processCollector,
 	// sys metric
 	hardwareStatsCollector,
+	// file service metrics
+	FsMemCacheReadCounter,
+	FsS3ReadCounter,
 }
 
 // register all defined collector here
