@@ -223,6 +223,16 @@ func TestAppend4(t *testing.T) {
 	}
 }
 
+func dropRelation(t *testing.T, e *DB, dbName, name string) {
+	txn, err := e.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabase(dbName)
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+}
+
 func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 	t.Skip("fsdfsdf")
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*(uint32(schema.SegmentMaxBlocks)+1)-1))
@@ -4028,14 +4038,12 @@ func TestBlockRead(t *testing.T) {
 	columns := make([]string, 0)
 	colIdxs := make([]uint16, 0)
 	colTyps := make([]types.Type, 0)
-	colNulls := make([]bool, 0)
 	defs := schema.ColDefs[:]
 	rand.Shuffle(len(defs), func(i, j int) { defs[i], defs[j] = defs[j], defs[i] })
 	for _, col := range defs {
 		columns = append(columns, col.Name)
 		colIdxs = append(colIdxs, uint16(col.Idx))
 		colTyps = append(colTyps, col.Type)
-		colNulls = append(colNulls, col.NullAbility)
 	}
 	t.Log("read columns: ", columns)
 	fs := tae.DB.Fs.Service

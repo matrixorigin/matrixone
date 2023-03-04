@@ -426,9 +426,3 @@ const timestampFormatter = "2006-01-02 15:04:05.000000"
 func Time2DatetimeString(t time.Time) string {
 	return t.Format(timestampFormatter)
 }
-
-func newVector(tye types.Type, buf []byte) *vector.Vector {
-	vector := vector.New(tye)
-	vector.Read(buf)
-	return vector
-}

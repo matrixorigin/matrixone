@@ -121,8 +121,11 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	colTypes []types.Type, info *pkgcatalog.BlockInfo, ts types.TS,
 	fs fileservice.FileService, m *mpool.MPool) (*containers.Batch, error) {
 	ok, _, idxes := getRowsIdIndex(colIndexes, colTypes)
-	reader, err := NewBlockReader(fs, info.MetaLoc)
 	_, id, extent, rows, err := DecodeLocation(info.MetaLoc)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := NewBlockReader(fs, info.MetaLoc)
 	if err != nil {
 		return nil, err
 	}

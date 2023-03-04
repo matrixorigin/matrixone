@@ -125,7 +125,6 @@ func (r *ObjectReader) Read(ctx context.Context,
 		ids = make([]uint32, len(blocks))
 		for i := range ids {
 			ids[i] = uint32(i)
-			i++
 		}
 	}
 	data := &fileservice.IOVector{

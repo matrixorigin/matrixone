@@ -175,6 +175,9 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 		return
 	}
 	_, id, _, _, err := blockio.DecodeLocation(location)
+	if err != nil {
+		return
+	}
 	bat, err := reader.LoadColumns(
 		context.Background(),
 		[]uint16{uint16(len(blk.meta.GetSchema().NameIndex))},

@@ -318,9 +318,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	if err != nil {
 		return err
 	}
-	pkIdx := -1
 	if schema.HasPK() {
-		pkIdx = schema.GetSingleSortKeyIdx()
+		pkIdx := schema.GetSingleSortKeyIdx()
 		writer.SetPrimaryKey(uint16(pkIdx))
 	}
 	for _, bat := range batchs {
