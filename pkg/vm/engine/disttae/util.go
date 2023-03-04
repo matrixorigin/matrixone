@@ -114,8 +114,7 @@ func fetchZonemapAndRowsFromBlockInfo(
 	}
 
 	for i := range idxs {
-		obs[0][i].Marshal()
-		bytes, err := obs[0][i].Marshal()
+		bytes := obs[0][i].GetBuf()
 		if err != nil {
 			return nil, 0, err
 		}

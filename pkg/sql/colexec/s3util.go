@@ -24,17 +24,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	indexwrapper2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -44,7 +41,7 @@ type WriteS3Container struct {
 	nameToNullablity map[string]bool
 	pk               map[string]bool
 
-	writer  objectio.Writer
+	writer  dataio.Writer
 	lengths []uint64
 
 	UniqueRels []engine.Relation
@@ -366,7 +363,7 @@ func GenerateWriter(container *WriteS3Container, proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	container.writer, err = objectio.NewObjectWriter(segId, s3)
+	container.writer, err = blockio.NewBlockWriter(s3, segId)
 	if err != nil {
 		return err
 	}
@@ -421,10 +418,26 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 	return bat.Shuffle(sels, m)
 }
 
+func getPrimaryKeyIdx(pk map[string]bool, Attrs []string) (bool, uint16) {
+	found := false
+	var idx uint16
+	for i := range Attrs {
+		if pk[Attrs[i]] {
+			idx = uint16(i)
+			found = true
+		}
+	}
+	return found, idx
+}
+
 // WriteBlock WriteBlock writes one batch to a buffer and generate related indexes for this batch
 // For more information, please refer to the comment about func Write in Writer interface
 func WriteBlock(container *WriteS3Container, bat *batch.Batch, proc *process.Process) error {
-	fd, err := container.writer.Write(bat)
+	isPK, pkIdx := getPrimaryKeyIdx(container.pk, bat.Attrs)
+	if isPK {
+		container.writer.SetPrimaryKey(pkIdx)
+	}
+	_, err := container.writer.WriteBatch(bat)
 
 	if err != nil {
 		return err
@@ -432,65 +445,14 @@ func WriteBlock(container *WriteS3Container, bat *batch.Batch, proc *process.Pro
 	// atomic.AddUint64(&n.Affected, uint64(bat.Vecs[0].Length()))
 
 	container.lengths = append(container.lengths, uint64(bat.Vecs[0].Length()))
-	if err := GenerateIndex(container, fd, container.writer, bat); err != nil {
-		return err
-	}
 
-	return nil
-}
-
-// GenerateIndex generates relative indexes for the batch writed directly to s3 from cn
-// For more information, please refer to the comment about func WriteIndex in Writer interface
-func GenerateIndex(container *WriteS3Container, fd objectio.BlockObject, objectWriter objectio.Writer, bat *batch.Batch) error {
-	for i, mvec := range bat.Vecs {
-		err := getIndexDataFromVec(fd, objectWriter, uint16(i), mvec, container.nameToNullablity[bat.Attrs[i]], container.pk[bat.Attrs[i]])
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func getIndexDataFromVec(block objectio.BlockObject, writer objectio.Writer,
-	idx uint16,
-	vec *vector.Vector, nullAbliaty bool, isPk bool) error {
-	var err error
-	columnData := containers.NewVectorWithSharedMemory(vec, nullAbliaty)
-	zmPos := 0
-	zoneMapWriter := indexwrapper2.NewZMWriter()
-	if err = zoneMapWriter.Init(writer, block, common.Plain, idx, uint16(zmPos)); err != nil {
-		return err
-	}
-	err = zoneMapWriter.AddValues(columnData)
-	if err != nil {
-		return err
-	}
-	_, err = zoneMapWriter.Finalize()
-	if err != nil {
-		return err
-	}
-	if !isPk {
-		return nil
-	}
-	bfPos := 1
-	bfWriter := indexwrapper2.NewBFWriter()
-	if err = bfWriter.Init(writer, block, common.Plain, idx, uint16(bfPos)); err != nil {
-		return err
-	}
-	if err = bfWriter.AddValues(columnData); err != nil {
-		return err
-	}
-	_, err = bfWriter.Finalize()
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
 // WriteEndBlocks WriteEndBlocks write batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
 func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int) error {
-	blocks, err := container.writer.WriteEnd(proc.Ctx)
+	blocks, _, err := container.writer.Sync(proc.Ctx)
 	if err != nil {
 		return err
 	}
