@@ -459,12 +459,14 @@ message WindowSpec {
 
 message InsertCtx {
 	ObjectRef ref 					= 1;
-	repeated int32 idx 				= 2;
-	TableDef table_def 				= 3;
+	TableDef table_def 				= 2;
 
-	map<string, int32> parent_idx 	= 4;
+	repeated int32 on_duplicate_idx		= 3;
+	map<string, Expr> on_duplicate_expr	= 4;
 
-	ClusterTable cluster_table = 5;
+	map<string, int32> parent_idx 	= 5;
+
+	ClusterTable cluster_table = 6;
 }
 
 message UpdateCtx {
