@@ -6714,7 +6714,7 @@ function_call_generic:
     }
 |   VALUES '(' insert_column ')'
     {
-    	column := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        column := tree.SetUnresolvedName(strings.ToLower($3))
         name := tree.SetUnresolvedName(strings.ToLower($1))
     	$$ = &tree.FuncExpr{
                     Func: tree.FuncName2ResolvableFunctionReference(name),
