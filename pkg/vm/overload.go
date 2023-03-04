@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
@@ -92,10 +93,11 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	MergeGroup:  mergegroup.String,
 	MergeOffset: mergeoffset.String,
 
-	Deletion: deletion.String,
-	Insert:   insert.String,
-	Update:   update.String,
-	External: external.String,
+	Deletion:       deletion.String,
+	Insert:         insert.String,
+	OnDuplicateKey: onduplicatekey.String,
+	Update:         update.String,
+	External:       external.String,
 
 	Minus:        minus.String,
 	Intersect:    intersect.String,
@@ -139,10 +141,11 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	MergeGroup:  mergegroup.Prepare,
 	MergeOffset: mergeoffset.Prepare,
 
-	Deletion: deletion.Prepare,
-	Insert:   insert.Prepare,
-	Update:   update.Prepare,
-	External: external.Prepare,
+	Deletion:       deletion.Prepare,
+	Insert:         insert.Prepare,
+	OnDuplicateKey: onduplicatekey.Prepare,
+	Update:         update.Prepare,
+	External:       external.Prepare,
 
 	Minus:        minus.Prepare,
 	Intersect:    intersect.Prepare,
@@ -190,6 +193,8 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	Insert:   insert.Call,
 	Update:   update.Call,
 	External: external.Call,
+
+	OnDuplicateKey: onduplicatekey.Call,
 
 	Minus:        minus.Call,
 	Intersect:    intersect.Call,

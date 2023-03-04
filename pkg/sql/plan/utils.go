@@ -1358,3 +1358,139 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 	}
 	return fileList, fileSize, err
 }
+
+// GetUniqueColAndIdxFromTableDef
+// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
+// return : []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
+func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
+	uniqueCols := make([]map[string]int, 0, len(tableDef.Cols))
+	if tableDef.Pkey != nil {
+		pkMap := make(map[string]int)
+		for _, colName := range tableDef.Pkey.Names {
+			pkMap[colName] = int(tableDef.Name2ColIndex[colName])
+		}
+		uniqueCols = append(uniqueCols, pkMap)
+	}
+
+	for _, index := range tableDef.Indexes {
+		if index.Unique {
+			pkMap := make(map[string]int)
+			for _, part := range index.Parts {
+				pkMap[part] = int(tableDef.Name2ColIndex[part])
+			}
+			uniqueCols = append(uniqueCols, pkMap)
+		}
+	}
+	return uniqueCols
+}
+
+// GenUniqueColJoinExpr
+// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
+// uniqueCols is: []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
+// we will get expr like: 'leftTag.a = rightTag.a or (leftTag.b = rightTag.b and leftTag.c = rightTag. c)
+func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, leftTag int32, rightTag int32) (*Expr, error) {
+	var checkExpr *Expr
+	var err error
+
+	for i, uniqueColMap := range uniqueCols {
+		var condExpr *Expr
+		condIdx := int(0)
+		for _, colIdx := range uniqueColMap {
+			col := tableDef.Cols[colIdx]
+			leftExpr := &Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: leftTag,
+						ColPos: int32(colIdx),
+					},
+				},
+			}
+			rightExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: rightTag,
+						ColPos: int32(colIdx),
+					},
+				},
+			}
+			eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
+			if err != nil {
+				return nil, err
+			}
+			if condIdx == 0 {
+				condExpr = eqExpr
+			} else {
+				condExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
+				if err != nil {
+					return nil, err
+				}
+			}
+			condIdx++
+		}
+
+		if i == 0 {
+			checkExpr = condExpr
+		} else {
+			checkExpr, err = bindFuncExprImplByPlanExpr(ctx, "or", []*Expr{checkExpr, condExpr})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return checkExpr, nil
+}
+
+// GenUniqueColCheckExpr   like GenUniqueColJoinExpr. but use for on duplicate key clause to check conflict
+// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
+// we get batch like [1,2,3,4, origin_a, origin_b, origin_c, origin_d, row_id ....]。
+// we get expr like:  []*Expr{ 1=origin_a ,  (2 = origin_b and 3 = origin_c) }
+func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int) ([]*Expr, error) {
+	checkExpr := make([]*Expr, len(uniqueCols))
+	colCount := len(tableDef.Cols)
+
+	for i, uniqueColMap := range uniqueCols {
+		var condExpr *Expr
+		condIdx := int(0)
+		for _, colIdx := range uniqueColMap {
+			col := tableDef.Cols[colIdx]
+			// insert values
+			leftExpr := &Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(colIdx),
+					},
+				},
+			}
+			rightExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: int32(colIdx + colCount),
+					},
+				},
+			}
+			eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
+			if err != nil {
+				return nil, err
+			}
+			if condIdx == 0 {
+				condExpr = eqExpr
+			} else {
+				condExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
+				if err != nil {
+					return nil, err
+				}
+			}
+			condIdx++
+		}
+		checkExpr[i] = condExpr
+	}
+
+	return checkExpr, nil
+}
