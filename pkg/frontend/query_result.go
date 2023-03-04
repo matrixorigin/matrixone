@@ -575,14 +575,6 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				return err
 			}
 			tmpBatch = bats[0]
-			//read every column
-			/*for colIndex, entry := range ioVector.Entries {
-				tmpBatch.Vecs[colIndex] = vector.New(typs[colIndex])
-				err = tmpBatch.Vecs[colIndex].Read(entry.Object.([]byte))
-				if err != nil {
-					return err
-				}
-			}*/
 			tmpBatch.InitZsOne(tmpBatch.Vecs[0].Length())
 
 			//step2.1: converts it into the csv string
