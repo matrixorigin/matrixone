@@ -62,7 +62,6 @@ func (node *persistedNode) init() {
 	for i := range schema.ColDefs {
 		index := indexwrapper.NewImmutableIndex()
 		if err := index.ReadFrom(
-			node.block.bufMgr,
 			node.block.fs,
 			node.block.meta.AsCommonID(),
 			node.block.meta.GetMetaLoc(),
