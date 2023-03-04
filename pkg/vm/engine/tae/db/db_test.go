@@ -223,16 +223,6 @@ func TestAppend4(t *testing.T) {
 	}
 }
 
-func dropRelation(t *testing.T, e *DB, dbName, name string) {
-	txn, err := e.StartTxn(nil)
-	assert.NoError(t, err)
-	db, err := txn.GetDatabase(dbName)
-	assert.NoError(t, err)
-	_, err = db.DropRelationByName(name)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
-}
-
 func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 	t.Skip("fsdfsdf")
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*(uint32(schema.SegmentMaxBlocks)+1)-1))
@@ -302,7 +292,13 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 	assert.NoError(t, txn.Commit())
 
 	// t.Log(rel.GetMeta().(*catalog.TableEntry).PPString(common.PPL1, 0, ""))
-	dropRelation(t, tae, defaultTestDB, schema.Name)
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabase(defaultTestDB)
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
 }
 
 func TestCRUD(t *testing.T) {

@@ -123,7 +123,7 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 	if err != nil {
 		return nil, err
 	}
-	for y, _ := range blocks {
+	for y := range blocks {
 		bat := batch.NewWithSize(len(idxs))
 		for i := range idxs {
 			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
