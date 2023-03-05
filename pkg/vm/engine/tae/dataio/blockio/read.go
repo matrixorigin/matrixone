@@ -88,8 +88,9 @@ func BlockReadInner(
 	}
 	// remove rows from columns
 	if columnBatch.Deletes != nil {
-		for _, col := range columnBatch.Vecs {
-			col.Compact(columnBatch.Deletes)
+		for i, col := range columnBatch.Vecs {
+			columnBatch.Vecs[i] = col.CloneWindow(0, columnBatch.Length(), nil)
+			columnBatch.Vecs[i].Compact(columnBatch.Deletes)
 		}
 	}
 	return columnBatch, nil
@@ -171,6 +172,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 			if typ.Oid == types.T_Rowid {
 				bat.AddVector(fmt.Sprintf("%d", i), rowIdVec)
 			} else {
+				entry[0].Show()
 				bat.AddVector(fmt.Sprintf("%d", i),
 					containers.NewVectorWithSharedMemory(entry[0], true))
 				entry = entry[1:]
@@ -253,7 +255,6 @@ func recordDeletes(columnBatch *containers.Batch, deleteBatch *containers.Batch,
 	if deleteBatch == nil {
 		return
 	}
-
 	// record visible delete rows
 	for i := 0; i < deleteBatch.Length(); i++ {
 		abort := deleteBatch.GetVectorByName(catalog.AttrAborted).Get(i).(bool)
