@@ -13,11 +13,3 @@ var FsS3ReadCounter = NewCounter(CounterOpts{
 	Help:        "Counter for S3 Reads",
 	ConstLabels: sysTenantID,
 })
-
-func MemCacheReadCounter() Counter {
-	return FsMemCacheReadCounter
-}
-
-func S3ReadCounter() Counter {
-	return FsS3ReadCounter
-}

@@ -373,7 +373,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	default:
 	}
 
-	metric.S3ReadCounter().Inc()
+	metric.FsS3ReadCounter.Inc()
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()

@@ -48,7 +48,7 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
-	metric.MemCacheReadCounter().Inc()
+	metric.FsMemCacheReadCounter.Inc()
 
 	numHit := 0
 	defer func() {
