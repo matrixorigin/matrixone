@@ -292,6 +292,8 @@ const (
 
 	MO_LOG_DATE // parse date from string, like __mo_filepath
 
+	// be used: insert into t1 values(1,1) on duplicate key update a=values(a)+a+1
+	VALUES
 	BINARY
 	INTERNAL_CHAR_LENGTH
 	INTERNAL_CHAR_SIZE
@@ -515,6 +517,7 @@ var functionIdRegister = map[string]int32{
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
 	"trim":                           TRIM,
 	"mo_log_date":                    MO_LOG_DATE,
+	"values":                         VALUES,
 	"binary":                         BINARY,
 	"internal_char_length":           INTERNAL_CHAR_LENGTH,
 	"internal_char_size":             INTERNAL_CHAR_SIZE,

@@ -21,9 +21,6 @@ import (
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Plan, err error) {
-	if len(stmt.OnDuplicateUpdate) > 0 {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ...")
-	}
 	if isReplace {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
 	}
@@ -41,6 +38,10 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tblDef, tblInfo.isClusterTable[0])
 	if err != nil {
 		return nil, err
+	}
+
+	if len(stmt.OnDuplicateUpdate) > 0 && clusterTable.IsClusterTable {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
@@ -82,12 +83,11 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	insertCtx := &plan.InsertCtx{
 		Ref:      rewriteInfo.tblInfo.objRef[0],
 		TableDef: rewriteInfo.tblInfo.tableDefs[0],
-		Idx:      make([]int32, len(rewriteInfo.tblInfo.tableDefs[0].Cols)),
+
+		OnDuplicateIdx:  rewriteInfo.onDuplicateIdx,
+		OnDuplicateExpr: rewriteInfo.onDuplicateExpr,
 
 		ClusterTable: clusterTable,
-	}
-	for j := range tblDef.Cols {
-		insertCtx.Idx[j] = int32(j)
 	}
 	if len(rewriteInfo.parentIdx) == 1 {
 		insertCtx.ParentIdx = rewriteInfo.parentIdx[0]
