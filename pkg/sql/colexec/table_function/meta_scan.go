@@ -79,12 +79,6 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	rbat = bats[0]
 	rbat.SetAttributes(catalog.MetaColNames)
 	rbat.Cnt = 1
-	/*for i, e := range iov.Entries {
-		rbat.Vecs[i] = vector.New(catalog.MetaColTypes[idxs[i]])
-		if err = rbat.Vecs[i].Read(e.Object.([]byte)); err != nil {
-			return false, err
-		}
-	}*/
 	rbat.InitZsOne(1)
 	proc.SetInputBatch(rbat)
 	return false, nil
