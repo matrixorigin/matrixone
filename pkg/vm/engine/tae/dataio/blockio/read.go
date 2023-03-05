@@ -89,7 +89,7 @@ func BlockReadInner(
 	// remove rows from columns
 	if columnBatch.Deletes != nil {
 		for i, col := range columnBatch.Vecs {
-			columnBatch.Vecs[i] = col.CloneWindow(0, columnBatch.Length(), nil)
+			columnBatch.Vecs[i] = col.CloneWindow(0, col.Length(), nil)
 			columnBatch.Vecs[i].Compact(columnBatch.Deletes)
 		}
 	}
