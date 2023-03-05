@@ -1179,6 +1179,87 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 
 	// build select plan
+	indexCols := make(tree.Exprs, len(stmt.KeyParts))
+	for i, key := range stmt.KeyParts {
+		indexCols[i] = key.ColName
+	}
+
+	var selectStmt *tree.Select
+	selectTable := &tree.JoinTableExpr{
+		JoinType: "CROSS",
+		Left: &tree.AliasedTableExpr{
+			Expr: &stmt.Table,
+		},
+	}
+
+	serialFuncExpr := &tree.FuncExpr{
+		Func: tree.ResolvableFunctionReference{
+			FunctionReference: &tree.UnresolvedName{
+				NumParts: 1,
+				Star:     false,
+				Parts:    tree.NameParts{"serial"},
+			},
+		},
+		Type:  tree.FUNC_TYPE_DEFAULT,
+		Exprs: indexCols,
+	}
+
+	if oriPriKeyName != "" {
+		selectStmt = &tree.Select{
+			Select: &tree.SelectClause{
+				Exprs: []tree.SelectExpr{{Expr: serialFuncExpr}, {Expr: &tree.UnresolvedName{
+					NumParts: 1,
+					Star:     false,
+					Parts:    tree.NameParts{oriPriKeyName},
+				}}},
+				From: &tree.From{Tables: []tree.TableExpr{selectTable}},
+			},
+		}
+	} else {
+		selectStmt = &tree.Select{
+			Select: &tree.SelectClause{
+				Exprs: []tree.SelectExpr{{Expr: serialFuncExpr}},
+				From:  &tree.From{Tables: []tree.TableExpr{selectTable}},
+			},
+		}
+	}
+
+	selectPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
+	if err != nil {
+		return nil, err
+	}
+
+	//build insert plan
+
+	//get select col defs
+	sourceColDefs := GetResultColumnsFromPlan(selectPlan)
+	selectPlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
+
+	insertExprs := make([]*Expr, len(sourceColDefs))
+	for i := range insertExprs {
+		insertExprs[i] = &plan.Expr{
+			Typ: sourceColDefs[i].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					ColPos: int32(i),
+				},
+			},
+		}
+	}
+
+	indexTableDef := index.IndexTables[0]
+	// do type cast if needed
+	for i := range insertExprs {
+		insertExprs[i], err = makePlan2CastExpr(ctx.GetContext(), insertExprs[i], indexTableDef.Cols[i].Typ)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// indexObjRef := &plan.ObjectRef{
+	// 	SchemaName: createIndex.Database,
+	// 	ObjName:    indexTableDef.Name,
+	// }
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
