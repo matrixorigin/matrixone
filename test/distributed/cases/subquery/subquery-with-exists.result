@@ -385,7 +385,7 @@ drop table if exists t1;
 create table t1 (df decimal(5,1));
 insert into t1 values(1.1);
 select 1.1 * exists(select * from t1);
-invalid argument operator *, bad value [DECIMAL128 BOOL]
+invalid argument operator *, bad value [DECIMAL64 BOOL]
 drop table if exists t1;
 drop table if exists t1;
 CREATE TABLE t1 (i INT);

@@ -47,12 +47,13 @@ import (
 // S3FS is a FileService implementation backed by S3
 type S3FS struct {
 	name      string
-	client    *s3.Client
+	s3Client  *s3.Client
 	bucket    string
 	keyPrefix string
 
-	memCache  *MemCache
-	diskCache *DiskCache
+	memCache    *MemCache
+	diskCache   *DiskCache
+	asyncUpdate bool
 }
 
 // key mapping scheme:
@@ -154,7 +155,7 @@ func (s *S3FS) initCaches(
 		if err != nil {
 			return err
 		}
-		logutil.Info("fileservice: disk cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", memCacheCapacity))
+		logutil.Info("fileservice: disk cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", diskCacheCapacity))
 	}
 
 	return nil
@@ -188,7 +189,7 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 	var cont *string
 
 	for {
-		output, err := s.client.ListObjectsV2(
+		output, err := s.s3ListObjects(
 			ctx,
 			&s3.ListObjectsV2Input{
 				Bucket:            ptrTo(s.bucket),
@@ -232,6 +233,49 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 	return
 }
 
+func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	ctx, span := trace.Start(ctx, "S3FS.StatFile")
+	defer span.End()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	path, err := ParsePathAtService(filePath, s.name)
+	if err != nil {
+		return nil, err
+	}
+	key := s.pathToKey(path.File)
+
+	output, err := s.s3HeadObject(
+		ctx,
+		&s3.HeadObjectInput{
+			Bucket: ptrTo(s.bucket),
+			Key:    ptrTo(key),
+		},
+	)
+	if err != nil {
+		var httpError *http.ResponseError
+		if errors.As(err, &httpError) {
+			if httpError.Response.StatusCode == 404 {
+				return nil, moerr.NewFileNotFound(ctx, filePath)
+			}
+		}
+		return nil, err
+	}
+
+	return &DirEntry{
+		Name:  pathpkg.Base(filePath),
+		IsDir: false,
+		Size:  output.ContentLength,
+	}, nil
+}
+
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	select {
 	case <-ctx.Done():
@@ -248,7 +292,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 	key := s.pathToKey(path.File)
-	output, err := s.client.HeadObject(
+	output, err := s.s3HeadObject(
 		ctx,
 		&s3.HeadObjectInput{
 			Bucket: ptrTo(s.bucket),
@@ -305,7 +349,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 	if !vector.ExpireAt.IsZero() {
 		expire = &vector.ExpireAt
 	}
-	_, err = s.client.PutObject(
+	_, err = s.s3PutObject(
 		ctx,
 		&s3.PutObjectInput{
 			Bucket:        ptrTo(s.bucket),
@@ -343,7 +387,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 			if err != nil {
 				return
 			}
-			err = s.memCache.Update(ctx, vector)
+			err = s.memCache.Update(ctx, vector, s.asyncUpdate)
 		}()
 	}
 
@@ -355,7 +399,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 			if err != nil {
 				return
 			}
-			err = s.diskCache.Update(ctx, vector)
+			err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
 		}()
 	}
 
@@ -403,7 +447,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		defer spanR.End()
 		if readToEnd {
 			rang := fmt.Sprintf("bytes=%d-", min)
-			output, err := s.client.GetObject(
+			output, err := s.s3GetObject(
 				ctx,
 				&s3.GetObjectInput{
 					Bucket: ptrTo(s.bucket),
@@ -419,7 +463,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		}
 
 		rang := fmt.Sprintf("bytes=%d-%d", min, max)
-		output, err := s.client.GetObject(
+		output, err := s.s3GetObject(
 			ctx,
 			&s3.GetObjectInput{
 				Bucket: ptrTo(s.bucket),
@@ -627,7 +671,7 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 func (s *S3FS) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier) error {
 	ctx, span := trace.Start(ctx, "S3FS.deleteMultiObj")
 	defer span.End()
-	output, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+	output, err := s.s3DeleteObjects(ctx, &s3.DeleteObjectsInput{
 		Bucket: ptrTo(s.bucket),
 		Delete: &types.Delete{
 			Objects: objs,
@@ -662,7 +706,7 @@ func (s *S3FS) deleteSingle(ctx context.Context, filePath string) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.client.DeleteObject(
+	_, err = s.s3DeleteObject(
 		ctx,
 		&s3.DeleteObjectInput{
 			Bucket: ptrTo(s.bucket),
@@ -711,9 +755,16 @@ func (s *S3FS) FlushCache() {
 	}
 }
 
+func (s *S3FS) SetAsyncUpdate(b bool) {
+	s.asyncUpdate = b
+}
+
 func (s *S3FS) CacheStats() *CacheStats {
 	if s.memCache != nil {
 		return s.memCache.CacheStats()
+	}
+	if s.diskCache != nil {
+		return s.diskCache.CacheStats()
 	}
 	return nil
 }
@@ -914,12 +965,43 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	}
 
 	fs := &S3FS{
-		name:      name,
-		client:    client,
-		bucket:    bucket,
-		keyPrefix: prefix,
+		name:        name,
+		s3Client:    client,
+		bucket:      bucket,
+		keyPrefix:   prefix,
+		asyncUpdate: true,
 	}
 
 	return fs, nil
 
+}
+
+func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	FSProfileHandler.AddSample()
+	return s.s3Client.ListObjectsV2(ctx, params, optFns...)
+}
+
+func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	FSProfileHandler.AddSample()
+	return s.s3Client.HeadObject(ctx, params, optFns...)
+}
+
+func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	FSProfileHandler.AddSample()
+	return s.s3Client.PutObject(ctx, params, optFns...)
+}
+
+func (s *S3FS) s3GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	FSProfileHandler.AddSample()
+	return s.s3Client.GetObject(ctx, params, optFns...)
+}
+
+func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
+	FSProfileHandler.AddSample()
+	return s.s3Client.DeleteObjects(ctx, params, optFns...)
+}
+
+func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	FSProfileHandler.AddSample()
+	return s.s3Client.DeleteObject(ctx, params, optFns...)
 }

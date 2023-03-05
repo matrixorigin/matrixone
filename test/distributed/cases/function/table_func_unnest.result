@@ -219,10 +219,10 @@ a	col	seq	key	path	index	value	this
 create view v3 as (select * from unnest(substring('{"a":1}...',1,7), '$') u);
 desc v3;
 Field    Type    Null    Key    Default    Extra    Comment
-col    VARCHAR(65535)    YES        NULL
-index    INT    YES        NULL
-key    VARCHAR(65535)    YES        NULL
-path    VARCHAR(65535)    YES        NULL
-seq    INT    YES        NULL
-this    JSON    YES        NULL
-value    JSON    YES        NULL
+col    VARCHAR(65535)    YES        null
+index    INT(4)    YES        null
+key    VARCHAR(65535)    YES        null
+path    VARCHAR(65535)    YES        null
+seq    INT(4)    YES        null
+this    JSON(0)    YES        null
+value    JSON(0)    YES        null

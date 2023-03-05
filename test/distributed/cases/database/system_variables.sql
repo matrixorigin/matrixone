@@ -91,6 +91,8 @@ desc key_column_usage;
 select table_name, column_name from key_column_usage limit 2;
 desc columns;
 select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
+desc views;
+select table_schema, table_name, definer from views where table_schema = 'system' order by table_name;
 desc profiling;
 select seq, state from profiling;
 
@@ -186,3 +188,26 @@ select version();
 alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select version();
 drop database test;
+
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+-- @session:id=2&user=abc:admin&password=123456
+drop database if exists test;
+drop database if exists test1;
+create database test;
+create database test1;
+use test;
+select version();
+alter database test set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+select version();
+use test1;
+select version();
+alter account config abc set mysql_compatbility_mode = '{"version_compatibility": "0.7"}';
+select version();
+use test1;
+select version();
+drop database test;
+drop database test1;
+-- @session
+alter account config sys set mysql_compatbility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
+select version();
+alter account config abc1 set mysql_compatbility_mode = '{"version_compatibility": "0.7"}';

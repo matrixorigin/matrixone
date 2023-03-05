@@ -162,8 +162,6 @@ type Process struct {
 
 	FileService fileservice.FileService
 
-	GetClusterDetails engine.GetClusterDetailsFunc
-
 	LoadTag bool
 
 	LastInsertID *uint64
@@ -174,9 +172,10 @@ type Process struct {
 }
 
 type WrapCs struct {
-	MsgId uint64
-	Uid   uuid.UUID
-	Cs    morpc.ClientSession
+	MsgId  uint64
+	Uid    uuid.UUID
+	Cs     morpc.ClientSession
+	DoneCh chan struct{}
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

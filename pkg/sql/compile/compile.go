@@ -37,10 +37,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -296,9 +298,17 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 		insertNode := qry.Nodes[qry.Steps[0]]
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
-			c.cnListStrategy()
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(1, blkNum)}}
+			} else {
+				c.cnListStrategy()
+			}
 		} else {
-			c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(1, blkNum)}}
+			} else {
+				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+			}
 		}
 	default:
 		if blkNum < MinBlockNum {
@@ -335,16 +345,33 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	case plan.Query_INSERT:
 		insertNode := qry.Nodes[qry.Steps[0]]
 		insertNode.NotCacheable = true
+
+		var err error
+		var onDuplicateKeyArg *onduplicatekey.Argument
+		if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+			onDuplicateKeyArg, err = constructOnduplicateKey(insertNode, c.e, c.proc)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
 			rs = c.newInsertMergeScope(arg, ss)
 			rs.Magic = MergeInsert
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op:  vm.OnDuplicateKey,
+					Arg: onDuplicateKeyArg,
+				})
+			}
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
@@ -356,6 +383,12 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			rs = c.newMergeScope(ss)
 			rs.Magic = Insert
 			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op:  vm.OnDuplicateKey,
+					Arg: onDuplicateKeyArg,
+				})
+			}
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Insert,
 				Arg: arg,
@@ -600,6 +633,8 @@ func (c *Compile) ConstructScope() *Scope {
 }
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	ctx, span := trace.Start(ctx, "compileExternScan")
+	defer span.End()
 	mcpu := c.cnList[0].Mcpu
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
@@ -639,12 +674,15 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 				fileList[i] = strings.TrimSpace(fileList[i])
 			}
 		} else {
+			_, spanReadDir := trace.Start(ctx, "compileExternScan.ReadDir")
 			fileList, fileSize, err = plan2.ReadDir(param)
 			if err != nil {
+				spanReadDir.End()
 				return nil, err
 			}
+			spanReadDir.End()
 		}
-		fileList, fileSize, err = external.FilterFileList(n, c.proc, fileList, fileSize)
+		fileList, fileSize, err = external.FilterFileList(ctx, n, c.proc, fileList, fileSize)
 		if err != nil {
 			return nil, err
 		}
@@ -919,7 +957,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 	}
 	switch joinTyp {
 	case plan.Node_INNER:
-		rs = c.newJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children)
 		if len(n.OnList) == 0 {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
@@ -946,7 +984,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_SEMI:
-		rs = c.newJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -963,7 +1001,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_LEFT:
-		rs = c.newJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -980,7 +1018,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_SINGLE:
-		rs = c.newJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -997,7 +1035,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_ANTI:
-		rs = c.newJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children)
 		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
 			if isEq && len(conds) == 1 {
@@ -1015,7 +1053,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			}
 		}
 	case plan.Node_MARK:
-		rs = c.newJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children)
 		for i := range rs {
 			//if isEq {
 			//	rs[i].appendInstruction(vm.Instruction{
@@ -1221,7 +1259,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructDispatch(true, extraRegisters(rs, j)),
+				Arg: constructDispatchLocal(true, extraRegisters(rs, j)),
 			})
 			j++
 			ss[i].IsEnd = true
@@ -1353,57 +1391,22 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 	return rs
 }
 
-func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
-	rs := make([]*Scope, len(ss))
-	// join's input will record in the left/right scope when JoinRun
-	// so set it to false here.
-	c.anal.isFirst = false
-	for i := range ss {
-		if ss[i].IsEnd {
-			rs[i] = ss[i]
-			continue
-		}
-		chp := c.newMergeScope(dupScopeList(children))
-		rs[i] = new(Scope)
-		rs[i].Magic = Remote
-		rs[i].IsJoin = true
-		rs[i].NodeInfo = ss[i].NodeInfo
-		rs[i].PreScopes = []*Scope{ss[i], chp}
-		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-		ss[i].appendInstruction(vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[0],
-			},
-		})
-		chp.appendInstruction(vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[1],
-			},
-		})
-		chp.IsEnd = true
-	}
-	return rs
-}
-
-//func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
-//len := len(ss)
-//rs := make([]*Scope, len)
-//idx := 0
+//func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+//rs := make([]*Scope, len(ss))
+//// join's input will record in the left/right scope when JoinRun
+//// so set it to false here.
+//c.anal.isFirst = false
 //for i := range ss {
 //if ss[i].IsEnd {
 //rs[i] = ss[i]
 //continue
 //}
+//chp := c.newMergeScope(dupScopeList(children))
 //rs[i] = new(Scope)
 //rs[i].Magic = Remote
 //rs[i].IsJoin = true
 //rs[i].NodeInfo = ss[i].NodeInfo
-//if isCurrentCN(rs[i].NodeInfo.Addr, c.addr) {
-//idx = i
-//}
-//rs[i].PreScopes = []*Scope{ss[i]}
+//rs[i].PreScopes = []*Scope{ss[i], chp}
 //rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
 //ss[i].appendInstruction(vm.Instruction{
 //Op: vm.Connector,
@@ -1411,17 +1414,52 @@ func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 //Reg: rs[i].Proc.Reg.MergeReceivers[0],
 //},
 //})
-//}
-
-//mergeChildren := c.newMergeScope(children)
-//mergeChildren.appendInstruction(vm.Instruction{
-//Op:  vm.Dispatch,
-//Arg: constructBroadcastJoinDispatch(1, rs, c.addr, mergeChildren.Proc),
+//chp.appendInstruction(vm.Instruction{
+//Op: vm.Connector,
+//Arg: &connector.Argument{
+//Reg: rs[i].Proc.Reg.MergeReceivers[1],
+//},
 //})
-//rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
-
+//chp.IsEnd = true
+//}
 //return rs
 //}
+
+func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+	len := len(ss)
+	rs := make([]*Scope, len)
+	idx := 0
+	for i := range ss {
+		if ss[i].IsEnd {
+			rs[i] = ss[i]
+			continue
+		}
+		rs[i] = new(Scope)
+		rs[i].Magic = Remote
+		rs[i].IsJoin = true
+		rs[i].NodeInfo = ss[i].NodeInfo
+		if isCurrentCN(rs[i].NodeInfo.Addr, c.addr) {
+			idx = i
+		}
+		rs[i].PreScopes = []*Scope{ss[i]}
+		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+		ss[i].appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[0],
+			},
+		})
+	}
+
+	mergeChildren := c.newMergeScope(children)
+	mergeChildren.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructBroadcastJoinDispatch(1, rs, c.addr, mergeChildren.Proc),
+	})
+	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
+
+	return rs
+}
 
 func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
@@ -1435,7 +1473,7 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatch(false, extraRegisters(ss, 0)),
+		Arg: constructDispatchLocal(false, extraRegisters(ss, 0)),
 	})
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
@@ -1455,7 +1493,7 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatch(true, extraRegisters(ss, 1)),
+		Arg: constructDispatchLocal(true, extraRegisters(ss, 1)),
 	})
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
@@ -1562,7 +1600,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			c.cnList[i].Addr = ""
 		}
 	}
-	ranges, err = rel.Ranges(ctx, plan2.HandleFiltersForZM(n.FilterList, c.proc))
+	expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
+	ranges, err = rel.Ranges(ctx, expr)
 	if err != nil {
 		return nil, err
 	}
@@ -1578,7 +1617,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 		return nodes, nil
 	}
-	// ranges[0] means memtable
 	if len(ranges[0]) == 0 {
 		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{
@@ -1591,6 +1629,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 				Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 			})
 		}
+		nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
 		ranges = ranges[1:]
 	}
 	if len(ranges) == 0 {
@@ -1600,21 +1639,29 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	for i := 0; i < len(ranges); i += step {
 		j := i / step
 		if i+step >= len(ranges) {
-			nodes = append(nodes, engine.Node{
-				Rel:  rel,
-				Id:   c.cnList[j].Id,
-				Addr: c.cnList[j].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-				Data: ranges[i:],
-			})
+			if strings.Split(c.addr, ":")[0] == strings.Split(c.cnList[j].Addr, ":")[0] {
+				nodes[0].Data = append(nodes[0].Data, ranges[i:]...)
+			} else {
+				nodes = append(nodes, engine.Node{
+					Rel:  rel,
+					Id:   c.cnList[j].Id,
+					Addr: c.cnList[j].Addr,
+					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
+					Data: ranges[i:],
+				})
+			}
 		} else {
-			nodes = append(nodes, engine.Node{
-				Rel:  rel,
-				Id:   c.cnList[j].Id,
-				Addr: c.cnList[j].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-				Data: ranges[i : i+step],
-			})
+			if strings.Split(c.addr, ":")[0] == strings.Split(c.cnList[j].Addr, ":")[0] {
+				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
+			} else {
+				nodes = append(nodes, engine.Node{
+					Rel:  rel,
+					Id:   c.cnList[j].Id,
+					Addr: c.cnList[j].Addr,
+					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
+					Data: ranges[i : i+step],
+				})
+			}
 		}
 	}
 	return nodes, nil
@@ -1696,9 +1743,9 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
-//func isCurrentCN(addr string, currentCNAddr string) bool {
-//return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
-//}
+func isCurrentCN(addr string, currentCNAddr string) bool {
+	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
+}
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	rowCount := len(exprs)
@@ -1754,7 +1801,8 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 			vec.Append(vector.MustTCols[float32](tmp)[0], false, proc.Mp())
 		case types.T_float64:
 			vec.Append(vector.MustTCols[float64](tmp)[0], false, proc.Mp())
-		case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_json,
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			vec.Append(vector.MustBytesCols(tmp)[0], false, proc.Mp())
 		case types.T_date:
 			vec.Append(vector.MustTCols[types.Date](tmp)[0], false, proc.Mp())

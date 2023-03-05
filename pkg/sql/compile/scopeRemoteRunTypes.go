@@ -16,6 +16,9 @@ package compile
 
 import (
 	"context"
+	"hash/crc32"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,15 +34,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"hash/crc32"
-	"time"
 )
 
 // cnInformation records service information to help handle messages.
 type cnInformation struct {
-	storeEngine       engine.Engine
-	fileService       fileservice.FileService
-	getClusterDetails engine.GetClusterDetailsFunc
+	storeEngine engine.Engine
+	fileService fileservice.FileService
 }
 
 // processHelper records source process information to help
@@ -147,11 +147,13 @@ type messageReceiverOnServer struct {
 }
 
 func newMessageReceiverOnServer(
-	ctx context.Context, message morpc.Message,
-	cs morpc.ClientSession, messageAcquirer func() morpc.Message,
-	storeEngine engine.Engine, fileService fileservice.FileService, txnClient client.TxnClient,
-	getClusterDetails engine.GetClusterDetailsFunc,
-) messageReceiverOnServer {
+	ctx context.Context,
+	message morpc.Message,
+	cs morpc.ClientSession,
+	messageAcquirer func() morpc.Message,
+	storeEngine engine.Engine,
+	fileService fileservice.FileService,
+	txnClient client.TxnClient) messageReceiverOnServer {
 	m, ok := message.(*pipeline.Message)
 	if !ok {
 		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
@@ -180,9 +182,8 @@ func newMessageReceiverOnServer(
 	case pipeline.PipelineMessage:
 		var err error
 		receiver.cnInformation = cnInformation{
-			storeEngine:       storeEngine,
-			fileService:       fileService,
-			getClusterDetails: getClusterDetails,
+			storeEngine: storeEngine,
+			fileService: fileService,
 		}
 		receiver.procBuildHelper, err = generateProcessHelper(m.GetProcInfoData(), txnClient)
 		if err != nil {
@@ -217,10 +218,11 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	}
 	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
 	proc := process.New(
-		receiver.ctx, mp,
-		pHelper.txnClient, pHelper.txnOperator,
-		cnInfo.fileService, cnInfo.getClusterDetails,
-	)
+		receiver.ctx,
+		mp,
+		pHelper.txnClient,
+		pHelper.txnOperator,
+		cnInfo.fileService)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
@@ -270,6 +272,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return err
 	}
 
+	checksum := crc32.ChecksumIEEE(data)
 	if len(data) <= receiver.maxMessageSize {
 		m, errA := receiver.acquireMessage()
 		if errA != nil {
@@ -277,7 +280,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		}
 		m.SetData(data)
 		// XXX too bad.
-		m.SetCheckSum(crc32.ChecksumIEEE(data))
+		m.SetCheckSum(checksum)
 		m.SetSequence(receiver.sequence)
 		receiver.sequence++
 		return receiver.clientSession.Write(receiver.ctx, m)
@@ -296,7 +299,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 			m.SetSid(pipeline.WaitingNext)
 		}
 		m.SetData(data[start:end])
-		m.SetCheckSum(crc32.ChecksumIEEE(data))
+		m.SetCheckSum(checksum)
 		m.SetSequence(receiver.sequence)
 		receiver.sequence++
 

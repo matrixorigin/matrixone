@@ -15,6 +15,8 @@
 package catalog
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -26,14 +28,27 @@ const (
 	PrefixPriColName     = "__mo_cpkey_"
 	PrefixCBColName      = "__mo_cbkey_"
 	PrefixIndexTableName = "__mo_index_"
+	// Compound primary key column name, which is a hidden column
+	CPrimaryKeyColName = "__mo_cpkey_col"
 	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
 	IndexTableIndexColName   = "__mo_index_idx_col"
 	IndexTablePrimaryColName = "__mo_index_pri_col"
 	ExternalFilePath         = "__mo_filepath"
+	IndexTableNamePrefix     = "__mo_index_unique__"
+	AutoIncrTableName        = "%!%mo_increment_columns"
 )
+
+var AutoIncrColumnNames = []string{Row_ID, "name", "offset", "step"}
 
 func ContainExternalHidenCol(col string) bool {
 	return col == ExternalFilePath
+}
+
+func IsHiddenTable(name string) bool {
+	if strings.HasPrefix(name, IndexTableNamePrefix) {
+		return true
+	}
+	return strings.EqualFold(name, AutoIncrTableName)
 }
 
 const (

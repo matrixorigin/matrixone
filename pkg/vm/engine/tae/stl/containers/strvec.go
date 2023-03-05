@@ -123,7 +123,7 @@ func (vec *StrVector[T]) String() string {
 	}
 	data := ""
 	for i := 0; i < end; i++ {
-		data = fmt.Sprintf("%s %v", data, vec.Get(i))
+		data = fmt.Sprintf("%s %v", data, vec.ShallowGet(i))
 	}
 	s = fmt.Sprintf("%s %s", s, data)
 	return s
@@ -165,13 +165,24 @@ func (vec *StrVector[T]) Update(i int, v T) {
 	vec.area.AppendMany(val...)
 }
 
-func (vec *StrVector[T]) Get(i int) T {
+func (vec *StrVector[T]) get(i int) []byte {
 	v := vec.vdata.Get(i)
 	if v.IsSmall() {
-		return any(v.ByteSlice()).(T)
+		return v.ByteSlice()
 	}
 	vOff, vLen := v.OffsetLen()
-	return any(vec.area.Slice()[vOff : vOff+vLen]).(T)
+	return vec.area.Slice()[vOff : vOff+vLen]
+}
+
+func (vec *StrVector[T]) Get(i int) T {
+	bs := vec.get(i)
+	ret := make([]byte, len(bs))
+	copy(ret, bs)
+	return any(ret).(T)
+}
+
+func (vec *StrVector[T]) ShallowGet(i int) T {
+	return any(vec.get(i)).(T)
 }
 
 func (vec *StrVector[T]) Delete(i int) (deleted T) {

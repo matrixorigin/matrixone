@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -84,6 +85,7 @@ type store struct {
 	hakeeperClient      logservice.DNHAKeeperClient
 	fileService         fileservice.FileService
 	metadataFileService fileservice.ReplaceableFileService
+	moCluster           clusterservice.MOCluster
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 
@@ -175,6 +177,7 @@ func (s *store) Start() error {
 func (s *store) Close() error {
 	s.stopper.Stop()
 	var err error
+	s.moCluster.Close()
 	if e := s.hakeeperClient.Close(); e != nil {
 		err = multierr.Append(e, err)
 	}
@@ -340,6 +343,7 @@ func (s *store) initHAKeeperClient() error {
 			return err
 		}
 		s.hakeeperClient = client
+		s.initClusterService()
 		return nil
 	}
 
@@ -350,5 +354,12 @@ func (s *store) initHAKeeperClient() error {
 		return err
 	}
 	s.hakeeperClient = client
+	s.initClusterService()
 	return nil
+}
+
+func (s *store) initClusterService() {
+	s.moCluster = clusterservice.NewMOCluster(s.hakeeperClient,
+		s.cfg.Cluster.RefreshInterval.Duration)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, s.moCluster)
 }

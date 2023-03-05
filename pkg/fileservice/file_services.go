@@ -115,3 +115,18 @@ func (f *FileServices) Write(ctx context.Context, vector IOVector) error {
 	}
 	return fs.Write(ctx, vector)
 }
+
+func (f *FileServices) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+	path, err := ParsePathAtService(filePath, "")
+	if err != nil {
+		return nil, err
+	}
+	if path.Service == "" {
+		path.Service = f.defaultName
+	}
+	fs, err := Get[FileService](f, path.Service)
+	if err != nil {
+		return nil, err
+	}
+	return fs.StatFile(ctx, filePath)
+}

@@ -224,7 +224,7 @@ var (
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
 	}, {
 		input:  "select binary('Geeksforgeeks')",
-		output: "select cast(Geeksforgeeks as binary)",
+		output: "select binary(Geeksforgeeks)",
 	}, {
 		input:  "show schemas where 1",
 		output: "show databases where 1",
@@ -583,13 +583,13 @@ var (
 		output: "insert into t1 (f1) values (-1)",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=VALUES(a)+VALUES(b), b=VALUES(a)+VALUES(c);",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (values(a) + values(b), values(a) + values(c))",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = values(a) + values(b), b = values(a) + values(c)",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2, b=3;",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (2, 3)",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2, b = 3",
 	}, {
 		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2/2, b=3;",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (2 / 2, 3)",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2 / 2, b = 3",
 	}, {
 		input:  "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
 		output: "insert into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
@@ -774,9 +774,6 @@ var (
 			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} into table db.a",
 		},
 		{
-			input:  "import data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-			output: "import data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 lines",
-		}, {
 			input:  "show tables from test01 where tables_in_test01 like '%t2%'",
 			output: "show tables from test01 where tables_in_test01 like %t2%",
 		}, {

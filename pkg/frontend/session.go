@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"strings"
@@ -30,12 +31,14 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -60,8 +63,7 @@ type ShowStatementType int
 
 const (
 	NotShowStatement ShowStatementType = 0
-	ShowColumns      ShowStatementType = 1
-	ShowTableStatus  ShowStatementType = 2
+	ShowTableStatus  ShowStatementType = 1
 )
 
 type TxnHandler struct {
@@ -323,6 +325,13 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Dispose()
 	})
+	proc := process.New(
+		context.Background(),
+		ses.GetMemPool(),
+		ses.GetTxnHandler().GetTxnClient(),
+		ses.GetTxnHandler().GetTxnOperator(),
+		pu.FileService)
+	ses.GetTxnCompileCtx().SetProcess(proc)
 	return ses
 }
 
@@ -503,28 +512,27 @@ func (ses *Session) GetTempTableStorage() *memorystorage.Storage {
 	return ses.tempTablestorage
 }
 
-func (ses *Session) SetTempTableStorage(ck clock.Clock) (*logservicepb.DNStore, error) {
+func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.DNService, error) {
 	// Without concurrency, there is no potential for data competition
 
 	// Arbitrary value is OK since it's single sharded. Let's use 0xbeef
 	// suggested by @reusee
-	shard := logservicepb.DNShardInfo{
-		ShardID:   0xbeef,
-		ReplicaID: 0xbeef,
-	}
-	shards := []logservicepb.DNShardInfo{
-		shard,
+	shards := []metadata.DNShard{
+		{
+			ReplicaID:     0xbeef,
+			DNShardRecord: metadata.DNShardRecord{ShardID: 0xbeef},
+		},
 	}
 	// Arbitrary value is OK, for more information about TEMPORARY_TABLE_DN_ADDR, please refer to the comment in defines/const.go
 	dnAddr := defines.TEMPORARY_TABLE_DN_ADDR
-	dnStore := logservicepb.DNStore{
-		UUID:           uuid.NewString(),
-		ServiceAddress: dnAddr,
-		Shards:         shards,
+	dnStore := metadata.DNService{
+		ServiceID:         uuid.NewString(),
+		TxnServiceAddress: dnAddr,
+		Shards:            shards,
 	}
 
 	ms, err := memorystorage.NewMemoryStorage(
-		mpool.MustNewZero(),
+		mpool.MustNewZeroNoFixed(),
 		ck,
 		memoryengine.RandomIDGenerator,
 	)
@@ -1699,9 +1707,10 @@ func (th *TxnHandler) GetStorage() engine.Engine {
 }
 
 func (th *TxnHandler) GetTxn() (TxnOperator, error) {
-	err := th.GetSession().TxnStart()
+	ses := th.GetSession()
+	err := ses.TxnStart()
 	if err != nil {
-		logutil.Errorf("GetTxn. error:%v", err)
+		logErrorf(ses.GetConciseProfile(), "GetTxn. error:%v", err)
 		return nil, err
 	}
 	return th.GetTxnOperator(), nil
@@ -1930,6 +1939,107 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	return tcc.getTableDef(ctx, table, dbName, tableName)
 }
 
+func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (string, error) {
+	var expectInvalidArgErr bool
+	var expectedInvalidArgLengthErr bool
+	var badValue string
+	var argstr string
+	var body string
+	var sql string
+	var err error
+	var erArray []ExecResult
+
+	ses := tcc.GetSession()
+	ctx := ses.GetRequestContext()
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	sql = fmt.Sprintf(`select args, body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			// reset flag
+			expectedInvalidArgLengthErr = false
+			expectInvalidArgErr = false
+			argstr, err = erArray[0].GetString(ctx, i, 0)
+			if err != nil {
+				goto handleFailed
+			}
+			body, err = erArray[0].GetString(ctx, i, 1)
+			if err != nil {
+				goto handleFailed
+			}
+			// arg type check
+			argMap := make(map[string]string)
+			json.Unmarshal([]byte(argstr), &argMap)
+			if len(argMap) != len(args) {
+				expectedInvalidArgLengthErr = true
+				continue
+			}
+			i := 0
+			for _, v := range argMap {
+				switch t := int32(types.Types[v]); {
+				case (t >= 20 && t <= 29): // int family
+					if args[i].Typ.Id < 20 || args[i].Typ.Id > 29 {
+						expectInvalidArgErr = true
+						badValue = v
+					}
+				case t == 10: // bool family
+					if args[i].Typ.Id != 10 {
+						expectInvalidArgErr = true
+						badValue = v
+					}
+				case (t >= 30 && t <= 33): // float family
+					if args[i].Typ.Id < 30 || args[i].Typ.Id > 33 {
+						expectInvalidArgErr = true
+						badValue = v
+					}
+				}
+				i++
+			}
+			if (!expectInvalidArgErr) && (!expectedInvalidArgLengthErr) {
+				goto handleSuccess
+			}
+		}
+		goto handleFailed
+	} else {
+		return "", moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+	}
+handleSuccess:
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return body, nil
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return "", rbErr
+	}
+	if expectedInvalidArgLengthErr {
+		return "", moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+	} else if expectInvalidArgErr {
+		return "", moerr.NewInvalidArg(ctx, name+" function have invalid input args", badValue)
+	}
+	return "", moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+}
+
 func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Relation, dbName, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
 	tableId := table.GetTableID(ctx)
 	engineDefs, err := table.TableDefs(ctx)
@@ -1951,7 +2061,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var refChildTbls []uint64
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
 			col := &plan2.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
@@ -1970,7 +2079,8 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Comment:   attr.Attr.Comment,
 				ClusterBy: attr.Attr.ClusterBy,
 			}
-			if isCPkey {
+			// Is it a composite primary key
+			if attr.Attr.Name == catalog.CPrimaryKeyColName {
 				CompositePkey = col
 				continue
 			}
@@ -2272,28 +2382,20 @@ func (tcc *TxnCompilerContext) GetProcess() *process.Process {
 func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
 	proc := tcc.proc
 	// get file size
-	fs := objectio.NewObjectFS(proc.FileService, catalog.QueryResultMetaDir)
-	dirs, err := fs.ListDir(catalog.QueryResultMetaDir)
+	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
+	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
+		}
 		return nil, "", err
 	}
-	var size int64 = -1
-	name := catalog.BuildQueryResultMetaName(proc.SessionInfo.Account, uuid)
-	for _, d := range dirs {
-		if d.Name == name {
-			size = d.Size
-		}
-	}
-	if size == -1 {
-		return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
-	}
 	// read meta's meta
-	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
 	reader, err := objectio.NewObjectReader(path, proc.FileService)
 	if err != nil {
 		return nil, "", err
 	}
-	bs, err := reader.ReadAllMeta(proc.Ctx, size, proc.Mp())
+	bs, err := reader.ReadAllMeta(proc.Ctx, e.Size, proc.Mp())
 	if err != nil {
 		return nil, "", err
 	}
@@ -2426,7 +2528,14 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 	//logutil.Debugf("-->bh:%s", sql)
-	err := bh.mce.GetDoQueryFunc()(ctx, sql)
+	statements, err := mysql.Parse(ctx, sql)
+	if err != nil {
+		return err
+	}
+	if len(statements) > 1 {
+		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
+	}
+	err = bh.mce.GetDoQueryFunc()(ctx, sql)
 	if err != nil {
 		return err
 	}

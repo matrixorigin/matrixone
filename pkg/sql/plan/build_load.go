@@ -68,7 +68,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	node3.Children = []int32{1}
 	// node3.ClusterTable = clusterTable
 
-	idxList := make([]int32, len(tableDef.Cols))
 	for i := 0; i < len(tableDef.Cols); i++ {
 		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = int32(i)
 		tmp := &plan.Expr{
@@ -80,7 +79,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		}
-		idxList[i] = int32(i)
 		node1.ProjectList = append(node1.ProjectList, tmp)
 		// node3.ProjectList = append(node3.ProjectList, tmp)
 	}
@@ -95,7 +93,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	// node3.ObjRef = objRef
 	node3.InsertCtx = &plan.InsertCtx{
 		Ref:          objRef,
-		Idx:          idxList,
 		TableDef:     tableDef,
 		ClusterTable: clusterTable,
 		// ParentIdx:    map[string]int32{},
