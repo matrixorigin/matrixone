@@ -95,10 +95,10 @@ var _ StmtExecutor = &statusStmtExecutor{}
 var _ StmtExecutor = &resultSetStmtExecutor{}
 
 // Execute runs the statement executor
-func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec StmtExecutor, beginInstant time.Time, envStmt string, useEnv bool) error {
+func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec StmtExecutor, beginInstant time.Time, envStmt, sqlType string, useEnv bool) error {
 	var err, err2 error
 	var cmpBegin, runBegin time.Time
-	ctx = RecordStatement(ctx, ses, proc, stmtExec, beginInstant, envStmt, useEnv)
+	ctx = RecordStatement(ctx, ses, proc, stmtExec, beginInstant, envStmt, sqlType, useEnv)
 	err = stmtExec.Setup(ctx, ses)
 	if err != nil {
 		goto handleRet

@@ -1031,10 +1031,11 @@ func isMetaTable(name string) bool {
 
 func genBlockMetas(
 	ctx context.Context,
-	blockInfos []catalog.BlockInfo,
+	rows [][]any,
 	columnLength int,
 	fs fileservice.FileService,
 	m *mpool.MPool, prefetch bool) ([]BlockMeta, error) {
+	blockInfos := catalog.GenBlockInfo(rows)
 	{
 		mp := make(map[uint64]catalog.BlockInfo) // block list
 		for i := range blockInfos {

@@ -206,7 +206,7 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt string, useEnv bool) context.Context {
+var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) context.Context {
 	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
@@ -258,12 +258,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
-		SqlSourceType:        ses.sqlSourceType,
+		SqlSourceType:        sqlType,
 		RequestAt:            requestAt,
 		StatementType:        getStatementType(statement).GetStatementType(),
 		QueryType:            getStatementType(statement).GetQueryType(),
 	}
-	if ses.sqlSourceType != "internal_sql" {
+	if sqlType != "internal_sql" {
 		ses.tStmt = stm
 		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
@@ -277,8 +277,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return motrace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string) context.Context {
-	ctx = RecordStatement(ctx, ses, proc, nil, envBegin, envStmt, true)
+var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt, sqlType string) context.Context {
+	ctx = RecordStatement(ctx, ses, proc, nil, envBegin, envStmt, sqlType, true)
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
@@ -2982,29 +2982,33 @@ func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(request
 }
 
 func (ses *Session) getSqlType(sql string) {
+	ses.sqlSourceType = nil
 	tenant := ses.GetTenantInfo()
 	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
-		ses.sqlSourceType = intereSql
+		ses.sqlSourceType = append(ses.sqlSourceType, intereSql)
 		return
 	}
 	flag, _, _ := isSpecialUser(tenant.User)
 	if flag {
-		ses.sqlSourceType = intereSql
+		ses.sqlSourceType = append(ses.sqlSourceType, intereSql)
 		return
 	}
-	p1 := strings.Index(sql, "/*")
-	p2 := strings.Index(sql, "*/")
-	if p1 < 0 || p2 < 0 || p2 <= p1+1 {
-		ses.sqlSourceType = externSql
-		return
-	}
-	source := strings.TrimSpace(sql[p1+2 : p2])
-	if source == cloudUserTag {
-		ses.sqlSourceType = cloudUserSql
-	} else if source == cloudNoUserTag {
-		ses.sqlSourceType = cloudNoUserSql
-	} else {
-		ses.sqlSourceType = externSql
+	for len(sql) > 0 {
+		p1 := strings.Index(sql, "/*")
+		p2 := strings.Index(sql, "*/")
+		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
+			ses.sqlSourceType = append(ses.sqlSourceType, externSql)
+			return
+		}
+		source := strings.TrimSpace(sql[p1+2 : p2])
+		if source == cloudUserTag {
+			ses.sqlSourceType = append(ses.sqlSourceType, cloudUserSql)
+		} else if source == cloudNoUserTag {
+			ses.sqlSourceType = append(ses.sqlSourceType, cloudNoUserSql)
+		} else {
+			ses.sqlSourceType = append(ses.sqlSourceType, externSql)
+		}
+		sql = sql[p2+2:]
 	}
 }
 
@@ -3172,7 +3176,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
@@ -3215,7 +3219,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
-		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sql, singleStatement)
+		sqlType := ses.sqlSourceType[0]
+		if i < len(ses.sqlSourceType) {
+			sqlType = ses.sqlSourceType[i]
+		}
+		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sql, sqlType, singleStatement)
 		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
@@ -4007,7 +4015,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, "", sql)
 		retErr = moerr.NewParseError(requestCtx, err.Error())
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
@@ -4015,7 +4023,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 
 	singleStatement := len(stmtExecs) == 1
 	for _, exec := range stmtExecs {
-		err = Execute(requestCtx, ses, proc, exec, beginInstant, sql, singleStatement)
+		err = Execute(requestCtx, ses, proc, exec, beginInstant, sql, "", singleStatement)
 		if err != nil {
 			return err
 		}
