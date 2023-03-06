@@ -58,7 +58,7 @@ func fetchZonemapAndRowsFromBlockInfo(
 	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
-	reader, err := blockio.NewBlockReader(fs, blockInfo.MetaLoc)
+	reader, err := blockio.NewObjectReader(fs, blockInfo.MetaLoc)
 	if err != nil {
 		return nil, 0, err
 	}

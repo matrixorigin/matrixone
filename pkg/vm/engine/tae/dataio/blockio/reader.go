@@ -39,7 +39,7 @@ type BlockReader struct {
 	meta   objectio.Extent
 }
 
-func NewBlockReader(service fileservice.FileService, key string) (dataio.Reader, error) {
+func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader, error) {
 	name, _, meta, _, err := DecodeLocation(key)
 	if err != nil {
 		return nil, err

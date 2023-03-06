@@ -52,7 +52,7 @@ func LoadPersistedColumnData(
 	if def.IsPhyAddr() {
 		return constructRowId(id, rows)
 	}
-	reader, err := blockio.NewBlockReader(fs.Service, location)
+	reader, err := blockio.NewObjectReader(fs.Service, location)
 	if err != nil {
 		return
 	}
@@ -79,7 +79,7 @@ func LoadPersistedDeletes(
 	if err != nil {
 		return nil, err
 	}
-	reader, err := blockio.NewBlockReader(fs.Service, location)
+	reader, err := blockio.NewObjectReader(fs.Service, location)
 	if err != nil {
 		return
 	}

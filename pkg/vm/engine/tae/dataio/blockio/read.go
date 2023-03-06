@@ -53,8 +53,13 @@ func BlockRead(
 
 	bat := batch.NewWithSize(len(colIdxes))
 	for i, vec := range columnBatch.Vecs {
-		// FIXME: CN may modify the vector, so it must be copied here now
-		bat.Vecs[i] = containers.CopyToMoVec(vec)
+		if columnBatch.Deletes != nil {
+			// already copied in BlockReadInner
+			bat.Vecs[i] = containers.UnmarshalToMoVec(vec)
+		} else {
+			// FIXME: CN may modify the vector, so it must be copied here now
+			bat.Vecs[i] = containers.CopyToMoVec(vec)
+		}
 		vec.Close()
 	}
 	bat.SetZs(bat.Vecs[0].Length(), pool)
@@ -91,6 +96,7 @@ func BlockReadInner(
 		for i, col := range columnBatch.Vecs {
 			columnBatch.Vecs[i] = col.CloneWindow(0, col.Length(), nil)
 			columnBatch.Vecs[i].Compact(columnBatch.Deletes)
+			col.Close()
 		}
 	}
 	return columnBatch, nil
@@ -126,7 +132,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	if err != nil {
 		return nil, err
 	}
-	reader, err := NewBlockReader(fs, info.MetaLoc)
+	reader, err := NewObjectReader(fs, info.MetaLoc)
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +242,7 @@ func readBlockDelete(ctx context.Context, deltaloc string, fs fileservice.FileSe
 	if err != nil {
 		return nil, err
 	}
-	reader, err := NewBlockReader(fs, deltaloc)
+	reader, err := NewObjectReader(fs, deltaloc)
 	if err != nil {
 		return nil, err
 	}

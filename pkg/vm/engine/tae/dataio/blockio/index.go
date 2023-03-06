@@ -71,7 +71,3 @@ func (b *BlockIndex) String() string {
 func (b *BlockIndex) GetType() types.Type {
 	return b.zm.GetType()
 }
-
-func (b *BlockIndex) getIndex() *index.ZoneMap {
-	return b.zm
-}

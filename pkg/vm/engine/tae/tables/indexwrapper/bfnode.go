@@ -39,7 +39,7 @@ func NewBfReader(
 	metaloc string,
 	fs *objectio.ObjectFS,
 ) *BfReader {
-	reader, _ := blockio.NewBlockReader(fs.Service, metaloc)
+	reader, _ := blockio.NewObjectReader(fs.Service, metaloc)
 
 	return &BfReader{
 		idx:    id.Idx,

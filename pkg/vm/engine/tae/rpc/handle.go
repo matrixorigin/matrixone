@@ -444,7 +444,7 @@ func (h *Handle) startLoadJobs(
 					jobR.Err = err
 					return
 				}
-				reader, err := blockio.NewBlockReader(
+				reader, err := blockio.NewObjectReader(
 					h.eng.GetTAE(ctx).Fs.Service, loc)
 				if err != nil {
 					jobR.Err = err
