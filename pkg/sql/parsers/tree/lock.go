@@ -15,7 +15,7 @@
 package tree
 
 // TableLockType is the type of the table lock.
-type TableLockType int
+type TableLockType int32
 
 const (
 	// TableLockNone means this table lock is absent.
@@ -50,7 +50,7 @@ func (t TableLockType) String() string {
 }
 
 type TableLock struct {
-	Table    TableExpr
+	Table    TableName
 	LockType TableLockType
 }
 

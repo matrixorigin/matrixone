@@ -157,8 +157,7 @@ func (container *WriteS3Container) resetMetaLocBat() {
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
 	metaLocBat := batch.New(true, attrs)
 	metaLocBat.Vecs[0] = vector.New(types.Type{Oid: types.T(types.T_uint16)})
-	metaLocBat.Vecs[1] = vector.New(types.New(types.T_varchar,
-		types.MaxVarcharLen, 0, 0))
+	metaLocBat.Vecs[1] = vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
 
 	container.metaLocBat = metaLocBat
 }
@@ -430,6 +429,7 @@ func WriteBlock(container *WriteS3Container, bat *batch.Batch, proc *process.Pro
 		return err
 	}
 	// atomic.AddUint64(&n.Affected, uint64(bat.Vecs[0].Length()))
+
 	container.lengths = append(container.lengths, uint64(bat.Vecs[0].Length()))
 	if err := GenerateIndex(container, fd, container.writer, bat); err != nil {
 		return err

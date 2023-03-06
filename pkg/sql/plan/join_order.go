@@ -28,11 +28,9 @@ type joinEdge struct {
 }
 
 type joinVertex struct {
-	node        *plan.Node
-	pks         []int32
-	selectivity float64
-	outcnt      float64
-	pkSelRate   float64
+	node      *plan.Node
+	pks       []int32
+	pkSelRate float64
 
 	children map[int32]any
 	parent   int32
@@ -177,10 +175,12 @@ func HasColExpr(expr *plan.Expr, pos int32) int32 {
 }
 
 func (builder *QueryBuilder) swapJoinOrderByStats(onList []*plan.Expr, children []int32, joinType plan.Node_JoinFlag) ([]int32, plan.Node_JoinFlag) {
+
 	if joinType != plan.Node_INNER && joinType != plan.Node_LEFT && joinType != plan.Node_RIGHT {
 		//do not swap
 		return children, joinType
 	}
+	//for left and right join, only swap equal join
 	if !IsEquiJoin(onList) {
 		switch joinType {
 		case plan.Node_LEFT:
@@ -191,8 +191,16 @@ func (builder *QueryBuilder) swapJoinOrderByStats(onList []*plan.Expr, children 
 		}
 	}
 
+	//left deep tree is preferred for pipeline
+	//if scan compare with join, scan should be 5% bigger than join, then we can swap
 	left := builder.qry.Nodes[children[0]].Stats.Outcnt
+	if builder.qry.Nodes[children[0]].Stats.TableCnt == 0 {
+		left *= 1.05
+	}
 	right := builder.qry.Nodes[children[1]].Stats.Outcnt
+	if builder.qry.Nodes[children[1]].Stats.TableCnt == 0 {
+		right *= 1.05
+	}
 	if left < right {
 		if joinType == plan.Node_LEFT {
 			joinType = plan.Node_RIGHT
@@ -376,12 +384,10 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 
 	for i, node := range leaves {
 		vertices[i] = &joinVertex{
-			node:        node,
-			selectivity: node.Stats.Selectivity,
-			outcnt:      node.Stats.Outcnt,
-			pkSelRate:   1.0,
-			children:    make(map[int32]any),
-			parent:      -1,
+			node:      node,
+			pkSelRate: 1.0,
+			children:  make(map[int32]any),
+			parent:    -1,
 		}
 
 		if node.NodeType == plan.Node_TABLE_SCAN {
@@ -484,11 +490,11 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		} else if dimensions[i].pkSelRate > dimensions[j].pkSelRate {
 			return false
 		} else {
-			//if math.Abs(dimensions[i].selectivity-dimensions[j].selectivity) > 0.01 {
-			//	return dimensions[i].selectivity < dimensions[j].selectivity
-			//} else {
-			return dimensions[i].outcnt < dimensions[j].outcnt
-			//}
+			if math.Abs(dimensions[i].node.Stats.Selectivity-dimensions[j].node.Stats.Selectivity) > 0.01 {
+				return dimensions[i].node.Stats.Selectivity < dimensions[j].node.Stats.Selectivity
+			} else {
+				return dimensions[i].node.Stats.Outcnt < dimensions[j].node.Stats.Outcnt
+			}
 		}
 	})
 
@@ -502,10 +508,9 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 			JoinType: plan.Node_INNER,
 		}, nil)
 
-		vertex.outcnt *= child.pkSelRate
 		vertex.pkSelRate *= child.pkSelRate
 		vertex.node = builder.qry.Nodes[nodeId]
-		vertex.node.Stats.Outcnt = vertex.outcnt
+		ReCalcNodeStats(nodeId, builder, false)
 	}
 }
 

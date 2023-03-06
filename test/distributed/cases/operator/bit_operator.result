@@ -367,3 +367,9 @@ hex(str1) >> bin(88) << bin(str1) >> hex(100)
 0
 0
 DROP TABLE t1;
+select binary(3) & binary(4);
+binary(3) & binary(4)
+0
+select binary(3) | binary(4);
+binary(3) | binary(4)
+7

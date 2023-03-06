@@ -22,9 +22,9 @@ import (
 )
 
 func TestApproxcdCount(t *testing.T) {
-	int8TestTyp := types.New(types.T_int8, 0, 0, 0)
-	decimal64Typ := types.New(types.T_decimal64, 0, 0, 0)
-	decimal128Typ := types.New(types.T_decimal128, 0, 0, 0)
+	int8TestTyp := types.New(types.T_int8, 0, 0)
+	decimal64Typ := types.New(types.T_decimal64, 0, 0)
+	decimal128Typ := types.New(types.T_decimal128, 0, 0)
 	testCases := []testCase{
 		{
 			op:         agg.AggregateApproxCountDistinct,

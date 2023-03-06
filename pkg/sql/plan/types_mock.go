@@ -214,7 +214,6 @@ func (m *MockCompilerContext2) ResolveUdf(name string, args []*plan.Expr) (strin
 	return "", nil
 }
 
-
 // Resolve mocks base method.
 func (m *MockCompilerContext2) Resolve(schemaName, tableName string) (*plan.ObjectRef, *plan.TableDef) {
 	m.ctrl.T.Helper()

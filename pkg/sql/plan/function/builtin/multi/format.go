@@ -30,8 +30,8 @@ func Format(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 
 	//get the first arg number
 	numberCols := vector.MustStrCols(vecs[0])
-	//get the second arg precision
-	precisionCols := vector.MustStrCols(vecs[1])
+	//get the second arg scale
+	scaleCols := vector.MustStrCols(vecs[1])
 	//get the third arg locale
 	var localeCols []string
 	if paramNum == 2 || vecs[2].IsScalarNull() {
@@ -58,7 +58,7 @@ func Format(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	}
 
 	//get result values
-	err := format.Format(numberCols, precisionCols, localeCols, rowCount, constVectors, resultValues)
+	err := format.Format(numberCols, scaleCols, localeCols, rowCount, constVectors, resultValues)
 	if err != nil {
 		return nil, err
 	}

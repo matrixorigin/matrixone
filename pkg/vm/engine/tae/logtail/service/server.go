@@ -239,12 +239,12 @@ func (s *LogtailServer) onMessage(
 	}
 
 	if req := msg.GetSubscribeTable(); req != nil {
-		logger.Debug("on subscritpion", zap.Any("request", req))
+		logger.Debug("on subscription", zap.Any("request", req))
 		return s.onSubscription(ctx, stream, req)
 	}
 
 	if req := msg.GetUnsubscribeTable(); req != nil {
-		logger.Debug("on unsubscritpion", zap.Any("request", req))
+		logger.Debug("on unsubscription", zap.Any("request", req))
 		return s.onUnsubscription(ctx, stream, req)
 	}
 
@@ -403,8 +403,6 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 					return
 				}
 
-				logger.Debug("send subscription response", zap.Any("table", sub.req.Table), zap.Any("To", to.String()))
-
 				// send subscription response
 				subErr = sub.session.SendSubscriptionResponse(sendCtx, tail)
 				if subErr != nil {
@@ -447,8 +445,6 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 					}
 					wraps = append(wraps, wrapLogtail{id: t.id, tail: tail})
 				}
-
-				logger.Debug("publish additional logtail", zap.Any("From", from.String()), zap.Any("To", to.String()))
 
 				// publish additional logtail for all subscribed tables
 				for _, session := range s.ssmgr.ListSession() {

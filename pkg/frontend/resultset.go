@@ -226,7 +226,7 @@ func (mc *MysqlColumn) GetAutoIncr() bool {
 	return mc.auto_incr
 }
 
-// Discussion: for some MatrixOne types, the Type.Precision and Type.Scale value are needed for stringification, I think we
+// Discussion: for some MatrixOne types and Type.Scale value are needed for stringification, I think we
 // need to add a field
 // MoTypes []types.Type
 // in this struct, what's your opinion on this matter?@Daviszhen

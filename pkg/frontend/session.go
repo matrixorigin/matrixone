@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -178,7 +179,7 @@ type Session struct {
 
 	skipAuth bool
 
-	sqlSourceType string
+	sqlSourceType []string
 
 	InitTempEngine bool
 
@@ -531,7 +532,7 @@ func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.DNService, er
 	}
 
 	ms, err := memorystorage.NewMemoryStorage(
-		mpool.MustNewZero(),
+		mpool.MustNewZeroNoFixed(),
 		ck,
 		memoryengine.RandomIDGenerator,
 	)
@@ -2066,7 +2067,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Typ: &plan2.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
-					Precision:   attr.Attr.Type.Precision,
 					Scale:       attr.Attr.Type.Scale,
 					AutoIncr:    attr.Attr.AutoIncrement,
 					Table:       tableName,
@@ -2156,10 +2156,9 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		cols = append(cols, &plan2.ColDef{
 			Name: hideKey.Name,
 			Typ: &plan2.Type{
-				Id:        int32(hideKey.Type.Oid),
-				Width:     hideKey.Type.Width,
-				Precision: hideKey.Type.Precision,
-				Scale:     hideKey.Type.Scale,
+				Id:    int32(hideKey.Type.Oid),
+				Width: hideKey.Type.Width,
+				Scale: hideKey.Type.Scale,
 			},
 			Primary: hideKey.Primary,
 		})
@@ -2296,11 +2295,10 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,
 			Typ: &plan2.Type{
-				Id:        int32(key.Type.Oid),
-				Width:     key.Type.Width,
-				Precision: key.Type.Precision,
-				Scale:     key.Type.Scale,
-				Size:      key.Type.Size,
+				Id:    int32(key.Type.Oid),
+				Width: key.Type.Width,
+				Scale: key.Type.Scale,
+				Size:  key.Type.Size,
 			},
 			Primary: key.Primary,
 		})
@@ -2330,11 +2328,10 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 	hideDef := &plan2.ColDef{
 		Name: hideKey.Name,
 		Typ: &plan2.Type{
-			Id:        int32(hideKey.Type.Oid),
-			Width:     hideKey.Type.Width,
-			Precision: hideKey.Type.Precision,
-			Scale:     hideKey.Type.Scale,
-			Size:      hideKey.Type.Size,
+			Id:    int32(hideKey.Type.Oid),
+			Width: hideKey.Type.Width,
+			Scale: hideKey.Type.Scale,
+			Size:  hideKey.Type.Size,
 		},
 		Primary: hideKey.Primary,
 	}
@@ -2527,7 +2524,14 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 	//logutil.Debugf("-->bh:%s", sql)
-	err := bh.mce.GetDoQueryFunc()(ctx, sql)
+	statements, err := mysql.Parse(ctx, sql)
+	if err != nil {
+		return err
+	}
+	if len(statements) > 1 {
+		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
+	}
+	err = bh.mce.GetDoQueryFunc()(ctx, sql)
 	if err != nil {
 		return err
 	}

@@ -17,28 +17,22 @@ package disttae
 import (
 	"context"
 	"sync"
-	"time"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-)
-
-const (
-	GcCycle = 10 * time.Second
 )
 
 const (
@@ -65,31 +59,19 @@ type IDGenerator interface {
 	AllocateID(ctx context.Context) (uint64, error)
 }
 
-// mvcc is the core data structure of cn and is used to
-// maintain multiple versions of logtail data for a table's partition
-type MVCC interface {
-	CheckPoint(ctx context.Context, ts timestamp.Timestamp) error
-	Insert(ctx context.Context, primaryKeyIndex int, bat *api.Batch, needCheck bool) error
-	Delete(ctx context.Context, bat *api.Batch) error
-	BlockList(ctx context.Context, ts timestamp.Timestamp,
-		blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int)
-	// If blocks is empty, it means no merge operation with the files on s3 is required.
-	NewReader(ctx context.Context, readerNumber int, index memtable.Tuple, defs []engine.TableDef,
-		tableDef *plan.TableDef, skipBlocks map[uint64]uint8, blks []ModifyBlockMeta,
-		ts timestamp.Timestamp, fs fileservice.FileService, entries []Entry) ([]engine.Reader, error)
-}
-
 type Engine struct {
 	sync.RWMutex
 	mp      *mpool.MPool
 	fs      fileservice.FileService
-	db      *DB
 	cli     client.TxnClient
 	idGen   IDGenerator
 	txns    map[string]*Transaction
 	catalog *cache.CatalogCache
 	// minimum heap of currently active transactions
 	txnHeap *transactionHeap
+
+	dnMap      map[string]int
+	partitions map[[2]uint64]Partitions
 
 	// XXX related to cn push model
 	usePushModel       bool
@@ -98,36 +80,19 @@ type Engine struct {
 	subscribed         subscribedTable
 }
 
-// DB is implementataion of cache
-type DB struct {
-	sync.RWMutex
-	dnMap      map[string]int
-	metaTables map[string]Partitions
-
-	// a pointer to cn engine for push model.
-	cnE *Engine
-
-	partitions map[[2]uint64]Partitions
-}
-
 type Partitions []*Partition
 
 // a partition corresponds to a dn
 type Partition struct {
-	lock chan struct{}
-	// multi-version data of logtail, implemented with reusee's memengine
-	data             *memtable.Table[RowID, DataValue, *DataRow]
-	columnsIndexDefs []ColumnsIndexDef
-	// last updated timestamp
-	ts timestamp.Timestamp
-	// used for block read in PartitionReader
-	txn *Transaction
+	lock  chan struct{}
+	state atomic.Pointer[PartitionState]
+	ts    timestamp.Timestamp // last updated timestamp
 }
 
 // Transaction represents a transaction
 type Transaction struct {
 	sync.Mutex
-	db *DB
+	engine *Engine
 	// readOnly default value is true, once a write happen, then set to false
 	readOnly bool
 	// db       *DB
@@ -157,8 +122,6 @@ type Transaction struct {
 	// interim incremental rowid
 	rowId [2]uint64
 
-	catalog *cache.CatalogCache
-
 	// use to cache table
 	tableMap *sync.Map
 	// use to cache database
@@ -183,12 +146,11 @@ type Entry struct {
 
 type transactionHeap []*Transaction
 
-type database struct {
+// txnDatabase represents an opened database in a transaction
+type txnDatabase struct {
 	databaseId   uint64
 	databaseName string
-	db           *DB
 	txn          *Transaction
-	fs           fileservice.FileService
 }
 
 type tableKey struct {
@@ -212,11 +174,12 @@ type tableMeta struct {
 	defs          []engine.TableDef
 }
 
-type table struct {
+// txnTable represents an opened table in a transaction
+type txnTable struct {
 	tableId    uint64
 	tableName  string
 	dnList     []int
-	db         *database
+	db         *txnDatabase
 	meta       *tableMeta
 	parts      Partitions
 	insertExpr *plan.Expr
@@ -322,10 +285,10 @@ func (a BlockMeta) Eq(b BlockMeta) bool {
 type workspaceRow struct {
 	rowID   RowID
 	tableID uint64
-	indexes []memtable.Tuple
+	indexes []memorytable.Tuple
 }
 
-var _ memtable.Row[RowID, *workspaceRow] = new(workspaceRow)
+var _ memorytable.Row[RowID, *workspaceRow] = new(workspaceRow)
 
 func (w *workspaceRow) Key() RowID {
 	return w.rowID
@@ -335,11 +298,11 @@ func (w *workspaceRow) Value() *workspaceRow {
 	return w
 }
 
-func (w *workspaceRow) Indexes() []memtable.Tuple {
+func (w *workspaceRow) Indexes() []memorytable.Tuple {
 	return w.indexes
 }
 
-func (w *workspaceRow) UniqueIndexes() []memtable.Tuple {
+func (w *workspaceRow) UniqueIndexes() []memorytable.Tuple {
 	return nil
 }
 
