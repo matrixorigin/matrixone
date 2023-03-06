@@ -35,7 +35,7 @@ var (
 	varchartyp = &plan.Type{Id: int32(types.T_varchar)}
 )
 
-func TestPreInsert(t *testing.T) {
+func TestPreInsertNormal(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -95,7 +95,31 @@ func TestPreInsert(t *testing.T) {
 			require.Equal(t, len(batch1.Zs), vector.Length(vec), fmt.Sprintf("column number: %d", i))
 		}
 	}
+}
 
+func TestPreInsertNullCheck(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.TODO()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+
+	proc := testutil.NewProc()
+	proc.TxnClient = txnClient
+	proc.Ctx = ctx
 	batch2 := &batch.Batch{
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
