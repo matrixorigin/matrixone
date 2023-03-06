@@ -505,19 +505,6 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Proce
 func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
 	insertCtx := n.InsertCtx
 	insertCtx.TableDef.TblId = uint64(insertCtx.Ref.Obj)
-	// Check if the table is temporary table.
-	dbSource, err := eg.Database(proc.Ctx, insertCtx.Ref.SchemaName, proc.TxnOperator)
-	if err != nil {
-		return nil, err
-	}
-	_, err = dbSource.Relation(proc.Ctx, insertCtx.Ref.ObjName)
-	if err != nil {
-		dbSource, err = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-		if err != nil {
-			return nil, err
-		}
-		insertCtx.Ref.SchemaName = defines.TEMPORARY_DBNAME
-	}
 
 	return &preinsert.Argument{
 		Ctx:        proc.Ctx,
