@@ -8830,7 +8830,7 @@ yydefault:
 		var yyLOCAL tree.TableLock
 //line mysql_sql.y:1990
 		{
-			yyLOCAL = tree.TableLock{yyDollar[1].tableNameUnion(), yyDollar[2].tableLockTypeUnion()}
+			yyLOCAL = tree.TableLock{*yyDollar[1].tableNameUnion(), yyDollar[2].tableLockTypeUnion()}
 		}
 		yyVAL.union = yyLOCAL
 	case 246:

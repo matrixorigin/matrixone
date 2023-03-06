@@ -179,7 +179,7 @@ type Session struct {
 
 	skipAuth bool
 
-	sqlSourceType string
+	sqlSourceType []string
 
 	InitTempEngine bool
 
