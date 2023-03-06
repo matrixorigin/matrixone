@@ -754,24 +754,21 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
-	nodes, err := c.generateNodes(n)
+	nodes, rel, err := c.generateNodes(n)
 	if err != nil {
 		return nil, err
 	}
 	ss := make([]*Scope, 0, len(nodes))
 	for i := range nodes {
-		ss = append(ss, c.compileTableScanWithNode(n, nodes[i]))
+		ss = append(ss, c.compileTableScanWithNode(n, nodes[i], rel))
 	}
 	return ss, nil
 }
 
-func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scope {
+func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, rel engine.Relation) *Scope {
 	var s *Scope
 	var tblDef *plan.TableDef
 	var ts timestamp.Timestamp
-	var db engine.Database
-	var rel engine.Relation
-	var err error
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -785,22 +782,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-		}
-		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
-		if err != nil {
-			panic(err)
-		}
-		rel, err = db.Relation(ctx, n.TableDef.Name)
-		if err != nil {
-			var e error // avoid contamination of error messages
-			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
-			if e != nil {
-				panic(e)
-			}
-			rel, e = db.Relation(c.ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
-			if e != nil {
-				panic(e)
-			}
 		}
 		defs, err := rel.TableDefs(ctx)
 		if err != nil {
@@ -1564,32 +1545,32 @@ func (c *Compile) fillAnalyzeInfo() {
 	}
 }
 
-func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
+func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, engine.Relation, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
 	var ranges [][]byte
 	var nodes engine.Nodes
+
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
-
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rel, err = db.Relation(ctx, n.TableDef.Name)
 	if err != nil {
 		var e error // avoid contamination of error messages
 		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
 		if e != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		c.isTemporaryScan = true
 	}
@@ -1602,7 +1583,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
 	ranges, err = rel.Ranges(ctx, expr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(ranges) == 0 {
 		nodes = make(engine.Nodes, len(c.cnList))
@@ -1614,9 +1595,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
 			}
 		}
-		return nodes, nil
+		return nodes, rel, nil
 	}
-	if len(ranges[0]) == 0 {
+	if engine.IsMemtable(ranges[0]) {
 		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{
 				Rel:  rel,
@@ -1632,7 +1613,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		ranges = ranges[1:]
 	}
 	if len(ranges) == 0 {
-		return nodes, nil
+		return nodes, rel, nil
 	}
 	step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
 	for i := 0; i < len(ranges); i += step {
@@ -1663,7 +1644,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			}
 		}
 	}
-	return nodes, nil
+	return nodes, rel, nil
 }
 
 func (anal *anaylze) Nodes() []*process.AnalyzeInfo {

@@ -48,7 +48,7 @@ func (t *Table) NewReader(
 	readers []engine.Reader,
 	err error,
 ) {
-	if len(shardIDs) > 0 && len(shardIDs[0]) == 0 { // Compatible with cn's logic
+	if len(shardIDs) > 0 && engine.IsMemtable(shardIDs[0]) { // Compatible with cn's logic
 		shardIDs = shardIDs[1:]
 	}
 
