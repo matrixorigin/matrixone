@@ -469,21 +469,18 @@ func TestGetSimpleExprValue(t *testing.T) {
 				Id:          int32(types.T_decimal64),
 				Width:       16,
 				Scale:       1,
-				Precision:   16,
 				NotNullable: true,
 			})},
 			{"set @@x=-1.0", false, plan.MakePlan2Decimal64ExprWithType(dec2, &plan.Type{
 				Id:          int32(types.T_decimal64),
 				Width:       16,
 				Scale:       1,
-				Precision:   16,
 				NotNullable: true,
 			})},
 			{"set @@x=-1.2345670", false, plan.MakePlan2Decimal64ExprWithType(dec3, &plan.Type{
 				Id:          int32(types.T_decimal64),
 				Width:       16,
 				Scale:       7,
-				Precision:   16,
 				NotNullable: true,
 			})},
 		}
