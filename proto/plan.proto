@@ -28,10 +28,9 @@ message Type {
 	bool notNullable	= 2;
 	bool auto_incr      = 3;
 	int32 width			= 4;
-	int32 precision		= 5;
-	int32 size 			= 6;
-	int32 scale 		= 7;
-	string table 		= 8;
+	int32 size 			= 5;
+	int32 scale 		= 6;
+	string table 		= 7;
 };
 
 // Const: if a const value can be reprensented by int64 or

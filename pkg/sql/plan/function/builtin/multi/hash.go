@@ -25,7 +25,7 @@ import (
 )
 
 func Hash(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vec := vector.New(types.New(types.T_int64, 0, 0, 0))
+	vec := vector.New(types.New(types.T_int64, 0, 0))
 	count := vecs[0].Length()
 	keys := make([][]byte, hashmap.UnitLimit)
 	states := make([][3]uint64, hashmap.UnitLimit)

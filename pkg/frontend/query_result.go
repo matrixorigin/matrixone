@@ -18,14 +18,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 func getQueryResultDir() string {
@@ -517,7 +519,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	mrs := &MysqlResultSet{}
 	typs := make([]types.Type, columnCount)
 	for i, c := range columnDefs.ResultCols {
-		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale, c.Typ.Precision)
+		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale)
 		mcol := &MysqlColumn{}
 		mcol.SetName(c.GetName())
 		err = convertEngineTypeToMysqlType(ctx, typs[i].Oid, mcol)

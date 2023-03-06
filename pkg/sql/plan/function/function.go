@@ -310,7 +310,7 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (int
 	argTs := getOidSlice(args)
 	index, targetTs := fs.TypeCheck(argTs)
 
-	// if implicit type conversion happens, set the right precision for target types.
+	// if implicit type conversion happens, set the right scale for target types.
 	targetTypes := getTypeSlice(targetTs)
 	rewriteTypesIfNecessary(targetTypes, args)
 
@@ -342,12 +342,12 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (int
 	return EncodeOverloadID(fid, index), rt, targetTypes, nil
 }
 
-func ensureBinaryOperatorWithSamePrecision(targets []types.Type, hasSet []bool) {
+func ensureBinaryOperatorWithSameScale(targets []types.Type, hasSet []bool) {
 	if len(targets) == 2 && targets[0].Oid == targets[1].Oid {
-		if hasSet[0] && !hasSet[1] { // precision follow the left-part
+		if hasSet[0] && !hasSet[1] { // scale follow the left-part
 			copyType(&targets[1], &targets[0])
 			hasSet[1] = true
-		} else if !hasSet[0] && hasSet[1] { // precision follow the right-part
+		} else if !hasSet[0] && hasSet[1] { // scale follow the right-part
 			copyType(&targets[0], &targets[1])
 			hasSet[0] = true
 		}
@@ -377,7 +377,7 @@ func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 
 		for i := range targets {
 			oid1, oid2 := sources[i].Oid, targets[i].Oid
-			// ensure that we will not lose the original precision.
+			// ensure that we will not lose the original scale.
 			if oid2 == types.T_decimal64 || oid2 == types.T_decimal128 || oid2 == types.T_timestamp || oid2 == types.T_time {
 				if oid1 != types.T_char && oid1 != types.T_varchar && oid1 != types.T_blob && oid1 != types.T_text {
 					copyType(&targets[i], &sources[i])
@@ -385,17 +385,17 @@ func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 				}
 			}
 		}
-		ensureBinaryOperatorWithSamePrecision(targets, hasSet)
+		ensureBinaryOperatorWithSameScale(targets, hasSet)
 		for i := range targets {
 			if !hasSet[i] && targets[i].Oid != ScalarNull {
-				setDefaultPrecision(&targets[i])
+				setDefaultScale(&targets[i], sources[i])
 			}
 		}
 	}
 }
 
-// set default precision / scalar / width for a type
-func setDefaultPrecision(typ *types.Type) {
+// set default scale / scalar / width for a type
+func setDefaultScale(typ *types.Type, typ2 types.Type) {
 	if typ.Oid == types.T_decimal64 {
 		typ.Scale = 0
 		typ.Width = 18
@@ -403,11 +403,20 @@ func setDefaultPrecision(typ *types.Type) {
 		typ.Scale = 0
 		typ.Width = 38
 	} else if typ.Oid == types.T_timestamp {
-		typ.Precision = 6
+		typ.Scale = 6
+		if typ2.Oid == types.T_timestamp {
+			typ.Scale = typ2.Scale
+		}
 	} else if typ.Oid == types.T_datetime {
-		typ.Precision = 6
+		typ.Scale = 6
+		if typ2.Oid == types.T_datetime {
+			typ.Scale = typ2.Scale
+		}
 	} else if typ.Oid == types.T_time {
-		typ.Precision = 6
+		typ.Scale = 6
+		if typ2.Oid == types.T_time {
+			typ.Scale = typ2.Scale
+		}
 	}
 	typ.Size = int32(typ.Oid.TypeLen())
 }
@@ -449,7 +458,6 @@ func checkTypeWidth(realArgs []types.Type, rt *types.Type) {
 func copyType(dst, src *types.Type) {
 	dst.Width = src.Width
 	dst.Scale = src.Scale
-	dst.Precision = src.Precision
 }
 
 func getOidSlice(ts []types.Type) []types.T {

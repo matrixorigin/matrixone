@@ -29,7 +29,7 @@ type Count[T1 types.OrderedT | Decimal128AndString] struct {
 }
 
 func CountReturnType(_ []types.Type) types.Type {
-	return types.New(types.T_int64, 0, 0, 0)
+	return types.New(types.T_int64, 0, 0)
 }
 
 func NewCount[T1 types.OrderedT | Decimal128AndString](isStar bool) *Count[T1] {

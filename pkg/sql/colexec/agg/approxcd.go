@@ -24,7 +24,7 @@ type ApproxCountDistic[T any] struct {
 }
 
 func ApproxCountReturnType(_ []types.Type) types.Type {
-	return types.New(types.T_uint64, 0, 0, 0)
+	return types.New(types.T_uint64, 0, 0)
 }
 
 func NewApproxc[T any]() *ApproxCountDistic[T] {

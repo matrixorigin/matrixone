@@ -50,7 +50,7 @@ type btreeLogIter[
 	K Ordered[K],
 	V any,
 ] struct {
-	iter btree.GenericIter[*logEntry[K, V]]
+	iter btree.IterG[*logEntry[K, V]]
 }
 
 func (b *BTreeLog[K, V]) Iter() LogIter[K, V] {

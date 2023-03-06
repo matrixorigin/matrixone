@@ -322,7 +322,7 @@ func TestParser(t *testing.T) {
 		case types.T_time:
 			xs := make([]types.Time, len(kase.xs))
 			for i, x := range kase.xs {
-				tmp, err := types.ParseTime(x, kase.tp.Precision)
+				tmp, err := types.ParseTime(x, kase.tp.Scale)
 				require.Nil(t, err)
 				xs[i] = tmp
 			}
@@ -339,7 +339,7 @@ func TestParser(t *testing.T) {
 		case types.T_datetime:
 			xs := make([]types.Datetime, len(kase.xs))
 			for i, x := range kase.xs {
-				tmp, err := types.ParseDatetime(x, kase.tp.Precision)
+				tmp, err := types.ParseDatetime(x, kase.tp.Scale)
 				require.Nil(t, err)
 				xs[i] = tmp
 			}
@@ -356,19 +356,19 @@ func TestParser(t *testing.T) {
 		case types.T_timestamp:
 			xs := make([]types.Timestamp, len(kase.xs))
 			for i, x := range kase.xs {
-				tmp, err := types.ParseTimestamp(time.Local, x, kase.tp.Precision)
+				tmp, err := types.ParseTimestamp(time.Local, x, kase.tp.Scale)
 				require.Nil(t, err)
 				xs[i] = tmp
 			}
 			xs = append(xs, xs[0])
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
-			rs, err = ParseTimeStamp(xs, kase.ns, rs, time.Local, kase.tp.Precision)
+			rs, err = ParseTimeStamp(xs, kase.ns, rs, time.Local, kase.tp.Scale)
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {
 				unquote := rs[i][1 : len(rs[i])-1]
-				require.Equal(t, xs[i].String2(time.Local, kase.tp.Precision), unquote)
+				require.Equal(t, xs[i].String2(time.Local, kase.tp.Scale), unquote)
 			}
 
 		case types.T_varchar, types.T_char, types.T_blob:
