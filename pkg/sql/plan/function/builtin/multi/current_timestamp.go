@@ -22,11 +22,11 @@ import (
 
 // a general round method is needed for timestamp fsp
 func CurrentTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultPrecision := int32(6)
+	resultScale := int32(6)
 	if len(vectors) == 1 {
-		resultPrecision = int32(vector.MustTCols[int64](vectors[0])[0])
+		resultScale = int32(vector.MustTCols[int64](vectors[0])[0])
 	}
-	resultType := types.Type{Oid: types.T_timestamp, Size: 8, Precision: resultPrecision}
+	resultType := types.Type{Oid: types.T_timestamp, Size: 8, Scale: resultScale}
 	resultVector := vector.NewConst(resultType, 1)
 	result := make([]types.Timestamp, 1)
 	result[0] = types.UnixNanoToTimestamp(proc.UnixTime)

@@ -983,7 +983,7 @@ func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, erro
 			if tbl.meta != nil {
 				blks = tbl.meta.blocks[j]
 			}
-			if inParttion(v, part, txn.meta.SnapshotTS, blks) {
+			if inPartition(v, part, txn.meta.SnapshotTS, blks) {
 				if err := vector.UnionOne(bats[j].GetVector(0), vec, int64(i), txn.proc.Mp()); err != nil {
 					for _, bat := range bats {
 						bat.Clean(txn.proc.Mp())
@@ -1031,11 +1031,10 @@ func isMetaTable(name string) bool {
 
 func genBlockMetas(
 	ctx context.Context,
-	rows [][]any,
+	blockInfos []catalog.BlockInfo,
 	columnLength int,
 	fs fileservice.FileService,
 	m *mpool.MPool, prefetch bool) ([]BlockMeta, error) {
-	blockInfos := catalog.GenBlockInfo(rows)
 	{
 		mp := make(map[uint64]catalog.BlockInfo) // block list
 		for i := range blockInfos {
@@ -1112,7 +1111,7 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	var vecs []*vector.Vector
 
 	{
-		vec := vector.New(types.New(types.T_Rowid, 0, 0, 0))
+		vec := vector.New(types.New(types.T_Rowid, 0, 0))
 		for i := 0; i < bat.Length(); i++ {
 			val := types.Rowid(uuid.New())
 			if err := vec.Append(val, false, m); err != nil {
@@ -1125,7 +1124,7 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	{
 		var val types.TS
 
-		vec := vector.New(types.New(types.T_TS, 0, 0, 0))
+		vec := vector.New(types.New(types.T_TS, 0, 0))
 		for i := 0; i < bat.Length(); i++ {
 			if err := vec.Append(val, false, m); err != nil {
 				return nil, err
@@ -1143,9 +1142,9 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 	return fmt.Sprintf("%v-%v", tableId, name)
 }
 
-func inParttion(v types.Rowid, part *Partition,
+func inPartition(v types.Rowid, part *Partition,
 	ts timestamp.Timestamp, blocks []BlockMeta) bool {
-	if part.Get(v, ts) {
+	if part.state.Load().RowExists(v, types.TimestampToTS(ts)) {
 		return true
 	}
 	if len(blocks) == 0 {
@@ -1159,85 +1158,6 @@ func inParttion(v types.Rowid, part *Partition,
 	}
 	return false
 }
-
-// transfer DataValue to rows
-func genRow(val *DataValue, cols []string) []any {
-	row := make([]any, len(cols))
-	for i, col := range cols {
-		switch v := val.value[col].Value.(type) {
-		case bool:
-			row[i] = v
-		case int8:
-			row[i] = v
-		case int16:
-			row[i] = v
-		case int32:
-			row[i] = v
-		case int64:
-			row[i] = v
-		case uint8:
-			row[i] = v
-		case uint16:
-			row[i] = v
-		case uint32:
-			row[i] = v
-		case uint64:
-			row[i] = v
-		case float32:
-			row[i] = v
-		case float64:
-			row[i] = v
-		case []byte:
-			row[i] = v
-		case types.Date:
-			row[i] = v
-		case types.Datetime:
-			row[i] = v
-		case types.Timestamp:
-			row[i] = v
-		case types.Decimal64:
-			row[i] = v
-		case types.Decimal128:
-			row[i] = v
-		case types.TS:
-			row[i] = v
-		case types.Rowid:
-			row[i] = v
-		case types.Uuid:
-			row[i] = v
-		default:
-			panic(fmt.Sprintf("unknown type: %T", v))
-		}
-	}
-	return row
-}
-
-/*
-func genDatabaseIndexKey(databaseName string, accountId uint32) memtable.Tuple {
-	return memtable.Tuple{
-		index_Database,
-		memtable.ToOrdered([]byte(databaseName)),
-		memtable.ToOrdered(accountId),
-	}
-
-}
-
-func genTableIndexKey(tableName string, databaseId uint64, accountId uint32) memtable.Tuple {
-	return memtable.Tuple{
-		index_Table,
-		memtable.ToOrdered([]byte(tableName)),
-		memtable.ToOrdered(databaseId),
-		memtable.ToOrdered(accountId),
-	}
-}
-
-func genColumnIndexKey(id uint64) memtable.Tuple {
-	return memtable.Tuple{
-		index_Column,
-		memtable.ToOrdered(id),
-	}
-}
-*/
 
 func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
 	switch oid {
@@ -1322,6 +1242,8 @@ func transferSval(v string, oid types.T) (bool, any) {
 	case types.T_char, types.T_varchar:
 		return true, []byte(v)
 	case types.T_text, types.T_blob:
+		return true, []byte(v)
+	case types.T_binary, types.T_varbinary:
 		return true, []byte(v)
 	case types.T_uuid:
 		var uv types.Uuid

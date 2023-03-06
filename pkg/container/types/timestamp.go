@@ -28,7 +28,7 @@
 //
 // Internal representation:
 // timestamp values are represented using a 64bit integer, which stores the microsecs since January 1, year 1, local time zone, in Gregorian calendar
-// the default fractional seconds precision(fsp) for TIMESTAMP is 6, as SQL standard requires.
+// the default fractional seconds scale(fsp) for TIMESTAMP is 6, as SQL standard requires.
 
 package types
 
@@ -64,15 +64,15 @@ func (ts Timestamp) String() string {
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%06d UTC", y, m, d, hour, minute, sec, msec)
 }
 
-// String2 stringify timestamp, including its fractional seconds precision part(fsp)
-func (ts Timestamp) String2(loc *time.Location, precision int32) string {
+// String2 stringify timestamp, including its fractional seconds scale part(fsp)
+func (ts Timestamp) String2(loc *time.Location, scale int32) string {
 	t := time.UnixMicro(int64(ts) - unixEpochSecs).In(loc)
 	y, m, d := t.Date()
 	hour, minute, sec := t.Clock()
-	if precision > 0 {
+	if scale > 0 {
 		msec := t.Nanosecond() / 1000
 		msecInstr := fmt.Sprintf("%06d\n", msec)
-		msecInstr = msecInstr[:precision]
+		msecInstr = msecInstr[:scale]
 
 		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d"+"."+msecInstr, y, m, d, hour, minute, sec)
 	}
@@ -96,37 +96,37 @@ func (ts Timestamp) UnixToDecimal128() (Decimal128, error) {
 	return a.DivInt64(microSecsPerSec), nil
 }
 
-// this scaleTable stores the corresponding microseconds value for a precision
+// this scaleTable stores the corresponding microseconds value for a scale
 var scaleTable = [...]uint32{1000000, 100000, 10000, 1000, 100, 10, 1}
 
 var OneSecInMicroSeconds = uint32(1000000)
 
-func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
+func getMsec(msecStr string, scale int32) (uint32, uint32, error) {
 	msecs := uint32(0)
 	carry := uint32(0)
 	msecCarry := uint32(0)
-	if len(msecStr) > int(precision) {
-		if msecStr[precision] >= '5' && msecStr[precision] <= '9' {
+	if len(msecStr) > int(scale) {
+		if msecStr[scale] >= '5' && msecStr[scale] <= '9' {
 			msecCarry = 1
-		} else if msecStr[precision] >= '0' && msecStr[precision] <= '4' {
+		} else if msecStr[scale] >= '0' && msecStr[scale] <= '4' {
 			msecCarry = 0
 		} else {
 			return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
 		}
-		msecStr = msecStr[:precision]
-	} else if len(msecStr) < int(precision) {
+		msecStr = msecStr[:scale]
+	} else if len(msecStr) < int(scale) {
 		lengthMsecStr := len(msecStr)
-		padZeros := int(precision) - lengthMsecStr
+		padZeros := int(scale) - lengthMsecStr
 		msecStr = msecStr + FillString[padZeros]
 	}
-	if len(msecStr) == 0 { // this means the precision is 0
+	if len(msecStr) == 0 { // this means the scale is 0
 		return 0, msecCarry, nil
 	}
 	m, err := strconv.ParseUint(msecStr, 10, 32)
 	if err != nil {
 		return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
 	}
-	msecs = (uint32(m) + msecCarry) * scaleTable[precision]
+	msecs = (uint32(m) + msecCarry) * scaleTable[scale]
 	if msecs == OneSecInMicroSeconds {
 		carry = 1
 		msecs = 0
@@ -139,8 +139,8 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 // 1. all the Date value
 // 2. yyyy-mm-dd hh:mm:ss(.msec)
 // 3. yyyymmddhhmmss(.msec)
-func ParseTimestamp(loc *time.Location, s string, precision int32) (Timestamp, error) {
-	dt, err := ParseDatetime(s, precision)
+func ParseTimestamp(loc *time.Location, s string, scale int32) (Timestamp, error) {
+	dt, err := ParseDatetime(s, scale)
 	if err != nil {
 		return -1, moerr.NewInvalidArgNoCtx("parse timestamp", s)
 	}

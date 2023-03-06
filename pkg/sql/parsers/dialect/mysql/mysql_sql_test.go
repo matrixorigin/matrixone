@@ -224,7 +224,7 @@ var (
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
 	}, {
 		input:  "select binary('Geeksforgeeks')",
-		output: "select cast(Geeksforgeeks as binary)",
+		output: "select binary(Geeksforgeeks)",
 	}, {
 		input:  "show schemas where 1",
 		output: "show databases where 1",
@@ -1929,27 +1929,27 @@ var (
 		},
 		{
 			input:  "LOCK TABLES t READ",
-			output: "Lock Table t READ",
+			output: "Lock Tables t READ",
 		},
 		{
 			input:  "LOCK TABLES t READ LOCAL",
-			output: "Lock Table t READ LOCAL",
+			output: "Lock Tables t READ LOCAL",
 		},
 		{
 			input:  "LOCK TABLES t WRITE",
-			output: "Lock Table t WRITE",
+			output: "Lock Tables t WRITE",
 		},
 		{
 			input:  "LOCK TABLES t LOW_PRIORITY WRITE",
-			output: "Lock Table t LOW_PRIORITY WRITE",
+			output: "Lock Tables t LOW_PRIORITY WRITE",
 		},
 		{
 			input:  "LOCK TABLES t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
-			output: "Lock Table t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
+			output: "Lock Tables t LOW_PRIORITY WRITE, t1 READ, t2 WRITE",
 		},
 		{
 			input:  "UNLOCK TABLES",
-			output: "UnLock Table",
+			output: "UnLock Tables",
 		},
 		{
 			input:  "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",

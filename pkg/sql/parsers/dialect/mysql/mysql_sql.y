@@ -491,7 +491,7 @@ import (
 %type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
 %type <exprs> expression_list row_value window_partition_by window_partition_by_opt
-%type <expr> datetime_precision_opt datetime_precision
+%type <expr> datetime_scale_opt datetime_scale
 %type <tuple> tuple_expression
 %type <comparisonOp> comparison_operator and_or_some
 %type <createOption> create_option
@@ -565,7 +565,7 @@ import (
 %type <insert> insert_data
 %type <replace> replace_data
 %type <rowsExprs> values_list
-%type <str> name_datetime_precision braces_opt name_braces
+%type <str> name_datetime_scale braces_opt name_braces
 %type <str> std_dev_pop extended_opt
 %type <expr> expr_or_default
 %type <exprs> data_values data_opt row_value
@@ -1997,13 +1997,13 @@ table_lock_list:
     }
 |   table_lock_list ',' table_lock_elem
     {
-       $$ = append($1, $3);
+       $$ = append($1, $3)
     }
 
 table_lock_elem:
     table_name table_lock_type
     {
-        $$ = tree.TableLock{$1, $2}
+        $$ = tree.TableLock{*$1, $2}
     }
 
 table_lock_type:  
@@ -5964,7 +5964,7 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeCheck($4, $6, $1)
     }
-|   ON UPDATE name_datetime_precision datetime_precision_opt
+|   ON UPDATE name_datetime_scale datetime_scale_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($3))
         var es tree.Exprs = nil
@@ -6264,18 +6264,7 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   BINARY '(' expression ')'
-    {
-        locale := ""
-        $$ = tree.NewCastExpr($3, &tree.T{
-            InternalType: tree.InternalType{
-                Family: tree.StringFamily,
-                FamilyString: "BINARY",
-                Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
-            },
-        })
-    }
+
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -6379,7 +6368,7 @@ mo_cast_type:
 
 mysql_cast_type:
     decimal_type
-|   BINARY length_opt
+|   BINARY length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -6437,7 +6426,7 @@ mysql_cast_type:
         $$ = &tree.T{
             InternalType: tree.InternalType{
                 Family:             tree.TimestampFamily,
-                Precision:          $2,
+                Scale:          $2,
                 FamilyString: $1,
                 DisplayWith: $2,
                 TimePrecisionIsSet: false,
@@ -6454,7 +6443,7 @@ mysql_cast_type:
                 Family: tree.TimeFamily,
                 FamilyString: $1,
                 DisplayWith: $2,
-                Precision: $2,
+                Scale: $2,
                 TimePrecisionIsSet: false,
                 Locale: &locale,
                 Oid: uint32(defines.MYSQL_TYPE_TIME),
@@ -6884,7 +6873,7 @@ function_call_generic:
     }
 |   VALUES '(' insert_column ')'
     {
-    	column := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        column := tree.SetUnresolvedName(strings.ToLower($3))
         name := tree.SetUnresolvedName(strings.ToLower($1))
     	$$ = &tree.FuncExpr{
                     Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -6940,7 +6929,7 @@ time_stamp_unit:
 |    SQL_TSI_YEAR
 
 function_call_nonkeyword:
-    CURTIME datetime_precision
+    CURTIME datetime_scale
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         var es tree.Exprs = nil
@@ -6952,7 +6941,7 @@ function_call_nonkeyword:
             Exprs: es,
         }
     }
-|   SYSDATE datetime_precision
+|   SYSDATE datetime_scale
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         var es tree.Exprs = nil
@@ -6997,7 +6986,7 @@ function_call_keyword:
             Func: tree.FuncName2ResolvableFunctionReference(name),
         }
     }
-|   name_datetime_precision datetime_precision_opt
+|   name_datetime_scale datetime_scale_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         var es tree.Exprs = nil
@@ -7007,6 +6996,14 @@ function_call_keyword:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: es,
+        }
+    }
+|   BINARY '(' expression_list ')' 
+    {
+        name := tree.SetUnresolvedName("binary")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
         }
     }
 |   CHAR '(' expression_list ')'
@@ -7082,16 +7079,16 @@ function_call_keyword:
         }
     }
 
-datetime_precision_opt:
+datetime_scale_opt:
     {
         $$ = nil
     }
-|   datetime_precision
+|   datetime_scale
     {
         $$ = $1
     }
 
-datetime_precision:
+datetime_scale:
    '(' ')'
     {
         $$ = nil
@@ -7107,7 +7104,7 @@ datetime_precision:
         $$ = tree.NewNumValWithType(constant.MakeInt64(ival), str, false, tree.P_int64)
     }
 
-name_datetime_precision:
+name_datetime_scale:
     CURRENT_TIME
 |   CURRENT_TIMESTAMP
 |   LOCALTIME
@@ -7689,7 +7686,7 @@ decimal_type:
             yylex.Error("Display width for double out of range (max = 255)")
             return 1
         }
-        if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
+        if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
             yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
                 return 1
         }
@@ -7701,14 +7698,18 @@ decimal_type:
         		Locale: &locale,
        			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
-                Precision: $2.Precision,
+                Scale: $2.Scale,
         	},
         }
     }
 |   FLOAT_TYPE float_length_opt
     {
         locale := ""
-        if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
+        if $2.DisplayWith > 255 {
+            yylex.Error("Display width for float out of range (max = 255)")
+            return 1
+        }
+        if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
         	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         	return 1
         }
@@ -7721,7 +7722,7 @@ decimal_type:
             		Locale: &locale,
            			Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
             		DisplayWith: $2.DisplayWith,
-            		Precision: $2.Precision,
+            		Scale: $2.Scale,
             	},
             }
         } else {
@@ -7733,7 +7734,7 @@ decimal_type:
             		Locale: &locale,
             		Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
             		DisplayWith: $2.DisplayWith,
-            		Precision: $2.Precision,
+            		Scale: $2.Scale,
             	},
             }
         }
@@ -7742,7 +7743,7 @@ decimal_type:
 |   DECIMAL decimal_length_opt
     {
         locale := ""
-        if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
+        if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         return 1
         }
@@ -7758,7 +7759,7 @@ decimal_type:
             Locale: &locale,
             Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
             DisplayWith: $2.DisplayWith,
-            Precision: $2.Precision,
+            Scale: $2.Scale,
             },
         }
         } else {
@@ -7770,7 +7771,7 @@ decimal_type:
             Locale: &locale,
             Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
             DisplayWith: $2.DisplayWith,
-            Precision: $2.Precision,
+            Scale: $2.Scale,
             },
                 }
         }
@@ -7779,13 +7780,13 @@ decimal_type:
 //     {
 //         $$ = tree.TYPE_DOUBLE
 //         $$.InternalType.DisplayWith = $2.DisplayWith
-//         $$.InternalType.Precision = $2.Precision
+//         $$.InternalType.Scale = $2.Scale
 //     }
 // |   NUMERIC decimal_length_opt
 //     {
 //         $$ = tree.TYPE_DOUBLE
 //         $$.InternalType.DisplayWith = $2.DisplayWith
-//         $$.InternalType.Precision = $2.Precision
+//         $$.InternalType.Scale = $2.Scale
 //     }
 |   REAL float_length_opt
     {
@@ -7798,7 +7799,7 @@ decimal_type:
                 Locale: &locale,
                 Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
-                Precision: $2.Precision,
+                Scale: $2.Scale,
             },
         }
     }
@@ -7826,7 +7827,7 @@ time_type:
                 $$ = &tree.T{
                     InternalType: tree.InternalType{
                 Family:             tree.TimeFamily,
-                Precision:          $2,
+                Scale:          $2,
                     FamilyString: $1,
                     DisplayWith: 26,
                 TimePrecisionIsSet: true,
@@ -7846,7 +7847,7 @@ time_type:
                 $$ = &tree.T{
                     InternalType: tree.InternalType{
                 Family:             tree.TimestampFamily,
-                Precision:          $2,
+                Scale:          $2,
                     FamilyString: $1,
                     DisplayWith: 26,
                 TimePrecisionIsSet: true,
@@ -7866,7 +7867,7 @@ time_type:
                 $$ = &tree.T{
                     InternalType: tree.InternalType{
                 Family:             tree.TimestampFamily,
-                Precision:          $2,
+                Scale:          $2,
                     FamilyString: $1,
                     DisplayWith: 26,
                 TimePrecisionIsSet: true,
@@ -7918,7 +7919,7 @@ char_type:
             },
         }
     }
-|   BINARY length_opt
+|   BINARY length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -7931,7 +7932,7 @@ char_type:
             },
         }
     }
-|   VARBINARY length_opt
+|   VARBINARY length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -8190,21 +8191,21 @@ float_length_opt:
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.NotDefineDisplayWidth,
-            Precision: tree.NotDefineDec,
+            Scale: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ')'
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Precision: tree.NotDefineDec,
+            Scale: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Precision: int32($4.(int64)),
+            Scale: int32($4.(int64)),
         }
     }
 
@@ -8212,22 +8213,22 @@ decimal_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: 34,           // this is the default precision for decimal
-            Precision: 0,
+            DisplayWith: 34,           // this is the default scale for decimal
+            Scale: 0,
         }
     }
 |   '(' INTEGRAL ')'
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Precision: 0,
+            Scale: 0,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Precision: int32($4.(int64)),
+            Scale: int32($4.(int64)),
         }
     }
 

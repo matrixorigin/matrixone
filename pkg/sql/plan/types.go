@@ -238,6 +238,11 @@ type DefaultBinder struct {
 	cols []string
 }
 
+type UpdateBinder struct {
+	baseBinder
+	cols []*ColDef
+}
+
 type TableBinder struct {
 	baseBinder
 }
@@ -280,6 +285,7 @@ var _ Binder = (*HavingBinder)(nil)
 var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*PartitionBinder)(nil)
+var _ Binder = (*UpdateBinder)(nil)
 
 var sequence_cols_name = []string{"next_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle"}
 

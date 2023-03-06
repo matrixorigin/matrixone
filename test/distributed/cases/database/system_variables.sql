@@ -91,6 +91,8 @@ desc key_column_usage;
 select table_name, column_name from key_column_usage limit 2;
 desc columns;
 select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
+desc views;
+select table_schema, table_name, definer from views where table_schema = 'system' order by table_name;
 desc profiling;
 select seq, state from profiling;
 
