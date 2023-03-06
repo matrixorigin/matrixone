@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"hash/crc32"
 	"time"
 
@@ -169,7 +170,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		len(c.addr) == 0 || isCurrentCN(s.NodeInfo.Addr, c.addr) {
+		len(c.addr) == 0 || isSameCN(s.NodeInfo.Addr, c.addr) {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
@@ -680,6 +681,7 @@ func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, for
 
 		// end message
 		if m.IsEndMessage() {
+			fmt.Printf("[forward] receive end message\n")
 			return nil
 		}
 
