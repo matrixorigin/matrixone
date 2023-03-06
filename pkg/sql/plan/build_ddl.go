@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -1277,6 +1278,74 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 				DdlType: plan.DataDefinition_ALTER_VIEW,
 				Definition: &plan.DataDefinition_AlterView{
 					AlterView: alterView,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, error) {
+	lockTables := make([]*plan.TableLockInfo, 0, len(stmt.TableLocks))
+	uniqueTableName := make(map[string]bool)
+
+	//get session id
+	var sessionIDbytes []byte
+	if ctx.GetProcess() != nil {
+		sessionID := ctx.GetProcess().Id
+		sessionIDbytes = []byte(sessionID)
+	}
+
+	//get rows from 0 to ^uint64(0)
+	rangeMax := make([]byte, 8)
+	binary.BigEndian.PutUint64(rangeMax, ^uint64(0))
+
+	//Check table locks
+	for _, tableLock := range stmt.TableLocks {
+		tb := tableLock.Table
+
+		//get table name
+		tblName := string(tb.ObjectName)
+
+		// get database name
+		var schemaName string
+		if len(tb.SchemaName) == 0 {
+			schemaName = ctx.DefaultDatabase()
+		} else {
+			schemaName = string(tb.SchemaName)
+		}
+
+		//check table whether exist
+		_, tableDef := ctx.Resolve(schemaName, tblName)
+		if tableDef == nil {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tblName)
+		}
+
+		// check the stmt whether locks the same table
+		if _, ok := uniqueTableName[tblName]; ok {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Not unique table %s", tblName)
+		}
+
+		uniqueTableName[tblName] = true
+
+		tableLockInfo := &plan.TableLockInfo{
+			LockType:  plan.TableLockType(tableLock.LockType),
+			TableID:   tableDef.TblId,
+			SessionID: sessionIDbytes,
+			Rows:      [][]byte{[]byte("0"), rangeMax},
+		}
+		lockTables = append(lockTables, tableLockInfo)
+	}
+
+	LockTables := &plan.LockTables{
+		TableLocks: lockTables,
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_LOCK_TABLES,
+				Definition: &plan.DataDefinition_LockTables{
+					LockTables: LockTables,
 				},
 			},
 		},

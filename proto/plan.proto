@@ -397,6 +397,8 @@ message TableDef {
 	repeated DefType defs	= 31;
 	map<string, int32> name2col_index = 32;
 	ColDef composite_pkey = 33;
+	bool isLocked = 34;
+	TableLockType tableLockType = 35;
 }
 
 message TableFunction{
@@ -792,6 +794,7 @@ message DataDefinition {
 		SHOW_TABLE_STATUS 	= 24;
 		SHOW_TARGET 		= 25;
 		SHOW_COLLATION 		= 26;
+		LOCK_TABLES         = 27;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -814,6 +817,7 @@ message DataDefinition {
 		TruncateTable truncate_table	= 12;
 		ShowVariables show_variables 	= 13;
 		AlterView alter_view			= 14;
+		LockTables lock_tables          = 15;
 	}
 }
 
@@ -937,4 +941,23 @@ message Execute {
 
 message Deallocate {
 	string name			= 1;
+}
+
+enum TableLockType {
+	TableLockNone = 0;
+	TableLockRead = 1;
+	TableLockReadLocal = 2;
+	TableLockWrite = 3;
+	TableLockLowPriorityWrite = 4;
+}
+
+message TableLockInfo {
+	TableLockType lockType = 1;
+	uint64 tableID = 2;
+	bytes SessionID = 3;
+	repeated bytes rows = 4;
+}
+
+message LockTables {
+	repeated TableLockInfo tableLocks = 1;
 }

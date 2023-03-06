@@ -3669,7 +3669,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateRole, *tree.DropRole,
 			*tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
-			*tree.Delete, *tree.TruncateTable:
+			*tree.Delete, *tree.TruncateTable, *tree.LockTableStmt:
 			//change privilege
 			switch cw.GetAst().(type) {
 			case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView,
