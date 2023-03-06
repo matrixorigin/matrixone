@@ -31,7 +31,7 @@ import (
 type MemoryFS struct {
 	name string
 	sync.RWMutex
-	tree *btree.Generic[*_MemFSEntry]
+	tree *btree.BTreeG[*_MemFSEntry]
 }
 
 var _ FileService = new(MemoryFS)
@@ -39,7 +39,7 @@ var _ FileService = new(MemoryFS)
 func NewMemoryFS(name string) (*MemoryFS, error) {
 	return &MemoryFS{
 		name: name,
-		tree: btree.NewGeneric(func(a, b *_MemFSEntry) bool {
+		tree: btree.NewBTreeG(func(a, b *_MemFSEntry) bool {
 			return a.FilePath < b.FilePath
 		}),
 	}, nil

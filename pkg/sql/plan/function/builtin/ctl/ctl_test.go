@@ -29,13 +29,13 @@ import (
 )
 
 func TestHandlerWithServiceTypeNotSupported(t *testing.T) {
-	vec1 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	vec1 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
 	require.NoError(t, vec1.Append([]byte("not support service"), false, mpool.MustNewZero()))
 
-	vec2 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	vec2 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
 	require.NoError(t, vec2.Append([]byte("ping"), false, mpool.MustNewZero()))
 
-	vec3 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	vec3 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
 	require.NoError(t, vec3.Append([]byte(""), false, mpool.MustNewZero()))
 
 	proc := testutil.NewProcess()
@@ -44,13 +44,13 @@ func TestHandlerWithServiceTypeNotSupported(t *testing.T) {
 }
 
 func TestHandlerWithCommandNotSupported(t *testing.T) {
-	vec1 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	vec1 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
 	require.NoError(t, vec1.Append([]byte("dn"), false, mpool.MustNewZero()))
 
-	vec2 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	vec2 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
 	require.NoError(t, vec2.Append([]byte("not supported command"), false, mpool.MustNewZero()))
 
-	vec3 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	vec3 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
 	require.NoError(t, vec3.Append([]byte(""), false, mpool.MustNewZero()))
 
 	proc := testutil.NewProcess()
@@ -59,13 +59,13 @@ func TestHandlerWithCommandNotSupported(t *testing.T) {
 }
 
 func TestHandler(t *testing.T) {
-	vec1 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	vec1 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
 	require.NoError(t, vec1.Append([]byte("dn"), false, mpool.MustNewZero()))
 
-	vec2 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	vec2 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
 	require.NoError(t, vec2.Append([]byte("test_cmd"), false, mpool.MustNewZero()))
 
-	vec3 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	vec3 := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
 	require.NoError(t, vec3.Append([]byte(""), false, mpool.MustNewZero()))
 	proc := testutil.NewProcess()
 	supportedCmds[strings.ToUpper("test_cmd")] = func(proc *process.Process,

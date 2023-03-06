@@ -47,17 +47,17 @@ var (
 	uuidType       = types.T_uuid.ToType()
 )
 
-func MakeDecimal64Type(precision, scalar int32) types.Type {
+func MakeDecimal64Type(width, scalar int32) types.Type {
 	d64 := types.T_decimal64.ToType()
 	d64.Scale = scalar
-	d64.Width = precision
+	d64.Width = width
 	return d64
 }
 
-func MakeDecimal128Type(precision, scalar int32) types.Type {
+func MakeDecimal128Type(width, scalar int32) types.Type {
 	d128 := types.T_decimal128.ToType()
 	d128.Scale = scalar
-	d128.Width = precision
+	d128.Width = width
 	return d128
 }
 

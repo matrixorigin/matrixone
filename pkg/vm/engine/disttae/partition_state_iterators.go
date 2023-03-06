@@ -15,13 +15,21 @@
 package disttae
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/tidwall/btree"
 )
 
+type partitionStateIter interface {
+	Next() bool
+	Close() error
+	Entry() RowEntry
+}
+
 type partitionStateRowsIter struct {
 	ts           types.TS
-	iter         btree.GenericIter[RowEntry]
+	iter         btree.IterG[RowEntry]
 	firstCalled  bool
 	lastRowID    types.Rowid
 	checkBlockID bool
@@ -30,8 +38,7 @@ type partitionStateRowsIter struct {
 }
 
 func (p *PartitionState) NewRowsIter(ts types.TS, blockID *uint64, iterDeleted bool) *partitionStateRowsIter {
-	rows := p.Rows.Copy()
-	iter := rows.Iter()
+	iter := p.Rows.Copy().Iter()
 	ret := &partitionStateRowsIter{
 		ts:          ts,
 		iter:        iter,
@@ -96,6 +103,94 @@ func (p *partitionStateRowsIter) Entry() RowEntry {
 }
 
 func (p *partitionStateRowsIter) Close() error {
+	p.iter.Release()
+	return nil
+}
+
+type partitionStatePrimaryKeyIter struct {
+	ts          types.TS
+	key         []byte
+	iter        btree.IterG[*PrimaryIndexEntry]
+	firstCalled bool
+	rows        *btree.BTreeG[RowEntry]
+	curRow      RowEntry
+}
+
+func (p *PartitionState) NewPrimaryKeyIter(ts types.TS, key []byte) *partitionStatePrimaryKeyIter {
+	iter := p.PrimaryIndex.Copy().Iter()
+	return &partitionStatePrimaryKeyIter{
+		ts:   ts,
+		key:  key,
+		iter: iter,
+		rows: p.Rows.Copy(),
+	}
+}
+
+func (p *partitionStatePrimaryKeyIter) Next() bool {
+	for {
+
+		if !p.firstCalled {
+			if !p.iter.Seek(&PrimaryIndexEntry{
+				Bytes: p.key,
+			}) {
+				return false
+			}
+			p.firstCalled = true
+		} else {
+			if !p.iter.Next() {
+				return false
+			}
+		}
+
+		entry := p.iter.Item()
+
+		if !bytes.Equal(entry.Bytes, p.key) {
+			// no more
+			return false
+		}
+
+		// validate
+		valid := false
+		rowsIter := p.rows.Iter()
+		for ok := rowsIter.Seek(RowEntry{
+			BlockID: entry.BlockID,
+			RowID:   entry.RowID,
+			Time:    p.ts,
+		}); ok; ok = rowsIter.Next() {
+			row := rowsIter.Item()
+			if row.BlockID != entry.BlockID {
+				// no more
+				break
+			}
+			if row.RowID != entry.RowID {
+				// no more
+				break
+			}
+			if row.Time.Greater(p.ts) {
+				// not visible
+				continue
+			}
+			valid = row.ID == entry.RowEntryID
+			if valid {
+				p.curRow = row
+			}
+			break
+		}
+		rowsIter.Release()
+
+		if !valid {
+			continue
+		}
+
+		return true
+	}
+}
+
+func (p *partitionStatePrimaryKeyIter) Entry() RowEntry {
+	return p.curRow
+}
+
+func (p *partitionStatePrimaryKeyIter) Close() error {
 	p.iter.Release()
 	return nil
 }
