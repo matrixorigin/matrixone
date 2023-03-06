@@ -71,15 +71,12 @@ func New(
 		txnHeap:    &transactionHeap{},
 		txns:       make(map[string]*Transaction),
 		dnMap:      dnMap,
-		metaTables: make(map[string]Partitions),
 		partitions: make(map[[2]uint64]Partitions),
 	}
 
 	if err := e.init(ctx, mp); err != nil {
 		panic(err)
 	}
-
-	go e.gc(ctx)
 
 	return e
 }
@@ -547,42 +544,6 @@ func (e *Engine) delTransaction(txn *Transaction) {
 		}
 	}
 	delete(e.txns, string(txn.meta.ID))
-}
-
-func (e *Engine) gc(ctx context.Context) {
-	var ps []Partitions
-	var ts timestamp.Timestamp
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(GcCycle):
-			e.RLock()
-			if len(*e.txnHeap) == 0 {
-				e.RUnlock()
-				continue
-			}
-			ts = (*e.txnHeap)[0].meta.SnapshotTS
-			e.RUnlock()
-			e.Lock()
-			for k := range e.partitions {
-				ps = append(ps, e.partitions[k])
-			}
-			e.Unlock()
-			for i := range ps {
-				for j := range ps[i] {
-					select {
-					case <-ps[i][j].lock:
-					case <-ctx.Done():
-						return
-					}
-					ps[i][j].GC(ts)
-					ps[i][j].lock <- struct{}{}
-				}
-			}
-		}
-	}
 }
 
 func (e *Engine) getDNServices() []DNStore {

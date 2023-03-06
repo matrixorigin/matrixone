@@ -983,7 +983,7 @@ func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, erro
 			if tbl.meta != nil {
 				blks = tbl.meta.blocks[j]
 			}
-			if inParttion(v, part, txn.meta.SnapshotTS, blks) {
+			if inPartition(v, part, txn.meta.SnapshotTS, blks) {
 				if err := vector.UnionOne(bats[j].GetVector(0), vec, int64(i), txn.proc.Mp()); err != nil {
 					for _, bat := range bats {
 						bat.Clean(txn.proc.Mp())
@@ -1031,11 +1031,10 @@ func isMetaTable(name string) bool {
 
 func genBlockMetas(
 	ctx context.Context,
-	rows [][]any,
+	blockInfos []catalog.BlockInfo,
 	columnLength int,
 	fs fileservice.FileService,
 	m *mpool.MPool, prefetch bool) ([]BlockMeta, error) {
-	blockInfos := catalog.GenBlockInfo(rows)
 	{
 		mp := make(map[uint64]catalog.BlockInfo) // block list
 		for i := range blockInfos {
@@ -1143,9 +1142,9 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 	return fmt.Sprintf("%v-%v", tableId, name)
 }
 
-func inParttion(v types.Rowid, part *Partition,
+func inPartition(v types.Rowid, part *Partition,
 	ts timestamp.Timestamp, blocks []BlockMeta) bool {
-	if part.Get(v, ts) {
+	if part.state.Load().RowExists(v, types.TimestampToTS(ts)) {
 		return true
 	}
 	if len(blocks) == 0 {
