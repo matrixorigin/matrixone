@@ -12,24 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memtable
+package disttae
 
-type IsolationPolicy struct {
-	Read ReadPolicy
-}
+import (
+	"testing"
 
-type ReadPolicy uint8
-
-const (
-	ReadCommitted ReadPolicy = iota + 1
-	ReadSnapshot
-	ReadNoStale
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-var SnapshotIsolation = IsolationPolicy{
-	Read: ReadSnapshot,
-}
+func BenchmarkPartitionState(b *testing.B) {
+	partition := NewPartition()
+	end := make(chan struct{})
+	defer func() {
+		close(end)
+	}()
 
-var Serializable = IsolationPolicy{
-	Read: ReadNoStale,
+	// concurrent writer
+	go func() {
+		for {
+			select {
+			case <-end:
+				return
+			default:
+			}
+			state, end := partition.MutateState()
+			_ = state
+			end()
+		}
+	}()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			state := partition.state.Load()
+			iter := state.NewRowsIter(types.BuildTS(0, 0), nil, false)
+			iter.Close()
+		}
+	})
+
 }

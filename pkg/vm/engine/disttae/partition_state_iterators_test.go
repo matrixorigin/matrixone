@@ -78,20 +78,38 @@ func TestPartitionStateRowsIter(t *testing.T) {
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
 			},
-		}, -1)
+		}, 0, pool)
 	}
 
 	for i := 0; i < num; i++ {
-		iter := state.NewRowsIter(types.BuildTS(int64(i), 0), nil, false)
+		ts := types.BuildTS(int64(i), 0)
+		iter := state.NewRowsIter(ts, nil, false)
 		n := 0
 		rowIDs := make(map[types.Rowid]bool)
 		for iter.Next() {
 			n++
 			entry := iter.Entry()
 			rowIDs[entry.RowID] = true
+
+			// RowExists
+			require.True(t, state.RowExists(entry.RowID, ts))
+
 		}
 		require.Equal(t, i+1, n)
 		require.Equal(t, i+1, len(rowIDs))
+		require.Nil(t, iter.Close())
+	}
+
+	// primary key iter
+	for i := 0; i < num; i++ {
+		ts := types.BuildTS(int64(i), 0)
+		bs := encodePrimaryKey(int64(i), pool)
+		iter := state.NewPrimaryKeyIter(ts, bs)
+		n := 0
+		for iter.Next() {
+			n++
+		}
+		require.Equal(t, 1, n)
 		require.Nil(t, iter.Close())
 	}
 
@@ -112,7 +130,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
 			},
-		}, -1)
+		}, 0, pool)
 	}
 
 	for i := 0; i < num; i++ {
