@@ -516,9 +516,7 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 		if err != nil {
 			return nil, err
 		}
-		newObjeName := engine.GetTempTableName(insertCtx.Ref.SchemaName, insertCtx.Ref.ObjName)
 		insertCtx.Ref.SchemaName = defines.TEMPORARY_DBNAME
-		insertCtx.TableDef.Name = newObjeName
 	}
 
 	return &preinsert.Argument{
