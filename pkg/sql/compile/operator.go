@@ -506,19 +506,21 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 	insertCtx := n.InsertCtx
 	insertCtx.TableDef.TblId = uint64(insertCtx.Ref.Obj)
 
-	dbSource, err := eg.Database(proc.Ctx, insertCtx.Ref.SchemaName, proc.TxnOperator)
-	if err != nil {
-		return nil, err
-	}
-	_, err = dbSource.Relation(proc.Ctx, insertCtx.Ref.ObjName)
-	if err != nil {
-		dbSource, err = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+	if insertCtx.Ref.SchemaName != "" {
+		dbSource, err := eg.Database(proc.Ctx, insertCtx.Ref.SchemaName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
-		newObjName := engine.GetTempTableName(insertCtx.Ref.SchemaName, insertCtx.Ref.ObjName)
-		insertCtx.Ref.SchemaName = defines.TEMPORARY_DBNAME
-		insertCtx.Ref.ObjName = newObjName
+		_, err = dbSource.Relation(proc.Ctx, insertCtx.Ref.ObjName)
+		if err != nil {
+			dbSource, err = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+			if err != nil {
+				return nil, err
+			}
+			newObjName := engine.GetTempTableName(insertCtx.Ref.SchemaName, insertCtx.Ref.ObjName)
+			insertCtx.Ref.SchemaName = defines.TEMPORARY_DBNAME
+			insertCtx.Ref.ObjName = newObjName
+		}
 	}
 
 	return &preinsert.Argument{
