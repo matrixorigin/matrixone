@@ -115,10 +115,10 @@ type Transaction struct {
 	writes [][]Entry
 	// txn workspace size
 	workspaceSize uint64
-	tagWriteS3    bool
-	workspace     *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
-	dnStores      []DNStore
-	proc          *process.Process
+
+	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
+	dnStores  []DNStore
+	proc      *process.Process
 
 	idGen IDGenerator
 
