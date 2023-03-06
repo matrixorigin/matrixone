@@ -48,17 +48,17 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 
 	info := colexec.GetInfoForInsertAndUpdate(arg.TableDef, nil)
 
-	if info.HasAutoCol {
-		err := genAutoIncrCol(bat, proc, arg)
-		if err != nil {
-			return false, err
-		}
-	}
-
 	//get insert batch
 	insertBatch, err := colexec.GetUpdateBatch(proc, bat, info.IdxList, bat.Length(), info.Attrs, nil, arg.ParentIdx)
 	if err != nil {
 		return false, err
+	}
+
+	if info.HasAutoCol {
+		err := genAutoIncrCol(insertBatch, proc, arg)
+		if err != nil {
+			return false, err
+		}
 	}
 
 	// check new rows not null
