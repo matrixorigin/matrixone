@@ -768,7 +768,7 @@ func TestDdl(t *testing.T) {
 		"create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation",
 		"CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey)) COMMENT='xxxxx'",
 		"create table t2(empno int unsigned,ename varchar(15),job varchar(10) key) cluster by(empno,ename)",
-		"create unique index index_nation  lineitem(n_name)",
+		"create unique index  idx on nation(n_name) ",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 

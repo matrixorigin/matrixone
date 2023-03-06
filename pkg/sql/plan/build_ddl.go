@@ -1224,17 +1224,58 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		}
 	}
 
-	insertStmt := &tree.Insert{
-		Table: selectTable,
-		Rows:  selectStmt,
-	}
-
-	insertPlan, err := buildInsert(insertStmt, ctx, false)
+	selectPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
 	if err != nil {
 		return nil, err
 	}
 
-	createIndex.InsertPlan = insertPlan
+	qry := selectPlan.Plan.(*plan.Plan_Query).Query
+	// build insert plan
+	indexTableDef := index.IndexTables[0]
+	indexObjRef := &plan.ObjectRef{
+		SchemaName: createIndex.Database,
+		ObjName:    indexTableDef.Name,
+	}
+
+	sourceColDefs := GetResultColumnsFromPlan(selectPlan)
+	qry.StmtType = plan.Query_INSERT
+
+	insertExprs := make([]*Expr, len(sourceColDefs))
+	for i := range insertExprs {
+		insertExprs[i] = &plan.Expr{
+			Typ: sourceColDefs[i].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					ColPos: int32(i),
+				},
+			},
+		}
+	}
+
+	// do type cast if needed
+	for i := range insertExprs {
+		insertExprs[i], err = makePlan2CastExpr(ctx.GetContext(), insertExprs[i], indexTableDef.Cols[i].Typ)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	insertNode := &Node{
+		ObjRef:      indexObjRef,
+		TableDef:    indexTableDef,
+		NodeType:    plan.Node_INSERT,
+		NodeId:      int32(len(qry.Nodes)),
+		Children:    []int32{qry.Steps[len(qry.Steps)-1]},
+		ProjectList: insertExprs,
+		ClusterTable: &plan.ClusterTable{
+			IsClusterTable:         false,
+			ColumnIndexOfAccountId: -1,
+		},
+	}
+	nodeID := int32(len(qry.Nodes))
+	insertNode.NodeId = nodeID
+	qry.Nodes = append(qry.Nodes, insertNode)
+	qry.Steps[len(qry.Steps)-1] = insertNode.NodeId
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
