@@ -1320,8 +1320,6 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tblName)
 		}
 
-		// check the table whether being locked
-
 		// check the stmt whether locks the same table
 		if _, ok := uniqueTableName[tblName]; ok {
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Not unique table %s", tblName)
