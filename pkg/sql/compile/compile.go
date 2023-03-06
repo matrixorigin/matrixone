@@ -389,16 +389,16 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			rs = c.newMergeScope(ss)
 			rs.Magic = Insert
 			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op:  vm.PreInsert,
-				Arg: preArg,
-			})
 			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
 				rs.Instructions = append(rs.Instructions, vm.Instruction{
 					Op:  vm.OnDuplicateKey,
 					Arg: onDuplicateKeyArg,
 				})
 			}
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.PreInsert,
+				Arg: preArg,
+			})
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Insert,
 				Arg: arg,
