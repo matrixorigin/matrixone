@@ -590,6 +590,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Preinsert = &pipeline.PreInsert{
 			SchemaName: t.SchemaName,
 			TableDef:   t.TableDef,
+			ParentIdx:  t.ParentIdx,
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
@@ -859,6 +860,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &preinsert.Argument{
 			SchemaName: t.GetSchemaName(),
 			TableDef:   t.GetTableDef(),
+			ParentIdx:  t.GetParentIdx(),
 		}
 	case vm.Anti:
 		t := opr.GetAnti()

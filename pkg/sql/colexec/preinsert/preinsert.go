@@ -45,30 +45,37 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	bat.Attrs = make([]string, 0, len(arg.TableDef.Cols))
-	for _, col := range arg.TableDef.Cols {
-		if col.Name == catalog.Row_ID {
-			continue
-		}
-		bat.Attrs = append(bat.Attrs, col.Name)
-	}
 
 	err := genAutoIncrCol(bat, proc, arg)
 	if err != nil {
 		return false, err
 	}
 
-	err = genCompositePrimaryKey(bat, proc, arg.TableDef)
+	info := colexec.GetInfoForInsertAndUpdate(arg.TableDef, nil)
+
+	//get insert batch
+	insertBatch, err := colexec.GetUpdateBatch(proc, bat, info.IdxList, bat.Length(), info.Attrs, nil, arg.ParentIdx)
 	if err != nil {
 		return false, err
 	}
 
-	err = genClusterBy(bat, proc, arg.TableDef)
+	// check new rows not null
+	err = colexec.BatchDataNotNullCheck(insertBatch, arg.TableDef, proc.Ctx)
 	if err != nil {
 		return false, err
 	}
 
-	proc.SetInputBatch(bat)
+	err = genCompositePrimaryKey(insertBatch, proc, arg.TableDef)
+	if err != nil {
+		return false, err
+	}
+
+	err = genClusterBy(insertBatch, proc, arg.TableDef)
+	if err != nil {
+		return false, err
+	}
+
+	proc.SetInputBatch(insertBatch)
 	return false, nil
 }
 

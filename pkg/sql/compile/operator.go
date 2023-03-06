@@ -387,6 +387,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Eg:         t.Eg,
 			SchemaName: t.SchemaName,
 			TableDef:   t.TableDef,
+			ParentIdx:  t.ParentIdx,
 		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -488,6 +489,7 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 		Eg:         eg,
 		SchemaName: insertCtx.Ref.SchemaName,
 		TableDef:   insertCtx.TableDef,
+		ParentIdx:  insertCtx.ParentIdx,
 	}, nil
 }
 

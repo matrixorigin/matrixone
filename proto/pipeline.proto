@@ -81,6 +81,7 @@ message Insert{
 message PreInsert {
   string   SchemaName       = 1;
   plan.TableDef   table_def = 2;
+  map<string, int32> parent_idx   = 3;
 }
 
 message OnDuplicateKey{
