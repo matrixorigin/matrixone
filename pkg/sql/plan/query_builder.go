@@ -839,7 +839,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 
 			if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
 				for i := 0; i < len(argsCastType); i++ {
-					argsCastType[i].Precision = 0
+					argsCastType[i].Scale = 0
 				}
 			}
 			var targetType *plan.Type

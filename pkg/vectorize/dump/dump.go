@@ -69,7 +69,7 @@ func ParseFloats[T types.Floats](xs []T, nsp *nulls.Nulls, rs []string, bitsSize
 			rs[i] = "NULL"
 			continue
 		}
-		rs[i] = strconv.FormatFloat(float64(xs[i]), 'f', -1, bitsSize) //TODO: precision
+		rs[i] = strconv.FormatFloat(float64(xs[i]), 'f', -1, bitsSize) //TODO: scale
 	}
 	return rs, nil
 }
@@ -86,13 +86,13 @@ func ParseQuoted[T transTp](xs []T, nsp *nulls.Nulls, rs []string, fn func(dt T)
 	return rs, nil
 }
 
-func ParseTimeStamp(xs []types.Timestamp, nsp *nulls.Nulls, rs []string, loc *time.Location, precision int32) ([]string, error) {
+func ParseTimeStamp(xs []types.Timestamp, nsp *nulls.Nulls, rs []string, loc *time.Location, scale int32) ([]string, error) {
 	for i := range xs {
 		if nsp.Contains(uint64(i)) {
 			rs[i] = "NULL"
 			continue
 		}
-		v := fmt.Sprintf("'%s'", xs[i].String2(loc, precision))
+		v := fmt.Sprintf("'%s'", xs[i].String2(loc, scale))
 		rs[i] = v
 	}
 	return rs, nil

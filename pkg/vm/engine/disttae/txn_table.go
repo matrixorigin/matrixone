@@ -283,12 +283,11 @@ func (tbl *txnTable) getTableDef() *plan.TableDef {
 					Name:  attr.Attr.Name,
 					ColId: attr.Attr.ID,
 					Typ: &plan.Type{
-						Id:        int32(attr.Attr.Type.Oid),
-						Width:     attr.Attr.Type.Width,
-						Size:      attr.Attr.Type.Size,
-						Precision: attr.Attr.Type.Precision,
-						Scale:     attr.Attr.Type.Scale,
-						AutoIncr:  attr.Attr.AutoIncrement,
+						Id:       int32(attr.Attr.Type.Oid),
+						Width:    attr.Attr.Type.Width,
+						Size:     attr.Attr.Type.Size,
+						Scale:    attr.Attr.Type.Scale,
+						AutoIncr: attr.Attr.AutoIncrement,
 					},
 					Primary:   attr.Attr.Primary,
 					Default:   attr.Attr.Default,
@@ -413,7 +412,7 @@ func (tbl *txnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, erro
 		IsHidden: true,
 		IsRowId:  true,
 		Name:     catalog.Row_ID,
-		Type:     types.New(types.T_Rowid, 0, 0, 0),
+		Type:     types.New(types.T_Rowid, 0, 0),
 		Primary:  true,
 	})
 	return attrs, nil
@@ -695,7 +694,7 @@ func (tbl *txnTable) newReader(
 		}
 	}
 
-	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0, 0)
+	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0)
 	for _, def := range tbl.defs {
 		attr, ok := def.(*engine.AttributeDef)
 		if !ok {

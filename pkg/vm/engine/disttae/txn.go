@@ -116,7 +116,7 @@ func (txn *Transaction) WriteBatch(
 	bat.Cnt = 1
 	if typ == INSERT {
 		len := bat.Length()
-		vec := vector.New(types.New(types.T_Rowid, 0, 0, 0))
+		vec := vector.New(types.New(types.T_Rowid, 0, 0))
 		for i := 0; i < len; i++ {
 			if err := vec.Append(txn.genRowId(), false,
 				txn.proc.Mp()); err != nil {

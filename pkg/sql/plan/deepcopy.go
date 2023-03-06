@@ -385,7 +385,6 @@ func DeepCopyTyp(typ *plan.Type) *plan.Type {
 		Id:          typ.Id,
 		NotNullable: typ.NotNullable,
 		Width:       typ.Width,
-		Precision:   typ.Precision,
 		Size:        typ.Size,
 		Scale:       typ.Scale,
 		AutoIncr:    typ.AutoIncr,

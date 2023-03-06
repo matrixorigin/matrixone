@@ -17,10 +17,11 @@ package table
 import (
 	"context"
 	"errors"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestNoopTableOptions_FormatDdl(t *testing.T) {
@@ -54,7 +55,7 @@ func TestNoopTableOptions_FormatDdl(t *testing.T) {
 	}
 }
 
-var dummyStrColumn = Column{Name: "str", ColType: TVarchar, Precision: 32, Default: "", Comment: "str column"}
+var dummyStrColumn = Column{Name: "str", ColType: TVarchar, Scale: 32, Default: "", Comment: "str column"}
 var dummyStrCreateSql = "`str` VARCHAR(32) NOT NULL COMMENT \"str column\""
 var dummyInt64Column = Column{Name: "int64", ColType: TInt64, Default: "0", Comment: "int64 column"}
 var dummyInt64CreateSql = "`int64` BIGINT DEFAULT \"0\" COMMENT \"int64 column\""
