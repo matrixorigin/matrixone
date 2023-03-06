@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type ZmReader struct {
@@ -39,7 +38,7 @@ func NewZmReader(fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
 	}
 }
 
-func (r *ZmReader) getZoneMap() (*index.ZoneMap, error) {
+func (r *ZmReader) getZoneMap() (dataio.Index, error) {
 	_, _, extent, _, _ := blockio.DecodeLocation(r.metaKey)
 	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, []uint32{extent.Id()}, nil)
 	if err != nil {

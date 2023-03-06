@@ -134,12 +134,12 @@ func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
 }
 
 func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
-	ids []uint32, m *mpool.MPool) ([][]*index.ZoneMap, error) {
+	ids []uint32, m *mpool.MPool) ([][]dataio.Index, error) {
 	blocks, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
 	if err != nil {
 		return nil, err
 	}
-	blocksZoneMap := make([][]*index.ZoneMap, len(ids))
+	blocksZoneMap := make([][]dataio.Index, len(ids))
 	for i, id := range ids {
 		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, blocks[id], m)
 		if err != nil {
@@ -172,8 +172,8 @@ func (r *BlockReader) LoadZoneMap(
 	ctx context.Context,
 	idxs []uint16,
 	block objectio.BlockObject,
-	m *mpool.MPool) ([]*index.ZoneMap, error) {
-	zoneMapList := make([]*index.ZoneMap, len(idxs))
+	m *mpool.MPool) ([]dataio.Index, error) {
+	zoneMapList := make([]dataio.Index, len(idxs))
 	for i, idx := range idxs {
 		column, err := block.GetColumn(idx)
 		if err != nil {
@@ -185,7 +185,7 @@ func (r *BlockReader) LoadZoneMap(
 		}
 		data := zm.(*objectio.ZoneMap).GetData()
 
-		zoneMapList[i] = data.(*index.ZoneMap)
+		zoneMapList[i] = data.(*BlockIndex)
 	}
 
 	return zoneMapList, nil
@@ -219,7 +219,7 @@ func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info c
 }
 
 func LoadZoneMapFunc(buf []byte, typ types.Type) (any, error) {
-	zm := index.NewZoneMap(typ)
+	zm := NewZoneMap(typ)
 	err := zm.Unmarshal(buf[:])
 	if err != nil {
 		return nil, err

@@ -16,9 +16,11 @@ package dataio
 
 import (
 	"context"
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -37,7 +39,7 @@ type Reader interface {
 
 	// LoadZoneMaps loads the ZoneMap index of the specified column of the block
 	// Returns a two-dimensional array of ZoneMap data structures
-	LoadZoneMaps(ctx context.Context, idxs []uint16, ids []uint32, m *mpool.MPool) ([][]*index.ZoneMap, error)
+	LoadZoneMaps(ctx context.Context, idxs []uint16, ids []uint32, m *mpool.MPool) ([][]Index, error)
 
 	// LoadBloomFilter loads the BloomFilter index of the specified column of the block
 	// idx is the column number of the index to be read,Only one column of data in a block has BloomFilter
@@ -83,4 +85,17 @@ type Writer interface {
 	// Sync is to write multiple batches written to the buffer to the fileservice at one time
 	// objectio.Extent is the address offset information of all block metadata stored in an object.
 	Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error)
+}
+
+type Index interface {
+	Contains(key any) (ok bool)
+	FastContainsAny(keys containers.Vector) (ok bool)
+	ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool)
+	GetMax() any
+	GetMin() any
+	GetBuf() []byte
+	Marshal() (buf []byte, err error)
+	Unmarshal(buf []byte) error
+	String() string
+	GetType() types.Type
 }
