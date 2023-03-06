@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"math"
 	gotrace "runtime/trace"
 	"time"
 
@@ -444,6 +445,9 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 					logger.Error("fail to fetch additional logtail", zap.Error(err))
 					risk += 1
 					return
+				}
+				if len(tails) == 1 && tails[0].Table.TbId == math.MaxUint64 {
+					panic("unexpected checkpoint within time range")
 				}
 
 				// format table ID beforehand

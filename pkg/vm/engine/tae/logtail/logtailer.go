@@ -30,6 +30,7 @@ import (
 // Logtailer provides logtail for the specified table.
 type Logtailer interface {
 	// RangeLogtail returns logtail for all tables within the range (from, to].
+	// NOTE: caller should keep time range monotonous, or there would be a checkpoint.
 	RangeLogtail(
 		ctx context.Context, from, to timestamp.Timestamp,
 	) ([]logtail.TableLogtail, error)
