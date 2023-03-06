@@ -1982,13 +1982,13 @@ table_lock_list:
     }
 |   table_lock_list ',' table_lock_elem
     {
-       $$ = append($1, $3);
+       $$ = append($1, $3)
     }
 
 table_lock_elem:
     table_name table_lock_type
     {
-        $$ = tree.TableLock{$1, $2}
+        $$ = tree.TableLock{*$1, $2}
     }
 
 table_lock_type:  
@@ -6105,18 +6105,7 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   BINARY '(' expression ')'
-    {
-        locale := ""
-        $$ = tree.NewCastExpr($3, &tree.T{
-            InternalType: tree.InternalType{
-                Family: tree.StringFamily,
-                FamilyString: "BINARY",
-                Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
-            },
-        })
-    }
+
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -6220,7 +6209,7 @@ mo_cast_type:
 
 mysql_cast_type:
     decimal_type
-|   BINARY length_opt
+|   BINARY length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -6725,7 +6714,7 @@ function_call_generic:
     }
 |   VALUES '(' insert_column ')'
     {
-    	column := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        column := tree.SetUnresolvedName(strings.ToLower($3))
         name := tree.SetUnresolvedName(strings.ToLower($1))
     	$$ = &tree.FuncExpr{
                     Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -6848,6 +6837,14 @@ function_call_keyword:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: es,
+        }
+    }
+|   BINARY '(' expression_list ')' 
+    {
+        name := tree.SetUnresolvedName("binary")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
         }
     }
 |   CHAR '(' expression_list ')'
@@ -7759,7 +7756,7 @@ char_type:
             },
         }
     }
-|   BINARY length_opt
+|   BINARY length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -7772,7 +7769,7 @@ char_type:
             },
         }
     }
-|   VARBINARY length_opt
+|   VARBINARY length_option_opt
     {
         locale := ""
         $$ = &tree.T{

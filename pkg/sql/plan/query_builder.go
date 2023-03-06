@@ -711,6 +711,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootId, _ = builder.pushdownFilters(rootId, nil)
 		ReCalcNodeStats(rootId, builder, true)
 		rootId = builder.determineJoinOrder(rootId)
+		SortFilterListByStats(builder.GetContext(), rootId, builder)
 		rootId = builder.pushdownSemiAntiJoins(rootId)
 		builder.qry.Steps[i] = rootId
 
@@ -851,6 +852,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			// if string union string, different length may cause error. use text type as the output
 			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
 				targetArgType = types.T_text.ToType()
+			}
+
+			if targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary {
+				targetArgType = types.T_blob.ToType()
 			}
 			targetType = makePlan2Type(&targetArgType)
 

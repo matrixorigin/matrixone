@@ -19,29 +19,23 @@ show tables;
 create table test01(a int primary key, b int) cluster by a;
 create table test01(a int, b int) cluster by a;
 create table test02(a int, b int) cluster by b;
--- @bvt:issue#7565
 insert into test01 values(1,1),(2,2),(3,null),(null,4);
 select * from test01;
 insert into test02 select * from test01;
 select * from test02;
 update test02 set b=null where a=1;
 select * from test02;
--- @bvt:issue
 create table test03(a int, b int) cluster by c;
 create table test04(a int, b int, c varchar(10), unique key(a)) cluster by (b,c,a);
 insert into test04 values(11,3,'bb');
 insert into test04 values(1,2,'a');
 insert into test04 values(2,2,'');
--- @bvt:issue#7565
 insert into test04 values(3,2,null);
--- @bvt:issue
 select * from test04;
 create table test06(a int, b int, c varchar(10)) cluster by (b,a,c);
 insert into test06 select * from test04;
 select * from test06;
--- @bvt:issue#7565
 update test06 set c=null where a=11;
--- @bvt:issue
 select * from test06;
 insert into test06 select * from test04;
 select * from test06;

@@ -153,6 +153,18 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
 			ctx.WriteByte(')')
 		}
+	case "binary":
+		if node.DisplayWith >= 0 {
+			ctx.WriteByte('(')
+			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
+			ctx.WriteByte(')')
+		}
+	case "varbinary":
+		if node.DisplayWith >= 0 {
+			ctx.WriteByte('(')
+			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
+			ctx.WriteByte(')')
+		}
 	default:
 		if node.Precision > 0 {
 			ctx.WriteByte('(')
@@ -315,6 +327,18 @@ var (
 	}}
 
 	TYPE_VARCHAR = &T{InternalType: InternalType{
+		Family: StringFamily,
+		Locale: &emptyLocale,
+		Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+	}}
+
+	TYPE_BINARY = &T{InternalType: InternalType{
+		Family: StringFamily,
+		Locale: &emptyLocale,
+		Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+	}}
+
+	TYPE_VARBINARY = &T{InternalType: InternalType{
 		Family: StringFamily,
 		Locale: &emptyLocale,
 		Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),

@@ -51,13 +51,6 @@ func (rel *txnRelation) Write(ctx context.Context, bat *batch.Batch) error {
 		//v := MOToVector(vec, allNullables[i])
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
-	if schema.HasSortKey() && !schema.HasPK() { // has cluster by key
-		clusterby := schema.GetSingleSortKey()
-		vec := taeBatch.GetVectorByName(clusterby.Name)
-		if vec.HasNull() {
-			return moerr.NewInternalError(ctx, "null value is not supported in cluster by column for now")
-		}
-	}
 	return rel.handle.Append(taeBatch)
 }
 

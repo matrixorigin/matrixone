@@ -173,20 +173,20 @@ var (
 			"mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,"+
 			"(case when attnotnull != 0 then 'YES' else 'NO' end) as IS_NULLABLE,"+
 			"mo_show_visible_bin(atttyp,2) as DATA_TYPE,"+
-			"att_length as CHARACTER_MAXIMUM_LENGTH,"+
-			"att_length as CHARACTER_OCTET_LENGTH,"+
-			"0 as NUMERIC_PRECISION,"+
-			"0 as NUMERIC_SCALE,"+
-			"0 as DATETIME_PRECISION,"+
-			"'utf8' as CHARACTER_SET_NAME,"+
-			"'utf8_bin' as COLLATION_NAME,"+
+			"internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
+			"internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,"+
+			"internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,"+
+			"internal_numeric_scale(atttyp) AS NUMERIC_SCALE,"+
+			"internal_datetime_precision(atttyp) AS DATETIME_PRECISION,"+
+			"(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,"+
+			"(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,"+
 			"mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,"+
 			"case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,"+
 			"case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,"+
 			"'select,insert,update,references' as `PRIVILEGES`,"+
 			"att_comment as COLUMN_COMMENT,"+
-			"'' as GENERATION_EXPRESSION,"+
-			"0 as SRS_ID "+
+			"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
+			"if(true, NULL, 0) as SRS_ID "+
 			"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.AutoIncrTableName, catalog.PrefixPriColName+"%", catalog.Row_ID),
 		//"CREATE TABLE IF NOT EXISTS COLUMNS(" +
 		//	"TABLE_CATALOG varchar(64)," +
@@ -262,8 +262,8 @@ var (
 			"datname AS SCHEMA_NAME," +
 			"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
 			"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
-			"'' AS SQL_PATH," +
-			"'NO' AS DEFAULT_ENCRYPTION " +
+			"if(true, NULL, '') AS SQL_PATH," +
+			"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 			"FROM mo_catalog.mo_database;",
 		"CREATE TABLE IF NOT EXISTS CHARACTER_SETS(" +
 			"CHARACTER_SET_NAME varchar(64)," +
@@ -305,48 +305,66 @@ var (
 			"when relkind = 'e' then 'EXTERNAL TABLE' " +
 			"when relkind = 'r' then 'BASE TABLE' " +
 			"else 'UNKNOWN TABLE TYPE' end) AS TABLE_TYPE," +
-			"'' AS ENGINE," +
-			"0 AS VERSION," +
-			"'' AS ROW_FORMAT," +
-			"0 AS TABLE_ROWS," +
-			"0 AS AVG_ROW_LENGTH," +
-			"0 AS DATA_LENGTH," +
-			"0 AS MAX_DATA_LENGTH," +
-			"0 AS INDEX_LENGTH," +
-			"0 AS DATA_FREE," +
-			"0 AS `AUTO_INCREMENT`," +
+			"if(relkind = 'r','Tae',NULL) AS ENGINE," +
+			"if(relkind = 'v',NULL,10) AS VERSION," +
+			"'Compressed' AS ROW_FORMAT," +
+			"if(relkind = 'v', NULL, 0) AS TABLE_ROWS," +
+			"if(relkind = 'v', NULL, 0) AS AVG_ROW_LENGTH," +
+			"if(relkind = 'v', NULL, 0) AS DATA_LENGTH," +
+			"if(relkind = 'v', NULL, 0) AS MAX_DATA_LENGTH," +
+			"if(relkind = 'v', NULL, 0) AS INDEX_LENGTH," +
+			"if(relkind = 'v', NULL, 0) AS DATA_FREE," +
+			"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`," +
 			"created_time AS CREATE_TIME," +
-			"created_time AS UPDATE_TIME," +
-			"created_time AS CHECK_TIME," +
-			"'' AS TABLE_COLLATION," +
-			"0 AS CHECKSUM," +
-			"'' AS CREATE_OPTIONS," +
-			"rel_comment AS TABLE_COMMENT " +
+			"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME," +
+			"if(relkind = 'v', NULL, created_time) AS CHECK_TIME," +
+			"'utf8mb4_0900_ai_ci' AS TABLE_COLLATION," +
+			"if(relkind = 'v', NULL, 0) AS CHECKSUM," +
+			"if(relkind = 'v', NULL, if(partitioned = '', '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS," +
+			"cast(rel_comment as text) AS TABLE_COMMENT " +
 			"FROM mo_catalog.mo_tables;",
 
-		//"CREATE TABLE TABLES(" +
-		//	"TABLE_CATALOG varchar(64)," +
-		//	"TABLE_SCHEMA varchar(64)," +
-		//	"TABLE_NAME varchar(64)," +
-		//	"TABLE_TYPE varchar(50)," +
-		//	"ENGINE varchar(64), " +
-		//	"VERSION int," +
-		//	"ROW_FORMAT varchar(50)," +
-		//	"TABLE_ROWS bigint unsigned," +
-		//	"AVG_ROW_LENGTH bigint unsigned," +
-		//	"DATA_LENGTH bigint unsigned," +
-		//	"MAX_DATA_LENGTH bigint unsigned," +
-		//	"INDEX_LENGTH bigint unsigned," +
-		//	"DATA_FREE bigint unsigned," +
-		//	"`AUTO_INCREMENT` bigint unsigned," +
-		//	"CREATE_TIME timestamp," +
-		//	"UPDATE_TIME datetime," +
-		//	"CHECK_TIME datetime," +
-		//	"TABLE_COLLATION varchar(64)," +
-		//	"CHECKSUM bigint," +
-		//	"CREATE_OPTIONS varchar(256)," +
-		//	"TABLE_COMMENT text" +
-		//	");",
+		//"CREATE VIEW IF NOT EXISTS TABLES AS " +
+		//	"SELECT 'def' AS TABLE_CATALOG," +
+		//	"reldatabase AS TABLE_SCHEMA," +
+		//	"relname AS TABLE_NAME," +
+		//	"(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' " +
+		//	"when relkind = 'v'  then 'VIEW' " +
+		//	"when relkind = 'e' then 'EXTERNAL TABLE' " +
+		//	"when relkind = 'r' then 'BASE TABLE' " +
+		//	"else 'UNKNOWN TABLE TYPE' end) AS TABLE_TYPE," +
+		//	"'' AS ENGINE," +
+		//	"0 AS VERSION," +
+		//	"'' AS ROW_FORMAT," +
+		//	"0 AS TABLE_ROWS," +
+		//	"0 AS AVG_ROW_LENGTH," +
+		//	"0 AS DATA_LENGTH," +
+		//	"0 AS MAX_DATA_LENGTH," +
+		//	"0 AS INDEX_LENGTH," +
+		//	"0 AS DATA_FREE," +
+		//	"0 AS `AUTO_INCREMENT`," +
+		//	"created_time AS CREATE_TIME," +
+		//	"created_time AS UPDATE_TIME," +
+		//	"created_time AS CHECK_TIME," +
+		//	"'' AS TABLE_COLLATION," +
+		//	"0 AS CHECKSUM," +
+		//	"'' AS CREATE_OPTIONS," +
+		//	"rel_comment AS TABLE_COMMENT " +
+		//	"FROM mo_catalog.mo_tables;",
+
+		"CREATE VIEW IF NOT EXISTS VIEWS AS " +
+			"SELECT 'def' AS `TABLE_CATALOG`," +
+			"tbl.reldatabase AS `TABLE_SCHEMA`," +
+			"tbl.relname AS `TABLE_NAME`," +
+			"tbl.rel_createsql AS `VIEW_DEFINITION`," +
+			"'NONE' AS `CHECK_OPTION`," +
+			"'YES' AS `IS_UPDATABLE`," +
+			"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
+			"'DEFINER' AS `SECURITY_TYPE`," +
+			"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
+			"'utf8mb4_0900_ai_ci' AS `COLLATION_CONNECTION` " +
+			"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
+			"WHERE tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'",
 
 		"CREATE TABLE IF NOT EXISTS ENGINES (" +
 			"ENGINE varchar(64)," +

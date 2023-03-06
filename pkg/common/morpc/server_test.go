@@ -24,6 +24,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -149,6 +150,110 @@ func TestStreamServer(t *testing.T) {
 		}
 
 		wg.Wait()
+	})
+}
+
+func TestStreamServerWithCache(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+		defer cancel()
+
+		c := newTestClient(t)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		rs.RegisterRequestHandler(func(ctx context.Context, request Message, seq uint64, cs ClientSession) error {
+			if seq == 1 {
+				cache, err := cs.CreateCache(ctx, request.GetID())
+				if err != nil {
+					return err
+				}
+				m := newTestMessage(request.GetID())
+				return cache.Add(m)
+			} else {
+				cache, err := cs.GetCache(request.GetID())
+				if err != nil {
+					return err
+				}
+				m, _, err := cache.Pop()
+				if err != nil {
+					return err
+				}
+				if err := cs.Write(ctx, m); err != nil {
+					return err
+				}
+				if err := cs.Write(ctx, request); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+
+		st, err := c.NewStream(testAddr, false)
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, st.Close())
+		}()
+
+		req1 := newTestMessage(st.ID())
+		req1.payload = []byte{1}
+		assert.NoError(t, st.Send(ctx, req1))
+
+		req2 := newTestMessage(st.ID())
+		req2.payload = []byte{2}
+		assert.NoError(t, st.Send(ctx, req2))
+
+		cc, err := st.Receive()
+		require.NoError(t, err)
+		for i := 0; i < 2; i++ {
+			select {
+			case <-ctx.Done():
+				assert.Fail(t, "message failed")
+			case <-cc:
+			}
+		}
+	})
+}
+
+func TestServerTimeoutCacheWillRemoved(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.TODO(), time.Millisecond*10)
+		defer cancel()
+
+		c := newTestClient(t)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		cc := make(chan struct{})
+		rs.RegisterRequestHandler(func(ctx context.Context, request Message, seq uint64, cs ClientSession) error {
+			cache, err := cs.CreateCache(ctx, request.GetID())
+			if err != nil {
+				return err
+			}
+			close(cc)
+			return cache.Add(request)
+		})
+
+		st, err := c.NewStream(testAddr, false)
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, st.Close())
+		}()
+
+		assert.NoError(t, st.Send(ctx, newTestMessage(1)))
+		<-cc
+		v, _ := rs.sessions.Load(uint64(1))
+		cs := v.(*clientSession)
+		for {
+			cs.mu.RLock()
+			if len(cs.mu.caches) == 0 {
+				cs.mu.RUnlock()
+				return
+			}
+			cs.mu.RUnlock()
+		}
 	})
 }
 

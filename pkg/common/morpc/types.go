@@ -103,6 +103,27 @@ type ClientSession interface {
 	Close() error
 	// Write writing the response message to the client.
 	Write(ctx context.Context, response Message) error
+	// CreateCache create a message cache using cache ID. Cache will removed if
+	// context is done.
+	CreateCache(ctx context.Context, cacheID uint64) (MessageCache, error)
+	// DeleteCache delete cache using the spec cacheID
+	DeleteCache(cacheID uint64)
+	// GetCache returns the message cache
+	GetCache(cacheID uint64) (MessageCache, error)
+}
+
+// MessageCache the client uses stream to send messages to the server, and when
+// the server thinks it has not received enough messages, it can cache the messages
+// sent by the client.
+type MessageCache interface {
+	// Add FIFO add message to cache
+	Add(value Message) error
+	// Len returns message count in the cache
+	Len() (int, error)
+	// Pop pop the first message in the cache, return false means no message in cache
+	Pop() (Message, bool, error)
+	// Close close the cache
+	Close()
 }
 
 // RPCServer RPC server implementation corresponding to RPCClient.

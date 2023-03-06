@@ -224,7 +224,7 @@ var (
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
 	}, {
 		input:  "select binary('Geeksforgeeks')",
-		output: "select cast(Geeksforgeeks as binary)",
+		output: "select binary(Geeksforgeeks)",
 	}, {
 		input:  "show schemas where 1",
 		output: "show databases where 1",

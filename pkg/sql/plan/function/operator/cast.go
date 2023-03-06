@@ -2873,7 +2873,8 @@ func IsNumeric(t types.T) bool {
 
 // isString: return true if the types.T is string type
 func isString(t types.T) bool {
-	if t == types.T_char || t == types.T_varchar || t == types.T_blob || t == types.T_text {
+	if t == types.T_char || t == types.T_varchar ||
+		t == types.T_binary || t == types.T_varbinary || t == types.T_blob || t == types.T_text {
 		return true
 	}
 	return false
@@ -2885,4 +2886,9 @@ func IsDecimal(t types.T) bool {
 		return true
 	}
 	return false
+}
+
+// IsBinary: return true if the types.T is binary or varbinary.
+func IsBinary(t types.T) bool {
+	return t == types.T_binary || t == types.T_varbinary
 }

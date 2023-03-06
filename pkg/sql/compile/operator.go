@@ -17,7 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+
 	"strings"
 
 	"github.com/google/uuid"
@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -58,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
@@ -486,6 +488,29 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 		Eg:         eg,
 		SchemaName: insertCtx.Ref.SchemaName,
 		TableDef:   insertCtx.TableDef,
+	}, nil
+}
+
+func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Process) (*onduplicatekey.Argument, error) {
+	oldCtx := n.InsertCtx
+	ctx := proc.Ctx
+	if oldCtx.GetClusterTable().GetIsClusterTable() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
+	if err != nil {
+		return nil, err
+	}
+
+	return &onduplicatekey.Argument{
+		Engine:   eg,
+		Ref:      oldCtx.Ref,
+		TableDef: oldCtx.TableDef,
+
+		OnDuplicateIdx:  oldCtx.OnDuplicateIdx,
+		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
+		Source:          originRel,
+		UniqueSource:    indexRels,
 	}, nil
 }
 

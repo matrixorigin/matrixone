@@ -121,7 +121,7 @@ func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
 	for nodeID, uuid := range shard.Nodes {
 		data, ok := r.GetMeta(uuid)
 		if !ok {
-			return pb.ShardInfoQueryResult{}, false
+			continue
 		}
 		var md storeMeta
 		md.unmarshal(data)
