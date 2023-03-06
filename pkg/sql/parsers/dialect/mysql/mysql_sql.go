@@ -8830,7 +8830,7 @@ yydefault:
 		var yyLOCAL tree.TableLock
 //line mysql_sql.y:1990
 		{
-			yyLOCAL = tree.TableLock{yyDollar[1].tableNameUnion(), yyDollar[2].tableLockTypeUnion()}
+			yyLOCAL = tree.TableLock{*yyDollar[1].tableNameUnion(), yyDollar[2].tableLockTypeUnion()}
 		}
 		yyVAL.union = yyLOCAL
 	case 246:
@@ -15501,7 +15501,7 @@ yydefault:
 		var yyLOCAL *tree.FuncExpr
 //line mysql_sql.y:6716
 		{
-			column := tree.NewNumValWithType(constant.MakeString(yyDollar[3].str), yyDollar[3].str, false, tree.P_char)
+			column := tree.SetUnresolvedName(strings.ToLower(yyDollar[3].str))
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:  tree.FuncName2ResolvableFunctionReference(name),

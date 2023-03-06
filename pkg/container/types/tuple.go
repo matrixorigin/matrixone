@@ -222,6 +222,10 @@ func (p *packer) FreeMem() {
 	}
 }
 
+func (p *packer) Reset() {
+	p.size = 0
+}
+
 func (p *packer) putByte(b byte) {
 	if p.size < p.capacity {
 		p.buf[p.size] = b
@@ -415,6 +419,12 @@ func (p *packer) EncodeStringType(e []byte) {
 
 func (p *packer) GetBuf() []byte {
 	return p.buf[:p.size]
+}
+
+func (p *packer) Bytes() []byte {
+	ret := make([]byte, p.size)
+	copy(ret, p.buf[:p.size])
+	return ret
 }
 
 func findTerminator(b []byte) int {

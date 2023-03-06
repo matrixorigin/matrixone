@@ -166,7 +166,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 
 		case plan.Node_SEMI, plan.Node_ANTI:
 			node.Stats = &plan.Stats{
-				Outcnt:      leftStats.Outcnt * .7,
+				Outcnt:      leftStats.Outcnt * selectivity,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
 				Selectivity: selectivity,
@@ -187,11 +187,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      childStats.Outcnt * 0.2,
 				Cost:        childStats.Outcnt,
 				HashmapSize: childStats.Outcnt,
+				Selectivity: 1,
 			}
 		} else {
 			node.Stats = &plan.Stats{
-				Outcnt: 1,
-				Cost:   childStats.Cost,
+				Outcnt:      1,
+				Cost:        childStats.Cost,
+				Selectivity: 1,
 			}
 		}
 
@@ -200,23 +202,27 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 			Outcnt:      (leftStats.Outcnt + rightStats.Outcnt) * 0.7,
 			Cost:        leftStats.Outcnt + rightStats.Outcnt,
 			HashmapSize: rightStats.Outcnt,
+			Selectivity: 1,
 		}
 	case plan.Node_UNION_ALL:
 		node.Stats = &plan.Stats{
-			Outcnt: leftStats.Outcnt + rightStats.Outcnt,
-			Cost:   leftStats.Outcnt + rightStats.Outcnt,
+			Outcnt:      leftStats.Outcnt + rightStats.Outcnt,
+			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+			Selectivity: 1,
 		}
 	case plan.Node_INTERSECT:
 		node.Stats = &plan.Stats{
 			Outcnt:      math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.5,
 			Cost:        leftStats.Outcnt + rightStats.Outcnt,
 			HashmapSize: rightStats.Outcnt,
+			Selectivity: 1,
 		}
 	case plan.Node_INTERSECT_ALL:
 		node.Stats = &plan.Stats{
 			Outcnt:      math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.7,
 			Cost:        leftStats.Outcnt + rightStats.Outcnt,
 			HashmapSize: rightStats.Outcnt,
+			Selectivity: 1,
 		}
 	case plan.Node_MINUS:
 		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
@@ -224,6 +230,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 			Outcnt:      minus * 0.5,
 			Cost:        leftStats.Outcnt + rightStats.Outcnt,
 			HashmapSize: rightStats.Outcnt,
+			Selectivity: 1,
 		}
 	case plan.Node_MINUS_ALL:
 		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
@@ -231,6 +238,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 			Outcnt:      minus * 0.7,
 			Cost:        leftStats.Outcnt + rightStats.Outcnt,
 			HashmapSize: rightStats.Outcnt,
+			Selectivity: 1,
 		}
 
 	case plan.Node_TABLE_SCAN:
@@ -247,14 +255,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 	default:
 		if len(node.Children) > 0 {
 			node.Stats = &plan.Stats{
-				Outcnt: childStats.Outcnt,
-				Cost:   childStats.Outcnt,
+				Outcnt:      childStats.Outcnt,
+				Cost:        childStats.Outcnt,
+				Selectivity: childStats.Selectivity,
 			}
 		} else if node.Stats == nil {
-			node.Stats = &plan.Stats{
-				Outcnt: 1000,
-				Cost:   1000000,
-			}
+			node.Stats = DefaultStats()
 		}
 	}
 }

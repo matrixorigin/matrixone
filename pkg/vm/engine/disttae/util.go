@@ -20,9 +20,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -823,15 +821,6 @@ func findRowByPkValue(vec *vector.Vector, v any) int {
 	}
 
 	return -1
-}
-
-var nextMemTableTransactionID = int64(1024)
-
-func newMemTableTransactionID() string {
-	return strconv.FormatInt(
-		atomic.AddInt64(&nextMemTableTransactionID, 1),
-		32,
-	)
 }
 
 func mustVectorFromProto(v *api.Vector) *vector.Vector {

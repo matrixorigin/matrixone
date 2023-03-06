@@ -12,28 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memtable
+package disttae
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-type (
-	ID       = memoryengine.ID
-	Nullable = memorytable.Nullable
-	Tuple    = memorytable.Tuple
-	Text     = memorytable.Text
-	Bool     = memorytable.Bool
-	Int      = memorytable.Int
-	Uint     = memorytable.Uint
-	Float    = memorytable.Float
-	Bytes    = memorytable.Bytes
-)
+func BenchmarkPartitionState(b *testing.B) {
+	partition := NewPartition()
+	end := make(chan struct{})
+	defer func() {
+		close(end)
+	}()
 
-var (
-	ToOrdered = memorytable.ToOrdered
-	TypeMatch = memorytable.TypeMatch
-	Min       = memorytable.Min
-	Max       = memorytable.Max
-)
+	// concurrent writer
+	go func() {
+		for {
+			select {
+			case <-end:
+				return
+			default:
+			}
+			state, end := partition.MutateState()
+			_ = state
+			end()
+		}
+	}()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			state := partition.state.Load()
+			iter := state.NewRowsIter(types.BuildTS(0, 0), nil, false)
+			iter.Close()
+		}
+	})
+
+}

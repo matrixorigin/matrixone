@@ -70,12 +70,20 @@ message Insert{
   bool IsRemote     = 2;
 
   // InsertCtx
-  repeated int32 idx              = 3;
-  plan.ObjectRef ref              = 4;
-  plan.TableDef table_def         = 5;
-  repeated int32 idx_idx          = 6;
+  repeated int32 on_duplicate_idx           = 3;
+  map<string, plan.Expr> on_duplicate_expr  = 4;
+  plan.ObjectRef ref              = 5;
+  plan.TableDef table_def         = 6;
   map<string, int32> parent_idx   = 7;
   plan.ClusterTable ClusterTable  = 8;
+}
+
+message OnDuplicateKey{
+  uint64 affected   = 1;
+  repeated int32 on_duplicate_idx           = 2;
+  map<string, plan.Expr> on_duplicate_expr  = 3;
+  plan.ObjectRef ref              = 4;
+  plan.TableDef table_def         = 5;
 }
 
 message Join {
@@ -210,15 +218,16 @@ message Instruction{
   HashBuild hash_build = 15;
   ExternalScan external_scan = 16;
   Insert insert = 17;
-  repeated plan.OrderBySpec order_by = 18;
-  repeated plan.Expr    project_list = 19;
-  plan.Expr    filter = 20;
-  uint64    limit = 21;
-  uint64    offset = 22;
+  OnDuplicateKey on_duplicate_key = 18;
+  repeated plan.OrderBySpec order_by = 19;
+  repeated plan.Expr    project_list = 20;
+  plan.Expr    filter = 21;
+  uint64    limit = 22;
+  uint64    offset = 23;
   // isFirst identifies whether it is the first instruction of analyzeInfo corresponding to idx
-  bool isFirst = 23;
+  bool isFirst = 24;
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
-  bool isLast = 24;
+  bool isLast = 25;
 }
 
 message AnalysisList {

@@ -12,11 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package unary
 
-import "github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
-
-const (
-	index_PrimaryKey         = memorytable.Text("primary key")
-	index_TableID_PrimaryKey = memorytable.Text("table id, primary key")
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	fromVec := parameters[0]
+	toVec := result.GetResultVector()
+
+	sels := make([]int64, fromVec.Length())
+	for j := 0; j < len(sels); j++ {
+		sels[j] = int64(j)
+	}
+	vector.Union(toVec, fromVec, sels, fromVec.Nsp.Any(), proc.GetMPool())
+	return nil
+}
