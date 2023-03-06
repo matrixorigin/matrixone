@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"strings"
 
 	"github.com/google/uuid"
@@ -489,6 +490,19 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Proce
 		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
 		Source:          originRel,
 		UniqueSource:    indexRels,
+	}, nil
+}
+
+func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
+	insertCtx := n.InsertCtx
+	insertCtx.TableDef.TblId = uint64(insertCtx.Ref.Obj)
+
+	return &preinsert.Argument{
+		Ctx:        proc.Ctx,
+		Eg:         eg,
+		SchemaName: insertCtx.Ref.SchemaName,
+		TableDef:   insertCtx.TableDef,
+		ParentIdx:  insertCtx.ParentIdx,
 	}, nil
 }
 
