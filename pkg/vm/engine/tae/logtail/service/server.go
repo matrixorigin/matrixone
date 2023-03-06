@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	gotrace "runtime/trace"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -392,7 +393,10 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				to := s.waterline.Waterline()
 
 				// fetch total logtail for table
-				tail, subErr := s.logtail.TableLogtail(sendCtx, table, from, to)
+				var tail logtail.TableLogtail
+				gotrace.WithRegion(ctx, "subscription-pull-logtail", func() {
+					tail, subErr = s.logtail.TableLogtail(sendCtx, table, from, to)
+				})
 				if subErr != nil {
 					logger.Error("fail to fetch table total logtail", zap.Error(subErr), zap.Any("table", table))
 					if err := sub.session.SendErrorResponse(
@@ -431,7 +435,11 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				to, _ := s.clock.Now()
 
 				// fetch additional logtail for tables
-				tails, err := s.logtail.RangeLogtail(ctx, from, to)
+				var tails []logtail.TableLogtail
+				var err error
+				gotrace.WithRegion(ctx, "publishment-pull-logtail", func() {
+					tails, err = s.logtail.RangeLogtail(ctx, from, to)
+				})
 				if err != nil {
 					logger.Error("fail to fetch additional logtail", zap.Error(err))
 					risk += 1
