@@ -54,6 +54,25 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 
 }
 
+func getExprNdv(expr *plan.Expr, ndvMap map[string]float64) float64 {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcName := exprImpl.F.Func.ObjName
+		switch funcName {
+		case "=", ">", ">=", "<=", "<":
+			//assume col is on the left side
+			return getExprNdv(exprImpl.F.Args[0], ndvMap)
+		case "year":
+			return getExprNdv(exprImpl.F.Args[0], ndvMap) / 365
+		default:
+			return -1
+		}
+	case *plan.Expr_Col:
+		return ndvMap[exprImpl.Col.Name]
+	}
+	return -1
+}
+
 func estimateOutCntForEquality(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, ndvMap map[string]float64) float64 {
 	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
@@ -67,12 +86,9 @@ func estimateOutCntForEquality(expr *plan.Expr, sortKeyName string, tableCnt, co
 	if sortOrder != -1 {
 		return estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
 	} else {
-		//check strict filter, otherwise can not estimate outcnt by ndv
-		ret, col, _ := plan2.CheckStrictFilter(expr)
-		if ret {
-			if ndv, ok := ndvMap[col.Name]; ok {
-				return tableCnt / ndv
-			}
+		ndv := getExprNdv(expr, ndvMap)
+		if ndv > 0 {
+			return tableCnt / ndv
 		}
 	}
 	return cost / 100
@@ -93,7 +109,7 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName, sortKeyName string,
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
 	ret, col := plan2.CheckFilter(expr)
 	if !ret {
-		return cost / 10
+		return cost / 2
 	}
 	sortOrder := util.GetClusterByColumnOrder(sortKeyName, col.Name)
 	//if col is clusterby, we assume most of the rows in blocks we read is needed
@@ -120,7 +136,7 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName, sortKeyName string,
 			}
 		}
 	}
-	return cost / 10
+	return cost / 2
 }
 
 // estimate output lines for a filter
@@ -147,7 +163,11 @@ func estimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			//get the bigger one of two children, and tune it up a little bit
 			out1 := estimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, s)
 			out2 := estimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, s)
-			outcnt = math.Max(out1, out2) * 1.5
+			if out1 == out2 {
+				outcnt = out1 + out2
+			} else {
+				outcnt = math.Max(out1, out2) * 1.5
+			}
 		default:
 			//no good way to estimate, just 0.1*cost
 			outcnt = cost * 0.1
@@ -165,6 +185,9 @@ func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64
 	ndv2 := calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt)
 	if ndv1 <= 0 {
 		return ndv2
+	}
+	if t.Oid == types.T_date {
+		return ndv1
 	}
 	return math.Min(ndv1, ndv2)
 }
