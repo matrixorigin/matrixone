@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"fmt"
 	"hash/crc32"
 	"time"
 
@@ -681,7 +680,6 @@ func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, for
 
 		// end message
 		if m.IsEndMessage() {
-			fmt.Printf("[forward] receive end message\n")
 			return nil
 		}
 
