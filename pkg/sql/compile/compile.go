@@ -351,7 +351,6 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			return nil, err
 		}
 
-		var err error
 		var onDuplicateKeyArg *onduplicatekey.Argument
 		if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
 			onDuplicateKeyArg, err = constructOnduplicateKey(insertNode, c.e, c.proc)
