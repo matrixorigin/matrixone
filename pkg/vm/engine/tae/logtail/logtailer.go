@@ -147,7 +147,7 @@ func (l *LogtailerImpl) getTableRespBuilder(did, tid uint64, reader *Reader, ckp
 func (l *LogtailerImpl) getCatalogRespBuilder(scope Scope, reader *Reader, ckpLoc string) *tableRespBuilder {
 	b := &tableRespBuilder{
 		did:    pkgcatalog.MO_CATALOG_ID,
-		scope:  ScopeUserTables,
+		scope:  scope,
 		reader: reader,
 		c:      l.c,
 	}
