@@ -36,14 +36,14 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 	if sortOrder == -1 {
 		return cost
 	}
-	// coefficient is 0.5 when tableCnt equals cost, and 1 when tableCnt >> cost
-	coefficient1 := math.Pow(0.6, cost/tableCnt)
-	// coefficient is 0.25 when tableCnt is small, and 1 when very large table.
-	coefficient2 := math.Pow(0.3, (1 / math.Log10(tableCnt)))
+	// coefficient is 0.15 when tableCnt equals cost, and 1 when tableCnt >> cost
+	coefficient1 := math.Pow(0.15, cost/tableCnt)
+	// coefficient is 0.5 when tableCnt is small, and 1 when very large table.
+	coefficient2 := math.Pow(0.5, (1 / math.Log(tableCnt)))
 
 	outCnt := cost * coefficient1 * coefficient2
 	if sortOrder == 0 {
-		return outCnt * 0.95
+		return outCnt * 0.9
 	} else if sortOrder == 1 {
 		return outCnt * 0.7
 	} else if sortOrder == 2 {
@@ -109,7 +109,7 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName, sortKeyName string,
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
 	ret, col := plan2.CheckFilter(expr)
 	if !ret {
-		return cost / 2
+		return cost / 10
 	}
 	sortOrder := util.GetClusterByColumnOrder(sortKeyName, col.Name)
 	//if col is clusterby, we assume most of the rows in blocks we read is needed
@@ -195,19 +195,18 @@ func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64
 // treat distinct val in zonemap like a sample , then estimate the ndv
 // more blocks, more accurate
 func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64) float64 {
-	// coefficient is 0.1 when 1 block, and 1 when many blocks.
-	coefficient := math.Pow(0.1, (1 / math.Log10(blockNumTotal*10)))
+	// coefficient is 0.15 when 1 block, and 1 when many blocks.
+	coefficient := math.Pow(0.35, (1 / math.Log2(blockNumTotal*2)))
 	// very little distinctValNum, assume ndv is very low
 	if distinctValNum <= 1 {
-		return 1 // only one value
-	} else if distinctValNum == 2 {
-		return 2 / coefficient
-	} else if distinctValNum <= 10 && distinctValNum/blockNumTotal < 0.2 {
+		return 5
+	}
+	if distinctValNum <= 100 && distinctValNum/blockNumTotal < 0.4 {
 		return distinctValNum / coefficient
 	}
 	// assume ndv is high
 	// ndvRate is from 0 to 1. 1 means unique key, and 0 means ndv is only 1
-	ndvRate := (distinctValNum / blockNumTotal) / 2
+	ndvRate := (distinctValNum / blockNumTotal)
 	ndv := tableCnt * ndvRate * coefficient
 	if ndv < 1 {
 		ndv = 1
@@ -296,11 +295,7 @@ func getStatsInfoMap(ctx context.Context, columns []int, blocks *[][]BlockMeta, 
 				} else {
 					valMap[colIdx][currentBlockMin] = 1
 				}
-				if s, ok := currentBlockMax.([]uint8); ok {
-					valMap[colIdx][string(s)] = 1
-				} else {
-					valMap[colIdx][currentBlockMax] = 1
-				}
+
 				if compute.CompareGeneric(currentBlockMin, minVal[colIdx], dataTypes[colIdx]) < 0 {
 					minVal[i] = zonemapVal[i][0]
 				}
