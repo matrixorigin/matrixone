@@ -456,13 +456,6 @@ func InsertBatch(
 
 	info := GetInfoForInsertAndUpdate(tableDef, nil)
 
-	if info.clusterBy != "" && util.JudgeIsCompositeClusterByColumn(info.clusterBy) {
-		err = util.FillCompositeClusterByBatch(bat, info.clusterBy, proc)
-		if err != nil {
-			return 0, err
-		}
-	}
-
 	if container != nil {
 		// write to s3
 		err = container.WriteS3Batch(bat, proc, 0)
