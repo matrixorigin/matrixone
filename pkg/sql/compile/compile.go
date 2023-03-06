@@ -1742,8 +1742,7 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 }
 
 func isSameCN(addr string, currentCNAddr string) bool {
-	return addr == currentCNAddr
-	//return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
+	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
