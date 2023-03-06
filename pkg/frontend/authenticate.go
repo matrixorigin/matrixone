@@ -3801,7 +3801,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Kill:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.LockTableStmt:
+	case *tree.LockTableStmt, *tree.UnLockTableStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	default:
