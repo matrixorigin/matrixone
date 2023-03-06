@@ -281,6 +281,8 @@ var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*PartitionBinder)(nil)
 
+var sequence_cols_name = []string{"next_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle"}
+
 const (
 	NotFound      int32 = math.MaxInt32
 	AmbiguousName int32 = math.MinInt32

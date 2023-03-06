@@ -790,6 +790,9 @@ message DataDefinition {
 		SHOW_TABLE_STATUS 	= 24;
 		SHOW_TARGET 		= 25;
 		SHOW_COLLATION 		= 26;
+		CREATE_SEQUENCE		= 27;
+		ALTER_SEQUENCE		= 28;
+		DROP_SEQUENCE		= 29;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -812,6 +815,9 @@ message DataDefinition {
 		TruncateTable truncate_table	= 12;
 		ShowVariables show_variables 	= 13;
 		AlterView alter_view			= 14;
+		CreateSequence create_sequence  = 15;
+		DropSequence   drop_sequence    = 16;
+		AlterSequence  alter_sequence   = 17;
 	}
 }
 
@@ -851,15 +857,6 @@ message AlterTable {
 	TableDef table_def 	= 2;
 }
 
-message AlterView {
-	bool if_exists		= 1;
-	string database 	= 2;
-	bool temporary		= 3;
-	string table		= 4;
-	TableDef table_def	= 5;
-	repeated TableDef index_tables = 6;
-}
-
 message DropTable {
 	bool if_exists 	= 1;
 	string database = 2;
@@ -869,6 +866,25 @@ message DropTable {
 	uint64 table_id = 6;
 	repeated uint64 foreign_tbl = 7;
 }
+
+message AlterView {
+	bool if_exists		= 1;
+	string database 	= 2;
+	TableDef table_def	= 4;
+}
+
+message CreateSequence {
+	bool if_not_exists		=1;
+	string database 		=2;
+	TableDef table_def 		=3;
+}
+
+message DropSequence {
+}
+
+message AlterSequence {
+}
+
 
 message CreateIndex {
 	string database = 1;

@@ -2746,6 +2746,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			di: st,
 		})
+	case *tree.CreateSequence:
+		ret = (&CreateSequenceExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			cs: st,
+		})
 	case *tree.CreateView:
 		ret = (&CreateViewExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
@@ -3645,8 +3652,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex,
-			*tree.CreateView, *tree.DropView,
-			*tree.AlterView,
+			*tree.CreateView, *tree.DropView, *tree.AlterView,
+			*tree.CreateSequence,
 			*tree.Insert, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.SetVar,
@@ -3809,6 +3816,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump,
+			*tree.CreateSequence,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig,
 			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
@@ -4203,7 +4211,7 @@ StatementCanBeExecutedInUncommittedTransaction checks the statement can be execu
 func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Statement) (bool, error) {
 	switch st := stmt.(type) {
 	//ddl statement
-	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView, *tree.AlterView:
+	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.CreateSequence:
 		return true, nil
 		//dml statement
 	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement:
@@ -4276,6 +4284,7 @@ func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable,
 		*tree.CreateView, *tree.DropView, *tree.AlterView,
+		*tree.CreateSequence,
 		*tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable:
 		return true

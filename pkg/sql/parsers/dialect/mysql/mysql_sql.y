@@ -5068,25 +5068,29 @@ increment_by_opt:
 |   INCREMENT BY INTEGRAL 
     {
         $$ = &tree.IncrementByOption{
-            Step: $3.(int64),
+            Minus: false,
+            Num: $3,
         }
     }
 |   INCREMENT INTEGRAL
     {
         $$ = &tree.IncrementByOption{
-            Step: $2.(int64),
+            Minus: false,
+            Num: $2,
         }
     }
 |   INCREMENT BY '-' INTEGRAL
     {
         $$ = &tree.IncrementByOption{
-            Step: -$4.(int64),
+            Minus: true,
+            Num: $4,
         }
     }
 |   INCREMENT '-' INTEGRAL
     {
         $$ = &tree.IncrementByOption {
-            Step: -$3.(int64),
+            Minus: true,
+            Num: $3,
         }
     }
 cycle_opt:
@@ -5108,13 +5112,15 @@ min_value_opt:
 |   MINVALUE INTEGRAL 
     {
         $$ = &tree.MinValueOption{
-            MinV: $2.(int64),
+            Minus: false,
+            Num: $2,
         }
     }
 |   MINVALUE '-' INTEGRAL
     {
         $$ = &tree.MinValueOption{
-            MinV: -$3.(int64),
+            Minus: true,
+            Num: $3,
         }
     }
 max_value_opt:
@@ -5124,13 +5130,15 @@ max_value_opt:
 |   MAXVALUE INTEGRAL
     {
         $$ = &tree.MaxValueOption{
-            MaxV: $2.(int64),
+            Minus: false,
+            Num: $2,
         }
     }
 |   MAXVALUE '-' INTEGRAL
     {
         $$ = &tree.MaxValueOption{
-            MaxV: -$3.(int64),
+            Minus: true,
+            Num: $3,
         }
     }
 start_with_opt:
@@ -5140,25 +5148,29 @@ start_with_opt:
 |   START WITH INTEGRAL
     {
         $$ = &tree.StartWithOption{
-            StartV: $3.(int64),
+            Minus: false,
+            Num: $3,
         }
     }
 |   START INTEGRAL
     {
         $$ = &tree.StartWithOption{
-            StartV: $2.(int64),
+            Minus:  false,
+            Num: $2,
         }
     }
 |   START WITH '-' INTEGRAL
     {
         $$ = &tree.StartWithOption{
-            StartV: -$4.(int64),
+            Minus: true,
+            Num: $4,
         }
     }
 |   START '-' INTEGRAL
     {
         $$ = &tree.StartWithOption{
-            StartV: -$3.(int64),
+            Minus: true,
+            Num: $3,
         }
     }
 temporary_opt:

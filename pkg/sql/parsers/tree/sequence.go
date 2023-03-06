@@ -40,7 +40,7 @@ func (node *CreateSequence) Format(ctx *FmtCtx) {
 
 	node.Name.Format(ctx)
 
-	ctx.WriteString(" as datatype ")
+	ctx.WriteString(" as ")
 	node.Type.(*T).InternalType.Format(ctx)
 	ctx.WriteString(" ")
 	if node.IncrementBy != nil {
@@ -65,38 +65,60 @@ func (node *CreateSequence) Format(ctx *FmtCtx) {
 func (node *CreateSequence) GetStatementType() string { return "Create Sequence" }
 func (node *CreateSequence) GetQueryType() string     { return QueryTypeDDL }
 
+func makeValue(minus bool, num any) {
+}
+
 type IncrementByOption struct {
-	Step int64
+	Minus bool
+	Num   any
 }
 
 func (node *IncrementByOption) Format(ctx *FmtCtx) {
 	ctx.WriteString("increment by ")
-	ctx.WriteString(fmt.Sprintf("%v ", node.Step))
+	formatAny(node.Minus, node.Num, ctx)
 }
 
 type MinValueOption struct {
-	MinV int64
+	Minus bool
+	Num   any
 }
 
 func (node *MinValueOption) Format(ctx *FmtCtx) {
 	ctx.WriteString("minvalue ")
-	ctx.WriteString(fmt.Sprintf("%v ", node.MinV))
+	formatAny(node.Minus, node.Num, ctx)
 }
 
 type MaxValueOption struct {
-	MaxV int64
+	Minus bool
+	Num   any
 }
 
 func (node *MaxValueOption) Format(ctx *FmtCtx) {
 	ctx.WriteString("maxvalue ")
-	ctx.WriteString(fmt.Sprintf("%v ", node.MaxV))
+	formatAny(node.Minus, node.Num, ctx)
 }
 
 type StartWithOption struct {
-	StartV int64
+	Minus bool
+	Num   any
 }
 
 func (node *StartWithOption) Format(ctx *FmtCtx) {
 	ctx.WriteString("start with ")
-	ctx.WriteString(fmt.Sprintf("%v ", node.StartV))
+	formatAny(node.Minus, node.Num, ctx)
+}
+
+func formatAny(minus bool, num any, ctx *FmtCtx) {
+	switch num.(type) {
+	case uint64:
+		ctx.WriteString(fmt.Sprintf("%v ", num.(uint64)))
+	case int64:
+		var v int64
+		if minus {
+			v = -num.(int64)
+		} else {
+			v = num.(int64)
+		}
+		ctx.WriteString(fmt.Sprintf("%v ", v))
+	}
 }
