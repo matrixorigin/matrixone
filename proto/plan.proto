@@ -876,6 +876,7 @@ message CreateIndex {
 	string	origin_table_primary_key = 3;
 	CreateTable index = 4;
 	bool table_exist = 5;
+	Plan insert_plan = 6;
 }
 
 message AlterIndex {

@@ -1224,42 +1224,17 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		}
 	}
 
-	selectPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
+	insertStmt := &tree.Insert{
+		Table: selectTable,
+		Rows:  selectStmt,
+	}
+
+	insertPlan, err := buildInsert(insertStmt, ctx, false)
 	if err != nil {
 		return nil, err
 	}
 
-	//build insert plan
-
-	//get select col defs
-	sourceColDefs := GetResultColumnsFromPlan(selectPlan)
-	selectPlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
-
-	insertExprs := make([]*Expr, len(sourceColDefs))
-	for i := range insertExprs {
-		insertExprs[i] = &plan.Expr{
-			Typ: sourceColDefs[i].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					ColPos: int32(i),
-				},
-			},
-		}
-	}
-
-	indexTableDef := index.IndexTables[0]
-	// do type cast if needed
-	for i := range insertExprs {
-		insertExprs[i], err = makePlan2CastExpr(ctx.GetContext(), insertExprs[i], indexTableDef.Cols[i].Typ)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// indexObjRef := &plan.ObjectRef{
-	// 	SchemaName: createIndex.Database,
-	// 	ObjName:    indexTableDef.Name,
-	// }
+	createIndex.InsertPlan = insertPlan
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
