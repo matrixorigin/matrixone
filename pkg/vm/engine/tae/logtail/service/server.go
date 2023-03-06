@@ -430,20 +430,22 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				from := s.waterline.Waterline()
 				to, _ := s.clock.Now()
 
-				tables := s.subscribed.ListTable()
-				wraps := make([]wrapLogtail, 0, len(tables))
-				for _, t := range tables {
-					tail, err := s.logtail.TableLogtail(ctx, t.table, from, to)
-					if err != nil {
-						logger.Error("fail to fetch additional logtail", zap.Error(err), zap.Any("table", t.table))
-						risk += 1
-						return
-					}
+				// fetch additional logtail for tables
+				tails, err := s.logtail.RangeLogtail(ctx, from, to)
+				if err != nil {
+					logger.Error("fail to fetch additional logtail", zap.Error(err))
+					risk += 1
+					return
+				}
+
+				// format table ID beforehand
+				wraps := make([]wrapLogtail, 0, len(tails))
+				for _, tail := range tails {
 					// skip empty logtail
 					if tail.CkpLocation == "" && len(tail.Commands) == 0 {
 						continue
 					}
-					wraps = append(wraps, wrapLogtail{id: t.id, tail: tail})
+					wraps = append(wraps, wrapLogtail{id: TableID(tail.GetTable().String()), tail: tail})
 				}
 
 				// publish additional logtail for all subscribed tables
