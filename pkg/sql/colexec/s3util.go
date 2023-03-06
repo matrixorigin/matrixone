@@ -83,13 +83,24 @@ func (container *WriteS3Container) SetMp(attrs []*engine.Attribute) {
 		if attrs[i].Primary {
 			container.pk[attrs[i].Name] = true
 		}
+		if attrs[i].Default == nil {
+			continue
+		}
 		container.nameToNullablity[attrs[i].Name] = attrs[i].Default.NullAbility
 	}
 }
 
-func (container *WriteS3Container) InitTableBatchAndSize(num int) {
+func (container *WriteS3Container) Init(num int) {
 	container.tableBatchSizes = make([]uint64, num)
 	container.tableBatches = make([][]*batch.Batch, num)
+	container.buffers = make([]*batch.Batch, num)
+	container.pk = make(map[string]bool)
+	container.nameToNullablity = make(map[string]bool)
+	container.sels = make([]int64, options.DefaultBlockMaxRows)
+	for i := 0; i < int(options.DefaultBlockMaxRows); i++ {
+		container.sels[i] = int64(i)
+	}
+	container.resetMetaLocBat()
 }
 
 func (container *WriteS3Container) AddSortIdx(sortIdx int) {

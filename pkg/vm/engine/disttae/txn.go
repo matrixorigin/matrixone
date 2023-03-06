@@ -152,17 +152,20 @@ func (txn *Transaction) WriteBatch(
 func (txn *Transaction) DumpBatch(force bool) error {
 
 	// if txn.workspaceSize >= colexec.WriteS3Threshold {
-	if txn.workspaceSize >= colexec.WriteS3Threshold || force {
+	if txn.workspaceSize >= colexec.WriteS3Threshold || force && txn.workspaceSize >= colexec.TagS3Size {
 		mp := make(map[[2]string][]*batch.Batch)
-		// colexec.NewWriteS3Container()
 		for i := 0; i < len(txn.writes); i++ {
-			idx := 0
+			idx := -1
 			for j := 0; j < len(txn.writes[i]); j++ {
 				if txn.writes[i][j].typ == INSERT && txn.writes[i][j].fileName == "" {
 					key := [2]string{txn.writes[i][j].databaseName, txn.writes[i][j].tableName}
-					mp[key] = append(mp[key], txn.writes[i][j].bat)
+					bat := txn.writes[i][j].bat
+					// skip rowid
+					bat.Attrs = bat.Attrs[1:]
+					bat.Vecs = bat.Vecs[1:]
+					mp[key] = append(mp[key], bat)
 				} else {
-					txn.writes[i][idx] = txn.writes[i][j]
+					txn.writes[i][idx+1] = txn.writes[i][j]
 					idx++
 				}
 			}
@@ -178,7 +181,14 @@ func (txn *Transaction) DumpBatch(force bool) error {
 				container.Put(mp[key][i], 0)
 			}
 			container.MergeBlock(0, len(mp[key]), txn.proc, false)
-			err = tbl.Write(txn.proc.Ctx, container.GetMetaLocBat())
+			metaLoc := container.GetMetaLocBat()
+
+			lenVecs := len(metaLoc.Attrs)
+			// only remain the metaLoc col
+			metaLoc.Vecs = metaLoc.Vecs[lenVecs-1:]
+			metaLoc.Attrs = metaLoc.Attrs[lenVecs-1:]
+			metaLoc.SetZs(metaLoc.Vecs[0].Length(), txn.proc.GetMPool())
+			err = tbl.Write(txn.proc.Ctx, metaLoc)
 			if err != nil {
 				return err
 			}
@@ -194,11 +204,11 @@ func (txn *Transaction) getContainer(key [2]string) (*colexec.WriteS3Container, 
 		return nil, nil, err
 	}
 	container := &colexec.WriteS3Container{}
+	container.Init(1)
 	container.SetMp(attrs)
 	if sortIdx != -1 {
 		container.AddSortIdx(sortIdx)
 	}
-	container.InitTableBatchAndSize(1)
 	return container, tbl, nil
 }
 
@@ -220,8 +230,7 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 	}
 	for i := 0; i < len(attrs); i++ {
 		if attrs[i].ClusterBy || attrs[i].Primary {
-			// skip rowId col
-			return i + 1, attrs, tbl, err
+			return i, attrs, tbl, err
 		}
 	}
 	return -1, attrs, tbl, nil
