@@ -18,7 +18,6 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,14 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-)
-
-const (
-	GcCycle = 10 * time.Second
 )
 
 const (
@@ -77,7 +71,6 @@ type Engine struct {
 	txnHeap *transactionHeap
 
 	dnMap      map[string]int
-	metaTables map[string]Partitions
 	partitions map[[2]uint64]Partitions
 
 	// XXX related to cn push model
@@ -91,16 +84,9 @@ type Partitions []*Partition
 
 // a partition corresponds to a dn
 type Partition struct {
-	lock chan struct{}
-	// multi-version data of logtail, implemented with reusee's memengine
-	data             *memtable.Table[RowID, DataValue, *DataRow]
-	state            atomic.Pointer[PartitionState]
-	columnsIndexDefs []ColumnsIndexDef
-	// last updated timestamp
-	ts timestamp.Timestamp
-	// used for block read in PartitionReader
-	txn    *Transaction
-	isMeta bool
+	lock  chan struct{}
+	state atomic.Pointer[PartitionState]
+	ts    timestamp.Timestamp // last updated timestamp
 }
 
 // Transaction represents a transaction
@@ -299,10 +285,10 @@ func (a BlockMeta) Eq(b BlockMeta) bool {
 type workspaceRow struct {
 	rowID   RowID
 	tableID uint64
-	indexes []memtable.Tuple
+	indexes []memorytable.Tuple
 }
 
-var _ memtable.Row[RowID, *workspaceRow] = new(workspaceRow)
+var _ memorytable.Row[RowID, *workspaceRow] = new(workspaceRow)
 
 func (w *workspaceRow) Key() RowID {
 	return w.rowID
@@ -312,11 +298,11 @@ func (w *workspaceRow) Value() *workspaceRow {
 	return w
 }
 
-func (w *workspaceRow) Indexes() []memtable.Tuple {
+func (w *workspaceRow) Indexes() []memorytable.Tuple {
 	return w.indexes
 }
 
-func (w *workspaceRow) UniqueIndexes() []memtable.Tuple {
+func (w *workspaceRow) UniqueIndexes() []memorytable.Tuple {
 	return nil
 }
 

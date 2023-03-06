@@ -14,22 +14,9 @@
 
 package disttae
 
-import "github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+import "github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 
 const (
-	index_PrimaryKey         = memtable.Text("primary key")
-	index_BlockID_Time_OP    = memtable.Text("block id, time, op")
-	index_TableID_PrimaryKey = memtable.Text("table id, primary key")
+	index_PrimaryKey         = memorytable.Text("primary key")
+	index_TableID_PrimaryKey = memorytable.Text("table id, primary key")
 )
-
-type ColumnsIndexDef struct {
-	Name    memtable.Text
-	Columns []int
-}
-
-func NewColumnsIndexDef(name memtable.Text, cols ...int) ColumnsIndexDef {
-	return ColumnsIndexDef{
-		Name:    name,
-		Columns: cols,
-	}
-}

@@ -56,6 +56,7 @@ pk    fl    dou
 1    1.87654    1.22334455667789
 select * from test_table where fl=1.2345678;
 pk    fl    dou
+0    1.2345678    1.22334455667789
 SET @fl_hit=1.2345678;
 SET @fl_not_hit=1.234567800;
 SET @dou_not_hit=1.223344556677889;

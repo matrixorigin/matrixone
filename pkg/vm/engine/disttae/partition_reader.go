@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -34,12 +33,10 @@ import (
 
 type PartitionReader struct {
 	typsMap              map[string]types.Type
-	firstCalled          bool
 	inserts              []*batch.Batch
 	deletes              map[types.Rowid]uint8
 	skipBlocks           map[uint64]uint8
-	iter                 partitionIter
-	newIter              *partitionStateRowsIter
+	iter                 partitionStateIter
 	sourceBatchNameIndex map[string]int
 
 	// the following attributes are used to support cn2s3
@@ -52,13 +49,6 @@ type PartitionReader struct {
 	colIdxMp        map[string]int
 	blockBatch      *BlockBatch
 	currentFileName string
-}
-
-type partitionIter interface {
-	First() bool
-	Next() bool
-	Close() error
-	Read() (RowID, DataValue, error)
 }
 
 type BlockBatch struct {
@@ -178,106 +168,52 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	}
 	rows := 0
 
-	if p.newIter != nil {
-		// new implementation
+	appendFuncs := make([]func(*vector.Vector, *vector.Vector, int64) error, len(b.Attrs))
+	for i, name := range b.Attrs {
+		if name == catalog.Row_ID {
+			appendFuncs[i] = vector.GetUnionOneFunction(types.T_Rowid.ToType(), mp)
+		} else {
+			appendFuncs[i] = vector.GetUnionOneFunction(p.typsMap[name], mp)
+		}
+	}
 
-		appendFuncs := make([]func(*vector.Vector, *vector.Vector, int64) error, len(b.Attrs))
+	for p.iter.Next() {
+		entry := p.iter.Entry()
+
+		if _, ok := p.deletes[entry.RowID]; ok {
+			continue
+		}
+
+		if p.skipBlocks != nil {
+			if _, ok := p.skipBlocks[entry.BlockID]; ok {
+				continue
+			}
+		}
+
+		if p.sourceBatchNameIndex == nil {
+			p.sourceBatchNameIndex = make(map[string]int)
+			for i, name := range entry.Batch.Attrs {
+				p.sourceBatchNameIndex[name] = i
+			}
+		}
+
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
-				appendFuncs[i] = vector.GetUnionOneFunction(types.T_Rowid.ToType(), mp)
-			} else {
-				appendFuncs[i] = vector.GetUnionOneFunction(p.typsMap[name], mp)
-			}
-		}
-
-		for p.newIter.Next() {
-			entry := p.newIter.Entry()
-
-			if _, ok := p.deletes[entry.RowID]; ok {
-				continue
-			}
-
-			if p.skipBlocks != nil {
-				if _, ok := p.skipBlocks[entry.BlockID]; ok {
-					continue
-				}
-			}
-
-			if p.sourceBatchNameIndex == nil {
-				p.sourceBatchNameIndex = make(map[string]int)
-				for i, name := range entry.Batch.Attrs {
-					p.sourceBatchNameIndex[name] = i
-				}
-			}
-
-			for i, name := range b.Attrs {
-				if name == catalog.Row_ID {
-					if err := b.Vecs[i].Append(entry.RowID, false, mp); err != nil {
-						return nil, err
-					}
-				} else {
-					appendFuncs[i](
-						b.Vecs[i],
-						entry.Batch.Vecs[p.sourceBatchNameIndex[name]],
-						entry.Offset,
-					)
-				}
-			}
-
-			rows++
-			if rows == maxRows {
-				break
-			}
-		}
-
-	} else {
-		// old implementation
-
-		fn := p.iter.Next
-		if !p.firstCalled {
-			fn = p.iter.First
-			p.firstCalled = true
-		}
-		for ok := fn(); ok; ok = p.iter.Next() {
-			dataKey, dataValue, err := p.iter.Read()
-			if err != nil {
-				return nil, err
-			}
-
-			if _, ok := p.deletes[types.Rowid(dataKey)]; ok {
-				continue
-			}
-
-			if dataValue.op == opDelete {
-				continue
-			}
-
-			if p.skipBlocks != nil {
-				if _, ok := p.skipBlocks[rowIDToBlockID(dataKey)]; ok {
-					continue
-				}
-			}
-
-			for i, name := range b.Attrs {
-				if name == catalog.Row_ID {
-					if err := b.Vecs[i].Append(types.Rowid(dataKey), false, mp); err != nil {
-						return nil, err
-					}
-					continue
-				}
-				value, ok := dataValue.value[name]
-				if !ok {
-					panic(fmt.Sprintf("invalid column name: %v", name))
-				}
-				if err := value.AppendVector(b.Vecs[i], mp); err != nil {
+				if err := b.Vecs[i].Append(entry.RowID, false, mp); err != nil {
 					return nil, err
 				}
+			} else {
+				appendFuncs[i](
+					b.Vecs[i],
+					entry.Batch.Vecs[p.sourceBatchNameIndex[name]],
+					entry.Offset,
+				)
 			}
+		}
 
-			rows++
-			if rows == maxRows {
-				break
-			}
+		rows++
+		if rows == maxRows {
+			break
 		}
 	}
 
