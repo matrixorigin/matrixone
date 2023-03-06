@@ -48,10 +48,6 @@ func (t *Table) NewReader(
 	readers []engine.Reader,
 	err error,
 ) {
-	if len(shardIDs) > 0 && engine.IsMemtable(shardIDs[0]) { // Compatible with cn's logic
-		shardIDs = shardIDs[1:]
-	}
-
 	readers = make([]engine.Reader, parallel)
 
 	var shards []Shard
@@ -209,7 +205,6 @@ func (t *Table) Ranges(ctx context.Context, _ *plan.Expr) ([][]byte, error) {
 	// return encoded shard ids
 	nodes := getDNServices(t.engine.cluster)
 	shards := make([][]byte, 0, len(nodes))
-	shards = append(shards, []byte{}) // Compatible with cn's logic
 	for _, node := range nodes {
 		for _, shard := range node.Shards {
 			id := make([]byte, 8)
