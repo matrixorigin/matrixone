@@ -165,11 +165,10 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 		Name: sequence_cols_name[4],
 		Alg:  plan.CompressType_Lz4,
 		Typ: &plan.Type{
-			Id:        int32(types.T_int64),
-			Width:     0,
-			Precision: 0,
-			Size:      1,
-			Scale:     0,
+			Id:    int32(types.T_int64),
+			Width: 0,
+			Size:  1,
+			Scale: 0,
 		},
 		Default: &plan.Default{
 			NullAbility:  true,
@@ -181,11 +180,10 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 		Name: sequence_cols_name[5],
 		Alg:  plan.CompressType_Lz4,
 		Typ: &plan.Type{
-			Id:        int32(types.T_bool),
-			Width:     0,
-			Precision: 0,
-			Size:      1,
-			Scale:     0,
+			Id:    int32(types.T_bool),
+			Width: 0,
+			Size:  1,
+			Scale: 0,
 		},
 		Default: &plan.Default{
 			NullAbility:  true,
