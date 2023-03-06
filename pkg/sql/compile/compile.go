@@ -372,12 +372,6 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			arg.IsRemote = true
 			rs = c.newInsertMergeScope(arg, preArg, ss)
 			rs.Magic = MergeInsert
-			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-				rs.Instructions = append(rs.Instructions, vm.Instruction{
-					Op:  vm.OnDuplicateKey,
-					Arg: onDuplicateKeyArg,
-				})
-			}
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
