@@ -505,7 +505,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
-		needSwap, joinTyp := joinType(ctx, n, ns)
+
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
@@ -518,10 +518,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 			return nil, err
 		}
 		c.SetAnalyzeCurrent(children, curr)
-		if needSwap {
-			return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[1]], ns[n.Children[0]], children, ss, joinTyp)), nil
-		}
-		return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], ns[n.Children[1]], ss, children, joinTyp)), nil
+
+		return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], ns[n.Children[1]], ss, children)), nil
 	case plan.Node_SORT:
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
@@ -946,7 +944,7 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
+func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin(n.OnList)
 
@@ -960,7 +958,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 		left_typs[i] = dupType(expr.Typ)
 	}
 
-	switch joinTyp {
+	switch n.JoinType {
 	case plan.Node_INNER:
 		rs = c.newBroadcastJoinScopeList(ss, children)
 		if len(n.OnList) == 0 {
@@ -1718,27 +1716,6 @@ func extraRegisters(ss []*Scope, i int) []*process.WaitRegister {
 		regs = append(regs, s.Proc.Reg.MergeReceivers[i])
 	}
 	return regs
-}
-
-func joinType(ctx context.Context, n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
-	switch n.JoinType {
-	case plan.Node_INNER:
-		return false, plan.Node_INNER
-	case plan.Node_LEFT:
-		return false, plan.Node_LEFT
-	case plan.Node_SEMI:
-		return false, plan.Node_SEMI
-	case plan.Node_ANTI:
-		return false, plan.Node_ANTI
-	case plan.Node_RIGHT:
-		return false, plan.Node_RIGHT
-	case plan.Node_SINGLE:
-		return false, plan.Node_SINGLE
-	case plan.Node_MARK:
-		return false, plan.Node_MARK
-	default:
-		panic(moerr.NewNYI(ctx, fmt.Sprintf("join typ '%v'", n.JoinType)))
-	}
 }
 
 func dupType(typ *plan.Type) types.Type {
