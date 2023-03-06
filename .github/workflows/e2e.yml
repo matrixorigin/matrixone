@@ -190,11 +190,11 @@ jobs:
       - name: echo dn.toml
         run: |
           cd $GITHUB_WORKSPACE/head
-          cat ./etc/testPushModel/dn.toml
+          cat ./etc/launch-test-push-model/dn.toml
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head testPushModel
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-test-push-model
       - name: Clone test-tool repository
         uses: actions/checkout@v3
         with:
