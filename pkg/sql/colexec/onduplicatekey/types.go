@@ -35,6 +35,8 @@ type Argument struct {
 
 	OnDuplicateIdx  []int32
 	OnDuplicateExpr map[string]*plan.Expr
+
+	IdxIdx []int32
 }
 
 func (arg *Argument) Free(*process.Process, bool) {}

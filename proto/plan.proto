@@ -465,9 +465,12 @@ message InsertCtx {
 	repeated int32 on_duplicate_idx		= 3;
 	map<string, Expr> on_duplicate_expr	= 4;
 
-	map<string, int32> parent_idx 	= 5;
+	repeated ObjectRef idx_ref 			= 5;
+	repeated int32 idx_idx 				= 6;
 
-	ClusterTable cluster_table = 6;
+	map<string, int32> parent_idx 	= 7;
+
+	ClusterTable cluster_table = 8;
 }
 
 message UpdateCtx {
