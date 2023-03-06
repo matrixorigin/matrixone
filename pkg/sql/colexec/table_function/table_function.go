@@ -61,5 +61,5 @@ func Prepare(proc *process.Process, arg any) error {
 }
 
 func dupType(typ *plan.Type) types.Type {
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale, typ.Precision)
+	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
 }

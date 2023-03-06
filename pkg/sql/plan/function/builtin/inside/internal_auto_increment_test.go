@@ -256,11 +256,10 @@ func Test_getTableAutoIncrCol(t *testing.T) {
 
 func makePlan2Type(typ types.Type) plan.Type {
 	return plan.Type{
-		Id:        int32(typ.Oid),
-		Width:     typ.Width,
-		Precision: typ.Precision,
-		Size:      typ.Size,
-		Scale:     typ.Scale,
+		Id:    int32(typ.Oid),
+		Width: typ.Width,
+		Size:  typ.Size,
+		Scale: typ.Scale,
 	}
 }
 
@@ -273,11 +272,10 @@ func buildTableDefs(columnNames []string, columnTypes []plan.Type) []engine.Tabl
 				Name: columnNames[i],
 				Alg:  compress.None,
 				Type: types.Type{
-					Oid:       types.T(colTyp.GetId()),
-					Width:     colTyp.GetWidth(),
-					Precision: colTyp.GetPrecision(),
-					Scale:     colTyp.GetScale(),
-					Size:      colTyp.GetSize(),
+					Oid:   types.T(colTyp.GetId()),
+					Width: colTyp.GetWidth(),
+					Scale: colTyp.GetScale(),
+					Size:  colTyp.GetSize(),
 				},
 				Default:       nil,
 				OnUpdate:      nil,

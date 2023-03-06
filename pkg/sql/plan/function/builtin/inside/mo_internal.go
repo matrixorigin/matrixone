@@ -43,9 +43,9 @@ func InternalNumericScale(vectors []*vector.Vector, proc *process.Process) (*vec
 	return generalInternalType("internal_numeric_scale", vectors, proc, getTypeNumericScale)
 }
 
-// InternalDatetimePrecision Implementation of mo internal function 'internal_datetime_precision'
-func InternalDatetimePrecision(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return generalInternalType("internal_datetime_precision", vectors, proc, getTypeDatetimePrecision)
+// InternalDatetimeScale Implementation of mo internal function 'internal_datetime_scale'
+func InternalDatetimeScale(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return generalInternalType("internal_datetime_scale", vectors, proc, getTypeDatetimeScale)
 }
 
 // InternalColumnCharacterSet  Implementation of mo internal function 'internal_column_character_set'
@@ -120,7 +120,7 @@ func getTypeCharSize(typ types.Type) (bool, int32) {
 // 'internal_numeric_precision' function operator
 func getTypeNumericPrecision(typ types.Type) (bool, int32) {
 	if types.IsDecimal(typ.Oid) {
-		return true, typ.Precision
+		return true, typ.Width
 	} else {
 		return false, -1
 	}
@@ -135,10 +135,10 @@ func getTypeNumericScale(typ types.Type) (bool, int32) {
 	}
 }
 
-// 'internal_datetime_precision' function operator
-func getTypeDatetimePrecision(typ types.Type) (bool, int32) {
+// 'internal_datetime_scale' function operator
+func getTypeDatetimeScale(typ types.Type) (bool, int32) {
 	if typ.Oid == types.T_datetime {
-		return true, typ.Precision
+		return true, typ.Scale
 	} else {
 		return false, -1
 	}

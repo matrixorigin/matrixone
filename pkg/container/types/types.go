@@ -205,14 +205,13 @@ var Types map[string]T = map[string]T{
 	"rowid":                 T_Rowid,
 }
 
-func New(oid T, width, scale, precision int32) Type {
+func New(oid T, width, scale int32) Type {
 	return Type{
-		Oid:       oid,
-		Width:     width,
-		Scale:     scale,
-		Precision: precision,
-		Size:      int32(TypeSize(oid)),
-		Charset:   CharsetType(oid),
+		Oid:     oid,
+		Width:   width,
+		Scale:   scale,
+		Size:    int32(TypeSize(oid)),
+		Charset: CharsetType(oid),
 	}
 }
 

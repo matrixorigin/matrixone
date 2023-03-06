@@ -89,8 +89,6 @@ func Prepare(proc *process.Process, arg any) error {
 			return moerr.NewNotSupported(proc.Ctx, "the jsonline format '%s' is not supported now", param.Extern.JsonData)
 		}
 	}
-	param.Extern.FileService = proc.FileService
-	param.Extern.Ctx = proc.Ctx
 	param.IgnoreLineTag = int(param.Extern.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
 	if len(param.FileList) == 0 {
@@ -419,7 +417,7 @@ func getUnCompressReader(param *tree.ExternParam, filepath string, r io.ReadClos
 }
 
 func makeType(Cols []*plan.ColDef, index int) types.Type {
-	return types.New(types.T(Cols[index].Typ.Id), Cols[index].Typ.Width, Cols[index].Typ.Scale, Cols[index].Typ.Precision)
+	return types.New(types.T(Cols[index].Typ.Id), Cols[index].Typ.Width, Cols[index].Typ.Scale)
 }
 
 func makeBatch(param *ExternalParam, batchSize int, mp *mpool.MPool) *batch.Batch {
@@ -1240,7 +1238,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
 				// origin float32 data type
-				if vec.Typ.Precision < 0 {
+				if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
 					d, err := strconv.ParseFloat(field, 32)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1249,7 +1247,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 					cols[rowIdx] = float32(d)
 					continue
 				}
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Precision)
+				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float32 type for column %d", field, colIdx)
@@ -1262,7 +1260,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
 				// origin float64 data type
-				if vec.Typ.Precision < 0 {
+				if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
 					d, err := strconv.ParseFloat(field, 64)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1271,7 +1269,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 					cols[rowIdx] = d
 					continue
 				}
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Precision)
+				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float64 type for column %d", field, colIdx)
@@ -1333,7 +1331,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := types.ParseTime(field, vec.Typ.Precision)
+				d, err := types.ParseTime(field, vec.Typ.Scale)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Time type for column %d", field, colIdx)
@@ -1345,7 +1343,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := types.ParseDatetime(field, vec.Typ.Precision)
+				d, err := types.ParseDatetime(field, vec.Typ.Scale)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Datetime type for column %d", field, colIdx)
@@ -1388,7 +1386,7 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
 				t := time.Local
-				d, err := types.ParseTimestamp(t, field, vec.Typ.Precision)
+				d, err := types.ParseTimestamp(t, field, vec.Typ.Scale)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field, colIdx)

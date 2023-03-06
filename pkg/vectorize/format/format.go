@@ -26,22 +26,22 @@ import (
 // FormatFunc is the locale format function signature.
 type FormatFunc func(string, string) (string, error)
 
-func Format(numbers, precisions, locales []string, rowCount int, constVectors []bool, results []string) error {
+func Format(numbers, scales, locales []string, rowCount int, constVectors []bool, results []string) error {
 	var err error
 	if constVectors[0] {
 		number := numbers[0]
 		if constVectors[1] {
-			precision := precisions[0]
+			scale := scales[0]
 			if constVectors[2] {
 				//scalar - scalar - scalar
-				results[0], err = getNumberFormat(number, precision, locales[0])
+				results[0], err = getNumberFormat(number, scale, locales[0])
 				if err != nil {
 					return err
 				}
 			} else {
 				//scalar - scalar - vector
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(number, precision, locales[i])
+					results[i], err = getNumberFormat(number, scale, locales[i])
 					if err != nil {
 						return err
 					}
@@ -52,7 +52,7 @@ func Format(numbers, precisions, locales []string, rowCount int, constVectors []
 				locale := locales[0]
 				//scalar - vector - scalar
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(number, precisions[i], locale)
+					results[i], err = getNumberFormat(number, scales[i], locale)
 					if err != nil {
 						return err
 					}
@@ -60,7 +60,7 @@ func Format(numbers, precisions, locales []string, rowCount int, constVectors []
 			} else {
 				//scalar - vector - vector
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(number, precisions[i], locales[i])
+					results[i], err = getNumberFormat(number, scales[i], locales[i])
 					if err != nil {
 						return err
 					}
@@ -69,12 +69,12 @@ func Format(numbers, precisions, locales []string, rowCount int, constVectors []
 		}
 	} else {
 		if constVectors[1] {
-			precision := precisions[0]
+			scale := scales[0]
 			if constVectors[2] {
 				locale := locales[0]
 				//vector - scalar - scalar
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(numbers[i], precision, locale)
+					results[i], err = getNumberFormat(numbers[i], scale, locale)
 					if err != nil {
 						return err
 					}
@@ -82,7 +82,7 @@ func Format(numbers, precisions, locales []string, rowCount int, constVectors []
 			} else {
 				//vaetor - scalar - vector
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(numbers[i], precision, locales[i])
+					results[i], err = getNumberFormat(numbers[i], scale, locales[i])
 					if err != nil {
 						return err
 					}
@@ -93,7 +93,7 @@ func Format(numbers, precisions, locales []string, rowCount int, constVectors []
 				locale := locales[0]
 				//vector - vector - scalar
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(numbers[i], precisions[i], locale)
+					results[i], err = getNumberFormat(numbers[i], scales[i], locale)
 					if err != nil {
 						return err
 					}
@@ -101,7 +101,7 @@ func Format(numbers, precisions, locales []string, rowCount int, constVectors []
 			} else {
 				//vector - vector - vector
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(numbers[i], precisions[i], locales[i])
+					results[i], err = getNumberFormat(numbers[i], scales[i], locales[i])
 					if err != nil {
 						return err
 					}
@@ -112,8 +112,8 @@ func Format(numbers, precisions, locales []string, rowCount int, constVectors []
 	return nil
 }
 
-func getNumberFormat(number, precision, locale string) (string, error) {
-	return getFormatFunctionWithLocale(locale)(number, precision)
+func getNumberFormat(number, scale, locale string) (string, error) {
+	return getFormatFunctionWithLocale(locale)(number, scale)
 }
 
 // GetFormatFunctionWithLocate get the format function for sepcific locale.
@@ -245,47 +245,47 @@ var localeToFormatFunction = map[string]FormatFunc{
 }
 
 // format number like 20,000,000.0000
-func formatENUS(number string, precision string) (string, error) {
-	return format(number, precision, []byte{','}, []byte{'.'})
+func formatENUS(number string, scale string) (string, error) {
+	return format(number, scale, []byte{','}, []byte{'.'})
 }
 
 // format number like 20000000.0000
-func formatARSA(number string, precision string) (string, error) {
-	return format(number, precision, []byte{}, []byte{'.'})
+func formatARSA(number string, scale string) (string, error) {
+	return format(number, scale, []byte{}, []byte{'.'})
 }
 
 // format number like 20.000.000,0000
-func formatBEBY(number string, precision string) (string, error) {
-	return format(number, precision, []byte{'.'}, []byte{','})
+func formatBEBY(number string, scale string) (string, error) {
+	return format(number, scale, []byte{'.'}, []byte{','})
 }
 
 // format number like 20 000 000,0000
-func formatBGBG(number string, precision string) (string, error) {
-	return format(number, precision, []byte{' '}, []byte{','})
+func formatBGBG(number string, scale string) (string, error) {
+	return format(number, scale, []byte{' '}, []byte{','})
 }
 
 // format number like 20'000'000.0000
-func formatDECH(number string, precision string) (string, error) {
-	return format(number, precision, []byte{'\''}, []byte{'.'})
+func formatDECH(number string, scale string) (string, error) {
+	return format(number, scale, []byte{'\''}, []byte{'.'})
 }
 
-func format(number string, precision string, comma, decimalPoint []byte) (string, error) {
+func format(number string, scale string, comma, decimalPoint []byte) (string, error) {
 	var buffer bytes.Buffer
 
 	if len(number) == 0 {
 		return "", nil
 	}
-	//handle precision
-	if unicode.IsDigit(rune(precision[0])) {
-		for i, v := range precision {
+	//handle scale
+	if unicode.IsDigit(rune(scale[0])) {
+		for i, v := range scale {
 			if unicode.IsDigit(v) {
 				continue
 			}
-			precision = precision[:i]
+			scale = scale[:i]
 			break
 		}
 	} else {
-		precision = "0"
+		scale = "0"
 	}
 
 	//handle number
@@ -298,7 +298,7 @@ func format(number string, precision string, comma, decimalPoint []byte) (string
 	if (number[:1] == "-" && !unicode.IsDigit(rune(number[1]))) ||
 		(!unicode.IsDigit(rune(number[0])) && number[:1] != "-") {
 		buffer.Write([]byte{'0'})
-		position, err := strconv.ParseUint(precision, 10, 64)
+		position, err := strconv.ParseUint(scale, 10, 64)
 		if err == nil && position > 0 {
 			buffer.Write([]byte{'.'})
 			buffer.WriteString(strings.Repeat("0", int(position)))
@@ -343,8 +343,8 @@ func format(number string, precision string, comma, decimalPoint []byte) (string
 		buffer.WriteString(parts[0])
 	}
 
-	//According to the precision to process the decimal parts
-	position, err := strconv.ParseUint(precision, 10, 64)
+	//According to the scale to process the decimal parts
+	position, err := strconv.ParseUint(scale, 10, 64)
 	if err != nil {
 		return "", err
 	}
