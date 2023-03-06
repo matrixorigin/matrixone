@@ -44,50 +44,50 @@ var (
 func init() {
 	mp := mpool.MustNewZero()
 	tcs = []testCase{
-		newTestCase(true, mp, types.New(types.T_bool, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_bool, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_bool, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_bool, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_int8, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_int8, 0, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_int16, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_int16, 0, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_int32, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_int32, 0, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_int64, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_int64, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_int8, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_int8, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_int16, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_int16, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_int32, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_int32, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_int64, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_int64, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_uint8, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_uint8, 0, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_uint16, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_uint16, 0, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_uint32, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_uint32, 0, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_uint64, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_uint64, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_uint8, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_uint8, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_uint16, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_uint16, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_uint32, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_uint32, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_uint64, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_uint64, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_float32, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_float32, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_float32, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_float32, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_float64, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_float64, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_float64, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_float64, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_date, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_date, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_date, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_date, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_datetime, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_datetime, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_datetime, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_datetime, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_timestamp, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_timestamp, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_timestamp, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_timestamp, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_decimal64, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_decimal64, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_decimal64, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_decimal64, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_decimal128, 0, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_decimal128, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_decimal128, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_decimal128, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0)),
+		newTestCase(false, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0)),
 	}
 }
 
@@ -118,7 +118,7 @@ func BenchmarkSortInt(b *testing.B) {
 
 func BenchmarkSortIntVector(b *testing.B) {
 	m := mpool.MustNewZero()
-	vec := testutil.NewInt32Vector(BenchmarkRows, types.New(types.T_int32, 0, 0, 0), m, true, nil)
+	vec := testutil.NewInt32Vector(BenchmarkRows, types.New(types.T_int32, 0, 0), m, true, nil)
 	os := make([]int64, vector.Length(vec))
 	for i := range os {
 		os[i] = int64(i)

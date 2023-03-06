@@ -64,7 +64,7 @@ type btreeKVIter[
 	K Ordered[K],
 	V any,
 ] struct {
-	iter btree.GenericIter[TreeNode[K, V]]
+	iter btree.IterG[TreeNode[K, V]]
 }
 
 func (b *BTree[K, V]) Iter() TreeIter[K, V] {

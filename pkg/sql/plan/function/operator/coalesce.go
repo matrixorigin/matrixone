@@ -137,7 +137,6 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 			if !input.IsScalarNull() {
 				cols := vector.MustTCols[T](input)
 				r := proc.AllocScalarVector(t)
-				r.Typ.Precision = input.Typ.Precision
 				r.Typ.Width = input.Typ.Width
 				r.Typ.Scale = input.Typ.Scale
 				r.Col = make([]T, 1)

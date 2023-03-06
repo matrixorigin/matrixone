@@ -62,13 +62,13 @@ func DatetimeSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	secondValues := vector.MustTCols[int64](vectors[1])
 	thirdValues := vector.MustTCols[int64](vectors[2])
 
-	precision := firstVector.Typ.Precision
+	scale := firstVector.Typ.Scale
 	switch types.IntervalType(thirdValues[0]) {
 	case types.MicroSecond:
-		precision = 6
+		scale = 6
 	}
 
-	resultType := types.Type{Oid: types.T_datetime, Precision: precision, Size: 8}
+	resultType := types.Type{Oid: types.T_datetime, Scale: scale, Size: 8}
 	if firstVector.IsScalar() && secondVector.IsScalar() {
 		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
@@ -101,7 +101,7 @@ func DateStringSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	firstValues := vector.MustStrCols(vectors[0])
 	secondValues := vector.MustTCols[int64](vectors[1])
 	thirdValues := vector.MustTCols[int64](vectors[2])
-	resultType := types.Type{Oid: types.T_datetime, Precision: 6, Size: 8}
+	resultType := types.Type{Oid: types.T_datetime, Scale: 6, Size: 8}
 
 	if firstVector.IsScalar() && secondVector.IsScalar() {
 		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
@@ -136,13 +136,13 @@ func TimeStampSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	secondValues := vector.MustTCols[int64](vectors[1])
 	thirdValues := vector.MustTCols[int64](vectors[2])
 
-	precision := firstVector.Typ.Precision
+	scale := firstVector.Typ.Scale
 	switch types.IntervalType(thirdValues[0]) {
 	case types.MicroSecond:
-		precision = 6
+		scale = 6
 	}
 
-	resultType := types.Type{Oid: types.T_timestamp, Precision: precision, Size: 8}
+	resultType := types.Type{Oid: types.T_timestamp, Scale: scale, Size: 8}
 	if firstVector.IsScalar() && secondVector.IsScalar() {
 		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil

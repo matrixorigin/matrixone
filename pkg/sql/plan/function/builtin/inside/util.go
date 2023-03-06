@@ -16,6 +16,7 @@ package inside
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -145,7 +146,6 @@ func getTableAutoIncrCol(engineDefs []engine.TableDef, tableName string) (bool, 
 					Typ: &plan.Type{
 						Id:          int32(attr.Attr.Type.Oid),
 						Width:       attr.Attr.Type.Width,
-						Precision:   attr.Attr.Type.Precision,
 						Scale:       attr.Attr.Type.Scale,
 						AutoIncr:    attr.Attr.AutoIncrement,
 						Table:       tableName,

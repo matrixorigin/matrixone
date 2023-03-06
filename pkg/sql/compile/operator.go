@@ -856,7 +856,6 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 		typs[i].Width = e.Typ.Width
 		typs[i].Size = e.Typ.Size
 		typs[i].Scale = e.Typ.Scale
-		typs[i].Precision = e.Typ.Precision
 	}
 	return &group.Argument{
 		Aggs:      aggs,
