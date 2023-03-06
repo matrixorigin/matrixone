@@ -47,8 +47,6 @@ type WriteS3Container struct {
 	writer  objectio.Writer
 	lengths []uint64
 
-	UniqueRels []engine.Relation
-
 	metaLocBat *batch.Batch
 
 	// buffers[i] stands the i-th buffer batch used
@@ -75,6 +73,28 @@ const (
 	// when over 10M, give a tag
 	TagS3Size uint64 = 10 * mpool.MB
 )
+
+func (container *WriteS3Container) GetMetaLocBat() *batch.Batch {
+	return container.metaLocBat
+}
+
+func (container *WriteS3Container) SetMp(attrs []*engine.Attribute) {
+	for i := 0; i < len(attrs); i++ {
+		if attrs[i].Primary {
+			container.pk[attrs[i].Name] = true
+		}
+		container.nameToNullablity[attrs[i].Name] = attrs[i].Default.NullAbility
+	}
+}
+
+func (container *WriteS3Container) InitTableBatchAndSize(num int) {
+	container.tableBatchSizes = make([]uint64, num)
+	container.tableBatches = make([][]*batch.Batch, num)
+}
+
+func (container *WriteS3Container) AddSortIdx(sortIdx int) {
+	container.sortIndex = append(container.sortIndex, sortIdx)
+}
 
 func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 	unique_nums := 0
@@ -183,7 +203,7 @@ func (container *WriteS3Container) WriteEnd(proc *process.Process) {
 func (container *WriteS3Container) WriteS3CacheBatch(proc *process.Process) error {
 	for i := range container.tableBatches {
 		if container.tableBatchSizes[i] >= TagS3Size {
-			if err := container.MergeBlock(i, len(container.tableBatches[i]), proc); err != nil {
+			if err := container.MergeBlock(i, len(container.tableBatches[i]), proc, true); err != nil {
 				return err
 			}
 		} else if container.tableBatchSizes[i] < TagS3Size && container.tableBatchSizes[i] > 0 {
@@ -243,10 +263,11 @@ func GetStrCols(bats []*batch.Batch, idx int, stopIdx int) (cols [][]string) {
 	return
 }
 
-func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process.Process) error {
+// cacheOvershold means whether we need to cahce the data part which is over 64M
+func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process.Process, cacheOvershold bool) error {
 	bats := container.tableBatches[idx][:length]
 	stopIdx := -1
-	if container.tableBatchSizes[idx] > WriteS3Threshold {
+	if container.tableBatchSizes[idx] > WriteS3Threshold && cacheOvershold {
 		container.buffers[idx].CleanOnlyData()
 		lastBatch := container.tableBatches[idx][length-1]
 		size := container.tableBatchSizes[idx] - uint64(lastBatch.Size())
@@ -284,12 +305,12 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 			if stopIdx != -1 && i == len(bats)-1 {
 				break
 			}
-			if err := WriteBlock(container, bats[i], proc); err != nil {
+			if err := WriteBlock(container, bats[i]); err != nil {
 				return err
 			}
 		}
 		if stopIdx != -1 {
-			if err := WriteBlock(container, container.buffers[idx], proc); err != nil {
+			if err := WriteBlock(container, container.buffers[idx]); err != nil {
 				return err
 			}
 			container.buffers[idx].CleanOnlyData()
@@ -360,7 +381,7 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 			lens++
 			if lens == int(options.DefaultBlockMaxRows) {
 				lens = 0
-				if err := WriteBlock(container, container.buffers[idx], proc); err != nil {
+				if err := WriteBlock(container, container.buffers[idx]); err != nil {
 					return err
 				}
 				// force clean
@@ -368,7 +389,7 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 			}
 		}
 		if lens > 0 {
-			if err := WriteBlock(container, container.buffers[idx], proc); err != nil {
+			if err := WriteBlock(container, container.buffers[idx]); err != nil {
 				return err
 			}
 		}
@@ -403,9 +424,9 @@ func (container *WriteS3Container) WriteS3Batch(bat *batch.Batch, proc *process.
 	res := container.Put(bat, idx)
 	switch res {
 	case 1:
-		container.MergeBlock(idx, len(container.tableBatches[idx]), proc)
+		container.MergeBlock(idx, len(container.tableBatches[idx]), proc, true)
 	case 0:
-		container.MergeBlock(idx, len(container.tableBatches[idx]), proc)
+		container.MergeBlock(idx, len(container.tableBatches[idx]), proc, true)
 	case -1:
 		proc.SetInputBatch(&batch.Batch{})
 	}
@@ -489,7 +510,7 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 
 // WriteBlock WriteBlock writes one batch to a buffer and generate related indexes for this batch
 // For more information, please refer to the comment about func Write in Writer interface
-func WriteBlock(container *WriteS3Container, bat *batch.Batch, proc *process.Process) error {
+func WriteBlock(container *WriteS3Container, bat *batch.Batch) error {
 	fd, err := container.writer.Write(bat)
 
 	if err != nil {

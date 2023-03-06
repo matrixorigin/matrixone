@@ -112,10 +112,13 @@ type Transaction struct {
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
 	// every statement is an element
-	writes    [][]Entry
-	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
-	dnStores  []DNStore
-	proc      *process.Process
+	writes [][]Entry
+	// txn workspace size
+	workspaceSize uint64
+	tagWriteS3    bool
+	workspace     *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
+	dnStores      []DNStore
+	proc          *process.Process
 
 	idGen IDGenerator
 
