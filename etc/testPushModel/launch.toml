@@ -1,0 +1,11 @@
+logservices = [
+    "./etc/testPushModel/log.toml",
+]
+
+dnservices = [
+    "./etc/testPushModel/dn.toml"
+]
+
+cnservices = [
+    "./etc/testPushModel/cn.toml"
+]
