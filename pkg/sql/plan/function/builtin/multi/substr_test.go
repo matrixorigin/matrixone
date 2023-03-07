@@ -653,7 +653,7 @@ func makeSubStrVectors(src string, start int64, length int64, withLength bool) [
 
 func makeSubStrBlobVectors(src []byte, start int64, length int64, withLength bool, procs *process.Process) []*vector.Vector {
 	inputVector := make([]*vector.Vector, 2)
-	inputType := types.New(types.T_blob, 0, 0, 0)
+	inputType := types.T_blob.ToType()
 	inputVector[0] = vector.NewConstBytes(inputType, src, 1, procs.Mp())
 	inputVector[1] = vector.NewConstFixed(types.T_int64.ToType(), start, 1, testutil.TestUtilMp)
 	if withLength {

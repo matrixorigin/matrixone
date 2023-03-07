@@ -663,6 +663,7 @@ func (v *Vector) Shuffle(sels []int64, m *mpool.MPool) error {
 func (v *Vector) Copy(w *Vector, vi, wi int64, m *mpool.MPool) error {
 	if w.class == CONSTANT {
 		if w.IsConstNull() {
+			v.nsp.Set(uint64(vi))
 			return nil
 		}
 		wi = 0
@@ -683,6 +684,19 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, m *mpool.MPool) error {
 				return err
 			}
 		}
+	}
+
+	if w.nsp != nil {
+		if v.nsp == nil {
+			v.nsp = nulls.Build(v.Length())
+		}
+		if w.nsp.Contains(uint64(wi)) {
+			v.nsp.Set(uint64(vi))
+		} else if v.nsp.Contains(uint64(vi)) {
+			v.nsp.Np.Remove(uint64(vi))
+		}
+	} else if v.nsp != nil {
+		v.nsp.Np.Remove(uint64(vi))
 	}
 	return nil
 }
@@ -728,7 +742,7 @@ func GetUnionOneFunction(typ types.Type, m *mpool.MPool) func(v, w *Vector, sel 
 		}
 	case types.T_uint32:
 		return func(v, w *Vector, sel int64) error {
-			ws := MustFixedCol[bool](w)
+			ws := MustFixedCol[uint32](w)
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), m)
 		}
 	case types.T_uint64:

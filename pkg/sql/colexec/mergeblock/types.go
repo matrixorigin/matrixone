@@ -50,12 +50,12 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 func (arg *Argument) GetMetaLocBat(name string) {
 	bat := batch.New(true, []string{name})
 	bat.Cnt = 1
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	arg.container.mp[0] = bat
 	for i := range arg.Unique_tbls {
 		bat := batch.New(true, []string{name})
 		bat.Cnt = 1
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0, 0))
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 		arg.container.mp[i+1] = bat
 	}
 }

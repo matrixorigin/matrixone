@@ -72,10 +72,10 @@ var (
 		SegmentAttr_Sorted,
 	}
 	SegmentSchemaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_bool, 0, 0, 0),
-		types.New(types.T_bool, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_bool, 0, 0),
+		types.New(types.T_bool, 0, 0),
 	}
 	TxnNodeSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,
@@ -86,12 +86,12 @@ var (
 		txnbase.SnapshotAttr_LogIndex_Size,
 	}
 	TxnNodeSchemaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_uint32, 0, 0, 0),
-		types.New(types.T_uint32, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint32, 0, 0),
 	}
 	DBDNSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,
@@ -104,14 +104,14 @@ var (
 		SnapshotAttr_TID,
 	}
 	DBDNSchemaType = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_uint32, 0, 0, 0),
-		types.New(types.T_uint32, 0, 0, 0),
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
 	}
 	TblDNSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,
@@ -126,16 +126,16 @@ var (
 		SnapshotAttr_SegmentMaxBlock,
 	}
 	TblDNSchemaType = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_uint32, 0, 0, 0),
-		types.New(types.T_uint32, 0, 0, 0),
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_uint32, 0, 0, 0),
-		types.New(types.T_uint16, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint16, 0, 0),
 	}
 	SegmentDNSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,
@@ -148,14 +148,14 @@ var (
 		SnapshotAttr_TID,
 	}
 	SegmentDNSchemaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_uint32, 0, 0, 0),
-		types.New(types.T_uint32, 0, 0, 0),
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
 	}
 	BlockDNSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,
@@ -171,17 +171,17 @@ var (
 		pkgcatalog.BlockMeta_DeltaLoc,
 	}
 	BlockDNSchemaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_uint32, 0, 0, 0),
-		types.New(types.T_uint32, 0, 0, 0),
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0),
-		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
 	MetaSchemaAttr = []string{
 		SnapshotMetaAttr_Tid,
@@ -191,11 +191,11 @@ var (
 		SnapshotMetaAttr_BlockDeleteBatchEnd,
 	}
 	MetaShcemaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),
-		types.New(types.T_int32, 0, 0, 0),
-		types.New(types.T_int32, 0, 0, 0),
-		types.New(types.T_int32, 0, 0, 0),
-		types.New(types.T_int32, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_int32, 0, 0),
+		types.New(types.T_int32, 0, 0),
+		types.New(types.T_int32, 0, 0),
+		types.New(types.T_int32, 0, 0),
 	}
 	BaseAttr = []string{
 		catalog.AttrRowID,

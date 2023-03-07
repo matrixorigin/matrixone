@@ -15,15 +15,16 @@
 package aggut
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"testing"
 )
 
 func TestMedian(t *testing.T) {
-	int8Typ := types.New(types.T_int8, 0, 0, 0)
-	decimal64Typ := types.New(types.T_decimal64, 0, 0, 0)
-	decimal128Typ := types.New(types.T_decimal128, 0, 0, 0)
+	int8Typ := types.New(types.T_int8, 0, 0)
+	decimal64Typ := types.New(types.T_decimal64, 0, 0)
+	decimal128Typ := types.New(types.T_decimal128, 0, 0)
 
 	testCases := []testCase{
 		// int8 avg test

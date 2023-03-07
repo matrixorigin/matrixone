@@ -349,7 +349,7 @@ func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 		return val.String(), nil
 	case types.T_timestamp:
 		val := vector.MustFixedCol[types.Timestamp](vec)[0]
-		return val.String2(ses.GetTimeZone(), vec.GetType().Precision), nil
+		return val.String2(ses.GetTimeZone(), vec.GetType().Scale), nil
 	default:
 		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.GetType().Oid.String())
 	}
@@ -523,10 +523,9 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 		case types.T_json:
 			xs := vector.MustBytesCol(bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.JsonParser)
-
 		case types.T_timestamp:
 			xs := vector.MustFixedCol[types.Timestamp](bat.Vecs[i])
-			rs, err = dumpUtils.ParseTimeStamp(xs, bat.GetVector(int32(i)).GetNulls(), rs, loc, bat.GetVector(int32(i)).GetType().Precision)
+			rs, err = dumpUtils.ParseTimeStamp(xs, bat.GetVector(int32(i)).GetNulls(), rs, loc, bat.GetVector(int32(i)).GetType().Scale)
 		case types.T_datetime:
 			xs := vector.MustFixedCol[types.Datetime](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Datetime])

@@ -22,7 +22,7 @@ import (
 
 func DateToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
+	rtyp := types.New(types.T_timestamp, 0, 6)
 	ivals := vector.MustFixedCol[types.Date](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
@@ -44,7 +44,7 @@ func DateToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vec
 
 func DatetimeToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_timestamp, Precision: inputVector.GetType().Precision, Size: 8}
+	rtyp := types.New(types.T_timestamp, 0, inputVector.GetType().Scale)
 	ivals := vector.MustFixedCol[types.Datetime](inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
@@ -70,7 +70,7 @@ func TimestampToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vecto
 
 func DateStringToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
+	rtyp := types.New(types.T_timestamp, 0, 6)
 	ivals := vector.MustStrCol(inputVector)
 
 	if inputVector.IsConst() {

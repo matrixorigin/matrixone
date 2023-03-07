@@ -207,8 +207,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//add two non-appendable blocks from S3 into "tbtest" table
 	attrs := []string{catalog2.BlockMeta_MetaLoc}
-	vecTypes := []types.Type{types.New(types.T_varchar,
-		types.MaxVarcharLen, 0, 0)}
+	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 	nullable := []bool{false}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
@@ -335,8 +334,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//prepare delete locations.
 	attrs = []string{catalog2.BlockMeta_DeltaLoc}
-	vecTypes = []types.Type{types.New(types.T_varchar,
-		types.MaxVarcharLen, 0, 0)}
+	vecTypes = []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 	nullable = []bool{false}
 	vecOpts = containers.Options{}
 	vecOpts.Capacity = 0

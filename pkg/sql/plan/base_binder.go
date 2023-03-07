@@ -1298,7 +1298,6 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				Id:          int32(types.T_decimal128),
 				Width:       34,
 				Scale:       scale,
-				Precision:   34,
 				NotNullable: true,
 			},
 		}, nil

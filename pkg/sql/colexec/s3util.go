@@ -156,9 +156,8 @@ func (container *WriteS3Container) resetMetaLocBat() {
 	// vecs[1] store relative block metadata
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
 	metaLocBat := batch.New(true, attrs)
-	metaLocBat.Vecs[0] = vector.NewVec(types.Type{Oid: types.T(types.T_uint16)})
-	metaLocBat.Vecs[1] = vector.NewVec(types.New(types.T_varchar,
-		types.MaxVarcharLen, 0, 0))
+	metaLocBat.Vecs[0] = vector.NewVec(types.T_uint16.ToType())
+	metaLocBat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 
 	container.metaLocBat = metaLocBat
 }

@@ -25,7 +25,7 @@ import (
 
 func HexString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
+	rtyp := types.T_varchar.ToType()
 	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {

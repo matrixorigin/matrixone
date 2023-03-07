@@ -31,7 +31,7 @@ const (
 
 func LoadFile(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
-	rtyp := types.New(types.T_text, 0, 0, 0)
+	rtyp := types.T_text.ToType()
 	if inputVector.IsConstNull() {
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 

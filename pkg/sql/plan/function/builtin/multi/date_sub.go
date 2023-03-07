@@ -89,13 +89,13 @@ func TimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	diffs := vector.MustFixedCol[int64](ivecs[1])
 	unit := vector.MustFixedCol[int64](ivecs[2])[0]
 
-	precision := startVec.GetType().Precision
+	scale := startVec.GetType().Scale
 	switch types.IntervalType(unit) {
 	case types.MicroSecond:
-		precision = 6
+		scale = 6
 	}
 
-	rtyp := types.New(types.T_time, 0, 0, precision)
+	rtyp := types.New(types.T_time, 0, scale)
 
 	if startVec.IsConstNull() || diffVec.IsConstNull() {
 		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
@@ -154,13 +154,13 @@ func DatetimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 	diffs := vector.MustFixedCol[int64](ivecs[1])
 	unit := vector.MustFixedCol[int64](ivecs[2])[0]
 
-	precision := startVec.GetType().Precision
+	scale := startVec.GetType().Scale
 	switch types.IntervalType(unit) {
 	case types.MicroSecond:
-		precision = 6
+		scale = 6
 	}
 
-	rtyp := types.New(types.T_datetime, 0, 0, precision)
+	rtyp := types.New(types.T_datetime, 0, scale)
 
 	if startVec.IsConstNull() || diffVec.IsConstNull() {
 		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
@@ -219,7 +219,7 @@ func DateStringSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 	diffs := vector.MustFixedCol[int64](ivecs[1])
 	unit := vector.MustFixedCol[int64](ivecs[2])[0]
 
-	rtyp := types.New(types.T_datetime, 0, 0, 6)
+	rtyp := types.New(types.T_datetime, 0, 6)
 
 	if startVec.IsConstNull() || diffVec.IsConstNull() {
 		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
@@ -278,13 +278,13 @@ func TimestampSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	diffs := vector.MustFixedCol[int64](ivecs[1])
 	unit := vector.MustFixedCol[int64](ivecs[2])[0]
 
-	precision := startVec.GetType().Precision
+	scale := startVec.GetType().Scale
 	switch types.IntervalType(unit) {
 	case types.MicroSecond:
-		precision = 6
+		scale = 6
 	}
 
-	rtyp := types.New(types.T_timestamp, 0, 0, precision)
+	rtyp := types.New(types.T_timestamp, 0, scale)
 
 	if startVec.IsConstNull() || diffVec.IsConstNull() {
 		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil

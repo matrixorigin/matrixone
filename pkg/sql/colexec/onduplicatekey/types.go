@@ -12,28 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memtable
+package onduplicatekey
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type (
-	ID       = memoryengine.ID
-	Nullable = memorytable.Nullable
-	Tuple    = memorytable.Tuple
-	Text     = memorytable.Text
-	Bool     = memorytable.Bool
-	Int      = memorytable.Int
-	Uint     = memorytable.Uint
-	Float    = memorytable.Float
-	Bytes    = memorytable.Bytes
-)
+type proc = process.Process
 
-var (
-	ToOrdered = memorytable.ToOrdered
-	TypeMatch = memorytable.TypeMatch
-	Min       = memorytable.Min
-	Max       = memorytable.Max
-)
+type Argument struct {
+	// Ts is not used
+	Ts       uint64
+	Affected uint64
+	Engine   engine.Engine
+
+	Source       engine.Relation
+	UniqueSource []engine.Relation
+	Ref          *plan.ObjectRef
+	TableDef     *plan.TableDef
+
+	OnDuplicateIdx  []int32
+	OnDuplicateExpr map[string]*plan.Expr
+}
+
+func (arg *Argument) Free(*process.Process, bool) {}

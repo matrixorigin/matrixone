@@ -187,14 +187,12 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 					return vector.NewConstNull(t, l, proc.Mp()), nil
 				} else {
 					r := vector.NewConstFixed(t, thencols[0], l, proc.Mp())
-					r.GetType().Precision = thenv.GetType().Precision
 					r.GetType().Width = thenv.GetType().Width
 					r.GetType().Scale = thenv.GetType().Scale
 					return r, nil
 				}
 			}
 		case whenv.IsConst() && !thenv.IsConst():
-			rs.GetType().Precision = thenv.GetType().Precision
 			rs.GetType().Width = thenv.GetType().Width
 			rs.GetType().Scale = thenv.GetType().Scale
 			if !whenv.IsConstNull() && whencols[0] {
@@ -203,7 +201,6 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 				return rs, nil
 			}
 		case !whenv.IsConst() && thenv.IsConst():
-			rs.GetType().Precision = thenv.GetType().Precision
 			rs.GetType().Width = thenv.GetType().Width
 			rs.GetType().Scale = thenv.GetType().Scale
 			if thenv.IsConstNull() {
@@ -231,7 +228,6 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 				}
 			}
 		case !whenv.IsConst() && !thenv.IsConst():
-			rs.GetType().Precision = thenv.GetType().Precision
 			rs.GetType().Width = thenv.GetType().Width
 			rs.GetType().Scale = thenv.GetType().Scale
 			if nulls.Any(thenv.GetNulls()) {

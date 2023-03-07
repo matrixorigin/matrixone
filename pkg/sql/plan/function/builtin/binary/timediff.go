@@ -22,19 +22,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func TimeDiff[T timediff.DiffT](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func TimeDiff[T timediff.DiffT](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	//input vectors
-	firstVector := vectors[0]
-	secondVector := vectors[1]
+	firstVector := ivecs[0]
+	secondVector := ivecs[1]
 	firstValues := vector.MustFixedCol[T](firstVector)
 	secondValues := vector.MustFixedCol[T](secondVector)
 	rtyp := types.T_time.ToType()
 
-	resultPrecision := firstVector.GetType().Precision
-	if firstVector.GetType().Precision < secondVector.GetType().Precision {
-		resultPrecision = secondVector.GetType().Precision
+	scale := firstVector.GetType().Scale
+	if firstVector.GetType().Scale < secondVector.GetType().Scale {
+		scale = secondVector.GetType().Scale
 	}
-	rtyp.Precision = resultPrecision
+	rtyp.Scale = scale
 
 	if firstVector.IsConstNull() || secondVector.IsConstNull() {
 		return vector.NewConstNull(rtyp, firstVector.Length(), proc.Mp()), nil

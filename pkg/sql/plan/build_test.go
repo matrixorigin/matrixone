@@ -766,6 +766,9 @@ func TestDdl(t *testing.T) {
 		"create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation",
 		"CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey)) COMMENT='xxxxx'",
 		"create table t2(empno int unsigned,ename varchar(15),job varchar(10) key) cluster by(empno,ename)",
+		"lock tables nation read",
+		"lock tables nation write, supplier read",
+		"unlock tables",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -779,6 +782,9 @@ func TestDdl(t *testing.T) {
 		"drop table tpch.tbl_not_exist", //database not exists
 		"drop table db_not_exist.tbl",   //table not exists
 		"create table t6(empno int unsigned,ename varchar(15) auto_increment) cluster by(empno,ename)",
+		"lock tables t3 read",
+		"lock tables t1 read, t1 write",
+		"lock tables nation read, nation write",
 	}
 	runTestShouldError(mock, t, sqls)
 }

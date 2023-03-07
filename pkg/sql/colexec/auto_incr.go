@@ -587,7 +587,7 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 				currentNum := vector.MustFixedCol[uint64](bat.Vecs[2])[rowIndex : rowIndex+1]
 				/* XXX dangerous operation
 				retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
-				retbat.Vecs[0].Col = vector.MustTCols[types.Rowid](retbat.Vecs[0])[rowIndex : rowIndex+1]
+				retbat.Vecs[0].Col = vector.MustFixedCol[types.Rowid](retbat.Vecs[0])[rowIndex : rowIndex+1]
 				*/
 				vec := vector.NewVec(*bat.GetVector(0).GetType())
 				rowid := vector.MustFixedCol[types.Rowid](bat.GetVector(0))[rowIndex]

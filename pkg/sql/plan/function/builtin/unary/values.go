@@ -12,24 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memtable
+package unary
 
-type IsolationPolicy struct {
-	Read ReadPolicy
-}
-
-type ReadPolicy uint8
-
-const (
-	ReadCommitted ReadPolicy = iota + 1
-	ReadSnapshot
-	ReadNoStale
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var SnapshotIsolation = IsolationPolicy{
-	Read: ReadSnapshot,
-}
+func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	fromVec := parameters[0]
+	toVec := result.GetResultVector()
 
-var Serializable = IsolationPolicy{
-	Read: ReadNoStale,
+	sels := make([]int64, fromVec.Length())
+	for j := 0; j < len(sels); j++ {
+		sels[j] = int64(j)
+	}
+	toVec.Union(fromVec, sels, proc.GetMPool())
+	return nil
 }

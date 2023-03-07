@@ -190,7 +190,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 
 /*
 func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][]int64, proc *process.Process) error {
-	col := vector.MustTCols[uint16](ctr.vecs[0])
+	col := vector.MustFixedCol[uint16](ctr.vecs[0])
 	for i, v := range col {
 		if v == 0 {
 			continue
@@ -202,7 +202,7 @@ func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][
 				if err != nil {
 					return err
 				}
-				bs := vector.MustTCols[bool](vec)
+				bs := vector.MustFixedCol[bool](vec)
 				if !bs[0] {
 					vec.Free(proc.Mp())
 					continue
@@ -285,7 +285,7 @@ func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
 		//      leftIdx.dict = ["c"->1, "d"->2, "b"->3, "a"->4]
 		//      mapping => fixed map = [3, 0, 2, 1]
 		fixedMap := idx.GetDict().FindBatch(leftIdx.GetDict().GetUnique())
-		poses := vector.MustTCols[uint16](leftIdx.GetPoses())
+		poses := vector.MustFixedCol[uint16](leftIdx.GetPoses())
 		col := make([]uint16, len(poses))
 		for i, pos := range poses {
 			if pos == 0 {

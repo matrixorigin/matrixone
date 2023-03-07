@@ -43,7 +43,7 @@ const (
 )
 
 var (
-	precisionVal = []Datetime{1000000, 100000, 10000, 1000, 100, 10, 1}
+	scaleVal = []Datetime{1000000, 100000, 10000, 1000, 100, 10, 1}
 )
 
 // The Datetime type holds number of microseconds since January 1, year 1 in Gregorian calendar
@@ -54,13 +54,13 @@ func (dt Datetime) String() string {
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
 }
 
-func (dt Datetime) String2(precision int32) string {
+func (dt Datetime) String2(scale int32) string {
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
-	if precision > 0 {
+	if scale > 0 {
 		msec := int64(dt) % microSecsPerSec
 		msecInstr := fmt.Sprintf("%06d\n", msec)
-		msecInstr = msecInstr[:precision]
+		msecInstr = msecInstr[:scale]
 
 		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d"+"."+msecInstr, y, m, d, hour, minute, sec)
 	}
@@ -73,14 +73,14 @@ func (dt Datetime) String2(precision int32) string {
 // 2. yyyy-mm-dd hh:mm:ss(.msec)
 // now support mm/dd/hh/mm/ss can be single number
 // 3. yyyymmddhhmmss(.msec)
-// during parsing, the Datetime value will be rounded(away from zero) to the predefined precision, for example:
+// during parsing, the Datetime value will be rounded(away from zero) to the predefined scale, for example:
 // Datetime(3) input string   					parsing result
 //
 //	"1999-09-09 11:11:11.1234"		"1999-09-09 11:11:11.123"
 //	"1999-09-09 11:11:11.1235"		"1999-09-09 11:11:11.124"
 //	"1999-09-09 11:11:11.9994"      "1999-09-09 11:11:11.999"
 //	"1999-09-09 11:11:11.9995"      "1999-09-09 11:11:12.000"
-func ParseDatetime(s string, precision int32) (Datetime, error) {
+func ParseDatetime(s string, scale int32) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if len(s) < 14 {
 		if d, err := ParseDateCast(s); err == nil {
@@ -152,7 +152,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 		}
 		// solve microsecond
 		if len(middleAndBack) == 2 {
-			msec, carry, err = getMsec(middleAndBack[1], precision)
+			msec, carry, err = getMsec(middleAndBack[1], scale)
 			if err != nil {
 				return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 			}
@@ -169,7 +169,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 		if len(s) > 14 {
 			if len(s) > 15 && s[14] == '.' {
 				msecStr := s[15:]
-				msec, carry, err = getMsec(msecStr, precision)
+				msec, carry, err = getMsec(msecStr, scale)
 				if err != nil {
 					return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
 				}
@@ -234,22 +234,22 @@ func (dt Datetime) ToDate() Date {
 	return Date((dt.sec()) / secsPerDay)
 }
 
-// We need to truncate the part after precision position when cast
-// between different precision.
-func (dt Datetime) ToTime(precision int32) Time {
-	if precision == 6 {
+// We need to truncate the part after scale position when cast
+// between different scale.
+func (dt Datetime) ToTime(scale int32) Time {
+	if scale == 6 {
 		return Time(dt % microSecsPerDay)
 	}
 
 	// truncate the date part
 	ms := dt % microSecsPerDay
 
-	base := ms / precisionVal[precision]
-	if ms%precisionVal[precision]/precisionVal[precision+1] >= 5 { // check carry
+	base := ms / scaleVal[scale]
+	if ms%scaleVal[scale]/scaleVal[scale+1] >= 5 { // check carry
 		base += 1
 	}
 
-	return Time(base * precisionVal[precision])
+	return Time(base * scaleVal[scale])
 }
 
 func (dt Datetime) Clock() (hour, minute, sec int8) {

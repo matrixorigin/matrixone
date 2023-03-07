@@ -57,7 +57,7 @@ func ExtractFromString(vectors []*vector.Vector, proc *process.Process) (*vector
 		rvals, err := proc.AllocVector(rtyp, int64(resultElementSize) * int64(len(rightValues.Lengths)))
 		if
 
-		result, resultNsp, err := extract.ExtractFromInputBytes(unit, rightValues, right.Nsp, )
+		result, resultNsp, err := extract.ExtractFromInputBytes(unit, rightValues, right.GetNulls(), )
 
 	default:
 		return nil, moerr.NewInternalError("invalid input")

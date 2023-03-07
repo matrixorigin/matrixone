@@ -145,7 +145,7 @@ func TestGroup(t *testing.T) {
 
 			rbat := tc.proc.Reg.InputBatch
 			require.Equal(t, []string{"a", "b", "c", "d"}, vector.MustStrCols(rbat.Vecs[0]))
-			require.Equal(t, []int64{4, 3, 3, 2}, vector.MustTCols[int64](rbat.Vecs[1]))
+			require.Equal(t, []int64{4, 3, 3, 2}, vector.MustFixedCol[int64](rbat.Vecs[1]))
 
 			if tc.proc.Reg.InputBatch != nil {
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
@@ -173,8 +173,8 @@ func TestGroup(t *testing.T) {
 			require.NoError(t, err)
 
 			rbat := tc.proc.Reg.InputBatch
-			require.Equal(t, []int64{16, 1, 4, 2, 8, 32}, vector.MustTCols[int64](rbat.Vecs[0]))
-			require.Equal(t, []int64{32, 2, 8, 6, 16, 32}, vector.MustTCols[int64](rbat.Vecs[1]))
+			require.Equal(t, []int64{16, 1, 4, 2, 8, 32}, vector.MustFixedCol[int64](rbat.Vecs[0]))
+			require.Equal(t, []int64{32, 2, 8, 6, 16, 32}, vector.MustFixedCol[int64](rbat.Vecs[1]))
 
 			if tc.proc.Reg.InputBatch != nil {
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())

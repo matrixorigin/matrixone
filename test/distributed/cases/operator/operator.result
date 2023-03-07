@@ -232,6 +232,7 @@ a	b	c	d	e
 1	c	3.001	2022-02-10	2022-02-10 12:00:00
 select * from t2 where c in (2.001,2.002);
 a	b	c	d	e
+2    b    2.001    2022-02-09    2022-02-09 12:00:00
 select * from t2 where b not in ('e',"f");
 a	b	c	d	e
 1	a	1.001	2022-02-08	2022-02-08 12:00:00
@@ -253,6 +254,7 @@ suma	e
 4	2022-02-11 12:00:00
 select * from t2 where c in (2.001,3);
 a	b	c	d	e
+2    b    2.001    2022-02-09    2022-02-09 12:00:00
 drop table if exists t1;
 create table t1(a int, b int unsigned);
 insert into t1 values (-1, 1), (-5, 5);

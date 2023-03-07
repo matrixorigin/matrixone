@@ -84,7 +84,6 @@ func TestInsertOperator(t *testing.T) {
 		Engine: eng,
 		InsertCtx: &InsertCtx{
 			Source: &mockRelation{},
-			// Idx:    []int32{0, 1, 2, 3, 4},
 			Ref: &plan.ObjectRef{
 				Obj:        0,
 				SchemaName: "testDb",
@@ -129,7 +128,6 @@ func TestInsertOperator(t *testing.T) {
 		Engine: eng,
 		InsertCtx: &InsertCtx{
 			Source: &mockRelation{},
-			// Idx:    []int32{0},
 			Ref: &plan.ObjectRef{
 				Obj:        0,
 				SchemaName: "testDb",

@@ -142,7 +142,7 @@ func TestLowCardinalityJoin(t *testing.T) {
 	require.Equal(
 		t,
 		[]uint16{3, 3, 3, 3, 3, 3, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 2},
-		vector.MustTCols[uint16](resultIdx.GetPoses()),
+		vector.MustFixedCol[uint16](resultIdx.GetPoses()),
 	)
 }
 
@@ -179,7 +179,7 @@ func TestLowCardinalityIndexesJoin(t *testing.T) {
 	require.Equal(
 		t,
 		[]uint16{1, 1, 1, 1, 1, 1, 3, 3, 4, 4, 4, 4, 3, 3, 4, 4, 4, 4, 3, 3},
-		vector.MustTCols[uint16](resultIdx.GetPoses()),
+		vector.MustFixedCol[uint16](resultIdx.GetPoses()),
 	)
 }
 */

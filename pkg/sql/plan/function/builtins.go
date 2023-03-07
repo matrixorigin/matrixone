@@ -2791,8 +2791,8 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
-	INTERNAL_DATETIME_PRECISION: {
-		Id:     INTERNAL_DATETIME_PRECISION,
+	INTERNAL_DATETIME_SCALE: {
+		Id:     INTERNAL_DATETIME_SCALE,
 		Flag:   plan.Function_STRICT,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
@@ -2802,7 +2802,7 @@ var builtins = map[int]Functions{
 				ReturnTyp:       types.T_int64,
 				Volatile:        true,
 				RealTimeRelated: true,
-				Fn:              inside.InternalDatetimePrecision,
+				Fn:              inside.InternalDatetimeScale,
 			},
 		},
 	},
@@ -2995,6 +2995,28 @@ var builtins = map[int]Functions{
 				Volatile:        true,
 				RealTimeRelated: true,
 				Fn:              ctl.MOLogDate,
+			},
+		},
+	},
+
+	VALUES: {
+		Id:     VALUES,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) != 1 {
+				return wrongFunctionParameters, nil
+			}
+			return 0, nil
+		},
+		Overloads: []Function{
+			{
+				Index:           0,
+				UseNewFramework: true,
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewFn: unary.Values,
 			},
 		},
 	},

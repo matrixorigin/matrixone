@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -58,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
@@ -469,6 +469,29 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	}, nil
 }
 
+func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Process) (*onduplicatekey.Argument, error) {
+	oldCtx := n.InsertCtx
+	ctx := proc.Ctx
+	if oldCtx.GetClusterTable().GetIsClusterTable() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
+	if err != nil {
+		return nil, err
+	}
+
+	return &onduplicatekey.Argument{
+		Engine:   eg,
+		Ref:      oldCtx.Ref,
+		TableDef: oldCtx.TableDef,
+
+		OnDuplicateIdx:  oldCtx.OnDuplicateIdx,
+		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
+		Source:          originRel,
+		UniqueSource:    indexRels,
+	}, nil
+}
+
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
 	oldCtx := n.InsertCtx
 	ctx := proc.Ctx
@@ -833,7 +856,6 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 		typs[i].Width = e.Typ.Width
 		typs[i].Size = e.Typ.Size
 		typs[i].Scale = e.Typ.Scale
-		typs[i].Precision = e.Typ.Precision
 	}
 	return &group.Argument{
 		Aggs:      aggs,
@@ -898,7 +920,7 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, 
 		}
 
 		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
-			strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+			isSameCN(currentCNAddr, s.NodeInfo.Addr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])

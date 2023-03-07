@@ -39,7 +39,7 @@ func TestExtractFromDate(t *testing.T) {
 	// XXX why?  This seems to be wrong.  ExtractFromDate "" should error out,
 	// but if it does not, we tested the result is 1 in prev check.
 	// it should not be null.
-	// require.True(t, nulls.Contains(outputVector.Nsp, uint64(3)))
+	// require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 
 	vector0 = testutil.MakeScalarVarchar("month", 4)
 	vector1 = testutil.MakeDateVector([]string{"2020-01-01", "2021-02-03", "2024-03-04", ""}, []uint64{3})
@@ -55,7 +55,7 @@ func TestExtractFromDate(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []uint32{1, 2, 3, 1}, outputValues)
 	// XXX same as above.
-	// require.True(t, nulls.Contains(outputVector.Nsp, uint64(3)))
+	// require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 
 	vector0 = testutil.MakeScalarVarchar("day", 4)
 	vector1 = testutil.MakeDateVector([]string{"2020-01-01", "2021-02-03", "2024-03-04", ""}, []uint64{3})
@@ -71,7 +71,7 @@ func TestExtractFromDate(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []uint32{1, 3, 4, 1}, outputValues)
 	// XXX Same
-	// require.True(t, nulls.Contains(outputVector.Nsp, uint64(3)))
+	// require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 
 	vector0 = testutil.MakeScalarVarchar("year_month", 4)
 	vector1 = testutil.MakeDateVector([]string{"2020-01-01", "2021-02-03", "2024-03-04", ""}, []uint64{3})
@@ -87,7 +87,7 @@ func TestExtractFromDate(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []uint32{202001, 202102, 202403, 101}, outputValues)
 	// XXX same
-	// require.True(t, nulls.Contains(outputVector.Nsp, uint64(3)))
+	// require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 }
 
 func TestExtractFromDatetime(t *testing.T) {

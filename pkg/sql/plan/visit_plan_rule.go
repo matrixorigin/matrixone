@@ -352,7 +352,7 @@ func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
 		}
 		constValue := rule.GetConstantValue(vec, true)
 		constValue.Src = e
-		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Precision: vec.GetType().Precision, Scale: vec.GetType().Scale, Width: vec.GetType().Width, Size: vec.GetType().Size}
+		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width, Size: vec.GetType().Size}
 		expr.Expr = &plan.Expr_C{
 			C: constValue,
 		}
