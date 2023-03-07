@@ -67,8 +67,6 @@ type Engine struct {
 	idGen   IDGenerator
 	txns    map[string]*Transaction
 	catalog *cache.CatalogCache
-	// minimum heap of currently active transactions
-	txnHeap *transactionHeap
 
 	dnMap      map[string]int
 	partitions map[[2]uint64]Partitions
