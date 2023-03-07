@@ -21,7 +21,7 @@ const constTenantKey = "account"
 // this constant lable is used for sys_* and process_* table
 var sysTenantID = prom.Labels{constTenantKey: "sys"}
 
-var initCollectors = []Collector{
+var InitCollectors = []Collector{
 	// sql metric
 	StatementCounterFactory,
 	StatementErrorsFactory,
@@ -36,9 +36,21 @@ var initCollectors = []Collector{
 	hardwareStatsCollector,
 }
 
-// register all defined collector here
-func registerAllMetrics() {
-	for _, c := range initCollectors {
-		mustRegister(c)
-	}
+type SubSystem struct {
+	Name              string
+	Comment           string
+	SupportUserAccess bool
+}
+
+var AllSubSystem = map[string]*SubSystem{}
+
+func RegisterSubSystem(s *SubSystem) {
+	AllSubSystem[s.Name] = s
+}
+
+func init() {
+	RegisterSubSystem(&SubSystem{"sql", "base on query action", true})
+	RegisterSubSystem(&SubSystem{"server", "MO Server status, observe from inside", true})
+	RegisterSubSystem(&SubSystem{"process", "MO process status", false})
+	RegisterSubSystem(&SubSystem{"sys", "OS status", false})
 }

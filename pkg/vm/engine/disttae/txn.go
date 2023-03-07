@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -125,6 +126,7 @@ func (txn *Transaction) WriteBatch(
 		}
 		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
 		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
+		txn.workspaceSize += uint64(bat.Size())
 	}
 	txn.Lock()
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
@@ -142,7 +144,95 @@ func (txn *Transaction) WriteBatch(
 		return err
 	}
 
+	txn.DumpBatch(false)
+
 	return nil
+}
+
+func (txn *Transaction) DumpBatch(force bool) error {
+	// if txn.workspaceSize >= colexec.WriteS3Threshold {
+	if txn.workspaceSize >= colexec.WriteS3Threshold || force && txn.workspaceSize >= colexec.TagS3Size {
+		mp := make(map[[2]string][]*batch.Batch)
+		for i := 0; i < len(txn.writes); i++ {
+			idx := -1
+			for j := 0; j < len(txn.writes[i]); j++ {
+				if txn.writes[i][j].typ == INSERT && txn.writes[i][j].fileName == "" {
+					key := [2]string{txn.writes[i][j].databaseName, txn.writes[i][j].tableName}
+					bat := txn.writes[i][j].bat
+					// skip rowid
+					bat.Attrs = bat.Attrs[1:]
+					bat.Vecs = bat.Vecs[1:]
+					mp[key] = append(mp[key], bat)
+				} else {
+					txn.writes[i][idx+1] = txn.writes[i][j]
+					idx++
+				}
+			}
+			txn.writes[i] = txn.writes[i][:idx+1]
+		}
+		for key := range mp {
+			container, tbl, err := txn.getContainer(key)
+			if err != nil {
+				return err
+			}
+			container.InitBuffers(mp[key][0], 0)
+			for i := 0; i < len(mp[key]); i++ {
+				container.Put(mp[key][i], 0)
+			}
+			container.MergeBlock(0, len(mp[key]), txn.proc, false)
+			metaLoc := container.GetMetaLocBat()
+
+			lenVecs := len(metaLoc.Attrs)
+			// only remain the metaLoc col
+			metaLoc.Vecs = metaLoc.Vecs[lenVecs-1:]
+			metaLoc.Attrs = metaLoc.Attrs[lenVecs-1:]
+			metaLoc.SetZs(metaLoc.Vecs[0].Length(), txn.proc.GetMPool())
+			err = tbl.Write(txn.proc.Ctx, metaLoc)
+			if err != nil {
+				return err
+			}
+		}
+		txn.workspaceSize = 0
+	}
+	return nil
+}
+
+func (txn *Transaction) getContainer(key [2]string) (*colexec.WriteS3Container, engine.Relation, error) {
+	sortIdx, attrs, tbl, err := txn.getSortIdx(key)
+	if err != nil {
+		return nil, nil, err
+	}
+	container := &colexec.WriteS3Container{}
+	container.Init(1)
+	container.SetMp(attrs)
+	if sortIdx != -1 {
+		container.AddSortIdx(sortIdx)
+	}
+	return container, tbl, nil
+}
+
+func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, engine.Relation, error) {
+	databaseName := key[0]
+	tableName := key[1]
+
+	database, err := txn.engine.Database(txn.proc.Ctx, databaseName, txn.proc.TxnOperator)
+	if err != nil {
+		return -1, nil, nil, err
+	}
+	tbl, err := database.Relation(txn.proc.Ctx, tableName)
+	if err != nil {
+		return -1, nil, nil, err
+	}
+	attrs, err := tbl.TableColumns(txn.proc.Ctx)
+	if err != nil {
+		return -1, nil, nil, err
+	}
+	for i := 0; i < len(attrs); i++ {
+		if attrs[i].ClusterBy || attrs[i].Primary {
+			return i, attrs, tbl, err
+		}
+	}
+	return -1, attrs, tbl, nil
 }
 
 func (txn *Transaction) checkPrimaryKey(
