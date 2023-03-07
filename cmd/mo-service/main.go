@@ -46,7 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"go.uber.org/zap"
 )
@@ -313,9 +313,9 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	}
 	if !SV.DisableMetric {
 		stopper.RunNamedTask("metric", func(ctx context.Context) {
-			metric.InitMetric(ctx, nil, &SV, UUID, nodeRole, metric.WithWriterFactory(writerFactory))
+			mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole, mometric.WithWriterFactory(writerFactory))
 			<-ctx.Done()
-			metric.StopMetricSync()
+			mometric.StopMetricSync()
 		})
 	}
 	if err = export.InitMerge(ctx, &SV); err != nil {
