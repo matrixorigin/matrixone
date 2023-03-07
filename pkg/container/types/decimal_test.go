@@ -21,10 +21,8 @@ import (
 )
 
 func Test1(t *testing.T) {
-	x, y := ParseDecimal128("0.9999999999999999999999999999999999999999999999999999999", 5, 4)
-	if y == nil {
-		fmt.Println(x)
-	}
+	x, _, _ := Parse128("-3728832.39820000")
+	fmt.Println(Decimal128ToFloat64(x, 8))
 }
 func TestDecimalFloat(t *testing.T) {
 	x := Decimal128{uint64(rand.Int()), uint64(rand.Int())}

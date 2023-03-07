@@ -1470,7 +1470,7 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 		signx = true
 	}
 	for i < len(x) {
-		if x[i] == ' ' {
+		if x[i] == ' ' || x[i] == '+' {
 			i++
 			continue
 		}

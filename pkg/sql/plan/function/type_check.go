@@ -253,8 +253,8 @@ func initTypeCheckRelated() {
 				convertRuleForBinaryTable2 = append(convertRuleForBinaryTable2, [4]types.T{numbers[i], numbers[j], types.T_float64, types.T_float64})
 			}
 			for j := range decimals {
-				convertRuleForBinaryTable2 = append(convertRuleForBinaryTable2, [4]types.T{numbers[i], decimals[j], types.T_float64, types.T_float64})
-				convertRuleForBinaryTable2 = append(convertRuleForBinaryTable2, [4]types.T{decimals[j], numbers[i], types.T_float64, types.T_float64})
+				convertRuleForBinaryTable2 = append(convertRuleForBinaryTable2, [4]types.T{numbers[i], decimals[j], types.T_decimal128, types.T_decimal128})
+				convertRuleForBinaryTable2 = append(convertRuleForBinaryTable2, [4]types.T{decimals[j], numbers[i], types.T_decimal128, types.T_decimal128})
 			}
 			for j := range floats {
 				convertRuleForBinaryTable2 = append(convertRuleForBinaryTable2, [4]types.T{numbers[i], floats[j], types.T_float64, types.T_float64})
