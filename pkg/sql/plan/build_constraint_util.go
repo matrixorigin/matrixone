@@ -410,7 +410,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		syntaxHasColumnNames = true
 		for _, column := range stmt.Columns {
 			colName := string(column)
-			if _, exists := colToIdx[colName]; !exists {
+			if _, exists := colToIdx[string(column)]; !exists {
 				return moerr.NewInvalidInput(builder.GetContext(), "insert value into unknown column '%s'", colName)
 			}
 			insertColumns = append(insertColumns, colName)
@@ -428,14 +428,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault {
 			for j, row := range slt.Rows {
 				if row != nil {
-					return moerr.NewWrongValueCountOnRow(builder.GetContext(), j)
+					return moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("Column count doesn't match value count at row '%v'", j))
 				}
 			}
 		} else {
 			colCount := len(insertColumns)
 			for j, row := range slt.Rows {
 				if len(row) != colCount {
-					return moerr.NewWrongValueCountOnRow(builder.GetContext(), j)
+					return moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("Column count doesn't match value count at row '%v'", j))
 				}
 			}
 		}
@@ -444,7 +444,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		//but it does not work at the case:
 		//insert into a(a) values (); insert into a values (0),();
 		if isAllDefault && syntaxHasColumnNames {
-			return moerr.NewWrongValueCount(builder.GetContext())
+			return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
 
 		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx)
@@ -483,7 +483,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 	lastNode := builder.qry.Nodes[info.rootId]
 	if len(insertColumns) != len(lastNode.ProjectList) {
-		return moerr.NewWrongValueCount(builder.GetContext())
+		return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 	}
 
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
