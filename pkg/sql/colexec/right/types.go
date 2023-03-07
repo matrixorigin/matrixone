@@ -12,21 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package hashbuild
+package right
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
 	Build = iota
+	Probe
+	SendLast
 	End
 )
 
@@ -38,34 +40,31 @@ type evalVector struct {
 type container struct {
 	state int
 
-	hasNull bool
-
-	sels [][]int32
+	inBuckets []uint8
 
 	bat *batch.Batch
 
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.StrHashMap
+	mp *hashmap.JoinMap
 
-	idx *index.LowCardinalityIndex
-
-	nullSels []int32
+	matched_sels []int32
 }
 
 type Argument struct {
-	ctr *container
-	// need to generate a push-down filter expression
-	NeedExpr       bool
-	NeedHashMap    bool
-	NeedSelectList bool
-	Ibucket        uint64
-	Nbucket        uint64
-	Typs           []types.Type
-	Conditions     []*plan.Expr
+	ctr        *container
+	Ibucket    uint64
+	Nbucket    uint64
+	Result     []colexec.ResultPos
+	Left_typs  []types.Type
+	Right_typs []types.Type
+	Cond       *plan.Expr
+	Conditions [][]*plan.Expr
 
-	IsRight bool
+	Is_receiver bool
+	Channel     chan *[]int32
+	NumCPU      uint64
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -74,9 +73,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanEvalVectors(mp)
-		if !arg.NeedHashMap {
-			ctr.cleanHashMap()
-		}
+		ctr.cleanHashMap()
 	}
 }
 
@@ -87,18 +84,18 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	}
 }
 
+func (ctr *container) cleanHashMap() {
+	if ctr.mp != nil {
+		ctr.mp.Free()
+		ctr.mp = nil
+	}
+}
+
 func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
 	for i := range ctr.evecs {
 		if ctr.evecs[i].needFree && ctr.evecs[i].vec != nil {
 			ctr.evecs[i].vec.Free(mp)
 			ctr.evecs[i].vec = nil
 		}
-	}
-}
-
-func (ctr *container) cleanHashMap() {
-	if ctr.mp != nil {
-		ctr.mp.Free()
-		ctr.mp = nil
 	}
 }

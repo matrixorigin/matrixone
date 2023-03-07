@@ -48,6 +48,7 @@ uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 listen-address = "0.0.0.0:6002"
 service-address = "cn-1:6002"
 sql-address = "cn-1:6001"
+turn-on-push-model = false
 
 [cn.Engine]
 type = "distributed-tae"

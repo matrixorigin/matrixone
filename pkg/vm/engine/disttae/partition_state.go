@@ -45,15 +45,17 @@ type PartitionState struct {
 	PrimaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 }
 
+// RowEntry represents a version of a row
 type RowEntry struct {
-	BlockID uint64
+	BlockID uint64 // we need to iter by block id, so put it first to allow faster iteration
 	RowID   types.Rowid
 	Time    types.TS
 
-	ID      int64
-	Deleted bool
-	Batch   *batch.Batch
-	Offset  int64
+	ID                int64 // a unique version id, for primary index building and validating
+	Deleted           bool
+	Batch             *batch.Batch
+	Offset            int64
+	PrimaryIndexBytes []byte
 }
 
 func (r RowEntry) Less(than RowEntry) bool {
@@ -237,10 +239,13 @@ func (p *PartitionState) HandleRowsInsert(
 
 			entry.Batch = batch
 			entry.Offset = int64(i)
+			if i < len(primaryKeyBytesSet) {
+				entry.PrimaryIndexBytes = primaryKeyBytesSet[i]
+			}
 
 			p.Rows.Set(entry)
 
-			if primaryKeyIndex >= 0 && len(primaryKeyBytesSet[i]) > 0 {
+			if i < len(primaryKeyBytesSet) && len(primaryKeyBytesSet[i]) > 0 {
 				p.PrimaryIndex.Set(&PrimaryIndexEntry{
 					Bytes:      primaryKeyBytesSet[i],
 					RowEntryID: entry.ID,
@@ -348,7 +353,15 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					if entry.BlockID != blockID {
 						break
 					}
+					// delete row entry
 					p.Rows.Delete(entry)
+					// delete primary index entry
+					if len(entry.PrimaryIndexBytes) > 0 {
+						p.PrimaryIndex.Delete(&PrimaryIndexEntry{
+							Bytes:      entry.PrimaryIndexBytes,
+							RowEntryID: entry.ID,
+						})
+					}
 				}
 				iter.Release()
 			}
