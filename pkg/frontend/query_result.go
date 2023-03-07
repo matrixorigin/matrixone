@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/google/uuid"
@@ -307,7 +306,7 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 			return err
 		}
 		idxs := []uint16{catalog.PLAN_IDX, catalog.AST_IDX}
-		bats, err := reader.LoadAllColumns(requestCtx, idxs, e.Size, common.DefaultAllocator)
+		bats, err := reader.LoadAllColumns(requestCtx, idxs, e.Size, ses.GetMemPool())
 		if err != nil {
 			return err
 		}
@@ -639,7 +638,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	idxs := make([]uint16, 1)
 	idxs[0] = catalog.COLUMNS_IDX
 	// read meta's data
-	bats, err := reader.LoadAllColumns(ctx, idxs, e.Size, common.DefaultAllocator)
+	bats, err := reader.LoadAllColumns(ctx, idxs, e.Size, ses.GetMemPool())
 	if err != nil {
 		return nil, err
 	}

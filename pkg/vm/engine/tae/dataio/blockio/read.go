@@ -109,6 +109,7 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, uint16, [
 		if typ.Oid == types.T_Rowid {
 			idx = i
 			found = true
+			break
 		}
 	}
 	if !found {
