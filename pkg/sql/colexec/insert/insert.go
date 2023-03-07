@@ -56,12 +56,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
 		return false, nil
 	}
 
 	insertCtx := insertArg.InsertCtx
-	clusterTable := insertCtx.ClusterTable
 
 	var insertBat *batch.Batch
 	defer func() {
@@ -86,72 +85,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return nil
 	}
 
-	if clusterTable.GetIsClusterTable() {
-		accountIdColumnDef := insertCtx.TableDef.Cols[clusterTable.GetColumnIndexOfAccountId()]
-		accountIdExpr := accountIdColumnDef.GetDefault().GetExpr()
-		accountIdConst := accountIdExpr.GetC()
-
-		vecLen := vector.Length(bat.Vecs[0])
-		tmpBat := batch.NewWithSize(0)
-		tmpBat.Zs = []int64{1}
-		//save auto_increment column if necessary
-		savedAutoIncrVectors := make([]*vector.Vector, 0)
-		defer func() {
-			for _, vec := range savedAutoIncrVectors {
-				vector.Clean(vec, proc.Mp())
-			}
-		}()
-		for i, colDef := range insertCtx.TableDef.Cols {
-			if colDef.GetTyp().GetAutoIncr() {
-				vec2, err := vector.Dup(bat.Vecs[i], proc.Mp())
-				if err != nil {
-					return false, err
-				}
-				savedAutoIncrVectors = append(savedAutoIncrVectors, vec2)
-			}
-		}
-		for idx, accountId := range clusterTable.GetAccountIDs() {
-			//update accountId in the accountIdExpr
-			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
-			accountIdVec := bat.Vecs[clusterTable.GetColumnIndexOfAccountId()]
-			//clean vector before fill it
-			vector.Clean(accountIdVec, proc.Mp())
-			//the i th row
-			for i := 0; i < vecLen; i++ {
-				err := fillRow(tmpBat, accountIdExpr, accountIdVec, proc)
-				if err != nil {
-					return false, err
-				}
-			}
-			if idx != 0 { //refill the auto_increment column vector
-				j := 0
-				for colIdx, colDef := range insertCtx.TableDef.Cols {
-					if colDef.GetTyp().GetAutoIncr() {
-						targetVec := bat.Vecs[colIdx]
-						vector.Clean(targetVec, proc.Mp())
-						for k := int64(0); k < int64(vecLen); k++ {
-							err := vector.UnionOne(targetVec, savedAutoIncrVectors[j], k, proc.Mp())
-							if err != nil {
-								return false, err
-							}
-						}
-						j++
-					}
-				}
-			}
-
-			err := insertRows()
-			if err != nil {
-				return false, err
-			}
-		}
-	} else {
-		err := insertRows()
-		if err != nil {
-			return false, err
-		}
+	if err := insertRows(); err != nil {
+		return false, err
 	}
-
 	if insertArg.IsRemote {
 		insertArg.Container.WriteEnd(proc)
 	}

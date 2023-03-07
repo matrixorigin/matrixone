@@ -393,7 +393,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	tableDef := info.tblInfo.tableDefs[0]
 	tableObjRef := info.tblInfo.objRef[0]
 	syntaxHasColumnNames := false
-	isClusterTable := info.tblInfo.isClusterTable[0]
 	colToIdx := make(map[string]int)
 	oldColPosMap := make(map[string]int)
 	for i, col := range tableDef.Cols {
@@ -404,25 +403,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
 
 	if stmt.Columns == nil {
-		if isClusterTable {
-			for _, col := range tableDef.Cols {
-				if !util.IsClusterTableAttribute(col.Name) {
-					insertColumns = append(insertColumns, col.Name)
-				}
-			}
-		} else {
-			for _, col := range tableDef.Cols {
-				insertColumns = append(insertColumns, col.Name)
-			}
+		for _, col := range tableDef.Cols {
+			insertColumns = append(insertColumns, col.Name)
 		}
 	} else {
 		syntaxHasColumnNames = true
 		for _, column := range stmt.Columns {
 			colName := string(column)
-			if isClusterTable && util.IsClusterTableAttribute(colName) {
-				return moerr.NewInvalidInput(builder.GetContext(), "do not specify the attribute %s for the cluster table", util.GetClusterTableAttributeName())
-			}
-			if _, exists := colToIdx[string(column)]; !exists {
+			if _, exists := colToIdx[colName]; !exists {
 				return moerr.NewInvalidInput(builder.GetContext(), "insert value into unknown column '%s'", colName)
 			}
 			insertColumns = append(insertColumns, colName)
@@ -440,14 +428,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault {
 			for j, row := range slt.Rows {
 				if row != nil {
-					return moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("Column count doesn't match value count at row '%v'", j))
+					return moerr.NewWrongValueCountOnRow(builder.GetContext(), j)
 				}
 			}
 		} else {
 			colCount := len(insertColumns)
 			for j, row := range slt.Rows {
 				if len(row) != colCount {
-					return moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("Column count doesn't match value count at row '%v'", j))
+					return moerr.NewWrongValueCountOnRow(builder.GetContext(), j)
 				}
 			}
 		}
@@ -456,7 +444,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		//but it does not work at the case:
 		//insert into a(a) values (); insert into a values (0),();
 		if isAllDefault && syntaxHasColumnNames {
-			return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+			return moerr.NewWrongValueCount(builder.GetContext())
 		}
 
 		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx)
@@ -495,7 +483,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 	lastNode := builder.qry.Nodes[info.rootId]
 	if len(insertColumns) != len(lastNode.ProjectList) {
-		return moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+		return moerr.NewWrongValueCount(builder.GetContext())
 	}
 
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]

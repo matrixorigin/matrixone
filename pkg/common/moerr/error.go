@@ -67,14 +67,16 @@ const (
 	ErrTruncatedWrongValueForField uint16 = 20204
 
 	// Group 3: invalid input
-	ErrBadConfig           uint16 = 20300
-	ErrInvalidInput        uint16 = 20301
-	ErrSyntaxError         uint16 = 20302
-	ErrParseError          uint16 = 20303
-	ErrConstraintViolation uint16 = 20304
-	ErrDuplicate           uint16 = 20305
-	ErrRoleGrantedToSelf   uint16 = 20306
-	ErrDuplicateEntry      uint16 = 20307
+	ErrBadConfig            uint16 = 20300
+	ErrInvalidInput         uint16 = 20301
+	ErrSyntaxError          uint16 = 20302
+	ErrParseError           uint16 = 20303
+	ErrConstraintViolation  uint16 = 20304
+	ErrDuplicate            uint16 = 20305
+	ErrRoleGrantedToSelf    uint16 = 20306
+	ErrDuplicateEntry       uint16 = 20307
+	ErrWrongValueCount      uint16 = 20308
+	ErrWrongValueCountOnRow uint16 = 20309
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                 uint16 = 20400
@@ -267,6 +269,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDropNonExistsDB:              {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
 	ErrQueryIdNotFound:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s is not found, or invalid tenant"},
 	ErrNoConfig:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
+	ErrWrongValueCount:              {ER_WRONG_VALUE_COUNT, []string{MySQLDefaultSqlState}, "Column count doesn't match value count"},
+	ErrWrongValueCountOnRow:         {ER_WRONG_VALUE_COUNT_ON_ROW, []string{MySQLDefaultSqlState}, "Column count doesn't match value count at row %d"},
 	// Group 5: rpc timeout
 	ErrRPCTimeout:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
 	ErrClientClosed:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
@@ -889,6 +893,14 @@ func NewAppendableBlockNotFound(ctx context.Context) *Error {
 
 func NewDeadLockDetected(ctx context.Context) *Error {
 	return newError(ctx, ErrDeadLockDetected)
+}
+
+func NewWrongValueCount(ctx context.Context) *Error {
+	return newError(ctx, ErrWrongValueCount)
+}
+
+func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
+	return newError(ctx, ErrWrongValueCountOnRow, row)
 }
 
 var contextFunc atomic.Value
