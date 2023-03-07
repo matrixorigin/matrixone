@@ -1351,3 +1351,17 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 		},
 	}, nil
 }
+
+func buildUnLockTables(stmt *tree.UnLockTableStmt, ctx CompilerContext) (*Plan, error) {
+	unLockTables := &plan.UnLockTables{}
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_UNLOCK_TABLES,
+				Definition: &plan.DataDefinition_UnlockTables{
+					UnlockTables: unLockTables,
+				},
+			},
+		},
+	}, nil
+}
