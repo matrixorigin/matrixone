@@ -27,6 +27,10 @@ jobs:
   
       - name: docker compose launch-tae-multi-CN-tae-DN
         run: |
+          sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-compose/config/cn-1.toml
+          sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-compose/config/cn-0.toml
+          cat ./etc/launch-tae-compose/config/cn-0.toml
+          cat ./etc/launch-tae-compose/config/cn-1.toml        
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
           # wait for ready
           sleep 10
