@@ -43,8 +43,8 @@ func TestMergeBlock(t *testing.T) {
 	batch1 := &batch.Batch{
 		Attrs: []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc},
 		Vecs: []*vector.Vector{
-			testutil.MakeUint16Vector([]uint16{0, 1, 2}, nil),
-			testutil.MakeVarcharVector([]string{
+			testutil.MakeInt16Vector([]int16{0, 1, 2}, nil),
+			testutil.MakeTextVector([]string{
 				"a.seg:magic:15",
 				"b.seg:magic:15",
 				"c.seg:magic:15"}, nil),

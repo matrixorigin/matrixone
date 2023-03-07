@@ -114,7 +114,10 @@ type Transaction struct {
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
 	// every statement is an element
-	writes    [][]Entry
+	writes [][]Entry
+	// txn workspace size
+	workspaceSize uint64
+
 	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
 	dnStores  []DNStore
 	proc      *process.Process

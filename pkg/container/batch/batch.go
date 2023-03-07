@@ -147,6 +147,7 @@ func (bat *Batch) ExpandNulls() {
 	}
 }
 
+// I think Shrink should have a mpool!!!
 func (bat *Batch) Shrink(sels []int64) {
 	mp := make(map[*vector.Vector]uint8)
 	for _, vec := range bat.Vecs {
