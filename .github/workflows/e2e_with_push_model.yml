@@ -1,4 +1,4 @@
-name: MatrixOne e2e CI(LAUNCH, PULL)
+name: MatrixOne e2e CI(LAUNCH, PUSH)
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ jobs:
   bvt-linux-x86:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    name: e2e BVT Test on Linux/x64(LAUNCH, PULL, 1CN)
+    name: e2e BVT Test on Linux/x64(LAUNCH, PUSH, 1CN)
     timeout-minutes: 60
 
     steps:
@@ -34,6 +34,8 @@ jobs:
       - name: echo config
         run: |
           cd $GITHUB_WORKSPACE/head
+          sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-CN-tae-DN/cn.toml
+          cat ./etc/launch-tae-CN-tae-DN/cn.toml
           cat ./etc/launch-tae-CN-tae-DN/dn.toml
 
       - name: Start MO
@@ -89,7 +91,7 @@ jobs:
 
   multi-cn-bvt-linux-x86:
     runs-on: ubuntu-latest
-    name: Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PULL)
+    name: Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PUSH)
     timeout-minutes: 60
 
     steps:
@@ -112,6 +114,10 @@ jobs:
       - name: echo dn.toml
         run: |
           cd $GITHUB_WORKSPACE/head
+          sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
+          sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
           cat ./etc/launch-tae-multi-CN-tae-DN/dn.toml
 
       - name: Start MO

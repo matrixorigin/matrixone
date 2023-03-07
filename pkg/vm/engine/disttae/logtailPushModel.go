@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	logtail2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
 
@@ -36,7 +35,7 @@ const (
 	// when starting a new transaction, we check the txn time every periodToCheckTxnTimestamp until
 	// the time is legal (less or equal to cn global log tail time).
 	// If still illegal within maxTimeToNewTransaction, the transaction creation fails.
-	maxTimeToNewTransaction   = 5 * time.Minute
+	maxTimeToNewTransaction   = 1 * time.Minute
 	periodToCheckTxnTimestamp = 1 * time.Millisecond
 
 	// if cn-log-tail-client does not receive response within time maxTimeToWaitServerResponse.
@@ -54,6 +53,14 @@ const (
 
 	// default deadline for context to send a rpc message.
 	defaultTimeOutToSubscribeTable = 2 * time.Minute
+)
+
+const (
+	// routine number to consume log tail.
+	parallelNums = 4
+
+	// each routine's log tail buffer size.
+	bufferLength = 100
 )
 
 // to ensure we can pass the SCA for unused code.
@@ -100,27 +107,40 @@ func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 }
 
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.
-// records the received last log tail timestamp.
+// support `getTimestamp()` method to get tiem of last received log.
 type syncLogTailTimestamp struct {
-	t timestamp.Timestamp
-	sync.RWMutex
+	tList []struct {
+		time timestamp.Timestamp
+		sync.RWMutex
+	}
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp() {
-	r.updateTimestamp(timestamp.Timestamp{})
+	r.tList = make([]struct {
+		time timestamp.Timestamp
+		sync.RWMutex
+	}, parallelNums+1)
 }
 
 func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
-	r.RLock()
-	t := r.t
-	r.RUnlock()
-	return t
+	r.tList[0].RLock()
+	minT := r.tList[0].time
+	r.tList[0].RUnlock()
+	for i := 1; i < len(r.tList); i++ {
+		r.tList[i].RLock()
+		tempT := r.tList[i].time
+		r.tList[i].RUnlock()
+		if tempT.Less(minT) {
+			minT = tempT
+		}
+	}
+	return minT
 }
 
-func (r *syncLogTailTimestamp) updateTimestamp(newTimestamp timestamp.Timestamp) {
-	r.Lock()
-	r.t = newTimestamp
-	r.Unlock()
+func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp.Timestamp) {
+	r.tList[index].Lock()
+	r.tList[index].time = newTimestamp
+	r.tList[index].Unlock()
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
@@ -233,16 +253,22 @@ func (e *Engine) UsePushModelOrNot() bool {
 
 func (e *Engine) InitLogTailPushModel(
 	ctx context.Context) error {
+	e.SetPushModelFlag(true)
+
+	// init global log time to be zero. and clear the record of subscription table.
 	e.receiveLogTailTime.initLogTailTimestamp()
 	e.subscribed.initTableSubscribeRecord()
+
+	// init log tail client to send request and receive response.
 	if err := e.initTableLogTailSubscriber(); err != nil {
 		return err
 	}
-	e.StartToReceiveTableLogTail()
+	e.ParallelToReceiveTableLogTail()
+
+	// first time connect to log tail server, should push subscription of some table on `mo_catalog` database.
 	if err := e.firstTimeConnectToLogTailServer(ctx); err != nil {
 		return err
 	}
-	e.SetPushModelFlag(true)
 	return nil
 }
 
@@ -308,78 +334,69 @@ func (e *Engine) tryToGetTableLogTail(
 	return nil
 }
 
-func (e *Engine) StartToReceiveTableLogTail() {
-	// set up a background routine to receive table log.
-	// if lost connection with log tail server. it should reconnect.
+func (e *Engine) ParallelToReceiveTableLogTail() {
 	go func() {
-		ctx := context.TODO()
 		for {
-			ch := make(chan logTailSubscriberResponse, 1)
-			reconect := false
-			for {
-				if reconect {
-					break
-				}
+			// new parallelNums routine to consume log tails.
+			errChan := make(chan error, parallelNums)
+			receiver := make([]routineController, parallelNums)
+			for i := range receiver {
+				receiver[i] = createRoutineToConsumeLogTails(i, bufferLength, e, errChan)
+			}
 
+			ctx := context.TODO()
+			ch := make(chan logTailSubscriberResponse, 1)
+			// a dead loop to receive log, if lost connect, should reconnect.
+			for {
 				deadline, cancel := context.WithTimeout(ctx, maxTimeToWaitServerResponse)
 				select {
 				case <-deadline.Done():
-					reconect = true
-					continue
+					// max wait time is out.
+					goto cleanAndReconnect
+
 				case ch <- e.subscriber.receiveResponse():
+					// receive a response from log tail service.
 					cancel()
+
+				case err := <-errChan:
+					// receive an error from sub-routine to consume log.
+					logutil.ErrorField(err)
+					goto cleanAndReconnect
 				}
 
 				resp := <-ch
 				if resp.err != nil {
-					// decoded error or rpc err. should reconnect soon.
-					logutil.Errorf("receive a error from dn log tail server, err is %s", resp.err.Error())
-					reconect = true
-					break
+					// may rpc close error or decode error.
+					logutil.ErrorField(resp.err)
+					goto cleanAndReconnect
 				}
 
-				subscriber := e.subscriber
 				response := resp.response
-				switch {
-				case response.GetSubscribeResponse() != nil:
-					logTail := response.GetSubscribeResponse().GetLogtail()
-					logTs := logTail.GetTs()
-					if err := updatePartitionOfPush(ctx, subscriber.dnNodeID, e, &logTail, *logTs); err != nil {
-						logutil.Errorf("update partition failed. err is %s", err)
-						reconect = true
-						break
+				// consume subscribe response
+				if sResponse := response.GetSubscribeResponse(); sResponse != nil {
+					if err := distributeSubscribeResponse(
+						ctx, e, sResponse, receiver); err != nil {
+						logutil.ErrorField(err)
+						goto cleanAndReconnect
 					}
-					tbl := logTail.GetTable()
-					e.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
-					e.receiveLogTailTime.updateTimestamp(*logTs)
+					continue
+				}
 
-				case response.GetUpdateResponse() != nil:
-					logLists := response.GetUpdateResponse().GetLogtailList()
-					to := response.GetUpdateResponse().GetTo()
-
-					// the purpose of sorting is to put log of mo.db, mo.table, mo.column first.
-					// ensure the consistency with the pull process.
-					logList(logLists).Sort()
-
-					for _, l := range logLists {
-						if err := updatePartitionOfPush(ctx, subscriber.dnNodeID, e, &l, *l.Ts); err != nil {
-							logutil.Errorf("update partition failed. err is %s", err)
-							reconect = true
-							break
-						}
+				// consume update response
+				if uResponse := response.GetUpdateResponse(); uResponse != nil {
+					if err := distributeUpdateResponse(
+						ctx, e, uResponse, receiver); err != nil {
+						logutil.ErrorField(err)
+						goto cleanAndReconnect
 					}
-					if !reconect {
-						e.receiveLogTailTime.updateTimestamp(*to)
-					}
-
-				default:
-					// errResponse and unSubscribeResponse. we have no need to handle these now.
-					//case resp.r.GetError() != nil:
-					//case resp.r.GetUnsubscribeResponse() != nil:
+					continue
 				}
 			}
 
-			// reconnect to log tail server.
+		cleanAndReconnect:
+			for _, r := range receiver {
+				r.close()
+			}
 			e.receiveLogTailTime.initLogTailTimestamp()
 			e.subscribed.initTableSubscribeRecord()
 			for {
@@ -398,6 +415,162 @@ func (e *Engine) StartToReceiveTableLogTail() {
 	}()
 }
 
+func ifShouldNotDistribute(dbId, tblId uint64) bool {
+	return dbId == catalog.MO_CATALOG_ID && tblId <= catalog.MO_COLUMNS_ID
+}
+
+func distributeSubscribeResponse(
+	ctx context.Context,
+	e *Engine,
+	response *logtail.SubscribeResponse,
+	recRoutines []routineController) error {
+	lt := response.Logtail
+	tbl := lt.GetTable()
+	notDistribute := ifShouldNotDistribute(tbl.DbId, tbl.TbId)
+	if notDistribute {
+		if err := e.consumeSubscribeResponse(ctx, response); err != nil {
+			return err
+		}
+		e.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
+	} else {
+		routineIndex := tbl.TbId % parallelNums
+		recRoutines[routineIndex].sendSubscribeResponse(response)
+	}
+	// no matter how we consume the response, should update all timestamp.
+	e.receiveLogTailTime.updateTimestamp(parallelNums, *lt.Ts)
+	for _, rc := range recRoutines {
+		rc.updateTimeFromT(*lt.Ts)
+	}
+	return nil
+}
+
+func distributeUpdateResponse(
+	ctx context.Context,
+	e *Engine,
+	response *logtail.UpdateResponse,
+	recRoutines []routineController) error {
+	list := response.GetLogtailList()
+	logList(list).Sort()
+
+	// after sort, the smaller tblId, the smaller the index.
+	var index int
+	for index = 0; index < len(list); index++ {
+		table := list[index].Table
+		notDistribute := ifShouldNotDistribute(table.DbId, table.TbId)
+		if !notDistribute {
+			break
+		}
+		if err := e.consumeUpdateLogTail(ctx, list[index]); err != nil {
+			return err
+		}
+	}
+	for ; index < len(list); index++ {
+		table := list[index].Table
+		recIndex := table.TbId % parallelNums
+		recRoutines[recIndex].sendTableLogTail(list[index])
+	}
+	// should update all the timestamp.
+	e.receiveLogTailTime.updateTimestamp(parallelNums, *response.To)
+	for _, rc := range recRoutines {
+		rc.updateTimeFromT(*response.To)
+	}
+	return nil
+}
+
+type routineController struct {
+	ctx        context.Context
+	routineId  int
+	closeChan  chan bool
+	signalChan chan routineControlCmd
+}
+
+func (rc *routineController) sendSubscribeResponse(r *logtail.SubscribeResponse) {
+	rc.signalChan <- cmdToConsumeSub{log: r}
+}
+
+func (rc *routineController) sendTableLogTail(r logtail.TableLogtail) {
+	rc.signalChan <- cmdToConsumeLog{log: r}
+}
+
+func (rc *routineController) updateTimeFromT(t timestamp.Timestamp) {
+	rc.signalChan <- cmdToUpdateTime{time: t}
+}
+
+func (rc *routineController) close() {
+	rc.closeChan <- true
+}
+
+func createRoutineToConsumeLogTails(
+	routineId int, signalBufferLength int,
+	e *Engine, errOut chan error) routineController {
+	controller := routineController{
+		ctx:        context.TODO(),
+		routineId:  routineId,
+		closeChan:  make(chan bool),
+		signalChan: make(chan routineControlCmd, signalBufferLength),
+	}
+
+	go func(engine *Engine, receiver *routineController, errRet chan error) {
+		for {
+			select {
+			case cmd := <-receiver.signalChan:
+				if err := cmd.action(engine, receiver); err != nil {
+					errRet <- err
+				}
+
+			case <-receiver.closeChan:
+				close(receiver.closeChan)
+				close(receiver.signalChan)
+				return
+			}
+		}
+	}(e, &controller, errOut)
+
+	return controller
+}
+
+// a signal to control the routine which is responsible for consuming log tail.
+type routineControlCmd interface {
+	action(e *Engine, ctrl *routineController) error
+}
+
+type cmdToConsumeSub struct{ log *logtail.SubscribeResponse }
+type cmdToConsumeLog struct{ log logtail.TableLogtail }
+type cmdToUpdateTime struct{ time timestamp.Timestamp }
+
+func (cmd cmdToConsumeSub) action(e *Engine, ctrl *routineController) error {
+	response := cmd.log
+	if err := e.consumeSubscribeResponse(ctrl.ctx, response); err != nil {
+		return err
+	}
+	lt := response.GetLogtail()
+	tbl := lt.GetTable()
+	e.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
+	return nil
+}
+
+func (cmd cmdToConsumeLog) action(e *Engine, ctrl *routineController) error {
+	response := cmd.log
+	if err := e.consumeUpdateLogTail(ctrl.ctx, response); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (cmd cmdToUpdateTime) action(e *Engine, ctrl *routineController) error {
+	e.receiveLogTailTime.updateTimestamp(ctrl.routineId, cmd.time)
+	return nil
+}
+
+func (e *Engine) consumeSubscribeResponse(ctx context.Context, rp *logtail.SubscribeResponse) error {
+	lt := rp.GetLogtail()
+	return updatePartitionOfPush(ctx, e.subscriber.dnNodeID, e, &lt, *lt.Ts)
+}
+
+func (e *Engine) consumeUpdateLogTail(ctx context.Context, rp logtail.TableLogtail) error {
+	return updatePartitionOfPush(ctx, e.subscriber.dnNodeID, e, &rp, *rp.Ts)
+}
+
 // updatePartitionOfPush is the partition update method of log tail push model.
 func updatePartitionOfPush(
 	ctx context.Context,
@@ -413,6 +586,9 @@ func updatePartitionOfPush(
 
 	key := e.catalog.GetTableById(dbId, tblId)
 
+	partition.Lock()
+	partition.ckptList = append(partition.ckptList, tl.CkpLocation)
+	partition.Unlock()
 	if err = consumeLogTailOfPush(
 		ctx,
 		dbId,
@@ -452,22 +628,17 @@ func consumeLogTailOfPush(
 	state *PartitionState,
 	lt *logtail.TableLogtail,
 ) (err error) {
-	var entries []*api.Entry
+	/*
+		var entries []*api.Entry
 
-	if entries, err = logtail2.LoadCheckpointEntries(
-		ctx,
-		lt.CkpLocation,
-		tableId, tableName,
-		databaseId, databaseName, engine.fs); err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if err = consumeEntry(ctx, primaryIdx,
-			engine, state, entry); err != nil {
+		if entries, err = logtail2.LoadCheckpointEntries(
+			ctx,
+			lt.CkpLocation,
+			tableId, tableName,
+			databaseId, databaseName, engine.fs); err != nil {
 			return
 		}
-	}
-
+	*/
 	for i := 0; i < len(lt.Commands); i++ {
 		if err = consumeEntry(ctx, primaryIdx,
 			engine, state, &lt.Commands[i]); err != nil {
