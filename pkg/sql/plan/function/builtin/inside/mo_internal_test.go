@@ -31,23 +31,23 @@ func TestInternalCharSize(t *testing.T) {
 			expect int
 		}{
 			{
-				typ:    types.New(types.T_char, 50, 0, 0),
+				typ:    types.New(types.T_char, 50, 0),
 				expect: types.TypeSize(types.T_char) * 50,
 			},
 			{
-				typ:    types.New(types.T_char, 10, 0, 0),
+				typ:    types.New(types.T_char, 10, 0),
 				expect: types.TypeSize(types.T_char) * 10,
 			},
 			{
-				typ:    types.New(types.T_varchar, 50, 0, 0),
+				typ:    types.New(types.T_varchar, 50, 0),
 				expect: types.TypeSize(types.T_varchar) * 50,
 			},
 			{
-				typ:    types.New(types.T_varchar, 10, 0, 0),
+				typ:    types.New(types.T_varchar, 10, 0),
 				expect: types.TypeSize(types.T_varchar) * 10,
 			},
 			{
-				typ:    types.New(types.T_blob, 50, 0, 0),
+				typ:    types.New(types.T_blob, 50, 0),
 				expect: types.TypeSize(types.T_blob) * 50,
 			},
 		}
@@ -81,7 +81,7 @@ func TestInternalCharSize(t *testing.T) {
 			typ    types.Type
 			expect int
 		}{
-			typ:    types.New(types.T_varchar, 50, 0, 0),
+			typ:    types.New(types.T_varchar, 50, 0),
 			expect: types.TypeSize(types.T_varchar) * 50,
 		}
 
@@ -108,23 +108,23 @@ func TestInternalCharLength(t *testing.T) {
 			expect int64
 		}{
 			{
-				typ:    types.New(types.T_char, 50, 0, 0),
+				typ:    types.New(types.T_char, 50, 0),
 				expect: 50,
 			},
 			{
-				typ:    types.New(types.T_char, 10, 0, 0),
+				typ:    types.New(types.T_char, 10, 0),
 				expect: 10,
 			},
 			{
-				typ:    types.New(types.T_varchar, 50, 0, 0),
+				typ:    types.New(types.T_varchar, 50, 0),
 				expect: 50,
 			},
 			{
-				typ:    types.New(types.T_varchar, 10, 0, 0),
+				typ:    types.New(types.T_varchar, 10, 0),
 				expect: 10,
 			},
 			{
-				typ:    types.New(types.T_blob, 50, 0, 0),
+				typ:    types.New(types.T_blob, 50, 0),
 				expect: 50,
 			},
 		}
@@ -158,7 +158,7 @@ func TestInternalCharLength(t *testing.T) {
 			typ    types.Type
 			expect int
 		}{
-			typ:    types.New(types.T_varchar, 50, 0, 0),
+			typ:    types.New(types.T_varchar, 50, 0),
 			expect: 50,
 		}
 
@@ -185,23 +185,23 @@ func TestInternalNumericPrecision(t *testing.T) {
 			expect int64
 		}{
 			{
-				typ:    types.New(types.T_decimal64, 0, 5, 10),
+				typ:    types.New(types.T_decimal64, 0, 10),
 				expect: 10,
 			},
 			{
-				typ:    types.New(types.T_decimal64, 0, 2, 7),
+				typ:    types.New(types.T_decimal64, 0, 7),
 				expect: 7,
 			},
 			{
-				typ:    types.New(types.T_decimal128, 0, 7, 15),
+				typ:    types.New(types.T_decimal128, 0, 15),
 				expect: 15,
 			},
 			{
-				typ:    types.New(types.T_decimal128, 0, 5, 12),
+				typ:    types.New(types.T_decimal128, 0, 12),
 				expect: 12,
 			},
 			{
-				typ:    types.New(types.T_decimal128, 0, 7, 20),
+				typ:    types.New(types.T_decimal128, 0, 20),
 				expect: 20,
 			},
 		}
@@ -221,7 +221,7 @@ func TestInternalNumericPrecision(t *testing.T) {
 		expectVector := testutil.MakeInt64Vector(expects, nil)
 
 		proc := testutil.NewProc()
-		result, err := InternalNumericPrecision([]*vector.Vector{srcVector}, proc)
+		result, err := InternalNumericScale([]*vector.Vector{srcVector}, proc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -235,7 +235,7 @@ func TestInternalNumericPrecision(t *testing.T) {
 			typ    types.Type
 			expect int
 		}{
-			typ:    types.New(types.T_decimal128, 0, 5, 12),
+			typ:    types.New(types.T_decimal128, 0, 12),
 			expect: 12,
 		}
 
@@ -244,7 +244,7 @@ func TestInternalNumericPrecision(t *testing.T) {
 		expectVector := testutil.MakeScalarInt64(int64(cases.expect), 1)
 
 		proc := testutil.NewProc()
-		result, err := InternalNumericPrecision([]*vector.Vector{srcVector}, proc)
+		result, err := InternalNumericScale([]*vector.Vector{srcVector}, proc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -262,24 +262,24 @@ func TestInternalNumericScale(t *testing.T) {
 			expect int64
 		}{
 			{
-				typ:    types.New(types.T_decimal64, 0, 5, 10),
-				expect: 5,
+				typ:    types.New(types.T_decimal64, 0, 10),
+				expect: 10,
 			},
 			{
-				typ:    types.New(types.T_decimal64, 0, 2, 7),
-				expect: 2,
-			},
-			{
-				typ:    types.New(types.T_decimal128, 0, 7, 15),
+				typ:    types.New(types.T_decimal64, 0, 7),
 				expect: 7,
 			},
 			{
-				typ:    types.New(types.T_decimal128, 0, 5, 12),
-				expect: 5,
+				typ:    types.New(types.T_decimal128, 0, 15),
+				expect: 15,
 			},
 			{
-				typ:    types.New(types.T_decimal128, 0, 7, 20),
-				expect: 7,
+				typ:    types.New(types.T_decimal128, 0, 12),
+				expect: 12,
+			},
+			{
+				typ:    types.New(types.T_decimal128, 0, 20),
+				expect: 20,
 			},
 		}
 
@@ -312,7 +312,7 @@ func TestInternalNumericScale(t *testing.T) {
 			typ    types.Type
 			expect int
 		}{
-			typ:    types.New(types.T_decimal128, 0, 5, 12),
+			typ:    types.New(types.T_decimal128, 0, 5),
 			expect: 5,
 		}
 
@@ -339,23 +339,23 @@ func TestInternalDatetimePrecision(t *testing.T) {
 			expect int64
 		}{
 			{
-				typ:    types.New(types.T_datetime, 0, 0, 3),
+				typ:    types.New(types.T_datetime, 0, 3),
 				expect: 3,
 			},
 			{
-				typ:    types.New(types.T_datetime, 0, 0, 2),
+				typ:    types.New(types.T_datetime, 0, 2),
 				expect: 2,
 			},
 			{
-				typ:    types.New(types.T_datetime, 0, 0, 5),
+				typ:    types.New(types.T_datetime, 0, 5),
 				expect: 5,
 			},
 			{
-				typ:    types.New(types.T_datetime, 0, 0, 4),
+				typ:    types.New(types.T_datetime, 0, 4),
 				expect: 4,
 			},
 			{
-				typ:    types.New(types.T_datetime, 0, 0, 6),
+				typ:    types.New(types.T_datetime, 0, 6),
 				expect: 6,
 			},
 		}
@@ -375,7 +375,7 @@ func TestInternalDatetimePrecision(t *testing.T) {
 		expectVector := testutil.MakeInt64Vector(expects, nil)
 
 		proc := testutil.NewProc()
-		result, err := InternalDatetimePrecision([]*vector.Vector{srcVector}, proc)
+		result, err := InternalDatetimeScale([]*vector.Vector{srcVector}, proc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -389,7 +389,7 @@ func TestInternalDatetimePrecision(t *testing.T) {
 			typ    types.Type
 			expect int64
 		}{
-			typ:    types.New(types.T_datetime, 0, 0, 3),
+			typ:    types.New(types.T_datetime, 0, 3),
 			expect: 3,
 		}
 
@@ -399,7 +399,7 @@ func TestInternalDatetimePrecision(t *testing.T) {
 		expectVector := testutil.MakeScalarInt64(cases.expect, 1)
 
 		proc := testutil.NewProc()
-		result, err := InternalDatetimePrecision([]*vector.Vector{srcVector}, proc)
+		result, err := InternalDatetimeScale([]*vector.Vector{srcVector}, proc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -417,23 +417,23 @@ func TestInternalColumnCharacterSet(t *testing.T) {
 			expect int64
 		}{
 			{
-				typ:    types.New(types.T_datetime, 0, 0, 3),
+				typ:    types.New(types.T_datetime, 0, 3),
 				expect: 0,
 			},
 			{
-				typ:    types.New(types.T_varchar, 50, 0, 0),
+				typ:    types.New(types.T_varchar, 50, 0),
 				expect: 0,
 			},
 			{
-				typ:    types.New(types.T_char, 20, 0, 0),
+				typ:    types.New(types.T_char, 20, 0),
 				expect: 0,
 			},
 			{
-				typ:    types.New(types.T_blob, 0, 0, 0),
+				typ:    types.New(types.T_blob, 0, 0),
 				expect: 1,
 			},
 			{
-				typ:    types.New(types.T_text, 0, 0, 0),
+				typ:    types.New(types.T_text, 0, 0),
 				expect: 0,
 			},
 		}

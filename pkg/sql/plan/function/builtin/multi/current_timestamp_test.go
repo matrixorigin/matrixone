@@ -38,6 +38,6 @@ func TestCurrentTimestamp(t *testing.T) {
 	resultVector, err = CurrentTimestamp(inputVectors, myProc)
 	require.NoError(t, err)
 	resultValues = vector.MustTCols[types.Timestamp](resultVector)
-	resultStr = resultValues[0].String2(time.Local, resultVector.Typ.Precision)
+	resultStr = resultValues[0].String2(time.Local, resultVector.Typ.Scale)
 	fmt.Println(resultStr)
 }

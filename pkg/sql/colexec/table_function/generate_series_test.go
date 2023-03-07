@@ -17,6 +17,10 @@ package table_function
 import (
 	"bytes"
 	"context"
+	"math"
+	"strings"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,9 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"math"
-	"strings"
-	"testing"
 )
 
 type Kase[T int32 | int64] struct {
@@ -380,18 +381,18 @@ func TestGenerateTimestamp(t *testing.T) {
 		},
 	}
 	for _, kase := range kases {
-		var precision int32
-		p1, p2 := getPrecision(kase.start), getPrecision(kase.end)
+		var scale int32
+		p1, p2 := getScale(kase.start), getScale(kase.end)
 		if p1 > p2 {
-			precision = p1
+			scale = p1
 		} else {
-			precision = p2
+			scale = p2
 		}
-		start, err := types.ParseDatetime(kase.start, precision)
+		start, err := types.ParseDatetime(kase.start, scale)
 		require.Nil(t, err)
-		end, err := types.ParseDatetime(kase.end, precision)
+		end, err := types.ParseDatetime(kase.end, scale)
 		require.Nil(t, err)
-		res, err := generateDatetime(context.TODO(), start, end, kase.step, precision)
+		res, err := generateDatetime(context.TODO(), start, end, kase.step, scale)
 		if kase.err {
 			require.NotNil(t, err)
 			continue
@@ -402,21 +403,21 @@ func TestGenerateTimestamp(t *testing.T) {
 }
 
 func transStr2Datetime(s string) types.Datetime {
-	precision := getPrecision(s)
-	t, err := types.ParseDatetime(s, precision)
+	scale := getScale(s)
+	t, err := types.ParseDatetime(s, scale)
 	if err != nil {
 		logutil.Errorf("parse timestamp '%s' failed", s)
 	}
 	return t
 }
 
-func getPrecision(s string) int32 {
-	var precision int32
+func getScale(s string) int32 {
+	var scale int32
 	ss := strings.Split(s, ".")
 	if len(ss) > 1 {
-		precision = int32(len(ss[1]))
+		scale = int32(len(ss[1]))
 	}
-	return precision
+	return scale
 }
 
 func TestGenerateSeriesString(t *testing.T) {
@@ -515,10 +516,10 @@ func makeInt64List(start, end, step int64) []*plan.Expr {
 	return ret
 }
 
-func makeDatetimeList(start, end, step string, precision int32) []*plan.Expr {
+func makeDatetimeList(start, end, step string, scale int32) []*plan.Expr {
 	ret := make([]*plan.Expr, 3)
-	ret[0] = makeDatetimeExpr(start, precision)
-	ret[1] = makeDatetimeExpr(end, precision)
+	ret[0] = makeDatetimeExpr(start, scale)
+	ret[1] = makeDatetimeExpr(end, scale)
 	ret[2] = makeVarcharExpr(step)
 	return ret
 }
@@ -563,8 +564,8 @@ func makeDatetimeExpr(s string, p int32) *plan.Expr {
 	dt, _ := types.ParseDatetime(s, p)
 	return &plan.Expr{
 		Typ: &plan.Type{
-			Id:        int32(types.T_datetime),
-			Precision: p,
+			Id:    int32(types.T_datetime),
+			Scale: p,
 		},
 		Expr: &plan2.Expr_C{
 			C: &plan.Const{

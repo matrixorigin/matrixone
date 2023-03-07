@@ -177,7 +177,7 @@ var (
 			"internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,"+
 			"internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,"+
 			"internal_numeric_scale(atttyp) AS NUMERIC_SCALE,"+
-			"internal_datetime_precision(atttyp) AS DATETIME_PRECISION,"+
+			"internal_datetime_scale(atttyp) AS DATETIME_PRECISION,"+
 			"(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,"+
 			"(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,"+
 			"mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,"+

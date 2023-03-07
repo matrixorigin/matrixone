@@ -57,7 +57,7 @@ func (c *ColType) ToType() types.Type {
 	switch *c {
 	case TDatetime:
 		typ := types.T_datetime.ToType()
-		typ.Precision = 6
+		typ.Scale = 6
 		return typ
 	case TUint64:
 		return types.T_uint64.ToType()
@@ -76,7 +76,7 @@ func (c *ColType) ToType() types.Type {
 	}
 }
 
-func (c *ColType) String(precision int) string {
+func (c *ColType) String(scale int) string {
 	switch *c {
 	case TDatetime:
 		return "Datetime(6)"
@@ -91,10 +91,10 @@ func (c *ColType) String(precision int) string {
 	case TText:
 		return "TEXT"
 	case TVarchar:
-		if precision == 0 {
-			precision = 1024
+		if scale == 0 {
+			scale = 1024
 		}
-		return fmt.Sprintf("VARCHAR(%d)", precision)
+		return fmt.Sprintf("VARCHAR(%d)", scale)
 	default:
 		panic("not support ColType")
 	}
@@ -102,41 +102,41 @@ func (c *ColType) String(precision int) string {
 
 func StringColumn(name, comment string) Column {
 	return Column{
-		Name:      name,
-		ColType:   TVarchar,
-		Precision: 1024,
-		Default:   "",
-		Comment:   comment,
+		Name:    name,
+		ColType: TVarchar,
+		Scale:   1024,
+		Default: "",
+		Comment: comment,
 	}
 }
 func StringDefaultColumn(name, defaultVal, comment string) Column {
 	return Column{
-		Name:      name,
-		ColType:   TVarchar,
-		Precision: 1024,
-		Default:   defaultVal,
-		Comment:   comment,
+		Name:    name,
+		ColType: TVarchar,
+		Scale:   1024,
+		Default: defaultVal,
+		Comment: comment,
 	}
 }
-func StringWithPrecision(name string, precision int, comment string) Column {
+func StringWithScale(name string, scale int, comment string) Column {
 	return Column{
-		Name:      name,
-		ColType:   TVarchar,
-		Precision: precision,
-		Default:   "",
-		Comment:   comment,
+		Name:    name,
+		ColType: TVarchar,
+		Scale:   scale,
+		Default: "",
+		Comment: comment,
 	}
 }
 
 func UuidStringColumn(name, comment string) Column {
 	col := StringColumn(name, comment)
-	col.Precision = 36
+	col.Scale = 36
 	return col
 }
 
 func SpanIDStringColumn(name, comment string) Column {
 	col := StringDefaultColumn(name, "0", comment)
-	col.Precision = 16
+	col.Scale = 16
 	return col
 }
 
@@ -197,11 +197,11 @@ func UInt64Column(name, comment string) Column {
 type Column struct {
 	Name    string
 	ColType ColType
-	// Precision default 0, usually for varchar
-	Precision int
-	Default   string
-	Comment   string
-	Alias     string // only use in view
+	// Scale default 0, usually for varchar
+	Scale   int
+	Default string
+	Comment string
+	Alias   string // only use in view
 }
 
 // ToCreateSql return column scheme in create sql
@@ -209,7 +209,7 @@ type Column struct {
 //   - case 2: `column_name` varchar(36) NOT NULL COMMENT "what am I. Without default, SO NOT NULL."
 func (col *Column) ToCreateSql(ctx context.Context) string {
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.ColType.String(col.Precision)))
+	sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.ColType.String(col.Scale)))
 	if col.ColType == TJson {
 		sb.WriteString("NOT NULL ")
 		if len(col.Default) == 0 {

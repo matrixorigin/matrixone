@@ -72,7 +72,7 @@ func FromUnixTimeFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Ve
 		ints, fracs := splitDecimalToIntAndFrac(times)
 		fromunixtime.UnixToDateTimeWithNsec(proc.SessionInfo.TimeZone, ints, fracs, rs)
 
-		t := types.Type{Oid: types.T_datetime, Size: int32(size), Precision: 6}
+		t := types.Type{Oid: types.T_datetime, Size: int32(size), Scale: 6}
 		vec := vector.NewConstFixed(t, 1, rs[0], proc.Mp())
 		if times[0] < 0 || times[0] > max_unix_timestamp_int {
 			nulls.Add(vec.Nsp, 0)
@@ -83,7 +83,7 @@ func FromUnixTimeFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Ve
 		rs := make([]types.Datetime, len(times))
 		ints, fracs := splitDecimalToIntAndFrac(times)
 		fromunixtime.UnixToDateTimeWithNsec(proc.SessionInfo.TimeZone, ints, fracs, rs)
-		t := types.Type{Oid: types.T_datetime, Size: int32(size), Precision: 6}
+		t := types.Type{Oid: types.T_datetime, Size: int32(size), Scale: 6}
 		vec := vector.NewWithFixed(t, rs, nulls.NewWithSize(len(rs)), proc.Mp())
 		for i := 0; i < len(times); i++ {
 			if times[i] < 0 || times[i] > max_unix_timestamp_int {

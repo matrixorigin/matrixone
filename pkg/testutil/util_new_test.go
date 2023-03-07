@@ -28,7 +28,7 @@ const (
 
 func TestNewBatch(t *testing.T) {
 	m := mpool.MustNewZero()
-	bat := NewBatch([]types.Type{types.New(types.T_int8, 0, 0, 0)}, true, Rows, m)
+	bat := NewBatch([]types.Type{types.New(types.T_int8, 0, 0)}, true, Rows, m)
 	bat.Clean(m)
 	require.Equal(t, int64(0), m.CurrNB())
 }
@@ -36,79 +36,79 @@ func TestNewBatch(t *testing.T) {
 func TestVector(t *testing.T) {
 	m := mpool.MustNewZero()
 	{
-		vec := NewVector(Rows, types.New(types.T_bool, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_bool, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_int8, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_int8, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_int16, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_int16, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_int32, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_int32, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_int64, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_int64, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_uint8, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_uint8, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_uint16, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_uint16, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_uint32, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_uint32, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_uint64, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_uint64, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_date, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_date, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_time, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_time, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_datetime, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_datetime, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_timestamp, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_timestamp, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_float32, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_float32, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_float64, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_float64, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_decimal64, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_decimal64, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_decimal128, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_decimal128, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_char, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_char, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	{
-		vec := NewVector(Rows, types.New(types.T_json, 0, 0, 0), m, true, nil)
+		vec := NewVector(Rows, types.New(types.T_json, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
 	require.Equal(t, int64(0), m.CurrNB())

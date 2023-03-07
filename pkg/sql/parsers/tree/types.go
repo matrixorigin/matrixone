@@ -66,7 +66,7 @@ type InternalType struct {
 		The maximum display width is 255. Display width is unrelated to the range of values a type can store.
 		For floating-point and fixed-point data types, M is the total number of digits that can be stored.
 
-		M is the total number of digits (the precision) and D is the number of digits after the decimal point (the scale).
+		M is the total number of digits (the width) and D is the number of digits after the decimal point (the scale).
 	*/
 	//the size or scale of the data type, such as number of bits or characters.
 	Width int32
@@ -78,7 +78,7 @@ type InternalType struct {
 	DisplayWith int32
 
 	//the accuracy of the data type.
-	Precision int32
+	Scale int32
 
 	//Unsigned or not
 	Unsigned bool
@@ -166,7 +166,7 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 			ctx.WriteByte(')')
 		}
 	default:
-		if node.Precision > 0 {
+		if node.Scale > 0 {
 			ctx.WriteByte('(')
 			if node.DisplayWith == -1 {
 				ctx.WriteString(strconv.FormatInt(int64(0), 10))
@@ -174,7 +174,7 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 				ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
 			}
 			ctx.WriteString(", ")
-			ctx.WriteString(strconv.FormatInt(int64(node.Precision), 10))
+			ctx.WriteString(strconv.FormatInt(int64(node.Scale), 10))
 			ctx.WriteByte(')')
 		} else if node.DisplayWith > 0 || node.DisplayWith == -1 {
 			ctx.WriteByte('(')
@@ -195,7 +195,7 @@ type T struct {
 
 type LengthScaleOpt struct {
 	DisplayWith int32
-	Precision   int32
+	Scale       int32
 }
 
 const (
@@ -262,7 +262,7 @@ var (
 
 	TYPE_TIMESTAMP = &T{InternalType: InternalType{
 		Family:             TimestampFamily,
-		Precision:          0,
+		Scale:              0,
 		TimePrecisionIsSet: false,
 		Locale:             &emptyLocale,
 		Oid:                uint32(defines.MYSQL_TYPE_TIMESTAMP),
@@ -290,7 +290,7 @@ var (
 
 	TYPE_DURATION = &T{InternalType: InternalType{
 		Family:                IntervalFamily,
-		Precision:             0,
+		Scale:                 0,
 		TimePrecisionIsSet:    false,
 		Locale:                &emptyLocale,
 		Oid:                   uint32(defines.MYSQL_TYPE_TIME),
@@ -299,7 +299,7 @@ var (
 
 	TYPE_TIME = &T{InternalType: InternalType{
 		Family:             TimeFamily,
-		Precision:          0,
+		Scale:              0,
 		TimePrecisionIsSet: false,
 		Locale:             &emptyLocale,
 		Oid:                uint32(defines.MYSQL_TYPE_TIME),
@@ -307,7 +307,7 @@ var (
 
 	TYPE_DATETIME = &T{InternalType: InternalType{
 		Family:             TimestampFamily,
-		Precision:          0,
+		Scale:              0,
 		TimePrecisionIsSet: false,
 		Locale:             &emptyLocale,
 		Oid:                uint32(defines.MYSQL_TYPE_DATETIME),

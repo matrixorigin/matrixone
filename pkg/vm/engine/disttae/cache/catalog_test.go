@@ -238,8 +238,8 @@ func TestTableInsert(t *testing.T) {
 func newTestTableBatch(mp *mpool.MPool) *batch.Batch {
 	var typs []types.Type
 
-	typs = append(typs, types.New(types.T_Rowid, 0, 0, 0))
-	typs = append(typs, types.New(types.T_TS, 0, 0, 0))
+	typs = append(typs, types.New(types.T_Rowid, 0, 0))
+	typs = append(typs, types.New(types.T_TS, 0, 0))
 	typs = append(typs, catalog.MoTablesTypes...)
 	return testutil.NewBatch(typs, false, Rows, mp)
 }
@@ -248,8 +248,8 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 	var typs []types.Type
 	var vec *vector.Vector
 
-	typs = append(typs, types.New(types.T_Rowid, 0, 0, 0))
-	typs = append(typs, types.New(types.T_TS, 0, 0, 0))
+	typs = append(typs, types.New(types.T_Rowid, 0, 0))
+	typs = append(typs, types.New(types.T_TS, 0, 0))
 	typs = append(typs, catalog.MoColumnsTypes...)
 	timestamps := vector.MustTCols[types.TS](ibat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustTCols[uint32](ibat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
@@ -323,8 +323,8 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 func newTestDatabaseBatch(mp *mpool.MPool) *batch.Batch {
 	var typs []types.Type
 
-	typs = append(typs, types.New(types.T_Rowid, 0, 0, 0))
-	typs = append(typs, types.New(types.T_TS, 0, 0, 0))
+	typs = append(typs, types.New(types.T_Rowid, 0, 0))
+	typs = append(typs, types.New(types.T_TS, 0, 0))
 	typs = append(typs, catalog.MoDatabaseTypes...)
 	return testutil.NewBatch(typs, false, Rows, mp)
 }
