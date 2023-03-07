@@ -764,12 +764,12 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scope {
+	var err error
 	var s *Scope
 	var tblDef *plan.TableDef
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
-	var err error
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -1595,11 +1595,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var rel engine.Relation
 	var ranges [][]byte
 	var nodes engine.Nodes
+
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
-
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
 		return nil, err
@@ -1641,7 +1641,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 		return nodes, nil
 	}
-	if len(ranges[0]) == 0 {
+	if engine.IsMemtable(ranges[0]) {
 		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{
 				Rel:  rel,
@@ -1664,6 +1664,12 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		j := i / step
 		if i+step >= len(ranges) {
 			if isSameCN(c.addr, c.cnList[j].Addr) {
+				if len(nodes) == 0 {
+					nodes = append(nodes, engine.Node{
+						Rel:  rel,
+						Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
+					})
+				}
 				nodes[0].Data = append(nodes[0].Data, ranges[i:]...)
 			} else {
 				nodes = append(nodes, engine.Node{
@@ -1676,6 +1682,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			}
 		} else {
 			if isSameCN(c.addr, c.cnList[j].Addr) {
+				if len(nodes) == 0 {
+					nodes = append(nodes, engine.Node{
+						Rel:  rel,
+						Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
+					})
+				}
+
 				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
 			} else {
 				nodes = append(nodes, engine.Node{
