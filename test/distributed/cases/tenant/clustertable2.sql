@@ -18,8 +18,8 @@ drop table if exists a;
 create cluster table a(a int);
 
 -- insert into cluster table
-insert into a accounts(sys,account_test) values(0,0),(1,0),(2,0),(3,0);
-insert into a accounts(sys,account_test) values(0,1),(1,1),(2,1),(3,1);
+insert into a values(0,0),(1,0),(2,0),(3,0);
+insert into a values(0,1),(1,1),(2,1),(3,1);
 update a set account_id=(select account_id from mo_account where account_name="account_test") where account_id=1;
 select a from a;
 
