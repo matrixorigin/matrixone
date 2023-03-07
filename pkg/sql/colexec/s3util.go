@@ -424,6 +424,7 @@ func getPrimaryKeyIdx(pk map[string]bool, Attrs []string) (bool, uint16) {
 		if pk[Attrs[i]] {
 			idx = uint16(i)
 			found = true
+			break
 		}
 	}
 	return found, idx
