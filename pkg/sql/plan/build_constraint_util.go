@@ -396,9 +396,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	isClusterTable := info.tblInfo.isClusterTable[0]
 	colToIdx := make(map[string]int)
 	oldColPosMap := make(map[string]int)
+	tableDef.Name2ColIndex = make(map[string]int32)
 	for i, col := range tableDef.Cols {
 		colToIdx[col.Name] = i
 		oldColPosMap[col.Name] = i
+		tableDef.Name2ColIndex[col.Name] = int32(i)
 	}
 	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
@@ -675,7 +677,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 					if condIdx == 0 {
 						condExpr = eqExpr
 					} else {
-						condExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, condExpr})
+						condExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, eqExpr})
 						if err != nil {
 							return err
 						}
