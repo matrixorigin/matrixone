@@ -1121,6 +1121,8 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			for i := 0; i < lenList && safe; i++ {
 				if constExpr, ok := rightList.List.List[i].Expr.(*plan.Expr_C); ok {
 					safe = checkNoNeedCast(makeTypeByPlan2Expr(rightList.List.List[i]), typLeft, constExpr)
+				} else {
+					safe = false
 				}
 			}
 
