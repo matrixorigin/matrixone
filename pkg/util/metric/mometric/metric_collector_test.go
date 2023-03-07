@@ -17,7 +17,6 @@ package mometric
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"regexp"
 	"testing"
 	"time"
@@ -26,13 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 )
 
 func init() {
-	m1 := &metric.SubSystem{"m1", "", false}
-	m2 := &metric.SubSystem{"m2", "", false}
-	metric.AllSubSystem[m1.Name] = m1
-	metric.AllSubSystem[m2.Name] = m2
+	metric.RegisterSubSystem(&metric.SubSystem{Name: "m1", Comment: "m1 test metric", SupportUserAccess: false})
+	metric.RegisterSubSystem(&metric.SubSystem{Name: "m2", Comment: "m2 test metric", SupportUserAccess: false})
 }
 
 type dummySqlExecutor struct {

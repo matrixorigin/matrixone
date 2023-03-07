@@ -21,9 +21,6 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // some tests will modify global variables, and something weird
@@ -35,21 +32,6 @@ func withModifiedConfig(f func()) {
 	configMu.Lock()
 	defer configMu.Unlock()
 	f()
-}
-
-// waitWgTimeout returns an error if the WaitGroup doesn't return in timeout duration
-func waitWgTimeout(wg *sync.WaitGroup, after time.Duration) error {
-	c := make(chan struct{})
-	go func() {
-		defer close(c)
-		wg.Wait()
-	}()
-	select {
-	case <-time.After(time.Second):
-		return moerr.NewInternalError(context.Background(), "timeout")
-	case <-c:
-		return nil
-	}
 }
 
 func makeDummyClock(startOffset int64) func() int64 {

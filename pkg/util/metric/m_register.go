@@ -44,13 +44,13 @@ type SubSystem struct {
 
 var AllSubSystem = map[string]*SubSystem{}
 
-func registerSubSystem(s *SubSystem) {
+func RegisterSubSystem(s *SubSystem) {
 	AllSubSystem[s.Name] = s
 }
 
 func init() {
-	registerSubSystem(&SubSystem{"sql", "base on query action", true})
-	registerSubSystem(&SubSystem{"server", "MO Server status, observe from inside", true})
-	registerSubSystem(&SubSystem{"process", "MO process status", false})
-	registerSubSystem(&SubSystem{"sys", "OS status", false})
+	RegisterSubSystem(&SubSystem{"sql", "base on query action", true})
+	RegisterSubSystem(&SubSystem{"server", "MO Server status, observe from inside", true})
+	RegisterSubSystem(&SubSystem{"process", "MO process status", false})
+	RegisterSubSystem(&SubSystem{"sys", "OS status", false})
 }
