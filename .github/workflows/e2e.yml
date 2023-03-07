@@ -89,7 +89,7 @@ jobs:
 
   multi-cn-bvt-linux-x86:
     runs-on: ubuntu-latest
-    name: Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PULL, 1CN)
+    name: Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PULL)
     timeout-minutes: 60
 
     steps:
