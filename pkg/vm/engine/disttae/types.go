@@ -85,6 +85,10 @@ type Partition struct {
 	lock  chan struct{}
 	state atomic.Pointer[PartitionState]
 	ts    timestamp.Timestamp // last updated timestamp
+
+	// lazy consume for ckpt.
+	sync.Mutex
+	ckptList []string
 }
 
 // Transaction represents a transaction

@@ -26,7 +26,7 @@ jobs:
         run: echo "run attempt is ${{ github.run_attempt }}"
   
       - name: docker compose launch-tae-multi-CN-tae-DN
-        run: |
+        run: |    
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
           # wait for ready
           sleep 10
