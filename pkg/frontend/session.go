@@ -19,6 +19,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"runtime"
 	"strings"
 	"sync"
@@ -35,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2387,11 +2388,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 		return nil, "", err
 	}
 	// read meta's meta
-	reader, err := objectio.NewObjectReader(path, proc.FileService)
-	if err != nil {
-		return nil, "", err
-	}
-	bs, err := reader.ReadAllMeta(proc.Ctx, e.Size, proc.Mp())
+	reader, err := blockio.NewFileReader(proc.FileService, path)
 	if err != nil {
 		return nil, "", err
 	}
@@ -2399,25 +2396,19 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	idxs[0] = catalog.COLUMNS_IDX
 	idxs[1] = catalog.RESULT_PATH_IDX
 	// read meta's data
-	iov, err := reader.Read(proc.Ctx, bs[0].GetExtent(), idxs, proc.Mp())
+	bats, err := reader.LoadAllColumns(proc.Ctx, idxs, e.Size, common.DefaultAllocator)
 	if err != nil {
 		return nil, "", err
 	}
 	// cols
-	vec := vector.New(catalog.MetaColTypes[catalog.COLUMNS_IDX])
-	if err = vec.Read(iov.Entries[0].Object.([]byte)); err != nil {
-		return nil, "", err
-	}
+	vec := bats[0].Vecs[0]
 	def := vector.MustStrCols(vec)[0]
 	r := &plan.ResultColDef{}
 	if err = r.Unmarshal([]byte(def)); err != nil {
 		return nil, "", err
 	}
 	// paths
-	vec = vector.New(catalog.MetaColTypes[catalog.RESULT_PATH_IDX])
-	if err = vec.Read(iov.Entries[1].Object.([]byte)); err != nil {
-		return nil, "", err
-	}
+	vec = bats[0].Vecs[1]
 	str := vector.MustStrCols(vec)[0]
 	return r.ResultCols, str, nil
 }

@@ -1,5 +1,5 @@
 SELECT bit_and(null), bit_or(null), bit_xor(null);
-bit_and(null) bit_or(null) bit_xor(null)
+bit_and(null)	bit_or(null)	bit_xor(null)
 null	null	null
 CREATE TABLE t1 (a int, b int);
 INSERT INTO t1 VALUES (1,null);
@@ -244,8 +244,8 @@ drop table if exists t1;
 create table t1(a varbinary(3));
 insert into t1 values(3), (4), (9), (7), (6);
 select bit_and(a), bit_or(a), bit_xor(a) from t1;
-bit_and(a)   bit_or(a)    bit_xor(a)
-0    ?    ? 
+bit_and(a)    bit_or(a)    bit_xor(a)
+0    ?    ?
 insert into t1 values(33);
 select bit_and(a) from t1;
 internal error: Binary operands of bitwise operators must be of equal length
