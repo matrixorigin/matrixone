@@ -132,9 +132,10 @@ func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) er
 
 func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vecs []*vector.Vector) error {
 	vec := vecs[0]
+	constNull := vec.IsConstNull()
 	if vec.GetType().IsString() {
 		for i := range os {
-			hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
+			hasNull := constNull || vec.GetNulls().Contains(uint64(i)+uint64(start))
 			if vps[i] == 0 {
 				continue
 			}
@@ -180,7 +181,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 		vi = 0
 	}
 	for i := range os {
-		hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
+		hasNull := constNull || vec.GetNulls().Contains(uint64(i)+uint64(start))
 		if vps[i] == 0 {
 			continue
 		}
@@ -193,25 +194,36 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 
 func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) error {
 	vec := vecs[0]
-	if vec.GetType().IsString() {
+	if vec.IsConst() {
+		var zsum int64
+		for j := range zs {
+			zsum += zs[j]
+		}
+		if vec.IsConstNull() {
+			var v T1
+			a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zsum, a.es[i], true)
+		} else if vec.GetType().IsString() {
+			a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(0)).(T1), a.vs[i], zsum, a.es[i], false)
+		} else {
+			a.vs[i], a.es[i] = a.fill(i, vector.GetFixedAt[T1](vec, 0), a.vs[i], zsum, a.es[i], false)
+		}
+		return nil
+	} else if vec.GetType().IsString() {
 		len := vec.Length()
 		for j := 0; j < len; j++ {
 			hasNull := vec.GetNulls().Contains(uint64(j))
-			if !vec.IsConst() {
-				a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(j)).(T1), a.vs[i], zs[j], a.es[i], hasNull)
-			} else {
-				a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(0)).(T1), a.vs[i], zs[j], a.es[i], hasNull)
-			}
+			a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(j)).(T1), a.vs[i], zs[j], a.es[i], hasNull)
 		}
 
 		return nil
+	} else {
+		vs := vector.MustFixedCol[T1](vec)
+		for j, v := range vs {
+			hasNull := vec.GetNulls().Contains(uint64(j))
+			a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
+		}
+		return nil
 	}
-	vs := vector.MustFixedCol[T1](vec)
-	for j, v := range vs {
-		hasNull := vec.GetNulls().Contains(uint64(j))
-		a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
-	}
-	return nil
 }
 
 // Merge a[x] += b[y]

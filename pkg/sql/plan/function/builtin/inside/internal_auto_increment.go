@@ -88,26 +88,14 @@ func InternalAutoIncrement(ivecs []*vector.Vector, proc *process.Process) (*vect
 		}
 		resValues := vector.MustFixedCol[uint64](rvec)
 
-		dbs := vector.MustStrCol(ivecs[0])
-		tables := vector.MustStrCol(ivecs[1])
 		for i := 0; i < rowCount; i++ {
-			var dbName string
-			if ivecs[0].IsConst() {
-				dbName = ivecs[0].GetStringAt(0)
-			} else {
-				dbName = dbs[i]
-			}
+			dbName := ivecs[0].GetStringAt(i)
 			database, err := eng.Database(proc.Ctx, dbName, txnOperator)
 			if err != nil {
 				return nil, moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
 			}
 
-			var tableName string
-			if ivecs[1].IsConst() {
-				tableName = ivecs[1].GetStringAt(0)
-			} else {
-				tableName = tables[i]
-			}
+			tableName := ivecs[1].GetStringAt(i)
 			relation, err := database.Relation(proc.Ctx, tableName)
 			if err != nil {
 				return nil, moerr.NewInvalidInput(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)

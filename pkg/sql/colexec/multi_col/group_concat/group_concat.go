@@ -399,9 +399,9 @@ func (gc *GroupConcat) WildAggReAlloc(m *mpool.MPool) error {
 }
 
 func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
-	if nulls.Any(vec.GetNulls()) {
-		return "", nil
-	}
+	//if nulls.Any(vec.GetNulls()) {
+	//	return "", nil
+	//}
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		flag := vector.GetFixedAt[bool](vec, rowIndex)
@@ -460,7 +460,7 @@ func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 
 func hasNull(vecs []*vector.Vector, rowIdx int64) bool {
 	for i := 0; i < len(vecs); i++ {
-		if vecs[i].GetNulls().Contains(uint64(rowIdx)) {
+		if vecs[i].IsConstNull() || vecs[i].GetNulls().Contains(uint64(rowIdx)) {
 			return true
 		}
 	}

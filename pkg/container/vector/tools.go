@@ -31,7 +31,7 @@ import (
 func MustFixedCol[T any](v *Vector) []T {
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
-	if v.GetType().Oid == types.T_any || len(v.rawData) == 0 {
+	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
 	if v.class == CONSTANT {
@@ -41,7 +41,7 @@ func MustFixedCol[T any](v *Vector) []T {
 }
 
 func MustBytesCol(v *Vector) [][]byte {
-	if v.GetType().Oid == types.T_any || len(v.rawData) == 0 {
+	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
 	varcol := MustFixedCol[types.Varlena](v)
@@ -57,7 +57,7 @@ func MustBytesCol(v *Vector) [][]byte {
 }
 
 func MustStrCol(v *Vector) []string {
-	if v.GetType().Oid == types.T_any || len(v.rawData) == 0 {
+	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
 	varcol := MustFixedCol[types.Varlena](v)
@@ -76,10 +76,12 @@ func MustStrCol(v *Vector) []string {
 // For const/scalar vector we expand and return newly allocated slice.
 func ExpandFixedCol[T any](v *Vector) []T {
 	if v.IsConst() {
-		cols := v.col.([]T)
 		vs := make([]T, v.Length())
-		for i := range vs {
-			vs[i] = cols[0]
+		if len(v.data) > 0 {
+			cols := v.col.([]T)
+			for i := range vs {
+				vs[i] = cols[0]
+			}
 		}
 		return vs
 	}
@@ -89,7 +91,7 @@ func ExpandFixedCol[T any](v *Vector) []T {
 func ExpandStrCol(v *Vector) []string {
 	if v.IsConst() {
 		vs := make([]string, v.Length())
-		if !v.IsConstNull() {
+		if len(v.data) > 0 {
 			cols := v.col.([]types.Varlena)
 			ss := cols[0].GetString(v.area)
 			for i := range vs {
@@ -103,11 +105,13 @@ func ExpandStrCol(v *Vector) []string {
 
 func ExpandBytesCol(v *Vector) [][]byte {
 	if v.IsConst() {
-		cols := v.col.([]types.Varlena)
-		ss := cols[0].GetByteSlice(v.area)
 		vs := make([][]byte, v.Length())
-		for i := range vs {
-			vs[i] = ss
+		if len(v.data) > 0 {
+			cols := v.col.([]types.Varlena)
+			ss := cols[0].GetByteSlice(v.area)
+			for i := range vs {
+				vs[i] = ss
+			}
 		}
 		return vs
 	}
@@ -122,17 +126,18 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 
 func FromDNVector(typ types.Type, header []types.Varlena, storage []byte) (vec *Vector, err error) {
 	vec = NewVec(typ)
-	vec.selfManaged = true
+	vec.cantFreeData = true
+	vec.cantFreeArea = true
 	if typ.IsString() {
 		vec.col = header
 		if len(header) > 0 {
-			vec.rawData = unsafe.Slice((*byte)(unsafe.Pointer(&header[0])), typ.TypeSize()*cap(header))
+			vec.data = unsafe.Slice((*byte)(unsafe.Pointer(&header[0])), typ.TypeSize()*cap(header))
 		}
 		vec.area = storage
 		vec.capacity = cap(header)
 		vec.length = len(header)
 	} else {
-		vec.rawData = storage
+		vec.data = storage
 		vec.length = len(storage) / typ.TypeSize()
 		vec.setupColFromData()
 	}
@@ -143,11 +148,11 @@ func FromDNVector(typ types.Type, header []types.Varlena, storage []byte) (vec *
 func extend(v *Vector, rows int, m *mpool.MPool) error {
 	if tgtCap := v.length + rows; tgtCap > v.capacity {
 		sz := v.typ.TypeSize()
-		ndata, err := m.Grow(v.rawData, tgtCap*sz)
+		ndata, err := m.Grow(v.data, tgtCap*sz)
 		if err != nil {
 			return err
 		}
-		v.rawData = ndata[:cap(ndata)]
+		v.data = ndata[:cap(ndata)]
 		v.setupColFromData()
 	}
 	return nil
@@ -205,7 +210,7 @@ func (v *Vector) setupColFromData() {
 		}
 	}
 	tlen := v.GetType().TypeSize()
-	v.capacity = cap(v.rawData) / tlen
+	v.capacity = cap(v.data) / tlen
 }
 
 func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
@@ -221,16 +226,17 @@ func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
 		IsConst:  vec.IsConst(),
 		Len:      uint32(vec.length),
 		Type:     TypeToProtoType(vec.typ),
-		Data:     vec.rawData[:vec.length*sz],
+		Data:     vec.data[:vec.length*sz],
 	}, nil
 }
 
 func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	rvec := &Vector{
-		area:        vec.Area,
-		length:      int(vec.Len),
-		typ:         ProtoTypeToType(vec.Type),
-		selfManaged: true,
+		area:         vec.Area,
+		length:       int(vec.Len),
+		typ:          ProtoTypeToType(vec.Type),
+		cantFreeData: true,
+		cantFreeArea: true,
 	}
 	if vec.IsConst {
 		rvec.class = CONSTANT
@@ -241,7 +247,11 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	if err := rvec.nsp.Read(vec.Nsp); err != nil {
 		return nil, err
 	}
-	rvec.rawData = vec.Data
+	if rvec.IsConst() && rvec.nsp.Contains(0) {
+		rvec.nsp = &nulls.Nulls{}
+		return rvec, nil
+	}
+	rvec.data = vec.Data
 	rvec.setupColFromData()
 	return rvec, nil
 }

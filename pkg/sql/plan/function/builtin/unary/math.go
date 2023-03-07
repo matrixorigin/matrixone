@@ -23,33 +23,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type mathFn func(*vector.Vector, *vector.Vector) error
+type mathFn func(float64) (float64, error)
 
 func math1(ivecs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vector, error) {
-	origVec := ivecs[0]
+	ivec := ivecs[0]
 	//Here we need to classify it into three scenes
 	//1. if it is a constant
 	//	1.1 if it's not a null value
 	//  1.2 if it's a null value
 	//2 common scene
-	if origVec.IsConst() {
-		if origVec.IsConstNull() {
-			return vector.NewConstNull(types.T_float64.ToType(), origVec.Length(), proc.Mp()), nil
+	if ivec.IsConst() {
+		if ivec.IsConstNull() {
+			return vector.NewConstNull(types.T_float64.ToType(), ivec.Length(), proc.Mp()), nil
 		} else {
-			rvec := vector.NewConstFixed(types.T_float64.ToType(), float64(0), origVec.Length(), proc.Mp())
-			if err := fn(origVec, rvec); err != nil {
+			val, err := fn(vector.GetFixedAt[float64](ivec, 0))
+			if err != nil {
 				return nil, err
 			}
-			return rvec, nil
+			return vector.NewConstFixed(types.T_float64.ToType(), val, ivec.Length(), proc.Mp()), nil
 		}
 	} else {
-		vecLen := origVec.Length()
-		rvec, err := proc.AllocVectorOfRows(types.T_float64.ToType(), vecLen, origVec.GetNulls())
+		vecLen := ivec.Length()
+		rvec, err := proc.AllocVectorOfRows(types.T_float64.ToType(), vecLen, ivec.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		if err = fn(origVec, rvec); err != nil {
-			return nil, err
+		ivals := vector.MustFixedCol[float64](ivec)
+		rvals := vector.MustFixedCol[float64](rvec)
+		for i := range ivals {
+			rvals[i], err = fn(ivals[i])
+			if err != nil {
+				rvec.Free(proc.Mp())
+				return nil, err
+			}
 		}
 		return rvec, nil
 	}

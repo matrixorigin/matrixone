@@ -2408,7 +2408,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	}
 	// cols
 	vec := vector.NewVec(catalog.MetaColTypes[catalog.COLUMNS_IDX])
-	if err = vec.UnmarshalBinary(iov.Entries[0].Object.([]byte)); err != nil {
+	if err = vec.UnmarshalBinaryWithMpool(iov.Entries[0].Object.([]byte), tcc.ses.mp); err != nil {
 		return nil, "", err
 	}
 	def := vector.MustStrCol(vec)[0]
@@ -2418,7 +2418,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	}
 	// paths
 	vec = vector.NewVec(catalog.MetaColTypes[catalog.RESULT_PATH_IDX])
-	if err = vec.UnmarshalBinary(iov.Entries[1].Object.([]byte)); err != nil {
+	if err = vec.UnmarshalBinaryWithMpool(iov.Entries[1].Object.([]byte), tcc.ses.mp); err != nil {
 		return nil, "", err
 	}
 	str := vector.MustStrCol(vec)[0]

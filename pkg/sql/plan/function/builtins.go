@@ -220,7 +220,7 @@ var builtins = map[int]Functions{
 				Index:         0,
 				Volatile:      true,
 				AppendHideArg: true,
-				ReturnTyp:     types.T_varchar,
+				ReturnTyp:     types.T_uuid,
 				Fn:            multi.UUID,
 			},
 		},
@@ -1358,7 +1358,7 @@ var builtins = map[int]Functions{
 			{
 				Index:     0,
 				Args:      []types.T{},
-				ReturnTyp: types.T_timestamp,
+				ReturnTyp: types.T_datetime,
 				Fn:        multi.UTCTimestamp,
 			},
 		},

@@ -193,7 +193,7 @@ func readColumnBatchByMetaloc(
 			vec := vector.NewVec(colTyps[i])
 			data := make([]byte, len(entry[0].Object.([]byte)))
 			copy(data, entry[0].Object.([]byte))
-			err := vec.UnmarshalBinary(data)
+			err := vec.UnmarshalBinaryWithMpool(data, pool)
 			if err != nil {
 				return nil, err
 			}
@@ -206,14 +206,14 @@ func readColumnBatchByMetaloc(
 	if info.EntryState {
 		t0 := time.Now()
 		v1 := vector.NewVec(types.T_TS.ToType())
-		err := v1.UnmarshalBinary(entry[0].Object.([]byte))
+		err := v1.UnmarshalBinaryWithMpool(entry[0].Object.([]byte), pool)
 		if err != nil {
 			return nil, err
 		}
 		commits := containers.NewVectorWithSharedMemory(v1, false)
 		defer commits.Close()
 		v2 := vector.NewVec(types.T_bool.ToType())
-		err = v2.UnmarshalBinary(entry[1].Object.([]byte))
+		err = v2.UnmarshalBinaryWithMpool(entry[1].Object.([]byte), pool)
 		if err != nil {
 			return nil, err
 		}

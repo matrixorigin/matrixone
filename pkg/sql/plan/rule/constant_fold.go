@@ -16,7 +16,6 @@ package rule
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -173,7 +172,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 }
 
 func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
-	if nulls.Any(vec.GetNulls()) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 		return &plan.Const{Isnull: true}
 	}
 	switch vec.GetType().Oid {

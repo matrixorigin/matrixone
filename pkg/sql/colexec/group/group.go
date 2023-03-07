@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -290,8 +289,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			}
 		}
 		switch {
-		case ctr.idx != nil:
-			ctr.typ = HIndex
+		//case ctr.idx != nil:
+		//	ctr.typ = HIndex
 		case size <= 8:
 			ctr.typ = H8
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
@@ -310,7 +309,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	case HStr:
 		err = ctr.processHStr(bat, proc)
 	default:
-		err = ctr.processHIndex(bat, proc)
 	}
 	if err != nil {
 		return false, err
@@ -378,6 +376,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	return nil
 }
 
+/*
 func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) error {
 	mSels := make([][]int64, index.MaxLowCardinality+1)
 	poses := vector.MustFixedCol[uint16](ctr.idx.GetPoses())
@@ -429,6 +428,7 @@ func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) err
 	}
 	return nil
 }
+*/
 
 func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, hashRows uint64, proc *process.Process) error {
 	cnt := 0

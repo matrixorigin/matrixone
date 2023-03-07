@@ -153,7 +153,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			rbat.Cnt = 1
 			for i, e := range ivec.Entries {
 				rbat.Vecs[i] = vector.NewVec(p.typsMap[colNames[i]])
-				if err = rbat.Vecs[i].UnmarshalBinary(e.Object.([]byte)); err != nil {
+				if err = rbat.Vecs[i].UnmarshalBinaryWithMpool(e.Object.([]byte), mp); err != nil {
 					return nil, err
 				}
 			}

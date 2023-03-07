@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -119,7 +118,7 @@ func TestDateStringAdd(t *testing.T) {
 				return
 			}
 			require.Equal(t, c.want, vector.MustFixedCol[types.Timestamp](date))
-			require.Equal(t, c.contain, nulls.Contains(date.GetNulls(), 0))
+			require.Equal(t, c.contain, date.IsConstNull())
 		})
 	}
 

@@ -15,6 +15,7 @@
 package multi
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/regular"
@@ -24,9 +25,13 @@ import (
 func RegularSubstr(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := ivecs[0]
 	secondVector := ivecs[1]
+	rtyp := types.T_varchar.ToType()
+	if firstVector.IsConstNull() || secondVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, firstVector.Length(), proc.Mp()), nil
+	}
+
 	firstValues := vector.MustStrCol(firstVector)
 	secondValues := vector.MustStrCol(secondVector)
-	rtyp := types.T_varchar.ToType()
 
 	//maxLen
 	maxLen := ivecs[0].Length()
@@ -59,17 +64,15 @@ func RegularSubstr(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		match_type = []string{"c"}
 	}
 
-	if firstVector.IsConstNull() || secondVector.IsConstNull() {
-		return vector.NewConstNull(rtyp, maxLen, proc.Mp()), nil
+	rvec, err := proc.AllocVectorOfRows(rtyp, firstVector.Length(), nil)
+	if err != nil {
+		return nil, err
+	}
+	nulls.Or(firstVector.GetNulls(), secondVector.GetNulls(), rvec.GetNulls())
+	err = regular.RegularSubstrWithArrays(firstValues, secondValues, pos, occ, match_type, rvec, proc, maxLen)
+	if err != nil {
+		return nil, err
 	}
 
-	rvec, err := proc.AllocVectorOfRows(rtyp, 0, nil)
-	if err != nil {
-		return nil, err
-	}
-	err = regular.RegularSubstrWithArrays(firstValues, secondValues, pos, occ, match_type, firstVector.GetNulls(), secondVector.GetNulls(), rvec, proc, maxLen)
-	if err != nil {
-		return nil, err
-	}
 	return rvec, nil
 }

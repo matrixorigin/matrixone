@@ -139,7 +139,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		hasTrue := false
 		hasNull := false
 		if vec.IsConst() {
-			if vec.GetNulls().Contains(0) {
+			if vec.IsConstNull() {
 				hasNull = true
 			} else {
 				hasTrue = exprVals[0]

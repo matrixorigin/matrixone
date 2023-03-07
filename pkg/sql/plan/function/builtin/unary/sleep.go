@@ -35,7 +35,7 @@ func Sleep[T number](vs []*vector.Vector, proc *process.Process) (rs *vector.Vec
 	}()
 	rtyp := types.T_uint8.ToType()
 	inputs := vs[0]
-	if inputs.GetNulls().Any() {
+	if inputs.IsConstNull() || inputs.GetNulls().Any() {
 		err = moerr.NewInvalidArg(proc.Ctx, "sleep", "input contains null")
 		return
 	}

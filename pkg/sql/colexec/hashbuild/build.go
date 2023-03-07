@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -72,7 +71,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 		default:
 			if ctr.bat != nil {
 				if ap.NeedHashMap {
-					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull, ctr.idx)
+					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
 				}
 				proc.SetInputBatch(ctr.bat)
 				ctr.mp = nil
@@ -116,9 +115,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 
-	if ctr.idx != nil {
-		return ctr.indexBuild()
-	}
+	//if ctr.idx != nil {
+	//	return ctr.indexBuild()
+	//}
 
 	itr := ctr.mp.NewIterator()
 	count := ctr.bat.Length()
@@ -150,6 +149,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
+/*
 func (ctr *container) indexBuild() error {
 	// e.g. original data = ["a", "b", "a", "c", "b", "c", "a", "a"]
 	//      => dictionary = ["a"->1, "b"->2, "c"->3]
@@ -169,6 +169,7 @@ func (ctr *container) indexBuild() error {
 	}
 	return nil
 }
+*/
 
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {

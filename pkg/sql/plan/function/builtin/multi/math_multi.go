@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -32,7 +31,7 @@ type mathMultiT interface {
 type mathMultiFun[T mathMultiT] func([]T, []T, int64) []T
 
 func generalMathMulti[T mathMultiT](funName string, ivecs []*vector.Vector, proc *process.Process, cb mathMultiFun[T]) (*vector.Vector, error) {
-	typ := ivecs[0].GetType().Oid.ToType()
+	rtyp := ivecs[0].GetType()
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		// if vecs[1].IsConstNull() {
@@ -44,22 +43,26 @@ func generalMathMulti[T mathMultiT](funName string, ivecs []*vector.Vector, proc
 		digits = vector.MustFixedCol[int64](ivecs[1])[0]
 	}
 	vs := vector.MustFixedCol[T](ivecs[0])
-	if ivecs[0].IsConstNull() {
-		return vector.NewConstNull(typ, ivecs[0].Length(), proc.Mp()), nil
-	}
-
 	if ivecs[0].IsConst() {
-		rs := make([]T, 1)
-		ret_rs := cb(vs, rs, digits)
-		return vector.NewConstFixed(typ, ret_rs[0], ivecs[0].Length(), proc.Mp()), nil
+		if ivecs[0].IsConstNull() {
+			return vector.NewConstNull(*rtyp, ivecs[0].Length(), proc.Mp()), nil
+		}
+
+		var rs [1]T
+		ret_rs := cb(vs, rs[:], digits)
+		return vector.NewConstFixed(*rtyp, ret_rs[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		rs := make([]T, len(vs))
-		ret_rs := cb(vs, rs, digits)
+		rvec, err := proc.AllocVectorOfRows(*rtyp, len(vs), ivecs[0].GetNulls())
+		if err != nil {
+			return nil, err
+		}
 
-		vec := vector.NewVec(typ)
-		vector.AppendFixedList(vec, ret_rs, nil, proc.Mp())
-		nulls.Set(vec.GetNulls(), ivecs[0].GetNulls())
+		rs := vector.MustFixedCol[T](rvec)
+		new_rs := cb(vs, rs, digits)
+		if &new_rs[0] == &vs[0] {
+			copy(rs, vs)
+		}
 
-		return vec, nil
+		return rvec, nil
 	}
 }

@@ -17,7 +17,6 @@ package multi
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -155,8 +154,7 @@ func TestLpadVarchar(t *testing.T) {
 				t.Fatal(err)
 			}
 			if c.wantBytes == nil {
-				ret := nulls.Contains(lpad.GetNulls(), 0)
-				require.Equal(t, ret, true)
+				require.Equal(t, lpad.IsConstNull(), true)
 			} else {
 				require.Equal(t, c.wantBytes, lpad.GetBytesAt(0))
 			}
@@ -173,7 +171,7 @@ func makeLpadVectors(src string, length int64, pad string, nils []int) []*vector
 	vec[2] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(pad), 1, testutil.TestUtilMp)
 	for i, n := range nils {
 		if n == 0 {
-			nulls.Add(vec[i].GetNulls(), uint64(0))
+			vector.SetConstNull(vec[i], 1, testutil.TestUtilMp)
 		}
 	}
 	return vec

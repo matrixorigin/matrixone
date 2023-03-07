@@ -2787,7 +2787,7 @@ func strToSigned[T constraints.Signed](
 	length int) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := false //from.GetSourceVector().GetIsBin()
+	isBinary := from.GetSourceVector().GetIsBin()
 
 	var result T
 	for i = 0; i < l; i++ {
@@ -2837,7 +2837,7 @@ func strToUnsigned[T constraints.Unsigned](
 	length int) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := false //from.GetSourceVector().GetIsBin()
+	isBinary := from.GetSourceVector().GetIsBin()
 
 	var val uint64
 	var tErr error
@@ -2879,7 +2879,7 @@ func strToFloat[T constraints.Float](
 	length int) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := false //from.GetSourceVector().GetIsBin()
+	isBinary := from.GetSourceVector().GetIsBin()
 
 	var result T
 	var tErr error
@@ -2927,7 +2927,7 @@ func strToDecimal64(
 	var l = uint64(length)
 	var dft types.Decimal64
 	totype := to.GetType()
-	isb := false //from.GetSourceVector().GetIsBin()
+	isb := from.GetSourceVector().GetIsBin()
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -2957,7 +2957,7 @@ func strToDecimal128(
 	var l = uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
-	isb := false //from.GetSourceVector().GetIsBin()
+	isb := from.GetSourceVector().GetIsBin()
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -3392,7 +3392,7 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 			for _, x := range nxs {
 				if x < 0 {
 					// XXX for adapt to bvt, but i don't know why we hide the wrong value here.
-					return moerr.NewOutOfRange(ctx, "uint64", "")
+					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		}
@@ -3486,7 +3486,7 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int64:
 			for _, x := range nxs {
 				if x > math.MaxInt64 {
-					return moerr.NewOutOfRangeNoCtx("int64", "")
+					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:

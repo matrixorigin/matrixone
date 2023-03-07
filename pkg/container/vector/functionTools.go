@@ -262,11 +262,21 @@ func newResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResu
 }
 
 func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
-	return AppendFixed(fr.vec, val, isnull, fr.mp)
+	if !fr.vec.IsConst() {
+		return AppendFixed(fr.vec, val, isnull, fr.mp)
+	} else if !isnull {
+		return SetConstFixed(fr.vec, val, fr.vec.Length(), fr.mp)
+	}
+	return nil
 }
 
 func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
-	return AppendBytes(fr.vec, val, isnull, fr.mp)
+	if !fr.vec.IsConst() {
+		return AppendBytes(fr.vec, val, isnull, fr.mp)
+	} else if !isnull {
+		return SetConstBytes(fr.vec, val, fr.vec.Length(), fr.mp)
+	}
+	return nil
 }
 
 func (fr *FunctionResult[T]) GetType() types.Type {
@@ -300,7 +310,7 @@ func (fr *FunctionResult[T]) Free() {
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, length int) FunctionResultWrapper {
 	var v *Vector
 	if isConst {
-		v = NewConstNull(typ, 0, mp)
+		v = NewConstNull(typ, length, mp)
 	} else {
 		v = NewVec(typ)
 	}

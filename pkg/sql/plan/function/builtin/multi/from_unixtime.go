@@ -37,13 +37,13 @@ func FromUnixTimeInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.V
 
 	times := vector.MustFixedCol[int64](inVec)
 	if inVec.IsConst() {
+		if times[0] < 0 || times[0] > max_unix_timestamp_int {
+			return vector.NewConstNull(types.T_datetime.ToType(), inVec.Length(), proc.Mp()), nil
+		}
+
 		var rs [1]types.Datetime
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs[:])
-
 		rvec := vector.NewConstFixed(types.T_datetime.ToType(), rs[0], inVec.Length(), proc.Mp())
-		if times[0] < 0 || times[0] > max_unix_timestamp_int {
-			nulls.Add(rvec.GetNulls(), 0)
-		}
 		return rvec, nil
 	} else {
 		rs := make([]types.Datetime, len(times))
@@ -69,16 +69,16 @@ func FromUnixTimeFloat64(ivecs []*vector.Vector, proc *process.Process) (*vector
 
 	times := vector.MustFixedCol[float64](inVec)
 	if inVec.IsConst() {
+		if times[0] < 0 || times[0] > max_unix_timestamp_int {
+			return vector.NewConstNull(types.T_datetime.ToType(), inVec.Length(), proc.Mp()), nil
+		}
+
 		var rs [1]types.Datetime
 		ints, fracs := splitDecimalToIntAndFrac(times)
 		fromunixtime.UnixToDateTimeWithNsec(proc.SessionInfo.TimeZone, ints, fracs, rs[:])
 
 		t := types.Type{Oid: types.T_datetime, Size: int32(size), Precision: 6}
 		rvec := vector.NewConstFixed(t, rs[0], inVec.Length(), proc.Mp())
-		nulls.Set(rvec.GetNulls(), inVec.GetNulls())
-		if times[0] < 0 || times[0] > max_unix_timestamp_int {
-			nulls.Add(rvec.GetNulls(), 0)
-		}
 		return rvec, nil
 	} else {
 		rs := make([]types.Datetime, len(times))

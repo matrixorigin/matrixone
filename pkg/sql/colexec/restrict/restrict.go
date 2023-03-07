@@ -62,7 +62,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 	bs := vector.MustFixedCol[bool](vec)
 	if vec.IsConst() {
-		if vec.GetNulls().Contains(0) || !bs[0] {
+		if vec.IsConstNull() || !bs[0] {
 			bat.Shrink(nil)
 		}
 	} else {

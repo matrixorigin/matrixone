@@ -656,7 +656,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		} else if catalog.ContainExternalHidenCol(param.Attrs[i]) {
 			if rows == 0 {
 				vecTmp = vector.NewVec(makeType(param.OriginCols, 0))
-				err = vecTmp.UnmarshalBinary(vec.Entries[i].Object.([]byte))
+				err = vecTmp.UnmarshalBinaryWithMpool(vec.Entries[i].Object.([]byte), proc.Mp())
 				if err != nil {
 					return nil, err
 				}
@@ -674,7 +674,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 			}
 		} else {
 			vecTmp = vector.NewVec(*bat.Vecs[i].GetType())
-			err = vecTmp.UnmarshalBinary(vec.Entries[i].Object.([]byte))
+			err = vecTmp.UnmarshalBinaryWithMpool(vec.Entries[i].Object.([]byte), proc.Mp())
 			if err != nil {
 				return nil, err
 			}

@@ -313,7 +313,7 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 		bat := batch.NewWithSize(len(idxs))
 		for i, e := range iov.Entries {
 			bat.Vecs[i] = vector.NewVec(catalog.MetaColTypes[idxs[i]])
-			if err = bat.Vecs[i].UnmarshalBinary(e.Object.([]byte)); err != nil {
+			if err = bat.Vecs[i].UnmarshalBinaryWithMpool(e.Object.([]byte), ses.mp); err != nil {
 				return err
 			}
 		}

@@ -138,7 +138,7 @@ func MinusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vect
 
 func MinusDatetime(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtyp := types.T_int64.ToType()
-	return Arith[types.Datetime, types.Datetime](args, proc, rtyp, sub.DatetimeSub)
+	return Arith[types.Datetime, int64](args, proc, rtyp, sub.DatetimeSub)
 }
 
 // Multiplication operation

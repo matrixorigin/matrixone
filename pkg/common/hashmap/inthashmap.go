@@ -109,7 +109,25 @@ func (m *IntHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 func fillKeys[T types.FixedSizeT](m *IntHashMap, vec *vector.Vector, size uint32, start int, n int) {
 	keys := m.keys
 	keyOffs := m.keyOffs
-	if !vec.GetNulls().Any() {
+	if vec.IsConstNull() {
+		if m.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				m.zValues[i] = 0
+			}
+		}
+	} else if vec.IsConst() {
+		ptr := (*T)(vector.GetPtrAt(vec, 0))
+		for i := 0; i < n; i++ {
+			*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+			*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = *ptr
+		}
+		uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
+	} else if !vec.GetNulls().Any() {
 		if m.hasNull {
 			for i := 0; i < n; i++ {
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
@@ -155,7 +173,18 @@ func fillKeys[T types.FixedSizeT](m *IntHashMap, vec *vector.Vector, size uint32
 func fillStrKey(m *IntHashMap, vec *vector.Vector, start int, n int) {
 	keys := m.keys
 	keyOffs := m.keyOffs
-	if !vec.GetNulls().Any() {
+	if vec.IsConstNull() {
+		if m.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				m.zValues[i] = 0
+			}
+		}
+	} else if !vec.GetNulls().Any() {
 		if m.hasNull {
 			for i := 0; i < n; i++ {
 				v := vec.GetBytesAt(i + start)

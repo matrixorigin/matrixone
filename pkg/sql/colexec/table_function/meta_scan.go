@@ -84,7 +84,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	rbat.Cnt = 1
 	for i, e := range iov.Entries {
 		rbat.Vecs[i] = vector.NewVec(catalog.MetaColTypes[idxs[i]])
-		if err = rbat.Vecs[i].UnmarshalBinary(e.Object.([]byte)); err != nil {
+		if err = rbat.Vecs[i].UnmarshalBinaryWithMpool(e.Object.([]byte), proc.Mp()); err != nil {
 			return false, err
 		}
 	}

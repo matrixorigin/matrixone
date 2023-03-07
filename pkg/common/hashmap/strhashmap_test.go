@@ -430,7 +430,7 @@ func newStringVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []st
 	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vector.AppendFixed(vec, []byte(vs[i]), false, m); err != nil {
+			if err := vector.AppendBytes(vec, []byte(vs[i]), false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -442,7 +442,7 @@ func newStringVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []st
 		if random {
 			v = rand.Int()
 		}
-		if err := vector.AppendFixed(vec, []byte(strconv.Itoa(v)), false, m); err != nil {
+		if err := vector.AppendBytes(vec, []byte(strconv.Itoa(v)), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

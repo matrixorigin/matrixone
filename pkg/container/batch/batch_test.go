@@ -17,6 +17,7 @@ package batch
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -64,13 +65,15 @@ func newTestCase(ts []types.Type) batchTestCase {
 
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(ts []types.Type, rows int) *Batch {
+	mp := mpool.MustNewZero()
 	bat := NewWithSize(len(ts))
 	bat.InitZsOne(rows)
 	for i, typ := range ts {
 		switch typ.Oid {
 		case types.T_int8:
 			vec := vector.NewVec(typ)
-			vec.PreExtend(rows, nil)
+			vec.PreExtend(rows, mp)
+			vec.SetLength(rows)
 			vs := vector.MustFixedCol[int8](vec)
 			for j := range vs {
 				vs[j] = int8(j)

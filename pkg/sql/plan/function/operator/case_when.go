@@ -425,5 +425,6 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 	}
 	vec := vector.NewVec(typ)
 	vector.AppendStringList(vec, results, nil, proc.Mp())
+	vec.SetNulls(nsp)
 	return vec, nil
 }
