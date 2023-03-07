@@ -200,6 +200,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 		return nil, err
 	}
 
+	states := tbl.parts.Snapshot()
+	tbl.states = states
+
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
 	tbl.skipBlocks = make(map[uint64]uint8)
@@ -207,8 +210,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 		return ranges, nil
 	}
 	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
-
-	states := tbl.parts.Snapshot()
 
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
@@ -506,10 +507,10 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 	if len(ranges) == 0 {
 		return tbl.newMergeReader(ctx, num, expr)
 	}
-	if len(ranges) == 1 && len(ranges[0]) == 0 {
+	if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
 		return tbl.newMergeReader(ctx, num, expr)
 	}
-	if len(ranges) > 1 && len(ranges[0]) == 0 {
+	if len(ranges) > 1 && engine.IsMemtable(ranges[0]) {
 		rds := make([]engine.Reader, num)
 		mrds := make([]mergeReader, num)
 		rds0, err := tbl.newMergeReader(ctx, num, expr)
@@ -705,12 +706,12 @@ func (tbl *txnTable) newReader(
 
 	var iter partitionStateIter
 	if len(encodedPrimaryKey) > 0 {
-		iter = tbl.parts[partitionIndex].state.Load().NewPrimaryKeyIter(
+		iter = tbl.states[partitionIndex].NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
 			encodedPrimaryKey,
 		)
 	} else {
-		iter = tbl.parts[partitionIndex].state.Load().NewRowsIter(
+		iter = tbl.states[partitionIndex].NewRowsIter(
 			types.TimestampToTS(ts),
 			nil,
 			false,

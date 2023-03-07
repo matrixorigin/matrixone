@@ -67,8 +67,6 @@ type Engine struct {
 	idGen   IDGenerator
 	txns    map[string]*Transaction
 	catalog *cache.CatalogCache
-	// minimum heap of currently active transactions
-	txnHeap *transactionHeap
 
 	dnMap      map[string]int
 	partitions map[[2]uint64]Partitions
@@ -144,8 +142,6 @@ type Entry struct {
 	dnStore DNStore
 }
 
-type transactionHeap []*Transaction
-
 // txnDatabase represents an opened database in a transaction
 type txnDatabase struct {
 	databaseId   uint64
@@ -185,6 +181,8 @@ type txnTable struct {
 	insertExpr *plan.Expr
 	defs       []engine.TableDef
 	tableDef   *plan.TableDef
+
+	states []*PartitionState
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
