@@ -178,7 +178,6 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 			if typ.Oid == types.T_Rowid {
 				bat.AddVector(fmt.Sprintf("%d", i), rowIdVec)
 			} else {
-				entry[0].Show()
 				bat.AddVector(fmt.Sprintf("%d", i),
 					containers.NewVectorWithSharedMemory(entry[0], true))
 				entry = entry[1:]
