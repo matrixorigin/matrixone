@@ -84,11 +84,9 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		}
 	}
 
-	states := tbl.parts.Snapshot()
-
 	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-	for _, state := range states {
-		iter := state.NewRowsIter(ts, nil, false)
+	for _, part := range tbl.parts {
+		iter := part.NewRowsIter(ts, nil, false)
 		for iter.Next() {
 			entry := iter.Entry()
 			if _, ok := deletes[entry.RowID]; ok {
@@ -175,13 +173,6 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error) {
-	/*
-		// consider halloween problem
-		if int64(tbl.db.txn.statementId)-1 > 0 {
-			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
-		}
-	*/
-
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	for i := range tbl.db.txn.writes {
 		for _, entry := range tbl.db.txn.writes[i] {
@@ -200,8 +191,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 		return nil, err
 	}
 
-	states := tbl.parts.Snapshot()
-	tbl.states = states
+	tbl.parts = tbl.db.txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
 
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
@@ -234,7 +224,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 
 			for _, blockID := range ids {
 				ts := types.TimestampToTS(ts)
-				iter := states[i].NewRowsIter(ts, &blockID, true)
+				iter := tbl.parts[i].NewRowsIter(ts, &blockID, true)
 				for iter.Next() {
 					entry := iter.Entry()
 					id, offset := catalog.DecodeRowid(entry.RowID)
@@ -552,12 +542,6 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		}
 	}
 
-	/*
-		// consider halloween problem
-		if int64(tbl.db.txn.statementId)-1 > 0 {
-			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
-		}
-	*/
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
@@ -706,12 +690,12 @@ func (tbl *txnTable) newReader(
 
 	var iter partitionStateIter
 	if len(encodedPrimaryKey) > 0 {
-		iter = tbl.states[partitionIndex].NewPrimaryKeyIter(
+		iter = tbl.parts[partitionIndex].NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
 			encodedPrimaryKey,
 		)
 	} else {
-		iter = tbl.states[partitionIndex].NewRowsIter(
+		iter = tbl.parts[partitionIndex].NewRowsIter(
 			types.TimestampToTS(ts),
 			nil,
 			false,
