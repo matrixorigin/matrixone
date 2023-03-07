@@ -308,6 +308,7 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 			}
 		}
 		if stopIdx != -1 {
+			container.buffers[idx].SetZs(stopIdx+1, proc.GetMPool())
 			container.buffers[idx].Shrink(container.sels[:stopIdx+1])
 		}
 	}
