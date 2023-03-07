@@ -19,6 +19,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 type joinEdge struct {
@@ -112,7 +113,84 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 	return nodeID
 }
 
-func (builder *QueryBuilder) swapJoinOrderByStats(children []int32) []int32 {
+func IsEquiJoin(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if e, ok := expr.Expr.(*plan.Expr_F); ok {
+			if !SupportedJoinCondition(e.F.Func.GetObj()) {
+				continue
+			}
+			lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
+			if lpos == -1 || rpos == -1 || (lpos == rpos) {
+				continue
+			}
+			return true
+		}
+	}
+	return false || isEquiJoin0(exprs)
+}
+
+func isEquiJoin0(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if e, ok := expr.Expr.(*plan.Expr_F); ok {
+			if !SupportedJoinCondition(e.F.Func.GetObj()) {
+				return false
+			}
+			lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
+			if lpos == -1 || rpos == -1 || (lpos == rpos) {
+				return false
+			}
+		}
+	}
+	return true
+}
+func SupportedJoinCondition(id int64) bool {
+	fid, _ := function.DecodeOverloadID(id)
+	return fid == function.EQUAL
+}
+func HasColExpr(expr *plan.Expr, pos int32) int32 {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if pos == -1 {
+			return e.Col.RelPos
+		}
+		if pos != e.Col.RelPos {
+			return -1
+		}
+		return pos
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			pos0 := HasColExpr(e.F.Args[i], pos)
+			switch {
+			case pos0 == -1:
+			case pos == -1:
+				pos = pos0
+			case pos != pos0:
+				return -1
+			}
+		}
+		return pos
+	default:
+		return pos
+	}
+}
+
+func (builder *QueryBuilder) swapJoinOrderByStats(onList []*plan.Expr, children []int32, joinType plan.Node_JoinFlag) ([]int32, plan.Node_JoinFlag) {
+
+	if joinType != plan.Node_INNER && joinType != plan.Node_LEFT && joinType != plan.Node_RIGHT {
+		//do not swap
+		return children, joinType
+	}
+	//for left and right join, only swap equal join
+	if !IsEquiJoin(onList) {
+		switch joinType {
+		case plan.Node_LEFT:
+			return children, joinType
+		case plan.Node_RIGHT:
+			return []int32{children[1], children[0]}, plan.Node_LEFT
+		default:
+		}
+	}
+
 	//left deep tree is preferred for pipeline
 	//if scan compare with join, scan should be 5% bigger than join, then we can swap
 	left := builder.qry.Nodes[children[0]].Stats.Outcnt
@@ -124,11 +202,25 @@ func (builder *QueryBuilder) swapJoinOrderByStats(children []int32) []int32 {
 		right *= 1.05
 	}
 	if left < right {
-		return []int32{children[1], children[0]}
+		if joinType == plan.Node_LEFT {
+			joinType = plan.Node_RIGHT
+		} else if joinType == plan.Node_RIGHT {
+			joinType = plan.Node_LEFT
+		}
+		return []int32{children[1], children[0]}, joinType
 	} else {
-		return children
+		return children, joinType
 	}
 }
+
+func (builder *QueryBuilder) swapJoinOrderByStatsUsedForInner(children []int32, joinType plan.Node_JoinFlag) ([]int32, plan.Node_JoinFlag) {
+	return builder.swapJoinOrderByStats([]*plan.Expr{}, children, joinType)
+}
+
+func (builder *QueryBuilder) swapJoinOrderByStatsUsedForLeftAndRight(onList []*plan.Expr, children []int32, joinType plan.Node_JoinFlag) ([]int32, plan.Node_JoinFlag) {
+	return builder.swapJoinOrderByStats(onList, children, joinType)
+}
+
 func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
 
@@ -137,6 +229,10 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			for i, child := range node.Children {
 				node.Children[i] = builder.determineJoinOrder(child)
 			}
+		}
+		if node.NodeType == plan.Node_JOIN {
+			//swap join order for left & right join, inner join is not here
+			node.Children, node.JoinType = builder.swapJoinOrderByStatsUsedForLeftAndRight(node.OnList, node.Children, node.JoinType)
 		}
 		return nodeID
 	}
@@ -224,7 +320,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			visited[nextSibling] = true
 
 			children := []int32{nodeID, subTrees[nextSibling].NodeId}
-			children = builder.swapJoinOrderByStats(children)
+			children, _ = builder.swapJoinOrderByStatsUsedForInner(children, plan.Node_INNER)
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: children,
@@ -251,7 +347,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 		for i := 1; i < len(subTrees); i++ {
 			children := []int32{nodeID, subTrees[i].NodeId}
-			children = builder.swapJoinOrderByStats(children)
+			children, _ = builder.swapJoinOrderByStatsUsedForInner(children, plan.Node_INNER)
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: children,
@@ -405,7 +501,7 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 	for _, child := range dimensions {
 
 		children := []int32{vertex.node.NodeId, child.node.NodeId}
-		children = builder.swapJoinOrderByStats(children)
+		children, _ = builder.swapJoinOrderByStatsUsedForInner(children, plan.Node_INNER)
 		nodeId := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: children,

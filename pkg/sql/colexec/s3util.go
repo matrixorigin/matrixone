@@ -47,8 +47,6 @@ type WriteS3Container struct {
 	writer  objectio.Writer
 	lengths []uint64
 
-	UniqueRels []engine.Relation
-
 	metaLocBat *batch.Batch
 
 	// buffers[i] stands the i-th buffer batch used
@@ -64,13 +62,50 @@ type WriteS3Container struct {
 	// tableBatchSizes are used to record the table_i's batches's
 	// size in tableBatches
 	tableBatchSizes []uint64
+
+	sels []int64
 }
 
 const (
 	// when batches's  size of table is over this, we will
 	// trigger write s3
 	WriteS3Threshold uint64 = 64 * mpool.MB
+	// when over 10M, give a tag
+	TagS3Size uint64 = 10 * mpool.MB
 )
+
+func (container *WriteS3Container) GetMetaLocBat() *batch.Batch {
+	return container.metaLocBat
+}
+
+func (container *WriteS3Container) SetMp(attrs []*engine.Attribute) {
+	for i := 0; i < len(attrs); i++ {
+		if attrs[i].Primary {
+			container.pk[attrs[i].Name] = true
+		}
+		if attrs[i].Default == nil {
+			continue
+		}
+		container.nameToNullablity[attrs[i].Name] = attrs[i].Default.NullAbility
+	}
+}
+
+func (container *WriteS3Container) Init(num int) {
+	container.tableBatchSizes = make([]uint64, num)
+	container.tableBatches = make([][]*batch.Batch, num)
+	container.buffers = make([]*batch.Batch, num)
+	container.pk = make(map[string]bool)
+	container.nameToNullablity = make(map[string]bool)
+	container.sels = make([]int64, options.DefaultBlockMaxRows)
+	for i := 0; i < int(options.DefaultBlockMaxRows); i++ {
+		container.sels[i] = int64(i)
+	}
+	container.resetMetaLocBat()
+}
+
+func (container *WriteS3Container) AddSortIdx(sortIdx int) {
+	container.sortIndex = append(container.sortIndex, sortIdx)
+}
 
 func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 	unique_nums := 0
@@ -88,6 +123,11 @@ func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
 		buffers:         make([]*batch.Batch, unique_nums+1),
 		tableBatches:    make([][]*batch.Batch, unique_nums+1),
 		tableBatchSizes: make([]uint64, unique_nums+1),
+		sels:            make([]int64, options.DefaultBlockMaxRows),
+	}
+
+	for i := 0; i < int(options.DefaultBlockMaxRows); i++ {
+		container.sels[i] = int64(i)
 	}
 
 	// Get CPkey index
@@ -156,8 +196,9 @@ func (container *WriteS3Container) resetMetaLocBat() {
 	// vecs[1] store relative block metadata
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
 	metaLocBat := batch.New(true, attrs)
-	metaLocBat.Vecs[0] = vector.New(types.Type{Oid: types.T(types.T_uint16)})
-	metaLocBat.Vecs[1] = vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+	metaLocBat.Vecs[0] = vector.New(types.Type{Oid: types.T(types.T_int16)})
+	metaLocBat.Vecs[1] = vector.New(types.New(types.T_text,
+		0, 0))
 
 	container.metaLocBat = metaLocBat
 }
@@ -172,9 +213,19 @@ func (container *WriteS3Container) WriteEnd(proc *process.Process) {
 
 func (container *WriteS3Container) WriteS3CacheBatch(proc *process.Process) error {
 	for i := range container.tableBatches {
-		if container.tableBatchSizes[i] > 0 {
-			if err := container.MergeBlock(i, len(container.tableBatches[i]), proc); err != nil {
+		if container.tableBatchSizes[i] >= TagS3Size {
+			if err := container.MergeBlock(i, len(container.tableBatches[i]), proc, true); err != nil {
 				return err
+			}
+		} else if container.tableBatchSizes[i] < TagS3Size && container.tableBatchSizes[i] > 0 {
+			for j := 0; j < len(container.tableBatches[i]); j++ {
+				// use negative value to show it's a normal batch
+				container.metaLocBat.Vecs[0].Append(int16(-i-1), false, proc.GetMPool())
+				bytes, err := container.tableBatches[i][j].MarshalBinary()
+				if err != nil {
+					return err
+				}
+				container.metaLocBat.Vecs[1].Append(bytes, false, proc.GetMPool())
 			}
 		}
 	}
@@ -203,23 +254,67 @@ func (container *WriteS3Container) Put(bat *batch.Batch, idx int) int {
 	return -1
 }
 
-func GetFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T) {
+func GetFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int, stopIdx int) (cols [][]T) {
 	for i := range bats {
 		cols = append(cols, vector.GetFixedVectorValues[T](bats[i].Vecs[idx]))
 	}
-	return
-}
-
-func GetStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
-	for i := range bats {
-		cols = append(cols, vector.GetStrVectorValues(bats[i].Vecs[idx]))
+	if stopIdx != -1 {
+		cols[len(cols)-1] = cols[len(cols)-1][:stopIdx+1]
 	}
 	return
 }
 
-// len(sortIndex) is always only one.
-func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process.Process) error {
+func GetStrCols(bats []*batch.Batch, idx int, stopIdx int) (cols [][]string) {
+	for i := range bats {
+		cols = append(cols, vector.GetStrVectorValues(bats[i].Vecs[idx]))
+	}
+	if stopIdx != -1 {
+		cols[len(cols)-1] = cols[len(cols)-1][:stopIdx+1]
+	}
+	return
+}
+
+// cacheOvershold means whether we need to cahce the data part which is over 64M
+func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process.Process, cacheOvershold bool) error {
 	bats := container.tableBatches[idx][:length]
+	stopIdx := -1
+	var hackLogic bool
+	if container.tableBatchSizes[idx] > WriteS3Threshold && cacheOvershold {
+		container.buffers[idx].CleanOnlyData()
+		lastBatch := container.tableBatches[idx][length-1]
+		size := container.tableBatchSizes[idx] - uint64(lastBatch.Size())
+		for i := 0; i < len(lastBatch.Zs); i++ {
+			for j := 0; j < len(lastBatch.Vecs); j++ {
+				vector.UnionOne(container.buffers[idx].Vecs[j], lastBatch.Vecs[j], int64(i), proc.GetMPool())
+			}
+			if size+uint64(container.buffers[idx].Size()) == WriteS3Threshold {
+				stopIdx = i
+				break
+			} else if size+uint64(container.buffers[idx].Size()) > WriteS3Threshold {
+				// hack logic:
+				// 1. if the first row of lastBatch result the size is over WriteS3Threshold
+				// the stopIdx will be -1, that's not true, because -1 means
+				// the batches' size of all batch (include the last batch) is
+				// equal to WriteS3Threshold
+				// 2. and there is another extreme situation: the the first row
+				// of lastBatch result the size is over WriteS3Threshold and the
+				// last batch is the first batch
+				// for above, we just care about the fisrt one,the second is no need
+				stopIdx = i - 1
+				if stopIdx == -1 {
+					hackLogic = true
+				}
+				break
+			}
+		}
+		if stopIdx != -1 {
+			container.buffers[idx].SetZs(stopIdx+1, proc.GetMPool())
+			container.buffers[idx].Shrink(container.sels[:stopIdx+1])
+		}
+	}
+	if stopIdx == -1 && hackLogic {
+		bats = bats[:len(bats)-1]
+	}
 	sortIdx := -1
 	for i := range bats {
 		// sort bats firstly
@@ -234,10 +329,21 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 		if err := GenerateWriter(container, proc); err != nil {
 			return err
 		}
+
 		for i := range bats {
-			if err := WriteBlock(container, bats[i], proc); err != nil {
+			// stopIdx!=-1 means the all batches' size is over 64M
+			if stopIdx != -1 && i == len(bats)-1 {
+				break
+			}
+			if err := WriteBlock(container, bats[i]); err != nil {
 				return err
 			}
+		}
+		if stopIdx != -1 {
+			if err := WriteBlock(container, container.buffers[idx]); err != nil {
+				return err
+			}
+			container.buffers[idx].CleanOnlyData()
 		}
 		if err := WriteEndBlocks(container, proc, idx); err != nil {
 			return err
@@ -251,49 +357,50 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 		pos := container.sortIndex[0]
 		switch bats[0].Vecs[sortIdx].Typ.Oid {
 		case types.T_bool:
-			merge = NewMerge(len(bats), sort.NewBoolLess(), GetFixedCols[bool](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewBoolLess(), GetFixedCols[bool](bats, pos, stopIdx), nulls)
 		case types.T_int8:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[int8](), GetFixedCols[int8](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[int8](), GetFixedCols[int8](bats, pos, stopIdx), nulls)
 		case types.T_int16:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[int16](), GetFixedCols[int16](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[int16](), GetFixedCols[int16](bats, pos, stopIdx), nulls)
 		case types.T_int32:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[int32](), GetFixedCols[int32](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[int32](), GetFixedCols[int32](bats, pos, stopIdx), nulls)
 		case types.T_int64:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[int64](), GetFixedCols[int64](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[int64](), GetFixedCols[int64](bats, pos, stopIdx), nulls)
 		case types.T_uint8:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint8](), GetFixedCols[uint8](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint8](), GetFixedCols[uint8](bats, pos, stopIdx), nulls)
 		case types.T_uint16:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint16](), GetFixedCols[uint16](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint16](), GetFixedCols[uint16](bats, pos, stopIdx), nulls)
 		case types.T_uint32:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint32](), GetFixedCols[uint32](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint32](), GetFixedCols[uint32](bats, pos, stopIdx), nulls)
 		case types.T_uint64:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint64](), GetFixedCols[uint64](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint64](), GetFixedCols[uint64](bats, pos, stopIdx), nulls)
 		case types.T_float32:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[float32](), GetFixedCols[float32](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[float32](), GetFixedCols[float32](bats, pos, stopIdx), nulls)
 		case types.T_float64:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[float64](), GetFixedCols[float64](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[float64](), GetFixedCols[float64](bats, pos, stopIdx), nulls)
 		case types.T_date:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Date](), GetFixedCols[types.Date](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Date](), GetFixedCols[types.Date](bats, pos, stopIdx), nulls)
 		case types.T_datetime:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Datetime](), GetFixedCols[types.Datetime](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Datetime](), GetFixedCols[types.Datetime](bats, pos, stopIdx), nulls)
 		case types.T_time:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Time](), GetFixedCols[types.Time](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Time](), GetFixedCols[types.Time](bats, pos, stopIdx), nulls)
 		case types.T_timestamp:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Timestamp](), GetFixedCols[types.Timestamp](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Timestamp](), GetFixedCols[types.Timestamp](bats, pos, stopIdx), nulls)
 		case types.T_decimal64:
-			merge = NewMerge(len(bats), sort.NewDecimal64Less(), GetFixedCols[types.Decimal64](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewDecimal64Less(), GetFixedCols[types.Decimal64](bats, pos, stopIdx), nulls)
 		case types.T_decimal128:
-			merge = NewMerge(len(bats), sort.NewDecimal128Less(), GetFixedCols[types.Decimal128](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewDecimal128Less(), GetFixedCols[types.Decimal128](bats, pos, stopIdx), nulls)
 		case types.T_uuid:
-			merge = NewMerge(len(bats), sort.NewUuidCompLess(), GetFixedCols[types.Uuid](bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewUuidCompLess(), GetFixedCols[types.Uuid](bats, pos, stopIdx), nulls)
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[string](), GetStrCols(bats, pos), nulls)
+			merge = NewMerge(len(bats), sort.NewGenericCompLess[string](), GetStrCols(bats, pos, stopIdx), nulls)
 		}
 		if err := GenerateWriter(container, proc); err != nil {
 			return err
 		}
 		lens := 0
 		size := len(bats)
+		container.buffers[idx].CleanOnlyData()
 		var batchIndex int
 		var rowIndex int
 		for size > 0 {
@@ -304,7 +411,7 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 			lens++
 			if lens == int(options.DefaultBlockMaxRows) {
 				lens = 0
-				if err := WriteBlock(container, container.buffers[idx], proc); err != nil {
+				if err := WriteBlock(container, container.buffers[idx]); err != nil {
 					return err
 				}
 				// force clean
@@ -312,33 +419,49 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 			}
 		}
 		if lens > 0 {
-			if err := WriteBlock(container, container.buffers[idx], proc); err != nil {
+			if err := WriteBlock(container, container.buffers[idx]); err != nil {
 				return err
 			}
 		}
 		if err := WriteEndBlocks(container, proc, idx); err != nil {
 			return err
 		}
+		// force clean
+		container.buffers[idx].CleanOnlyData()
 	}
-	left := container.tableBatches[idx][length:]
-	container.tableBatches[idx] = left
-	container.tableBatchSizes[idx] = 0
-	for _, bat := range left {
-		container.tableBatchSizes[idx] += uint64(bat.Size())
+	if stopIdx == -1 {
+		if hackLogic {
+			container.tableBatchSizes[idx] = uint64(container.tableBatches[idx][length-1].Size())
+			container.tableBatches[idx] = container.tableBatches[idx][length-1:]
+		} else {
+			container.tableBatchSizes[idx] = 0
+			container.tableBatches[idx] = container.tableBatches[idx][:0]
+		}
+	} else {
+		lastBatch := container.tableBatches[idx][length-1]
+		lastBatch.Shrink(container.sels[stopIdx+1:])
+		container.tableBatches[idx] = container.tableBatches[idx][:0]
+		container.tableBatches[idx] = append(container.tableBatches[idx], lastBatch)
+		container.tableBatchSizes[idx] = uint64(lastBatch.Size())
 	}
 	return nil
 }
 
-// the first pr for cn-write-s3 logic of insert will result this:
-// and now we need to change it, there will be 64Mb data in one seg.
+// write s3 batch logic:
+// container will cache the batches in memory
+// and when the batches size is over 10M, we will
+// give a tag to say we need to write these data into
+// s3, but not immediately. We will continuelly wait until
+// no more data or the data size is over 64M,at this time
+// we will trigger write s3
 func (container *WriteS3Container) WriteS3Batch(bat *batch.Batch, proc *process.Process, idx int) error {
 	container.InitBuffers(bat, idx)
 	res := container.Put(bat, idx)
 	switch res {
 	case 1:
-		container.MergeBlock(idx, len(container.tableBatches[idx])-1, proc)
+		container.MergeBlock(idx, len(container.tableBatches[idx]), proc, true)
 	case 0:
-		container.MergeBlock(idx, len(container.tableBatches[idx]), proc)
+		container.MergeBlock(idx, len(container.tableBatches[idx]), proc, true)
 	case -1:
 		proc.SetInputBatch(&batch.Batch{})
 	}
@@ -422,7 +545,7 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 
 // WriteBlock WriteBlock writes one batch to a buffer and generate related indexes for this batch
 // For more information, please refer to the comment about func Write in Writer interface
-func WriteBlock(container *WriteS3Container, bat *batch.Batch, proc *process.Process) error {
+func WriteBlock(container *WriteS3Container, bat *batch.Batch) error {
 	fd, err := container.writer.Write(bat)
 
 	if err != nil {
@@ -502,7 +625,7 @@ func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int)
 		if err != nil {
 			return err
 		}
-		container.metaLocBat.Vecs[0].Append(uint16(idx), false, proc.GetMPool())
+		container.metaLocBat.Vecs[0].Append(int16(idx), false, proc.GetMPool())
 		container.metaLocBat.Vecs[1].Append([]byte(metaLoc), false, proc.GetMPool())
 	}
 	// for i := range container.unique_writer {

@@ -84,21 +84,10 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) e
 // common sender: send to all receiver
 func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
 	if !ap.prepared {
-		cnt := len(ap.RemoteRegs)
-		for cnt > 0 {
-			csinfo := <-proc.DispatchNotifyCh
-			ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers, &WrapperClientSession{
-				msgId:  csinfo.MsgId,
-				cs:     csinfo.Cs,
-				uuid:   csinfo.Uid,
-				doneCh: csinfo.DoneCh,
-			})
-			cnt--
-		}
-		ap.prepared = true
+		ap.waitRemoteRegsReady(proc)
 	}
 
-	if ap.ctr.remoteReceivers != nil {
+	{ // send to remote regs
 		encodeData, errEncode := types.Encode(bat)
 		if errEncode != nil {
 			return errEncode

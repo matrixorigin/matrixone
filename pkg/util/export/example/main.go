@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"go.uber.org/zap/zapcore"
 	"net/http"
 	"os"
@@ -41,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
@@ -110,7 +110,7 @@ func main() {
 
 	mergeTable(ctx, fs, motrace.SingleStatementTable)
 	mergeTable(ctx, fs, motrace.SingleRowLogTable)
-	mergeTable(ctx, fs, metric.SingleMetricTable)
+	mergeTable(ctx, fs, mometric.SingleMetricTable)
 
 	logutil.Infof("all done, run sleep(5)")
 	time.Sleep(5 * time.Second)
