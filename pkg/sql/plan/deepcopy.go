@@ -756,6 +756,12 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 				TableLocks: df.LockTables.TableLocks,
 			},
 		}
+
+	case *plan.DataDefinition_UnlockTables:
+		newDf.Definition = &plan.DataDefinition_UnlockTables{
+			UnlockTables: &plan.UnLockTables{},
+		}
+
 	}
 
 	return newDf

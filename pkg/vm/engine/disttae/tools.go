@@ -1142,9 +1142,9 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 	return fmt.Sprintf("%v-%v", tableId, name)
 }
 
-func inPartition(v types.Rowid, part *Partition,
+func inPartition(v types.Rowid, part *PartitionState,
 	ts timestamp.Timestamp, blocks []BlockMeta) bool {
-	if part.state.Load().RowExists(v, types.TimestampToTS(ts)) {
+	if part.RowExists(v, types.TimestampToTS(ts)) {
 		return true
 	}
 	if len(blocks) == 0 {
