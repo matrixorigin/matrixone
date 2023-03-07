@@ -31,9 +31,11 @@ jobs:
           cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
 
-      - name: echo dn.toml
+      - name: echo config
         run: |
           cd $GITHUB_WORKSPACE/head
+          sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-CN-tae-DN/cn.toml
+          cat ./etc/launch-tae-CN-tae-DN/cn.toml
           cat ./etc/launch-tae-CN-tae-DN/dn.toml
 
       - name: Start MO
