@@ -360,6 +360,8 @@ const (
 	dumpDefaultRoleID = moAdminRoleID
 
 	moCatalog = "mo_catalog"
+
+	moMysqlCompatbilityModeDefaultDb = "%!%mo_mysql_compatbility_mode_temp_db"
 )
 
 type objectType int
@@ -821,7 +823,9 @@ var (
 		`drop table if exists mo_catalog.mo_user_grant;`,
 		`drop table if exists mo_catalog.mo_role_grant;`,
 		`drop table if exists mo_catalog.mo_role_privs;`,
-		//"drop table if exists mo_catalog.`catalog.AutoIncrTableName`;",
+		`drop table if exists mo_catalog.mo_user_defined_function;`,
+		`drop table if exists mo_catalog.mo_mysql_compatbility_mode;`,
+		fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.AutoIncrTableName),
 	}
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatbility_mode(
@@ -1916,7 +1920,7 @@ func (g *graph) hasLoop(start int64) bool {
 	return !g.toposort(start, visited)
 }
 
-// nameIsInvalid checks the name of account/user/role is valid or not
+// nameIsInvalid checks the name of user/role is valid or not
 func nameIsInvalid(name string) bool {
 	s := strings.TrimSpace(name)
 	if len(s) == 0 {
@@ -1932,6 +1936,29 @@ func normalizeName(ctx context.Context, name string) (string, error) {
 		return "", moerr.NewInternalError(ctx, `the name "%s" is invalid`, name)
 	}
 	return s, nil
+}
+
+func normalizeNameOfAccount(ctx context.Context, ca *tree.CreateAccount) error {
+	s := strings.TrimSpace(ca.Name)
+	if len(s) == 0 {
+		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
+	}
+	for _, c := range s {
+		switch {
+		case c >= '0' && c <= '9':
+			continue
+		case c >= 'a' && c <= 'z':
+			continue
+		case c >= 'A' && c <= 'Z':
+			continue
+		case c == '_' || c == '-':
+			continue
+		default:
+			return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
+		}
+	}
+	ca.Name = s
+	return nil
 }
 
 // normalizeNameOfRole normalizes the name
@@ -2299,6 +2326,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		//step 4 : drop table mo_user_grant
 		//step 5 : drop table mo_role_grant
 		//step 6 : drop table mo_role_privs
+		//step 7 : drop table mo_user_defined_function
+		//step 8 : drop table mo_mysql_compatbility_mode
+		//step 9 : drop table %!%mo_increment_columns
 		for _, sql = range getSqlForDropAccount() {
 			err = bh.Exec(deleteCtx, sql)
 			if err != nil {
@@ -3769,6 +3799,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			typs = append(typs, PrivilegeTypeDump, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		}
 	case *tree.Kill:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.LockTableStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	default:
@@ -5263,6 +5296,11 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	addSqlIntoSet(initMoUserGrant4)
 	addSqlIntoSet(initMoUserGrant5)
 
+	//step6: add new entries to the mo_compatbility_mode
+	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
+	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, sysAccountName, moMysqlCompatbilityModeDefaultDb, configuration)
+	addSqlIntoSet(initMoMysqlCompatbilityMode)
+
 	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant
 	for _, sql := range initDataSqls {
 		err = bh.Exec(ctx, sql)
@@ -5325,7 +5363,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	}
 
 	//normalize the name
-	ca.Name, err = normalizeName(ctx, ca.Name)
+	err = normalizeNameOfAccount(ctx, ca)
 	if err != nil {
 		return err
 	}
@@ -5431,6 +5469,8 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	var comment = ""
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
+	//var configuration string
+	//var sql string
 	ctx, span := trace.Debug(ctx, "createTablesInMoCatalogOfGeneralTenant")
 	defer span.End()
 
@@ -5479,6 +5519,14 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		err = moerr.NewInternalError(ctx, "get the id of tenant %s failed", ca.Name)
 		goto handleFailed
 	}
+
+	//step2.Add new entries to the mo_mysql_compatbility_mode when create a new account
+	// configuration = fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
+	// sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
+	// err = bh.Exec(ctx, sql)
+	// if err != nil {
+	// 	goto handleFailed
+	// }
 
 	newTenant = &TenantInfo{
 		Tenant:        ca.Name,
@@ -5578,6 +5626,11 @@ func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundEx
 	addSqlIntoSet(initMoUserGrant1)
 	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
+
+	//step6: add new entries to the mo_mysql_compatbility_mode
+	configuration := fmt.Sprintf("'"+"{"+"%q"+":"+"%q"+"}"+"'", "version_compatibility", "0.7")
+	initMoMysqlCompatbilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, ca.Name, moMysqlCompatbilityModeDefaultDb, configuration)
+	addSqlIntoSet(initMoMysqlCompatbilityMode)
 
 	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
 	for _, sql := range initDataSqls {
@@ -6079,10 +6132,12 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	var err error
 	var sql string
 	var erArray []ExecResult
+	var accountName string
 
 	datname := ad.DbName
 	update_config := "'" + ad.UpdateConfig + "'"
 
+	accountName = ses.GetTenantInfo().GetTenant()
 	//verify the update_config
 	if !isInvalidConfigInput(update_config) {
 		return moerr.NewInvalidInput(ctx, "invalid input %s for alter database config", update_config)
@@ -6116,8 +6171,8 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	}
 
 	//step2: update the mo_mysql_compatbility_mode of that database
-	sql = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where dat_name = "%s";`
-	sql = fmt.Sprintf(sql, update_config, datname)
+	sql = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s" and dat_name = "%s";`
+	sql = fmt.Sprintf(sql, update_config, accountName, datname)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
@@ -6160,6 +6215,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	var err error
 	var sql string
 	var erArray []ExecResult
+	var dbName string
 
 	accountName := stmt.AccountName
 	update_config := "'" + stmt.UpdateConfig + "'"
@@ -6192,7 +6248,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "there is no account %s", accountName)
+		err = moerr.NewInternalError(ctx, "Permission change %s's config denied", accountName)
 		goto handleFailed
 	}
 
@@ -6214,8 +6270,21 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 		goto handleFailed
 	}
 
-	if len(ses.GetDatabaseName()) != 0 {
-		err = changeVersion(ctx, ses, ses.GetDatabaseName())
+	dbName = ses.GetDatabaseName()
+	if len(dbName) != 0 {
+		if _, ok := bannedCatalogDatabases[dbName]; ok {
+			err = changeVersion(ctx, ses, moMysqlCompatbilityModeDefaultDb)
+			if err != nil {
+				goto handleFailed
+			}
+		} else {
+			err = changeVersion(ctx, ses, dbName)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+	} else {
+		err = changeVersion(ctx, ses, moMysqlCompatbilityModeDefaultDb)
 		if err != nil {
 			goto handleFailed
 		}

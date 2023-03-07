@@ -27,7 +27,7 @@ import (
 )
 
 func String(_ any, buf *bytes.Buffer) {
-	buf.WriteString("insert select")
+	buf.WriteString("insert")
 }
 
 func Prepare(proc *process.Process, arg any) error {

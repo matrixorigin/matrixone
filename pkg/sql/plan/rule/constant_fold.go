@@ -115,7 +115,6 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 				Id:          e.Typ.Id,
 				NotNullable: e.Typ.NotNullable,
 				Width:       e.Typ.Width,
-				Precision:   e.Typ.Precision,
 				Size:        e.Typ.Size,
 				Scale:       e.Typ.Scale,
 				AutoIncr:    e.Typ.AutoIncr,
@@ -153,7 +152,6 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 					Id:          e.Typ.Id,
 					NotNullable: e.Typ.NotNullable,
 					Width:       e.Typ.Width,
-					Precision:   e.Typ.Precision,
 					Size:        e.Typ.Size,
 					Scale:       e.Typ.Scale,
 					AutoIncr:    e.Typ.AutoIncr,
@@ -167,7 +165,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	ec := &plan.Expr_C{
 		C: c,
 	}
-	e.Typ = &plan.Type{Id: int32(vec.Typ.Oid), Precision: vec.Typ.Precision, Scale: vec.Typ.Scale, Width: vec.Typ.Width, Size: vec.Typ.Size}
+	e.Typ = &plan.Type{Id: int32(vec.Typ.Oid), Scale: vec.Typ.Scale, Width: vec.Typ.Width, Size: vec.Typ.Size}
 	e.Expr = ec
 	return e
 }
@@ -243,7 +241,8 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 				Dval: vec.Col.([]float64)[0],
 			},
 		}
-	case types.T_varchar, types.T_char, types.T_text, types.T_blob:
+	case types.T_varchar, types.T_char,
+		types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
 		return &plan.Const{
 			Value: &plan.Const_Sval{
 				Sval: vec.GetString(0),

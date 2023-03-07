@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/stretchr/testify/assert"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -31,8 +32,10 @@ import (
 
 // only use in developing
 func TestSingleSQL(t *testing.T) {
-	sql := "select * from nation"
-
+	//sql := "select * from nation"
+	//sql := "create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation"
+	//sql := "CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey))"
+	sql := "create table t2(empno int unsigned,ename varchar(15),job varchar(10) key) cluster by(empno,ename)"
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
@@ -762,6 +765,11 @@ func TestDdl(t *testing.T) {
 		"truncate table nation",
 		"truncate table tpch.nation",
 		"create unique index idx_name on nation(n_regionkey)",
+		"create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation",
+		"CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey)) COMMENT='xxxxx'",
+		"create table t2(empno int unsigned,ename varchar(15),job varchar(10) key) cluster by(empno,ename)",
+		"lock tables nation read",
+		"lock tables nation write, supplier read",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -774,6 +782,10 @@ func TestDdl(t *testing.T) {
 		"drop table tbl_name",           //table not exists in tpch
 		"drop table tpch.tbl_not_exist", //database not exists
 		"drop table db_not_exist.tbl",   //table not exists
+		"create table t6(empno int unsigned,ename varchar(15) auto_increment) cluster by(empno,ename)",
+		"lock tables t3 read",
+		"lock tables t1 read, t1 write",
+		"lock tables nation read, nation write",
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -788,15 +800,18 @@ func TestShow(t *testing.T) {
 		"show create table tpch.nation",
 		"show databases",
 		"show databases like '%d'",
-		"show databases where `Database` = '11'",
-		"show databases where `Database` = '11' or `Database` = 'ddd'",
+		"show databases where `database` = '11'",
+		"show databases where `database` = '11' or `database` = 'ddd'",
 		"show tables",
 		"show tables from tpch",
 		"show tables like '%dd'",
-		"show tables from tpch where `Tables_in_tpch` = 'aa' or `Tables_in_tpch` like '%dd'",
+		"show tables from tpch where `tables_in_tpch` = 'aa' or `tables_in_tpch` like '%dd'",
 		"show columns from nation",
+		"show full columns from nation",
 		"show columns from nation from tpch",
-		"show columns from nation where `Field` like '%ff' or `Type` = 1 or `Null` = 0",
+		"show full columns from nation from tpch",
+		"show columns from nation where `field` like '%ff' or `type` = 1 or `null` = 0",
+		"show full columns from nation where `field` like '%ff' or `type` = 1 or `null` = 0",
 		"show create view v1",
 		"show create table v1",
 		"show table_number",
@@ -823,8 +838,11 @@ func TestShow(t *testing.T) {
 		"show tables from tpch22222",                           //database not exist
 		"show tables from tpch where Tables_in_tpch222 = 'aa'", //column not exist
 		"show columns from nation_ddddd",                       //table not exist
-		"show columns from nation_ddddd from tpch",             //table not exist
-		"show columns from nation where `Field22` like '%ff'",  //column not exist
+		"show full columns from nation_ddddd",
+		"show columns from nation_ddddd from tpch", //table not exist
+		"show full columns from nation_ddddd from tpch",
+		"show columns from nation where `Field22` like '%ff'", //column not exist
+		"show full columns from nation where `Field22` like '%ff'",
 		"show index from tpch.dddd",
 		"show table_number from tpch222",
 		"show column_number from nation222",

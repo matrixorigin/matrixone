@@ -192,7 +192,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		}
 		tt := types.T(Typ.Id)
 		if tt == types.T_decimal64 || tt == types.T_decimal128 {
-			result += fmt.Sprintf("CAST(%s AS %s(%d, %d))", describeExpr, tt.String(), Typ.Precision, Typ.Scale)
+			result += fmt.Sprintf("CAST(%s AS %s(%d, %d))", describeExpr, tt.String(), Typ.Width, Typ.Scale)
 		} else {
 			result += "CAST(" + describeExpr + " AS " + tt.String() + ")"
 		}

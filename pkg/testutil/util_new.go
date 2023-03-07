@@ -34,7 +34,7 @@ import (
 )
 
 func NewProcess() *process.Process {
-	mp := mpool.MustNewZero()
+	mp := mpool.MustNewZeroNoFixed()
 	return NewProcessWithMPool(mp)
 }
 
@@ -45,7 +45,6 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
 		NewFS(),
-		nil, // no get cluster details func can be set
 	)
 	proc.Lim.Size = 1 << 20
 	proc.Lim.BatchRows = 1 << 20
@@ -208,7 +207,8 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewDecimal128Vector(n, typ, m, random, vs)
 		}
 		return NewDecimal128Vector(n, typ, m, random, nil)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		if vs, ok := Values.([]string); ok {
 			return NewStringVector(n, typ, m, random, vs)
 		}

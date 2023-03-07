@@ -19,8 +19,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -42,6 +40,10 @@ type MockCompilerContext struct {
 
 	// ctx default: nil
 	ctx context.Context
+}
+
+func (m *MockCompilerContext) ResolveUdf(name string, ast []*plan.Expr) (string, error) {
+	return "", nil
 }
 
 func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
@@ -72,11 +74,11 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 }
 
 type col struct {
-	Name      string
-	Id        types.T
-	Nullable  bool
-	Precision int32
-	Scale     int32
+	Name     string
+	Id       types.T
+	Nullable bool
+	Width    int32
+	Scale    int32
 }
 
 type index struct {
@@ -541,11 +543,12 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					Typ: &plan.Type{
 						Id:          int32(col.Id),
 						NotNullable: !col.Nullable,
-						Precision:   col.Precision,
+						Width:       col.Width,
 						Scale:       col.Scale,
 					},
-					Name:  col.Name,
-					Pkidx: 1,
+					Name:    col.Name,
+					Primary: idx == 0,
+					Pkidx:   1,
 					Default: &plan.Default{
 						NullAbility: col.Nullable,
 					},
@@ -572,7 +575,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 
 			if table.idxs != nil {
-
 				for i, idx := range table.idxs {
 					indexdef := &plan.IndexDef{
 						IndexName:      idx.indexName,
@@ -698,7 +700,6 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectR
 	name := strings.ToLower(tableName)
 	tableDef := DeepCopyTableDef(m.tables[name])
 	if tableDef != nil && !m.isDml {
-
 		for i, col := range tableDef.Cols {
 			if col.Typ.Id == int32(types.T_Rowid) {
 				tableDef.Cols = append(tableDef.Cols[:i], tableDef.Cols[i+1:]...)
@@ -707,8 +708,8 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectR
 		}
 
 		for i, col := range tableDef.Cols {
-			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(col.Name)
-			if isCPkey {
+			// judege whether it is a composite primary key
+			if col.Name == catalog.CPrimaryKeyColName {
 				tableDef.Cols = append(tableDef.Cols[:i], tableDef.Cols[i+1:]...)
 				break
 			}

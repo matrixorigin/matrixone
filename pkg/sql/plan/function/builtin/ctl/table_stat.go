@@ -29,7 +29,7 @@ import (
 
 // MoTableRows returns an estimated row number of a table.
 func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vec := vector.New(types.New(types.T_int64, 0, 0, 0))
+	vec := vector.New(types.New(types.T_int64, 0, 0))
 	count := vecs[0].Length()
 	dbs := vector.MustStrCols(vecs[0])
 	tbls := vector.MustStrCols(vecs[1])
@@ -67,7 +67,7 @@ func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 // MoTableSize returns an estimated size of a table.
 func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vec := vector.New(types.New(types.T_int64, 0, 0, 0))
+	vec := vector.New(types.New(types.T_int64, 0, 0))
 	count := vecs[0].Length()
 	dbs := vector.MustStrCols(vecs[0])
 	tbls := vector.MustStrCols(vecs[1])

@@ -62,7 +62,7 @@ func (c *catalogArg) fromCommand(cmd *cobra.Command) error {
 	}
 	c.verbose = lv
 
-	file, _ := cmd.Parent().PersistentFlags().GetString("outfile")
+	file, _ := cmd.Flags().GetString("outfile")
 	if file != "" {
 		if f, err := os.Create(file); err != nil {
 			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("open %s err: %v", file, err)))

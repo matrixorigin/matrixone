@@ -20,22 +20,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/stretchr/testify/assert"
-
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestTxnHandler_NewTxn(t *testing.T) {
@@ -195,7 +192,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		eng.EXPECT().Hints().Return(hints).AnyTimes()
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil, nil), gSysVars, false)
+		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil), gSysVars, false)
 		session.SetRequestContext(context.Background())
 		return session
 	}
@@ -245,7 +242,7 @@ func TestVariables(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New().AnyTimes()
-		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, txnClient, nil, nil), gSysVars, true)
+		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, txnClient, nil), gSysVars, true)
 		session.SetRequestContext(context.Background())
 		return session
 	}
@@ -557,7 +554,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 
 		gSysVars := &GlobalSystemVariables{}
 		InitGlobalSystemVariables(gSysVars)
@@ -608,7 +605,7 @@ func TestSession_GetTempTableStorage(t *testing.T) {
 	defer ctrl.Finish()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	eng := mock_frontend.NewMockEngine(ctrl)
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	gSysVars := &GlobalSystemVariables{}
 
 	ses := genSession(ctrl, pu, gSysVars)
@@ -638,7 +635,7 @@ func TestIfInitedTempEngine(t *testing.T) {
 	defer ctrl.Finish()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	eng := mock_frontend.NewMockEngine(ctrl)
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	gSysVars := &GlobalSystemVariables{}
 
 	ses := genSession(ctrl, pu, gSysVars)
@@ -666,7 +663,7 @@ func TestSetTempTableStorage(t *testing.T) {
 	defer ctrl.Finish()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	eng := mock_frontend.NewMockEngine(ctrl)
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	gSysVars := &GlobalSystemVariables{}
 
 	ses := genSession(ctrl, pu, gSysVars)
@@ -676,5 +673,5 @@ func TestSetTempTableStorage(t *testing.T) {
 	}, math.MaxInt)
 	dnStore, _ := ses.SetTempTableStorage(ck)
 
-	assert.Equal(t, defines.TEMPORARY_TABLE_DN_ADDR, dnStore.ServiceAddress)
+	assert.Equal(t, defines.TEMPORARY_TABLE_DN_ADDR, dnStore.TxnServiceAddress)
 }

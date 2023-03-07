@@ -443,6 +443,35 @@ func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
 	return newFilters
 }
 
+// strict filter means col compared to const. for example col1>1
+// func(col1)=1 is not strict
+func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "=", ">", "<", ">=", "<=":
+			switch child0 := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_Col:
+				col = child0.Col
+			default:
+				return false, nil, nil
+			}
+			switch child1 := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				constExpr = child1.C
+				b = true
+				return
+			default:
+				return false, nil, nil
+			}
+		default:
+			return false, nil, nil
+		}
+	default:
+		return false, nil, nil
+	}
+}
+
 // for predicate deduction, filter must be like func(col)>1 , or (col=1) or (col=2)
 // and only 1 colRef is allowd in the filter
 func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
@@ -842,10 +871,12 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 }
 
 // handle the filter list for zonemap. rewrite and constFold
-func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+// return monotonic filters and number of nonMonotonic filters
+func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, int) {
 	if proc == nil || proc.Ctx == nil {
-		return nil
+		return nil, 0
 	}
+	num := 0
 	var newExprList []*plan.Expr
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
@@ -856,10 +887,12 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) *plan.Expr
 		}
 		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
 			newExprList = append(newExprList, expr)
+		} else {
+			num++
 		}
 	}
 	e := colexec.RewriteFilterExprList(newExprList)
-	return e
+	return e, num
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
@@ -1074,6 +1107,20 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return false
 		}
 
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		switch columnT.Oid {
+		case types.T_binary, types.T_varbinary:
+			if constT.Width <= columnT.Width {
+				return true
+			} else {
+				return false
+			}
+		case types.T_blob:
+			return true
+		default:
+			return false
+		}
+
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
 		if !valOk {
@@ -1102,6 +1149,8 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		case types.T_float32:
 			//float32 has 6-7 significant digits.
 			return constVal <= 100000 && constVal >= -100000
+		case types.T_decimal64:
+			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		default:
 			return false
 		}
@@ -1131,6 +1180,8 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		case types.T_float32:
 			//float32 has 6-7 significant digits.
 			return constVal <= 100000
+		case types.T_decimal64:
+			return constVal <= math.MaxInt32
 		default:
 			return false
 		}
@@ -1306,4 +1357,140 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 		l2.Remove(l2.Front())
 	}
 	return fileList, fileSize, err
+}
+
+// GetUniqueColAndIdxFromTableDef
+// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
+// return : []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
+func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
+	uniqueCols := make([]map[string]int, 0, len(tableDef.Cols))
+	if tableDef.Pkey != nil {
+		pkMap := make(map[string]int)
+		for _, colName := range tableDef.Pkey.Names {
+			pkMap[colName] = int(tableDef.Name2ColIndex[colName])
+		}
+		uniqueCols = append(uniqueCols, pkMap)
+	}
+
+	for _, index := range tableDef.Indexes {
+		if index.Unique {
+			pkMap := make(map[string]int)
+			for _, part := range index.Parts {
+				pkMap[part] = int(tableDef.Name2ColIndex[part])
+			}
+			uniqueCols = append(uniqueCols, pkMap)
+		}
+	}
+	return uniqueCols
+}
+
+// GenUniqueColJoinExpr
+// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
+// uniqueCols is: []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
+// we will get expr like: 'leftTag.a = rightTag.a or (leftTag.b = rightTag.b and leftTag.c = rightTag. c)
+func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, leftTag int32, rightTag int32) (*Expr, error) {
+	var checkExpr *Expr
+	var err error
+
+	for i, uniqueColMap := range uniqueCols {
+		var condExpr *Expr
+		condIdx := int(0)
+		for _, colIdx := range uniqueColMap {
+			col := tableDef.Cols[colIdx]
+			leftExpr := &Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: leftTag,
+						ColPos: int32(colIdx),
+					},
+				},
+			}
+			rightExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: rightTag,
+						ColPos: int32(colIdx),
+					},
+				},
+			}
+			eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
+			if err != nil {
+				return nil, err
+			}
+			if condIdx == 0 {
+				condExpr = eqExpr
+			} else {
+				condExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
+				if err != nil {
+					return nil, err
+				}
+			}
+			condIdx++
+		}
+
+		if i == 0 {
+			checkExpr = condExpr
+		} else {
+			checkExpr, err = bindFuncExprImplByPlanExpr(ctx, "or", []*Expr{checkExpr, condExpr})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return checkExpr, nil
+}
+
+// GenUniqueColCheckExpr   like GenUniqueColJoinExpr. but use for on duplicate key clause to check conflict
+// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
+// we get batch like [1,2,3,4, origin_a, origin_b, origin_c, origin_d, row_id ....]。
+// we get expr like:  []*Expr{ 1=origin_a ,  (2 = origin_b and 3 = origin_c) }
+func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int) ([]*Expr, error) {
+	checkExpr := make([]*Expr, len(uniqueCols))
+	colCount := len(tableDef.Cols)
+
+	for i, uniqueColMap := range uniqueCols {
+		var condExpr *Expr
+		condIdx := int(0)
+		for _, colIdx := range uniqueColMap {
+			col := tableDef.Cols[colIdx]
+			// insert values
+			leftExpr := &Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(colIdx),
+					},
+				},
+			}
+			rightExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: int32(colIdx + colCount),
+					},
+				},
+			}
+			eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
+			if err != nil {
+				return nil, err
+			}
+			if condIdx == 0 {
+				condExpr = eqExpr
+			} else {
+				condExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
+				if err != nil {
+					return nil, err
+				}
+			}
+			condIdx++
+		}
+		checkExpr[i] = condExpr
+	}
+
+	return checkExpr, nil
 }

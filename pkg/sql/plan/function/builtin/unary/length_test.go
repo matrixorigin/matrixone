@@ -90,7 +90,7 @@ func TestLength(t *testing.T) {
 
 func TestBlobLength(t *testing.T) {
 	makeBlobVector := func(src []byte, srcIsScalar bool, procs *process.Process) *vector.Vector {
-		inputType := types.New(types.T_blob, 0, 0, 0)
+		inputType := types.New(types.T_blob, 0, 0)
 		var inputVector *vector.Vector
 		if srcIsScalar {
 			inputVector = vector.NewConst(inputType, 1)

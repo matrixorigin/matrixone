@@ -31,177 +31,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-/*
-func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
-	rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1],
-		catalog.MoTablesTableDefs, []string{
-			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
-			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
-			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
-		},
-		genTableListExpr(ctx, getAccountId(ctx), databaseId))
-	if err != nil {
-		return nil, err
-	}
-	tableList := make([]string, len(rows))
-	for i := range rows {
-		tableList[i] = string(rows[i][0].([]byte))
-	}
-	return tableList, nil
-}
-
-func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
-	name string) (*table, []engine.TableDef, error) {
-	accountId := getAccountId(ctx)
-	key := genTableIndexKey(name, databaseId, accountId)
-	rows, err := txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, "",
-		txn.dnStores[:1], catalog.MoTablesSchema, key,
-		genTableInfoExpr(ctx, accountId, databaseId, name))
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(rows) != 1 {
-		return nil, nil, moerr.NewDuplicate(ctx)
-	}
-	row := rows[0]
-	//	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-	//		txn.dnStores[:1], catalog.MoTablesTableDefs, catalog.MoTablesSchema,
-	//		genTableInfoExpr(accountId, databaseId, name))
-	//	if err != nil {
-	//		return nil, nil, err
-	//	}
-	tbl := new(table)
-	tbl.primaryIdx = -1
-	tbl.tableId = row[catalog.MO_TABLES_REL_ID_IDX].(uint64)
-	tbl.viewdef = string(row[catalog.MO_TABLES_VIEWDEF_IDX].([]byte))
-	tbl.relKind = string(row[catalog.MO_TABLES_RELKIND_IDX].([]byte))
-	tbl.comment = string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))
-	tbl.partition = string(row[catalog.MO_TABLES_PARTITIONED_IDX].([]byte))
-	tbl.createSql = string(row[catalog.MO_TABLES_REL_CREATESQL_IDX].([]byte))
-	tbl.constraint = row[catalog.MO_TABLES_CONSTRAINT_IDX].([]byte)
-	//	rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-	//		txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
-	//		genColumnInfoExpr(accountId, databaseId, tbl.tableId))
-	//	if err != nil {
-	//		return nil, nil, err
-	//	}
-	rows, err = txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, "",
-		txn.dnStores[:1], catalog.MoColumnsSchema, genColumnIndexKey(tbl.tableId),
-		genColumnInfoExpr(ctx, accountId, databaseId, tbl.tableId))
-	if err != nil {
-		return nil, nil, err
-	}
-	cols := getColumnsFromRows(rows)
-	defs := make([]engine.TableDef, 0, len(cols))
-	defs = append(defs, genTableDefOfComment(string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))))
-	for i, col := range cols {
-		if col.constraintType == catalog.SystemColPKConstraint {
-			tbl.primaryIdx = i
-		}
-		if col.isClusterBy == 1 {
-			tbl.clusterByIdx = i
-		}
-		defs = append(defs, genTableDefOfColumn(col))
-	}
-	return tbl, defs, nil
-}
-
-func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
-	name string) (uint64, error) {
-	accountId := getAccountId(ctx)
-	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		txn.dnStores[:1],
-		catalog.MoTablesTableDefs, []string{
-			catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX],
-			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
-			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
-			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
-		},
-		genTableIdExpr(ctx, accountId, databaseId, name))
-	if err != nil {
-		return 0, err
-	}
-	return row[0].(uint64), nil
-}
-
-func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
-	rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		txn.dnStores[:1],
-		catalog.MoDatabaseTableDefs, []string{
-			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
-			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-		},
-		genDatabaseListExpr(ctx, getAccountId(ctx)))
-	if err != nil {
-		return nil, err
-	}
-	databaseList := make([]string, len(rows))
-	for i := range rows {
-		databaseList[i] = string(rows[i][0].([]byte))
-	}
-	return databaseList, nil
-}
-
-func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64, error) {
-	accountId := getAccountId(ctx)
-	key := genDatabaseIndexKey(name, accountId)
-	rows, err := txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, "",
-		txn.dnStores[:1], []string{
-			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
-			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
-			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-		}, key, genDatabaseIdExpr(ctx, accountId, name))
-	if err != nil {
-		return 0, err
-	}
-	if len(rows) != 1 {
-		return 0, moerr.NewDuplicate(ctx)
-	}
-	//	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
-	//		catalog.MoDatabaseTableDefs, []string{
-	//			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
-	//			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
-	//			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-	//		},
-	//		genDatabaseIdExpr(accountId, name))
-	//	if err != nil {
-	//		return 0, err
-	//	}
-	return rows[0][0].(uint64), nil
-}
-*/
-
-func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
-	name string, needUpdated bool, columnLength int, prefetch bool) (*tableMeta, error) {
+func (txn *Transaction) getTableMeta(
+	ctx context.Context,
+	databaseId uint64,
+	tableId uint64,
+	needUpdated bool,
+	columnLength int,
+	prefetch bool,
+) (*tableMeta, error) {
 	blocks := make([][]BlockMeta, len(txn.dnStores))
+	name := genMetaTableName(tableId)
+
+	ts := types.TimestampToTS(txn.meta.SnapshotTS)
 	if needUpdated {
-		for i, dnStore := range txn.dnStores {
-			rows, err := txn.getRows(ctx, name, databaseId, 0,
-				[]DNStore{dnStore}, catalog.MoTableMetaDefs, catalog.MoTableMetaSchema, nil)
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		key := [2]uint64{databaseId, tableId}
+		states := txn.engine.partitions[key].Snapshot()
+
+		for i := range txn.dnStores {
+			if i >= len(states) {
 				continue
 			}
-			if err != nil {
-				return nil, err
+
+			var blockInfos []catalog.BlockInfo
+			state := states[i]
+			iter := state.Blocks.Iter()
+			for ok := iter.First(); ok; ok = iter.Next() {
+				entry := iter.Item()
+				if !entry.Visible(ts) {
+					continue
+				}
+				blockInfos = append(blockInfos, entry.BlockInfo)
 			}
-			blocks[i], err = genBlockMetas(ctx, rows, columnLength, txn.proc.FileService,
+			iter.Release()
+
+			var err error
+			blocks[i], err = genBlockMetas(ctx, blockInfos, columnLength, txn.proc.FileService,
 				txn.proc.GetMPool(), prefetch)
 			if err != nil {
 				return nil, moerr.NewInternalError(ctx, "disttae: getTableMeta err: %v, table: %v", err.Error(), name)
 			}
+
 		}
 	}
+
 	return &tableMeta{
 		tableName: name,
 		blocks:    blocks,
@@ -236,7 +116,7 @@ func (txn *Transaction) WriteBatch(
 	bat.Cnt = 1
 	if typ == INSERT {
 		len := bat.Length()
-		vec := vector.New(types.New(types.T_Rowid, 0, 0, 0))
+		vec := vector.New(types.New(types.T_Rowid, 0, 0))
 		for i := 0; i < len; i++ {
 			if err := vec.Append(txn.genRowId(), false,
 				txn.proc.Mp()); err != nil {
@@ -297,13 +177,13 @@ func (txn *Transaction) checkPrimaryKey(
 		switch typ {
 
 		case INSERT:
-			var indexes []memtable.Tuple
+			var indexes []memorytable.Tuple
 
 			idx := primaryIdx + 1 // skip the first row id column
-			primaryKey := memtable.ToOrdered(tuple[idx].Value)
-			index := memtable.Tuple{
+			primaryKey := memorytable.ToOrdered(tuple[idx].Value)
+			index := memorytable.Tuple{
 				index_TableID_PrimaryKey,
-				memtable.ToOrdered(tableId),
+				memorytable.ToOrdered(tableId),
 				primaryKey,
 			}
 
@@ -369,234 +249,6 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 		dnStore:      dnStore,
 	})
 	return nil
-}
-
-// getRow used to get a row of table based on a condition
-/*
-func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId uint64,
-	dnList []DNStore, defs []engine.TableDef, columns []string, expr *plan.Expr) ([]any, error) {
-	bats, err := txn.readTable(ctx, "", databaseId, tableId, defs, dnList, columns, expr)
-	if err != nil {
-		return nil, err
-	}
-	if len(bats) == 0 {
-		return nil, moerr.GetOkExpectedEOB()
-	}
-	rows := make([][]any, 0, len(bats))
-	for _, bat := range bats {
-		if bat.Length() > 0 {
-			rows = append(rows, catalog.GenRows(bat)...)
-		}
-		bat.Clean(txn.proc.Mp())
-	}
-	if len(rows) == 0 {
-		return nil, moerr.GetOkExpectedEOB()
-	}
-	if len(rows) != 1 {
-		return nil, moerr.NewInvalidInput(ctx, "table is not unique")
-	}
-	return rows[0], nil
-}
-*/
-
-// getRows used to get rows of table
-func (txn *Transaction) getRows(ctx context.Context, name string, databaseId uint64, tableId uint64,
-	dnList []DNStore, defs []engine.TableDef, columns []string, expr *plan.Expr) ([][]any, error) {
-	bats, err := txn.readTable(ctx, name, databaseId, tableId, defs, dnList, columns, expr)
-	if err != nil {
-		return nil, err
-	}
-	if len(bats) == 0 {
-		return nil, moerr.GetOkExpectedEOB()
-	}
-	rows := make([][]any, 0, len(bats))
-	for _, bat := range bats {
-		if bat.Length() > 0 {
-			rows = append(rows, catalog.GenRows(bat)...)
-		}
-		bat.Clean(txn.proc.Mp())
-	}
-	return rows, nil
-}
-
-/*
-func (txn *Transaction) getRowsByIndex(databaseId, tableId uint64, name string,
-	dnList []DNStore, columns []string, index memtable.Tuple, expr *plan.Expr) ([][]any, error) {
-	var rows [][]any
-
-	deletes := make(map[types.Rowid]uint8)
-	if len(name) == 0 {
-		for i := range txn.writes {
-			for _, entry := range txn.writes[i] {
-				if !(entry.databaseId == databaseId &&
-					entry.tableId == tableId) {
-					continue
-				}
-				if entry.typ == DELETE {
-					if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-						vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
-						for _, v := range vs {
-							deletes[v] = 0
-						}
-					}
-				}
-				if entry.typ == INSERT {
-					length := entry.bat.Length()
-					flags := make([]uint8, length)
-					for i := range flags {
-						flags[i]++
-					}
-					mp := make(map[string]int)
-					for _, col := range columns {
-						mp[col] = 0
-					}
-					for i, attr := range entry.bat.Attrs {
-						if _, ok := mp[attr]; ok {
-							mp[attr] = i
-						}
-					}
-					bat := batch.NewWithSize(len(columns))
-					for i := range bat.Vecs {
-						vec := entry.bat.Vecs[mp[columns[i]]]
-						bat.Vecs[i] = vector.New(vec.GetType())
-						if err := vector.UnionBatch(bat.Vecs[i], vec, 0, length,
-							flags[:length], txn.proc.Mp()); err != nil {
-							return nil, err
-						}
-					}
-					bat.SetZs(entry.bat.Length(), txn.proc.Mp())
-					if expr != nil {
-						vec, err := colexec.EvalExpr(bat, txn.proc, expr)
-						if err != nil {
-							return nil, err
-						}
-						bs := vector.GetColumn[bool](vec)
-						if vec.IsScalar() {
-							if !bs[0] {
-								bat.Shrink(nil)
-							}
-						} else {
-							sels := txn.proc.Mp().GetSels()
-							for i, b := range bs {
-								if b {
-									sels = append(sels, int64(i))
-								}
-							}
-							bat.Shrink(sels)
-							txn.proc.Mp().PutSels(sels)
-						}
-						vec.Free(txn.proc.Mp())
-					}
-					rows = append(rows, catalog.GenRows(bat)...)
-					bat.Clean(txn.proc.Mp())
-				}
-			}
-		}
-	}
-	accessed := make(map[string]uint8)
-	for _, dn := range dnList {
-		accessed[dn.GetUUID()] = 0
-	}
-	parts := txn.db.getPartitions(databaseId, tableId)
-	for i, dn := range txn.dnStores {
-		if _, ok := accessed[dn.GetUUID()]; !ok {
-			continue
-		}
-		tuples, err := parts[i].GetRowsByIndex(txn.meta.SnapshotTS, index, columns, deletes)
-		if err == nil {
-			rows = append(rows, tuples...)
-		}
-	}
-	if len(rows) == 0 {
-		return nil, moerr.GetOkExpectedEOB()
-	}
-	return rows, nil
-}
-*/
-
-// readTable used to get tuples of table based on a condition
-// only used to read data from catalog, for which the execution is currently single-core
-func (txn *Transaction) readTable(ctx context.Context, name string, databaseId uint64, tableId uint64,
-	defs []engine.TableDef, dnList []DNStore, columns []string, expr *plan.Expr) ([]*batch.Batch, error) {
-	var parts Partitions
-	/*
-		var writes [][]Entry
-		// consider halloween problem
-		if int64(txn.statementId)-1 > 0 {
-			writes = txn.writes[:txn.statementId-1]
-		}
-	*/
-	writes := make([]Entry, 0, len(txn.writes))
-	if len(name) == 0 { // meta table not need this
-		for i := range txn.writes {
-			for _, entry := range txn.writes[i] {
-				if entry.databaseId == databaseId &&
-					entry.tableId == tableId {
-					writes = append(writes, entry)
-				}
-			}
-		}
-	}
-	bats := make([]*batch.Batch, 0, 1)
-	accessed := make(map[string]uint8)
-	for _, dn := range dnList {
-		accessed[dn.GetUUID()] = 0
-	}
-	if len(name) == 0 {
-		parts = txn.db.getPartitions(databaseId, tableId)
-	} else {
-		parts = txn.db.getMetaPartitions(name)
-	}
-	for i, dn := range txn.dnStores {
-		if _, ok := accessed[dn.GetUUID()]; !ok {
-			continue
-		}
-		rds, err := parts[i].NewReader(ctx, 1, nil, defs, nil, nil, nil,
-			txn.meta.SnapshotTS, nil, writes)
-		if err != nil {
-			return nil, err
-		}
-		for _, rd := range rds {
-			for {
-				bat, err := rd.Read(ctx, columns, expr, txn.proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-				if bat != nil {
-					bats = append(bats, bat)
-				} else {
-					break
-				}
-			}
-		}
-	}
-	if expr == nil {
-		return bats, nil
-	}
-	for i, bat := range bats {
-		vec, err := colexec.EvalExpr(bat, txn.proc, expr)
-		if err != nil {
-			return nil, err
-		}
-		bs := vector.GetColumn[bool](vec)
-		if vec.IsScalar() {
-			if !bs[0] {
-				bat.Shrink(nil)
-			}
-		} else {
-			sels := txn.proc.Mp().GetSels()
-			for i, b := range bs {
-				if b {
-					sels = append(sels, int64(i))
-				}
-			}
-			bat.Shrink(sels)
-			txn.proc.Mp().PutSels(sels)
-		}
-		vec.Free(txn.proc.Mp())
-		bats[i] = bat
-	}
-	return bats, nil
 }
 
 func (txn *Transaction) deleteBatch(bat *batch.Batch,
@@ -807,8 +459,8 @@ func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.Table
 		return []int{0}
 	}
 	for _, key := range priKeys {
-		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
-		if isCPkey {
+		// If it is a composite primary key, skip
+		if key.Name == catalog.CPrimaryKeyColName {
 			continue
 		}
 		pk = key

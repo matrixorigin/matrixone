@@ -171,7 +171,7 @@ func (zm *ZoneMap) FastContainsAny(keys containers.Vector) (ok bool) {
 		}
 		return
 	}
-	keys.Foreach(op, nil)
+	keys.ForeachShallow(op, nil)
 	return
 }
 
@@ -191,7 +191,7 @@ func (zm *ZoneMap) ContainsAny(keys containers.Vector) (visibility *roaring.Bitm
 		row++
 		return
 	}
-	if err := keys.Foreach(op, nil); err != nil {
+	if err := keys.ForeachShallow(op, nil); err != nil {
 		panic(err)
 	}
 	if visibility.GetCardinality() != 0 {
@@ -252,7 +252,8 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 	}
 	buf[31] |= constZMInited
 	switch zm.typ.Oid {
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		minv, maxv := zm.min.([]byte), zm.max.([]byte)
 		// write 31-byte prefix of minv
 		copy(buf[0:31], minv)
@@ -394,7 +395,8 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		buf = buf[32:]
 		zm.max = buf[:types.RowidSize]
 		return nil
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		minBuf := make([]byte, buf[31]&0x7f)
 		copy(minBuf, buf[0:32])
 		maxBuf := make([]byte, 32)

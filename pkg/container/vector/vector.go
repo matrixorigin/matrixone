@@ -60,9 +60,6 @@ type Vector struct {
 	// TODO: check whether isBin should be changed into array/bitmap
 	// now we assumpt that it can only be true in the case of only one data in vector
 	isBin bool
-
-	// idx for low cardinality scenario.
-	idx any
 }
 
 func (v *Vector) SetIsBin(isBin bool) {
@@ -97,18 +94,6 @@ func (v *Vector) IsOriginal() bool {
 
 func (v *Vector) SetOriginal(status bool) {
 	v.original = status
-}
-
-func (v *Vector) IsLowCardinality() bool {
-	return v.idx != nil
-}
-
-func (v *Vector) Index() any {
-	return v.idx
-}
-
-func (v *Vector) SetIndex(idx any) {
-	v.idx = idx
 }
 
 func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
@@ -318,7 +303,8 @@ func (v *Vector) FillDefaultValue() {
 		fillDefaultValue[types.TS](v)
 	case types.T_Rowid:
 		fillDefaultValue[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		fillDefaultValue[types.Varlena](v)
 	default:
 		panic("unsupported type in FillDefaultValue")
@@ -370,7 +356,8 @@ func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 		return toConstVector[types.TS](v, row, mp)
 	case types.T_Rowid:
 		return toConstVector[types.Rowid](v, row, mp)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		if nulls.Contains(v.Nsp, uint64(row)) {
 			return NewConstNull(v.GetType(), 1)
 		}
@@ -437,7 +424,8 @@ func (v *Vector) ConstExpand(expandCols bool, m *mpool.MPool) *Vector {
 		expandVector[types.TS](v, types.TxnTsSize, m)
 	case types.T_Rowid:
 		expandVector[types.Rowid](v, types.RowidSize, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		expandVector[types.Varlena](v, types.VarlenaSize, m)
 	}
 	v.isConst = false
@@ -646,7 +634,8 @@ func (v *Vector) initConst(typ types.Type) {
 		v.Col = make([]types.TS, 1)
 	case types.T_Rowid:
 		v.Col = make([]types.Rowid, 1)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob,
+		types.T_json, types.T_text, types.T_binary, types.T_varbinary:
 		v.Col = make([]types.Varlena, 1)
 	}
 }
@@ -705,6 +694,18 @@ func (v *Vector) Free(m *mpool.MPool) {
 	v.data = nil
 	v.area = nil
 	v.colFromData()
+}
+
+func (v *Vector) CleanOnlyData() {
+	if v.data != nil {
+		v.data = v.data[:0]
+	}
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
+	if v.Nsp != nil && v.Nsp.Np != nil {
+		v.Nsp.Np.Clear()
+	}
 }
 
 func (v *Vector) FreeOriginal(m *mpool.MPool) {
@@ -792,7 +793,8 @@ func (v *Vector) Append(w any, isNull bool, m *mpool.MPool) error {
 		return appendOne(v, w.(types.TS), isNull, m)
 	case types.T_Rowid:
 		return appendOne(v, w.(types.Rowid), isNull, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		return appendOneBytes(v, w.([]byte), isNull, m)
 	}
 	return nil
@@ -1056,7 +1058,8 @@ func Shrink(v *Vector, sels []int64) {
 		ShrinkFixed[float32](v, sels)
 	case types.T_float64:
 		ShrinkFixed[float64](v, sels)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -1137,7 +1140,8 @@ func Shuffle(v *Vector, sels []int64, m *mpool.MPool) error {
 		ShuffleFixed[float32](v, sels, m)
 	case types.T_float64:
 		ShuffleFixed[float64](v, sels, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		ShuffleFixed[types.Varlena](v, sels, m)
 	case types.T_date:
 		ShuffleFixed[types.Date](v, sels, m)
@@ -1203,6 +1207,14 @@ func (v *Vector) Show() ([]byte, error) {
 		buf.Write(types.EncodeUint32(&lenA))
 		buf.Write(v.area)
 	}
+
+	// Write isConst
+	buf.Write(types.EncodeBool(&v.isConst))
+
+	// Write length
+	i := int64(v.length)
+	buf.Write(types.EncodeInt64(&i))
+
 	return buf.Bytes(), nil
 }
 
@@ -1245,10 +1257,22 @@ func (v *Vector) Read(data []byte) error {
 
 	// Read areaLen and area
 	size = types.DecodeUint32(data)
+	data = data[4:]
 	if size != 0 {
-		data = data[4:]
 		v.area = data[:size]
+		data = data[size:]
 	}
+
+	if len(data) >= 9 {
+
+		// Read isConst
+		v.isConst = types.DecodeBool(data[:1])
+		data = data[1:]
+
+		// Read length
+		v.length = int(types.DecodeInt64(data[:8]))
+	}
+
 	return nil
 }
 
@@ -1275,7 +1299,134 @@ func Copy(v, w *Vector, vi, wi int64, m *mpool.MPool) error {
 			}
 		}
 	}
+
+	if w.Nsp != nil {
+		if v.Nsp == nil {
+			v.Nsp = nulls.Build(v.Length())
+		}
+		if w.Nsp.Contains(uint64(wi)) {
+			v.Nsp.Set(uint64(vi))
+		} else if v.Nsp.Contains(uint64(vi)) {
+			v.Nsp.Np.Remove(uint64(vi))
+		}
+	} else if v.Nsp != nil {
+		v.Nsp.Np.Remove(uint64(vi))
+	}
 	return nil
+}
+
+// GetUnionOneFunction: A more sensible function for copying elements,
+// which avoids having to do type conversions and type judgements every time you append.
+func GetUnionOneFunction(typ types.Type, m *mpool.MPool) func(v, w *Vector, sel int64) error {
+	switch typ.Oid {
+	case types.T_bool:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[bool](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_int8:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[int8](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_int16:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[int16](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_int32:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[int32](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_int64:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[int64](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_uint8:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[uint8](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_uint16:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[uint16](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_uint32:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[uint32](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_uint64:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[uint64](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_float32:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[float32](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_float64:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[float64](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_date:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Date](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_datetime:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Datetime](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_time:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Time](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_timestamp:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Timestamp](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_decimal64:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Decimal64](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_decimal128:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Decimal128](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_uuid:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Uuid](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_TS:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.TS](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_Rowid:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Rowid](w)
+			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+		return func(v, w *Vector, sel int64) error {
+			ws := MustTCols[types.Varlena](w)
+			return appendOneBytes(v, ws[sel].GetByteSlice(w.area), nulls.Contains(w.Nsp, uint64(sel)), m)
+		}
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.GetUnionOneFunction", typ))
+	}
 }
 
 // XXX Old UnionOne is FUBAR
@@ -1438,6 +1589,7 @@ func Union(v, w *Vector, sels []int64, hasNull bool, m *mpool.MPool) (err error)
 
 	if v.GetType().IsTuple() {
 		panic("union called on tuple vector")
+	} else if w.IsScalar() && w.Nsp != nil {
 	} else if v.GetType().IsVarlen() {
 		tgt := MustTCols[types.Varlena](v)
 		next := len(tgt) - len(sels)
@@ -1622,7 +1774,8 @@ func (v *Vector) String() string {
 		return VecToString[types.TS](v)
 	case types.T_Rowid:
 		return VecToString[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		col := MustStrCols(v)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
@@ -1683,7 +1836,8 @@ func GetInitConstVal(typ types.Type) any {
 	case types.T_Rowid:
 		var emptyRowid [types.RowidSize]byte
 		return emptyRowid[:]
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob,
+		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
 		var emptyVarlena [types.VarlenaSize]byte
 		return emptyVarlena[:]
 	default:
@@ -1718,7 +1872,8 @@ func CopyConst(toVec, fromVec *Vector, length int, m *mpool.MPool) error {
 		item = MustTCols[float32](fromVec)[0]
 	case types.T_float64:
 		item = MustTCols[float64](fromVec)[0]
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		item = MustBytesCols(fromVec)[0]
 	case types.T_date:
 		item = MustTCols[types.Date](fromVec)[0]

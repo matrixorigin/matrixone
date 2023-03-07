@@ -37,10 +37,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -296,9 +298,17 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 		insertNode := qry.Nodes[qry.Steps[0]]
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
-			c.cnListStrategy()
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(1, blkNum)}}
+			} else {
+				c.cnListStrategy()
+			}
 		} else {
-			c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(1, blkNum)}}
+			} else {
+				c.cnList = engine.Nodes{engine.Node{Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)}}
+			}
 		}
 	default:
 		if blkNum < MinBlockNum {
@@ -335,16 +345,33 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	case plan.Query_INSERT:
 		insertNode := qry.Nodes[qry.Steps[0]]
 		insertNode.NotCacheable = true
+
+		var err error
+		var onDuplicateKeyArg *onduplicatekey.Argument
+		if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+			onDuplicateKeyArg, err = constructOnduplicateKey(insertNode, c.e, c.proc)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
 		nodeStats := qry.Nodes[insertNode.Children[0]].Stats
+
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
 			rs = c.newInsertMergeScope(arg, ss)
 			rs.Magic = MergeInsert
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op:  vm.OnDuplicateKey,
+					Arg: onDuplicateKeyArg,
+				})
+			}
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
@@ -356,6 +383,12 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			rs = c.newMergeScope(ss)
 			rs.Magic = Insert
 			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op:  vm.OnDuplicateKey,
+					Arg: onDuplicateKeyArg,
+				})
+			}
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Insert,
 				Arg: arg,
@@ -600,6 +633,8 @@ func (c *Compile) ConstructScope() *Scope {
 }
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	ctx, span := trace.Start(ctx, "compileExternScan")
+	defer span.End()
 	mcpu := c.cnList[0].Mcpu
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
@@ -639,12 +674,15 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 				fileList[i] = strings.TrimSpace(fileList[i])
 			}
 		} else {
+			_, spanReadDir := trace.Start(ctx, "compileExternScan.ReadDir")
 			fileList, fileSize, err = plan2.ReadDir(param)
 			if err != nil {
+				spanReadDir.End()
 				return nil, err
 			}
+			spanReadDir.End()
 		}
-		fileList, fileSize, err = external.FilterFileList(n, c.proc, fileList, fileSize)
+		fileList, fileSize, err = external.FilterFileList(ctx, n, c.proc, fileList, fileSize)
 		if err != nil {
 			return nil, err
 		}
@@ -776,12 +814,11 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 				cols = append(cols, &plan.ColDef{
 					Name: attr.Attr.Name,
 					Typ: &plan.Type{
-						Id:        int32(attr.Attr.Type.Oid),
-						Width:     attr.Attr.Type.Width,
-						Size:      attr.Attr.Type.Size,
-						Precision: attr.Attr.Type.Precision,
-						Scale:     attr.Attr.Type.Scale,
-						AutoIncr:  attr.Attr.AutoIncrement,
+						Id:       int32(attr.Attr.Type.Oid),
+						Width:    attr.Attr.Type.Width,
+						Size:     attr.Attr.Type.Size,
+						Scale:    attr.Attr.Type.Scale,
+						AutoIncr: attr.Attr.AutoIncrement,
 					},
 					Primary:   attr.Attr.Primary,
 					Default:   attr.Attr.Default,
@@ -1562,7 +1599,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			c.cnList[i].Addr = ""
 		}
 	}
-	ranges, err = rel.Ranges(ctx, plan2.HandleFiltersForZM(n.FilterList, c.proc))
+	expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
+	ranges, err = rel.Ranges(ctx, expr)
 	if err != nil {
 		return nil, err
 	}
@@ -1678,11 +1716,10 @@ func joinType(ctx context.Context, n *plan.Node, ns []*plan.Node) (bool, plan.No
 
 func dupType(typ *plan.Type) types.Type {
 	return types.Type{
-		Oid:       types.T(typ.Id),
-		Size:      typ.Size,
-		Width:     typ.Width,
-		Scale:     typ.Scale,
-		Precision: typ.Precision,
+		Oid:   types.T(typ.Id),
+		Size:  typ.Size,
+		Width: typ.Width,
+		Scale: typ.Scale,
 	}
 }
 
@@ -1762,7 +1799,8 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 			vec.Append(vector.MustTCols[float32](tmp)[0], false, proc.Mp())
 		case types.T_float64:
 			vec.Append(vector.MustTCols[float64](tmp)[0], false, proc.Mp())
-		case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_json,
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			vec.Append(vector.MustBytesCols(tmp)[0], false, proc.Mp())
 		case types.T_date:
 			vec.Append(vector.MustTCols[types.Date](tmp)[0], false, proc.Mp())

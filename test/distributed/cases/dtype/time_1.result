@@ -136,7 +136,7 @@ drop table time_03;
 create table time_03 (t1 int,t2 time,t3 varchar(25),t4 time default '110034',primary key(t1,t2));
 insert into time_03(t1,t2,t3) values (30,"24:59:09.932823","yellow");
 insert into time_03(t1,t2,t3) values (30,"24:59:09.932823","oooppppp");
-Duplicate entry '3a151e471914f1701380' for key '__mo_cpkey_002t1002t2'
+Duplicate entry '3a151e471914f1701380' for key '__mo_cpkey_col'
 insert into time_03(t1,t2,t3) values (31,"24:59:09.932823","postttttt");
 insert into time_03(t1,t2,t3) values (32,NULL,"vinda");
 constraint violation: Column 't2' cannot be null

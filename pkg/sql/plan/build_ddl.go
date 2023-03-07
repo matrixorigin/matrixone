@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -44,7 +45,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
 	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
 		cols[idx] = &plan.ColDef{
-			Name: query.Headings[idx],
+			Name: strings.ToLower(query.Headings[idx]),
 			Alg:  plan.CompressType_Lz4,
 			Typ:  expr.Typ,
 			Default: &plan.Default{
@@ -334,7 +335,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
-			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) {
+			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
+				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 				if colType.GetWidth() > types.MaxStringSize {
 					return moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
 				}
@@ -394,6 +396,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			onUpdateExpr, err := buildOnUpdate(def, colType, ctx.GetProcess())
 			if err != nil {
 				return err
+			}
+
+			if !checkTableColumnNameValid(def.Name.Parts[0]) {
+				return moerr.NewInvalidInput(ctx.GetContext(), "table column name '%s' is illegal and conflicts with internal keyword", def.Name.Parts[0])
 			}
 
 			colType.AutoIncr = auto_incr
@@ -575,12 +581,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	pkeyName := ""
 	if len(primaryKeys) > 0 {
-		pKeyParts := make([]*ColDef, len(primaryKeys))
-		for i, primaryKey := range primaryKeys {
-			if coldef, ok := colMap[primaryKey]; !ok {
+		for _, primaryKey := range primaryKeys {
+			if _, ok := colMap[primaryKey]; !ok {
 				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", primaryKey)
-			} else {
-				pKeyParts[i] = coldef
 			}
 		}
 		if len(primaryKeys) == 1 {
@@ -596,7 +599,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 			}
 		} else {
-			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
+			//pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
+			pkeyName = catalog.CPrimaryKeyColName
 			colDef := &ColDef{
 				Name: pkeyName,
 				Alg:  plan.CompressType_Lz4,
@@ -1144,7 +1148,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// index.TableDef.Defs store info of index need to be modified
 	// index.IndexTables store index table need to be created
-	oriPriKeyName := GetTablePriKeyName(tableDef.Cols, tableDef.CompositePkey)
+	oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 	createIndex.OriginTablePrimaryKey = oriPriKeyName
 
 	index := &plan.CreateTable{TableDef: &TableDef{}}
@@ -1274,6 +1278,74 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 				DdlType: plan.DataDefinition_ALTER_VIEW,
 				Definition: &plan.DataDefinition_AlterView{
 					AlterView: alterView,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, error) {
+	lockTables := make([]*plan.TableLockInfo, 0, len(stmt.TableLocks))
+	uniqueTableName := make(map[string]bool)
+
+	//get session id
+	var sessionIDbytes []byte
+	if ctx.GetProcess() != nil {
+		sessionID := ctx.GetProcess().Id
+		sessionIDbytes = []byte(sessionID)
+	}
+
+	//get rows from 0 to ^uint64(0)
+	rangeMax := make([]byte, 8)
+	binary.BigEndian.PutUint64(rangeMax, ^uint64(0))
+
+	//Check table locks
+	for _, tableLock := range stmt.TableLocks {
+		tb := tableLock.Table
+
+		//get table name
+		tblName := string(tb.ObjectName)
+
+		// get database name
+		var schemaName string
+		if len(tb.SchemaName) == 0 {
+			schemaName = ctx.DefaultDatabase()
+		} else {
+			schemaName = string(tb.SchemaName)
+		}
+
+		//check table whether exist
+		_, tableDef := ctx.Resolve(schemaName, tblName)
+		if tableDef == nil {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tblName)
+		}
+
+		// check the stmt whether locks the same table
+		if _, ok := uniqueTableName[tblName]; ok {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Not unique table %s", tblName)
+		}
+
+		uniqueTableName[tblName] = true
+
+		tableLockInfo := &plan.TableLockInfo{
+			LockType:  plan.TableLockType(tableLock.LockType),
+			TableID:   tableDef.TblId,
+			SessionID: sessionIDbytes,
+			Rows:      [][]byte{[]byte("0"), rangeMax},
+		}
+		lockTables = append(lockTables, tableLockInfo)
+	}
+
+	LockTables := &plan.LockTables{
+		TableLocks: lockTables,
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_LOCK_TABLES,
+				Definition: &plan.DataDefinition_LockTables{
+					LockTables: LockTables,
 				},
 			},
 		},
