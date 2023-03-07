@@ -15,8 +15,6 @@
 package disttae
 
 import (
-	"bytes"
-	"container/heap"
 	"context"
 	"math"
 	"runtime"
@@ -24,9 +22,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -45,29 +45,36 @@ func New(
 	fs fileservice.FileService,
 	cli client.TxnClient,
 	idGen IDGenerator,
-	getClusterDetails engine.GetClusterDetailsFunc,
 ) *Engine {
-	cluster, err := getClusterDetails()
-	if err != nil {
-		panic(err)
+
+	var services []metadata.DNService
+	cluster := clusterservice.GetMOCluster()
+	cluster.GetDNService(clusterservice.NewSelector(),
+		func(d metadata.DNService) bool {
+			services = append(services, d)
+			return true
+		})
+
+	dnMap := make(map[string]int)
+	for i := range services {
+		dnMap[services[i].ServiceID] = i
 	}
-	db := newDB(cluster.DNStores)
-	catalogCache := cache.NewCatalog()
-	if err := db.init(ctx, mp, catalogCache); err != nil {
-		panic(err)
-	}
+
 	e := &Engine{
-		db:                db,
-		mp:                mp,
-		fs:                fs,
-		cli:               cli,
-		idGen:             idGen,
-		catalog:           catalogCache,
-		txnHeap:           &transactionHeap{},
-		getClusterDetails: getClusterDetails,
-		txns:              make(map[string]*Transaction),
+		mp:         mp,
+		fs:         fs,
+		cli:        cli,
+		idGen:      idGen,
+		catalog:    cache.NewCatalog(),
+		txns:       make(map[string]*Transaction),
+		dnMap:      dnMap,
+		partitions: make(map[[2]uint64]Partitions),
 	}
-	go e.gc(ctx)
+
+	if err := e.init(ctx, mp); err != nil {
+		panic(err)
+	}
+
 	return e
 }
 
@@ -92,10 +99,8 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
 		return err
 	}
-	txn.databaseMap.Store(genDatabaseKey(ctx, name), &database{
+	txn.databaseMap.Store(genDatabaseKey(ctx, name), &txnDatabase{
 		txn:          txn,
-		db:           e.db,
-		fs:           e.fs,
 		databaseId:   databaseId,
 		databaseName: name,
 	})
@@ -109,13 +114,11 @@ func (e *Engine) Database(ctx context.Context, name string,
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
 	if v, ok := txn.databaseMap.Load(genDatabaseKey(ctx, name)); ok {
-		return v.(*database), nil
+		return v.(*txnDatabase), nil
 	}
 	if name == catalog.MO_CATALOG {
-		db := &database{
+		db := &txnDatabase{
 			txn:          txn,
-			db:           e.db,
-			fs:           e.fs,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
@@ -129,10 +132,8 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if ok := e.catalog.GetDatabase(key); !ok {
 		return nil, moerr.GetOkExpectedEOB()
 	}
-	return &database{
+	return &txnDatabase{
 		txn:          txn,
-		db:           e.db,
-		fs:           e.fs,
 		databaseName: name,
 		databaseId:   key.Id,
 	}, nil
@@ -173,7 +174,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 			if err != nil {
 				return false
 			}
-			distDb := db.(*database)
+			distDb := db.(*txnDatabase)
 			tblName = distDb.getTableNameById(ctx, key.id)
 			if tblName != "" {
 				return false
@@ -189,7 +190,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 			if err != nil {
 				return "", "", err
 			}
-			distDb := db.(*database)
+			distDb := db.(*txnDatabase)
 			tableName, rel, _ := distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				tblName = tableName
@@ -221,7 +222,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			if err != nil {
 				return false
 			}
-			distDb := db.(*database)
+			distDb := db.(*txnDatabase)
 			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				return false
@@ -237,7 +238,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			if err != nil {
 				return "", "", nil, err
 			}
-			distDb := db.(*database)
+			distDb := db.(*txnDatabase)
 			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				break
@@ -252,7 +253,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 }
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
-	var db *database
+	var db *txnDatabase
 
 	txn := e.getTransaction(op)
 	if txn == nil {
@@ -271,10 +272,8 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		if ok := e.catalog.GetDatabase(key); !ok {
 			return moerr.GetOkExpectedEOB()
 		}
-		db = &database{
+		db = &txnDatabase{
 			txn:          txn,
-			db:           e.db,
-			fs:           e.fs,
 			databaseName: name,
 			databaseId:   key.Id,
 		}
@@ -321,7 +320,7 @@ func (e *Engine) hasDuplicate(ctx context.Context, txn *Transaction) bool {
 			if !ok {
 				continue
 			}
-			tbl := v.(*table)
+			tbl := v.(*txnTable)
 			if tbl.meta == nil {
 				continue
 			}
@@ -334,69 +333,73 @@ func (e *Engine) hasDuplicate(ctx context.Context, txn *Transaction) bool {
 }
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
-	cluster, err := e.getClusterDetails()
-	if err != nil {
-		return err
-	}
 	proc := process.New(
 		ctx,
 		e.mp,
 		e.cli,
 		op,
 		e.fs,
-		e.getClusterDetails,
 	)
 	workspace := memorytable.NewTable[RowID, *workspaceRow, *workspaceRow]()
 	workspace.DisableHistory()
 	txn := &Transaction{
 		op:          op,
 		proc:        proc,
-		db:          e.db,
+		engine:      e,
 		readOnly:    true,
 		meta:        op.Txn(),
 		idGen:       e.idGen,
 		rowId:       [2]uint64{math.MaxUint64, 0},
 		workspace:   workspace,
-		dnStores:    cluster.DNStores,
+		dnStores:    e.getDNServices(),
 		fileMap:     make(map[string]uint64),
 		tableMap:    new(sync.Map),
 		databaseMap: new(sync.Map),
 		createMap:   new(sync.Map),
-		catalog:     e.catalog,
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
-	// update catalog's cache
-	table := &table{
-		db: &database{
-			fs: e.fs,
-			txn: &Transaction{
-				catalog: e.catalog,
+
+	if e.UsePushModelOrNot() {
+		if err := e.receiveLogTailTime.blockUntilTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
+			e.delTransaction(txn)
+			return err
+		}
+	} else {
+		// update catalog's cache
+		table := &txnTable{
+			db: &txnDatabase{
+				txn: &Transaction{
+					engine: e,
+				},
+				databaseId: catalog.MO_CATALOG_ID,
 			},
-			databaseId: catalog.MO_CATALOG_ID,
-		},
+		}
+		table.tableId = catalog.MO_DATABASE_ID
+		table.tableName = catalog.MO_DATABASE
+		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
+			catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
+			e.delTransaction(txn)
+			return err
+		}
+
+		table.tableId = catalog.MO_TABLES_ID
+		table.tableName = catalog.MO_TABLES
+		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
+			catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
+			e.delTransaction(txn)
+			return err
+		}
+
+		table.tableId = catalog.MO_COLUMNS_ID
+		table.tableName = catalog.MO_COLUMNS
+		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
+			catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
+			e.delTransaction(txn)
+			return err
+		}
 	}
-	table.tableId = catalog.MO_DATABASE_ID
-	table.tableName = catalog.MO_DATABASE
-	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
-		catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
-		e.delTransaction(txn)
-		return err
-	}
-	table.tableId = catalog.MO_TABLES_ID
-	table.tableName = catalog.MO_TABLES
-	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
-		catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
-		e.delTransaction(txn)
-		return err
-	}
-	table.tableId = catalog.MO_COLUMNS_ID
-	table.tableName = catalog.MO_COLUMNS
-	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
-		catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
-		e.delTransaction(txn)
-		return err
-	}
+
 	return nil
 }
 
@@ -414,6 +417,10 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	}
 	if e.hasDuplicate(ctx, txn) {
 		return moerr.NewDuplicateNoCtx()
+	}
+	err := txn.DumpBatch(true)
+	if err != nil {
+		return err
 	}
 	reqs, err := genWriteReqs(txn.writes)
 	if err != nil {
@@ -434,19 +441,16 @@ func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 }
 
 func (e *Engine) Nodes() (engine.Nodes, error) {
-	clusterDetails, err := e.getClusterDetails()
-	if err != nil {
-		return nil, err
-	}
-
 	var nodes engine.Nodes
-	for _, store := range clusterDetails.CNStores {
+	cluster := clusterservice.GetMOCluster()
+	cluster.GetCNService(clusterservice.NewSelector(), func(c metadata.CNService) bool {
 		nodes = append(nodes, engine.Node{
 			Mcpu: runtime.NumCPU(),
-			Id:   store.UUID,
-			Addr: store.ServiceAddress,
+			Id:   c.ServiceID,
+			Addr: c.PipelineServiceAddress,
 		})
-	}
+		return true
+	})
 	return nodes, nil
 }
 
@@ -513,7 +517,6 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
 	e.Lock()
 	defer e.Unlock()
-	heap.Push(e.txnHeap, txn)
 	e.txns[string(op.Txn().ID)] = txn
 }
 
@@ -534,47 +537,16 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	txn.databaseMap = nil
 	e.Lock()
 	defer e.Unlock()
-	for i, tmp := range *e.txnHeap {
-		if bytes.Equal(txn.meta.ID, tmp.meta.ID) {
-			heap.Remove(e.txnHeap, i)
-			break
-		}
-	}
 	delete(e.txns, string(txn.meta.ID))
 }
 
-func (e *Engine) gc(ctx context.Context) {
-	var ps []Partitions
-	var ts timestamp.Timestamp
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(GcCycle):
-			e.RLock()
-			if len(*e.txnHeap) == 0 {
-				e.RUnlock()
-				continue
-			}
-			ts = (*e.txnHeap)[0].meta.SnapshotTS
-			e.RUnlock()
-			e.db.Lock()
-			for k := range e.db.partitions {
-				ps = append(ps, e.db.partitions[k])
-			}
-			e.db.Unlock()
-			for i := range ps {
-				for j := range ps[i] {
-					select {
-					case <-ps[i][j].lock:
-					case <-ctx.Done():
-						return
-					}
-					ps[i][j].GC(ts)
-					ps[i][j].lock <- struct{}{}
-				}
-			}
-		}
-	}
+func (e *Engine) getDNServices() []DNStore {
+	var values []DNStore
+	cluster := clusterservice.GetMOCluster()
+	cluster.GetDNService(clusterservice.NewSelector(),
+		func(d metadata.DNService) bool {
+			values = append(values, d)
+			return true
+		})
+	return values
 }

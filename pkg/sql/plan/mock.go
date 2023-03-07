@@ -42,6 +42,10 @@ type MockCompilerContext struct {
 	ctx context.Context
 }
 
+func (m *MockCompilerContext) ResolveUdf(name string, ast []*plan.Expr) (string, error) {
+	return "", nil
+}
+
 func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
 	return []uint32{catalog.System_Account}, nil
 }
@@ -70,11 +74,11 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 }
 
 type col struct {
-	Name      string
-	Id        types.T
-	Nullable  bool
-	Precision int32
-	Scale     int32
+	Name     string
+	Id       types.T
+	Nullable bool
+	Width    int32
+	Scale    int32
 }
 
 type index struct {
@@ -539,7 +543,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					Typ: &plan.Type{
 						Id:          int32(col.Id),
 						NotNullable: !col.Nullable,
-						Precision:   col.Precision,
+						Width:       col.Width,
 						Scale:       col.Scale,
 					},
 					Name:    col.Name,

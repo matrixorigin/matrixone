@@ -342,64 +342,64 @@ var (
 		BlockMeta_SegmentID,
 	}
 	MoDatabaseTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),     // dat_id
-		types.New(types.T_varchar, 5000, 0, 0), // datname
-		types.New(types.T_varchar, 5000, 0, 0), // dat_catalog_name
-		types.New(types.T_varchar, 5000, 0, 0), // dat_createsql
-		types.New(types.T_uint32, 0, 0, 0),     // owner
-		types.New(types.T_uint32, 0, 0, 0),     // creator
-		types.New(types.T_timestamp, 0, 0, 0),  // created_time
-		types.New(types.T_uint32, 0, 0, 0),     // account_id
+		types.New(types.T_uint64, 0, 0),     // dat_id
+		types.New(types.T_varchar, 5000, 0), // datname
+		types.New(types.T_varchar, 5000, 0), // dat_catalog_name
+		types.New(types.T_varchar, 5000, 0), // dat_createsql
+		types.New(types.T_uint32, 0, 0),     // owner
+		types.New(types.T_uint32, 0, 0),     // creator
+		types.New(types.T_timestamp, 0, 0),  // created_time
+		types.New(types.T_uint32, 0, 0),     // account_id
 	}
 	MoTablesTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),     // rel_id
-		types.New(types.T_varchar, 5000, 0, 0), // relname
-		types.New(types.T_varchar, 5000, 0, 0), // reldatabase
-		types.New(types.T_uint64, 0, 0, 0),     // reldatabase_id
-		types.New(types.T_varchar, 5000, 0, 0), // relpersistence
-		types.New(types.T_varchar, 5000, 0, 0), // relkind
-		types.New(types.T_varchar, 5000, 0, 0), // rel_comment
-		types.New(types.T_text, 0, 0, 0),       // rel_createsql
-		types.New(types.T_timestamp, 0, 0, 0),  // created_time
-		types.New(types.T_uint32, 0, 0, 0),     // creator
-		types.New(types.T_uint32, 0, 0, 0),     // owner
-		types.New(types.T_uint32, 0, 0, 0),     // account_id
-		types.New(types.T_blob, 0, 0, 0),       // partition
-		types.New(types.T_blob, 0, 0, 0),       // viewdef
-		types.New(types.T_varchar, 5000, 0, 0), // constraint
+		types.New(types.T_uint64, 0, 0),     // rel_id
+		types.New(types.T_varchar, 5000, 0), // relname
+		types.New(types.T_varchar, 5000, 0), // reldatabase
+		types.New(types.T_uint64, 0, 0),     // reldatabase_id
+		types.New(types.T_varchar, 5000, 0), // relpersistence
+		types.New(types.T_varchar, 5000, 0), // relkind
+		types.New(types.T_varchar, 5000, 0), // rel_comment
+		types.New(types.T_text, 0, 0),       // rel_createsql
+		types.New(types.T_timestamp, 0, 0),  // created_time
+		types.New(types.T_uint32, 0, 0),     // creator
+		types.New(types.T_uint32, 0, 0),     // owner
+		types.New(types.T_uint32, 0, 0),     // account_id
+		types.New(types.T_blob, 0, 0),       // partition
+		types.New(types.T_blob, 0, 0),       // viewdef
+		types.New(types.T_varchar, 5000, 0), // constraint
 	}
 	MoColumnsTypes = []types.Type{
-		types.New(types.T_varchar, 256, 0, 0),  // att_uniq_name
-		types.New(types.T_uint32, 0, 0, 0),     // account_id
-		types.New(types.T_uint64, 0, 0, 0),     // att_database_id
-		types.New(types.T_varchar, 256, 0, 0),  // att_database
-		types.New(types.T_uint64, 0, 0, 0),     // att_relname_id
-		types.New(types.T_varchar, 256, 0, 0),  // att_relname
-		types.New(types.T_varchar, 256, 0, 0),  // attname
-		types.New(types.T_varchar, 256, 0, 0),  // atttyp
-		types.New(types.T_int32, 0, 0, 0),      // attnum
-		types.New(types.T_int32, 0, 0, 0),      // att_length
-		types.New(types.T_int8, 0, 0, 0),       // attnotnull
-		types.New(types.T_int8, 0, 0, 0),       // atthasdef
-		types.New(types.T_varchar, 2048, 0, 0), // att_default
-		types.New(types.T_int8, 0, 0, 0),       // attisdropped
-		types.New(types.T_char, 1, 0, 0),       // att_constraint_type
-		types.New(types.T_int8, 0, 0, 0),       // att_is_unsigned
-		types.New(types.T_int8, 0, 0, 0),       // att_is_auto_increment
-		types.New(types.T_varchar, 2048, 0, 0), // att_comment
-		types.New(types.T_int8, 0, 0, 0),       // att_is_hidden
-		types.New(types.T_int8, 0, 0, 0),       // att_has_update
-		types.New(types.T_varchar, 2048, 0, 0), // att_update
-		types.New(types.T_int8, 0, 0, 0),       // att_is_clusterby
+		types.New(types.T_varchar, 256, 0),  // att_uniq_name
+		types.New(types.T_uint32, 0, 0),     // account_id
+		types.New(types.T_uint64, 0, 0),     // att_database_id
+		types.New(types.T_varchar, 256, 0),  // att_database
+		types.New(types.T_uint64, 0, 0),     // att_relname_id
+		types.New(types.T_varchar, 256, 0),  // att_relname
+		types.New(types.T_varchar, 256, 0),  // attname
+		types.New(types.T_varchar, 256, 0),  // atttyp
+		types.New(types.T_int32, 0, 0),      // attnum
+		types.New(types.T_int32, 0, 0),      // att_length
+		types.New(types.T_int8, 0, 0),       // attnotnull
+		types.New(types.T_int8, 0, 0),       // atthasdef
+		types.New(types.T_varchar, 2048, 0), // att_default
+		types.New(types.T_int8, 0, 0),       // attisdropped
+		types.New(types.T_char, 1, 0),       // att_constraint_type
+		types.New(types.T_int8, 0, 0),       // att_is_unsigned
+		types.New(types.T_int8, 0, 0),       // att_is_auto_increment
+		types.New(types.T_varchar, 2048, 0), // att_comment
+		types.New(types.T_int8, 0, 0),       // att_is_hidden
+		types.New(types.T_int8, 0, 0),       // att_has_update
+		types.New(types.T_varchar, 2048, 0), // att_update
+		types.New(types.T_int8, 0, 0),       // att_is_clusterby
 	}
 	MoTableMetaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0),                    // block_id
-		types.New(types.T_bool, 0, 0, 0),                      // entry_state, true for appendable
-		types.New(types.T_bool, 0, 0, 0),                      // sorted, true for sorted by primary key
-		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0), // meta_loc
-		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0), // delta_loc
-		types.New(types.T_TS, 0, 0, 0),                        // committs
-		types.New(types.T_uint64, 0, 0, 0),                    // segment_id
+		types.New(types.T_uint64, 0, 0),                    // block_id
+		types.New(types.T_bool, 0, 0),                      // entry_state, true for appendable
+		types.New(types.T_bool, 0, 0),                      // sorted, true for sorted by primary key
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // meta_loc
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // delta_loc
+		types.New(types.T_TS, 0, 0),                        // committs
+		types.New(types.T_uint64, 0, 0),                    // segment_id
 	}
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}
@@ -445,20 +445,20 @@ type Meta struct {
 
 var (
 	MetaColTypes = []types.Type{
-		types.New(types.T_uuid, 0, 0, 0),      // query_id
-		types.New(types.T_text, 0, 0, 0),      // statement
-		types.New(types.T_uint32, 0, 0, 0),    // account_id
-		types.New(types.T_uint32, 0, 0, 0),    // role_id
-		types.New(types.T_text, 0, 0, 0),      // result_path
-		types.New(types.T_timestamp, 0, 0, 0), // create_time
-		types.New(types.T_float64, 0, 0, 0),   // result_size
-		types.New(types.T_text, 0, 0, 0),      // columns
-		types.New(types.T_text, 0, 0, 0),      // Tables
-		types.New(types.T_uint32, 0, 0, 0),    // user_id
-		types.New(types.T_timestamp, 0, 0, 0), // expired_time
-		types.New(types.T_text, 0, 0, 0),      // Plan
-		types.New(types.T_text, 0, 0, 0),      // Ast
-		types.New(types.T_text, 0, 0, 0),      // ColumnMap
+		types.New(types.T_uuid, 0, 0),      // query_id
+		types.New(types.T_text, 0, 0),      // statement
+		types.New(types.T_uint32, 0, 0),    // account_id
+		types.New(types.T_uint32, 0, 0),    // role_id
+		types.New(types.T_text, 0, 0),      // result_path
+		types.New(types.T_timestamp, 0, 0), // create_time
+		types.New(types.T_float64, 0, 0),   // result_size
+		types.New(types.T_text, 0, 0),      // columns
+		types.New(types.T_text, 0, 0),      // Tables
+		types.New(types.T_uint32, 0, 0),    // user_id
+		types.New(types.T_timestamp, 0, 0), // expired_time
+		types.New(types.T_text, 0, 0),      // Plan
+		types.New(types.T_text, 0, 0),      // Ast
+		types.New(types.T_text, 0, 0),      // ColumnMap
 	}
 
 	MetaColNames = []string{

@@ -18,14 +18,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 func getQueryResultDir() string {
@@ -293,6 +295,9 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
 		e, err := f.StatFile(requestCtx, path)
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				return moerr.NewQueryIdNotFound(requestCtx, id)
+			}
 			return err
 		}
 		reader, err := objectio.NewObjectReader(path, f)
@@ -514,7 +519,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	mrs := &MysqlResultSet{}
 	typs := make([]types.Type, columnCount)
 	for i, c := range columnDefs.ResultCols {
-		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale, c.Typ.Precision)
+		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale)
 		mcol := &MysqlColumn{}
 		mcol.SetName(c.GetName())
 		err = convertEngineTypeToMysqlType(ctx, typs[i].Oid, mcol)
@@ -637,6 +642,9 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
 	e, err := ses.GetParameterUnit().FileService.StatFile(ctx, metaFile)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, moerr.NewQueryIdNotFound(ctx, queryId)
+		}
 		return nil, err
 	}
 	// read meta's meta
@@ -682,6 +690,9 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 	for i, file := range fileList {
 		e, err := ses.GetParameterUnit().FileService.StatFile(ctx, file)
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				return nil, moerr.NewQueryIdNotFound(ctx, queryId)
+			}
 			return nil, err
 		}
 		rti = append(rti, resultFileInfo{

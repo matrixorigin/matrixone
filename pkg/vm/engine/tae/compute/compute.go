@@ -235,14 +235,15 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 			v.(types.Uuid),
 			types.CompareUuid,
 			skipmask)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob,
+		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
 		// column := data.Slice().(*containers.Bytes)
 		val := v.([]byte)
 		start, end := 0, data.Length()-1
 		var mid int
 		for start <= end {
 			mid = (start + end) / 2
-			res := bytes.Compare(data.Get(mid).([]byte), val)
+			res := bytes.Compare(data.ShallowGet(mid).([]byte), val)
 			if res > 0 {
 				end = mid - 1
 			} else if res < 0 {

@@ -48,7 +48,6 @@ func (t *Table) NewReader(
 	readers []engine.Reader,
 	err error,
 ) {
-
 	readers = make([]engine.Reader, parallel)
 
 	var shards []Shard
@@ -81,11 +80,7 @@ func (t *Table) NewReader(
 			id := binary.LittleEndian.Uint64(bs)
 			idSet[id] = true
 		}
-		clusterDetails, err := t.engine.getClusterDetails()
-		if err != nil {
-			return nil, err
-		}
-		for _, store := range clusterDetails.DNStores {
+		for _, store := range getDNServices(t.engine.cluster) {
 			for _, shard := range store.Shards {
 				if !idSet[shard.ShardID] {
 					continue
@@ -95,7 +90,7 @@ func (t *Table) NewReader(
 						ShardID: shard.ShardID,
 					},
 					ReplicaID: shard.ReplicaID,
-					Address:   store.ServiceAddress,
+					Address:   store.TxnServiceAddress,
 				})
 			}
 		}
@@ -208,11 +203,7 @@ func (t *TableReader) Close() error {
 
 func (t *Table) Ranges(ctx context.Context, _ *plan.Expr) ([][]byte, error) {
 	// return encoded shard ids
-	clusterDetails, err := t.engine.getClusterDetails()
-	if err != nil {
-		return nil, err
-	}
-	nodes := clusterDetails.DNStores
+	nodes := getDNServices(t.engine.cluster)
 	shards := make([][]byte, 0, len(nodes))
 	for _, node := range nodes {
 		for _, shard := range node.Shards {

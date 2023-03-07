@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"reflect"
 	"sort"
@@ -31,42 +30,35 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"golang.org/x/sync/errgroup"
-
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-
-	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 )
 
 func onlyCreateStatementErrorInfo() string {
@@ -213,7 +205,7 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt string, useEnv bool) context.Context {
+var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) context.Context {
 	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
@@ -265,12 +257,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
-		SqlSourceType:        ses.sqlSourceType,
+		SqlSourceType:        sqlType,
 		RequestAt:            requestAt,
 		StatementType:        getStatementType(statement).GetStatementType(),
 		QueryType:            getStatementType(statement).GetQueryType(),
 	}
-	if ses.sqlSourceType != "internal_sql" {
+	if sqlType != "internal_sql" {
 		ses.tStmt = stm
 		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
@@ -284,8 +276,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return motrace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string) context.Context {
-	ctx = RecordStatement(ctx, ses, proc, nil, envBegin, envStmt, true)
+var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt, sqlType string) context.Context {
+	ctx = RecordStatement(ctx, ses, proc, nil, envBegin, envStmt, sqlType, true)
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
@@ -413,7 +405,7 @@ func (oq *outputQueue) flush() error {
 		}
 	} else {
 		//send group of row
-		if oq.showStmtType == ShowColumns || oq.showStmtType == ShowTableStatus {
+		if oq.showStmtType == ShowTableStatus {
 			oq.rowIdx = 0
 			return nil
 		}
@@ -447,143 +439,6 @@ func (foq *fakeOutputQueue) getEmptyRow() ([]interface{}, error) {
 }
 
 func (foq *fakeOutputQueue) flush() error {
-	return nil
-}
-
-const (
-	primaryKeyPos = 25
-)
-
-/*
-handle show columns from table in plan2 and tae
-*/
-func handleShowColumns(ses *Session, stmt *tree.ShowColumns) error {
-	data := ses.GetData()
-	mrs := ses.GetMysqlResultSet()
-	dbName := stmt.Table.GetDBName()
-	if len(dbName) == 0 {
-		dbName = ses.GetDatabaseName()
-	}
-
-	tableName := string(stmt.Table.ToTableName().ObjectName)
-	ctx := ses.GetTxnCompileCtx()
-	_, tableDef := ctx.Resolve(dbName, tableName)
-	if tableDef == nil {
-		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tableName)
-	}
-
-	colNameToColContent := make(map[string][]interface{})
-	for _, d := range data {
-		colName := string(d[0].([]byte))
-		if colName == catalog.Row_ID {
-			continue
-		}
-		//the non-sys account skips the column account_id of the cluster table
-		if util.IsClusterTableAttribute(colName) &&
-			isClusterTable(dbName, tableName) &&
-			ses.GetTenantInfo() != nil &&
-			!ses.GetTenantInfo().IsSysTenant() {
-			continue
-		}
-
-		if len(d) == 7 {
-			row := make([]interface{}, 7)
-			row[0] = colName
-			typ := &types.Type{}
-			data := d[1].([]uint8)
-			if err := types.Decode(data, typ); err != nil {
-				return err
-			}
-			row[1] = typ.DescString()
-			row[2] = d[2]
-			row[3] = d[3]
-			if value, ok := row[3].([]uint8); ok {
-				if len(value) != 0 {
-					row[2] = "NO"
-				}
-			}
-			def := &plan.Default{}
-			defaultData := d[4].([]uint8)
-			if string(defaultData) == "" {
-				row[4] = "NULL"
-			} else {
-				if err := types.Decode(defaultData, def); err != nil {
-					return err
-				}
-				originString := def.GetOriginString()
-				switch originString {
-				case "uuid()":
-					row[4] = "UUID"
-				case "current_timestamp()":
-					row[4] = "CURRENT_TIMESTAMP"
-				case "now()":
-					row[4] = "CURRENT_TIMESTAMP"
-				case "":
-					row[4] = "NULL"
-				default:
-					row[4] = originString
-				}
-			}
-
-			row[5] = ""
-			row[6] = d[6]
-			colNameToColContent[colName] = row
-		} else {
-			row := make([]interface{}, 9)
-			row[0] = colName
-			typ := &types.Type{}
-			data := d[1].([]uint8)
-			if err := types.Decode(data, typ); err != nil {
-				return err
-			}
-			row[1] = typ.DescString()
-			row[2] = "NULL"
-			row[3] = d[3]
-			row[4] = d[4]
-			if value, ok := row[4].([]uint8); ok {
-				if len(value) != 0 {
-					row[3] = "NO"
-				}
-			}
-			def := &plan.Default{}
-			defaultData := d[5].([]uint8)
-			if string(defaultData) == "" {
-				row[5] = "NULL"
-			} else {
-				if err := types.Decode(defaultData, def); err != nil {
-					return err
-				}
-				originString := def.GetOriginString()
-				switch originString {
-				case "uuid()":
-					row[5] = "UUID"
-				case "current_timestamp()":
-					row[5] = "CURRENT_TIMESTAMP"
-				case "now()":
-					row[5] = "CURRENT_TIMESTAMP"
-				case "":
-					row[5] = "NULL"
-				default:
-					row[5] = originString
-				}
-			}
-
-			row[6] = ""
-			row[7] = d[7]
-			row[8] = d[8]
-			colNameToColContent[colName] = row
-		}
-	}
-	for _, col := range tableDef.Cols {
-		if row, ok := colNameToColContent[col.Name]; ok {
-			mrs.AddRow(row)
-		}
-
-	}
-	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
-		logErrorf(ses.GetConciseProfile(), "handleShowColumns error %v", err)
-		return err
-	}
 	return nil
 }
 
@@ -664,7 +519,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		if oq.showStmtType == ShowColumns || oq.showStmtType == ShowTableStatus {
+		if oq.showStmtType == ShowTableStatus {
 			row2 := make([]interface{}, len(row))
 			copy(row2, row)
 			ses.AppendData(row2)
@@ -728,29 +583,6 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int64, oq o
 		}
 	}
 	return row, nil
-}
-
-func formatFloatNum[T types.Floats](num T, Typ types.Type) T {
-	if Typ.Precision == -1 || Typ.Width == 0 {
-		return num
-	}
-	pow := math.Pow10(int(Typ.Precision))
-	t := math.Abs(float64(num))
-	upperLimit := math.Pow10(int(Typ.Width))
-	if t >= upperLimit {
-		t = upperLimit - 1
-	} else {
-		t *= pow
-		t = math.Round(t)
-	}
-	if t >= upperLimit {
-		t = upperLimit - 1
-	}
-	t /= pow
-	if num < 0 {
-		t = -1 * t
-	}
-	return T(t)
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector
@@ -878,28 +710,44 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	case types.T_float32:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float32)
-			row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
+			if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
+				row[i] = vs[rowIndex]
+			} else {
+				row[i] = strconv.FormatFloat(float64(vs[rowIndex]), 'f', int(vec.Typ.Scale), 64)
+			}
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float32)
-				row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
+				if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
+					row[i] = vs[rowIndex]
+				} else {
+					row[i] = strconv.FormatFloat(float64(vs[rowIndex]), 'f', int(vec.Typ.Scale), 64)
+				}
 			}
 		}
 	case types.T_float64:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float64)
-			row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
+			if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
+				row[i] = vs[rowIndex]
+			} else {
+				row[i] = strconv.FormatFloat(vs[rowIndex], 'f', int(vec.Typ.Scale), 64)
+			}
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float64)
-				row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
+				if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
+					row[i] = vs[rowIndex]
+				} else {
+					row[i] = strconv.FormatFloat(vs[rowIndex], 'f', int(vec.Typ.Scale), 64)
+				}
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			row[i] = vec.GetBytes(rowIndex)
 		} else {
@@ -922,42 +770,42 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			}
 		}
 	case types.T_datetime:
-		precision := vec.Typ.Precision
+		scale := vec.Typ.Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Datetime)
-			row[i] = vs[rowIndex].String2(precision)
+			row[i] = vs[rowIndex].String2(scale)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Datetime)
-				row[i] = vs[rowIndex].String2(precision)
+				row[i] = vs[rowIndex].String2(scale)
 			}
 		}
 	case types.T_time:
-		precision := vec.Typ.Precision
+		scale := vec.Typ.Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Time)
-			row[i] = vs[rowIndex].String2(precision)
+			row[i] = vs[rowIndex].String2(scale)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Time)
-				row[i] = vs[rowIndex].String2(precision)
+				row[i] = vs[rowIndex].String2(scale)
 			}
 		}
 	case types.T_timestamp:
-		precision := vec.Typ.Precision
+		scale := vec.Typ.Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Timestamp)
-			row[i] = vs[rowIndex].String2(timeZone, precision)
+			row[i] = vs[rowIndex].String2(timeZone, scale)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Timestamp)
-				row[i] = vs[rowIndex].String2(timeZone, precision)
+				row[i] = vs[rowIndex].String2(timeZone, scale)
 			}
 		}
 	case types.T_decimal64:
@@ -1678,7 +1526,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 
 func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"Variable_name", "Value"})
-	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
+	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
 	cnt := len(rows)
 	bat.Zs = make([]int64, cnt)
 	for i := range bat.Zs {
@@ -2179,6 +2027,12 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 		setColFlag(c)
 		setColLength(c, col.Typ.Width)
 		setCharacter(c)
+
+		// For binary/varbinary with mysql_type_varchar.Change the charset.
+		if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
+			c.SetCharset(0x3f)
+		}
+
 		c.SetDecimal(uint8(col.Typ.Scale))
 		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
@@ -2256,9 +2110,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.plan = newPlan
 		// reset some special stmt for execute statement
 		switch cwft.stmt.(type) {
-		case *tree.ShowColumns:
-			cwft.ses.SetShowStmtType(ShowColumns)
-			cwft.ses.SetData(nil)
 		case *tree.ShowTableStatus:
 			cwft.ses.showStmtType = ShowTableStatus
 			cwft.ses.SetData(nil)
@@ -2327,16 +2178,16 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		tempEngine := memoryengine.New(
 			requestCtx,
 			memoryengine.NewDefaultShardPolicy(
-				mpool.MustNewZero(),
+				mpool.MustNewZeroNoFixed(),
 			),
-			func() (logservicepb.ClusterDetails, error) {
-				return logservicepb.ClusterDetails{
-					DNStores: []logservicepb.DNStore{
-						*dnStore,
-					},
-				}, nil
-			},
 			memoryengine.RandomIDGenerator,
+			clusterservice.NewMOCluster(
+				nil,
+				0,
+				clusterservice.WithDisableRefresh(),
+				clusterservice.WithServices(nil, []metadata.DNService{
+					*dnStore,
+				})),
 		)
 
 		// 2. bind the temporary engine to the session and txnHandler
@@ -3123,29 +2974,33 @@ func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(request
 }
 
 func (ses *Session) getSqlType(sql string) {
+	ses.sqlSourceType = nil
 	tenant := ses.GetTenantInfo()
 	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
-		ses.sqlSourceType = intereSql
+		ses.sqlSourceType = append(ses.sqlSourceType, intereSql)
 		return
 	}
 	flag, _, _ := isSpecialUser(tenant.User)
 	if flag {
-		ses.sqlSourceType = intereSql
+		ses.sqlSourceType = append(ses.sqlSourceType, intereSql)
 		return
 	}
-	p1 := strings.Index(sql, "/*")
-	p2 := strings.Index(sql, "*/")
-	if p1 < 0 || p2 < 0 || p2 <= p1+1 {
-		ses.sqlSourceType = externSql
-		return
-	}
-	source := strings.TrimSpace(sql[p1+2 : p2])
-	if source == cloudUserTag {
-		ses.sqlSourceType = cloudUserSql
-	} else if source == cloudNoUserTag {
-		ses.sqlSourceType = cloudNoUserSql
-	} else {
-		ses.sqlSourceType = externSql
+	for len(sql) > 0 {
+		p1 := strings.Index(sql, "/*")
+		p2 := strings.Index(sql, "*/")
+		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
+			ses.sqlSourceType = append(ses.sqlSourceType, externSql)
+			return
+		}
+		source := strings.TrimSpace(sql[p1+2 : p2])
+		if source == cloudUserTag {
+			ses.sqlSourceType = append(ses.sqlSourceType, cloudUserSql)
+		} else if source == cloudNoUserTag {
+			ses.sqlSourceType = append(ses.sqlSourceType, cloudNoUserSql)
+		} else {
+			ses.sqlSourceType = append(ses.sqlSourceType, externSql)
+		}
+		sql = sql[p2+2:]
 	}
 }
 
@@ -3271,9 +3126,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.GetMemPool(),
 		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService,
-		pu.GetClusterDetails,
-	)
+		pu.FileService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -3315,7 +3168,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
@@ -3358,7 +3211,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
-		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sql, singleStatement)
+		sqlType := ses.sqlSourceType[0]
+		if i < len(ses.sqlSourceType) {
+			sqlType = ses.sqlSourceType[i]
+		}
+		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sql, sqlType, singleStatement)
 		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
@@ -3525,9 +3382,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			default:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 			}
-		case *tree.ShowColumns:
-			ses.SetShowStmtType(ShowColumns)
-			ses.SetData(nil)
 		case *tree.ShowTableStatus:
 			ses.SetShowStmtType(ShowTableStatus)
 			ses.SetData(nil)
@@ -3761,10 +3615,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 
 			switch ses.GetShowStmtType() {
-			case ShowColumns:
-				if err = handleShowColumns(ses, statement.(*tree.ShowColumns)); err != nil {
-					goto handleFailed
-				}
 			case ShowTableStatus:
 				if err = handleShowTableStatus(ses, statement.(*tree.ShowTableStatus), proc); err != nil {
 					goto handleFailed
@@ -3811,7 +3661,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateRole, *tree.DropRole,
 			*tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
-			*tree.Delete, *tree.TruncateTable:
+			*tree.Delete, *tree.TruncateTable, *tree.LockTableStmt, *tree.UnLockTableStmt:
 			//change privilege
 			switch cw.GetAst().(type) {
 			case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView,
@@ -4122,9 +3972,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		ses.GetMemPool(),
 		pu.TxnClient,
 		ses.GetTxnHandler().GetTxnOperator(),
-		pu.FileService,
-		pu.GetClusterDetails,
-	)
+		pu.FileService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -4159,7 +4007,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, "", sql)
 		retErr = moerr.NewParseError(requestCtx, err.Error())
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
@@ -4167,7 +4015,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 
 	singleStatement := len(stmtExecs) == 1
 	for _, exec := range stmtExecs {
-		err = Execute(requestCtx, ses, proc, exec, beginInstant, sql, singleStatement)
+		err = Execute(requestCtx, ses, proc, exec, beginInstant, sql, "", singleStatement)
 		if err != nil {
 			return err
 		}
@@ -4541,6 +4389,10 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varchar:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_binary:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_varbinary:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_date:
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:
@@ -4657,6 +4509,9 @@ func getAccountId(ctx context.Context) uint32 {
 
 func changeVersion(ctx context.Context, ses *Session, db string) error {
 	var err error
+	if _, ok := bannedCatalogDatabases[db]; ok {
+		return err
+	}
 	version, _ := GetVersionCompatbility(ctx, ses, db)
 	if ses.GetTenantInfo() != nil {
 		ses.GetTenantInfo().SetVersion(version)

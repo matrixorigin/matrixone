@@ -56,7 +56,10 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr.remoteReceivers != nil {
+	if arg.FuncId == SendToAllFunc {
+		if !arg.prepared {
+			arg.waitRemoteRegsReady(proc)
+		}
 		for _, r := range arg.ctr.remoteReceivers {
 			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
 			_ = cancel
@@ -74,7 +77,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			r.cs.Write(timeoutCtx, message)
 			close(r.doneCh)
 		}
-
 	}
 
 	if pipelineFailed {

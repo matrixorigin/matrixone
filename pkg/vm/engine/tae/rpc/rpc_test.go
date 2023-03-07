@@ -17,6 +17,13 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"os"
+	"path"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -25,12 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
-	"os"
-	"path"
-	"strconv"
-	"sync"
-	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -207,8 +208,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//add two non-appendable blocks from S3 into "tbtest" table
 	attrs := []string{catalog2.BlockMeta_MetaLoc}
-	vecTypes := []types.Type{types.New(types.T_varchar,
-		types.MaxVarcharLen, 0, 0)}
+	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 	nullable := []bool{false}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
@@ -335,8 +335,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//prepare delete locations.
 	attrs = []string{catalog2.BlockMeta_DeltaLoc}
-	vecTypes = []types.Type{types.New(types.T_varchar,
-		types.MaxVarcharLen, 0, 0)}
+	vecTypes = []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 	nullable = []bool{false}
 	vecOpts = containers.Options{}
 	vecOpts.Capacity = 0

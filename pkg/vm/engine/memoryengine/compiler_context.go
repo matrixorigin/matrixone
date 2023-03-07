@@ -48,6 +48,10 @@ func (e *Engine) NewCompilerContext(
 
 var _ plan.CompilerContext = new(CompilerContext)
 
+func (c *CompilerContext) ResolveUdf(name string, ast []*plan.Expr) (string, error) {
+	return "", nil
+}
+
 func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
 	return []uint32{catalog.System_Account}, nil
 }
@@ -171,7 +175,7 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 }
 
 func (*CompilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
-	panic("unimplemented")
+	return "", nil
 }
 
 func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs []*engine.Attribute, err error) {
@@ -217,7 +221,6 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 			Id:          int32(attr.Type.Oid),
 			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),
 			Width:       attr.Type.Width,
-			Precision:   attr.Type.Precision,
 			Size:        attr.Type.Size,
 			Scale:       attr.Type.Scale,
 		},

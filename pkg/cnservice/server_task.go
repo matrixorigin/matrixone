@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/file"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"go.uber.org/zap"
@@ -205,9 +206,7 @@ func (s *service) registerExecutorsLocked() {
 		&s.cfg.Frontend,
 		nil,
 		nil,
-		nil,
-		s.pu.GetClusterDetails,
-	)
+		nil)
 	pu.StorageEngine = s.storeEngine
 	pu.TxnClient = s._txnClient
 	s.cfg.Frontend.SetDefaultValues()
@@ -229,7 +228,7 @@ func (s *service) registerExecutorsLocked() {
 			if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
 			}
-			if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
+			if err := mometric.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
 			}
 			if err := motrace.InitSchema(moServerCtx, ieFactory); err != nil {

@@ -46,11 +46,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
@@ -64,6 +66,7 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Join:       join.String,
 	Semi:       semi.String,
 	Left:       left.String,
+	Right:      right.String,
 	Single:     single.String,
 	Limit:      limit.String,
 	Order:      order.String,
@@ -92,10 +95,11 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	MergeGroup:  mergegroup.String,
 	MergeOffset: mergeoffset.String,
 
-	Deletion: deletion.String,
-	Insert:   insert.String,
-	Update:   update.String,
-	External: external.String,
+	Deletion:       deletion.String,
+	Insert:         insert.String,
+	OnDuplicateKey: onduplicatekey.String,
+	Update:         update.String,
+	External:       external.String,
 
 	Minus:        minus.String,
 	Intersect:    intersect.String,
@@ -111,6 +115,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Join:       join.Prepare,
 	Semi:       semi.Prepare,
 	Left:       left.Prepare,
+	Right:      right.Prepare,
 	Single:     single.Prepare,
 	Limit:      limit.Prepare,
 	Order:      order.Prepare,
@@ -139,10 +144,11 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	MergeGroup:  mergegroup.Prepare,
 	MergeOffset: mergeoffset.Prepare,
 
-	Deletion: deletion.Prepare,
-	Insert:   insert.Prepare,
-	Update:   update.Prepare,
-	External: external.Prepare,
+	Deletion:       deletion.Prepare,
+	Insert:         insert.Prepare,
+	OnDuplicateKey: onduplicatekey.Prepare,
+	Update:         update.Prepare,
+	External:       external.Prepare,
 
 	Minus:        minus.Prepare,
 	Intersect:    intersect.Prepare,
@@ -158,6 +164,7 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	Join:       join.Call,
 	Semi:       semi.Call,
 	Left:       left.Call,
+	Right:      right.Call,
 	Single:     single.Call,
 	Limit:      limit.Call,
 	Order:      order.Call,
@@ -190,6 +197,8 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	Insert:   insert.Call,
 	Update:   update.Call,
 	External: external.Call,
+
+	OnDuplicateKey: onduplicatekey.Call,
 
 	Minus:        minus.Call,
 	Intersect:    intersect.Call,

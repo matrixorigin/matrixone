@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/google/uuid"
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -66,7 +65,7 @@ func init() {
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 	stm := &motrace.StatementInfo{}
 	ctx = motrace.ContextWithStatement(ctx, stm)
-	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, bool) context.Context {
+	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, string, bool) context.Context {
 		return ctx
 	})
 	return ctx, stubs
@@ -800,59 +799,6 @@ func Test_GetComputationWrapper(t *testing.T) {
 	})
 }
 
-func Test_handleShowColumns(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("handleShowColumns succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-		ioses.EXPECT().Ref().AnyTimes()
-		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false)
-		ses.SetRequestContext(ctx)
-		data := make([][]interface{}, 1)
-		data[0] = make([]interface{}, primaryKeyPos+1)
-		data[0][0] = []byte("col1")
-		typ, err := types.Encode(types.New(types.T_int8, 0, 0, 0))
-		convey.So(err, convey.ShouldBeNil)
-		data[0][1] = typ
-		data[0][2] = []byte("NULL")
-		data[0][3] = int8(2)
-		defaultV, err := types.Encode(&plan2.Default{NullAbility: true, Expr: nil, OriginString: "", XXX_NoUnkeyedLiteral: struct{}{}, XXX_unrecognized: []byte{}, XXX_sizecache: 0})
-		convey.So(err, convey.ShouldBeNil)
-		data[0][5] = defaultV
-		data[0][primaryKeyPos] = []byte("p")
-		ses.SetData(data)
-		proto.ses = ses
-
-		ses.mrs = &MysqlResultSet{}
-
-		tableName := &tree.UnresolvedObjectName{
-			NumParts: 2,
-		}
-		tableName.Parts[0] = "x"
-		tableName.Parts[0] = "y"
-		err = handleShowColumns(ses, &tree.ShowColumns{
-			Table: tableName,
-		})
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-}
-
 func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecutor) error) {
 	ctx := context.TODO()
 	convey.Convey(fmt.Sprintf("%s succ", funName), t, func() {
@@ -1175,7 +1121,7 @@ func Test_getSqlType(t *testing.T) {
 		sql := "use db"
 		ses := &Session{}
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, intereSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, intereSql)
 
 		user := "special_user"
 		tenant := &TenantInfo{
@@ -1184,23 +1130,23 @@ func Test_getSqlType(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 		SetSpecialUser(user, nil)
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, intereSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, intereSql)
 
 		tenant.User = "dump"
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, externSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, externSql)
 
 		sql = "/* cloud_user */ use db"
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudUserSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, cloudUserSql)
 
 		sql = "/* cloud_nonuser */ use db"
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudNoUserSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, cloudNoUserSql)
 
 		sql = "/* json */ use db"
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, externSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, externSql)
 	})
 }
 

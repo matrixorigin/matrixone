@@ -4616,7 +4616,7 @@ func TestCastTimeToString(t *testing.T) {
 		proc       *process.Process
 		wantValues interface{}
 		wantType   types.T
-		precision  int32
+		scale      int32
 		wantScalar bool
 	}{
 		{
@@ -4625,7 +4625,7 @@ func TestCastTimeToString(t *testing.T) {
 			proc:       procs,
 			wantValues: []string{"11:22:33"},
 			wantType:   types.T_varchar,
-			precision:  0,
+			scale:      0,
 			wantScalar: true,
 		},
 		{
@@ -4634,7 +4634,7 @@ func TestCastTimeToString(t *testing.T) {
 			proc:       procs,
 			wantValues: []string{"11:22:33.00"},
 			wantType:   types.T_varchar,
-			precision:  2,
+			scale:      2,
 			wantScalar: false,
 		},
 		{
@@ -4643,7 +4643,7 @@ func TestCastTimeToString(t *testing.T) {
 			proc:       procs,
 			wantValues: []string{"11:22:33.000000"},
 			wantType:   types.T_varchar,
-			precision:  6,
+			scale:      6,
 			wantScalar: true,
 		},
 		{
@@ -4652,7 +4652,7 @@ func TestCastTimeToString(t *testing.T) {
 			proc:       procs,
 			wantValues: []string{"-01:12:23.000"},
 			wantType:   types.T_varchar,
-			precision:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 		{
@@ -4661,7 +4661,7 @@ func TestCastTimeToString(t *testing.T) {
 			proc:       procs,
 			wantValues: []string{"-01:12:23.444"},
 			wantType:   types.T_varchar,
-			precision:  3,
+			scale:      3,
 			wantScalar: false,
 		},
 		{
@@ -4670,15 +4670,15 @@ func TestCastTimeToString(t *testing.T) {
 			proc:       procs,
 			wantValues: []string{"-01:12:23.444"},
 			wantType:   types.T_char,
-			precision:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			// setting precision
-			c.vecs[0].Typ.Precision = c.precision
+			// setting scale
+			c.vecs[0].Typ.Scale = c.scale
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
 
@@ -4710,7 +4710,7 @@ func TestCastStringToTime(t *testing.T) {
 		proc       *process.Process
 		wantValues interface{}
 		wantType   types.T
-		precision  int32
+		scale      int32
 		wantScalar bool
 	}{
 		{
@@ -4719,7 +4719,7 @@ func TestCastStringToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
 			wantType:   types.T_time,
-			precision:  0,
+			scale:      0,
 			wantScalar: true,
 		},
 		{
@@ -4728,7 +4728,7 @@ func TestCastStringToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 130000)},
 			wantType:   types.T_time,
-			precision:  2,
+			scale:      2,
 			wantScalar: true,
 		},
 		{
@@ -4737,7 +4737,7 @@ func TestCastStringToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
 			wantType:   types.T_time,
-			precision:  6,
+			scale:      6,
 			wantScalar: true,
 		},
 		{
@@ -4746,7 +4746,7 @@ func TestCastStringToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(true, 1, 12, 23, 0)},
 			wantType:   types.T_time,
-			precision:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 		{
@@ -4755,7 +4755,7 @@ func TestCastStringToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 1, 12, 23, 444000)},
 			wantType:   types.T_time,
-			precision:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 		{
@@ -4764,15 +4764,15 @@ func TestCastStringToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(true, 1, 12, 23, 445000)},
 			wantType:   types.T_time,
-			precision:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			// setting precision
-			c.vecs[1].Typ.Precision = c.precision
+			// setting scale
+			c.vecs[1].Typ.Scale = c.scale
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
 			require.Equal(t, c.wantValues, castRes.Col)
@@ -4798,7 +4798,7 @@ func TestCastInt64ToTime(t *testing.T) {
 		proc       *process.Process
 		wantValues interface{}
 		wantType   types.T
-		precision  int32
+		scale      int32
 		wantScalar bool
 	}{
 		{
@@ -4807,7 +4807,7 @@ func TestCastInt64ToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
 			wantType:   types.T_time,
-			precision:  0,
+			scale:      0,
 			wantScalar: false,
 		},
 		{
@@ -4816,15 +4816,15 @@ func TestCastInt64ToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(true, 22, 33, 44, 0)},
 			wantType:   types.T_time,
-			precision:  2,
+			scale:      2,
 			wantScalar: false,
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			// setting precision
-			c.vecs[1].Typ.Precision = c.precision
+			// setting scale
+			c.vecs[1].Typ.Scale = c.scale
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
 			require.Equal(t, c.wantValues, castRes.Col)
@@ -4856,7 +4856,7 @@ func TestCastDecimal128ToTime(t *testing.T) {
 		proc       *process.Process
 		wantValues interface{}
 		wantType   types.T
-		precision  int32
+		scale      int32
 		wantScalar bool
 	}{
 		{
@@ -4865,7 +4865,7 @@ func TestCastDecimal128ToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 444000)},
 			wantType:   types.T_time,
-			precision:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 		{
@@ -4874,15 +4874,15 @@ func TestCastDecimal128ToTime(t *testing.T) {
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(true, 22, 33, 44, 444000)},
 			wantType:   types.T_time,
-			precision:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			// setting precision
-			c.vecs[1].Typ.Precision = c.precision
+			// setting scale
+			c.vecs[1].Typ.Scale = c.scale
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
 			require.Equal(t, c.wantValues, castRes.Col)
@@ -4893,7 +4893,7 @@ func TestCastDecimal128ToTime(t *testing.T) {
 }
 
 func TestCastDateAndDatetimeToTime(t *testing.T) {
-	makeTempVectors := func(src string, srcIsConst bool, precision int32, srcType types.T) []*vector.Vector {
+	makeTempVectors := func(src string, srcIsConst bool, scale int32, srcType types.T) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
 		switch srcType {
 		case types.T_date:
@@ -4908,7 +4908,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			panic("wrong input test type")
 		}
 		vectors[1] = makeTypeVector(types.T_time)
-		vectors[1].Typ.Precision = precision
+		vectors[1].Typ.Scale = scale
 		return vectors
 	}
 
@@ -4918,7 +4918,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 		vecs       []*vector.Vector
 		proc       *process.Process
 		wantValues interface{}
-		precision  int32
+		scale      int32
 		wantScalar bool
 	}{
 		{
@@ -4926,7 +4926,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			vecs:       makeTempVectors("2022-12-01", true, 0, types.T_date),
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 0, 0, 0, 0)},
-			precision:  0,
+			scale:      0,
 			wantScalar: true,
 		},
 		{
@@ -4934,7 +4934,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			vecs:       makeTempVectors("2022-12-01 11:22:33", false, 0, types.T_datetime),
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
-			precision:  0,
+			scale:      0,
 			wantScalar: false,
 		},
 		{
@@ -4942,15 +4942,15 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			vecs:       makeTempVectors("2022-12-01 11:22:33.123456", true, 0, types.T_datetime),
 			proc:       procs,
 			wantValues: []types.Time{types.TimeFromClock(false, 11, 22, 33, 123000)},
-			precision:  3,
+			scale:      3,
 			wantScalar: true,
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			// setting precision
-			c.vecs[1].Typ.Precision = c.precision
+			// setting scale
+			c.vecs[1].Typ.Scale = c.scale
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
 			require.Equal(t, c.wantValues, castRes.Col)
@@ -4962,7 +4962,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 }
 
 func TestCastDateAndDatetimeToInt(t *testing.T) {
-	makeTempVectors := func(src string, srcIsConst bool, precision int32, srcType, dstType types.T) []*vector.Vector {
+	makeTempVectors := func(src string, srcIsConst bool, scale int32, srcType, dstType types.T) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
 		switch srcType {
 		case types.T_date:
@@ -5017,7 +5017,7 @@ func TestCastDateAndDatetimeToInt(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			// setting precision
+			// setting scale
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
 			require.Equal(t, c.wantValues, castRes.Col)

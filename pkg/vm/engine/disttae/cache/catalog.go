@@ -114,6 +114,23 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 	return rs, rids
 }
 
+func (cc *CatalogCache) GetTableById(databaseId, tblId uint64) *TableItem {
+	var rel *TableItem
+
+	key := &TableItem{
+		DatabaseId: databaseId,
+	}
+	// If account is much, the performance is very bad.
+	cc.tables.data.Ascend(key, func(item *TableItem) bool {
+		if item.Id == tblId {
+			rel = item
+			return false
+		}
+		return true
+	})
+	return rel
+}
+
 func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []string {
 	var rs []string
 
@@ -237,6 +254,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	viewDefs := vector.MustStrCols(bat.GetVector(catalog.MO_TABLES_VIEWDEF_IDX + MO_OFF))
 	paritions := vector.MustStrCols(bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
 	constraints := vector.MustBytesCols(bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
+
 	for i, account := range accounts {
 		item := new(TableItem)
 		item.Id = ids[i]
@@ -405,12 +423,11 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
 				Typ: &plan.Type{
-					Id:        int32(attr.Attr.Type.Oid),
-					Width:     attr.Attr.Type.Width,
-					Size:      attr.Attr.Type.Size,
-					Precision: attr.Attr.Type.Precision,
-					Scale:     attr.Attr.Type.Scale,
-					AutoIncr:  attr.Attr.AutoIncrement,
+					Id:       int32(attr.Attr.Type.Oid),
+					Width:    attr.Attr.Type.Width,
+					Size:     attr.Attr.Type.Size,
+					Scale:    attr.Attr.Type.Scale,
+					AutoIncr: attr.Attr.AutoIncrement,
 				},
 				Primary:  attr.Attr.Primary,
 				Default:  attr.Attr.Default,
