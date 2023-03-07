@@ -84,11 +84,9 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		}
 	}
 
-	states := tbl.parts.Snapshot()
-
 	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-	for _, state := range states {
-		iter := state.NewRowsIter(ts, nil, false)
+	for _, part := range tbl.parts {
+		iter := part.NewRowsIter(ts, nil, false)
 		for iter.Next() {
 			entry := iter.Entry()
 			if _, ok := deletes[entry.RowID]; ok {
@@ -175,13 +173,6 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error) {
-	/*
-		// consider halloween problem
-		if int64(tbl.db.txn.statementId)-1 > 0 {
-			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
-		}
-	*/
-
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	for i := range tbl.db.txn.writes {
 		for _, entry := range tbl.db.txn.writes[i] {
@@ -200,6 +191,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 		return nil, err
 	}
 
+	tbl.parts = tbl.db.txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
+
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
 	tbl.skipBlocks = make(map[uint64]uint8)
@@ -207,8 +200,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 		return ranges, nil
 	}
 	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
-
-	states := tbl.parts.Snapshot()
 
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
@@ -233,7 +224,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 
 			for _, blockID := range ids {
 				ts := types.TimestampToTS(ts)
-				iter := states[i].NewRowsIter(ts, &blockID, true)
+				iter := tbl.parts[i].NewRowsIter(ts, &blockID, true)
 				for iter.Next() {
 					entry := iter.Entry()
 					id, offset := catalog.DecodeRowid(entry.RowID)
@@ -506,10 +497,10 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 	if len(ranges) == 0 {
 		return tbl.newMergeReader(ctx, num, expr)
 	}
-	if len(ranges) == 1 && len(ranges[0]) == 0 {
+	if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
 		return tbl.newMergeReader(ctx, num, expr)
 	}
-	if len(ranges) > 1 && len(ranges[0]) == 0 {
+	if len(ranges) > 1 && engine.IsMemtable(ranges[0]) {
 		rds := make([]engine.Reader, num)
 		mrds := make([]mergeReader, num)
 		rds0, err := tbl.newMergeReader(ctx, num, expr)
@@ -551,12 +542,6 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		}
 	}
 
-	/*
-		// consider halloween problem
-		if int64(tbl.db.txn.statementId)-1 > 0 {
-			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
-		}
-	*/
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
 	for i := range tbl.db.txn.writes {
@@ -705,12 +690,12 @@ func (tbl *txnTable) newReader(
 
 	var iter partitionStateIter
 	if len(encodedPrimaryKey) > 0 {
-		iter = tbl.parts[partitionIndex].state.Load().NewPrimaryKeyIter(
+		iter = tbl.parts[partitionIndex].NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
 			encodedPrimaryKey,
 		)
 	} else {
-		iter = tbl.parts[partitionIndex].state.Load().NewRowsIter(
+		iter = tbl.parts[partitionIndex].NewRowsIter(
 			types.TimestampToTS(ts),
 			nil,
 			false,

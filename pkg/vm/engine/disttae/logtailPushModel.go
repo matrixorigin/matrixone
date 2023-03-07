@@ -606,7 +606,11 @@ func updatePartitionOfPush(
 
 	doneMutate()
 
-	<-partition.lock
+	select {
+	case <-partition.lock:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	partition.ts = *tl.Ts
 	partition.lock <- struct{}{}
 
