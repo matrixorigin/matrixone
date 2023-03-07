@@ -60,7 +60,7 @@ type LockTableStmt struct {
 }
 
 func (node *LockTableStmt) Format(ctx *FmtCtx) {
-	ctx.WriteString("Lock Table")
+	ctx.WriteString("Lock Tables")
 	if node.TableLocks != nil {
 		prefix := " "
 		for _, a := range node.TableLocks {
@@ -73,7 +73,7 @@ func (node *LockTableStmt) Format(ctx *FmtCtx) {
 	}
 }
 
-func (node *LockTableStmt) GetStatementType() string { return "Lock Table" }
+func (node *LockTableStmt) GetStatementType() string { return "Lock Tables" }
 func (node *LockTableStmt) GetQueryType() string     { return QueryTypeOth }
 
 type UnLockTableStmt struct {
@@ -81,8 +81,8 @@ type UnLockTableStmt struct {
 }
 
 func (node *UnLockTableStmt) Format(ctx *FmtCtx) {
-	ctx.WriteString("UnLock Table")
+	ctx.WriteString("UnLock Tables")
 }
 
-func (node *UnLockTableStmt) GetStatementType() string { return "UnLock Table" }
+func (node *UnLockTableStmt) GetStatementType() string { return "UnLock Tables" }
 func (node *UnLockTableStmt) GetQueryType() string     { return QueryTypeOth }
