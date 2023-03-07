@@ -247,8 +247,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 			node.Stats = builder.compCtx.Stats(node.ObjRef, expr)
 			//if there is non monotonic filters
 			if num > 0 {
-				node.Stats.Selectivity *= 0.1
-				node.Stats.Outcnt *= 0.1
+				node.Stats.Selectivity *= 0.15
+				node.Stats.Outcnt *= 0.15
 			}
 		}
 
