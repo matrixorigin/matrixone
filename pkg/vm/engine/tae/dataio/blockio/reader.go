@@ -16,204 +16,259 @@ package blockio
 
 import (
 	"context"
-	"errors"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"io"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-type Reader struct {
-	reader  objectio.Reader
-	fs      *objectio.ObjectFS
-	key     string
-	meta    *Meta
-	name    string
-	locs    []objectio.Extent
-	readCxt context.Context
+type BlockReader struct {
+	reader objectio.Reader
+	key    string
+	name   string
+	meta   objectio.Extent
 }
 
-func NewReader(cxt context.Context, fs *objectio.ObjectFS, key string) (*Reader, error) {
-	meta, err := DecodeMetaLocToMeta(key)
+func NewObjectReader(service fileservice.FileService, key string) (dataio.Reader, error) {
+	name, _, meta, _, err := DecodeLocation(key)
 	if err != nil {
 		return nil, err
 	}
-	reader, err := objectio.NewObjectReader(meta.GetKey(), fs.Service)
+	reader, err := objectio.NewObjectReader(name, service)
 	if err != nil {
 		return nil, err
 	}
-	return &Reader{
-		fs:      fs,
-		reader:  reader,
-		key:     key,
-		meta:    meta,
-		readCxt: cxt,
+	return &BlockReader{
+		reader: reader,
+		name:   name,
+		meta:   meta,
 	}, nil
 }
 
-func NewCheckpointReader(cxt context.Context, fs fileservice.FileService, key string) (*Reader, error) {
-	name, locs, err := DecodeMetaLocToMetas(key)
+func NewFileReader(service fileservice.FileService, name string) (*BlockReader, error) {
+	reader, err := objectio.NewObjectReader(name, service)
 	if err != nil {
 		return nil, err
 	}
-	reader, err := objectio.NewObjectReader(name, fs)
-	if err != nil {
-		return nil, err
-	}
-	return &Reader{
-		fs:      objectio.NewObjectFS(fs, ""),
-		reader:  reader,
-		key:     key,
-		name:    name,
-		locs:    locs,
-		readCxt: cxt,
+	return &BlockReader{
+		reader: reader,
+		name:   name,
 	}, nil
 }
 
-func (r *Reader) BlkColumnByMetaLoadJob(
-	colTypes []types.Type,
-	colNames []string,
-	nullables []bool,
-	block objectio.BlockObject,
-) *tasks.Job {
-	exec := func(_ context.Context) (result *tasks.JobResult) {
-		bat, err := r.LoadBlkColumnsByMeta(colTypes, colNames, nullables, block)
-		return &tasks.JobResult{
-			Err: err,
-			Res: bat,
-		}
-	}
-	return tasks.NewJob(uuid.NewString(), r.readCxt, exec)
-}
-
-func (r *Reader) BlkColumnsByMetaAndIdxLoadJob(
-	colTypes []types.Type,
-	colNames []string,
-	nullables []bool,
-	block objectio.BlockObject,
-	idx int,
-) *tasks.Job {
-	exec := func(_ context.Context) (result *tasks.JobResult) {
-		bat, err := r.LoadBlkColumnsByMetaAndIdx(
-			colTypes,
-			colNames,
-			nullables,
-			block,
-			idx)
-		return &tasks.JobResult{
-			Err: err,
-			Res: bat,
-		}
-	}
-	return tasks.NewJob(uuid.NewString(), r.readCxt, exec)
-}
-
-func (r *Reader) LoadBlkColumnsByMeta(
-	colTypes []types.Type,
-	colNames []string,
-	nullables []bool,
-	block objectio.BlockObject) (*containers.Batch, error) {
-	bat := containers.NewBatch()
-	if block.GetExtent().End() == 0 {
-		return bat, nil
-	}
-	idxs := make([]uint16, len(colNames))
-	for i := range colNames {
-		idxs[i] = uint16(i)
-	}
-	ioResult, err := r.reader.Read(r.readCxt, block.GetExtent(), idxs, nil)
+func NewCheckPointReader(service fileservice.FileService, key string) (dataio.Reader, error) {
+	name, locs, err := DecodeLocationToMetas(key)
 	if err != nil {
 		return nil, err
 	}
-
-	for i := range colNames {
-		pkgVec := vector.New(colTypes[i])
-		data := make([]byte, len(ioResult.Entries[i].Object.([]byte)))
-		copy(data, ioResult.Entries[i].Object.([]byte))
-		if err = pkgVec.Read(data); err != nil && !errors.Is(err, io.EOF) {
-			return bat, err
-		}
-		var vec containers.Vector
-		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(colTypes[i], nullables[i])
-		} else {
-			vec = containers.NewVectorWithSharedMemory(pkgVec, nullables[i])
-		}
-		bat.AddVector(colNames[i], vec)
-		bat.Vecs[i] = vec
-
+	reader, err := objectio.NewObjectReader(name, service)
+	if err != nil {
+		return nil, err
 	}
-	return bat, nil
+	return &BlockReader{
+		key:    key,
+		reader: reader,
+		name:   name,
+		meta:   locs[0],
+	}, nil
 }
 
-func (r *Reader) LoadBlkColumnsByMetaAndIdx(
-	colTypes []types.Type,
-	colNames []string,
-	nullables []bool,
-	block objectio.BlockObject,
-	idx int) (*containers.Batch, error) {
-	bat := containers.NewBatch()
+func (r *BlockReader) LoadColumns(ctx context.Context, idxs []uint16,
+	ids []uint32, m *mpool.MPool) ([]*batch.Batch, error) {
+	bats := make([]*batch.Batch, 0)
+	if r.meta.End() == 0 {
+		return bats, nil
+	}
+	ioVectors, err := r.reader.Read(ctx, r.meta, idxs, ids, nil, LoadZoneMapFunc, LoadColumnFunc)
+	if err != nil {
+		return nil, err
+	}
+	for y := range ids {
+		bat := batch.NewWithSize(len(idxs))
+		for i := range idxs {
+			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+		}
+		bats = append(bats, bat)
+	}
+	return bats, nil
+}
 
-	if block.GetExtent().End() == 0 {
+func (r *BlockReader) LoadAllColumns(ctx context.Context, idxs []uint16,
+	size int64, m *mpool.MPool) ([]*batch.Batch, error) {
+	blocks, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	if blocks[0].GetExtent().End() == 0 {
 		return nil, nil
 	}
-	col, err := block.GetColumn(uint16(idx))
-	if err != nil {
-		return bat, err
+	if len(idxs) == 0 {
+		idxs = make([]uint16, blocks[0].GetColumnCount())
+		for i := range idxs {
+			idxs[i] = uint16(i)
+		}
 	}
-	data, err := col.GetData(r.readCxt, nil)
-	if err != nil {
-		return bat, err
-	}
-	pkgVec := vector.New(colTypes[0])
-	v := make([]byte, len(data.Entries[0].Object.([]byte)))
-	copy(v, data.Entries[0].Object.([]byte))
-	if err = pkgVec.Read(v); err != nil && !errors.Is(err, io.EOF) {
-		return bat, err
-	}
-	var vec containers.Vector
-	if pkgVec.Length() == 0 {
-		vec = containers.MakeVector(colTypes[0], nullables[0])
-	} else {
-		vec = containers.NewVectorWithSharedMemory(pkgVec, nullables[0])
-	}
-	bat.AddVector(colNames[0], vec)
-	return bat, nil
-}
-
-func (r *Reader) ReadMeta(m *mpool.MPool) (objectio.BlockObject, error) {
-	extents := make([]objectio.Extent, 1)
-	extents[0] = r.meta.GetLoc()
-	block, err := r.reader.ReadMeta(r.readCxt, extents, m)
+	bats := make([]*batch.Batch, 0)
+	ioVectors, err := r.reader.Read(ctx, blocks[0].GetExtent(), idxs, nil, nil, LoadZoneMapFunc, LoadColumnFunc)
 	if err != nil {
 		return nil, err
 	}
-	return block[0], err
+	for y := range blocks {
+		bat := batch.NewWithSize(len(idxs))
+		for i := range idxs {
+			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+		}
+		bats = append(bats, bat)
+	}
+	return bats, nil
 }
 
-func (r *Reader) ReadMetas(m *mpool.MPool) ([]objectio.BlockObject, error) {
-	block, err := r.reader.ReadMeta(r.readCxt, r.locs, m)
-	return block, err
+func (r *BlockReader) LoadZoneMaps(ctx context.Context, idxs []uint16,
+	ids []uint32, m *mpool.MPool) ([][]dataio.Index, error) {
+	blocks, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	blocksZoneMap := make([][]dataio.Index, len(ids))
+	for i, id := range ids {
+		blocksZoneMap[i], err = r.LoadZoneMap(ctx, idxs, blocks[id], m)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return blocksZoneMap, nil
 }
 
-func (r *Reader) GetDataObject(idx uint16, m *mpool.MPool) objectio.ColumnObject {
-	block, err := r.ReadMeta(m)
+func (r *BlockReader) LoadBlocksMeta(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
+	_, locs, err := DecodeLocationToMetas(r.key)
 	if err != nil {
-		panic(any(err))
+		return nil, err
 	}
-	if block == nil {
-		return nil
-	}
-	object, err := block.GetColumn(idx)
+	return r.reader.ReadMeta(ctx, locs, m, LoadZoneMapFunc)
+}
+
+func (r *BlockReader) LoadAllBlocks(ctx context.Context, size int64, m *mpool.MPool) ([]objectio.BlockObject, error) {
+	blocks, err := r.reader.ReadAllMeta(ctx, size, m, LoadZoneMapFunc)
 	if err != nil {
-		panic(any(err))
+		return nil, err
 	}
-	return object
+	if r.meta.End() == 0 {
+		r.meta = blocks[0].GetExtent()
+	}
+	return blocks, nil
+}
+
+func (r *BlockReader) LoadZoneMap(
+	ctx context.Context,
+	idxs []uint16,
+	block objectio.BlockObject,
+	m *mpool.MPool) ([]dataio.Index, error) {
+	zoneMapList := make([]dataio.Index, len(idxs))
+	for i, idx := range idxs {
+		column, err := block.GetColumn(idx)
+		if err != nil {
+			return nil, err
+		}
+		zm, err := column.GetIndex(ctx, objectio.ZoneMapType, nil, m)
+		if err != nil {
+			return nil, err
+		}
+		data := zm.(*objectio.ZoneMap).GetData()
+
+		zoneMapList[i] = data.(*BlockIndex)
+	}
+
+	return zoneMapList, nil
+}
+
+func (r *BlockReader) LoadBloomFilter(ctx context.Context, idx uint16,
+	ids []uint32, m *mpool.MPool) ([]index.StaticFilter, error) {
+	blocks, err := r.reader.ReadMeta(ctx, []objectio.Extent{r.meta}, m, LoadZoneMapFunc)
+	if err != nil {
+		return nil, err
+	}
+	blocksBloomFilters := make([]index.StaticFilter, len(ids))
+	for i, id := range ids {
+		column, err := blocks[id].GetColumn(idx)
+		if err != nil {
+			return nil, err
+		}
+		bf, err := column.GetIndex(ctx, objectio.BloomFilterType, LoadBloomFilterFunc, m)
+		if err != nil {
+			return nil, err
+		}
+		blocksBloomFilters[i] = bf.(*objectio.BloomFilter).GetData().(index.StaticFilter)
+	}
+	return blocksBloomFilters, nil
+}
+
+func (r *BlockReader) MvccLoadColumns(ctx context.Context, idxs []uint16, info catalog.BlockInfo,
+	ts timestamp.Timestamp, m *mpool.MPool) (*batch.Batch, error) {
+	bat := batch.NewWithSize(len(idxs))
+	return bat, nil
+}
+
+func LoadZoneMapFunc(buf []byte, typ types.Type) (any, error) {
+	zm := NewZoneMap(typ)
+	err := zm.Unmarshal(buf[:])
+	if err != nil {
+		return nil, err
+	}
+	return zm, err
+}
+
+func LoadBloomFilterFunc(size int64) objectio.ToObjectFunc {
+	return func(reader io.Reader, data []byte) (any, int64, error) {
+		// decompress
+		var err error
+		if len(data) == 0 {
+			data, err = io.ReadAll(reader)
+			if err != nil {
+				return nil, 0, err
+			}
+		}
+		decompressed := make([]byte, size)
+		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
+		if err != nil {
+			return nil, 0, err
+		}
+		bf, err := index.NewBinaryFuseFilterFromSource(decompressed)
+		if err != nil {
+			return nil, 0, err
+		}
+		return bf, int64(len(decompressed)), nil
+	}
+}
+
+func LoadColumnFunc(size int64) objectio.ToObjectFunc {
+	return func(reader io.Reader, data []byte) (any, int64, error) {
+		// decompress
+		var err error
+		if len(data) == 0 {
+			data, err = io.ReadAll(reader)
+			if err != nil {
+				return nil, 0, err
+			}
+		}
+		decompressed := make([]byte, size)
+		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
+		if err != nil {
+			return nil, 0, err
+		}
+		vec := vector.New(types.Type{})
+		if err = vec.Read(decompressed); err != nil {
+			return nil, 0, err
+		}
+		return vec, int64(len(decompressed)), nil
+	}
 }
