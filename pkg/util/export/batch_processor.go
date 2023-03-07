@@ -64,6 +64,8 @@ type bufferHolder struct {
 	trigger *time.Timer
 
 	mux sync.Mutex
+	// stopped mark
+	stopped bool
 }
 
 type bufferSignalFunc func(*bufferHolder)
@@ -92,6 +94,7 @@ func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.P
 func (b *bufferHolder) Start() {
 	b.mux.Lock()
 	defer b.mux.Unlock()
+	b.stopped = false
 	b.trigger.Stop()
 	b.trigger = time.AfterFunc(b.reminder.RemindNextAfter(), func() {
 		if b.mux.TryLock() {
@@ -120,6 +123,9 @@ func (b *bufferHolder) putBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, 
 // Add call buffer.Add(), while bufferHolder is NOT readonly
 func (b *bufferHolder) Add(item batchpipe.HasName) {
 	b.mux.Lock()
+	if b.stopped {
+		return
+	}
 	if b.buffer == nil {
 		b.buffer = b.getBuffer()
 	}
@@ -186,15 +192,18 @@ func (b *bufferHolder) getGenerateReq() generateReq {
 	return req
 }
 
-// StopTrigger stop buffer's trigger(Reminder)
-func (b *bufferHolder) StopTrigger() bool {
-	b.mux.Lock()
-	defer b.mux.Unlock()
-	return b.trigger.Stop()
+func (b *bufferHolder) resetTrigger() {
+	if b.stopped {
+		return
+	}
+	b.trigger.Reset(b.reminder.RemindNextAfter())
 }
 
-func (b *bufferHolder) resetTrigger() {
-	b.trigger.Reset(b.reminder.RemindNextAfter())
+func (b *bufferHolder) Stop() {
+	b.mux.Lock()
+	defer b.mux.Unlock()
+	b.stopped = true
+	b.trigger.Stop()
 }
 
 var _ motrace.BatchProcessor = (*MOCollector)(nil)
@@ -465,13 +474,13 @@ func (c *MOCollector) Stop(graceful bool) error {
 	var err error
 	var buf = new(bytes.Buffer)
 	c.stopOnce.Do(func() {
-		for len(c.awakeCollect) > 0 {
-			logutil.Debug(fmt.Sprintf("doCollect left %d job", len(c.awakeCollect)), logutil.NoReportFiled())
+		for len(c.awakeCollect) > 0 && graceful {
+			c.logger.Debug(fmt.Sprintf("doCollect left %d job", len(c.awakeCollect)))
 			time.Sleep(250 * time.Second)
 		}
 		c.mux.Lock()
 		for _, buffer := range c.buffers {
-			_ = buffer.StopTrigger()
+			buffer.Stop()
 		}
 		c.mux.Unlock()
 		close(c.stopCh)
@@ -503,11 +512,9 @@ func (c *MOCollector) Stop(graceful bool) error {
 			handleGen(req)
 		}
 		for _, buffer := range c.buffers {
-			generate := buffer.getGenerateReq()
-			if generate == nil {
-				continue
+			if generate := buffer.getGenerateReq(); generate != nil {
+				handleGen(generate)
 			}
-			handleGen(generate)
 		}
 	})
 	return err
