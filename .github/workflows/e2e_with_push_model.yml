@@ -1,18 +1,17 @@
-name: MatrixOne e2e CI(Push-Enabled)
+name: MatrixOne e2e CI(Launch, Single CN, Push-Enabled)
 
 on:
-  pull_request:
-    types: [ closed ]
+  pull_request_target:
+    types: [ opened, synchronize, reopened ]
     branches: [ main,'[0-9]+.[0-9]+.[0-9]+' ]
 
   workflow_dispatch:
 
 jobs:
   single-cn-bvt-push-model-linux-x86:
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     name: Single-CN e2e BVT(PUSH) Test on Linux/x64
-    timeout-minutes: 180
+    timeout-minutes: 60
 
     steps:
       - name: checkout head
