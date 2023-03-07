@@ -17,77 +17,98 @@ package blockio
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-type Writer struct {
-	writer   objectio.Writer
-	fs       *objectio.ObjectFS
-	writeCxt context.Context
+type BlockWriter struct {
+	writer  objectio.Writer
+	isSetPK bool
+	pk      uint16
 }
 
-func NewWriter(ctx context.Context, fs *objectio.ObjectFS, name string) *Writer {
-	writer, err := objectio.NewObjectWriter(name, fs.Service)
+func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, error) {
+	writer, err := objectio.NewObjectWriter(name, fs)
 	if err != nil {
-		panic(any(err))
+		return nil, err
 	}
-	return &Writer{
-		fs:       fs,
-		writer:   writer,
-		writeCxt: ctx,
-	}
+	return &BlockWriter{
+		writer:  writer,
+		isSetPK: false,
+	}, nil
 }
 
-func (w *Writer) WriteBlock(columns *containers.Batch) (block objectio.BlockObject, err error) {
+func (w *BlockWriter) SetPrimaryKey(idx uint16) {
+	w.isSetPK = true
+	w.pk = idx
+}
+
+func (w *BlockWriter) WriteBlock(columns *containers.Batch) (block objectio.BlockObject, err error) {
 	bat := batch.New(true, columns.Attrs)
 	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
-	block, err = w.writer.Write(bat)
+	block, err = w.WriteBatch(bat)
 	return
 }
 
-func (w *Writer) WriteBlockAndZoneMap(batch *batch.Batch, idxs []uint16) (objectio.BlockObject, error) {
+func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, error) {
 	block, err := w.writer.Write(batch)
 	if err != nil {
 		return nil, err
 	}
-	for _, idx := range idxs {
-		var zoneMap objectio.IndexData
-		vec := containers.NewVectorWithSharedMemory(batch.Vecs[idx], true)
-		zm := index.NewZoneMap(batch.Vecs[idx].Typ)
-		ctx := new(index.KeysCtx)
-		ctx.Keys = vec
-		ctx.Count = batch.Vecs[idx].Length()
-		defer ctx.Keys.Close()
-		err = zm.BatchUpdate(ctx)
+	for i, vec := range batch.Vecs {
+		if vec.Typ.Oid == types.T_Rowid || vec.Typ.Oid == types.T_TS {
+			continue
+		}
+		columnData := containers.NewVectorWithSharedMemory(vec, true)
+		zmPos := 0
+		zoneMapWriter := NewZMWriter()
+		if err = zoneMapWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(zmPos)); err != nil {
+			return nil, err
+		}
+		err = zoneMapWriter.AddValues(columnData)
 		if err != nil {
 			return nil, err
 		}
-		buf, err := zm.Marshal()
+		err = zoneMapWriter.Finalize()
 		if err != nil {
 			return nil, err
 		}
-		zoneMap, err = objectio.NewZoneMap(idx, buf)
+		if !w.isSetPK || w.pk != uint16(i) {
+			continue
+		}
+		bfPos := 1
+		bfWriter := NewBFWriter()
+		if err = bfWriter.Init(w.writer, block, common.Plain, uint16(i), uint16(bfPos)); err != nil {
+			return nil, err
+		}
+		if err = bfWriter.AddValues(columnData); err != nil {
+			return nil, err
+		}
+		err = bfWriter.Finalize()
 		if err != nil {
 			return nil, err
 		}
-		w.writer.WriteIndex(block, zoneMap)
 	}
 	return block, nil
 }
 
-func (w *Writer) Sync() ([]objectio.BlockObject, error) {
-	blocks, err := w.writer.WriteEnd(w.writeCxt)
-	return blocks, err
+func (w *BlockWriter) WriteBlockWithOutIndex(columns *containers.Batch) (objectio.BlockObject, error) {
+	bat := batch.New(true, columns.Attrs)
+	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
+	return w.writer.Write(bat)
 }
 
-func (w *Writer) WriteIndex(
-	block objectio.BlockObject,
-	index objectio.IndexData) (err error) {
-	return w.writer.WriteIndex(block, index)
+func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.BlockObject, error) {
+	return w.writer.Write(batch)
 }
 
-func (w *Writer) GetWriter() objectio.Writer {
-	return w.writer
+func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error) {
+	blocks, err := w.writer.WriteEnd(ctx)
+	if len(blocks) == 0 {
+		return blocks, objectio.Extent{}, err
+	}
+	return blocks, blocks[0].GetExtent(), err
 }
