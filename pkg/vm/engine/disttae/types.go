@@ -177,12 +177,10 @@ type txnTable struct {
 	dnList     []int
 	db         *txnDatabase
 	meta       *tableMeta
-	parts      Partitions
+	parts      []*PartitionState
 	insertExpr *plan.Expr
 	defs       []engine.TableDef
 	tableDef   *plan.TableDef
-
-	states []*PartitionState
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
