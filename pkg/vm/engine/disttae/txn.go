@@ -150,7 +150,6 @@ func (txn *Transaction) WriteBatch(
 }
 
 func (txn *Transaction) DumpBatch(force bool) error {
-
 	// if txn.workspaceSize >= colexec.WriteS3Threshold {
 	if txn.workspaceSize >= colexec.WriteS3Threshold || force && txn.workspaceSize >= colexec.TagS3Size {
 		mp := make(map[[2]string][]*batch.Batch)

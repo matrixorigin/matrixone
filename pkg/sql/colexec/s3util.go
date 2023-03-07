@@ -278,6 +278,7 @@ func GetStrCols(bats []*batch.Batch, idx int, stopIdx int) (cols [][]string) {
 func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process.Process, cacheOvershold bool) error {
 	bats := container.tableBatches[idx][:length]
 	stopIdx := -1
+	var hackLogic bool
 	if container.tableBatchSizes[idx] > WriteS3Threshold && cacheOvershold {
 		container.buffers[idx].CleanOnlyData()
 		lastBatch := container.tableBatches[idx][length-1]
@@ -290,12 +291,29 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 				stopIdx = i
 				break
 			} else if size+uint64(container.buffers[idx].Size()) > WriteS3Threshold {
+				// hack logic:
+				// 1. if the first row of lastBatch result the size is over WriteS3Threshold
+				// the stopIdx will be -1, that's not true, because -1 means
+				// the batches' size of all batch (include the last batch) is
+				// equal to WriteS3Threshold
+				// 2. and there is another extreme situation: the the first row
+				// of lastBatch result the size is over WriteS3Threshold and the
+				// last batch is the first batch
+				// for above, we just care about the fisrt one,the second is no need
 				stopIdx = i - 1
+				if stopIdx == -1 {
+					hackLogic = true
+				}
 				break
 			}
 		}
+		if stopIdx != -1 {
+			container.buffers[idx].Shrink(container.sels[:stopIdx+1])
+		}
 	}
-
+	if stopIdx == -1 && hackLogic {
+		bats = bats[:len(bats)-1]
+	}
 	sortIdx := -1
 	for i := range bats {
 		// sort bats firstly
@@ -411,8 +429,13 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 		container.buffers[idx].CleanOnlyData()
 	}
 	if stopIdx == -1 {
-		container.tableBatchSizes[idx] = 0
-		container.tableBatches[idx] = container.tableBatches[idx][:0]
+		if hackLogic {
+			container.tableBatchSizes[idx] = uint64(container.tableBatches[idx][length-1].Size())
+			container.tableBatches[idx] = container.tableBatches[idx][length-1:]
+		} else {
+			container.tableBatchSizes[idx] = 0
+			container.tableBatches[idx] = container.tableBatches[idx][:0]
+		}
 	} else {
 		lastBatch := container.tableBatches[idx][length-1]
 		lastBatch.Shrink(container.sels[stopIdx+1:])
