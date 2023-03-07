@@ -38,14 +38,13 @@ const defaultQueueSize = 1310720 // queue mem cost = 10MB
 
 const LoggerNameMOCollector = "MOCollector"
 
-var TotalBufferCnt atomic.Int32
-
 // bufferHolder hold ItemBuffer content, handle buffer's new/flush/reset/reminder(base on timer) operations.
 // work like:
 // ---> Add ---> ShouldFlush or trigger.signal -----> StopAndGetBatch ---> FlushAndReset ---> Add ---> ...
 // #     ^                   |No                |Yes, go next call
 // #     |<------------------/Accept next Add
 type bufferHolder struct {
+	c   *MOCollector
 	ctx context.Context
 	// name like a type
 	name string
@@ -70,8 +69,9 @@ type bufferHolder struct {
 
 type bufferSignalFunc func(*bufferHolder)
 
-func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.PipeImpl, signal bufferSignalFunc) *bufferHolder {
+func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.PipeImpl, signal bufferSignalFunc, c *MOCollector) *bufferHolder {
 	b := &bufferHolder{
+		c:      c,
 		ctx:    ctx,
 		name:   name.GetName(),
 		signal: signal,
@@ -105,19 +105,19 @@ func (b *bufferHolder) Start() {
 }
 
 func (b *bufferHolder) getBuffer() batchpipe.ItemBuffer[batchpipe.HasName, any] {
-	TotalBufferCnt.Add(1)
+	b.c.allocBuffer()
 	b.bufferCnt.Add(1)
 	buffer := b.bufferPool.Get().(batchpipe.ItemBuffer[batchpipe.HasName, any])
-	logutil.Debugf("new buffer for %s, cnt: %d, using: %d", b.name, b.bufferCnt.Load(), TotalBufferCnt.Load())
+	logutil.Debugf("new buffer for %s, cnt: %d, using: %d", b.name, b.bufferCnt.Load(), b.c.bufferTotal.Load())
 	return buffer
 }
 
 func (b *bufferHolder) putBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, any]) {
 	buffer.Reset()
 	b.bufferPool.Put(buffer)
-	TotalBufferCnt.Add(-1)
 	b.bufferCnt.Add(-1)
-	logutil.Debugf("release buffer for %s, cnt: %d, using: %d", b.name, b.bufferCnt.Load(), TotalBufferCnt.Load())
+	b.c.releaseBuffer()
+	logutil.Debugf("release buffer for %s, cnt: %d, using: %d", b.name, b.bufferCnt.Load(), b.c.bufferTotal.Load())
 }
 
 // Add call buffer.Add(), while bufferHolder is NOT readonly
@@ -233,6 +233,11 @@ type MOCollector struct {
 
 	statsInterval time.Duration // WithStatsInterval
 
+	maxBufferCnt int32 // cooperate with bufferCond
+	bufferTotal  atomic.Int32
+	bufferMux    sync.Mutex
+	bufferCond   *sync.Cond
+
 	// flow control
 	started  uint32
 	stopOnce sync.Once
@@ -257,6 +262,7 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 		pipeImplHolder: newPipeImplHolder(),
 		statsInterval:  time.Minute,
 	}
+	c.bufferCond = sync.NewCond(&c.bufferMux)
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -273,13 +279,10 @@ func WithExporterCnt(cnt int) MOCollectorOption {
 	return MOCollectorOption(func(c *MOCollector) { c.exporterCnt = cnt })
 }
 
-func WithStatsInterval(i time.Duration) MOCollectorOption {
-	return MOCollectorOption(func(c *MOCollector) { c.statsInterval = i })
-}
-
 func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {
 	return MOCollectorOption(func(c *MOCollector) {
 		c.statsInterval = cfg.ShowStatsInterval.Duration
+		c.maxBufferCnt = cfg.BufferCnt
 	})
 }
 
@@ -341,6 +344,22 @@ func (c *MOCollector) Start() bool {
 	return true
 }
 
+func (c *MOCollector) allocBuffer() {
+	c.bufferCond.L.Lock()
+	for c.bufferTotal.Load() == c.maxBufferCnt {
+		c.bufferCond.Wait()
+	}
+	c.bufferTotal.Add(1)
+	c.bufferCond.L.Unlock()
+}
+
+func (c *MOCollector) releaseBuffer() {
+	c.bufferCond.L.Lock()
+	c.bufferTotal.Add(-1)
+	c.bufferCond.Signal()
+	c.bufferCond.L.Unlock()
+}
+
 // doCollect handle all item accept work, send it to the corresponding buffer
 // goroutine worker
 func (c *MOCollector) doCollect(idx int) {
@@ -362,7 +381,7 @@ loop:
 					if impl, has := c.pipeImplHolder.Get(i.GetName()); !has {
 						panic(moerr.NewInternalError(ctx, "unknown item type: %s", i.GetName()))
 					} else {
-						buf = newBufferHolder(ctx, i, impl, awakeBufferFactory(c))
+						buf = newBufferHolder(ctx, i, impl, awakeBufferFactory(c), c)
 						c.buffers[i.GetName()] = buf
 						buf.Add(i)
 						buf.Start()
@@ -458,7 +477,7 @@ loop:
 		select {
 		case <-time.After(c.statsInterval):
 			fields := make([]zap.Field, 0, 16)
-			fields = append(fields, zap.Int32("TotalBufferCnt", TotalBufferCnt.Load()))
+			fields = append(fields, zap.Int32("TotalBufferCnt", c.bufferTotal.Load()))
 			for _, b := range c.buffers {
 				fields = append(fields, zap.Int32(fmt.Sprintf("%sBufferCnt", b.name), b.bufferCnt.Load()))
 			}

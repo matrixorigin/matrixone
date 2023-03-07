@@ -142,6 +142,12 @@ var (
 
 	// defaultOBShowStatsInterval default: 1min
 	defaultOBShowStatsInterval = time.Minute
+
+	// defaultOBMaxBufferCnt
+	defaultOBBufferCnt int32 = 10
+
+	//defaultOBBufferSize, 10 << 20 = 10485760
+	defaultOBBufferSize int64 = 10485760
 )
 
 // FrontendParameters of the frontend
@@ -583,11 +589,20 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 type OBCollectorConfig struct {
 	ShowStatsInterval toml.Duration `toml:"showStatsInterval"`
+	// BufferCnt
+	BufferCnt  int32 `toml:"bufferCnt"`
+	BufferSize int64 `toml:"bufferSize"`
 }
 
 func (c *OBCollectorConfig) SetDefaultValues() {
 	if c.ShowStatsInterval.Duration == 0 {
 		c.ShowStatsInterval.Duration = defaultOBShowStatsInterval
+	}
+	if c.BufferCnt == 0 {
+		c.BufferCnt = defaultOBBufferCnt
+	}
+	if c.BufferSize == 0 {
+		c.BufferSize = defaultOBBufferSize
 	}
 }
 
