@@ -63,6 +63,7 @@ func is32BytesMax(bs []byte) bool {
 type ZoneMap struct {
 	typ      types.Type
 	min, max any
+	buf      []byte
 	inited   bool
 	// only in a deserialized zonemap, this field is possibile to be True.
 	// isInf is true means we can't find a 32-byte upper bound for original maximum when serializing,
@@ -234,6 +235,10 @@ func (zm *ZoneMap) GetMin() any {
 	return zm.min
 }
 
+func (zm *ZoneMap) GetBuf() []byte {
+	return zm.buf
+}
+
 // func (zm *ZoneMap) Print() string {
 // 	// default int32
 // 	s := "<ZM>\n["
@@ -252,7 +257,8 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 	}
 	buf[31] |= constZMInited
 	switch zm.typ.Oid {
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		minv, maxv := zm.min.([]byte), zm.max.([]byte)
 		// write 31-byte prefix of minv
 		copy(buf[0:31], minv)
@@ -292,6 +298,7 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		zm.inited = false
 		return nil
 	}
+	zm.buf = buf
 	zm.inited = true
 	switch zm.typ.Oid {
 	case types.T_bool:
@@ -394,7 +401,8 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		buf = buf[32:]
 		zm.max = buf[:types.RowidSize]
 		return nil
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		minBuf := make([]byte, buf[31]&0x7f)
 		copy(minBuf, buf[0:32])
 		maxBuf := make([]byte, 32)

@@ -61,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
@@ -604,21 +605,20 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			IsRemote: t.IsRemote,
-			Affected: t.Affected,
-			// TargetColDefs:  t.TargetColDefs,
-			// TableID:        t.TableID,
-			// CPkeyColDef:    t.CPkeyColDef,
-			// DBName:         t.DBName,
-			// TableName:      t.TableName,
-			// ClusterTable:   t.ClusterTable,
-			// ClusterByDef:   t.ClusterByDef,
-			// UniqueIndexDef: t.UniqueIndexDef,
-			// HasAutoCol:     t.HasAutoCol,
+			IsRemote:     t.IsRemote,
+			Affected:     t.Affected,
 			Ref:          t.InsertCtx.Ref,
 			TableDef:     t.InsertCtx.TableDef,
 			ClusterTable: t.InsertCtx.ClusterTable,
 			ParentIdx:    t.InsertCtx.ParentIdx,
+		}
+	case *onduplicatekey.Argument:
+		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
+			Affected:        t.Affected,
+			Ref:             t.Ref,
+			TableDef:        t.TableDef,
+			OnDuplicateIdx:  t.OnDuplicateIdx,
+			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
@@ -873,6 +873,15 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				ParentIdx:    t.ParentIdx,
 				ClusterTable: t.ClusterTable,
 			},
+		}
+	case vm.OnDuplicateKey:
+		t := opr.GetOnDuplicateKey()
+		v.Arg = &onduplicatekey.Argument{
+			Affected:        t.Affected,
+			Ref:             t.Ref,
+			TableDef:        t.TableDef,
+			OnDuplicateIdx:  t.OnDuplicateIdx,
+			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
 	case vm.Anti:
 		t := opr.GetAnti()
@@ -1156,11 +1165,10 @@ func convertToPlanTypes(ts []types.Type) []*plan.Type {
 	result := make([]*plan.Type, len(ts))
 	for i, t := range ts {
 		result[i] = &plan.Type{
-			Id:        int32(t.Oid),
-			Width:     t.Width,
-			Precision: t.Precision,
-			Size:      t.Size,
-			Scale:     t.Scale,
+			Id:    int32(t.Oid),
+			Width: t.Width,
+			Size:  t.Size,
+			Scale: t.Scale,
 		}
 	}
 	return result
@@ -1171,11 +1179,10 @@ func convertToTypes(ts []*plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
 		result[i] = types.Type{
-			Oid:       types.T(t.Id),
-			Width:     t.Width,
-			Precision: t.Precision,
-			Size:      t.Size,
-			Scale:     t.Scale,
+			Oid:   types.T(t.Id),
+			Width: t.Width,
+			Size:  t.Size,
+			Scale: t.Scale,
 		}
 	}
 	return result

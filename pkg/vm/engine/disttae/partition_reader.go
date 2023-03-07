@@ -16,7 +16,7 @@ package disttae
 
 import (
 	"context"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,41 +26,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type PartitionReader struct {
-	end         bool
-	typsMap     map[string]types.Type
-	firstCalled bool
-	readTime    memtable.Time
-	tx          *memtable.Transaction
-	inserts     []*batch.Batch
-	deletes     map[types.Rowid]uint8
-	skipBlocks  map[uint64]uint8
-	iter        partitionIter
-	proc        *process.Process
+	typsMap              map[string]types.Type
+	inserts              []*batch.Batch
+	deletes              map[types.Rowid]uint8
+	skipBlocks           map[uint64]uint8
+	iter                 partitionStateIter
+	sourceBatchNameIndex map[string]int
 
 	// the following attributes are used to support cn2s3
+	procMPool       *mpool.MPool
 	s3FileService   fileservice.FileService
-	s3BlockReader   objectio.Reader
+	s3BlockReader   dataio.Reader
 	extendId2s3File map[string]int
+
 	// used to get idx of sepcified col
 	colIdxMp        map[string]int
 	blockBatch      *BlockBatch
 	currentFileName string
-}
-
-type partitionIter interface {
-	First() bool
-	Next() bool
-	Close() error
-	Read() (RowID, DataValue, error)
 }
 
 type BlockBatch struct {
@@ -110,9 +98,6 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	if p == nil {
 		return nil, nil
 	}
-	if p.end {
-		return nil, nil
-	}
 	if p.blockBatch == nil {
 		p.blockBatch = &BlockBatch{}
 	}
@@ -121,7 +106,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		var bat *batch.Batch
 		if p.blockBatch.hasRows() || p.inserts[0].Attrs[0] == catalog.BlockMeta_MetaLoc {
 			var err error
-			var ivec *fileservice.IOVector
+			//var ivec *fileservice.IOVector
+			var bats []*batch.Batch
 			// read block
 			// These blocks may have been written to s3 before the transaction was committed if the transaction is huge, but note that these blocks are only invisible to other transactions
 			if !p.blockBatch.hasRows() {
@@ -131,33 +117,27 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			metaLoc := p.blockBatch.read()
 			name := strings.Split(metaLoc, ":")[0]
 			if name != p.currentFileName {
-				p.s3BlockReader, err = objectio.NewObjectReader(name, p.s3FileService)
+				p.s3BlockReader, err = blockio.NewObjectReader(p.s3FileService, metaLoc)
 				p.extendId2s3File[name] = 0
 				p.currentFileName = name
 				if err != nil {
 					return nil, err
 				}
 			}
-			_, extent, _ := blockio.DecodeMetaLoc(metaLoc)
+			_, _, extent, _, _ := blockio.DecodeLocation(metaLoc)
 			for _, name := range colNames {
 				if name == catalog.Row_ID {
 					return nil, moerr.NewInternalError(ctx, "The current version does not support modifying the data read from s3 within a transaction")
 				}
 			}
-			ivec, err = p.s3BlockReader.Read(ctx, extent, p.getIdxs(colNames), p.proc.GetMPool())
+			bats, err = p.s3BlockReader.LoadColumns(context.Background(), p.getIdxs(colNames), []uint32{extent.Id()}, p.procMPool)
 			if err != nil {
 				return nil, err
 			}
-			rbat := batch.NewWithSize(len(colNames))
+			rbat := bats[0]
 			rbat.SetAttributes(colNames)
 			rbat.Cnt = 1
-			for i, e := range ivec.Entries {
-				rbat.Vecs[i] = vector.New(p.typsMap[colNames[i]])
-				if err = rbat.Vecs[i].Read(e.Object.([]byte)); err != nil {
-					return nil, err
-				}
-			}
-			rbat.SetZs(rbat.Vecs[0].Length(), p.proc.GetMPool())
+			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
 			return rbat, nil
 		} else {
 			bat = p.inserts[0].GetSubBatch(colNames)
@@ -174,6 +154,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		}
 	}
 
+	const maxRows = 8192
+
 	b := batch.NewWithSize(len(colNames))
 	b.SetAttributes(colNames)
 	for i, name := range colNames {
@@ -181,46 +163,46 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	}
 	rows := 0
 
-	fn := p.iter.Next
-	if !p.firstCalled {
-		fn = p.iter.First
-		p.firstCalled = true
+	appendFuncs := make([]func(*vector.Vector, *vector.Vector, int64) error, len(b.Attrs))
+	for i, name := range b.Attrs {
+		if name == catalog.Row_ID {
+			appendFuncs[i] = vector.GetUnionOneFunction(types.T_Rowid.ToType(), mp)
+		} else {
+			appendFuncs[i] = vector.GetUnionOneFunction(p.typsMap[name], mp)
+		}
 	}
 
-	maxRows := 8192 // i think 8192 is better than 4096
-	for ok := fn(); ok; ok = p.iter.Next() {
-		dataKey, dataValue, err := p.iter.Read()
-		if err != nil {
-			return nil, err
-		}
+	for p.iter.Next() {
+		entry := p.iter.Entry()
 
-		if _, ok := p.deletes[types.Rowid(dataKey)]; ok {
-			continue
-		}
-
-		if dataValue.op == opDelete {
+		if _, ok := p.deletes[entry.RowID]; ok {
 			continue
 		}
 
 		if p.skipBlocks != nil {
-			if _, ok := p.skipBlocks[rowIDToBlockID(dataKey)]; ok {
+			if _, ok := p.skipBlocks[entry.BlockID]; ok {
 				continue
+			}
+		}
+
+		if p.sourceBatchNameIndex == nil {
+			p.sourceBatchNameIndex = make(map[string]int)
+			for i, name := range entry.Batch.Attrs {
+				p.sourceBatchNameIndex[name] = i
 			}
 		}
 
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
-				if err := b.Vecs[i].Append(types.Rowid(dataKey), false, mp); err != nil {
+				if err := b.Vecs[i].Append(entry.RowID, false, mp); err != nil {
 					return nil, err
 				}
-				continue
-			}
-			value, ok := dataValue.value[name]
-			if !ok {
-				panic(fmt.Sprintf("invalid column name: %v", name))
-			}
-			if err := value.AppendVector(b.Vecs[i], mp); err != nil {
-				return nil, err
+			} else {
+				appendFuncs[i](
+					b.Vecs[i],
+					entry.Batch.Vecs[p.sourceBatchNameIndex[name]],
+					entry.Offset,
+				)
 			}
 		}
 

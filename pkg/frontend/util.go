@@ -324,7 +324,8 @@ func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 		return vector.GetValueAt[float32](vec, 0), nil
 	case types.T_float64:
 		return vector.GetValueAt[float64](vec, 0), nil
-	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_binary,
+		types.T_varbinary, types.T_text, types.T_blob:
 		return vec.GetString(0), nil
 	case types.T_decimal64:
 		val := vector.GetValueAt[types.Decimal64](vec, 0)
@@ -350,7 +351,7 @@ func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 		return val.String(), nil
 	case types.T_timestamp:
 		val := vector.GetValueAt[types.Timestamp](vec, 0)
-		return val.String2(ses.GetTimeZone(), vec.Typ.Precision), nil
+		return val.String2(ses.GetTimeZone(), vec.Typ.Scale), nil
 	default:
 		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.Typ.Oid.String())
 	}
@@ -518,16 +519,15 @@ func convertValueBat2Str(ctx context.Context, bat *batch.Batch, mp *mpool.MPool,
 		case types.T_decimal128:
 			xs := vector.MustTCols[types.Decimal128](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal128])
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 			xs := vector.MustStrCols(bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[string])
 		case types.T_json:
 			xs := vector.MustBytesCols(bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.JsonParser)
-
 		case types.T_timestamp:
 			xs := vector.MustTCols[types.Timestamp](bat.Vecs[i])
-			rs, err = dumpUtils.ParseTimeStamp(xs, bat.GetVector(int32(i)).GetNulls(), rs, loc, bat.GetVector(int32(i)).Typ.Precision)
+			rs, err = dumpUtils.ParseTimeStamp(xs, bat.GetVector(int32(i)).GetNulls(), rs, loc, bat.GetVector(int32(i)).Typ.Scale)
 		case types.T_datetime:
 			xs := vector.MustTCols[types.Datetime](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Datetime])

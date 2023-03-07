@@ -189,7 +189,6 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 					return proc.AllocScalarNullVector(t), nil
 				} else {
 					r := proc.AllocScalarVector(t)
-					r.Typ.Precision = thenv.Typ.Precision
 					r.Typ.Width = thenv.Typ.Width
 					r.Typ.Scale = thenv.Typ.Scale
 					r.Col = make([]T, 1)
@@ -198,7 +197,6 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 				}
 			}
 		case whenv.IsScalar() && !thenv.IsScalar():
-			rs.Typ.Precision = thenv.Typ.Precision
 			rs.Typ.Width = thenv.Typ.Width
 			rs.Typ.Scale = thenv.Typ.Scale
 			if !whenv.IsScalarNull() && whencols[0] {
@@ -207,7 +205,6 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 				return rs, nil
 			}
 		case !whenv.IsScalar() && thenv.IsScalar():
-			rs.Typ.Precision = thenv.Typ.Precision
 			rs.Typ.Width = thenv.Typ.Width
 			rs.Typ.Scale = thenv.Typ.Scale
 			if thenv.IsScalarNull() {
@@ -235,7 +232,6 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 				}
 			}
 		case !whenv.IsScalar() && !thenv.IsScalar():
-			rs.Typ.Precision = thenv.Typ.Precision
 			rs.Typ.Width = thenv.Typ.Width
 			rs.Typ.Scale = thenv.Typ.Scale
 			if nulls.Any(thenv.Nsp) {

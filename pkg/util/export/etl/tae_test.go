@@ -17,21 +17,21 @@ package etl
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/stretchr/testify/require"
 	"path"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/stretchr/testify/require"
 )
 
-var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Precision: 32, Default: "", Comment: "str column"}
+var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Scale: 32, Default: "", Comment: "str column"}
 var dummyInt64Column = table.Column{Name: "int64", ColType: table.TInt64, Default: "0", Comment: "int64 column"}
 var dummyFloat64Column = table.Column{Name: "float64", ColType: table.TFloat64, Default: "0.0", Comment: "float64 column"}
 var dummyUInt64Column = table.Column{Name: "uint64", ColType: table.TUint64, Default: "0", Comment: "uint64 column"}
@@ -110,8 +110,8 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 
 	// read index
 	for _, bbs := range r.bs {
-		_, err = r.objectReader.ReadIndex(context.Background(), bbs.GetExtent(),
-			r.idxs, objectio.ZoneMapType, mp)
+		_, err = r.blockReader.LoadZoneMaps(context.Background(),
+			r.idxs, []uint32{bbs.GetExtent().Id()}, mp)
 		require.Nil(t, err)
 	}
 
@@ -343,8 +343,8 @@ func TestTaeReadFile(t *testing.T) {
 
 	// read index
 	for _, bbs := range r.bs {
-		_, err = r.objectReader.ReadIndex(context.Background(), bbs.GetExtent(),
-			r.idxs, objectio.ZoneMapType, mp)
+		_, err = r.blockReader.LoadZoneMaps(context.Background(),
+			r.idxs, []uint32{bbs.GetExtent().Id()}, mp)
 		require.Nil(t, err)
 	}
 
@@ -419,8 +419,8 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 
 		// read index
 		for _, bbs := range r.bs {
-			_, err = r.objectReader.ReadIndex(context.Background(), bbs.GetExtent(),
-				r.idxs, objectio.ZoneMapType, mp)
+			_, err = r.blockReader.LoadZoneMaps(context.Background(),
+				r.idxs, []uint32{bbs.GetExtent().Id()}, mp)
 			require.Nil(t, err)
 		}
 

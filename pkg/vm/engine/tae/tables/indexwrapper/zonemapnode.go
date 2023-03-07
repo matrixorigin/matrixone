@@ -15,161 +15,64 @@
 package indexwrapper
 
 import (
-	"fmt"
-
+	"context"
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/evictable"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 )
 
 type ZmReader struct {
-	metaKey        string
-	mgr            base.INodeManager
-	colMetaFactory evictable.EvictableNodeFactory
+	metaKey string
+	idx     uint16
+	reader  dataio.Reader
 }
 
-func newZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
-	metaKey := evictable.EncodeColMetaKey(id.Idx, metaloc)
+func NewZmReader(fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
+	reader, _ := blockio.NewObjectReader(fs.Service, metaloc)
 	return &ZmReader{
-		metaKey: metaKey,
-		mgr:     mgr,
-		colMetaFactory: func() (base.INode, error) {
-			return evictable.NewColumnMetaNode(
-				idx,
-				typ,
-				metaloc,
-				metaKey,
-				mgr,
-				fs), nil
-		},
+		metaKey: metaloc,
+		idx:     idx,
+		reader:  reader,
 	}
 }
 
+func (r *ZmReader) getZoneMap() (dataio.Index, error) {
+	_, _, extent, _, _ := blockio.DecodeLocation(r.metaKey)
+	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.idx}, []uint32{extent.Id()}, nil)
+	if err != nil {
+		// TODOa: Error Handling?
+		return nil, err
+	}
+	return zmList[0][0], err
+}
+
 func (r *ZmReader) Contains(key any) bool {
-	// TODOa: new zmreader if metaloc changed, replayIndex is not right?
-	h, err := evictable.PinEvictableNode(r.mgr, r.metaKey, r.colMetaFactory)
+	zm, err := r.getZoneMap()
 	if err != nil {
 		// TODOa: Error Handling?
 		return false
 	}
-	defer h.Close()
-	node := h.GetNode().(*evictable.ColumnMetaNode)
-	return node.Zonemap.Contains(key)
+	return zm.Contains(key)
 }
 
 func (r *ZmReader) FastContainsAny(keys containers.Vector) (ok bool) {
-	h, err := evictable.PinEvictableNode(r.mgr, r.metaKey, r.colMetaFactory)
+	zm, err := r.getZoneMap()
 	if err != nil {
-		return
+		// TODOa: Error Handling?
+		return false
 	}
-	defer h.Close()
-	node := h.GetNode().(*evictable.ColumnMetaNode)
-	return node.Zonemap.FastContainsAny(keys)
+	return zm.FastContainsAny(keys)
 }
 
 func (r *ZmReader) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
-	h, err := evictable.PinEvictableNode(r.mgr, r.metaKey, r.colMetaFactory)
+	zm, err := r.getZoneMap()
 	if err != nil {
+		// TODOa: Error Handling?
 		return
 	}
-	defer h.Close()
-	node := h.GetNode().(*evictable.ColumnMetaNode)
-	return node.Zonemap.ContainsAny(keys)
+	return zm.ContainsAny(keys)
 }
 
 func (r *ZmReader) Destroy() error { return nil }
-
-type ZMWriter struct {
-	cType       common.CompressType
-	writer      objectio.Writer
-	block       objectio.BlockObject
-	zonemap     *index.ZoneMap
-	colIdx      uint16
-	internalIdx uint16
-}
-
-func NewZMWriter() *ZMWriter {
-	return &ZMWriter{}
-}
-
-func (writer *ZMWriter) String() string {
-	return fmt.Sprintf("ZmWriter[Cid-%d,%s]", writer.colIdx, writer.zonemap.String())
-}
-
-func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
-	writer.writer = wr
-	writer.block = block
-	writer.cType = cType
-	writer.colIdx = colIdx
-	writer.internalIdx = internalIdx
-	return nil
-}
-
-func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
-	if writer.zonemap == nil {
-		panic("unexpected error")
-	}
-	appender := writer.writer
-	meta := NewEmptyIndexMeta()
-	meta.SetIndexType(BlockZoneMapIndex)
-	meta.SetCompressType(writer.cType)
-	meta.SetIndexedColumn(writer.colIdx)
-	meta.SetInternalIndex(writer.internalIdx)
-
-	//var startOffset uint32
-	iBuf, err := writer.zonemap.Marshal()
-	if err != nil {
-		return nil, err
-	}
-	zonemap, err := objectio.NewZoneMap(writer.colIdx, iBuf)
-	if err != nil {
-		return nil, err
-	}
-	rawSize := uint32(len(iBuf))
-	compressed := common.Compress(iBuf, writer.cType)
-	exactSize := uint32(len(compressed))
-	meta.SetSize(rawSize, exactSize)
-	err = appender.WriteIndex(writer.block, zonemap)
-	if err != nil {
-		return nil, err
-	}
-	//meta.SetStartOffset(startOffset)
-	return meta, nil
-}
-
-func (writer *ZMWriter) AddValues(values containers.Vector) (err error) {
-	typ := values.GetType()
-	if writer.zonemap == nil {
-		writer.zonemap = index.NewZoneMap(typ)
-	} else {
-		if writer.zonemap.GetType() != typ {
-			err = moerr.NewInternalErrorNoCtx("wrong type")
-			return
-		}
-	}
-	ctx := new(index.KeysCtx)
-	ctx.Keys = values
-	ctx.Count = values.Length()
-	err = writer.zonemap.BatchUpdate(ctx)
-	return
-}
-
-func (writer *ZMWriter) SetMinMax(min, max any, typ types.Type) (err error) {
-	if writer.zonemap == nil {
-		writer.zonemap = index.NewZoneMap(typ)
-	} else {
-		if writer.zonemap.GetType() != typ {
-			err = moerr.NewInternalErrorNoCtx("wrong type")
-			return
-		}
-	}
-	writer.zonemap.SetMin(min)
-	writer.zonemap.SetMax(max)
-	return
-}

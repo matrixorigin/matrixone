@@ -123,9 +123,9 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		startStr := startSlice[0]
 		endStr := endSlice[0]
 		stepStr := stepSlice[0]
-		precision := int32(findPrecision(startStr, endStr))
-		rbat.Vecs[0].Typ.Precision = precision
-		start, err := types.ParseDatetime(startStr, precision)
+		scale := int32(findScale(startStr, endStr))
+		rbat.Vecs[0].Typ.Scale = scale
+		start, err := types.ParseDatetime(startStr, scale)
 		if err != nil {
 			err = tryInt(startStr, endStr, stepStr, proc, rbat)
 			if err != nil {
@@ -134,7 +134,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 			break
 		}
 
-		end, err := types.ParseDatetime(endStr, precision)
+		end, err := types.ParseDatetime(endStr, scale)
 		if err != nil {
 			return false, err
 		}
@@ -249,7 +249,7 @@ func generateInt64(ctx context.Context, start, end, step int64) ([]int64, error)
 	return res, nil
 }
 
-func generateDatetime(ctx context.Context, start, end types.Datetime, stepStr string, precision int32) ([]types.Datetime, error) {
+func generateDatetime(ctx context.Context, start, end types.Datetime, stepStr string, scale int32) ([]types.Datetime, error) {
 	step, tp, err := genStep(ctx, stepStr)
 	if err != nil {
 		return nil, err
@@ -334,13 +334,13 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, toString bool, pro
 	}
 	stepSlice := vector.MustStrCols(stepVec)
 	step = stepSlice[0]
-	res, err := generateDatetime(proc.Ctx, start, end, step, startVec.Typ.Precision)
+	res, err := generateDatetime(proc.Ctx, start, end, step, startVec.Typ.Scale)
 	if err != nil {
 		return err
 	}
 	for i := range res {
 		if toString {
-			err = rbat.Vecs[0].Append([]byte(res[i].String2(rbat.Vecs[0].Typ.Precision)), false, proc.Mp())
+			err = rbat.Vecs[0].Append([]byte(res[i].String2(rbat.Vecs[0].Typ.Scale)), false, proc.Mp())
 		} else {
 			err = rbat.Vecs[0].Append(res[i], false, proc.Mp())
 		}
@@ -352,7 +352,7 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, toString bool, pro
 	return nil
 }
 
-func findPrecision(s1, s2 string) int {
+func findScale(s1, s2 string) int {
 	p1 := 0
 	if strings.Contains(s1, ".") {
 		p1 = len(s1) - strings.LastIndex(s1, ".")

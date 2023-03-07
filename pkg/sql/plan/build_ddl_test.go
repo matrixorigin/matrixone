@@ -17,6 +17,8 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"testing"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestBuildAlterView(t *testing.T) {
@@ -141,5 +142,90 @@ func TestBuildAlterView(t *testing.T) {
 	stmt5, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql5)
 	assert.NoError(t, err)
 	_, err = buildAlterView(stmt5.(*tree.AlterView), ctx)
+	assert.Error(t, err)
+}
+
+func TestBuildLockTables(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	type arg struct {
+		obj   *ObjectRef
+		table *TableDef
+	}
+
+	store := make(map[string]arg)
+
+	sql1 := "lock tables t1 read"
+	sql2 := "lock tables t1 read, t2 write"
+	sql3 := "lock tables t1 read, t1 write"
+
+	store["db.t1"] = arg{
+		&plan.ObjectRef{},
+		&plan.TableDef{
+			TableType: catalog.SystemOrdinaryRel,
+			Cols: []*ColDef{
+				{
+					Name: "a",
+					Typ: &plan.Type{
+						Id:    int32(types.T_varchar),
+						Width: types.MaxVarcharLen,
+						Table: "t1",
+					},
+				},
+			},
+		}}
+
+	ctx := NewMockCompilerContext2(ctrl)
+	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName string, tableName string) (*ObjectRef, *TableDef) {
+			if schemaName == "" {
+				schemaName = "db"
+			}
+			x := store[schemaName+"."+tableName]
+			return x.obj, x.table
+		}).AnyTimes()
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().GetAccountId().Return(catalog.System_Account).AnyTimes()
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(&plan.Stats{}).AnyTimes()
+
+	ctx.EXPECT().GetRootSql().Return(sql1).AnyTimes()
+	stmt1, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql1)
+	assert.NoError(t, err)
+	_, err = buildLockTables(stmt1.(*tree.LockTableStmt), ctx)
+	assert.NoError(t, err)
+
+	ctx.EXPECT().GetRootSql().Return(sql2).AnyTimes()
+	stmt2, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql2)
+	assert.NoError(t, err)
+	_, err = buildLockTables(stmt2.(*tree.LockTableStmt), ctx)
+	assert.Error(t, err)
+
+	store["db.t2"] = arg{
+		&plan.ObjectRef{},
+		&plan.TableDef{
+			TableType: catalog.SystemOrdinaryRel,
+			Cols: []*ColDef{
+				{
+					Name: "a",
+					Typ: &plan.Type{
+						Id:    int32(types.T_varchar),
+						Width: types.MaxVarcharLen,
+						Table: "t2",
+					},
+				},
+			},
+		}}
+
+	_, err = buildLockTables(stmt2.(*tree.LockTableStmt), ctx)
+	assert.NoError(t, err)
+
+	ctx.EXPECT().GetRootSql().Return(sql3).AnyTimes()
+	stmt3, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql3)
+	assert.NoError(t, err)
+	_, err = buildLockTables(stmt3.(*tree.LockTableStmt), ctx)
 	assert.Error(t, err)
 }

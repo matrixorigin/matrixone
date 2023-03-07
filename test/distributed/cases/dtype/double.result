@@ -178,29 +178,37 @@ id    1.1 <= id
 SELECT id, id = 1.1 FROM t_double;
 id    id = 1.1
 1.2    false
-1.1    false
+1.1    true
 2.0    false
 SELECT id, 1.1 = id FROM t_double;
 id    1.1 = id
 1.2    false
-1.1    false
+1.1    true
 2.0    false
 SELECT * from t_double WHERE id = 1.1;
 id
+1.1
 SELECT * from t_double WHERE id = 1.1e0;
 id
+1.1
 SELECT * from t_double WHERE id = '1.1';
 id
+1.1
 SELECT * from t_double WHERE id = '1.1e0';
 id
+1.1
 SELECT * from t_double WHERE id IN (1.1, 2.2);
 id
+1.1
 SELECT * from t_double WHERE id IN (1.1e0, 2.2e0);
 id
+1.1
 SELECT * from t_double WHERE id IN ('1.1', '2.2');
 id
+1.1
 SELECT * from t_double WHERE id IN ('1.1e0', '2.2e0');
 id
+1.1
 SELECT * from t_double WHERE id BETWEEN 1.1 AND 1.9;
 id
 1.2
@@ -416,25 +424,43 @@ a    b
 drop table if exists double_test;
 create table double_test(c1 double(6,1));
 insert into double_test values(-1.7976931348623157E+308);
+Data truncation: data out of range: data type float, value '-1.7976931348623157e+308'
 insert into double_test values(1.7976931348623157E+308);
+Data truncation: data out of range: data type float, value '1.7976931348623157e+308'
 insert into double_test values(1000000);
+Data truncation: data out of range: data type float, value '1000000'
 insert into double_test values(1000001);
+Data truncation: data out of range: data type float, value '1000001'
 insert into double_test values(999999);
+Data truncation: data out of range: data type float, value '999999'
 insert into double_test values(-1000000);
+Data truncation: data out of range: data type float, value '-1000000'
 insert into double_test values(-1000001);
+Data truncation: data out of range: data type float, value '-1000001'
 insert into double_test values(-999999);
+Data truncation: data out of range: data type float, value '-999999'
 insert into double_test values(100000);
+Data truncation: data out of range: data type float, value '100000'
 insert into double_test values(100001);
+Data truncation: data out of range: data type float, value '100001'
 insert into double_test values(99999);
 insert into double_test values(-100000);
+Data truncation: data out of range: data type float, value '-100000'
 insert into double_test values(-100001);
+Data truncation: data out of range: data type float, value '-100001'
 insert into double_test values(-99999);
 insert into double_test values(10000000);
+Data truncation: data out of range: data type float, value '10000000'
 insert into double_test values(10000001);
+Data truncation: data out of range: data type float, value '10000001'
 insert into double_test values(9999999);
+Data truncation: data out of range: data type float, value '9999999'
 insert into double_test values(-10000000);
+Data truncation: data out of range: data type float, value '-10000000'
 insert into double_test values(-10000001);
+Data truncation: data out of range: data type float, value '-10000001'
 insert into double_test values(-9999999);
+Data truncation: data out of range: data type float, value '-9999999'
 insert into double_test values(10000);
 insert into double_test values(10001);
 insert into double_test values(9999);
@@ -443,15 +469,6 @@ insert into double_test values(-10001);
 insert into double_test values(-9999);
 select * from double_test order by 1;
 c1
--99999.9
--99999.9
--99999.9
--99999.9
--99999.9
--99999.9
--99999.9
--99999.9
--99999.9
 -99999.0
 -10001.0
 -10000.0
@@ -460,13 +477,169 @@ c1
 10000.0
 10001.0
 99999.0
-99999.9
-99999.9
-99999.9
-99999.9
-99999.9
-99999.9
-99999.9
-99999.9
-99999.9
 drop table double_test;
+drop table if exists t1;
+create table t1(a double(5, 2));
+insert into t1 values("999.995");
+Data truncation: data out of range: data type float, value '999.995'
+insert into t1 values("1000");
+Data truncation: data out of range: data type float, value '1000'
+insert into t1 values("-999.995");
+Data truncation: data out of range: data type float, value '-999.995'
+insert into t1 values("-1000");
+Data truncation: data out of range: data type float, value '-1000'
+insert into t1 values("999.994"), ("-999.994"),(null);
+insert into t1 values("90.004"), ("90.005"), ("-90.004"), ("-90.005"), ("90.006"), ("90.007");
+select * from t1;
+a
+999.99
+-999.99
+null
+90.00
+90.00
+-90.00
+-90.00
+90.01
+90.01
+delete from t1;
+insert into t1 values(90.012), (90.013), (90.014), (90.015);
+select * from t1;
+a
+90.01
+90.01
+90.01
+90.02
+select * from t1 where a > 90.01;
+a
+90.02
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a double(3, 1));
+create table t2(a tinyint);
+insert into t2 values(100);
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '100'
+delete from t2;
+insert into t2 values(-100);
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '-100'
+delete from t2;
+insert into t2 values(99), (-99);
+insert into t1 select * from t2;
+select * from t1;
+a
+99.0
+-99.0
+drop table if exists t2;
+create table t2(a tinyint unsigned);
+insert into t2 values(100);
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '100'
+delete from t2;
+insert into t2 values(99), (0);
+insert into t1 select * from t2;
+select * from t1;
+a
+99.0
+-99.0
+99.0
+0.0
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a double(5, 2));
+create table t2(a smallint);
+insert into t2 values("1000");
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '1000'
+delete from t2;
+insert into t2 values("-1000");
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '-1000'
+delete from t2;
+insert into t2 values(999), (-999), (0), (1), (-1);
+insert into t1 select * from t2;
+select * from t1;
+a
+999.00
+-999.00
+0.00
+1.00
+-1.00
+delete from t1;
+drop table if exists t2;
+create table t2(a int);
+insert into t2 values("1000");
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '1000'
+delete from t2;
+insert into t2 values("-1000");
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '-1000'
+delete from t2;
+insert into t2 values(999), (-999), (0), (1), (-1);
+insert into t1 select * from t2;
+select * from t1;
+a
+999.00
+-999.00
+0.00
+1.00
+-1.00
+delete from t1;
+drop table if exists t2;
+create table t2(a bigint);
+insert into t2 values("1000");
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '1000'
+delete from t2;
+insert into t2 values("-1000");
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '-1000'
+delete from t2;
+insert into t2 values(999), (-999), (0), (1), (-1);
+insert into t1 select * from t2;
+select * from t1;
+a
+999.00
+-999.00
+0.00
+1.00
+-1.00
+drop table if exists t2;
+create table t2(a decimal(10, 3));
+insert into t2 values(999.995);
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '999.995'
+delete from t2;
+insert into t2 values(-999.995);
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '-999.995'
+delete from t2;
+insert into t2 values(999.994), (-999.994), (99.005), (99);
+delete from t1;
+insert into t1 select * from t2;
+select * from t1;
+a
+999.99
+-999.99
+99.00
+99.00
+drop table if exists t2;
+create table t2(a decimal(30, 3));
+insert into t2 values(999.995);
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '999.995'
+delete from t2;
+insert into t2 values(-999.995);
+insert into t1 select * from t2;
+Data truncation: data out of range: data type float, value '-999.995'
+delete from t2;
+insert into t2 values(999.994), (-999.994), (99.005), (99);
+delete from t1;
+insert into t1 select * from t2;
+select * from t1;
+a
+999.99
+-999.99
+99.00
+99.00

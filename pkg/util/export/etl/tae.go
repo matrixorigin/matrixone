@@ -17,6 +17,9 @@ package etl
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"strconv"
-	"time"
 )
 
 const BatchSize = 8192
@@ -44,9 +45,8 @@ type TAEWriter struct {
 	filename     string
 	fs           fileservice.FileService
 	//writer       objectio.Writer
-	objectFS *objectio.ObjectFS
-	writer   *blockio.Writer
-	rows     []*table.Row
+	writer *blockio.BlockWriter
+	rows   []*table.Row
 }
 
 func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePath string, fs fileservice.FileService) *TAEWriter {
@@ -65,8 +65,7 @@ func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePa
 		w.columnsTypes = append(w.columnsTypes, c.ColType.ToType())
 		w.idxs[idx] = uint16(idx)
 	}
-	w.objectFS = objectio.NewObjectFS(fs, "")
-	w.writer = blockio.NewWriter(ctx, w.objectFS, filename)
+	w.writer, _ = blockio.NewBlockWriter(fs, filename)
 	return w
 }
 
@@ -75,7 +74,7 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 	for i, typ := range typs {
 		switch typ.Oid {
 		case types.T_datetime:
-			typ.Precision = 6
+			typ.Scale = 6
 		}
 		vec := vector.NewOriginal(typ)
 		vector.PreAlloc(vec, batchSize, batchSize, pool)
@@ -113,7 +112,8 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 				return moerr.NewInternalError(w.ctx, "the input value is not float64 type for column %d: %v, err: %s", colIdx, field, err)
 			}
 			elems[colIdx] = val
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar,
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			elems[colIdx] = field
 		case types.T_json:
 			elems[colIdx] = field
@@ -155,7 +155,7 @@ func (w *TAEWriter) writeBatch() error {
 			return err
 		}
 	}
-	_, err := w.writer.WriteBlockAndZoneMap(batch, w.idxs)
+	_, err := w.writer.WriteBatch(batch)
 	if err != nil {
 		return err
 	}
@@ -170,7 +170,7 @@ func (w *TAEWriter) writeBatch() error {
 
 func (w *TAEWriter) flush() error {
 	w.writeBatch()
-	_, err := w.writer.Sync()
+	_, _, err := w.writer.Sync(w.ctx)
 	if err != nil {
 		return err
 	}
@@ -222,7 +222,8 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 			default:
 				panic(moerr.NewInternalError(ctx, "not Support float64 type %v", t))
 			}
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar,
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			switch t := field.(type) {
 			case string:
 				err := vector.SetStringAt(vec, rowIdx, field.(string), mp)
@@ -256,7 +257,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 			switch t := field.(type) {
 			case time.Time:
 				datetimeStr := Time2DatetimeString(field.(time.Time))
-				d, err := types.ParseDatetime(datetimeStr, vec.Typ.Precision)
+				d, err := types.ParseDatetime(datetimeStr, vec.Typ.Scale)
 				if err != nil {
 					return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
 				}
@@ -266,7 +267,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 				if len(datetimeStr) == 0 {
 					cols[rowIdx] = types.Datetime(0)
 				} else {
-					d, err := types.ParseDatetime(datetimeStr, vec.Typ.Precision)
+					d, err := types.ParseDatetime(datetimeStr, vec.Typ.Scale)
 					if err != nil {
 						return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
 					}
@@ -291,7 +292,7 @@ type TAEReader struct {
 	typs     []types.Type
 	idxs     []uint16
 
-	objectReader objectio.Reader
+	blockReader *blockio.BlockReader
 
 	bs       []objectio.BlockObject
 	batchs   []*batch.Batch
@@ -314,41 +315,19 @@ func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesi
 		r.typs = append(r.typs, c.ColType.ToType())
 		r.idxs[idx] = uint16(idx)
 	}
-	r.objectReader, err = objectio.NewObjectReader(r.filepath, r.fs)
+	r.blockReader, err = blockio.NewFileReader(r.fs, r.filepath)
 	if err != nil {
 		return nil, err
 	}
 	return r, nil
 }
 
-func (r *TAEReader) readAllMeta(ctx context.Context) error {
-	var err error
-	if len(r.bs) == 0 {
-		r.bs, err = r.objectReader.ReadAllMeta(ctx, r.filesize, r.mp)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (r *TAEReader) ReadAll(ctx context.Context) ([]*batch.Batch, error) {
-	var err error
-	if err = r.readAllMeta(ctx); err != nil {
+	ioVec, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.filesize, r.mp)
+	if err != nil {
 		return nil, err
 	}
-	for _, bss := range r.bs {
-		ioVec, err := r.objectReader.Read(context.Background(), bss.GetExtent(), r.idxs, r.mp)
-		if err != nil {
-			return nil, err
-		}
-		batch := batch.NewWithSize(len(r.typs))
-		for idx, entry := range ioVec.Entries {
-			vec := newVector(r.typs[idx], entry.Object.([]byte))
-			batch.Vecs[idx] = vec
-		}
-		r.batchs = append(r.batchs, batch)
-	}
+	r.batchs = append(r.batchs, ioVec...)
 	return r.batchs, nil
 }
 
@@ -398,7 +377,8 @@ func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 	case types.T_float64:
 		cols := vector.MustTCols[float64](vec)
 		return len(cols), nil
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		cols := vector.MustTCols[types.Varlena](vec)
 		return len(cols), nil
 	case types.T_json:
@@ -424,7 +404,8 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 	case types.T_float64:
 		cols := vector.MustTCols[float64](vec)
 		return fmt.Sprintf("%f", cols[rowIdx]), nil
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		cols, area := vector.MustVarlenaRawData(vec)
 		return cols[rowIdx].GetString(area), nil
 	case types.T_json:
@@ -444,10 +425,4 @@ const timestampFormatter = "2006-01-02 15:04:05.000000"
 
 func Time2DatetimeString(t time.Time) string {
 	return t.Format(timestampFormatter)
-}
-
-func newVector(tye types.Type, buf []byte) *vector.Vector {
-	vector := vector.New(tye)
-	vector.Read(buf)
-	return vector
 }
