@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"context"
+	"math"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -96,12 +97,10 @@ func (l *LogtailerImpl) RangeLogtail(
 	}
 
 	if checkpointed.GreaterEq(end) {
-		u64Max := uint64(0)
-		u64Max -= 1
 		return []logtail.TableLogtail{{
 			CkpLocation: ckpLoc,
 			Ts:          &to,
-			Table:       &api.TableID{DbId: u64Max, TbId: u64Max},
+			Table:       &api.TableID{DbId: math.MaxUint64, TbId: math.MaxUint64},
 		}}, nil
 	} else if ckpLoc != "" {
 		start = checkpointed.Next()
@@ -174,10 +173,6 @@ type tableRespBuilder struct {
 func (b *tableRespBuilder) build() (logtail.TableLogtail, error) {
 	resp, err := b.collect()
 	if err != nil {
-		return logtail.TableLogtail{}, err
-	}
-	if len(resp.Commands) == 0 {
-		logutil.Info("[Logtail] empty table logtail", zap.Any("t_id", b.tid))
 		return logtail.TableLogtail{}, err
 	}
 	ret := logtail.TableLogtail{}
