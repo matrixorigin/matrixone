@@ -1112,9 +1112,13 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		var safe bool
 		if rightList, ok := args[1].Expr.(*plan.Expr_List); ok {
 			typLeft := makeTypeByPlan2Expr(args[0])
+			// for now ,decimal type can not fold constant
+			if typLeft.Oid == types.T_decimal64 || typLeft.Oid == types.T_decimal128 {
+				safe = false
+			}
 			lenList := len(rightList.List.List)
 
-			for i := 0; i < lenList; i++ {
+			for i := 0; i < lenList && safe; i++ {
 				if constExpr, ok := rightList.List.List[i].Expr.(*plan.Expr_C); ok {
 					safe = checkNoNeedCast(makeTypeByPlan2Expr(rightList.List.List[i]), typLeft, constExpr)
 					if !safe {
