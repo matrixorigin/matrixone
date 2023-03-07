@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"reflect"
 	"sort"
@@ -206,7 +205,7 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt string, useEnv bool) context.Context {
+var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) context.Context {
 	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
@@ -258,12 +257,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
-		SqlSourceType:        ses.sqlSourceType,
+		SqlSourceType:        sqlType,
 		RequestAt:            requestAt,
 		StatementType:        getStatementType(statement).GetStatementType(),
 		QueryType:            getStatementType(statement).GetQueryType(),
 	}
-	if ses.sqlSourceType != "internal_sql" {
+	if sqlType != "internal_sql" {
 		ses.tStmt = stm
 		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
@@ -277,8 +276,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return motrace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string) context.Context {
-	ctx = RecordStatement(ctx, ses, proc, nil, envBegin, envStmt, true)
+var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt, sqlType string) context.Context {
+	ctx = RecordStatement(ctx, ses, proc, nil, envBegin, envStmt, sqlType, true)
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
@@ -586,29 +585,6 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int64, oq o
 	return row, nil
 }
 
-func formatFloatNum[T types.Floats](num T, Typ types.Type) T {
-	if Typ.Precision == -1 || Typ.Width == 0 {
-		return num
-	}
-	pow := math.Pow10(int(Typ.Precision))
-	t := math.Abs(float64(num))
-	upperLimit := math.Pow10(int(Typ.Width))
-	if t >= upperLimit {
-		t = upperLimit - 1
-	} else {
-		t *= pow
-		t = math.Round(t)
-	}
-	if t >= upperLimit {
-		t = upperLimit - 1
-	}
-	t /= pow
-	if num < 0 {
-		t = -1 * t
-	}
-	return T(t)
-}
-
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int64) error {
 	timeZone := ses.GetTimeZone()
@@ -734,28 +710,44 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	case types.T_float32:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float32)
-			row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
+			if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
+				row[i] = vs[rowIndex]
+			} else {
+				row[i] = strconv.FormatFloat(float64(vs[rowIndex]), 'f', int(vec.Typ.Scale), 64)
+			}
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float32)
-				row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
+				if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
+					row[i] = vs[rowIndex]
+				} else {
+					row[i] = strconv.FormatFloat(float64(vs[rowIndex]), 'f', int(vec.Typ.Scale), 64)
+				}
 			}
 		}
 	case types.T_float64:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float64)
-			row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
+			if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
+				row[i] = vs[rowIndex]
+			} else {
+				row[i] = strconv.FormatFloat(vs[rowIndex], 'f', int(vec.Typ.Scale), 64)
+			}
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float64)
-				row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
+				if vec.Typ.Scale < 0 || vec.Typ.Width == 0 {
+					row[i] = vs[rowIndex]
+				} else {
+					row[i] = strconv.FormatFloat(vs[rowIndex], 'f', int(vec.Typ.Scale), 64)
+				}
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			row[i] = vec.GetBytes(rowIndex)
 		} else {
@@ -778,42 +770,42 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			}
 		}
 	case types.T_datetime:
-		precision := vec.Typ.Precision
+		scale := vec.Typ.Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Datetime)
-			row[i] = vs[rowIndex].String2(precision)
+			row[i] = vs[rowIndex].String2(scale)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Datetime)
-				row[i] = vs[rowIndex].String2(precision)
+				row[i] = vs[rowIndex].String2(scale)
 			}
 		}
 	case types.T_time:
-		precision := vec.Typ.Precision
+		scale := vec.Typ.Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Time)
-			row[i] = vs[rowIndex].String2(precision)
+			row[i] = vs[rowIndex].String2(scale)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Time)
-				row[i] = vs[rowIndex].String2(precision)
+				row[i] = vs[rowIndex].String2(scale)
 			}
 		}
 	case types.T_timestamp:
-		precision := vec.Typ.Precision
+		scale := vec.Typ.Scale
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]types.Timestamp)
-			row[i] = vs[rowIndex].String2(timeZone, precision)
+			row[i] = vs[rowIndex].String2(timeZone, scale)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Timestamp)
-				row[i] = vs[rowIndex].String2(timeZone, precision)
+				row[i] = vs[rowIndex].String2(timeZone, scale)
 			}
 		}
 	case types.T_decimal64:
@@ -1534,7 +1526,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 
 func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"Variable_name", "Value"})
-	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
+	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
 	cnt := len(rows)
 	bat.Zs = make([]int64, cnt)
 	for i := range bat.Zs {
@@ -2035,6 +2027,12 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 		setColFlag(c)
 		setColLength(c, col.Typ.Width)
 		setCharacter(c)
+
+		// For binary/varbinary with mysql_type_varchar.Change the charset.
+		if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
+			c.SetCharset(0x3f)
+		}
+
 		c.SetDecimal(uint8(col.Typ.Scale))
 		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
@@ -2180,7 +2178,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		tempEngine := memoryengine.New(
 			requestCtx,
 			memoryengine.NewDefaultShardPolicy(
-				mpool.MustNewZero(),
+				mpool.MustNewZeroNoFixed(),
 			),
 			memoryengine.RandomIDGenerator,
 			clusterservice.NewMOCluster(
@@ -2976,29 +2974,33 @@ func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(request
 }
 
 func (ses *Session) getSqlType(sql string) {
+	ses.sqlSourceType = nil
 	tenant := ses.GetTenantInfo()
 	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
-		ses.sqlSourceType = intereSql
+		ses.sqlSourceType = append(ses.sqlSourceType, intereSql)
 		return
 	}
 	flag, _, _ := isSpecialUser(tenant.User)
 	if flag {
-		ses.sqlSourceType = intereSql
+		ses.sqlSourceType = append(ses.sqlSourceType, intereSql)
 		return
 	}
-	p1 := strings.Index(sql, "/*")
-	p2 := strings.Index(sql, "*/")
-	if p1 < 0 || p2 < 0 || p2 <= p1+1 {
-		ses.sqlSourceType = externSql
-		return
-	}
-	source := strings.TrimSpace(sql[p1+2 : p2])
-	if source == cloudUserTag {
-		ses.sqlSourceType = cloudUserSql
-	} else if source == cloudNoUserTag {
-		ses.sqlSourceType = cloudNoUserSql
-	} else {
-		ses.sqlSourceType = externSql
+	for len(sql) > 0 {
+		p1 := strings.Index(sql, "/*")
+		p2 := strings.Index(sql, "*/")
+		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
+			ses.sqlSourceType = append(ses.sqlSourceType, externSql)
+			return
+		}
+		source := strings.TrimSpace(sql[p1+2 : p2])
+		if source == cloudUserTag {
+			ses.sqlSourceType = append(ses.sqlSourceType, cloudUserSql)
+		} else if source == cloudNoUserTag {
+			ses.sqlSourceType = append(ses.sqlSourceType, cloudNoUserSql)
+		} else {
+			ses.sqlSourceType = append(ses.sqlSourceType, externSql)
+		}
+		sql = sql[p2+2:]
 	}
 }
 
@@ -3166,7 +3168,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
@@ -3209,7 +3211,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
-		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sql, singleStatement)
+		sqlType := ses.sqlSourceType[0]
+		if i < len(ses.sqlSourceType) {
+			sqlType = ses.sqlSourceType[i]
+		}
+		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sql, sqlType, singleStatement)
 		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
@@ -3655,7 +3661,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateRole, *tree.DropRole,
 			*tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
-			*tree.Delete, *tree.TruncateTable:
+			*tree.Delete, *tree.TruncateTable, *tree.LockTableStmt, *tree.UnLockTableStmt:
 			//change privilege
 			switch cw.GetAst().(type) {
 			case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView,
@@ -4001,7 +4007,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, "", sql)
 		retErr = moerr.NewParseError(requestCtx, err.Error())
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
@@ -4009,7 +4015,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 
 	singleStatement := len(stmtExecs) == 1
 	for _, exec := range stmtExecs {
-		err = Execute(requestCtx, ses, proc, exec, beginInstant, sql, singleStatement)
+		err = Execute(requestCtx, ses, proc, exec, beginInstant, sql, "", singleStatement)
 		if err != nil {
 			return err
 		}
@@ -4383,6 +4389,10 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varchar:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_binary:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_varbinary:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_date:
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:
@@ -4499,6 +4509,9 @@ func getAccountId(ctx context.Context) uint32 {
 
 func changeVersion(ctx context.Context, ses *Session, db string) error {
 	var err error
+	if _, ok := bannedCatalogDatabases[db]; ok {
+		return err
+	}
 	version, _ := GetVersionCompatbility(ctx, ses, db)
 	if ses.GetTenantInfo() != nil {
 		ses.GetTenantInfo().SetVersion(version)

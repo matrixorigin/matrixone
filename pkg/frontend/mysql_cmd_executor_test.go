@@ -65,7 +65,7 @@ func init() {
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 	stm := &motrace.StatementInfo{}
 	ctx = motrace.ContextWithStatement(ctx, stm)
-	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, bool) context.Context {
+	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, string, bool) context.Context {
 		return ctx
 	})
 	return ctx, stubs
@@ -1121,7 +1121,7 @@ func Test_getSqlType(t *testing.T) {
 		sql := "use db"
 		ses := &Session{}
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, intereSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, intereSql)
 
 		user := "special_user"
 		tenant := &TenantInfo{
@@ -1130,23 +1130,23 @@ func Test_getSqlType(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 		SetSpecialUser(user, nil)
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, intereSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, intereSql)
 
 		tenant.User = "dump"
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, externSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, externSql)
 
 		sql = "/* cloud_user */ use db"
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudUserSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, cloudUserSql)
 
 		sql = "/* cloud_nonuser */ use db"
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudNoUserSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, cloudNoUserSql)
 
 		sql = "/* json */ use db"
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, externSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, externSql)
 	})
 }
 

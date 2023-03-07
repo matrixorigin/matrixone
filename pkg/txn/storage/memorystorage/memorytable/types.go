@@ -200,6 +200,10 @@ func TypeMatch(v any, typ types.T) bool {
 		_, ok = v.([]byte)
 	case types.T_varchar:
 		_, ok = v.([]byte)
+	case types.T_binary:
+		_, ok = v.([]byte)
+	case types.T_varbinary:
+		_, ok = v.([]byte)
 	case types.T_json:
 		_, ok = v.([]byte)
 	case types.T_blob:

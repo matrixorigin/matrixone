@@ -43,15 +43,15 @@ func (t Time) String() string {
 }
 
 // Format: hh:mm:ss.msec
-func (t Time) String2(precision int32) string {
+func (t Time) String2(scale int32) string {
 	var symbol string
 	h, m, s, ms, isNeg := t.ClockFormat()
 	if isNeg {
 		symbol = "-"
 	}
-	if precision > 0 {
+	if scale > 0 {
 		msecInstr := fmt.Sprintf("%06d\n", ms)
-		msecInstr = msecInstr[:precision]
+		msecInstr = msecInstr[:scale]
 		return fmt.Sprintf("%s%02d:%02d:%02d"+"."+msecInstr, symbol, h, m, s)
 	}
 	return fmt.Sprintf("%s%02d:%02d:%02d", symbol, h, m, s)
@@ -59,15 +59,15 @@ func (t Time) String2(precision int32) string {
 
 // Format: hhmmss.msec
 // TODO: add the carry when truncate
-func (t Time) NumericString(precision int32) string {
+func (t Time) NumericString(scale int32) string {
 	var symbol string
 	h, m, s, ms, isNeg := t.ClockFormat()
 	if isNeg {
 		symbol = "-"
 	}
-	if precision > 0 {
+	if scale > 0 {
 		msecInstr := fmt.Sprintf("%06d\n", ms)
-		msecInstr = msecInstr[:precision]
+		msecInstr = msecInstr[:scale]
 		return fmt.Sprintf("%s%02d%02d%02d"+"."+msecInstr, symbol, h, m, s)
 	}
 	return fmt.Sprintf("%s%02d%02d%02d", symbol, h, m, s)
@@ -83,7 +83,7 @@ func (t Time) NumericString(precision int32) string {
 // * (-)hhmmss(.msec)
 
 // During parsing, if the input length of msec is larger than predefined
-// precision, it will be rounded
+// scale, it will be rounded
 // eg.
 //
 //	Time(3) input string   		parsing result
@@ -93,7 +93,7 @@ func (t Time) NumericString(precision int32) string {
 //	"11:11:11.9995"      		"11:11:12.000"
 //	"-11:11:11.1235"		"-11:11:11.124"
 //	"-11:11:11.9995"      		"-11:11:12.000"
-func ParseTime(s string, precision int32) (Time, error) {
+func ParseTime(s string, scale int32) (Time, error) {
 	s = strings.TrimSpace(s)
 
 	// seperate to date&time and msec parts
@@ -106,11 +106,11 @@ func ParseTime(s string, precision int32) (Time, error) {
 	if isDateType(timeString) {
 		// The date type format must be "yyyy-mm-dd hh:mm:ss" and
 		// it can be handled like Datetime
-		dt, err := ParseDatetime(s, precision)
+		dt, err := ParseDatetime(s, scale)
 		if err != nil {
 			return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 		}
-		return dt.ToTime(precision), nil
+		return dt.ToTime(scale), nil
 	} else {
 		// empty string "" equals to 00:00:00
 		if len(timeString) == 0 {
@@ -197,7 +197,7 @@ func ParseTime(s string, precision int32) (Time, error) {
 
 	// handle msec part
 	if len(strs) > 1 {
-		msec, carry, err = getMsec(strs[1], precision)
+		msec, carry, err = getMsec(strs[1], scale)
 		if err != nil {
 			return -1, moerr.NewInvalidInputNoCtx("invalid time value %s", s)
 		}
@@ -218,22 +218,22 @@ func ParseTime(s string, precision int32) (Time, error) {
 //	123 -> "000123" -> "00:01:23"
 //	112233.444 -> "112233.444" -> "11:22:33.444"
 
-func ParseInt64ToTime(input int64, precision int32) (Time, error) {
+func ParseInt64ToTime(input int64, scale int32) (Time, error) {
 	if input < MinInputIntTime || input > MaxInputIntTime {
 		return -1, moerr.NewInvalidInputNoCtx("invalid time value %d", input)
 	}
 	s := strconv.FormatInt(input, 10)
-	return ParseTime(s, precision)
+	return ParseTime(s, scale)
 }
 
-func ParseDecimal64lToTime(input Decimal64, precision int32) (Time, error) {
-	s := input.ToStringWithScale(precision)
-	return ParseTime(s, precision)
+func ParseDecimal64lToTime(input Decimal64, scale int32) (Time, error) {
+	s := input.ToStringWithScale(scale)
+	return ParseTime(s, scale)
 }
 
-func ParseDecimal128lToTime(input Decimal128, precision int32) (Time, error) {
-	s := input.ToStringWithScale(precision)
-	return ParseTime(s, precision)
+func ParseDecimal128lToTime(input Decimal128, scale int32) (Time, error) {
+	s := input.ToStringWithScale(scale)
+	return ParseTime(s, scale)
 }
 
 func (t Time) ToInt64() int64 {
@@ -246,9 +246,9 @@ func (t Time) ToInt64() int64 {
 	return trans
 }
 
-func (t Time) ToDecimal64(ctx context.Context, width, precision int32) (Decimal64, error) {
-	tToStr := t.NumericString(precision)
-	ret, err := ParseStringToDecimal64(tToStr, width, precision, false)
+func (t Time) ToDecimal64(ctx context.Context, width, scale int32) (Decimal64, error) {
+	tToStr := t.NumericString(scale)
+	ret, err := ParseStringToDecimal64(tToStr, width, scale, false)
 	if err != nil {
 		return ret, moerr.NewInternalError(ctx, "exsit time cant't cast to decimal64")
 	}
@@ -256,9 +256,9 @@ func (t Time) ToDecimal64(ctx context.Context, width, precision int32) (Decimal6
 	return ret, nil
 }
 
-func (t Time) ToDecimal128(ctx context.Context, width, precision int32) (Decimal128, error) {
-	tToStr := t.NumericString(precision)
-	ret, err := ParseStringToDecimal128(tToStr, width, precision, false)
+func (t Time) ToDecimal128(ctx context.Context, width, scale int32) (Decimal128, error) {
+	tToStr := t.NumericString(scale)
+	ret, err := ParseStringToDecimal128(tToStr, width, scale, false)
 	if err != nil {
 		return ret, moerr.NewInternalError(ctx, "exsit time cant't cast to decimal128")
 	}
@@ -314,23 +314,23 @@ func (t Time) ToDate() Date {
 	return Today(time.UTC)
 }
 
-// We need to truncate the part after precision position when cast
-// between different precision.
-func (t Time) ToDatetime(precision int32) Datetime {
+// We need to truncate the part after scale position when cast
+// between different scale.
+func (t Time) ToDatetime(scale int32) Datetime {
 	// TODO: Get today date from local time zone setting?
 	d := Today(time.UTC)
 	dt := d.ToDatetime()
-	if precision == 6 {
+	if scale == 6 {
 		return Datetime(int64(dt) + int64(t))
 	}
 
 	// TODO: add the valid check
 	newTime := Datetime(int64(dt) + int64(t))
-	base := newTime / precisionVal[precision]
-	if newTime%precisionVal[precision]/precisionVal[precision+1] >= 5 { // check carry
+	base := newTime / scaleVal[scale]
+	if newTime%scaleVal[scale]/scaleVal[scale+1] >= 5 { // check carry
 		base += 1
 	}
-	return base * precisionVal[precision]
+	return base * scaleVal[scale]
 }
 
 // AddInterval now date or time use the function to add/sub date,

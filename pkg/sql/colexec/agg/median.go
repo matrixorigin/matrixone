@@ -75,15 +75,15 @@ type Decimal128Median struct {
 func MedianReturnType(typs []types.Type) types.Type {
 	switch typs[0].Oid {
 	case types.T_decimal64:
-		return types.New(types.T_decimal128, 0, typs[0].Scale, typs[0].Precision)
+		return types.New(types.T_decimal128, 0, typs[0].Scale)
 	case types.T_decimal128:
-		return types.New(types.T_decimal128, 0, typs[0].Scale, typs[0].Precision)
+		return types.New(types.T_decimal128, 0, typs[0].Scale)
 	case types.T_float32, types.T_float64:
-		return types.New(types.T_float64, 0, 0, 0)
+		return types.New(types.T_float64, 0, 0)
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		return types.New(types.T_float64, 0, 0, 0)
+		return types.New(types.T_float64, 0, 0)
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		return types.New(types.T_float64, 0, 0, 0)
+		return types.New(types.T_float64, 0, 0)
 	default:
 		return types.Type{}
 	}
