@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -289,6 +290,9 @@ func (s *Scope) JoinRun(c *Compile) error {
 	if mcpu < 1 {
 		mcpu = 1
 	}
+
+	isRight := s.isRight()
+
 	chp := s.PreScopes
 	for i := range chp {
 		chp[i].IsEnd = true
@@ -302,12 +306,28 @@ func (s *Scope) JoinRun(c *Compile) error {
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
-	left, right := c.newLeftScope(s, ss), c.newRightScope(s, ss)
+	left_scope, right_scope := c.newLeftScope(s, ss), c.newRightScope(s, ss)
 	s = newParallelScope(c, s, ss)
+
+	if isRight {
+		channel := make(chan *[]int32)
+		for i := range s.PreScopes {
+			arg := s.PreScopes[i].Instructions[0].Arg.(*right.Argument)
+			arg.Channel = channel
+			arg.NumCPU = uint64(mcpu)
+			if i == 0 {
+				arg.Is_receiver = true
+			}
+		}
+	}
 	s.PreScopes = append(s.PreScopes, chp...)
-	s.PreScopes = append(s.PreScopes, left)
-	s.PreScopes = append(s.PreScopes, right)
+	s.PreScopes = append(s.PreScopes, left_scope)
+	s.PreScopes = append(s.PreScopes, right_scope)
+
 	return s.MergeRun(c)
+}
+func (s *Scope) isRight() bool {
+	return s != nil && s.Instructions[0].Op == vm.Right
 }
 
 func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
