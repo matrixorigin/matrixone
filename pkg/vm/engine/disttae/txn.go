@@ -315,30 +315,6 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
-func (h transactionHeap) Len() int {
-	return len(h)
-}
-
-func (h transactionHeap) Less(i, j int) bool {
-	return h[i].meta.SnapshotTS.Less(h[j].meta.SnapshotTS)
-}
-
-func (h transactionHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-}
-
-func (h *transactionHeap) Push(x any) {
-	*h = append(*h, x.(*Transaction))
-}
-
-func (h *transactionHeap) Pop() any {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[0 : n-1]
-	return x
-}
-
 // needRead determine if a block needs to be read
 func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
 	var err error

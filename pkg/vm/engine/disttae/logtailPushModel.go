@@ -16,6 +16,10 @@ package disttae
 
 import (
 	"context"
+	"sort"
+	"sync"
+	"time"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,9 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	logtail2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
-	"sort"
-	"sync"
-	"time"
 )
 
 const (
@@ -429,7 +430,11 @@ func updatePartitionOfPush(
 
 	doneMutate()
 
-	<-partition.lock
+	select {
+	case <-partition.lock:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	partition.ts = *tl.Ts
 	partition.lock <- struct{}{}
 
