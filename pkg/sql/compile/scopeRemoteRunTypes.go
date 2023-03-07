@@ -226,7 +226,7 @@ func newMessageReceiverOnServer(
 		if receiver.sequence == 0 { // status == Last && sequence == 0 means it is a complete data
 			receiver.scopeData = m.Data
 		} else {
-			completeData, err := getCompleteScopeDate(int(receiver.sequence), m, cs)
+			completeData, err := getCompleteScopeDate(ctx, int(receiver.sequence), m, cs)
 			if err != nil {
 				logutil.Errorf("failed to get complete pipeline data. err = %s", err)
 				panic("failed to get complete pipeline data")
@@ -242,9 +242,9 @@ func newMessageReceiverOnServer(
 	return receiver
 }
 
-func getCompleteScopeDate(msgCount int, m *pipeline.Message, cs morpc.ClientSession) ([]byte, error) {
+func getCompleteScopeDate(ctx context.Context, msgCount int, m *pipeline.Message, cs morpc.ClientSession) ([]byte, error) {
 	msgVec := make([]*pipeline.Message, int(msgCount))
-	cache, err := cs.GetCache(0)
+	cache, err := cs.CreateCache(ctx, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +353,8 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	}
 
 	checksum := crc32.ChecksumIEEE(data)
-	if len(data) <= receiver.maxMessageSize {
+	dataLen := len(data)
+	if dataLen <= receiver.maxMessageSize {
 		m, errA := receiver.acquireMessage()
 		if errA != nil {
 			return errA
@@ -366,14 +367,14 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return receiver.clientSession.Write(receiver.ctx, m)
 	}
 	// if data is too large, cut and send
-	for start, end := 0, 0; start < len(data); start = end {
+	for start, end := 0, 0; start < dataLen; start = end {
 		m, errA := receiver.acquireMessage()
 		if errA != nil {
 			return errA
 		}
 		end = start + receiver.maxMessageSize
-		if end > len(data) {
-			end = len(data)
+		if end > dataLen {
+			end = dataLen
 			m.SetSid(pipeline.Last)
 		} else {
 			m.SetSid(pipeline.WaitingNext)

@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"hash/crc32"
 	"time"
 
@@ -177,6 +178,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	err := s.remoteRun(c)
 
 	// tell connect operator that it's over
+	fmt.Printf("[ccompile] %s\n", DebugShowScopes([]*Scope{s}))
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
 	arg.Free(s.Proc, err != nil)
 	return err
@@ -645,6 +647,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) error {
 			{
 				message.Id = streamSender.ID()
 				message.Cmd = pbpipeline.PrepareDoneNotifyMessage
+				message.Sid = pbpipeline.Last
 				message.Uuid = info.Uuid[:]
 			}
 			if errSend := streamSender.Send(c, message); errSend != nil {

@@ -119,14 +119,8 @@ func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.C
 	case pipeline.PipelineMessage:
 		var cache morpc.MessageCache
 		var err error
-		if msg.GetSequence() == 0 {
-			if cache, err = cs.CreateCache(ctx, 0); err != nil {
-				return err
-			}
-		} else {
-			if cache, err = cs.GetCache(0); err != nil {
-				return err
-			}
+		if cache, err = cs.CreateCache(ctx, 0); err != nil {
+			return err
 		}
 		cache.Add(message)
 	}
