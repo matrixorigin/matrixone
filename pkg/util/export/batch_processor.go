@@ -36,6 +36,8 @@ import (
 
 const defaultQueueSize = 1310720 // queue mem cost = 10MB
 
+const defaultBufferCnt = 10
+
 const LoggerNameMOCollector = "MOCollector"
 
 // bufferHolder hold ItemBuffer content, handle buffer's new/flush/reset/reminder(base on timer) operations.
@@ -261,6 +263,7 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 		exporterCnt:    runtime.NumCPU(),
 		pipeImplHolder: newPipeImplHolder(),
 		statsInterval:  time.Minute,
+		maxBufferCnt:   defaultBufferCnt,
 	}
 	c.bufferCond = sync.NewCond(&c.bufferMux)
 	for _, opt := range opts {
