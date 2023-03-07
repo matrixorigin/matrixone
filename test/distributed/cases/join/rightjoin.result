@@ -1,0 +1,104 @@
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+CREATE TABLE t1 (S1 INT, S2 varchar(10));
+CREATE TABLE t2 (S1 INT, S2 varchar(10));
+CREATE TABLE t3 (S1 INT, S2 varchar(10));
+INSERT INTO t1 VALUES (1,'aaa'),(2,'bbb'),(3,'ccc'),(4,NULL),(5,'eee'),(6,'fff'),(NULL,'aaa'),(9,'bbb'),(10,'ccc'),(11,'ddd'),(12,'abc'),(NULL,NULL);
+INSERT INTO t2 VALUES  (11,'aaa'),(12,'bbb'),(13,'ccc'),(14,NULL),(1,'aaa'),(2,'bbb'),(3,'ccc'),(4,'ddd'),(NULL,'abc'),(NULL,NULL);
+SELECT * FROM t1 RIGHT JOIN t2 on t1.S1=t2.S1;
+s1    s2    s1    s2
+1    aaa    1    aaa
+2    bbb    2    bbb
+3    ccc    3    ccc
+4    null    4    ddd
+11    ddd    11    aaa
+12    abc    12    bbb
+null    null    13    ccc
+null    null    14    null
+null    null    null    abc
+null    null    null    null
+SELECT * FROM t1 RIGHT JOIN t2 on t1.S2=t2.S2;
+s1    s2    s1    s2
+1    aaa    11    aaa
+1    aaa    1    aaa
+2    bbb    12    bbb
+2    bbb    2    bbb
+3    ccc    13    ccc
+3    ccc    3    ccc
+null    aaa    11    aaa
+null    aaa    1    aaa
+9    bbb    12    bbb
+9    bbb    2    bbb
+10    ccc    13    ccc
+10    ccc    3    ccc
+11    ddd    4    ddd
+12    abc    null    abc
+null    null    14    null
+null    null    null    null
+SELECT * FROM t2 RIGHT JOIN t1 on t1.S1=t2.S1;
+s1    s2    s1    s2
+11    aaa    11    ddd
+12    bbb    12    abc
+1    aaa    1    aaa
+2    bbb    2    bbb
+3    ccc    3    ccc
+4    ddd    4    null
+null    null    5    eee
+null    null    6    fff
+null    null    9    bbb
+null    null    10    ccc
+null    null    null    aaa
+null    null    null    null
+SELECT * FROM t2 RIGHT JOIN t1 on t1.S2=t2.S2;
+s1    s2    s1    s2
+11    aaa    1    aaa
+11    aaa    null    aaa
+12    bbb    2    bbb
+12    bbb    9    bbb
+13    ccc    3    ccc
+13    ccc    10    ccc
+1    aaa    1    aaa
+1    aaa    null    aaa
+2    bbb    2    bbb
+2    bbb    9    bbb
+3    ccc    3    ccc
+3    ccc    10    ccc
+4    ddd    11    ddd
+null    abc    12    abc
+null    null    5    eee
+null    null    6    fff
+null    null    4    null
+null    null    null    null
+SELECT * FROM t3 RIGHT JOIN t1 on t1.S1=t3.S1;
+s1    s2    s1    s2
+null    null    1    aaa
+null    null    2    bbb
+null    null    3    ccc
+null    null    4    null
+null    null    5    eee
+null    null    6    fff
+null    null    9    bbb
+null    null    10    ccc
+null    null    11    ddd
+null    null    12    abc
+null    null    null    aaa
+null    null    null    null
+SELECT * FROM t3 RIGHT JOIN t1 on t1.S2=t3.S2;
+s1    s2    s1    s2
+null    null    1    aaa
+null    null    null    aaa
+null    null    2    bbb
+null    null    9    bbb
+null    null    3    ccc
+null    null    10    ccc
+null    null    5    eee
+null    null    6    fff
+null    null    11    ddd
+null    null    12    abc
+null    null    4    null
+null    null    null    null
+SELECT * FROM t1 RIGHT JOIN t3 on t1.S1=t3.S1;
+s1    s2    s1    s2
+SELECT * FROM t1 RIGHT JOIN t3 on t1.S2=t3.S2;
+s1    s2    s1    s2
