@@ -94,10 +94,13 @@ func CnServerMessageHandler(
 		panic("cn server receive a message with unexpected type")
 	}
 
+	fmt.Printf("[CnServerMessageHandler] receive msg typ = %d, status = %d\n", msg.GetCmd(), msg.GetSid())
 	switch msg.GetSid() {
 	case pipeline.WaitingNext:
+		fmt.Printf("[CnServerMessageHandler] handle waiting next msg\n")
 		return handleWaitingNextMsg(ctx, message, cs)
 	case pipeline.Last:
+		fmt.Printf("[CnServerMessageHandler] handle last msg, typ = %d\n", msg.GetCmd())
 		// new a receiver to receive message and write back result.
 		receiver := newMessageReceiverOnServer(ctx, msg,
 			cs, messageAcquirer, storeEngine, fileService, cli)
@@ -117,12 +120,14 @@ func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.C
 	msg, _ := message.(*pipeline.Message)
 	switch msg.GetCmd() {
 	case pipeline.PipelineMessage:
+		fmt.Printf("[handleWaitingNextMsg] handle pipeline waiting next msg\n")
 		var cache morpc.MessageCache
 		var err error
 		if cache, err = cs.CreateCache(ctx, 0); err != nil {
 			return err
 		}
 		cache.Add(message)
+		fmt.Printf("[handleWaitingNextMsg] add idx %d to cache success\n", msg.GetSequence())
 	}
 	return nil
 }

@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"hash/crc32"
 	"runtime"
 	"time"
@@ -38,7 +39,7 @@ import (
 )
 
 const (
-	maxMessageSizeToMoRpc = 64 * mpool.MB
+	maxMessageSizeToMoRpc = 10 * mpool.MB
 )
 
 // cnInformation records service information to help handle messages.
@@ -92,37 +93,45 @@ func (sender *messageSenderOnClient) send(
 	scopeData, procData []byte, messageType uint64) error {
 	sdLen := len(scopeData)
 	if sdLen <= maxMessageSizeToMoRpc {
+		fmt.Printf("[seperatesend] send in one\n")
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+		_ = cancel
 		message := cnclient.AcquireMessage()
 		message.SetID(sender.streamSender.ID())
-		message.SetMessageType(messageType)
+		message.SetMessageType(pipeline.PipelineMessage)
 		message.SetData(scopeData)
 		message.SetProcData(procData)
 		message.SetSequence(0)
 		message.SetSid(pipeline.Last)
-		return sender.streamSender.Send(sender.ctx, message)
+		return sender.streamSender.Send(timeoutCtx, message)
 	}
 
 	start := 0
 	cnt := uint64(0)
 	for start < sdLen {
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+		_ = cancel
+
 		end := start + maxMessageSizeToMoRpc
-		isLast := end > sdLen
+		isLast := end >= sdLen
 
 		message := cnclient.AcquireMessage()
 		message.SetID(sender.streamSender.ID())
-		message.SetMessageType(messageType)
+		message.SetMessageType(pipeline.PipelineMessage)
 		message.SetSequence(cnt)
 		if isLast {
+			fmt.Printf("[seperatesend] isLast. cnt == %d\n", cnt)
 			message.SetData(scopeData[start:sdLen])
 			message.SetProcData(procData)
 			message.SetSid(pipeline.Last)
 		} else {
+			fmt.Printf("[seperatesend] notLast. cnt == %d\n", cnt)
 			message.SetData(scopeData[start:end])
 			message.SetProcData(nil)
 			message.SetSid(pipeline.WaitingNext)
 		}
 
-		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
+		if err := sender.streamSender.Send(timeoutCtx, message); err != nil {
 			return err
 		}
 		cnt++
@@ -199,7 +208,7 @@ func newMessageReceiverOnServer(
 		clientSession:   cs,
 		messageAcquirer: messageAcquirer,
 		maxMessageSize:  maxMessageSizeToMoRpc,
-		sequence:        m.GetSequence(),
+		sequence:        0,
 	}
 
 	switch m.GetCmd() {
@@ -222,8 +231,7 @@ func newMessageReceiverOnServer(
 			logutil.Errorf("decode process info from pipeline.Message failed, bytes are %v", m.GetProcInfoData())
 			panic("cn receive a message with wrong process bytes")
 		}
-		receiver.sequence = m.GetSequence()
-		if receiver.sequence == 0 { // status == Last && sequence == 0 means it is a complete data
+		if m.GetSequence() == 0 { // status == Last && sequence == 0 means it is a complete data
 			receiver.scopeData = m.Data
 		} else {
 			completeData, err := getCompleteScopeDate(ctx, int(receiver.sequence), m, cs)
@@ -249,6 +257,7 @@ func getCompleteScopeDate(ctx context.Context, msgCount int, m *pipeline.Message
 		return nil, err
 	}
 	cnt := 0
+	fmt.Printf("[getCompleteScopeDate] waiting %d ...\n", msgCount)
 	for cnt < msgCount {
 		msg, ok, err := cache.Pop()
 		if err != nil {
@@ -266,11 +275,13 @@ func getCompleteScopeDate(ctx context.Context, msgCount int, m *pipeline.Message
 			if msgVec[idx] == nil {
 				msgVec[idx] = inputMsg
 				cnt++
+				fmt.Printf("[handleScopeDate] receive %d, current cnt = %d\n", idx, cnt)
 			} else {
 				return nil, moerr.NewInternalErrorNoCtx("duplicate msg in morpc message cache")
 			}
 		}
 	}
+	fmt.Printf("[getCompleteScopeDate] %d get done\n", msgCount)
 
 	var dataBuffer []byte
 	for i := range msgVec {
@@ -359,6 +370,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		if errA != nil {
 			return errA
 		}
+		m.SetMessageType(pipeline.BatchMessage)
 		m.SetData(data)
 		// XXX too bad.
 		m.SetCheckSum(checksum)
@@ -379,6 +391,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		} else {
 			m.SetSid(pipeline.WaitingNext)
 		}
+		m.SetMessageType(pipeline.BatchMessage)
 		m.SetData(data[start:end])
 		m.SetCheckSum(checksum)
 		m.SetSequence(receiver.sequence)
