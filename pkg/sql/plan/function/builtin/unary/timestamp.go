@@ -23,7 +23,7 @@ import (
 
 func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
+	resultType := types.Type{Oid: types.T_timestamp, Scale: 6, Size: 8}
 	inputValues := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -47,7 +47,7 @@ func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.V
 
 func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Precision: inputVector.Typ.Precision, Size: 8}
+	resultType := types.Type{Oid: types.T_timestamp, Scale: inputVector.Typ.Scale, Size: 8}
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -71,7 +71,7 @@ func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vect
 func TimestampToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// XXX should this be an Noop?
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Precision: inputVector.Typ.Precision, Size: 8}
+	resultType := types.Type{Oid: types.T_timestamp, Scale: inputVector.Typ.Scale, Size: 8}
 	inputValues := vector.MustTCols[types.Timestamp](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -95,7 +95,7 @@ func TimestampToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vec
 
 func DateStringToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Precision: 6, Size: 8}
+	resultType := types.Type{Oid: types.T_timestamp, Scale: 6, Size: 8}
 	inputValues := vector.MustStrCols(inputVector)
 
 	if inputVector.IsScalar() {

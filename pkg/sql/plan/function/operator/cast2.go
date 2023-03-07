@@ -1000,10 +1000,16 @@ func float32ToOthers(ctx context.Context,
 		return floatToInteger(ctx, source, rs, length)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
+		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
+			return floatToFixFloat(ctx, source, rs, length)
+		}
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
+		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
+			return floatToFixFloat(ctx, source, rs, length)
+		}
 		return numericToNumeric(ctx, source, rs, length)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
@@ -1052,9 +1058,15 @@ func float64ToOthers(ctx context.Context,
 		return floatToInteger(ctx, source, rs, length)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
+		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
+			return floatToFixFloat(ctx, source, rs, length)
+		}
 		return numericToNumeric(ctx, source, rs, length)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
+		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
+			return floatToFixFloat(ctx, source, rs, length)
+		}
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_decimal64:
@@ -1432,6 +1444,76 @@ func jsonToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from json to %s", toType))
 }
 
+func integerToFixFloat[T1, T2 constraints.Integer | constraints.Float](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length uint64) error {
+
+	max_value := math.Pow10(int(to.GetType().Width-to.GetType().Scale)) - 1
+	var i uint64
+	var dftValue T2
+	for i = 0; i < length; i++ {
+		v, isnull := from.GetValue(i)
+		if isnull {
+			if err := to.Append(dftValue, true); err != nil {
+				return err
+			}
+		} else {
+			if float64(v) < -max_value || float64(v) > max_value {
+				return moerr.NewOutOfRange(ctx, "float", "value '%v'", v)
+			}
+			if err := to.Append(T2(v), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func floatToFixFloat[T1, T2 constraints.Float](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int) error {
+
+	pow := math.Pow10(int(to.GetType().Scale))
+	max_value := math.Pow10(int(to.GetType().Width - to.GetType().Scale))
+	max_value -= 1.0 / pow
+	var i uint64
+	var dftValue T2
+	for i = 0; i < uint64(length); i++ {
+		v, isnull := from.GetValue(i)
+		if isnull {
+			if err := to.Append(dftValue, true); err != nil {
+				return err
+			}
+		} else {
+			v2 := float64(v)
+			tmp := math.Round((v2-math.Floor(v2))*pow) / pow
+			v2 = math.Floor(v2) + tmp
+			if v2 < -max_value || v2 > max_value {
+				return moerr.NewOutOfRange(ctx, "float", "value '%v'", v)
+			}
+			if err := to.Append(T2(v2), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func floatNumToFixFloat[T1 constraints.Float](
+	ctx context.Context, from float64, to *vector.FunctionResult[T1]) (T1, error) {
+
+	pow := math.Pow10(int(to.GetType().Scale))
+	max_value := math.Pow10(int(to.GetType().Width - to.GetType().Scale))
+	max_value -= 1.0 / pow
+
+	tmp := math.Round((from-math.Floor(from))*pow) / pow
+	v := math.Floor(from) + tmp
+	if v < -max_value || v > max_value {
+		return 0, moerr.NewOutOfRange(ctx, "float", "value '%v'", from)
+	}
+	return T1(v), nil
+}
+
 // XXX do not use it to cast float to integer, please use floatToInteger
 func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](
 	ctx context.Context,
@@ -1439,9 +1521,15 @@ func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](
 	var i uint64
 	var dftValue T2
 	times := uint64(length)
+
+	if to.GetType().Scale >= 0 && to.GetType().Width > 0 {
+		return integerToFixFloat(ctx, from, to, times)
+	}
+
 	if err := overflowForNumericToNumeric[T1, T2](ctx, from.UnSafeGetAllValue()); err != nil {
 		return err
 	}
+
 	for i = 0; i < times; i++ {
 		v, isnull := from.GetValue(i)
 		if isnull {
@@ -1851,7 +1939,7 @@ func integerToTime[T constraints.Integer](
 			if vI64 < types.MinInputIntTime || vI64 > types.MaxInputIntTime {
 				return moerr.NewOutOfRange(ctx, "time", "value %d", v)
 			}
-			result, err := types.ParseInt64ToTime(vI64, toType.Precision)
+			result, err := types.ParseInt64ToTime(vI64, toType.Scale)
 			if err != nil {
 				return err
 			}
@@ -1916,7 +2004,7 @@ func datetimeToTime(
 				return err
 			}
 		} else {
-			if err := to.Append(v.ToTime(totype.Precision), false); err != nil {
+			if err := to.Append(v.ToTime(totype.Scale), false); err != nil {
 				return err
 			}
 		}
@@ -2074,7 +2162,7 @@ func timeToDatetime(
 				return err
 			}
 		} else {
-			if err := to.Append(v.ToDatetime(totype.Precision), false); err != nil {
+			if err := to.Append(v.ToDatetime(totype.Scale), false); err != nil {
 				return err
 			}
 		}
@@ -2264,7 +2352,7 @@ func datetimeToStr(
 				return err
 			}
 		} else {
-			result := []byte(v.String2(fromType.Precision))
+			result := []byte(v.String2(fromType.Scale))
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
 				for ; add0 != 0; add0-- {
@@ -2293,7 +2381,7 @@ func timestampToStr(
 				return err
 			}
 		} else {
-			result := []byte(v.String2(zone, fromType.Precision))
+			result := []byte(v.String2(zone, fromType.Scale))
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
 				for ; add0 != 0; add0-- {
@@ -2321,7 +2409,7 @@ func timeToStr(
 				return err
 			}
 		} else {
-			result := []byte(v.String2(fromType.Precision))
+			result := []byte(v.String2(fromType.Scale))
 			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
 				add0 := int(toType.Width) - len(result)
 				for ; add0 != 0; add0-- {
@@ -2352,7 +2440,7 @@ func timeToDecimal64(
 				return err
 			}
 		} else {
-			result, err := v.ToDecimal64(ctx, totype.Width, fromType.Precision)
+			result, err := v.ToDecimal64(ctx, totype.Width, fromType.Scale)
 			if err != nil {
 				return err
 			}
@@ -2380,7 +2468,7 @@ func timeToDecimal128(
 				return err
 			}
 		} else {
-			result, err := v.ToDecimal128(ctx, totype.Width, fromType.Precision)
+			result, err := v.ToDecimal128(ctx, totype.Width, fromType.Scale)
 			if err != nil {
 				return err
 			}
@@ -2529,7 +2617,7 @@ func decimal64ToTime(
 				return err
 			}
 		} else {
-			result, err := types.ParseDecimal64lToTime(v, totype.Precision)
+			result, err := types.ParseDecimal64lToTime(v, totype.Scale)
 			if err != nil {
 				return err
 			}
@@ -2554,7 +2642,7 @@ func decimal128ToTime(
 				return err
 			}
 		} else {
-			result, err := types.ParseDecimal128lToTime(v, totype.Precision)
+			result, err := types.ParseDecimal128lToTime(v, totype.Scale)
 			if err != nil {
 				return err
 			}
@@ -2628,8 +2716,21 @@ func decimal64ToFloat[T constraints.Float](
 			if err != nil {
 				return moerr.NewOutOfRange(ctx, "float32", "value '%v'", xStr)
 			}
-			if err = to.Append(T(result), false); err != nil {
-				return err
+			if bitSize == 32 {
+				result, _ = strconv.ParseFloat(xStr, 64)
+			}
+			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
+				if err = to.Append(T(result), false); err != nil {
+					return err
+				}
+			} else {
+				v2, err := floatNumToFixFloat(ctx, result, to)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(T(v2), false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -2656,8 +2757,21 @@ func decimal128ToFloat[T constraints.Float](
 			if err != nil {
 				return moerr.NewOutOfRange(ctx, "float32", "value '%v'", xStr)
 			}
-			if err = to.Append(T(result), false); err != nil {
-				return err
+			if bitSize == 32 {
+				result, _ = strconv.ParseFloat(xStr, 64)
+			}
+			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
+				if err = to.Append(T(result), false); err != nil {
+					return err
+				}
+			} else {
+				v2, err := floatNumToFixFloat(ctx, result, to)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(T(v2), false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -2902,16 +3016,34 @@ func strToFloat[T constraints.Float](
 					}
 					return moerr.NewInvalidArg(ctx, "cast to float", s)
 				}
-				result = T(r1)
+				if to.GetType().Scale < 0 || to.GetType().Width == 0 {
+					result = T(r1)
+				} else {
+					v2, err := floatNumToFixFloat(ctx, float64(r1), to)
+					if err != nil {
+						return err
+					}
+					result = T(v2)
+				}
 			} else {
 				s := convertByteSliceToString(v)
 				r2, tErr = strconv.ParseFloat(s, bitSize)
 				if tErr != nil {
 					return tErr
 				}
-				result = T(r2)
+				if bitSize == 32 {
+					r2, _ = strconv.ParseFloat(s, 64)
+				}
+				if to.GetType().Scale < 0 || to.GetType().Width == 0 {
+					result = T(r2)
+				} else {
+					v2, err := floatNumToFixFloat(ctx, r2, to)
+					if err != nil {
+						return err
+					}
+					result = T(v2)
+				}
 			}
-
 			if err := to.Append(result, false); err != nil {
 				return err
 			}
@@ -3101,7 +3233,7 @@ func strToTime(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			val, err := types.ParseTime(s, totype.Precision)
+			val, err := types.ParseTime(s, totype.Scale)
 			if err != nil {
 				return err
 			}
@@ -3128,7 +3260,7 @@ func strToDatetime(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			val, err := types.ParseDatetime(s, totype.Precision)
+			val, err := types.ParseDatetime(s, totype.Scale)
 			if err != nil {
 				return err
 			}
@@ -3156,7 +3288,7 @@ func strToTimestamp(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			val, err := types.ParseTimestamp(zone, s, totype.Precision)
+			val, err := types.ParseTimestamp(zone, s, totype.Scale)
 			if err != nil {
 				return err
 			}

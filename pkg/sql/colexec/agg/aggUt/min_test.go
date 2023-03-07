@@ -23,11 +23,11 @@ import (
 )
 
 func TestMin(t *testing.T) {
-	int8TestTyp := types.New(types.T_int8, 0, 0, 0)
-	decimalTestTyp := types.New(types.T_decimal128, 0, 0, 0)
-	boolTestTyp := types.New(types.T_bool, 0, 0, 0)
-	varcharTestTyp := types.New(types.T_varchar, types.MaxVarcharLen, 0, 0)
-	uuidTestTyp := types.New(types.T_uuid, 0, 0, 0)
+	int8TestTyp := types.New(types.T_int8, 0, 0)
+	decimalTestTyp := types.New(types.T_decimal128, 0, 0)
+	boolTestTyp := types.New(types.T_bool, 0, 0)
+	varcharTestTyp := types.New(types.T_varchar, types.MaxVarcharLen, 0)
+	uuidTestTyp := types.New(types.T_uuid, 0, 0)
 
 	testCases := []testCase{
 		{

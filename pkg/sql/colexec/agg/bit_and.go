@@ -27,7 +27,7 @@ func BitAndReturnType(typs []types.Type) types.Type {
 	if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary {
 		return typs[0]
 	}
-	return types.New(types.T_uint64, 0, 0, 0)
+	return types.New(types.T_uint64, 0, 0)
 }
 
 func NewBitAnd[T1 types.Ints | types.UInts | types.Floats]() *BitAnd[T1] {

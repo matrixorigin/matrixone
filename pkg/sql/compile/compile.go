@@ -814,12 +814,11 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 				cols = append(cols, &plan.ColDef{
 					Name: attr.Attr.Name,
 					Typ: &plan.Type{
-						Id:        int32(attr.Attr.Type.Oid),
-						Width:     attr.Attr.Type.Width,
-						Size:      attr.Attr.Type.Size,
-						Precision: attr.Attr.Type.Precision,
-						Scale:     attr.Attr.Type.Scale,
-						AutoIncr:  attr.Attr.AutoIncrement,
+						Id:       int32(attr.Attr.Type.Oid),
+						Width:    attr.Attr.Type.Width,
+						Size:     attr.Attr.Type.Size,
+						Scale:    attr.Attr.Type.Scale,
+						AutoIncr: attr.Attr.AutoIncrement,
 					},
 					Primary:   attr.Attr.Primary,
 					Default:   attr.Attr.Default,
@@ -1438,7 +1437,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = ss[i].NodeInfo
-		if isCurrentCN(rs[i].NodeInfo.Addr, c.addr) {
+		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
 			idx = i
 		}
 		rs[i].PreScopes = []*Scope{ss[i]}
@@ -1639,7 +1638,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	for i := 0; i < len(ranges); i += step {
 		j := i / step
 		if i+step >= len(ranges) {
-			if strings.Split(c.addr, ":")[0] == strings.Split(c.cnList[j].Addr, ":")[0] {
+			if isSameCN(c.addr, c.cnList[j].Addr) {
 				nodes[0].Data = append(nodes[0].Data, ranges[i:]...)
 			} else {
 				nodes = append(nodes, engine.Node{
@@ -1651,7 +1650,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 				})
 			}
 		} else {
-			if strings.Split(c.addr, ":")[0] == strings.Split(c.cnList[j].Addr, ":")[0] {
+			if isSameCN(c.addr, c.cnList[j].Addr) {
 				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
 			} else {
 				nodes = append(nodes, engine.Node{
@@ -1717,11 +1716,10 @@ func joinType(ctx context.Context, n *plan.Node, ns []*plan.Node) (bool, plan.No
 
 func dupType(typ *plan.Type) types.Type {
 	return types.Type{
-		Oid:       types.T(typ.Id),
-		Size:      typ.Size,
-		Width:     typ.Width,
-		Scale:     typ.Scale,
-		Precision: typ.Precision,
+		Oid:   types.T(typ.Id),
+		Size:  typ.Size,
+		Width: typ.Width,
+		Scale: typ.Scale,
 	}
 }
 
@@ -1743,7 +1741,7 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
-func isCurrentCN(addr string, currentCNAddr string) bool {
+func isSameCN(addr string, currentCNAddr string) bool {
 	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
 }
 

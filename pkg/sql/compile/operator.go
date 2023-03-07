@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -856,7 +855,6 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 		typs[i].Width = e.Typ.Width
 		typs[i].Size = e.Typ.Size
 		typs[i].Scale = e.Typ.Scale
-		typs[i].Precision = e.Typ.Precision
 	}
 	return &group.Argument{
 		Aggs:      aggs,
@@ -921,7 +919,7 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, 
 		}
 
 		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
-			strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+			isSameCN(currentCNAddr, s.NodeInfo.Addr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
