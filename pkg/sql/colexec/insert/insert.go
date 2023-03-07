@@ -20,8 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -93,29 +91,4 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 	atomic.AddUint64(&insertArg.Affected, affectedRows)
 	return false, nil
-}
-
-/*
-fillRow evaluates the expression and put the result into the targetVec.
-tmpBat: store temporal vector
-expr: the expression to be evaluated at the position (colIdx,rowIdx)
-targetVec: the destination where the evaluated result of expr saved into
-*/
-func fillRow(tmpBat *batch.Batch,
-	expr *plan.Expr,
-	targetVec *vector.Vector,
-	proc *process.Process) error {
-	vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-	if err != nil {
-		return err
-	}
-	if vec.Size() == 0 {
-		vec = vec.ConstExpand(false, proc.Mp())
-	}
-	if err := vector.UnionOne(targetVec, vec, 0, proc.Mp()); err != nil {
-		vec.Free(proc.Mp())
-		return err
-	}
-	vec.Free(proc.Mp())
-	return err
 }
