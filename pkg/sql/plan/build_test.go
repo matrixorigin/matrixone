@@ -770,6 +770,7 @@ func TestDdl(t *testing.T) {
 		"create table t2(empno int unsigned,ename varchar(15),job varchar(10) key) cluster by(empno,ename)",
 		"lock tables nation read",
 		"lock tables nation write, supplier read",
+		"unlock tables",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 

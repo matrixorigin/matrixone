@@ -1437,7 +1437,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = ss[i].NodeInfo
-		if isCurrentCN(rs[i].NodeInfo.Addr, c.addr) {
+		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
 			idx = i
 		}
 		rs[i].PreScopes = []*Scope{ss[i]}
@@ -1638,7 +1638,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	for i := 0; i < len(ranges); i += step {
 		j := i / step
 		if i+step >= len(ranges) {
-			if strings.Split(c.addr, ":")[0] == strings.Split(c.cnList[j].Addr, ":")[0] {
+			if isSameCN(c.addr, c.cnList[j].Addr) {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
 						Rel:  rel,
@@ -1656,13 +1656,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 				})
 			}
 		} else {
-			if strings.Split(c.addr, ":")[0] == strings.Split(c.cnList[j].Addr, ":")[0] {
+			if isSameCN(c.addr, c.cnList[j].Addr) {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
 						Rel:  rel,
 						Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
 					})
 				}
+
 				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
 			} else {
 				nodes = append(nodes, engine.Node{
@@ -1753,7 +1754,7 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
-func isCurrentCN(addr string, currentCNAddr string) bool {
+func isSameCN(addr string, currentCNAddr string) bool {
 	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
 }
 

@@ -151,6 +151,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildValues(stmt, ctx)
 	case *tree.LockTableStmt:
 		return buildLockTables(stmt, ctx)
+	case *tree.UnLockTableStmt:
+		return buildUnLockTables(stmt, ctx)
 	default:
 		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
