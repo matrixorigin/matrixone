@@ -36,12 +36,12 @@ func TestInsert(t *testing.T) {
 	mp, err := NewStrMap(false, 0, 0, m)
 	require.NoError(t, err)
 	ts := []types.Type{
-		types.New(types.T_int8, 0, 0, 0),
-		types.New(types.T_int16, 0, 0, 0),
-		types.New(types.T_int32, 0, 0, 0),
-		types.New(types.T_int64, 0, 0, 0),
-		types.New(types.T_decimal64, 0, 0, 0),
-		types.New(types.T_char, 0, 0, 0),
+		types.New(types.T_int8, 0, 0),
+		types.New(types.T_int16, 0, 0),
+		types.New(types.T_int32, 0, 0),
+		types.New(types.T_int64, 0, 0),
+		types.New(types.T_decimal64, 0, 0),
+		types.New(types.T_char, 0, 0),
 	}
 	vecs := newVectors(ts, false, Rows, m)
 	for i := 0; i < Rows; i++ {
@@ -112,12 +112,12 @@ func TestIterator(t *testing.T) {
 		mp, err := NewStrMap(false, 0, 0, m)
 		require.NoError(t, err)
 		ts := []types.Type{
-			types.New(types.T_int8, 0, 0, 0),
-			types.New(types.T_int16, 0, 0, 0),
-			types.New(types.T_int32, 0, 0, 0),
-			types.New(types.T_int64, 0, 0, 0),
-			types.New(types.T_decimal64, 0, 0, 0),
-			types.New(types.T_char, 0, 0, 0),
+			types.New(types.T_int8, 0, 0),
+			types.New(types.T_int16, 0, 0),
+			types.New(types.T_int32, 0, 0),
+			types.New(types.T_int64, 0, 0),
+			types.New(types.T_decimal64, 0, 0),
+			types.New(types.T_char, 0, 0),
 		}
 		vecs := newVectors(ts, false, Rows, m)
 		itr := mp.NewIterator()
@@ -137,12 +137,12 @@ func TestIterator(t *testing.T) {
 		mp, err := NewStrMap(true, 0, 0, m)
 		require.NoError(t, err)
 		ts := []types.Type{
-			types.New(types.T_int8, 0, 0, 0),
-			types.New(types.T_int16, 0, 0, 0),
-			types.New(types.T_int32, 0, 0, 0),
-			types.New(types.T_int64, 0, 0, 0),
-			types.New(types.T_decimal64, 0, 0, 0),
-			types.New(types.T_char, 0, 0, 0),
+			types.New(types.T_int8, 0, 0),
+			types.New(types.T_int16, 0, 0),
+			types.New(types.T_int32, 0, 0),
+			types.New(types.T_int64, 0, 0),
+			types.New(types.T_decimal64, 0, 0),
+			types.New(types.T_char, 0, 0),
 		}
 		vecs := newVectors(ts, false, Rows, m)
 		itr := mp.NewIterator()
@@ -162,12 +162,12 @@ func TestIterator(t *testing.T) {
 		mp, err := NewStrMap(true, 0, 0, m)
 		require.NoError(t, err)
 		ts := []types.Type{
-			types.New(types.T_int8, 0, 0, 0),
-			types.New(types.T_int16, 0, 0, 0),
-			types.New(types.T_int32, 0, 0, 0),
-			types.New(types.T_int64, 0, 0, 0),
-			types.New(types.T_decimal64, 0, 0, 0),
-			types.New(types.T_char, 0, 0, 0),
+			types.New(types.T_int8, 0, 0),
+			types.New(types.T_int16, 0, 0),
+			types.New(types.T_int32, 0, 0),
+			types.New(types.T_int64, 0, 0),
+			types.New(types.T_decimal64, 0, 0),
+			types.New(types.T_char, 0, 0),
 		}
 		vecs := newVectorsWithNull(ts, false, Rows, m)
 		itr := mp.NewIterator()

@@ -23,8 +23,8 @@ import (
 )
 
 func TestBitXor(t *testing.T) {
-	int32Typ := types.New(types.T_int32, 0, 0, 0)
-	float64Typ := types.New(types.T_float64, 0, 0, 0)
+	int32Typ := types.New(types.T_int32, 0, 0)
+	float64Typ := types.New(types.T_float64, 0, 0)
 
 	testCases := []testCase{
 		// int8 bit-xor test

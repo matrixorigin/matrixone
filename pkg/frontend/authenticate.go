@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
@@ -3801,6 +3801,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Kill:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.LockTableStmt, *tree.UnLockTableStmt:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -5655,9 +5658,9 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 	sqls = append(sqls, "use "+motrace.SystemDBConst+";")
 	traceTables := motrace.GetSchemaForAccount(ctx, newTenant.GetTenant())
 	sqls = append(sqls, traceTables...)
-	sqls = append(sqls, "create database "+metric.MetricDBConst+";")
-	sqls = append(sqls, "use "+metric.MetricDBConst+";")
-	metricTables := metric.GetSchemaForAccount(ctx, newTenant.GetTenant())
+	sqls = append(sqls, "create database "+mometric.MetricDBConst+";")
+	sqls = append(sqls, "use "+mometric.MetricDBConst+";")
+	metricTables := mometric.GetSchemaForAccount(ctx, newTenant.GetTenant())
 	sqls = append(sqls, metricTables...)
 
 	for _, sql := range sqls {

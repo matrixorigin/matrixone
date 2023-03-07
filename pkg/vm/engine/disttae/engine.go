@@ -15,8 +15,6 @@
 package disttae
 
 import (
-	"bytes"
-	"container/heap"
 	"context"
 	"math"
 	"runtime"
@@ -68,18 +66,14 @@ func New(
 		cli:        cli,
 		idGen:      idGen,
 		catalog:    cache.NewCatalog(),
-		txnHeap:    &transactionHeap{},
 		txns:       make(map[string]*Transaction),
 		dnMap:      dnMap,
-		metaTables: make(map[string]Partitions),
 		partitions: make(map[[2]uint64]Partitions),
 	}
 
 	if err := e.init(ctx, mp); err != nil {
 		panic(err)
 	}
-
-	go e.gc(ctx)
 
 	return e
 }
@@ -424,6 +418,10 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if e.hasDuplicate(ctx, txn) {
 		return moerr.NewDuplicateNoCtx()
 	}
+	err := txn.DumpBatch(true)
+	if err != nil {
+		return err
+	}
 	reqs, err := genWriteReqs(txn.writes)
 	if err != nil {
 		return err
@@ -519,7 +517,6 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
 	e.Lock()
 	defer e.Unlock()
-	heap.Push(e.txnHeap, txn)
 	e.txns[string(op.Txn().ID)] = txn
 }
 
@@ -540,49 +537,7 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	txn.databaseMap = nil
 	e.Lock()
 	defer e.Unlock()
-	for i, tmp := range *e.txnHeap {
-		if bytes.Equal(txn.meta.ID, tmp.meta.ID) {
-			heap.Remove(e.txnHeap, i)
-			break
-		}
-	}
 	delete(e.txns, string(txn.meta.ID))
-}
-
-func (e *Engine) gc(ctx context.Context) {
-	var ps []Partitions
-	var ts timestamp.Timestamp
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(GcCycle):
-			e.RLock()
-			if len(*e.txnHeap) == 0 {
-				e.RUnlock()
-				continue
-			}
-			ts = (*e.txnHeap)[0].meta.SnapshotTS
-			e.RUnlock()
-			e.Lock()
-			for k := range e.partitions {
-				ps = append(ps, e.partitions[k])
-			}
-			e.Unlock()
-			for i := range ps {
-				for j := range ps[i] {
-					select {
-					case <-ps[i][j].lock:
-					case <-ctx.Done():
-						return
-					}
-					ps[i][j].GC(ts)
-					ps[i][j].lock <- struct{}{}
-				}
-			}
-		}
-	}
 }
 
 func (e *Engine) getDNServices() []DNStore {

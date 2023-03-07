@@ -48,46 +48,46 @@ func TestDateToTime(t *testing.T) {
 
 func TestDatetimeToTime(t *testing.T) {
 	testCases := []struct {
-		name      string
-		inputStr  string
-		want      []types.Time
-		precision int32
-		success   bool
+		name     string
+		inputStr string
+		want     []types.Time
+		scale    int32
+		success  bool
 	}{
 		{
-			name:      "TestDatetimeToTime01",
-			inputStr:  "2022-12-12 11:22:33",
-			want:      []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
-			precision: 0,
-			success:   true,
+			name:     "TestDatetimeToTime01",
+			inputStr: "2022-12-12 11:22:33",
+			want:     []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
+			scale:    0,
+			success:  true,
 		},
 		{
-			name:      "TestDatetimeToTime02",
-			inputStr:  "2022-12-12 11:22:33",
-			want:      []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
-			precision: 3,
-			success:   true,
+			name:     "TestDatetimeToTime02",
+			inputStr: "2022-12-12 11:22:33",
+			want:     []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
+			scale:    3,
+			success:  true,
 		},
 		{
-			name:      "TestDatetimeToTime03",
-			inputStr:  "2022-12-12 11:22:33.1234",
-			want:      []types.Time{types.TimeFromClock(false, 11, 22, 33, 123000)},
-			precision: 3,
-			success:   true,
+			name:     "TestDatetimeToTime03",
+			inputStr: "2022-12-12 11:22:33.1234",
+			want:     []types.Time{types.TimeFromClock(false, 11, 22, 33, 123000)},
+			scale:    3,
+			success:  true,
 		},
 		{
-			name:      "TestDatetimeToTime03",
-			inputStr:  "2022-12-12 11:22:33.1235",
-			want:      []types.Time{types.TimeFromClock(false, 11, 22, 33, 124000)},
-			precision: 3,
-			success:   true,
+			name:     "TestDatetimeToTime03",
+			inputStr: "2022-12-12 11:22:33.1235",
+			want:     []types.Time{types.TimeFromClock(false, 11, 22, 33, 124000)},
+			scale:    3,
+			success:  true,
 		},
 		{
-			name:      "TestDatetimeToTime04",
-			inputStr:  "20221212112233",
-			want:      []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
-			precision: 0,
-			success:   true,
+			name:     "TestDatetimeToTime04",
+			inputStr: "20221212112233",
+			want:     []types.Time{types.TimeFromClock(false, 11, 22, 33, 0)},
+			scale:    0,
+			success:  true,
 		},
 	}
 
@@ -98,10 +98,10 @@ func TestDatetimeToTime(t *testing.T) {
 		ns := &nulls.Nulls{}
 
 		var err error
-		dtArr[0], err = types.ParseDatetime(v.inputStr, v.precision)
+		dtArr[0], err = types.ParseDatetime(v.inputStr, v.scale)
 		require.NoError(t, err)
 
-		reply = DatetimeToTime(dtArr, reply, v.precision)
+		reply = DatetimeToTime(dtArr, reply, v.scale)
 		require.Equal(t, reply, v.want)
 		require.Equal(t, !nulls.Contains(ns, 0), v.success)
 	}

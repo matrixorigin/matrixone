@@ -388,7 +388,8 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
-		case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+		case types.T_char, types.T_varchar, types.T_blob,
+			types.T_binary, types.T_varbinary, types.T_json, types.T_text:
 			col := vector.GetBytesVectorValues(vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]

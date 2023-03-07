@@ -132,8 +132,8 @@ func TestDup(t *testing.T) {
 func TestGetUnionOneFunction(t *testing.T) {
 	{ // test const vector
 		mp := mpool.MustNewZero()
-		v := New(types.New(types.T_int8, 0, 0, 0))
-		w := New(types.New(types.T_int8, 0, 0, 0))
+		v := New(types.New(types.T_int8, 0, 0))
+		w := New(types.New(types.T_int8, 0, 0))
 		err := w.Append(int8(0), false, mp)
 		require.NoError(t, err)
 		uf := GetUnionOneFunction(w.GetType(), mp)
@@ -145,8 +145,8 @@ func TestGetUnionOneFunction(t *testing.T) {
 	}
 	{ // test const vector
 		mp := mpool.MustNewZero()
-		v := New(types.New(types.T_varchar, 0, 0, 0))
-		w := New(types.New(types.T_varchar, 0, 0, 0))
+		v := New(types.New(types.T_varchar, 0, 0))
+		w := New(types.New(types.T_varchar, 0, 0))
 		err := w.Append([]byte("x"), false, mp)
 		require.NoError(t, err)
 		uf := GetUnionOneFunction(w.GetType(), mp)

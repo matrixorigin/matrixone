@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -25,13 +27,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"time"
 )
 
 // updatePartitionOfPull the old method of log tail pull model.
-func updatePartitionOfPull(idx, primaryIdx int, tbl *txnTable,
-	ctx context.Context, op client.TxnOperator, engine *Engine,
-	partition *Partition, dn DNStore, req api.SyncLogTailReq) error {
+func updatePartitionOfPull(
+	primaryIdx int,
+	tbl *txnTable,
+	ctx context.Context,
+	op client.TxnOperator,
+	engine *Engine,
+	partition *Partition,
+	dn DNStore,
+	req api.SyncLogTailReq,
+) error {
 	reqs, err := genLogTailReq(dn, req)
 	if err != nil {
 		return err
@@ -41,19 +49,16 @@ func updatePartitionOfPull(idx, primaryIdx int, tbl *txnTable,
 		return err
 	}
 
-	curState := partition.state.Load()
-	state := curState.Copy()
+	state, doneMutate := partition.MutateState()
 
 	for i := range logTails {
-		if err := consumeLogTailOfPull(idx, primaryIdx, tbl, ctx, engine, partition, state, logTails[i]); err != nil {
+		if err := consumeLogTailOfPull(primaryIdx, tbl, ctx, engine, state, logTails[i]); err != nil {
 			logutil.Errorf("consume %d-%s logtail error: %v\n", tbl.tableId, tbl.tableName, err)
 			return err
 		}
 	}
 
-	if !partition.state.CompareAndSwap(curState, state) {
-		panic("concurrent mutation")
-	}
+	doneMutate()
 
 	return nil
 }
@@ -75,7 +80,14 @@ func getLogTail(ctx context.Context, op client.TxnOperator, reqs []txn.TxnReques
 	return logTails, nil
 }
 
-func consumeLogTailOfPull(idx, primaryIdx int, tbl *txnTable, ctx context.Context, engine *Engine, partition *Partition, state *PartitionState, logTail *api.SyncLogTailResp) (err error) {
+func consumeLogTailOfPull(
+	primaryIdx int,
+	tbl *txnTable,
+	ctx context.Context,
+	engine *Engine,
+	state *PartitionState,
+	logTail *api.SyncLogTailResp,
+) (err error) {
 	var entries []*api.Entry
 
 	if entries, err = logtail.LoadCheckpointEntries(
@@ -85,19 +97,19 @@ func consumeLogTailOfPull(idx, primaryIdx int, tbl *txnTable, ctx context.Contex
 		tbl.tableName,
 		tbl.db.databaseId,
 		tbl.db.databaseName,
-		tbl.db.txn.engine.fs); err != nil {
+		engine.fs); err != nil {
 		return
 	}
 	for _, e := range entries {
-		if err = consumeEntry(idx, primaryIdx, tbl, ctx,
-			engine, partition, state, e); err != nil {
+		if err = consumeEntry(ctx, primaryIdx,
+			engine, state, e); err != nil {
 			return
 		}
 	}
 
 	for i := 0; i < len(logTail.Commands); i++ {
-		if err = consumeEntry(idx, primaryIdx, tbl, ctx,
-			engine, partition, state, logTail.Commands[i]); err != nil {
+		if err = consumeEntry(ctx, primaryIdx,
+			engine, state, logTail.Commands[i]); err != nil {
 			return
 		}
 	}
