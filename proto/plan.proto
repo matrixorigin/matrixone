@@ -794,6 +794,7 @@ message DataDefinition {
 		SHOW_TARGET 		= 25;
 		SHOW_COLLATION 		= 26;
 		LOCK_TABLES         = 27;
+		UNLOCK_TABLES       = 28;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -817,6 +818,7 @@ message DataDefinition {
 		ShowVariables show_variables 	= 13;
 		AlterView alter_view			= 14;
 		LockTables lock_tables          = 15;
+		UnLockTables unlock_tables      = 16;
 	}
 }
 
@@ -960,3 +962,5 @@ message TableLockInfo {
 message LockTables {
 	repeated TableLockInfo tableLocks = 1;
 }
+
+message UnLockTables{}
