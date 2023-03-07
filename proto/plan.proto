@@ -466,8 +466,6 @@ message InsertCtx {
 	map<string, Expr> on_duplicate_expr	= 4;
 
 	map<string, int32> parent_idx 	= 5;
-
-	ClusterTable cluster_table = 6;
 }
 
 message UpdateCtx {
