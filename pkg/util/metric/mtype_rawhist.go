@@ -46,15 +46,15 @@ func (r *rawHist) record(t int64, v float64) {
 		Datetime: t,
 		Value:    v,
 	})
-	if int32(len(r.buf)) >= getRawHistBufLimit() {
+	if int32(len(r.buf)) >= GetRawHistBufLimit() {
 		buf := r.buf
-		r.buf = make([]*pb.Sample, 0, getRawHistBufLimit()/2)
+		r.buf = make([]*pb.Sample, 0, GetRawHistBufLimit()/2)
 		go r.assembleAndSend(buf)
 	}
 }
 
 func (r *rawHist) assembleAndSend(buf []*pb.Sample) {
-	if r.exporter == nil || *r.exporter == nil {
+	if r.exporter == nil || r.exporter.Get() == nil {
 		// rawHist has no exporter yet, ignore collection
 		return
 	}
@@ -74,7 +74,7 @@ func (r *rawHist) assembleAndSend(buf []*pb.Sample) {
 		Metric: []*pb.Metric{metric},
 	}
 
-	if err := (*r.exporter).ExportMetricFamily(context.TODO(), mf); err != nil {
+	if err := r.exporter.Get().ExportMetricFamily(context.TODO(), mf); err != nil {
 		logutil.Errorf("[Metric] rawhist send error: %v", err)
 	}
 }
@@ -89,9 +89,10 @@ type rawHist struct {
 
 	// For buf write
 
-	buf      []*pb.Sample
-	mutex    *sync.Mutex
-	exporter *MetricExporter // store a pointer to interface because newRawHist can be called before creating exporter
+	buf   []*pb.Sample
+	mutex *sync.Mutex
+	// store a pointer to interface because newRawHist can be called before creating exporter
+	exporter *ExporterHolder
 
 	// For tests
 
@@ -121,7 +122,7 @@ func newRawHist(desc *prom.Desc, compatHist prom.Observer, opts *prom.HistogramO
 		labelPairs:   prom.MakeLabelPairs(desc, lvs),
 
 		mutex:    &sync.Mutex{},
-		exporter: &moExporter,
+		exporter: &exporterHolder,
 		now:      func() int64 { return time.Now().UnixMicro() },
 	}
 	return raw
@@ -192,6 +193,16 @@ func (r *rawHist) CancelToProm() {
 
 func (r *rawHist) CollectorToProm() prom.Collector {
 	return r.compat_inner.(prom.Collector)
+}
+
+// WithExporter only for test, should call before Registry) MustRegister
+func (r *rawHist) WithExporter(e *ExporterHolder) {
+	r.exporter = e
+}
+
+// WithNowFunction only for test, should call before Registry) MustRegister
+func (r *rawHist) WithNowFunction(now func() int64) {
+	r.now = now
 }
 
 // RawHistVec is a Collector that bundles a set of RawHist that all share the

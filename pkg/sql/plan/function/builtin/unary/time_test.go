@@ -30,7 +30,7 @@ func TestTime(t *testing.T) {
 	cases := []struct {
 		name    string
 		input   string
-		precise int32
+		scale   int32
 		isConst bool
 		testTyp types.Type
 		vecs    []*vector.Vector
@@ -41,7 +41,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDate01",
 			input:   "2022-01-01",
-			precise: 0,
+			scale:   0,
 			isConst: false,
 			testTyp: types.T_date.ToType(),
 			proc:    testutil.NewProc(),
@@ -50,7 +50,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDate02",
 			input:   "20110101",
-			precise: 0,
+			scale:   0,
 			isConst: false,
 			testTyp: types.T_date.ToType(),
 			proc:    testutil.NewProc(),
@@ -61,7 +61,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDatetime01",
 			input:   "2022-01-01 16:22:44",
-			precise: 0,
+			scale:   0,
 			isConst: false,
 			testTyp: types.T_datetime.ToType(),
 			proc:    testutil.NewProc(),
@@ -70,7 +70,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDatetime02",
 			input:   "2022-01-01 16:22:44.123456",
-			precise: 4,
+			scale:   4,
 			isConst: false,
 			testTyp: types.T_datetime.ToType(),
 			proc:    testutil.NewProc(),
@@ -82,7 +82,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDateString01",
 			input:   "20110101112233",
-			precise: 6,
+			scale:   6,
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
@@ -91,7 +91,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDateString02",
 			input:   "2022-01-01 16:22:44.1235",
-			precise: 6,
+			scale:   6,
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
@@ -100,7 +100,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDateString03",
 			input:   "2022-01-01 16:22:44",
-			precise: 6,
+			scale:   6,
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
@@ -109,7 +109,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDateString04",
 			input:   "-112233",
-			precise: 6,
+			scale:   6,
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
@@ -118,7 +118,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDateString05",
 			input:   "-233.123",
-			precise: 6,
+			scale:   6,
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
@@ -128,7 +128,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromInt64-01",
 			input:   "112233",
-			precise: 0,
+			scale:   0,
 			isConst: false,
 			testTyp: types.T_int64.ToType(),
 			proc:    testutil.NewProc(),
@@ -137,7 +137,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromInt64-02",
 			input:   "20221212112233",
-			precise: 0,
+			scale:   0,
 			isConst: false,
 			testTyp: types.T_int64.ToType(),
 			proc:    testutil.NewProc(),
@@ -146,7 +146,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromInt64-03",
 			input:   "-20221212112233",
-			precise: 0,
+			scale:   0,
 			isConst: false,
 			testTyp: types.T_int64.ToType(),
 			proc:    testutil.NewProc(),
@@ -156,7 +156,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDecimal128-01",
 			input:   "20221212112233.4444",
-			precise: 3,
+			scale:   3,
 			isConst: false,
 			testTyp: types.T_decimal128.ToType(),
 			proc:    testutil.NewProc(),
@@ -165,7 +165,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDecimal128-02",
 			input:   "20221212112233.4446",
-			precise: 3,
+			scale:   3,
 			isConst: false,
 			testTyp: types.T_decimal128.ToType(),
 			proc:    testutil.NewProc(),
@@ -174,7 +174,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDecimal128-03",
 			input:   "-20221212112233.4444",
-			precise: 3,
+			scale:   3,
 			isConst: false,
 			testTyp: types.T_decimal128.ToType(),
 			proc:    testutil.NewProc(),
@@ -183,7 +183,7 @@ func TestTime(t *testing.T) {
 		{
 			name:    "TimeTest-FromDecimal128-04",
 			input:   "-20221212112233.4446",
-			precise: 3,
+			scale:   3,
 			isConst: false,
 			testTyp: types.T_decimal128.ToType(),
 			proc:    testutil.NewProc(),
@@ -193,7 +193,7 @@ func TestTime(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			vec, err1 := makeVectorForTimeTest(c.input, c.precise, c.isConst, c.testTyp, c.proc)
+			vec, err1 := makeVectorForTimeTest(c.input, c.scale, c.isConst, c.testTyp, c.proc)
 			require.Equal(t, uint16(0), err1)
 
 			var result *vector.Vector
@@ -217,7 +217,7 @@ func TestTime(t *testing.T) {
 
 }
 
-func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.Type, proc *process.Process) ([]*vector.Vector, uint16) {
+func makeVectorForTimeTest(str string, scale int32, isConst bool, typ types.Type, proc *process.Process) ([]*vector.Vector, uint16) {
 	vec := make([]*vector.Vector, 1)
 	if isConst {
 		switch typ.Oid {
@@ -228,7 +228,7 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 			}
 			vec[0] = vector.NewConstFixed(types.T_int64.ToType(), 1, data, testutil.TestUtilMp)
 		case types.T_decimal128:
-			data, err := types.ParseStringToDecimal128(str, 34, precision, false)
+			data, err := types.ParseStringToDecimal128(str, 34, scale, false)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
@@ -240,12 +240,12 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 			}
 			vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, data, testutil.TestUtilMp)
 		case types.T_datetime:
-			data, err := types.ParseDatetime(str, precision)
+			data, err := types.ParseDatetime(str, scale)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
 			vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, data, testutil.TestUtilMp)
-			vec[0].Typ.Precision = precision
+			vec[0].Typ.Scale = scale
 		case types.T_char, types.T_varchar:
 			vec[0] = vector.NewConstString(types.Type{Oid: types.T_varchar, Size: 26}, 1, str, testutil.TestUtilMp)
 		}
@@ -263,7 +263,7 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 			vec[0] = testutil.MakeInt64Vector(input, nil)
 		case types.T_decimal128:
 			input := make([]types.Decimal128, 0)
-			tmp, err := types.ParseStringToDecimal128(str, 34, precision, false)
+			tmp, err := types.ParseStringToDecimal128(str, 34, scale, false)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
@@ -274,7 +274,7 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 			vec[0] = testutil.MakeDateVector(input, nil)
 		case types.T_datetime:
 			vec[0] = testutil.MakeDateTimeVector(input, nil)
-			vec[0].Typ.Precision = precision
+			vec[0].Typ.Scale = scale
 		case types.T_char:
 			vec[0] = testutil.MakeCharVector(input, nil)
 		case types.T_varchar:

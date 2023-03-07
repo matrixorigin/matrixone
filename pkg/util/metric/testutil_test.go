@@ -20,7 +20,6 @@ package metric
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -49,13 +48,6 @@ func waitWgTimeout(wg *sync.WaitGroup, after time.Duration) error {
 		return moerr.NewInternalError(context.Background(), "timeout")
 	case <-c:
 		return nil
-	}
-}
-
-func makeDummyClock(startOffset int64) func() int64 {
-	var tick = startOffset - 1
-	return func() int64 {
-		return atomic.AddInt64(&tick, 1)
 	}
 }
 
