@@ -294,6 +294,13 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	blk.RLock()
 	defer blk.RUnlock()
 	err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
+	if view.BaseView.DeleteMask != nil {
+		for _, colIdx := range colIdxs {
+			vec := data.Vecs[colIdx]
+			view.SetData(colIdx, vec.CloneWindow(0, vec.Length(), nil))
+			vec.Close()
+		}
+	}
 	return
 }
 
@@ -327,6 +334,10 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	blk.RLock()
 	defer blk.RUnlock()
 	err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
+	if view.BaseView.DeleteMask != nil {
+		view.SetData(vec.CloneWindow(0, vec.Length(), nil))
+		vec.Close()
+	}
 	return
 }
 

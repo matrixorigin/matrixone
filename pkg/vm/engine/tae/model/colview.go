@@ -53,11 +53,8 @@ func (view *ColumnView) ApplyDeletes() containers.Vector {
 	if view.DeleteMask == nil {
 		return view.data
 	}
-	data := view.data
-	view.data = data.CloneWindow(0, view.data.Length(), nil)
 	view.data.Compact(view.DeleteMask)
 	view.DeleteMask = nil
-	data.Close()
 	return view.data
 }
 

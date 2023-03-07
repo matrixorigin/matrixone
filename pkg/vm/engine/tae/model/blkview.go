@@ -97,11 +97,8 @@ func (view *BlockView) ApplyDeletes() {
 	if view.DeleteMask == nil {
 		return
 	}
-	for i, col := range view.Columns {
-		data := col.data
-		view.Columns[i].data = data.CloneWindow(0, col.data.Length(), nil)
-		view.Columns[i].data.Compact(view.DeleteMask)
-		data.Close()
+	for _, col := range view.Columns {
+		col.data.Compact(view.DeleteMask)
 	}
 	view.DeleteMask = nil
 }
