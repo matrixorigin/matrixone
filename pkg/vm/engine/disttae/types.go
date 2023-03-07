@@ -142,8 +142,6 @@ type Entry struct {
 	dnStore DNStore
 }
 
-type transactionHeap []*Transaction
-
 // txnDatabase represents an opened database in a transaction
 type txnDatabase struct {
 	databaseId   uint64
