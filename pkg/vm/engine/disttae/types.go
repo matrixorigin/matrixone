@@ -189,8 +189,6 @@ type txnTable struct {
 	defs       []engine.TableDef
 	tableDef   *plan.TableDef
 
-	states []*PartitionState
-
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
 	viewdef      string
