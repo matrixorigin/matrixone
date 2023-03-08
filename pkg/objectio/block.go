@@ -88,6 +88,10 @@ func (b *Block) GetID() uint32 {
 	return b.id
 }
 
+func (b *Block) GetColumnCount() uint16 {
+	return b.header.columnCount
+}
+
 func (b *Block) MarshalMeta() ([]byte, error) {
 	var (
 		err    error
@@ -125,7 +129,7 @@ func (b *Block) MarshalMeta() ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func (b *Block) UnMarshalMeta(data []byte) (uint32, error) {
+func (b *Block) UnMarshalMeta(data []byte, ZMUnmarshalFunc ZoneMapUnmarshalFunc) (uint32, error) {
 	var err error
 	cache := bytes.NewBuffer(data)
 	size := uint32(0)
@@ -152,6 +156,10 @@ func (b *Block) UnMarshalMeta(data []byte) (uint32, error) {
 	b.columns = make([]ColumnObject, b.header.columnCount)
 	for i := range b.columns {
 		b.columns[i] = NewColumnBlock(uint16(i), b.object)
+		b.columns[i].(*ColumnBlock).meta.zoneMap = ZoneMap{
+			idx:           uint16(i),
+			unmarshalFunc: ZMUnmarshalFunc,
+		}
 		err = b.columns[i].(*ColumnBlock).UnMarshalMate(cache)
 		if err != nil {
 			return 0, err

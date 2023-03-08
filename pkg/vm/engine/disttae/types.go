@@ -85,6 +85,10 @@ type Partition struct {
 	lock  chan struct{}
 	state atomic.Pointer[PartitionState]
 	ts    timestamp.Timestamp // last updated timestamp
+
+	// lazy consume for ckpt.
+	sync.Mutex
+	ckptList []string
 }
 
 // Transaction represents a transaction
@@ -110,7 +114,10 @@ type Transaction struct {
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
 	// every statement is an element
-	writes    [][]Entry
+	writes [][]Entry
+	// txn workspace size
+	workspaceSize uint64
+
 	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
 	dnStores  []DNStore
 	proc      *process.Process
@@ -177,7 +184,7 @@ type txnTable struct {
 	dnList     []int
 	db         *txnDatabase
 	meta       *tableMeta
-	parts      Partitions
+	parts      []*PartitionState
 	insertExpr *plan.Expr
 	defs       []engine.TableDef
 	tableDef   *plan.TableDef
