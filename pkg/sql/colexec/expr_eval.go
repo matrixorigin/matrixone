@@ -190,12 +190,12 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 		case *plan.Const_Decimal64Val:
 			cd64 := t.C.GetDecimal64Val()
 			d64 := types.Decimal64FromInt64Raw(cd64.A)
-			typ := types.Type{Oid: types.T_decimal64, Size: 8, Width: expr.Typ.Width, Scale: expr.Typ.Scale}
+			typ := types.New(types.T_decimal64, expr.Typ.Width, expr.Typ.Scale)
 			vec = vector.NewConstFixed(typ, length, d64, proc.Mp())
 		case *plan.Const_Decimal128Val:
 			cd128 := t.C.GetDecimal128Val()
 			d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
-			typ := types.Type{Oid: types.T_decimal128, Size: 16, Width: expr.Typ.Width, Scale: expr.Typ.Scale}
+			typ := types.New(types.T_decimal128, expr.Typ.Width, expr.Typ.Scale)
 			vec = vector.NewConstFixed(typ, length, d128, proc.Mp())
 		case *plan.Const_Timestampval:
 			scale := expr.Typ.Scale
