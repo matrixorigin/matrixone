@@ -430,6 +430,7 @@ func (h *Handle) startLoadJobs(
 		nctx = context.WithValue(nctx, db.LocationKey{}, v)
 		req.Jobs[i] = tasks.NewJob(
 			jobIds[i],
+			blockio.JTLoad,
 			nctx,
 			func(ctx context.Context) (jobR *tasks.JobResult) {
 				jobR = &tasks.JobResult{}

@@ -623,6 +623,7 @@ func LoadCheckpointEntries(
 		}
 		job = tasks.NewJob(
 			fmt.Sprintf("load-%s", location),
+			blockio.JTLoad,
 			context.Background(),
 			exec)
 		return

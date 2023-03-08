@@ -16,13 +16,42 @@ package tasks
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/panjf2000/ants/v2"
 )
+
+type JobType = uint16
+
+const (
+	JTAny             JobType = iota
+	JTCustomizedStart         = 100
+)
+
+var jobTypeNames = map[JobType]string{
+	JTAny: "AnyJob",
+}
+
+func RegisterJobType(jt JobType, jn string) {
+	_, ok := jobTypeNames[jt]
+	if ok {
+		panic(any(moerr.NewInternalErrorNoCtx("duplicate job type: %d", jt)))
+	}
+	jobTypeNames[jt] = jn
+}
+
+func JobName(jt JobType) string {
+	n, ok := jobTypeNames[jt]
+	if !ok {
+		panic(any(moerr.NewInternalErrorNoCtx("specified job type: %d not found", jt)))
+	}
+	return n
+}
 
 type JobScheduler interface {
 	Schedule(job *Job) error
@@ -53,7 +82,7 @@ type parallelJobScheduler struct {
 func NewParallelJobScheduler(parallism int) *parallelJobScheduler {
 	pool, err := ants.NewPool(parallism)
 	if err != nil {
-		panic(err)
+		panic(any(err))
 	}
 	return &parallelJobScheduler{
 		pool: pool,
@@ -72,6 +101,7 @@ func (s *parallelJobScheduler) Schedule(job *Job) (err error) {
 
 type Job struct {
 	id      string
+	typ     JobType
 	wg      *sync.WaitGroup
 	ctx     context.Context
 	exec    JobExecutor
@@ -80,9 +110,10 @@ type Job struct {
 	endTs   time.Time
 }
 
-func NewJob(id string, ctx context.Context, exec JobExecutor) *Job {
+func NewJob(id string, typ JobType, ctx context.Context, exec JobExecutor) *Job {
 	e := &Job{
 		id:   id,
+		typ:  typ,
 		ctx:  ctx,
 		exec: exec,
 		wg:   new(sync.WaitGroup),
@@ -96,12 +127,24 @@ func (job *Job) Run() {
 	job.startTs = time.Now()
 	defer func() {
 		job.endTs = time.Now()
-		logutil.Info("run-job", common.AnyField("id", job.id),
+		logutil.Info("run-job", common.AnyField("name", job.String()),
 			common.ErrorField(job.result.Err),
 			common.DurationField(job.endTs.Sub(job.startTs)))
 	}()
 	result := job.exec(job.ctx)
 	job.result = result
+}
+
+func (job *Job) ID() string {
+	return job.id
+}
+
+func (job *Job) String() string {
+	return fmt.Sprintf("Job[%s]-[%s]", JobName(job.typ), job.id)
+}
+
+func (job *Job) Type() JobType {
+	return job.typ
 }
 
 func (job *Job) WaitDone() *JobResult {
@@ -112,6 +155,13 @@ func (job *Job) WaitDone() *JobResult {
 func (job *Job) GetResult() *JobResult {
 	job.wg.Wait()
 	return job.result
+}
+
+func (job *Job) DoneWithErr(err error) {
+	defer job.wg.Done()
+	job.result = &JobResult{
+		Err: err,
+	}
 }
 
 func (job *Job) Close() {

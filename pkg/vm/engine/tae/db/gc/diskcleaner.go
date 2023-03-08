@@ -192,6 +192,7 @@ func (cleaner *DiskCleaner) replay() error {
 		}
 		job = tasks.NewJob(
 			fmt.Sprintf("load-%s", dir.Name),
+			blockio.JTLoad,
 			context.Background(),
 			exec)
 		return

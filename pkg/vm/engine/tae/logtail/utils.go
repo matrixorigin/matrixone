@@ -505,7 +505,7 @@ func BlkColumnByMetaLoadJob(
 			Res: bat,
 		}
 	}
-	return tasks.NewJob(uuid.NewString(), cxt, exec)
+	return tasks.NewJob(uuid.NewString(), blockio.JTLoad, cxt, exec)
 }
 
 // TODO:
