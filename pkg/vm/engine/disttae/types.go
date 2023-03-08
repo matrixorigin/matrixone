@@ -67,8 +67,6 @@ type Engine struct {
 	idGen   IDGenerator
 	txns    map[string]*Transaction
 	catalog *cache.CatalogCache
-	// minimum heap of currently active transactions
-	txnHeap *transactionHeap
 
 	dnMap      map[string]int
 	partitions map[[2]uint64]Partitions
@@ -87,6 +85,10 @@ type Partition struct {
 	lock  chan struct{}
 	state atomic.Pointer[PartitionState]
 	ts    timestamp.Timestamp // last updated timestamp
+
+	// lazy consume for ckpt.
+	sync.Mutex
+	ckptList []string
 }
 
 // Transaction represents a transaction
@@ -112,7 +114,10 @@ type Transaction struct {
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
 	// every statement is an element
-	writes    [][]Entry
+	writes [][]Entry
+	// txn workspace size
+	workspaceSize uint64
+
 	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
 	dnStores  []DNStore
 	proc      *process.Process
@@ -143,8 +148,6 @@ type Entry struct {
 	bat     *batch.Batch
 	dnStore DNStore
 }
-
-type transactionHeap []*Transaction
 
 // txnDatabase represents an opened database in a transaction
 type txnDatabase struct {
@@ -181,7 +184,7 @@ type txnTable struct {
 	dnList     []int
 	db         *txnDatabase
 	meta       *tableMeta
-	parts      Partitions
+	parts      []*PartitionState
 	insertExpr *plan.Expr
 	defs       []engine.TableDef
 	tableDef   *plan.TableDef

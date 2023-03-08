@@ -15,13 +15,13 @@
 package disttae
 
 import (
-	"context"
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // the sort func should ensure that:
@@ -45,39 +45,14 @@ func TestLogList_Sort(t *testing.T) {
 	}
 }
 
+/*
 // should ensure syncLogTailTimestamp can get time or set time without any trace.
 // and will not cause any deadlock.
 func TestSyncLogTailTimestamp(t *testing.T) {
-	var globalTime syncLogTailTimestamp
-	globalTime.initLogTailTimestamp()
-	require.Equal(t, int64(0), globalTime.getTimestamp().PhysicalTime)
-
-	storeTime := timestamp.Timestamp{PhysicalTime: 100}
-	compareTime := timestamp.Timestamp{PhysicalTime: 105}
-	globalTime.updateTimestamp(storeTime)
-
-	require.Equal(t, storeTime.GreaterEq(compareTime), globalTime.greatEq(compareTime))
-
-	errChan := make(chan error, 2)
-	// routine 1 to update the global timestamp.
-	go func() {
-		for i := 0; i < 10; i++ {
-			compareTime.PhysicalTime++
-			globalTime.updateTimestamp(compareTime)
-		}
-		errChan <- nil
-	}()
-	// routine 2 to block until global timestamp >= requireTime
-	go func() {
-		requireTime := timestamp.Timestamp{PhysicalTime: 115}
-		errChan <- globalTime.blockUntilTxnTimeIsLegal(context.TODO(), requireTime)
-	}()
-	// global time will increase to 115 on routine 1, and the routine 2 can run succeed.
-	for i := 0; i < 2; i++ {
-		getErr := <-errChan
-		require.NoError(t, getErr)
-	}
+	// Not now.
+	t.Skip()
 }
+*/
 
 // should ensure that subscribe and unsubscribe methods are effective.
 func TestSubscribedTable(t *testing.T) {

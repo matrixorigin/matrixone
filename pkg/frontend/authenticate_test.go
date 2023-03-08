@@ -143,11 +143,16 @@ func TestPrivilegeType(t *testing.T) {
 
 func TestFormSql(t *testing.T) {
 	convey.Convey("form sql", t, func() {
-		convey.So(getSqlForCheckTenant("a"), convey.ShouldEqual, fmt.Sprintf(checkTenantFormat, "a"))
-		convey.So(getSqlForPasswordOfUser("u"), convey.ShouldEqual, fmt.Sprintf(getPasswordOfUserFormat, "u"))
-		convey.So(getSqlForCheckRoleExists(0, "r"), convey.ShouldEqual, fmt.Sprintf(checkRoleExistsFormat, 0, "r"))
-		convey.So(getSqlForRoleIdOfRole("r"), convey.ShouldEqual, fmt.Sprintf(roleIdOfRoleFormat, "r"))
-		convey.So(getSqlForRoleOfUser(0, "r"), convey.ShouldEqual, fmt.Sprintf(getRoleOfUserFormat, 0, "r"))
+		sql, _ := getSqlForCheckTenant(context.TODO(), "a")
+		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(checkTenantFormat, "a"))
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), "u")
+		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(getPasswordOfUserFormat, "u"))
+		sql, _ = getSqlForCheckRoleExists(context.TODO(), 0, "r")
+		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(checkRoleExistsFormat, 0, "r"))
+		sql, _ = getSqlForRoleIdOfRole(context.TODO(), "r")
+		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(roleIdOfRoleFormat, "r"))
+		sql, _ = getSqlForRoleOfUser(context.TODO(), 0, "r")
+		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(getRoleOfUserFormat, 0, "r"))
 	})
 }
 
@@ -484,15 +489,15 @@ func Test_initUser(t *testing.T) {
 			{10},
 		})
 
-		sql := getSqlForRoleIdOfRole(cu.Role.UserName)
+		sql, _ := getSqlForRoleIdOfRole(context.TODO(), cu.Role.UserName)
 		sql2result[sql] = mrs
 
 		for _, user := range cu.Users {
-			sql = getSqlForPasswordOfUser(user.Username)
+			sql, _ = getSqlForPasswordOfUser(context.TODO(), user.Username)
 			mrs = newMrsForPasswordOfUser([][]interface{}{})
 			sql2result[sql] = mrs
 
-			sql = getSqlForRoleIdOfRole(user.Username)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 			mrs = newMrsForRoleIdOfRole([][]interface{}{})
 			sql2result[sql] = mrs
 		}
@@ -3529,7 +3534,7 @@ func Test_determineDML(t *testing.T) {
 
 			for _, roleId := range roleIds {
 				for _, entry := range priv.entries {
-					sql := getSqlForCheckRoleHasTableLevelPrivilege(int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
+					sql, _ := getSqlForCheckRoleHasTableLevelPrivilege(context.TODO(), int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
 					sql2result[sql] = newMrsForWithGrantOptionPrivilege([][]interface{}{
 						{entry.privilegeId, true},
 					})
@@ -3805,7 +3810,7 @@ func Test_doGrantRole(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -3814,7 +3819,7 @@ func Test_doGrantRole(t *testing.T) {
 
 		//init to roles
 		for i, user := range stmt.Users {
-			sql := getSqlForRoleIdOfRole(user.Username)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i + len(stmt.Roles)},
 			})
@@ -3874,7 +3879,7 @@ func Test_doGrantRole(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -3884,18 +3889,18 @@ func Test_doGrantRole(t *testing.T) {
 		//init to empty roles,
 		//init to users
 		for i, user := range stmt.Users {
-			sql := getSqlForRoleIdOfRole(user.Username)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{})
 
 			bh.sql2result[sql] = mrs
 
-			sql = getSqlForPasswordOfUser(user.Username)
+			sql, _ = getSqlForPasswordOfUser(context.TODO(), user.Username)
 			mrs = newMrsForPasswordOfUser([][]interface{}{
 				{i, "111", i},
 			})
 			bh.sql2result[sql] = mrs
 
-			sql = getSqlForRoleOfUser(int64(i), moAdminRoleName)
+			sql, _ = getSqlForRoleOfUser(context.TODO(), int64(i), moAdminRoleName)
 			bh.sql2result[sql] = newMrsForRoleOfUser([][]interface{}{})
 		}
 
@@ -3954,7 +3959,7 @@ func Test_doGrantRole(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -3965,29 +3970,29 @@ func Test_doGrantRole(t *testing.T) {
 		//init to 1 users
 		for i, user := range stmt.Users {
 			if i < 2 { //roles
-				sql := getSqlForRoleIdOfRole(user.Username)
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 				mrs := newMrsForRoleIdOfRole([][]interface{}{
 					{i + len(stmt.Roles)},
 				})
 
 				bh.sql2result[sql] = mrs
 
-				sql = getSqlForPasswordOfUser(user.Username)
+				sql, _ = getSqlForPasswordOfUser(context.TODO(), user.Username)
 				mrs = newMrsForPasswordOfUser([][]interface{}{})
 				bh.sql2result[sql] = mrs
 			} else { //users
-				sql := getSqlForRoleIdOfRole(user.Username)
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 				mrs := newMrsForRoleIdOfRole([][]interface{}{})
 
 				bh.sql2result[sql] = mrs
 
-				sql = getSqlForPasswordOfUser(user.Username)
+				sql, _ = getSqlForPasswordOfUser(context.TODO(), user.Username)
 				mrs = newMrsForPasswordOfUser([][]interface{}{
 					{i, "111", i},
 				})
 				bh.sql2result[sql] = mrs
 
-				sql = getSqlForRoleOfUser(int64(i), moAdminRoleName)
+				sql, _ = getSqlForRoleOfUser(context.TODO(), int64(i), moAdminRoleName)
 				bh.sql2result[sql] = newMrsForRoleOfUser([][]interface{}{})
 			}
 
@@ -4060,7 +4065,7 @@ func Test_doGrantRole(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -4071,29 +4076,29 @@ func Test_doGrantRole(t *testing.T) {
 		//init to 1 users
 		for i, user := range stmt.Users {
 			if i < 2 { //roles
-				sql := getSqlForRoleIdOfRole(user.Username)
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 				mrs := newMrsForRoleIdOfRole([][]interface{}{
 					{i + len(stmt.Roles)},
 				})
 
 				bh.sql2result[sql] = mrs
 
-				sql = getSqlForPasswordOfUser(user.Username)
+				sql, _ = getSqlForPasswordOfUser(context.TODO(), user.Username)
 				mrs = newMrsForPasswordOfUser([][]interface{}{})
 				bh.sql2result[sql] = mrs
 			} else { //users
-				sql := getSqlForRoleIdOfRole(user.Username)
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 				mrs := newMrsForRoleIdOfRole([][]interface{}{})
 
 				bh.sql2result[sql] = mrs
 
-				sql = getSqlForPasswordOfUser(user.Username)
+				sql, _ = getSqlForPasswordOfUser(context.TODO(), user.Username)
 				mrs = newMrsForPasswordOfUser([][]interface{}{
 					{i, "111", i},
 				})
 				bh.sql2result[sql] = mrs
 
-				sql = getSqlForRoleOfUser(int64(i), moAdminRoleName)
+				sql, _ = getSqlForRoleOfUser(context.TODO(), int64(i), moAdminRoleName)
 				bh.sql2result[sql] = newMrsForRoleOfUser([][]interface{}{})
 			}
 
@@ -4170,7 +4175,7 @@ func Test_doGrantRole(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -4181,29 +4186,29 @@ func Test_doGrantRole(t *testing.T) {
 		//init to 1 users
 		for i, user := range stmt.Users {
 			if i < 2 { //roles
-				sql := getSqlForRoleIdOfRole(user.Username)
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 				mrs := newMrsForRoleIdOfRole([][]interface{}{
 					{i + len(stmt.Roles)},
 				})
 
 				bh.sql2result[sql] = mrs
 
-				sql = getSqlForPasswordOfUser(user.Username)
+				sql, _ = getSqlForPasswordOfUser(context.TODO(), user.Username)
 				mrs = newMrsForPasswordOfUser([][]interface{}{})
 				bh.sql2result[sql] = mrs
 			} else { //users
-				sql := getSqlForRoleIdOfRole(user.Username)
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 				mrs := newMrsForRoleIdOfRole([][]interface{}{})
 
 				bh.sql2result[sql] = mrs
 
-				sql = getSqlForPasswordOfUser(user.Username)
+				sql, _ = getSqlForPasswordOfUser(context.TODO(), user.Username)
 				mrs = newMrsForPasswordOfUser([][]interface{}{
 					{i, "111", i},
 				})
 				bh.sql2result[sql] = mrs
 
-				sql = getSqlForRoleOfUser(int64(i), moAdminRoleName)
+				sql, _ = getSqlForRoleOfUser(context.TODO(), int64(i), moAdminRoleName)
 				bh.sql2result[sql] = newMrsForRoleOfUser([][]interface{}{})
 			}
 
@@ -4280,7 +4285,7 @@ func Test_doGrantRole(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -4289,7 +4294,7 @@ func Test_doGrantRole(t *testing.T) {
 
 		//init to roles
 		for i, user := range stmt.Users {
-			sql := getSqlForRoleIdOfRole(user.Username)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i + len(stmt.Roles)},
 			})
@@ -4350,7 +4355,7 @@ func Test_doGrantRole(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -4361,29 +4366,29 @@ func Test_doGrantRole(t *testing.T) {
 		//init to 1 users
 		for i, user := range stmt.Users {
 			if i < 2 { //roles
-				sql := getSqlForRoleIdOfRole(user.Username)
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 				mrs := newMrsForRoleIdOfRole([][]interface{}{
 					{i + len(stmt.Roles)},
 				})
 
 				bh.sql2result[sql] = mrs
 
-				sql = getSqlForPasswordOfUser(user.Username)
+				sql, _ = getSqlForPasswordOfUser(context.TODO(), user.Username)
 				mrs = newMrsForPasswordOfUser([][]interface{}{})
 				bh.sql2result[sql] = mrs
 			} else { //users
-				sql := getSqlForRoleIdOfRole(user.Username)
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 				mrs := newMrsForRoleIdOfRole([][]interface{}{})
 
 				bh.sql2result[sql] = mrs
 
-				sql = getSqlForPasswordOfUser(user.Username)
+				sql, _ = getSqlForPasswordOfUser(context.TODO(), user.Username)
 				mrs = newMrsForPasswordOfUser([][]interface{}{
 					{i, "111", i},
 				})
 				bh.sql2result[sql] = mrs
 
-				sql = getSqlForRoleOfUser(int64(i), moAdminRoleName)
+				sql, _ = getSqlForRoleOfUser(context.TODO(), int64(i), moAdminRoleName)
 				bh.sql2result[sql] = newMrsForRoleOfUser([][]interface{}{})
 			}
 
@@ -4465,14 +4470,14 @@ func Test_doGrantRole(t *testing.T) {
 
 		//init from roles
 		for _, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{})
 			bh.sql2result[sql] = mrs
 		}
 
 		//init to roles
 		for i, user := range stmt.Users {
-			sql := getSqlForRoleIdOfRole(user.Username)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i + len(stmt.Roles)},
 			})
@@ -4532,7 +4537,7 @@ func Test_doGrantRole(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -4542,12 +4547,12 @@ func Test_doGrantRole(t *testing.T) {
 		//init to empty roles,
 		//init to users
 		for _, user := range stmt.Users {
-			sql := getSqlForRoleIdOfRole(user.Username)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{})
 
 			bh.sql2result[sql] = mrs
 
-			sql = getSqlForPasswordOfUser(user.Username)
+			sql, _ = getSqlForPasswordOfUser(context.TODO(), user.Username)
 			mrs = newMrsForPasswordOfUser([][]interface{}{})
 			bh.sql2result[sql] = mrs
 		}
@@ -4609,7 +4614,7 @@ func Test_doRevokeRole(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -4618,7 +4623,7 @@ func Test_doRevokeRole(t *testing.T) {
 
 		//init to roles
 		for i, user := range stmt.Users {
-			sql := getSqlForRoleIdOfRole(user.Username)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i + len(stmt.Roles)},
 			})
@@ -4673,7 +4678,7 @@ func Test_doRevokeRole(t *testing.T) {
 		//init from roles
 		var mrs *MysqlResultSet
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs = newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -4682,7 +4687,7 @@ func Test_doRevokeRole(t *testing.T) {
 
 		//init to roles
 		for i, user := range stmt.Users {
-			sql := getSqlForRoleIdOfRole(user.Username)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i + len(stmt.Roles)},
 			})
@@ -4736,7 +4741,7 @@ func Test_doRevokeRole(t *testing.T) {
 		//init from roles
 		var mrs *MysqlResultSet
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			if i == 0 {
 				mrs = newMrsForRoleIdOfRole([][]interface{}{})
 			} else {
@@ -4750,7 +4755,7 @@ func Test_doRevokeRole(t *testing.T) {
 
 		//init to roles
 		for i, user := range stmt.Users {
-			sql := getSqlForRoleIdOfRole(user.Username)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i + len(stmt.Roles)},
 			})
@@ -4804,7 +4809,7 @@ func Test_doRevokeRole(t *testing.T) {
 		//init from roles
 		var mrs *MysqlResultSet
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs = newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -4814,10 +4819,10 @@ func Test_doRevokeRole(t *testing.T) {
 
 		//init to roles
 		for i, user := range stmt.Users {
-			//sql := getSqlForRoleIdOfRole(user.Username)
+			//sql := sql, _ := getSqlForRoleIdOfRole(context.TODO(),user.Username)
 			//mrs = newMrsForRoleIdOfRole([][]interface{}{})
 
-			sql := getSqlForPasswordOfUser(user.Username)
+			sql, _ := getSqlForPasswordOfUser(context.TODO(), user.Username)
 			//miss u2
 			if i == 1 {
 				mrs = newMrsForPasswordOfUser([][]interface{}{})
@@ -4875,7 +4880,7 @@ func Test_doRevokeRole(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -4884,12 +4889,12 @@ func Test_doRevokeRole(t *testing.T) {
 
 		//init to roles
 		for i, user := range stmt.Users {
-			sql := getSqlForRoleIdOfRole(user.Username)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), user.Username)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{})
 
 			bh.sql2result[sql] = mrs
 
-			sql = getSqlForPasswordOfUser(user.Username)
+			sql, _ = getSqlForPasswordOfUser(context.TODO(), user.Username)
 			mrs = newMrsForPasswordOfUser([][]interface{}{
 				{i},
 			})
@@ -4942,7 +4947,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -5036,7 +5041,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 
 			//init from roles
 			for i, role := range stmt.Roles {
-				sql := getSqlForRoleIdOfRole(role.UserName)
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 				mrs := newMrsForRoleIdOfRole([][]interface{}{
 					{i},
 				})
@@ -5047,13 +5052,13 @@ func Test_doGrantPrivilege(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 
 			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE {
-				sql := getSqlForCheckDatabase(stmt.Level.DbName)
+				sql, _ := getSqlForCheckDatabase(context.TODO(), stmt.Level.DbName)
 				mrs := newMrsForCheckDatabase([][]interface{}{
 					{0},
 				})
 				bh.sql2result[sql] = mrs
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
-				sql := getSqlForCheckDatabase(stmt.Level.TabName)
+				sql, _ := getSqlForCheckDatabase(context.TODO(), stmt.Level.TabName)
 				mrs := newMrsForCheckDatabase([][]interface{}{
 					{0},
 				})
@@ -5168,7 +5173,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 
 			//init from roles
 			for i, role := range stmt.Roles {
-				sql := getSqlForRoleIdOfRole(role.UserName)
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 				mrs := newMrsForRoleIdOfRole([][]interface{}{
 					{i},
 				})
@@ -5180,14 +5185,14 @@ func Test_doGrantPrivilege(t *testing.T) {
 
 			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR {
-				sql := getSqlForCheckDatabase(dbName)
+				sql, _ := getSqlForCheckDatabase(context.TODO(), dbName)
 				mrs := newMrsForCheckDatabase([][]interface{}{
 					{0},
 				})
 				bh.sql2result[sql] = mrs
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
-				sql := getSqlForCheckDatabaseTable(dbName, tableName)
+				sql, _ := getSqlForCheckDatabaseTable(context.TODO(), dbName, tableName)
 				mrs := newMrsForCheckDatabaseTable([][]interface{}{
 					{0},
 				})
@@ -5244,7 +5249,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -5338,7 +5343,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 
 			//init from roles
 			for i, role := range stmt.Roles {
-				sql := getSqlForRoleIdOfRole(role.UserName)
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 				mrs := newMrsForRoleIdOfRole([][]interface{}{
 					{i},
 				})
@@ -5349,13 +5354,13 @@ func Test_doRevokePrivilege(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 
 			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE {
-				sql := getSqlForCheckDatabase(stmt.Level.DbName)
+				sql, _ := getSqlForCheckDatabase(context.TODO(), stmt.Level.DbName)
 				mrs := newMrsForCheckDatabase([][]interface{}{
 					{0},
 				})
 				bh.sql2result[sql] = mrs
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
-				sql := getSqlForCheckDatabase(stmt.Level.TabName)
+				sql, _ := getSqlForCheckDatabase(context.TODO(), stmt.Level.TabName)
 				mrs := newMrsForCheckDatabase([][]interface{}{
 					{0},
 				})
@@ -5470,7 +5475,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 
 			//init from roles
 			for i, role := range stmt.Roles {
-				sql := getSqlForRoleIdOfRole(role.UserName)
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 				mrs := newMrsForRoleIdOfRole([][]interface{}{
 					{i},
 				})
@@ -5482,14 +5487,14 @@ func Test_doRevokePrivilege(t *testing.T) {
 
 			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR {
-				sql := getSqlForCheckDatabase(dbName)
+				sql, _ := getSqlForCheckDatabase(context.TODO(), dbName)
 				mrs := newMrsForCheckDatabase([][]interface{}{
 					{0},
 				})
 				bh.sql2result[sql] = mrs
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
-				sql := getSqlForCheckDatabaseTable(dbName, tableName)
+				sql, _ := getSqlForCheckDatabaseTable(context.TODO(), dbName, tableName)
 				mrs := newMrsForCheckDatabaseTable([][]interface{}{
 					{0},
 				})
@@ -5582,7 +5587,7 @@ func Test_doDropRole(t *testing.T) {
 
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -5628,7 +5633,7 @@ func Test_doDropRole(t *testing.T) {
 		var mrs *MysqlResultSet
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			if i == 0 {
 				mrs = newMrsForRoleIdOfRole([][]interface{}{})
 			} else {
@@ -5679,7 +5684,7 @@ func Test_doDropRole(t *testing.T) {
 		var mrs *MysqlResultSet
 		//init from roles
 		for i, role := range stmt.Roles {
-			sql := getSqlForRoleIdOfRole(role.UserName)
+			sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
 			if i == 0 {
 				mrs = newMrsForRoleIdOfRole([][]interface{}{})
 			} else {
@@ -5730,13 +5735,13 @@ func Test_doDropUser(t *testing.T) {
 		bh.sql2result["rollback;"] = nil
 
 		for i, user := range stmt.Users {
-			sql := getSqlForPasswordOfUser(user.Username)
+			sql, _ := getSqlForPasswordOfUser(context.TODO(), user.Username)
 			mrs := newMrsForPasswordOfUser([][]interface{}{
 				{i, "111", "public"},
 			})
 			bh.sql2result[sql] = mrs
 
-			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			sql, _ = getSqlForCheckUserHasRole(context.TODO(), user.Username, moAdminRoleID)
 			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
 			bh.sql2result[sql] = mrs
 		}
@@ -5781,7 +5786,7 @@ func Test_doDropUser(t *testing.T) {
 		var mrs *MysqlResultSet
 		//init from roles
 		for i, user := range stmt.Users {
-			sql := getSqlForPasswordOfUser(user.Username)
+			sql, _ := getSqlForPasswordOfUser(context.TODO(), user.Username)
 			if i == 0 {
 				mrs = newMrsForPasswordOfUser([][]interface{}{})
 			} else {
@@ -5791,7 +5796,7 @@ func Test_doDropUser(t *testing.T) {
 			}
 
 			bh.sql2result[sql] = mrs
-			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			sql, _ = getSqlForCheckUserHasRole(context.TODO(), user.Username, moAdminRoleID)
 			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
 			bh.sql2result[sql] = mrs
 		}
@@ -5836,7 +5841,7 @@ func Test_doDropUser(t *testing.T) {
 		var mrs *MysqlResultSet
 		//init from roles
 		for i, user := range stmt.Users {
-			sql := getSqlForPasswordOfUser(user.Username)
+			sql, _ := getSqlForPasswordOfUser(context.TODO(), user.Username)
 			if i == 0 {
 				mrs = newMrsForPasswordOfUser([][]interface{}{})
 			} else {
@@ -5847,7 +5852,7 @@ func Test_doDropUser(t *testing.T) {
 
 			bh.sql2result[sql] = mrs
 
-			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			sql, _ = getSqlForCheckUserHasRole(context.TODO(), user.Username, moAdminRoleID)
 			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
 			bh.sql2result[sql] = mrs
 		}
@@ -5894,18 +5899,18 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
 			{0},
 		})
 		bh.sql2result[sql] = mrs
 
-		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{
 			{10, "111", 0},
 		})
 
-		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
@@ -5941,18 +5946,18 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
 			{0},
 		})
 		bh.sql2result[sql] = mrs
 
-		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{
 			{10, "111", 0},
 		})
 
-		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
@@ -5988,13 +5993,13 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		bh.sql2result[sql] = nil
 
-		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
@@ -6031,14 +6036,14 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
@@ -6075,16 +6080,16 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
 			{0},
 		})
 		bh.sql2result[sql] = mrs
 
-		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{})
 
-		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
@@ -6113,13 +6118,13 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		bh.sql2result[sql] = nil
 
-		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
@@ -6160,12 +6165,12 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		bh.sql2result[sql] = nil
-		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		sql = getSqlForUpdatePasswordOfUser(stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
@@ -6197,16 +6202,16 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
 			{0},
 		})
 		bh.sql2result[sql] = mrs
 
-		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		sql = getSqlForUpdateCommentsOfAccount(stmt.Comment.Comment, stmt.Name)
+		sql, _ = getSqlForUpdateCommentsOfAccount(context.TODO(), stmt.Comment.Comment, stmt.Name)
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
@@ -6238,16 +6243,16 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
 			{0},
 		})
 		bh.sql2result[sql] = mrs
 
-		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		sql = getSqlForUpdateStatusOfAccount(stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
+		sql, _ = getSqlForUpdateStatusOfAccount(context.TODO(), stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
@@ -6279,13 +6284,13 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		bh.sql2result[sql] = nil
 
-		sql = getSqlForPasswordOfUser(stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
 		bh.sql2result[sql] = nil
 
-		sql = getSqlForUpdateStatusOfAccount(stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
+		sql, _ = getSqlForUpdateStatusOfAccount(context.TODO(), stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
@@ -6330,13 +6335,13 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{
 			{0},
 		})
 		bh.sql2result[sql] = mrs
 
-		sql = getSqlForDeleteAccountFromMoAccount(stmt.Name)
+		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), stmt.Name)
 		bh.sql2result[sql] = nil
 
 		for _, sql = range getSqlForDropAccount() {
@@ -6373,11 +6378,11 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = getSqlForDeleteAccountFromMoAccount(stmt.Name)
+		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), stmt.Name)
 		bh.sql2result[sql] = nil
 
 		for _, sql = range getSqlForDropAccount() {
@@ -6410,11 +6415,11 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForCheckTenant(stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		mrs := newMrsForCheckTenant([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = getSqlForDeleteAccountFromMoAccount(stmt.Name)
+		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), stmt.Name)
 		bh.sql2result[sql] = nil
 
 		for _, sql = range getSqlForDropAccount() {
@@ -6952,7 +6957,8 @@ func newMrsForCheckTenant(rows [][]interface{}) *MysqlResultSet {
 
 func makeRowsOfMoRole(sql2result map[string]ExecResult, roleNames []string, rows [][][]interface{}) {
 	for i, name := range roleNames {
-		sql2result[getSqlForRoleIdOfRole(name)] = newMrsForRoleIdOfRole(rows[i])
+		sql, _ := getSqlForRoleIdOfRole(context.TODO(), name)
+		sql2result[sql] = newMrsForRoleIdOfRole(rows[i])
 	}
 }
 

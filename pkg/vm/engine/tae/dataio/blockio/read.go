@@ -16,56 +16,49 @@ package blockio
 
 import (
 	"context"
-	"time"
-
+	"fmt"
 	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"time"
 )
 
 // BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
 func BlockRead(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
-	columns []string,
-	colIdxs []uint16,
+	colIdxes []uint16,
 	colTypes []types.Type,
-	colNulls []bool,
-	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
 	pool *mpool.MPool) (*batch.Batch, error) {
 
 	// read
 	columnBatch, err := BlockReadInner(
-		ctx, info, len(tableDef.Cols), /*including rowid*/
-		columns, colIdxs, colTypes, colNulls,
+		ctx, info, colIdxes, colTypes,
 		types.TimestampToTS(ts), fs, pool,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	bat := batch.NewWithSize(len(columns))
-	bat.Attrs = columns
+	bat := batch.NewWithSize(len(colIdxes))
 	for i, vec := range columnBatch.Vecs {
-		// If the vector uses mpool to allocate memory internally,
-		// it needs to be free here
-		if vec.Allocated() > 0 {
-			bat.Vecs[i] = containers.CopyToMoVec(vec)
-		} else {
+		if columnBatch.Deletes != nil {
+			// already copied in BlockReadInner
 			bat.Vecs[i] = containers.UnmarshalToMoVec(vec)
+		} else {
+			// FIXME: CN may modify the vector, so it must be copied here now
+			bat.Vecs[i] = containers.CopyToMoVec(vec)
 		}
 		vec.Close()
 	}
@@ -77,24 +70,18 @@ func BlockRead(
 func BlockReadInner(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
-	schemaColCnt int,
-	colNames []string,
-	colIdxs []uint16,
-	colTyps []types.Type,
-	colNulls []bool,
+	colIdxes []uint16,
+	colTypes []types.Type,
 	ts types.TS,
 	fs fileservice.FileService,
 	pool *mpool.MPool) (*containers.Batch, error) {
-	columnBatch, err := readColumnBatchByMetaloc(
-		ctx, info, ts, schemaColCnt,
-		colNames, colIdxs, colTyps, colNulls,
-		fs, pool,
-	)
+	columnBatch, err := readBlockData(ctx, colIdxes, colTypes, info, ts,
+		fs, pool)
 	if err != nil {
 		return nil, err
 	}
 	if info.DeltaLoc != "" {
-		deleteBatch, err := readDeleteBatchByDeltaloc(ctx, info.DeltaLoc, fs)
+		deleteBatch, err := readBlockDelete(ctx, info.DeltaLoc, fs)
 		if err != nil {
 			return nil, err
 		}
@@ -106,117 +93,120 @@ func BlockReadInner(
 	}
 	// remove rows from columns
 	if columnBatch.Deletes != nil {
-		for _, col := range columnBatch.Vecs {
-			col.Compact(columnBatch.Deletes)
+		for i, col := range columnBatch.Vecs {
+			columnBatch.Vecs[i] = col.CloneWindow(0, col.Length(), nil)
+			columnBatch.Vecs[i].Compact(columnBatch.Deletes)
+			col.Close()
 		}
 	}
 	return columnBatch, nil
 }
 
-func readColumnBatchByMetaloc(
-	ctx context.Context,
-	info *pkgcatalog.BlockInfo,
-	ts types.TS,
-	schemaColCnt int,
-	colNames []string,
-	colIdxs []uint16,
-	colTyps []types.Type,
-	colNulls []bool,
-	fs fileservice.FileService,
-	pool *mpool.MPool) (*containers.Batch, error) {
-	var bat *containers.Batch
-	var err error
-	name, extent, rows := DecodeMetaLoc(info.MetaLoc)
-	idxsWithouRowid := make([]uint16, 0, len(colIdxs))
-	var rowidData containers.Vector
-	// sift rowid column
-	for i, typ := range colTyps {
+func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, uint16, []uint16) {
+	found := false
+	idx := 0
+	for i, typ := range colTypes {
 		if typ.Oid == types.T_Rowid {
-			// generate rowid data
-			prefix := model.EncodeBlockKeyPrefix(info.SegmentID, info.BlockID)
-			rowidData, err = model.PreparePhyAddrDataWithPool(
-				types.T_Rowid.ToType(),
-				prefix,
-				0,
-				rows,
-				pool,
-			)
-			if err != nil {
-				return nil, err
-			}
-			defer func() {
-				if err != nil {
-					rowidData.Close()
-				}
-			}()
-		} else {
-			idxsWithouRowid = append(idxsWithouRowid, colIdxs[i])
+			idx = i
+			found = true
+			break
 		}
 	}
+	if !found {
+		return found, uint16(idx), colIndexes
+	}
+	idxes := make([]uint16, 0)
+	for i := range colIndexes {
+		if i == idx {
+			continue
+		}
+		idxes = append(idxes, colIndexes[i])
+	}
+	return found, uint16(idx), idxes
+}
 
-	bat = containers.NewBatch()
+func readBlockData(ctx context.Context, colIndexes []uint16,
+	colTypes []types.Type, info *pkgcatalog.BlockInfo, ts types.TS,
+	fs fileservice.FileService, m *mpool.MPool) (*containers.Batch, error) {
+	ok, _, idxes := getRowsIdIndex(colIndexes, colTypes)
+	_, id, extent, rows, err := DecodeLocation(info.MetaLoc)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := NewObjectReader(fs, info.MetaLoc)
+	if err != nil {
+		return nil, err
+	}
+	var rowIdVec containers.Vector
+	bat := containers.NewBatch()
 	defer func() {
 		if err != nil {
 			bat.Close()
 		}
 	}()
-
-	// only read rowid column on non appendable block, return early
-	if len(idxsWithouRowid) == 0 && !info.EntryState {
-		for _, name := range colNames {
-			bat.AddVector(name, rowidData)
-		}
-		return bat, nil
-	}
-
-	if info.EntryState { // appendable block should be filtered by committs
-		idxsWithouRowid = append(idxsWithouRowid, uint16(schemaColCnt))   // committs
-		idxsWithouRowid = append(idxsWithouRowid, uint16(schemaColCnt+1)) // aborted
-	}
-
-	// raed s3
-	reader, err := objectio.NewObjectReader(name, fs)
-	if err != nil {
-		return nil, err
-	}
-
-	ioResult, err := reader.Read(ctx, extent, idxsWithouRowid, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	entry := ioResult.Entries
-	for i, typ := range colTyps {
-		if typ.Oid == types.T_Rowid {
-			bat.AddVector(colNames[i], rowidData)
-		} else {
-			vec := vector.New(colTyps[i])
-			data := make([]byte, len(entry[0].Object.([]byte)))
-			copy(data, entry[0].Object.([]byte))
-			err := vec.Read(data)
-			if err != nil {
-				return nil, err
-			}
-			bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(vec, colNulls[i]))
-			entry = entry[1:]
-		}
-	}
-
-	// generate filter map
-	if info.EntryState {
-		t0 := time.Now()
-		v1 := vector.New(types.T_TS.ToType())
-		err := v1.Read(entry[0].Object.([]byte))
+	if ok {
+		// generate rowIdVec
+		prefix := model.EncodeBlockKeyPrefix(info.SegmentID, info.BlockID)
+		rowIdVec, err = model.PreparePhyAddrDataWithPool(
+			types.T_Rowid.ToType(),
+			prefix,
+			0,
+			rows,
+			m,
+		)
 		if err != nil {
 			return nil, err
 		}
+		defer func() {
+			if err != nil {
+				rowIdVec.Close()
+			}
+		}()
+	}
+
+	loadBlock := func(idxes []uint16) ([]*batch.Batch, error) {
+		if len(idxes) == 0 && ok {
+			// only read rowid column on non appendable block, return early
+			bat.AddVector(catalog.AttrRowID, rowIdVec)
+			return nil, nil
+		}
+		bats, err := reader.LoadColumns(ctx, idxes, []uint32{id}, m)
+		if err != nil {
+			return nil, err
+		}
+		entry := bats[0].Vecs
+		for i, typ := range colTypes {
+			if typ.Oid == types.T_Rowid {
+				bat.AddVector(fmt.Sprintf("%d", i), rowIdVec)
+			} else {
+				bat.AddVector(fmt.Sprintf("%d", i),
+					containers.NewVectorWithSharedMemory(entry[0], true))
+				entry = entry[1:]
+			}
+		}
+		return bats, nil
+	}
+
+	loadAppendBlock := func() error {
+		// appendable block should be filtered by committs
+		blocks, err := reader.(*BlockReader).reader.ReadMeta(ctx, []objectio.Extent{extent}, m, LoadZoneMapFunc)
+		if err != nil {
+			return err
+		}
+
+		colCount := blocks[0].GetColumnCount()
+		idxes = append(idxes, colCount-2) // committs
+		idxes = append(idxes, colCount-1) // aborted
+		bats, err := loadBlock(idxes)
+		if err != nil {
+			return err
+		}
+		lenVecs := len(bats[0].Vecs)
+		t0 := time.Now()
+		v1 := bats[0].Vecs[lenVecs-2]
 		commits := containers.NewVectorWithSharedMemory(v1, false)
 		defer commits.Close()
-		v2 := vector.New(types.T_bool.ToType())
-		err = v2.Read(entry[1].Object.([]byte))
-		if err != nil {
-			return nil, err
-		}
+		v2 := bats[0].Vecs[lenVecs-1]
 		abort := containers.NewVectorWithSharedMemory(v2, false)
 		defer abort.Close()
 		for i := 0; i < commits.Length(); i++ {
@@ -230,34 +220,39 @@ func readColumnBatchByMetaloc(
 		logutil.Infof(
 			"blockread %d scan filter cost %v: base %s filter out %v\n ",
 			info.BlockID, time.Since(t0), ts.ToString(), bat.DeleteCnt())
+		return nil
 	}
 
+	if info.EntryState {
+		err = loadAppendBlock()
+	} else {
+		_, err = loadBlock(idxes)
+	}
+
+	if err != nil {
+		return nil, err
+	}
 	return bat, nil
 }
 
-func readDeleteBatchByDeltaloc(ctx context.Context, deltaloc string, fs fileservice.FileService) (*containers.Batch, error) {
+func readBlockDelete(ctx context.Context, deltaloc string, fs fileservice.FileService) (*containers.Batch, error) {
 	bat := containers.NewBatch()
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
-	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
+	_, id, _, _, err := DecodeLocation(deltaloc)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := NewObjectReader(fs, deltaloc)
+	if err != nil {
+		return nil, err
+	}
 
-	name, extent, _ := DecodeMetaLoc(deltaloc)
-	reader, err := objectio.NewObjectReader(name, fs)
+	ioResult, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, []uint32{id}, nil)
 	if err != nil {
 		return nil, err
 	}
-	ioResult, err := reader.Read(ctx, extent, []uint16{0, 1, 2}, nil)
-	if err != nil {
-		return nil, err
-	}
-	for i, entry := range ioResult.Entries {
-		vec := vector.New(colTypes[i])
-		data := make([]byte, len(entry.Object.([]byte)))
-		copy(data, entry.Object.([]byte))
-		err := vec.Read(data)
-		if err != nil {
-			return nil, err
-		}
-		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(vec, false))
+	for i, entry := range ioResult[0].Vecs {
+		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(entry, false))
 	}
 	return bat, nil
 }
@@ -266,7 +261,6 @@ func recordDeletes(columnBatch *containers.Batch, deleteBatch *containers.Batch,
 	if deleteBatch == nil {
 		return
 	}
-
 	// record visible delete rows
 	for i := 0; i < deleteBatch.Length(); i++ {
 		abort := deleteBatch.GetVectorByName(catalog.AttrAborted).Get(i).(bool)
