@@ -59,8 +59,6 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		Ref:            DeepCopyObjectRef(ctx.Ref),
 		OnDuplicateIdx: make([]int32, len(ctx.OnDuplicateIdx)),
 		TableDef:       DeepCopyTableDef(ctx.TableDef),
-
-		ClusterTable: DeepCopyClusterTable(ctx.ClusterTable),
 	}
 
 	copy(newCtx.OnDuplicateIdx, ctx.OnDuplicateIdx)
