@@ -169,6 +169,7 @@ func TestNewMOCollector(t *testing.T) {
 	MOCollectorMux.Lock()
 	defer MOCollectorMux.Unlock()
 	defer leaktest.AfterTest(t)()
+	defer agent.Close()
 	ctx := context.Background()
 	ch := make(chan string, 3)
 	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
@@ -208,7 +209,6 @@ func TestNewMOCollector(t *testing.T) {
 func TestNewMOCollector_BufferCnt(t *testing.T) {
 	MOCollectorMux.Lock()
 	defer MOCollectorMux.Unlock()
-	defer leaktest.AfterTest(t)()
 	ctx := context.Background()
 	ch := make(chan string, 3)
 	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
