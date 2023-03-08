@@ -152,7 +152,7 @@ func (n *anode) RowsWithoutDeletes() uint32 {
 	if n.storage.mnode.data != nil && n.storage.mnode.data.Deletes != nil {
 		deletes = uint32(n.storage.mnode.data.DeleteCnt())
 	}
-	return n.storage.mnode.rows - deletes
+	return uint32(n.storage.mnode.data.Length()) - deletes
 }
 
 func (n *anode) LengthWithDeletes(appended, toAppend uint32) uint32 {
