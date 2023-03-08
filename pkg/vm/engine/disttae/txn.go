@@ -180,7 +180,10 @@ func (txn *Transaction) DumpBatch(force bool) error {
 			old_ctx := txn.proc.Ctx
 			// deal context Cancel error
 			txn.proc.Ctx = context.Background()
-			container.MergeBlock(0, len(mp[key]), txn.proc, false)
+			err = container.MergeBlock(0, len(mp[key]), txn.proc, false)
+			if err != nil {
+				return err
+			}
 			txn.proc.Ctx = old_ctx
 			metaLoc := container.GetMetaLocBat()
 
