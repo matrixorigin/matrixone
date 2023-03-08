@@ -278,7 +278,6 @@ func (n *persistedNode) init() {
 	for i := range schema.ColDefs {
 		index := indexwrapper.NewImmutableIndex()
 		if err := index.ReadFrom(
-			n.bnode.bufMgr,
 			n.bnode.fs,
 			n.bnode.meta.AsCommonID(),
 			n.bnode.meta.GetMetaLoc(),
