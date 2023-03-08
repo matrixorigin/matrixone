@@ -94,42 +94,35 @@ func CnServerMessageHandler(
 		panic("cn server receive a message with unexpected type")
 	}
 
-	fmt.Printf("[CnServerMessageHandler] receive msg typ = %d, status = %d\n", msg.GetCmd(), msg.GetSid())
-	switch msg.GetSid() {
-	case pipeline.WaitingNext:
-		fmt.Printf("[CnServerMessageHandler] handle waiting next msg\n")
-		return handleWaitingNextMsg(ctx, message, cs)
-	case pipeline.Last:
-		fmt.Printf("[CnServerMessageHandler] handle last msg, typ = %d\n", msg.GetCmd())
-		// new a receiver to receive message and write back result.
-		receiver := newMessageReceiverOnServer(ctx, msg,
-			cs, messageAcquirer, storeEngine, fileService, cli)
+	/*
+		fmt.Printf("[CnServerMessageHandler] receive msg typ = %d, status = %d\n", msg.GetCmd(), msg.GetSid())
+		switch msg.GetSid() {
+		case pipeline.WaitingNext:
+			fmt.Printf("[CnServerMessageHandler] handle waiting next msg\n")
+			return handleWaitingNextMsg(ctx, message, cs)
+		case pipeline.Last:
+			fmt.Printf("[CnServerMessageHandler] handle last msg, typ = %d\n", msg.GetCmd())
+			// new a receiver to receive message and write back result.
+			receiver := newMessageReceiverOnServer(ctx, msg,
+				cs, messageAcquirer, storeEngine, fileService, cli)
 
-		// rebuild pipeline to run and send query result back.
-		err := cnMessageHandle(receiver)
-		if err != nil {
-			return receiver.sendError(err)
+			// rebuild pipeline to run and send query result back.
+			err := cnMessageHandle(receiver)
+			if err != nil {
+				return receiver.sendError(err)
+			}
+			return receiver.sendEndMessage()
 		}
-		return receiver.sendEndMessage()
-	}
-	return nil
-}
+	*/
+	receiver := newMessageReceiverOnServer(ctx, msg,
+		cs, messageAcquirer, storeEngine, fileService, cli)
 
-// put the waiting-next type msg into client session's cache and return directly
-func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
-	msg, _ := message.(*pipeline.Message)
-	switch msg.GetCmd() {
-	case pipeline.PipelineMessage:
-		fmt.Printf("[handleWaitingNextMsg] handle pipeline waiting next msg\n")
-		var cache morpc.MessageCache
-		var err error
-		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
-			return err
-		}
-		cache.Add(message)
-		fmt.Printf("[handleWaitingNextMsg] add idx %d to cache success\n", msg.GetSequence())
+	// rebuild pipeline to run and send query result back.
+	err := cnMessageHandle(receiver)
+	if err != nil {
+		return receiver.sendError(err)
 	}
-	return nil
+	return receiver.sendEndMessage()
 }
 
 func fillEngineForInsert(s *Scope, e engine.Engine) {
