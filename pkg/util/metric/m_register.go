@@ -34,9 +34,6 @@ var InitCollectors = []Collector{
 	processCollector,
 	// sys metric
 	hardwareStatsCollector,
-	// file service metrics
-	FsMemCacheReadCounter,
-	FsS3ReadCounter,
 }
 
 type SubSystem struct {

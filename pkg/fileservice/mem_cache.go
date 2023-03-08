@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"sync/atomic"
 )
 
@@ -48,7 +47,6 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
-	metric.FsMemCacheReadCounter.Inc()
 
 	numHit := 0
 	defer func() {

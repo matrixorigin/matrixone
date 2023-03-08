@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"io"
 	"math"
 	stdhttp "net/http"
@@ -372,8 +371,6 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return ctx.Err()
 	default:
 	}
-
-	metric.FsS3ReadCounter.Inc()
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
