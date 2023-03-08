@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -69,6 +70,18 @@ func New(
 		txns:       make(map[string]*Transaction),
 		dnMap:      dnMap,
 		partitions: make(map[[2]uint64]Partitions),
+		packerPool: fileservice.NewPool(
+			128,
+			func() *types.Packer {
+				return types.NewPacker(mp)
+			},
+			func(packer *types.Packer) {
+				packer.Reset()
+			},
+			func(packer *types.Packer) {
+				packer.FreeMem()
+			},
+		),
 	}
 
 	if err := e.init(ctx, mp); err != nil {
