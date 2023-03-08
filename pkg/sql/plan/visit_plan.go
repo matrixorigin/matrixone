@@ -103,12 +103,8 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 			return nil, err
 		}
 		if (oldType.Id == int32(types.T_float32) || oldType.Id == int32(types.T_float64)) && (e.Typ.Id == int32(types.T_decimal64) || e.Typ.Id == int32(types.T_decimal128)) {
-			e, err = forceCastExpr(ctx, e, &plan.Type{
-				Id:          int32(types.T_varchar),
-				NotNullable: true,
-				Size:        4,
-				Width:       65000,
-			})
+			toTyp := types.New(types.T_varchar, 65000, 0)
+			e, err = forceCastExpr(ctx, e, makePlan2Type(&toTyp))
 			if err != nil {
 				return nil, err
 			}
