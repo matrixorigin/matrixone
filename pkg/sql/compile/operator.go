@@ -514,8 +514,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		Ref:      oldCtx.Ref,
 		TableDef: oldCtx.TableDef,
 
-		ParentIdx:    oldCtx.ParentIdx,
-		ClusterTable: oldCtx.ClusterTable,
+		ParentIdx: oldCtx.ParentIdx,
 	}
 
 	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
