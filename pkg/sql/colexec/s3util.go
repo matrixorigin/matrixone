@@ -469,7 +469,7 @@ func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int)
 		if err != nil {
 			return err
 		}
-		container.metaLocBat.Vecs[0].Append(int16(idx), false, proc.GetMPool())
+		container.metaLocBat.Vecs[0].Append(uint16(idx), false, proc.GetMPool())
 		container.metaLocBat.Vecs[1].Append([]byte(metaLoc), false, proc.GetMPool())
 	}
 	// for i := range container.unique_writer {
