@@ -92,7 +92,7 @@ func (sender *messageSenderOnClient) send(
 	scopeData, procData []byte, messageType uint64) error {
 	sdLen := len(scopeData)
 	if sdLen <= maxMessageSizeToMoRpc {
-		fmt.Printf("[seperatesend] send in one\n")
+		fmt.Printf("[pipeline seperatesend] send in one\n")
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
 		_ = cancel
 		message := cnclient.AcquireMessage()
@@ -119,12 +119,12 @@ func (sender *messageSenderOnClient) send(
 		message.SetMessageType(pipeline.PipelineMessage)
 		message.SetSequence(cnt)
 		if isLast {
-			fmt.Printf("[seperatesend] isLast. cnt == %d\n", cnt)
+			fmt.Printf("[pipeline seperatesend] isLast. cnt = %d\n", cnt)
 			message.SetData(scopeData[start:sdLen])
 			message.SetProcData(procData)
 			message.SetSid(pipeline.Last)
 		} else {
-			fmt.Printf("[seperatesend] notLast. cnt == %d\n", cnt)
+			fmt.Printf("[pipeline seperatesend] notLast. cnt = %d\n", cnt)
 			message.SetData(scopeData[start:end])
 			message.SetProcData(nil)
 			message.SetSid(pipeline.WaitingNext)
@@ -231,16 +231,7 @@ func newMessageReceiverOnServer(
 			logutil.Errorf("decode process info from pipeline.Message failed, bytes are %v", m.GetProcInfoData())
 			panic("cn receive a message with wrong process bytes")
 		}
-		//if m.GetSequence() == 0 { // status == Last && sequence == 0 means it is a complete data
-		//receiver.scopeData = m.Data
-		//} else {
-		//completeData, err := getCompleteScopeDate(ctx, receiver.messageId, int(m.GetSequence()), m, cs)
-		//if err != nil {
-		//logutil.Errorf("failed to get complete pipeline data. err = %s", err)
-		//panic("failed to get complete pipeline data")
-		//}
-		//receiver.scopeData = completeData
-		//}
+		receiver.scopeData = m.Data
 
 	default:
 		logutil.Errorf("unknown cmd %d for pipeline.Message", m.GetCmd())
@@ -366,6 +357,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	checksum := crc32.ChecksumIEEE(data)
 	dataLen := len(data)
 	if dataLen <= receiver.maxMessageSize {
+		fmt.Printf("[sendBatch] inonemsg: current seq = %d\n", receiver.sequence)
 		m, errA := receiver.acquireMessage()
 		if errA != nil {
 			return errA
@@ -375,6 +367,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		// XXX too bad.
 		m.SetCheckSum(checksum)
 		m.SetSequence(receiver.sequence)
+		m.SetSid(pipeline.Last)
 		receiver.sequence++
 		return receiver.clientSession.Write(receiver.ctx, m)
 	}
@@ -384,16 +377,17 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		if errA != nil {
 			return errA
 		}
+		fmt.Printf("[sendBatch] seperate: current seq = %d\n", receiver.sequence)
 		end = start + receiver.maxMessageSize
-		if end > dataLen {
+		if end >= dataLen {
 			end = dataLen
 			m.SetSid(pipeline.Last)
+			m.SetCheckSum(checksum)
 		} else {
 			m.SetSid(pipeline.WaitingNext)
 		}
 		m.SetMessageType(pipeline.BatchMessage)
 		m.SetData(data[start:end])
-		m.SetCheckSum(checksum)
 		m.SetSequence(receiver.sequence)
 		receiver.sequence++
 

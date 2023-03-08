@@ -94,26 +94,6 @@ func CnServerMessageHandler(
 		panic("cn server receive a message with unexpected type")
 	}
 
-	/*
-		fmt.Printf("[CnServerMessageHandler] receive msg typ = %d, status = %d\n", msg.GetCmd(), msg.GetSid())
-		switch msg.GetSid() {
-		case pipeline.WaitingNext:
-			fmt.Printf("[CnServerMessageHandler] handle waiting next msg\n")
-			return handleWaitingNextMsg(ctx, message, cs)
-		case pipeline.Last:
-			fmt.Printf("[CnServerMessageHandler] handle last msg, typ = %d\n", msg.GetCmd())
-			// new a receiver to receive message and write back result.
-			receiver := newMessageReceiverOnServer(ctx, msg,
-				cs, messageAcquirer, storeEngine, fileService, cli)
-
-			// rebuild pipeline to run and send query result back.
-			err := cnMessageHandle(receiver)
-			if err != nil {
-				return receiver.sendError(err)
-			}
-			return receiver.sendEndMessage()
-		}
-	*/
 	receiver := newMessageReceiverOnServer(ctx, msg,
 		cs, messageAcquirer, storeEngine, fileService, cli)
 
@@ -191,7 +171,8 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 	var val morpc.Message
 	var err error
 	var dataBuffer []byte
-	var sequence uint64
+	//var sequence uint64
+	sequence := uint64(0)
 	for {
 		val, err = sender.receiveMessage()
 		if err != nil {

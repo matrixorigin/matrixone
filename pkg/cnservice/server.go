@@ -227,8 +227,10 @@ func (s *service) handleRequest(
 		fmt.Printf("[CnServerMessageHandler] handle waiting next msg\n")
 		return handleWaitingNextMsg(ctx, req, cs)
 	case pipeline.Last:
-		if err := handleAssemblePipeline(ctx, req, cs); err != nil {
-			return err
+		if msg.IsPipelineMessage() { // only pipeline type need assemble msg now.
+			if err := handleAssemblePipeline(ctx, req, cs); err != nil {
+				return err
+			}
 		}
 	}
 	go s.requestHandler(ctx,
