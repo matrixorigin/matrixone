@@ -108,8 +108,10 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases 2>&1
+          
       - name: Stop MO Service
         id: test_bvt_stop
+        if: ${{ steps.ut-pr.outputs.paths != '' }}
         run: |
           ps -aux | grep 'mo-service' | grep -v 'grep' | awk '{print $2}' | xargs kill -s SIGINT
           i=1 && while [ -n "$(ps -aux|grep 'mo-service' | grep -v 'grep' | awk '{print $2}')" ] && [ $i -le 300 ]; do echo "mo-service kill not finished......$i/300"; i=$(($i+1)); sleep 1s; done
@@ -129,7 +131,7 @@ jobs:
           awk 'BEGIN{flag=1}{if($4<${{ env.coverage_line }}){flag=0;print("\033[31merror:\033[0m the code coverage of \033[31m"$1"\033[0m is \033[31m"$4"%\033[0m which is below ${{ env.coverage_line }}%");} else { print("\033[32minfo:\033[0m the code coverage of "$1" is "$4"% which is up to ${{ env.coverage_line }}%") }}END{if(flag==0) {exit 1;}}' ${{ env.test_report }}
 
       - name: Package Test Result
-        if: ${{ failure() && steps.test_ut.conclusion != 'failure' && steps.test_bvt_start.conclusion != 'failure' && steps.test_bvt_stop.conclusion != 'failure' }}
+        if: ${{ steps.ut-pr.outputs.paths != '' && failure() && steps.test_ut.conclusion != 'failure' && steps.test_bvt_start.conclusion != 'failure' && steps.test_bvt_stop.conclusion != 'failure' }}
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           echo "======================= Coverage HTML Generate Start ======================="
@@ -147,7 +149,7 @@ jobs:
           rm -rf ${{ env.all_html_coverage }} ${{ env.raw_ut_coverage }} ${{ env.raw_ut_coverage_temp }} ${{ env.test_report }} ${{ env.raw_bvt_coverage_temp }} ${{ env.raw_bvt_coverage }} ${{ env.all_coverage }} ${{ env.ut_html_coverage }} ${{ env.bvt_html_coverage }} 'mo-service.log'
 
       - uses: actions/upload-artifact@v3
-        if: ${{ failure() && steps.test_ut.conclusion != 'failure' && steps.test_bvt_start.conclusion != 'failure' && steps.test_bvt_stop.conclusion != 'failure' }}
+        if: ${{ steps.ut-pr.outputs.paths != '' && failure() && steps.test_ut.conclusion != 'failure' && steps.test_bvt_start.conclusion != 'failure' && steps.test_bvt_stop.conclusion != 'failure' }}
         continue-on-error: true
         with:
           name: code_coverage_reports_${{ github.event.pull_request.number}}_${{ github.run_id }}.zip
