@@ -293,11 +293,11 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		if err != nil {
 			return nil, err
 		}
-		return getValueFromVector(vec, ses)
+		return getValueFromVector(vec, ses, planExpr)
 	}
 }
 
-func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
+func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (interface{}, error) {
 	if nulls.Any(vec.Nsp) {
 		return nil, nil
 	}
@@ -329,10 +329,10 @@ func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 		return vec.GetString(0), nil
 	case types.T_decimal64:
 		val := vector.GetValueAt[types.Decimal64](vec, 0)
-		return val.String(), nil
+		return plan2.MakePlan2Decimal64ExprWithType(val, plan2.DeepCopyTyp(expr.Typ)), nil
 	case types.T_decimal128:
 		val := vector.GetValueAt[types.Decimal128](vec, 0)
-		return val.String(), nil
+		return plan2.MakePlan2Decimal128ExprWithType(val, plan2.DeepCopyTyp(expr.Typ)), nil
 	case types.T_json:
 		val := vec.GetBytes(0)
 		byteJson := types.DecodeJson(val)

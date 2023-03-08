@@ -1321,7 +1321,10 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
 	sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
 	sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
-	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
+	sqlForCheckTenant, err := getSqlForCheckTenant(sysTenantCtx, tenant.GetTenant())
+	if err != nil {
+		return nil, err
+	}
 	pu := ses.GetParameterUnit()
 	mp := ses.GetMemPool()
 	logDebugf(sessionProfile, "check tenant %s exists", tenant)
@@ -1357,7 +1360,10 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	logDebugf(sessionProfile, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
-	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
+	sqlForPasswordOfUser, err := getSqlForPasswordOfUser(tenantCtx, tenant.GetUser())
+	if err != nil {
+		return nil, err
+	}
 	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser, ses.GetAutoIncrCaches())
 	if err != nil {
 		return nil, err
@@ -1400,7 +1406,10 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	if tenant.HasDefaultRole() {
 		logDebugf(sessionProfile, "check default role of user %s.", tenant)
 		//step4 : check role exists or not
-		sqlForCheckRoleExists := getSqlForRoleIdOfRole(tenant.GetDefaultRole())
+		sqlForCheckRoleExists, err := getSqlForRoleIdOfRole(tenantCtx, tenant.GetDefaultRole())
+		if err != nil {
+			return nil, err
+		}
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists, ses.GetAutoIncrCaches())
 		if err != nil {
 			return nil, err
@@ -1412,7 +1421,10 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 		logDebugf(sessionProfile, "check granted role of user %s.", tenant)
 		//step4.2 : check the role has been granted to the user or not
-		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
+		sqlForRoleOfUser, err := getSqlForRoleOfUser(tenantCtx, userID, tenant.GetDefaultRole())
+		if err != nil {
+			return nil, err
+		}
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser, ses.GetAutoIncrCaches())
 		if err != nil {
 			return nil, err
@@ -1960,6 +1972,10 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (strin
 		goto handleFailed
 	}
 
+	err = inputNameIsInvalid(ctx, name)
+	if err != nil {
+		goto handleFailed
+	}
 	sql = fmt.Sprintf(`select args, body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
@@ -2234,7 +2250,10 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) ([]uint3
 	}
 
 	for name := range dedup {
-		sql = getSqlForCheckTenant(name)
+		sql, err = getSqlForCheckTenant(ctx, name)
+		if err != nil {
+			goto handleFailed
+		}
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {

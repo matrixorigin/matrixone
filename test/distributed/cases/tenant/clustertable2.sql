@@ -18,7 +18,9 @@ drop table if exists a;
 create cluster table a(a int);
 
 -- insert into cluster table
-insert into a accounts(sys,account_test) values(0),(1),(2),(3);
+insert into a values(0,0),(1,0),(2,0),(3,0);
+insert into a values(0,1),(1,1),(2,1),(3,1);
+update a set account_id=(select account_id from mo_account where account_name="account_test") where account_id=1;
 select a from a;
 
 -- check it in the non-sys account
@@ -37,8 +39,9 @@ select * from a;
 -- @session
 
 -- insert into cluster table
-insert into a accounts(sys,account_test) select b from db1.b;
-
+insert into a select b,0 from db1.b;
+insert into a select b,1 from db1.b;
+update a set account_id=(select account_id from mo_account where account_name="account_test") where account_id=1;
 select a from a;
 
 -- check it in the non-sys account
@@ -50,7 +53,8 @@ select * from a;
 delete from a;
 
 -- load into cluster table
-load data infile '$resources/load_data/cluster_table1.csv' into table a accounts(sys,account_test) (a);
+load data infile '$resources/load_data/cluster_table1.csv' into table a;
+update a set account_id=(select account_id from mo_account where account_name="account_test") where account_id=1;
 select a from a;
 
 -- check it in the non-sys account
@@ -60,11 +64,6 @@ select * from a;
 -- @session
 
 delete from a;
-
--- insert into account_id
-insert into a(account_id) values (0),(1),(2),(3);
-insert into a(account_id) select b from db1.b;
-load data infile '$resources/load_data/cluster_table1.csv' into table a (account_id);
 
 -- check it in the non-sys account
 -- @session:id=2&user=account_test:root&password=111

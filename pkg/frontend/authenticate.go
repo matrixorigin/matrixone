@@ -1166,6 +1166,16 @@ const (
 	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
 
 	deleteMysqlCompatbilityModeForAccountFormat = `delete from mo_catalog.mo_mysql_compatbility_mode where account_name = "%s";`
+
+	getDbName = `select datname from mo_catalog.mo_database where datname = "%s";`
+
+	updateConfigurationByDbNameAndAccountName = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s" and dat_name = "%s";`
+
+	getAccountNameFromCompatbility = `select account_name from mo_catalog.mo_mysql_compatbility_mode where account_name = "%s";`
+
+	updateConfigurationByAccountName = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s";`
+
+	getConfiguationByDbName = `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
 )
 
 var (
@@ -1196,44 +1206,120 @@ var (
 	}
 )
 
-func getSqlForCheckTenant(tenant string) string {
-	return fmt.Sprintf(checkTenantFormat, tenant)
+func getSqlForGetConfiguationByDbName(ctx context.Context, path string, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getConfiguationByDbName, path, dbName), nil
 }
 
-func getSqlForUpdateCommentsOfAccount(comment, account string) string {
-	return fmt.Sprintf(updateCommentsOfAccountFormat, comment, account)
+func getSqlForGetAccountNameFromCompatbility(ctx context.Context, accountName string) (string, error) {
+	err := inputNameIsInvalid(ctx, accountName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getAccountNameFromCompatbility, accountName), nil
 }
 
-func getSqlForUpdateStatusOfAccount(status, timestamp, account string) string {
-	return fmt.Sprintf(updateStatusOfAccountFormat, status, timestamp, account)
+func getSqlForGetDbName(ctx context.Context, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getDbName, dbName), nil
 }
 
-func getSqlForDeleteAccountFromMoAccount(account string) string {
-	return fmt.Sprintf(deleteAccountFromMoAccountFormat, account)
+func getSqlForUpdateConfigurationByAccountName(ctx context.Context, update_config, accountName string) (string, error) {
+	err := inputNameIsInvalid(ctx, accountName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateConfigurationByAccountName, update_config, accountName), nil
 }
 
-func getSqlForPasswordOfUser(user string) string {
-	return fmt.Sprintf(getPasswordOfUserFormat, user)
+func getSqlForUpdateConfigurationByDbNameAndAccountName(ctx context.Context, update_config, accountName, datname string) (string, error) {
+	err := inputNameIsInvalid(ctx, accountName, datname)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateConfigurationByDbNameAndAccountName, update_config, accountName, datname), nil
 }
 
-func getSqlForUpdatePasswordOfUser(password, user string) string {
-	return fmt.Sprintf(updatePasswordOfUserFormat, password, user)
+func getSqlForCheckTenant(ctx context.Context, tenant string) (string, error) {
+	err := inputNameIsInvalid(ctx, tenant)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkTenantFormat, tenant), nil
 }
 
-func getSqlForCheckRoleExists(roleID int, roleName string) string {
-	return fmt.Sprintf(checkRoleExistsFormat, roleID, roleName)
+func getSqlForUpdateCommentsOfAccount(ctx context.Context, comment, account string) (string, error) {
+	err := inputNameIsInvalid(ctx, account)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateCommentsOfAccountFormat, comment, account), nil
+}
+
+func getSqlForUpdateStatusOfAccount(ctx context.Context, status, timestamp, account string) (string, error) {
+	err := inputNameIsInvalid(ctx, status, account)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateStatusOfAccountFormat, status, timestamp, account), nil
+}
+
+func getSqlForDeleteAccountFromMoAccount(ctx context.Context, account string) (string, error) {
+	err := inputNameIsInvalid(ctx, account)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(deleteAccountFromMoAccountFormat, account), nil
+}
+
+func getSqlForPasswordOfUser(ctx context.Context, user string) (string, error) {
+	err := inputNameIsInvalid(ctx, user)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getPasswordOfUserFormat, user), nil
+}
+
+func getSqlForUpdatePasswordOfUser(ctx context.Context, password, user string) (string, error) {
+	err := inputNameIsInvalid(ctx, user)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updatePasswordOfUserFormat, password, user), nil
+}
+
+func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
+	err := inputNameIsInvalid(ctx, roleName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkRoleExistsFormat, roleID, roleName), nil
 }
 
 func getSqlForRoleNameOfRoleId(roleId int64) string {
 	return fmt.Sprintf(roleNameOfRoleIdFormat, roleId)
 }
 
-func getSqlForRoleIdOfRole(roleName string) string {
-	return fmt.Sprintf(roleIdOfRoleFormat, roleName)
+func getSqlForRoleIdOfRole(ctx context.Context, roleName string) (string, error) {
+	err := inputNameIsInvalid(ctx, roleName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(roleIdOfRoleFormat, roleName), nil
 }
 
-func getSqlForRoleOfUser(userID int64, roleName string) string {
-	return fmt.Sprintf(getRoleOfUserFormat, userID, roleName)
+func getSqlForRoleOfUser(ctx context.Context, userID int64, roleName string) (string, error) {
+	err := inputNameIsInvalid(ctx, roleName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getRoleOfUserFormat, userID, roleName), nil
 }
 
 func getSqlForRoleIdOfUserId(userId int) string {
@@ -1244,8 +1330,12 @@ func getSqlForCheckUserGrant(roleId, userId int64) string {
 	return fmt.Sprintf(checkUserGrantFormat, roleId, userId)
 }
 
-func getSqlForCheckUserHasRole(userName string, roleId int64) string {
-	return fmt.Sprintf(checkUserHasRoleFormat, userName, roleId)
+func getSqlForCheckUserHasRole(ctx context.Context, userName string, roleId int64) (string, error) {
+	err := inputNameIsInvalid(ctx, userName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkUserHasRoleFormat, userName, roleId), nil
 }
 
 func getSqlForCheckUserGrantWGO(roleId, userId int64) string {
@@ -1316,12 +1406,20 @@ func getSqlForCheckWithGrantOptionForTableStarStar(roleId int64, privId Privileg
 	return fmt.Sprintf(checkWithGrantOptionForTableStarStar, objectTypeTable, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckWithGrantOptionForTableDatabaseStar(roleId int64, privId PrivilegeType, dbName string) string {
-	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, objectTypeTable, roleId, privId, privilegeLevelDatabaseStar, dbName)
+func getSqlForCheckWithGrantOptionForTableDatabaseStar(ctx context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, objectTypeTable, roleId, privId, privilegeLevelDatabaseStar, dbName), nil
 }
 
-func getSqlForCheckWithGrantOptionForTableDatabaseTable(roleId int64, privId PrivilegeType, dbName string, tableName string) string {
-	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, objectTypeTable, roleId, privId, privilegeLevelDatabaseTable, dbName, tableName)
+func getSqlForCheckWithGrantOptionForTableDatabaseTable(ctx context.Context, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName, tableName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, objectTypeTable, roleId, privId, privilegeLevelDatabaseTable, dbName, tableName), nil
 }
 
 func getSqlForCheckWithGrantOptionForDatabaseStar(roleId int64, privId PrivilegeType) string {
@@ -1332,20 +1430,32 @@ func getSqlForCheckWithGrantOptionForDatabaseStarStar(roleId int64, privId Privi
 	return fmt.Sprintf(checkWithGrantOptionForDatabaseStarStar, objectTypeDatabase, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckWithGrantOptionForDatabaseDB(roleId int64, privId PrivilegeType, dbName string) string {
-	return fmt.Sprintf(checkWithGrantOptionForDatabaseDB, objectTypeDatabase, roleId, privId, privilegeLevelDatabase, dbName)
+func getSqlForCheckWithGrantOptionForDatabaseDB(ctx context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkWithGrantOptionForDatabaseDB, objectTypeDatabase, roleId, privId, privilegeLevelDatabase, dbName), nil
 }
 
 func getSqlForCheckWithGrantOptionForAccountStar(roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkWithGrantOptionForAccountStar, objectTypeAccount, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckRoleHasTableLevelPrivilege(roleId int64, privId PrivilegeType, dbName string, tableName string) string {
-	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, objectTypeTable, roleId, privId, privilegeLevelDatabaseTable, privilegeLevelTable, dbName, tableName)
+func getSqlForCheckRoleHasTableLevelPrivilege(ctx context.Context, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName, tableName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, objectTypeTable, roleId, privId, privilegeLevelDatabaseTable, privilegeLevelTable, dbName, tableName), nil
 }
 
-func getSqlForCheckRoleHasTableLevelForDatabaseStar(roleId int64, privId PrivilegeType, dbName string) string {
-	return fmt.Sprintf(checkRoleHasTableLevelForDatabaseStarFormat, objectTypeTable, roleId, privId, privilegeLevelDatabaseStar, privilegeLevelStar, dbName)
+func getSqlForCheckRoleHasTableLevelForDatabaseStar(ctx context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkRoleHasTableLevelForDatabaseStarFormat, objectTypeTable, roleId, privId, privilegeLevelDatabaseStar, privilegeLevelStar, dbName), nil
 }
 
 func getSqlForCheckRoleHasTableLevelForStarStar(roleId int64, privId PrivilegeType) string {
@@ -1356,20 +1466,32 @@ func getSqlForCheckRoleHasDatabaseLevelForStarStar(roleId int64, privId Privileg
 	return fmt.Sprintf(checkRoleHasDatabaseLevelForStarStarFormat, objectTypeDatabase, roleId, privId, level)
 }
 
-func getSqlForCheckRoleHasDatabaseLevelForDatabase(roleId int64, privId PrivilegeType, dbName string) string {
-	return fmt.Sprintf(checkRoleHasDatabaseLevelForDatabaseFormat, objectTypeDatabase, roleId, privId, privilegeLevelDatabase, dbName)
+func getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkRoleHasDatabaseLevelForDatabaseFormat, objectTypeDatabase, roleId, privId, privilegeLevelDatabase, dbName), nil
 }
 
 func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privId, privilegeLevelStar)
 }
 
-func getSqlForCheckDatabase(dbName string) string {
-	return fmt.Sprintf(checkDatabaseFormat, dbName)
+func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkDatabaseFormat, dbName), nil
 }
 
-func getSqlForCheckDatabaseTable(dbName, tableName string) string {
-	return fmt.Sprintf(checkDatabaseTableFormat, dbName, tableName)
+func getSqlForCheckDatabaseTable(ctx context.Context, dbName, tableName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName, tableName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkDatabaseTableFormat, dbName, tableName), nil
 }
 
 func getSqlForDeleteRole(roleId int64) []string {
@@ -1396,8 +1518,12 @@ func getSqlForDeleteMysqlCompatbilityMode(dtname string) string {
 	return fmt.Sprintf(deleteMysqlCompatbilityModeFormat, dtname)
 }
 
-func getSqlForDeleteMysqlCompatbilityModeForAccount(account_name string) string {
-	return fmt.Sprintf(deleteMysqlCompatbilityModeForAccountFormat, account_name)
+func getSqlForDeleteMysqlCompatbilityModeForAccount(ctx context.Context, account_name string) (string, error) {
+	err := inputNameIsInvalid(ctx, account_name)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(deleteMysqlCompatbilityModeForAccountFormat, account_name), nil
 }
 
 // isClusterTable decides a table is the index table or not
@@ -1812,9 +1938,12 @@ func userIsAdministrator(ctx context.Context, bh BackgroundExec, userId int64, a
 	var erArray []ExecResult
 	var sql string
 	if account.IsSysTenant() {
-		sql = getSqlForRoleOfUser(userId, moAdminRoleName)
+		sql, err = getSqlForRoleOfUser(ctx, userId, moAdminRoleName)
 	} else {
-		sql = getSqlForRoleOfUser(userId, accountAdminRoleName)
+		sql, err = getSqlForRoleOfUser(ctx, userId, accountAdminRoleName)
+	}
+	if err != nil {
+		return false, err
 	}
 
 	bh.ClearExecResultSet()
@@ -1918,6 +2047,17 @@ func (g *graph) hasLoop(start int64) bool {
 	}
 
 	return !g.toposort(start, visited)
+}
+
+func inputNameIsInvalid(ctx context.Context, inputs ...string) error {
+	for _, input := range inputs {
+		for _, t := range input {
+			if t == ' ' || t == '\t' || t == '`' || t == '"' || t == '\'' {
+				return moerr.NewInternalError(ctx, `invalid input`)
+			}
+		}
+	}
+	return nil
 }
 
 // nameIsInvalid checks the name of user/role is valid or not
@@ -2067,7 +2207,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 
 	//step 1: check account exists or not
 	//get accountID
-	sql = getSqlForCheckTenant(aa.Name)
+	sql, err = getSqlForCheckTenant(ctx, aa.Name)
+	if err != nil {
+		goto handleFailed
+	}
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
@@ -2104,7 +2247,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 			accountCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(targetAccountId))
 
 			//1, check the admin exists or not
-			sql = getSqlForPasswordOfUser(aa.AuthOption.AdminName)
+			sql, err = getSqlForPasswordOfUser(ctx, aa.AuthOption.AdminName)
+			if err != nil {
+				goto handleFailed
+			}
 			bh.ClearExecResultSet()
 			err = bh.Exec(accountCtx, sql)
 			if err != nil {
@@ -2122,7 +2268,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 			}
 
 			//2, update the password
-			sql = getSqlForUpdatePasswordOfUser(aa.AuthOption.IdentifiedType.Str, aa.AuthOption.AdminName)
+			sql, err = getSqlForUpdatePasswordOfUser(ctx, aa.AuthOption.IdentifiedType.Str, aa.AuthOption.AdminName)
+			if err != nil {
+				goto handleFailed
+			}
 			bh.ClearExecResultSet()
 			err = bh.Exec(accountCtx, sql)
 			if err != nil {
@@ -2132,7 +2281,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 
 		//Option 2: alter the comment of the account
 		if aa.Comment.Exist {
-			sql = getSqlForUpdateCommentsOfAccount(aa.Comment.Comment, aa.Name)
+			sql, err = getSqlForUpdateCommentsOfAccount(ctx, aa.Comment.Comment, aa.Name)
+			if err != nil {
+				goto handleFailed
+			}
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sql)
 			if err != nil {
@@ -2142,7 +2294,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) er
 
 		//Option 3: suspend or resume the account
 		if aa.StatusOption.Exist {
-			sql = getSqlForUpdateStatusOfAccount(aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name)
+			sql, err = getSqlForUpdateStatusOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name)
+			if err != nil {
+				goto handleFailed
+			}
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sql)
 			if err != nil {
@@ -2197,7 +2352,10 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 			goto handleFailed
 		}
 
-		sql = getSqlForRoleIdOfRole(sr.Role.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, sr.Role.UserName)
+		if err != nil {
+			goto handleFailed
+		}
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -2289,7 +2447,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	}
 
 	//check the account exists or not
-	sql = getSqlForCheckTenant(da.Name)
+	sql, err = getSqlForCheckTenant(ctx, da.Name)
+	if err != nil {
+		goto handleFailed
+	}
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
@@ -2388,7 +2549,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	}
 
 	//step 1 : delete the account in the mo_account of the sys account
-	sql = getSqlForDeleteAccountFromMoAccount(da.Name)
+	sql, err = getSqlForDeleteAccountFromMoAccount(ctx, da.Name)
+	if err != nil {
+		goto handleFailed
+	}
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
@@ -2429,7 +2593,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	}
 
 	//step4: delete data of mo_mysql_comaptbility_mode table
-	sql = getSqlForDeleteMysqlCompatbilityModeForAccount(da.Name)
+	sql, err = getSqlForDeleteMysqlCompatbilityModeForAccount(ctx, da.Name)
+	if err != nil {
+		goto handleFailed
+	}
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
@@ -2475,7 +2642,10 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
 	//step1: check users exists or not.
 	//handle "IF EXISTS"
 	for _, user := range du.Users {
-		sql = getSqlForPasswordOfUser(user.Username)
+		sql, err = getSqlForPasswordOfUser(ctx, user.Username)
+		if err != nil {
+			goto handleFailed
+		}
 		vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, roleType)
 		if err != nil {
 			goto handleFailed
@@ -2495,9 +2665,12 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
 		//if the user is admin user with the role moadmin or accountadmin,
 		//the user can not be deleted.
 		if account.IsSysTenant() {
-			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			sql, err = getSqlForCheckUserHasRole(ctx, user.Username, moAdminRoleID)
 		} else {
-			sql = getSqlForCheckUserHasRole(user.Username, accountAdminRoleID)
+			sql, err = getSqlForCheckUserHasRole(ctx, user.Username, accountAdminRoleID)
+		}
+		if err != nil {
+			goto handleFailed
 		}
 
 		bh.ClearExecResultSet()
@@ -2548,6 +2721,7 @@ handleFailed:
 func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	var err error
 	var vr *verifiedRole
+	var sql string
 	account := ses.GetTenantInfo()
 	err = normalizeNamesOfRoles(ctx, dr.Roles)
 	if err != nil {
@@ -2566,7 +2740,10 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	//step1: check roles exists or not.
 	//handle "IF EXISTS"
 	for _, role := range dr.Roles {
-		sql := getSqlForRoleIdOfRole(role.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
+		if err != nil {
+			goto handleFailed
+		}
 		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
 		if err != nil {
 			goto handleFailed
@@ -2728,6 +2905,7 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 	var privLevel privilegeLevelType
 	var objId int64
 	var privType PrivilegeType
+	var sql string
 	err = normalizeNamesOfRoles(ctx, rp.Roles)
 	if err != nil {
 		return err
@@ -2754,7 +2932,10 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 			err = moerr.NewInternalError(ctx, "the privilege can not be revoked from the role %s", user.UserName)
 			goto handleFailed
 		}
-		sql := getSqlForRoleIdOfRole(user.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, user.UserName)
+		if err != nil {
+			goto handleFailed
+		}
 		vr, err = verifyRoleFunc(ctx, bh, sql, user.UserName, roleType)
 		if err != nil {
 			goto handleFailed
@@ -2836,9 +3017,12 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 	var erArray []ExecResult
 	var id int64
 	if isDb {
-		sql = getSqlForCheckDatabase(dbName)
+		sql, err = getSqlForCheckDatabase(ctx, dbName)
 	} else {
-		sql = getSqlForCheckDatabaseTable(dbName, tableName)
+		sql, err = getSqlForCheckDatabaseTable(ctx, dbName, tableName)
+	}
+	if err != nil {
+		return 0, err
 	}
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
@@ -3002,6 +3186,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	var objType objectType
 	var privLevel privilegeLevelType
 	var objId int64
+	var sql string
 
 	err = normalizeNamesOfRoles(ctx, gp.Roles)
 	if err != nil {
@@ -3029,7 +3214,10 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 			err = moerr.NewInternalError(ctx, "the privilege can not be granted to the role %s", role.UserName)
 			goto handleFailed
 		}
-		sql := getSqlForRoleIdOfRole(role.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
+		if err != nil {
+			goto handleFailed
+		}
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -3160,6 +3348,7 @@ handleFailed:
 // doRevokeRole accomplishes the RevokeRole statement
 func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error {
 	var err error
+	var sql string
 	err = normalizeNamesOfRoles(ctx, rr.Roles)
 	if err != nil {
 		return err
@@ -3188,7 +3377,10 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 	//handle "IF EXISTS"
 	//step1 : check Users are real Users or Roles,  exists or not
 	for i, user := range rr.Users {
-		sql := getSqlForRoleIdOfRole(user.Username)
+		sql, err = getSqlForRoleIdOfRole(ctx, user.Username)
+		if err != nil {
+			goto handleFailed
+		}
 		vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, roleType)
 		if err != nil {
 			goto handleFailed
@@ -3197,7 +3389,10 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 			verifiedToRoles[i] = vr
 		} else {
 			//check user
-			sql = getSqlForPasswordOfUser(user.Username)
+			sql, err = getSqlForPasswordOfUser(ctx, user.Username)
+			if err != nil {
+				goto handleFailed
+			}
 			vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, userType)
 			if err != nil {
 				goto handleFailed
@@ -3215,7 +3410,10 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 	//handle "IF EXISTS"
 	//step2 : check roles before the FROM clause
 	for i, role := range rr.Roles {
-		sql := getSqlForRoleIdOfRole(role.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
+		if err != nil {
+			goto handleFailed
+		}
 		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
 		if err != nil {
 			goto handleFailed
@@ -3329,6 +3527,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	var erArray []ExecResult
 	var err error
 	var withGrantOption int64
+	var sql string
 	err = normalizeNamesOfRoles(ctx, gr.Roles)
 	if err != nil {
 		return err
@@ -3361,7 +3560,10 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	}
 
 	for i, role := range gr.Roles {
-		sql := getSqlForRoleIdOfRole(role.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
+		if err != nil {
+			goto handleFailed
+		}
 		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
 		if err != nil {
 			goto handleFailed
@@ -3375,7 +3577,10 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 
 	//step2 : check Users are real Users or Roles,  exists or not
 	for i, user := range gr.Users {
-		sql := getSqlForRoleIdOfRole(user.Username)
+		sql, err = getSqlForRoleIdOfRole(ctx, user.Username)
+		if err != nil {
+			goto handleFailed
+		}
 		vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, roleType)
 		if err != nil {
 			goto handleFailed
@@ -3384,7 +3589,10 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 			verifiedToRoles[i] = vr
 		} else {
 			//check user exists or not
-			sql = getSqlForPasswordOfUser(user.Username)
+			sql, err = getSqlForPasswordOfUser(ctx, user.Username)
+			if err != nil {
+				goto handleFailed
+			}
 			vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, userType)
 			if err != nil {
 				goto handleFailed
@@ -4004,15 +4212,16 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 
 // getSqlFromPrivilegeEntry generates the query sql for the privilege entry
 func getSqlFromPrivilegeEntry(ctx context.Context, roleId int64, entry privilegeEntry) (string, error) {
+	var err error
 	var sql string
 	//for object type table, need concrete tableid
 	//TODO: table level check should be done after getting the plan
 	if entry.objType == objectTypeTable {
 		switch entry.privilegeLevel {
 		case privilegeLevelDatabaseTable, privilegeLevelTable:
-			sql = getSqlForCheckRoleHasTableLevelPrivilege(roleId, entry.privilegeId, entry.databaseName, entry.tableName)
+			sql, err = getSqlForCheckRoleHasTableLevelPrivilege(ctx, roleId, entry.privilegeId, entry.databaseName, entry.tableName)
 		case privilegeLevelDatabaseStar, privilegeLevelStar:
-			sql = getSqlForCheckRoleHasTableLevelForDatabaseStar(roleId, entry.privilegeId, entry.databaseName)
+			sql, err = getSqlForCheckRoleHasTableLevelForDatabaseStar(ctx, roleId, entry.privilegeId, entry.databaseName)
 		case privilegeLevelStarStar:
 			sql = getSqlForCheckRoleHasTableLevelForStarStar(roleId, entry.privilegeId)
 		default:
@@ -4023,7 +4232,7 @@ func getSqlFromPrivilegeEntry(ctx context.Context, roleId int64, entry privilege
 		case privilegeLevelStar, privilegeLevelStarStar:
 			sql = getSqlForCheckRoleHasDatabaseLevelForStarStar(roleId, entry.privilegeId, entry.privilegeLevel)
 		case privilegeLevelDatabase:
-			sql = getSqlForCheckRoleHasDatabaseLevelForDatabase(roleId, entry.privilegeId, entry.databaseName)
+			sql, err = getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx, roleId, entry.privilegeId, entry.databaseName)
 		default:
 			return "", moerr.NewInternalError(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
 		}
@@ -4037,7 +4246,7 @@ func getSqlFromPrivilegeEntry(ctx context.Context, roleId int64, entry privilege
 	} else {
 		sql = getSqlForCheckRoleHasPrivilege(roleId, entry.objType, int64(entry.objId), int64(entry.privilegeId))
 	}
-	return sql, nil
+	return sql, err
 }
 
 // getPrivilegeLevelsOfObjectType gets the privilege levels of the objectType
@@ -4051,14 +4260,15 @@ func getPrivilegeLevelsOfObjectType(ctx context.Context, objType objectType) ([]
 // getSqlForPrivilege generates the query sql for the privilege entry
 func getSqlForPrivilege(ctx context.Context, roleId int64, entry privilegeEntry, pl privilegeLevelType) (string, error) {
 	var sql string
+	var err error
 	//for object type table, need concrete tableid
 	switch entry.objType {
 	case objectTypeTable:
 		switch pl {
 		case privilegeLevelDatabaseTable, privilegeLevelTable:
-			sql = getSqlForCheckRoleHasTableLevelPrivilege(roleId, entry.privilegeId, entry.databaseName, entry.tableName)
+			sql, err = getSqlForCheckRoleHasTableLevelPrivilege(ctx, roleId, entry.privilegeId, entry.databaseName, entry.tableName)
 		case privilegeLevelDatabaseStar, privilegeLevelStar:
-			sql = getSqlForCheckRoleHasTableLevelForDatabaseStar(roleId, entry.privilegeId, entry.databaseName)
+			sql, err = getSqlForCheckRoleHasTableLevelForDatabaseStar(ctx, roleId, entry.privilegeId, entry.databaseName)
 		case privilegeLevelStarStar:
 			sql = getSqlForCheckRoleHasTableLevelForStarStar(roleId, entry.privilegeId)
 		default:
@@ -4069,7 +4279,7 @@ func getSqlForPrivilege(ctx context.Context, roleId int64, entry privilegeEntry,
 		case privilegeLevelStar, privilegeLevelStarStar:
 			sql = getSqlForCheckRoleHasDatabaseLevelForStarStar(roleId, entry.privilegeId, pl)
 		case privilegeLevelDatabase:
-			sql = getSqlForCheckRoleHasDatabaseLevelForDatabase(roleId, entry.privilegeId, entry.databaseName)
+			sql, err = getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx, roleId, entry.privilegeId, entry.databaseName)
 		default:
 			return "", moerr.NewInternalError(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
 		}
@@ -4084,7 +4294,7 @@ func getSqlForPrivilege(ctx context.Context, roleId int64, entry privilegeEntry,
 		sql = getSqlForCheckRoleHasPrivilege(roleId, entry.objType, int64(entry.objId), int64(entry.privilegeId))
 	}
 
-	return sql, nil
+	return sql, err
 }
 
 // getSqlForPrivilege2 complements the database name and calls getSqlForPrivilege
@@ -4487,7 +4697,10 @@ func determineUserCanGrantRolesToOthersInternal(ctx context.Context, bh Backgrou
 	roleSetOfCurrentUser.Insert(int64(account.GetDefaultRoleID()))
 
 	for i, role := range fromRoles {
-		sql = getSqlForRoleIdOfRole(role.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
+		if err != nil {
+			goto handleFailed
+		}
 		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
 		if err != nil {
 			goto handleFailed
@@ -4737,15 +4950,15 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 	case tree.OBJECT_TYPE_TABLE:
 		switch gp.Level.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
-			sql = getSqlForCheckWithGrantOptionForTableDatabaseStar(int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName())
+			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseStar(ctx, int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName())
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
 			sql = getSqlForCheckWithGrantOptionForTableStarStar(int64(tenant.GetDefaultRoleID()), privType)
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR:
-			sql = getSqlForCheckWithGrantOptionForTableDatabaseStar(int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
+			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseStar(ctx, int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
-			sql = getSqlForCheckWithGrantOptionForTableDatabaseTable(int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName, gp.Level.TabName)
+			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseTable(ctx, int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName, gp.Level.TabName)
 		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
-			sql = getSqlForCheckWithGrantOptionForTableDatabaseTable(int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName(), gp.Level.TabName)
+			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseTable(ctx, int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName(), gp.Level.TabName)
 		default:
 			return "", moerr.NewInternalError(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 		}
@@ -4757,9 +4970,9 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 			sql = getSqlForCheckWithGrantOptionForDatabaseStarStar(int64(tenant.GetDefaultRoleID()), privType)
 		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
 			//in the syntax, we can not distinguish the table name from the database name.
-			sql = getSqlForCheckWithGrantOptionForDatabaseDB(int64(tenant.GetDefaultRoleID()), privType, gp.Level.TabName)
+			sql, err = getSqlForCheckWithGrantOptionForDatabaseDB(ctx, int64(tenant.GetDefaultRoleID()), privType, gp.Level.TabName)
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
-			sql = getSqlForCheckWithGrantOptionForDatabaseDB(int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
+			sql, err = getSqlForCheckWithGrantOptionForDatabaseDB(ctx, int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
 		default:
 			return "", moerr.NewInternalError(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 		}
@@ -4773,7 +4986,7 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 	default:
 		return "", moerr.NewInternalError(ctx, "object type %v is unsupported", gp.ObjType)
 	}
-	return sql, nil
+	return sql, err
 }
 
 // getRoleSetThatPrivilegeGrantedToWGO gets all roles that the privilege granted to with with_grant_option = true
@@ -5328,7 +5541,10 @@ func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName str
 	var err error
 	ctx, span := trace.Debug(ctx, "checkTenantExistsOrNot")
 	defer span.End()
-	sqlForCheckTenant = getSqlForCheckTenant(userName)
+	sqlForCheckTenant, err = getSqlForCheckTenant(ctx, userName)
+	if err != nil {
+		return false, err
+	}
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sqlForCheckTenant)
 	if err != nil {
@@ -5469,6 +5685,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	var comment = ""
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
+	var sql string
 	//var configuration string
 	//var sql string
 	ctx, span := trace.Debug(ctx, "createTablesInMoCatalogOfGeneralTenant")
@@ -5500,7 +5717,11 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 
 	//query the tenant id
 	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, getSqlForCheckTenant(ca.Name))
+	sql, err = getSqlForCheckTenant(ctx, ca.Name)
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
 	}
@@ -5710,7 +5931,10 @@ func checkUserExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantN
 	}
 	defer mpool.DeleteMPool(mp)
 
-	sqlForCheckUser := getSqlForPasswordOfUser(tenantName)
+	sqlForCheckUser, err := getSqlForPasswordOfUser(ctx, tenantName)
+	if err != nil {
+		return false, err
+	}
 
 	// A mock autoIncrCaches
 	aic := defines.AutoIncrCaches{}
@@ -5735,6 +5959,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 	var host string
 	var newRoleId int64
 	var status string
+	var sql string
 
 	err = normalizeNamesOfUsers(ctx, cu.Users)
 	if err != nil {
@@ -5765,9 +5990,12 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 	//TODO: get role and the id of role
 	newRoleId = publicRoleID
 	if cu.Role != nil {
-		sqlForRoleIdOfRole := getSqlForRoleIdOfRole(cu.Role.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, cu.Role.UserName)
+		if err != nil {
+			goto handleFailed
+		}
 		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sqlForRoleIdOfRole)
+		err = bh.Exec(ctx, sql)
 		if err != nil {
 			goto handleFailed
 		}
@@ -5811,7 +6039,10 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 
 	for _, user := range cu.Users {
 		//dedup with user
-		sql := getSqlForPasswordOfUser(user.Username)
+		sql, err = getSqlForPasswordOfUser(ctx, user.Username)
+		if err != nil {
+			goto handleFailed
+		}
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -5829,9 +6060,12 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 
 		//dedup with the role
 		if exists == 0 {
-			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(user.Username)
+			sql, err = getSqlForRoleIdOfRole(ctx, user.Username)
+			if err != nil {
+				goto handleFailed
+			}
 			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sqlForRoleIdOfRole)
+			err = bh.Exec(ctx, sql)
 			if err != nil {
 				goto handleFailed
 			}
@@ -5891,7 +6125,11 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 
 		//query the id
 		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, getSqlForPasswordOfUser(user.Username))
+		sql, err = getSqlForPasswordOfUser(ctx, user.Username)
+		if err != nil {
+			goto handleFailed
+		}
+		err = bh.Exec(ctx, sql)
 		if err != nil {
 			goto handleFailed
 		}
@@ -5946,6 +6184,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	var err error
 	var exists int
 	var erArray []ExecResult
+	var sql string
 	err = normalizeNamesOfRoles(ctx, cr.Roles)
 	if err != nil {
 		return err
@@ -5965,9 +6204,12 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 			exists = 3
 		} else {
 			//dedup with role
-			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(r.UserName)
+			sql, err = getSqlForRoleIdOfRole(ctx, r.UserName)
+			if err != nil {
+				goto handleFailed
+			}
 			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sqlForRoleIdOfRole)
+			err = bh.Exec(ctx, sql)
 			if err != nil {
 				goto handleFailed
 			}
@@ -5982,7 +6224,10 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 
 			//dedup with user
 			if exists == 0 {
-				sql := getSqlForPasswordOfUser(r.UserName)
+				sql, err = getSqlForPasswordOfUser(ctx, r.UserName)
+				if err != nil {
+					goto handleFailed
+				}
 				bh.ClearExecResultSet()
 				err = bh.Exec(ctx, sql)
 				if err != nil {
@@ -6152,8 +6397,10 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	}
 
 	//step1:check database exists or not
-	sql = `select datname from mo_catalog.mo_database where datname = "%s";`
-	sql = fmt.Sprintf(sql, datname)
+	sql, err = getSqlForGetDbName(ctx, datname)
+	if err != nil {
+		goto handleFailed
+	}
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
@@ -6171,8 +6418,10 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	}
 
 	//step2: update the mo_mysql_compatbility_mode of that database
-	sql = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s" and dat_name = "%s";`
-	sql = fmt.Sprintf(sql, update_config, accountName, datname)
+	sql, err = getSqlForUpdateConfigurationByDbNameAndAccountName(ctx, update_config, accountName, datname)
+	if err != nil {
+		goto handleFailed
+	}
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
@@ -6234,8 +6483,10 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	}
 
 	//step 1: check account exists or not
-	sql = `select account_name from mo_catalog.mo_mysql_compatbility_mode where account_name = "%s";`
-	sql = fmt.Sprintf(sql, accountName)
+	sql, err = getSqlForGetAccountNameFromCompatbility(ctx, accountName)
+	if err != nil {
+		goto handleFailed
+	}
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
@@ -6253,8 +6504,10 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	}
 
 	//step2: update the config table
-	sql = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s";`
-	sql = fmt.Sprintf(sql, update_config, accountName)
+	sql, err = getSqlForUpdateConfigurationByAccountName(ctx, update_config, accountName)
+	if err != nil {
+		goto handleFailed
+	}
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
@@ -6381,13 +6634,16 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (string, error) {
 	var err error
 	var erArray []ExecResult
+	var sql string
 	defaultConfig := "0.7"
 	path := "$.version_compatibility"
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	sql := `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s"; `
-	sql = fmt.Sprintf(sql, path, dbName)
+	sql, err = getSqlForGetConfiguationByDbName(ctx, path, dbName)
+	if err != nil {
+		return defaultConfig, err
+	}
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
