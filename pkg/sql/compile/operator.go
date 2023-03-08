@@ -516,6 +516,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Proce
 
 func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
 	insertCtx := n.InsertCtx
+	schemaName := insertCtx.Ref.SchemaName
 	insertCtx.TableDef.TblId = uint64(insertCtx.Ref.Obj)
 
 	if insertCtx.Ref.SchemaName != "" {
@@ -523,18 +524,15 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 		if err != nil {
 			return nil, err
 		}
-		_, err = dbSource.Relation(proc.Ctx, insertCtx.Ref.ObjName)
-		if err != nil {
-			newObjName := engine.GetTempTableName(insertCtx.Ref.SchemaName, insertCtx.Ref.ObjName)
-			insertCtx.Ref.SchemaName = defines.TEMPORARY_DBNAME
-			insertCtx.Ref.ObjName = newObjName
+		if _, err = dbSource.Relation(proc.Ctx, insertCtx.Ref.ObjName); err != nil {
+			schemaName = defines.TEMPORARY_DBNAME
 		}
 	}
 
 	return &preinsert.Argument{
 		Ctx:        proc.Ctx,
 		Eg:         eg,
-		SchemaName: insertCtx.Ref.SchemaName,
+		SchemaName: schemaName,
 		TableDef:   insertCtx.TableDef,
 		ParentIdx:  insertCtx.ParentIdx,
 	}, nil
