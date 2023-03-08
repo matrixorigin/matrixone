@@ -92,7 +92,6 @@ func (sender *messageSenderOnClient) send(
 	scopeData, procData []byte, messageType uint64) error {
 	sdLen := len(scopeData)
 	if sdLen <= maxMessageSizeToMoRpc {
-		fmt.Printf("[pipeline seperatesend] send in one\n")
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
 		_ = cancel
 		message := cnclient.AcquireMessage()
@@ -119,14 +118,11 @@ func (sender *messageSenderOnClient) send(
 		message.SetMessageType(pipeline.PipelineMessage)
 		message.SetSequence(cnt)
 		if isLast {
-			fmt.Printf("[pipeline seperatesend] isLast. cnt = %d\n", cnt)
 			message.SetData(scopeData[start:sdLen])
 			message.SetProcData(procData)
 			message.SetSid(pipeline.Last)
 		} else {
-			fmt.Printf("[pipeline seperatesend] notLast. cnt = %d\n", cnt)
 			message.SetData(scopeData[start:end])
-			message.SetProcData(nil)
 			message.SetSid(pipeline.WaitingNext)
 		}
 
@@ -240,47 +236,6 @@ func newMessageReceiverOnServer(
 
 	return receiver
 }
-
-//func getCompleteScopeDate(ctx context.Context, msgID uint64, msgCount int, m *pipeline.Message, cs morpc.ClientSession) ([]byte, error) {
-//msgVec := make([]*pipeline.Message, int(msgCount))
-//cache, err := cs.CreateCache(ctx, msgID)
-//if err != nil {
-//return nil, err
-//}
-//cnt := 0
-//fmt.Printf("[getCompleteScopeDate] waiting %d ...\n", msgCount)
-//for cnt < msgCount {
-//msg, ok, err := cache.Pop()
-//if err != nil {
-//return nil, err
-//}
-
-//if !ok {
-//runtime.Gosched()
-//} else {
-//// saving the msg
-//// has been check when put it into cache queue
-//// so we don't need to check again
-//inputMsg := msg.(*pipeline.Message)
-//idx := inputMsg.GetSequence()
-//if msgVec[idx] == nil {
-//msgVec[idx] = inputMsg
-//cnt++
-//fmt.Printf("[handleScopeDate] receive %d, current cnt = %d\n", idx, cnt)
-//} else {
-//return nil, moerr.NewInternalErrorNoCtx("duplicate msg in morpc message cache")
-//}
-//}
-//}
-//fmt.Printf("[getCompleteScopeDate] %d get done\n", msgCount)
-
-//var dataBuffer []byte
-//for i := range msgVec {
-//dataBuffer = append(dataBuffer, msgVec[i].Data...)
-//}
-//dataBuffer = append(dataBuffer, m.Data...)
-//return dataBuffer, nil
-//}
 
 func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, error) {
 	message, ok := receiver.messageAcquirer().(*pipeline.Message)
