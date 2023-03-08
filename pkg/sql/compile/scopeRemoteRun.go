@@ -171,8 +171,7 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 	var val morpc.Message
 	var err error
 	var dataBuffer []byte
-	//var sequence uint64
-	sequence := uint64(0)
+	var sequence uint64
 	for {
 		val, err = sender.receiveMessage()
 		if err != nil {

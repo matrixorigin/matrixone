@@ -110,13 +110,12 @@ func (sender *messageSenderOnClient) send(
 		_ = cancel
 
 		end := start + maxMessageSizeToMoRpc
-		isLast := end >= sdLen
 
 		message := cnclient.AcquireMessage()
 		message.SetID(sender.streamSender.ID())
 		message.SetMessageType(pipeline.PipelineMessage)
 		message.SetSequence(cnt)
-		if isLast {
+		if end >= sdLen {
 			message.SetData(scopeData[start:sdLen])
 			message.SetProcData(procData)
 			message.SetSid(pipeline.Last)
