@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"context"
+	"math"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,6 +31,7 @@ import (
 // Logtailer provides logtail for the specified table.
 type Logtailer interface {
 	// RangeLogtail returns logtail for all tables within the range (from, to].
+	// NOTE: caller should keep time range monotonous, or there would be a checkpoint.
 	RangeLogtail(
 		ctx context.Context, from, to timestamp.Timestamp,
 	) ([]logtail.TableLogtail, error)
@@ -95,12 +97,10 @@ func (l *LogtailerImpl) RangeLogtail(
 	}
 
 	if checkpointed.GreaterEq(end) {
-		u64Max := uint64(0)
-		u64Max -= 1
 		return []logtail.TableLogtail{{
 			CkpLocation: ckpLoc,
 			Ts:          &to,
-			Table:       &api.TableID{DbId: u64Max, TbId: u64Max},
+			Table:       &api.TableID{DbId: math.MaxUint64, TbId: math.MaxUint64},
 		}}, nil
 	} else if ckpLoc != "" {
 		start = checkpointed.Next()
@@ -147,7 +147,7 @@ func (l *LogtailerImpl) getTableRespBuilder(did, tid uint64, reader *Reader, ckp
 func (l *LogtailerImpl) getCatalogRespBuilder(scope Scope, reader *Reader, ckpLoc string) *tableRespBuilder {
 	b := &tableRespBuilder{
 		did:    pkgcatalog.MO_CATALOG_ID,
-		scope:  ScopeUserTables,
+		scope:  scope,
 		reader: reader,
 		c:      l.c,
 	}
@@ -173,10 +173,6 @@ type tableRespBuilder struct {
 func (b *tableRespBuilder) build() (logtail.TableLogtail, error) {
 	resp, err := b.collect()
 	if err != nil {
-		return logtail.TableLogtail{}, err
-	}
-	if len(resp.Commands) == 0 {
-		logutil.Info("[Logtail] empty table logtail", zap.Any("t_id", b.tid))
 		return logtail.TableLogtail{}, err
 	}
 	ret := logtail.TableLogtail{}
