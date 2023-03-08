@@ -21,24 +21,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/config"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 )
 
 var (
 	// full buffer approximately cost (56[Sample struct] + 8[pointer]) x 4096 = 256K
-	configRawHistBufLimit int32 = envOrDefaultInt[int32]("MO_METRIC_RAWHIST_BUF_LIMIT", 4096)
-	configGatherInterval  int64 = envOrDefaultInt[int64]("MO_METRIC_GATHER_INTERVAL", 15000) // 15s
-	configExportToProm    int32 = envOrDefaultBool("MO_METRIC_EXPORT_TO_PROM", 1)
-	configForceReinit     int32 = envOrDefaultBool("MO_METRIC_DROP_AND_INIT", 0) // TODO: find a better way to init metrics and remove this one
+	configRawHistBufLimit int32 = EnvOrDefaultInt[int32]("MO_METRIC_RAWHIST_BUF_LIMIT", 4096)
+	configGatherInterval  int64 = EnvOrDefaultInt[int64]("MO_METRIC_GATHER_INTERVAL", 15000) // 15s
+	configExportToProm    int32 = EnvOrDefaultBool("MO_METRIC_EXPORT_TO_PROM", 1)
+	configForceReinit     int32 = EnvOrDefaultBool("MO_METRIC_DROP_AND_INIT", 0) // TODO: find a better way to init metrics and remove this one
 )
 
-func initConfigByParamaterUnit(SV *config.ObservabilityParameters) {
-	setExportToProm(SV.EnableMetricToProm)
-	setGatherInterval(time.Second * time.Duration(SV.MetricGatherInterval))
-}
-
-func envOrDefaultBool(key string, defaultValue int32) int32 {
+func EnvOrDefaultBool(key string, defaultValue int32) int32 {
 	val, ok := os.LookupEnv(key)
 	if !ok {
 		return defaultValue
@@ -53,7 +47,7 @@ func envOrDefaultBool(key string, defaultValue int32) int32 {
 	}
 }
 
-func envOrDefaultInt[T int32 | int64](key string, defaultValue T) T {
+func EnvOrDefaultInt[T int32 | int64](key string, defaultValue T) T {
 	val, ok := os.LookupEnv(key)
 	if !ok {
 		return defaultValue
@@ -71,24 +65,23 @@ func envOrDefaultInt[T int32 | int64](key string, defaultValue T) T {
 	}
 	return T(i)
 }
+func GetRawHistBufLimit() int32 { return atomic.LoadInt32(&configRawHistBufLimit) }
 
-func getRawHistBufLimit() int32 { return atomic.LoadInt32(&configRawHistBufLimit) }
+func GetExportToProm() bool { return atomic.LoadInt32(&configExportToProm) != 0 }
 
-func getExportToProm() bool { return atomic.LoadInt32(&configExportToProm) != 0 }
+func GetForceInit() bool { return atomic.LoadInt32(&configForceReinit) != 0 }
 
-func getForceInit() bool { return atomic.LoadInt32(&configForceReinit) != 0 }
-
-func getGatherInterval() time.Duration {
+func GetGatherInterval() time.Duration {
 	return time.Duration(atomic.LoadInt64(&configGatherInterval)) * time.Millisecond
 }
 
 // for tests
 
-func setRawHistBufLimit(new int32) int32 {
+func SetRawHistBufLimit(new int32) int32 {
 	return atomic.SwapInt32(&configRawHistBufLimit, new)
 }
 
-func setExportToProm(new bool) bool {
+func SetExportToProm(new bool) bool {
 	var val int32 = 0
 	if new {
 		val = 1
@@ -96,10 +89,10 @@ func setExportToProm(new bool) bool {
 	return atomic.SwapInt32(&configExportToProm, val) != 0
 }
 
-func setGatherInterval(new time.Duration) time.Duration {
+func SetGatherInterval(new time.Duration) time.Duration {
 	return time.Duration(atomic.SwapInt64(&configGatherInterval, int64(new/time.Millisecond))) * time.Millisecond
 }
 
-func isFullBatchRawHist(mf *pb.MetricFamily) bool {
-	return mf.GetType() == pb.MetricType_RAWHIST && len(mf.Metric[0].RawHist.Samples) >= int(getRawHistBufLimit())
+func IsFullBatchRawHist(mf *pb.MetricFamily) bool {
+	return mf.GetType() == pb.MetricType_RAWHIST && len(mf.Metric[0].RawHist.Samples) >= int(GetRawHistBufLimit())
 }

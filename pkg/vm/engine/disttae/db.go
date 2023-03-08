@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -269,6 +270,38 @@ func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
 		e.partitions[[2]uint64{databaseId, tableId}] = parts
 	}
 	return parts
+}
+
+func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64,
+	tbl *txnTable) error {
+	parts := e.getPartitions(databaseId, tableId)
+	for _, part := range parts {
+		part.Lock()
+		ckptList := part.ckptList
+		part.ckptList = nil
+		part.Unlock()
+		state := part.state.Load().Copy()
+
+		for _, ckpt := range ckptList {
+			entries, err := logtail.LoadCheckpointEntries(
+				ctx,
+				ckpt,
+				tbl.tableId,
+				tbl.tableName,
+				tbl.db.databaseId,
+				tbl.db.databaseName,
+				tbl.db.txn.engine.fs)
+			if err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				if err = consumeEntry(ctx, tbl.primaryIdx, e, state, entry); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {

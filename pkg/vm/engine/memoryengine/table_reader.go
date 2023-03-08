@@ -48,7 +48,6 @@ func (t *Table) NewReader(
 	readers []engine.Reader,
 	err error,
 ) {
-
 	readers = make([]engine.Reader, parallel)
 
 	var shards []Shard
