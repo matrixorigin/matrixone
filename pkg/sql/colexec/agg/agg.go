@@ -268,19 +268,20 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 	}
 	if a.otyp.IsString() {
 		vec := vector.NewVec(a.otyp)
-		vec.SetNulls(nsp)
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
-		for _, v := range vs {
-			if err := vector.AppendBytes(vec, v, false, m); err != nil {
-				vec.Free(m)
-				return nil, err
-			}
+		if err := vector.AppendBytesList(vec, vs, nil, m); err != nil {
+			vec.Free(m)
+			return nil, err
 		}
+		vec.SetNulls(nsp)
 		return vec, nil
 	}
 	vec := vector.NewVec(a.otyp)
-	vector.AppendFixedList(vec, a.eval(a.vs), nil, m)
+	if err := vector.AppendFixedList(vec, a.eval(a.vs), nil, m); err != nil {
+		vec.Free(m)
+		return nil, err
+	}
 	vec.SetNulls(nsp)
 	return vec, nil
 }

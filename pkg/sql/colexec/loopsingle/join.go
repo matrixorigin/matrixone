@@ -166,7 +166,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		if unmatched {
 			for k, rp := range ap.Result {
 				if rp.Rel != 0 {
-					if err := vector.UnionNull(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
+					if err := rbat.Vecs[k].UnionNull(proc.Mp()); err != nil {
 						vec.Free(proc.Mp())
 						rbat.Clean(proc.Mp())
 						return err

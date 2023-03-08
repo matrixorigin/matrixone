@@ -186,7 +186,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						return err
 					}
 				} else {
-					if err := vector.UnionNull(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
+					if err := rbat.Vecs[k].UnionNull(proc.Mp()); err != nil {
 						rbat.Clean(proc.Mp())
 						return err
 					}

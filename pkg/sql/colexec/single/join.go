@@ -157,7 +157,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if zvals[k] == 0 || vals[k] == 0 {
 				for j, rp := range ap.Result {
 					if rp.Rel != 0 {
-						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
+						if err := rbat.Vecs[j].UnionNull(proc.Mp()); err != nil {
 							rbat.Clean(proc.Mp())
 							return err
 						}
@@ -194,7 +194,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if ap.Cond != nil && !matched {
 				for j, rp := range ap.Result {
 					if rp.Rel != 0 {
-						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
+						if err := rbat.Vecs[j].UnionNull(proc.Mp()); err != nil {
 							rbat.Clean(proc.Mp())
 							return err
 						}

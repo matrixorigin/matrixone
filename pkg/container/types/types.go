@@ -210,7 +210,7 @@ func New(oid T, width, scale int32) Type {
 		Oid:     oid,
 		Width:   width,
 		Scale:   scale,
-		Size:    int32(TypeSize(oid)),
+		Size:    int32(oid.TypeLen()),
 		Charset: CharsetType(oid),
 	}
 }
