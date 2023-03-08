@@ -24,7 +24,7 @@ func TestBytesPool(t *testing.T) {
 	pool := NewPool(8, func() any {
 		bs := make([]byte, 8)
 		return &bs
-	})
+	}, nil, nil)
 
 	wg := new(sync.WaitGroup)
 	for i := 0; i < 200; i++ {
@@ -47,7 +47,7 @@ func BenchmarkBytesPool(b *testing.B) {
 	pool := NewPool(1024, func() any {
 		bs := make([]byte, 8)
 		return &bs
-	})
+	}, nil, nil)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, put := pool.Get()
@@ -59,7 +59,7 @@ func BenchmarkParallelBytesPool(b *testing.B) {
 	pool := NewPool(1024, func() any {
 		bs := make([]byte, 8)
 		return &bs
-	})
+	}, nil, nil)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
