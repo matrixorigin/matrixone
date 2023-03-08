@@ -123,7 +123,7 @@ func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.C
 		fmt.Printf("[handleWaitingNextMsg] handle pipeline waiting next msg\n")
 		var cache morpc.MessageCache
 		var err error
-		if cache, err = cs.CreateCache(ctx, 0); err != nil {
+		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
 			return err
 		}
 		cache.Add(message)
