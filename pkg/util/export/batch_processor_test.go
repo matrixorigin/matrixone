@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -283,4 +284,52 @@ func TestNewMOCollector_BufferCnt(t *testing.T) {
 		t.Logf("left ch: %s", got)
 	}
 	require.Equal(t, []string{`(1),(2),(3)`, `(4),(5),(6)`, `(7)`}, got)
+}
+
+func Test_newBufferHolder_AddAfterStop(t *testing.T) {
+	MOCollectorMux.Lock()
+	defer MOCollectorMux.Unlock()
+	type args struct {
+		ctx    context.Context
+		name   batchpipe.HasName
+		impl   motrace.PipeImpl
+		signal bufferSignalFunc
+		c      *MOCollector
+	}
+
+	ch := make(chan string)
+	triggerSignalFunc := func(holder *bufferHolder) {}
+
+	cfg := &config.OBCollectorConfig{}
+	cfg.SetDefaultValues()
+	collector := NewMOCollector(context.TODO(), WithOBCollectorConfig(cfg))
+
+	tests := []struct {
+		name string
+		args args
+		want *bufferHolder
+	}{
+		{
+			name: "callAddAfterStop",
+			args: args{
+				ctx:    context.TODO(),
+				name:   newDummy(0),
+				impl:   &dummyPipeImpl{ch: ch, duration: time.Hour},
+				signal: triggerSignalFunc,
+				c:      collector,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := newBufferHolder(tt.args.ctx, tt.args.name, tt.args.impl, tt.args.signal, tt.args.c)
+			buf.Start()
+			buf.Add(newDummy(1))
+			buf.Stop()
+			buf.Add(newDummy(2))
+			buf.Add(newDummy(3))
+			b, _ := buf.buffer.(*dummyBuffer)
+			require.Equal(t, []batchpipe.HasName{newDummy(1)}, b.arr)
+		})
+	}
 }
