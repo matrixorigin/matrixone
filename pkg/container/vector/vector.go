@@ -1666,6 +1666,9 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 					}
 				}
 				tgt[curIdx], v.area, err = types.BuildVarlena(bs, v.area, m)
+				if err != nil {
+					return err
+				}
 				curIdx += 1
 			}
 		}
