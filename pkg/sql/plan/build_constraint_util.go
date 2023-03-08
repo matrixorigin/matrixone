@@ -864,6 +864,9 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 }
 
 func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
+	if targetType.Id == 0 {
+		return expr, nil
+	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if t1.Oid == t2.Oid && t1.Width == t2.Width && t1.Size == t2.Size && t1.Scale == t2.Scale {
 		return expr, nil
