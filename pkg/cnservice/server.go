@@ -437,7 +437,7 @@ func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.C
 	msg, _ := message.(*pipeline.Message)
 	switch msg.GetCmd() {
 	case pipeline.PipelineMessage:
-		fmt.Printf("[handleWaitingNextMsg] handle pipeline waiting next msg\n")
+		fmt.Printf("[handleWaitingNextMsg] handle pipeline waiting next msg, msg id = %d, idx = %d\n", msg.Id, msg.Sequence)
 		var cache morpc.MessageCache
 		var err error
 		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
@@ -452,6 +452,7 @@ func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.C
 func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
 	var data []byte
 
+	cnt := uint64(0)
 	cache, err := cs.CreateCache(ctx, message.GetID())
 	if err != nil {
 		return err
@@ -465,6 +466,12 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 			cache.Close()
 			break
 		}
+		if cnt != msg.(*pipeline.Message).GetSequence() {
+			m := msg.(*pipeline.Message)
+			fmt.Printf("[handleAssemblePipeline] cnt = %d, seq = %d, cmd = %d, status = %d\n", cnt, m.GetSequence(), m.GetCmd(), m.GetSid())
+			return moerr.NewInternalErrorNoCtx("Pipeline packages passed by morpc are out of order")
+		}
+		cnt++
 		data = append(data, msg.(*pipeline.Message).GetData()...)
 	}
 	msg := message.(*pipeline.Message)

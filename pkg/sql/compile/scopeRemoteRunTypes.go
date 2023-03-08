@@ -129,6 +129,7 @@ func (sender *messageSenderOnClient) send(
 		if err := sender.streamSender.Send(timeoutCtx, message); err != nil {
 			return err
 		}
+		fmt.Printf("[seperatepipeline] send seperate pmsg id = %d, seq = %d success\n", sender.streamSender.ID(), cnt)
 		cnt++
 		start = end
 	}
@@ -312,7 +313,6 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	checksum := crc32.ChecksumIEEE(data)
 	dataLen := len(data)
 	if dataLen <= receiver.maxMessageSize {
-		fmt.Printf("[sendBatch] inonemsg: current seq = %d\n", receiver.sequence)
 		m, errA := receiver.acquireMessage()
 		if errA != nil {
 			return errA
@@ -332,7 +332,6 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		if errA != nil {
 			return errA
 		}
-		fmt.Printf("[sendBatch] seperate: current seq = %d\n", receiver.sequence)
 		end = start + receiver.maxMessageSize
 		if end >= dataLen {
 			end = dataLen

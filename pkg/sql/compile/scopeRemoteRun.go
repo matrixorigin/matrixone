@@ -197,7 +197,8 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		}
 		// XXX some order check just for safety ?
 		if sequence != m.Sequence {
-			return moerr.NewInternalErrorNoCtx("Packages passed by morpc are out of order")
+			fmt.Printf("[handleAssembleBatch] sequence = %d, seq = %d, cmd = %d, status = %d\n", sequence, m.GetSequence(), m.GetCmd(), m.GetSid())
+			return moerr.NewInternalErrorNoCtx("Batch packages passed by morpc are out of order")
 		}
 		sequence++
 
