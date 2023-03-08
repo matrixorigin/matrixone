@@ -129,6 +129,18 @@ message LeftJoin {
   repeated plan.Expr right_cond = 8;
 }
 
+message RightJoin {
+  uint64 ibucket = 1;
+  uint64 nbucket = 2;
+  repeated int32 rel_list = 3;
+  repeated int32 col_list = 4;
+  plan.Expr  expr = 5;
+  repeated plan.Type  left_types = 6;
+  repeated plan.Type  right_types = 7;
+  repeated plan.Expr left_cond = 8;
+  repeated plan.Expr right_cond = 9;
+}
+
 message SemiJoin {
   uint64 ibucket = 1;
   uint64 nbucket = 2;
@@ -228,6 +240,9 @@ message Instruction{
   bool isFirst = 24;
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
   bool isLast = 25;
+  
+  RightJoin  right_join = 26;
+
 }
 
 message AnalysisList {

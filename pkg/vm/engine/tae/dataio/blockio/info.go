@@ -83,7 +83,7 @@ func DecodeMetaLocToMeta(metaLoc string) (*Meta, error) {
 	return meta, nil
 }
 
-func EncodeMetalocFromMetas(name string, blks []objectio.BlockObject) string {
+func EncodeLocationFromMetas(name string, blks []objectio.BlockObject) string {
 	offset := blks[0].GetExtent().Offset()
 	length := blks[0].GetExtent().Length()
 	var buf bytes.Buffer
@@ -98,7 +98,7 @@ func EncodeMetalocFromMetas(name string, blks []objectio.BlockObject) string {
 	return buf.String()
 }
 
-func DecodeMetaLocToMetas(metaLoc string) (string, []objectio.Extent, error) {
+func DecodeLocationToMetas(metaLoc string) (string, []objectio.Extent, error) {
 	info := strings.Split(metaLoc, ":")
 	name := info[0]
 	extents := make([]objectio.Extent, 0)
@@ -124,33 +124,4 @@ func DecodeMetaLocToMetas(metaLoc string) (string, []objectio.Extent, error) {
 		extents = append(extents, extent)
 	}
 	return name, extents, nil
-}
-
-func DecodeDeltaLocToDelta(metaLoc string) (*Delta, error) {
-	info := strings.Split(metaLoc, ":")
-	name := info[0]
-	location := strings.Split(info[1], "_")
-	offset, err := strconv.ParseUint(location[0], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	size, err := strconv.ParseUint(location[1], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	osize, err := strconv.ParseUint(location[2], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	objectSize, err := strconv.ParseUint(info[3], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	extent := objectio.NewExtent(0, uint32(offset), uint32(size), uint32(osize))
-	delta := &Delta{
-		key:        name,
-		loc:        extent,
-		objectSize: uint32(objectSize),
-	}
-	return delta, nil
 }

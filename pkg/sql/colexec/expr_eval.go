@@ -28,24 +28,24 @@ import (
 )
 
 var (
-	constBType          = types.Type{Oid: types.T_bool}
-	constI8Type         = types.Type{Oid: types.T_int8}
-	constI16Type        = types.Type{Oid: types.T_int16}
-	constI32Type        = types.Type{Oid: types.T_int32}
-	constI64Type        = types.Type{Oid: types.T_int64}
-	constU8Type         = types.Type{Oid: types.T_uint8}
-	constU16Type        = types.Type{Oid: types.T_uint16}
-	constU32Type        = types.Type{Oid: types.T_uint32}
-	constU64Type        = types.Type{Oid: types.T_uint64}
-	constFType          = types.Type{Oid: types.T_float32}
-	constDType          = types.Type{Oid: types.T_float64}
-	constSType          = types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
-	constBinType        = types.Type{Oid: types.T_blob}
-	constDateType       = types.Type{Oid: types.T_date}
-	constTimeType       = types.Type{Oid: types.T_time}
-	constDatetimeType   = types.Type{Oid: types.T_datetime}
-	constDecimal64Type  = types.Type{Oid: types.T_decimal64}
-	constDecimal128Type = types.Type{Oid: types.T_decimal128}
+	constBType        = types.Type{Oid: types.T_bool}
+	constI8Type       = types.Type{Oid: types.T_int8}
+	constI16Type      = types.Type{Oid: types.T_int16}
+	constI32Type      = types.Type{Oid: types.T_int32}
+	constI64Type      = types.Type{Oid: types.T_int64}
+	constU8Type       = types.Type{Oid: types.T_uint8}
+	constU16Type      = types.Type{Oid: types.T_uint16}
+	constU32Type      = types.Type{Oid: types.T_uint32}
+	constU64Type      = types.Type{Oid: types.T_uint64}
+	constFType        = types.Type{Oid: types.T_float32}
+	constDType        = types.Type{Oid: types.T_float64}
+	constSType        = types.Type{Oid: types.T_varchar, Width: types.MaxVarcharLen}
+	constBinType      = types.Type{Oid: types.T_blob}
+	constDateType     = types.Type{Oid: types.T_date}
+	constTimeType     = types.Type{Oid: types.T_time}
+	constDatetimeType = types.Type{Oid: types.T_datetime}
+	// constDecimal64Type  = types.Type{Oid: types.T_decimal64}
+	// constDecimal128Type = types.Type{Oid: types.T_decimal128}
 	constTimestampTypes = []types.Type{
 		{Oid: types.T_timestamp},
 		{Oid: types.T_timestamp, Scale: 1},
@@ -190,11 +190,13 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 		case *plan.Const_Decimal64Val:
 			cd64 := t.C.GetDecimal64Val()
 			d64 := types.Decimal64FromInt64Raw(cd64.A)
-			vec = vector.NewConstFixed(constDecimal64Type, length, d64, proc.Mp())
+			typ := types.New(types.T_decimal64, expr.Typ.Width, expr.Typ.Scale)
+			vec = vector.NewConstFixed(typ, length, d64, proc.Mp())
 		case *plan.Const_Decimal128Val:
 			cd128 := t.C.GetDecimal128Val()
 			d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
-			vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
+			typ := types.New(types.T_decimal128, expr.Typ.Width, expr.Typ.Scale)
+			vec = vector.NewConstFixed(typ, length, d128, proc.Mp())
 		case *plan.Const_Timestampval:
 			scale := expr.Typ.Scale
 			if scale < 0 || scale > 6 {

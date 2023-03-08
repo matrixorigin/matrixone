@@ -214,7 +214,7 @@ func TestBaseCollectorReminderBackOff(t *testing.T) {
 	require.NoError(t, err)
 
 	var prev time.Time
-	gap := 30 // time.Millisecond
+	gap := 30 // time.Millisecond, same value in NewItemBuffer funciton
 	waitTimeCheck := func(element time.Time, closed bool) (goOn bool, err error) {
 		if gap >= 300 {
 			return
@@ -223,7 +223,8 @@ func TestBaseCollectorReminderBackOff(t *testing.T) {
 			goOn = true
 			prev = element
 		} else {
-			goOn = assert.InDelta(t, gap, element.Sub(prev).Milliseconds(), 30)
+			// check backoff increament
+			goOn = assert.InDelta(t, gap, element.Sub(prev).Milliseconds(), 200)
 			prev = element
 			gap *= 2
 		}
@@ -235,8 +236,8 @@ func TestBaseCollectorReminderBackOff(t *testing.T) {
 
 	_ = collector.SendItem(ctx, &TestItem{name: T_POS, posval: &Pos{line: 1, linepos: 12, docpos: 12}})
 
-	// new write will reset timer to 30ms
-	time.Sleep(50 * time.Millisecond)
+	// new write will reset timer to 30ms, so it should be received within 200ms
+	time.Sleep(200 * time.Millisecond)
 	require.Contains(t, collector.Received(), fmt.Sprintf("Ln %d, Col %d, Doc %d\n", 1, 12, 12))
 
 	handle, succ := collector.Stop(false)

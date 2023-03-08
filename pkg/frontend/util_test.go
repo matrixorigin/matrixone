@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	cvey "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
@@ -421,8 +422,6 @@ func TestGetSimpleExprValue(t *testing.T) {
 		kases := []args{
 			{"set @@x=1", false, 1},
 			{"set @@x=-1", false, -1},
-			{"set @@x=1.0", false, "1"},
-			{"set @@x=-1.0", false, "-1"},
 			{fmt.Sprintf("set @@x=%d", math.MaxInt64), false, math.MaxInt64},
 			{fmt.Sprintf("set @@x=%d", -math.MaxInt64), false, -math.MaxInt64},
 			{"set @@x=true", false, true},
@@ -449,6 +448,57 @@ func TestGetSimpleExprValue(t *testing.T) {
 			} else {
 				cvey.So(err, cvey.ShouldBeNil)
 				cvey.So(value, cvey.ShouldEqual, kase.want)
+			}
+		}
+
+	})
+
+	cvey.Convey("", t, func() {
+		type args struct {
+			sql     string
+			wantErr bool
+			want    interface{}
+		}
+
+		dec1 := types.MustDecimal64FromString("1.0")
+		dec2 := types.MustDecimal64FromString("-1.0")
+		dec3 := types.MustDecimal64FromString("-1.2345670")
+
+		kases := []args{
+			{"set @@x=1.0", false, plan.MakePlan2Decimal64ExprWithType(dec1, &plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       16,
+				Scale:       1,
+				NotNullable: true,
+			})},
+			{"set @@x=-1.0", false, plan.MakePlan2Decimal64ExprWithType(dec2, &plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       16,
+				Scale:       1,
+				NotNullable: true,
+			})},
+			{"set @@x=-1.2345670", false, plan.MakePlan2Decimal64ExprWithType(dec3, &plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       16,
+				Scale:       7,
+				NotNullable: true,
+			})},
+		}
+		ctrl := gomock.NewController(t)
+		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), nil, false)
+		ses.txnCompileCtx.SetProcess(testutil.NewProc())
+		for _, kase := range kases {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql)
+			cvey.So(err, cvey.ShouldBeNil)
+
+			sv, ok := stmt.(*tree.SetVar)
+			cvey.So(ok, cvey.ShouldBeTrue)
+			value, err := GetSimpleExprValue(sv.Assignments[0].Value, ses)
+			if kase.wantErr {
+				cvey.So(err, cvey.ShouldNotBeNil)
+			} else {
+				cvey.So(err, cvey.ShouldBeNil)
+				cvey.So(value, cvey.ShouldResemble, kase.want)
 			}
 		}
 

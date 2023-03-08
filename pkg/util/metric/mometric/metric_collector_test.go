@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metric
+package mometric
 
 import (
 	"bytes"
@@ -25,13 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 )
 
 func init() {
-	m1 := &SubSystem{"m1", "", false}
-	m2 := &SubSystem{"m2", "", false}
-	allSubSystem[m1.Name] = m1
-	allSubSystem[m2.Name] = m2
+	metric.RegisterSubSystem(&metric.SubSystem{Name: "m1", Comment: "m1 test metric", SupportUserAccess: false})
+	metric.RegisterSubSystem(&metric.SubSystem{Name: "m2", Comment: "m2 test metric", SupportUserAccess: false})
 }
 
 type dummySqlExecutor struct {
