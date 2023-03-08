@@ -218,9 +218,13 @@ func TestNewMOCollector_BufferCnt(t *testing.T) {
 	stub1 := gostub.Stub(&signalFunc, func() { signalC <- struct{}{} })
 	defer stub1.Reset()
 
+	var batchFlowC = make(chan struct{})
 	var signalBatchFinishC = make(chan struct{})
-	var signalBatchFinish = func() { signalBatchFinishC <- struct{}{} }
+	var signalBatchFinish = func() {
+		signalBatchFinishC <- struct{}{}
+	}
 	bhStub := gostub.Stub(&waitGetBatchFinish, func() {
+		batchFlowC <- struct{}{}
 		<-signalBatchFinishC
 	})
 	defer bhStub.Reset()
@@ -239,6 +243,8 @@ func TestNewMOCollector_BufferCnt(t *testing.T) {
 	acceptSignal()
 	collector.Collect(ctx, newDummy(3))
 	acceptSignal()
+	// make 1/2 buffer hang.
+	<-batchFlowC
 	collector.Collect(ctx, newDummy(4))
 	acceptSignal()
 	collector.Collect(ctx, newDummy(5))
@@ -246,14 +252,20 @@ func TestNewMOCollector_BufferCnt(t *testing.T) {
 	collector.Collect(ctx, newDummy(6))
 	acceptSignal()
 
+	// make 2/2 buffer hang.
+	<-batchFlowC
+	// send 7th elem, it will hang, wait for buffer slot
 	go collector.Collect(ctx, newDummy(7))
+	// reset
+	bhStub.Reset()
+
 	select {
 	case <-signalC:
 		t.Errorf("failed wait buffer released.")
+		return
 	case <-time.After(5 * time.Second):
-		t.Logf("success: hang by buffer alloc")
+		t.Logf("success: hang by buffer alloc: no slot.")
 		// reset be normal flow
-		bhStub.Reset()
 		signalBatchFinish()
 		signalBatchFinish()
 		acceptSignal()
