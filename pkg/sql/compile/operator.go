@@ -525,10 +525,6 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 		}
 		_, err = dbSource.Relation(proc.Ctx, insertCtx.Ref.ObjName)
 		if err != nil {
-			dbSource, err = eg.Database(proc.Ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-			if err != nil {
-				return nil, err
-			}
 			newObjName := engine.GetTempTableName(insertCtx.Ref.SchemaName, insertCtx.Ref.ObjName)
 			insertCtx.Ref.SchemaName = defines.TEMPORARY_DBNAME
 			insertCtx.Ref.ObjName = newObjName
@@ -1360,7 +1356,7 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 		}
 		relation, err = dbSource.Relation(ctx, ref.ObjName)
 		if err == nil {
-			isTemp = false
+			isTemp = defines.TEMPORARY_DBNAME == ref.SchemaName
 		} else {
 			dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
 			if err != nil {
