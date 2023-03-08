@@ -20,8 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -56,12 +54,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
 		return false, nil
 	}
 
 	insertCtx := insertArg.InsertCtx
-	clusterTable := insertCtx.ClusterTable
 
 	var insertBat *batch.Batch
 	defer func() {
@@ -86,100 +83,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return nil
 	}
 
-	if clusterTable.GetIsClusterTable() {
-		accountIdColumnDef := insertCtx.TableDef.Cols[clusterTable.GetColumnIndexOfAccountId()]
-		accountIdExpr := accountIdColumnDef.GetDefault().GetExpr()
-		accountIdConst := accountIdExpr.GetC()
-
-		vecLen := vector.Length(bat.Vecs[0])
-		tmpBat := batch.NewWithSize(0)
-		tmpBat.Zs = []int64{1}
-		//save auto_increment column if necessary
-		savedAutoIncrVectors := make([]*vector.Vector, 0)
-		defer func() {
-			for _, vec := range savedAutoIncrVectors {
-				vector.Clean(vec, proc.Mp())
-			}
-		}()
-		for i, colDef := range insertCtx.TableDef.Cols {
-			if colDef.GetTyp().GetAutoIncr() {
-				vec2, err := vector.Dup(bat.Vecs[i], proc.Mp())
-				if err != nil {
-					return false, err
-				}
-				savedAutoIncrVectors = append(savedAutoIncrVectors, vec2)
-			}
-		}
-		for idx, accountId := range clusterTable.GetAccountIDs() {
-			//update accountId in the accountIdExpr
-			accountIdConst.Value = &plan.Const_U32Val{U32Val: accountId}
-			accountIdVec := bat.Vecs[clusterTable.GetColumnIndexOfAccountId()]
-			//clean vector before fill it
-			vector.Clean(accountIdVec, proc.Mp())
-			//the i th row
-			for i := 0; i < vecLen; i++ {
-				err := fillRow(tmpBat, accountIdExpr, accountIdVec, proc)
-				if err != nil {
-					return false, err
-				}
-			}
-			if idx != 0 { //refill the auto_increment column vector
-				j := 0
-				for colIdx, colDef := range insertCtx.TableDef.Cols {
-					if colDef.GetTyp().GetAutoIncr() {
-						targetVec := bat.Vecs[colIdx]
-						vector.Clean(targetVec, proc.Mp())
-						for k := int64(0); k < int64(vecLen); k++ {
-							err := vector.UnionOne(targetVec, savedAutoIncrVectors[j], k, proc.Mp())
-							if err != nil {
-								return false, err
-							}
-						}
-						j++
-					}
-				}
-			}
-
-			err := insertRows()
-			if err != nil {
-				return false, err
-			}
-		}
-	} else {
-		err := insertRows()
-		if err != nil {
-			return false, err
-		}
+	if err := insertRows(); err != nil {
+		return false, err
 	}
-
 	if insertArg.IsRemote {
 		insertArg.Container.WriteEnd(proc)
 	}
 	atomic.AddUint64(&insertArg.Affected, affectedRows)
 	return false, nil
-}
-
-/*
-fillRow evaluates the expression and put the result into the targetVec.
-tmpBat: store temporal vector
-expr: the expression to be evaluated at the position (colIdx,rowIdx)
-targetVec: the destination where the evaluated result of expr saved into
-*/
-func fillRow(tmpBat *batch.Batch,
-	expr *plan.Expr,
-	targetVec *vector.Vector,
-	proc *process.Process) error {
-	vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-	if err != nil {
-		return err
-	}
-	if vec.Size() == 0 {
-		vec = vec.ConstExpand(false, proc.Mp())
-	}
-	if err := vector.UnionOne(targetVec, vec, 0, proc.Mp()); err != nil {
-		vec.Free(proc.Mp())
-		return err
-	}
-	vec.Free(proc.Mp())
-	return err
 }
