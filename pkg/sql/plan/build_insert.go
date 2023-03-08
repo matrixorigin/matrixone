@@ -86,8 +86,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 
 		OnDuplicateIdx:  rewriteInfo.onDuplicateIdx,
 		OnDuplicateExpr: rewriteInfo.onDuplicateExpr,
-
-		ClusterTable: clusterTable,
 	}
 	if len(rewriteInfo.parentIdx) == 1 {
 		insertCtx.ParentIdx = rewriteInfo.parentIdx[0]
