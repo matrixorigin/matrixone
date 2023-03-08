@@ -220,7 +220,6 @@ func (s *service) handleRequest(
 	}
 	switch msg.GetSid() {
 	case pipeline.WaitingNext:
-		fmt.Printf("[CnServerMessageHandler] handle waiting next msg\n")
 		return handleWaitingNextMsg(ctx, req, cs)
 	case pipeline.Last:
 		if msg.IsPipelineMessage() { // only pipeline type need assemble msg now.
@@ -433,14 +432,12 @@ func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.C
 	msg, _ := message.(*pipeline.Message)
 	switch msg.GetCmd() {
 	case pipeline.PipelineMessage:
-		fmt.Printf("[handleWaitingNextMsg] handle pipeline waiting next msg, msg id = %d, idx = %d\n", msg.Id, msg.Sequence)
 		var cache morpc.MessageCache
 		var err error
 		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
 			return err
 		}
 		cache.Add(message)
-		fmt.Printf("[handleWaitingNextMsg] add idx %d to cache success\n", msg.GetSequence())
 	}
 	return nil
 }
@@ -463,8 +460,6 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 			break
 		}
 		if cnt != msg.(*pipeline.Message).GetSequence() {
-			m := msg.(*pipeline.Message)
-			fmt.Printf("[handleAssemblePipeline] cnt = %d, seq = %d, cmd = %d, status = %d\n", cnt, m.GetSequence(), m.GetCmd(), m.GetSid())
 			return moerr.NewInternalErrorNoCtx("Pipeline packages passed by morpc are out of order")
 		}
 		cnt++

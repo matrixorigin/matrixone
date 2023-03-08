@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"fmt"
 	"hash/crc32"
 	"time"
 
@@ -38,7 +37,7 @@ import (
 )
 
 const (
-	maxMessageSizeToMoRpc = 1 * mpool.MB
+	maxMessageSizeToMoRpc = 64 * mpool.MB
 )
 
 // cnInformation records service information to help handle messages.
@@ -129,7 +128,6 @@ func (sender *messageSenderOnClient) send(
 		if err := sender.streamSender.Send(timeoutCtx, message); err != nil {
 			return err
 		}
-		fmt.Printf("[seperatepipeline] send seperate pmsg id = %d, seq = %d success\n", sender.streamSender.ID(), cnt)
 		cnt++
 		start = end
 	}
