@@ -90,9 +90,10 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	return n
 }
 
-func (node *DeleteNode) CloneAll() txnif.MVCCNode  { panic("todo") }
-func (node *DeleteNode) CloneData() txnif.MVCCNode { panic("todo") }
-func (node *DeleteNode) Update(txnif.MVCCNode)     { panic("todo") }
+func (node *DeleteNode) GetTxnEntryType() txnif.TxnEntryType { return txnif.TxnEntryAppend }
+func (node *DeleteNode) CloneAll() txnif.MVCCNode            { panic("todo") }
+func (node *DeleteNode) CloneData() txnif.MVCCNode           { panic("todo") }
+func (node *DeleteNode) Update(txnif.MVCCNode)               { panic("todo") }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }
@@ -297,7 +298,9 @@ func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewDeleteCmd(id, node)
 	return
 }
-
+func (node *DeleteNode) GetPrefix() []byte {
+	return node.chain.mvcc.meta.MakeKey()
+}
 func (node *DeleteNode) Set1PC()     { node.TxnMVCCNode.Set1PC() }
 func (node *DeleteNode) Is1PC() bool { return node.TxnMVCCNode.Is1PC() }
 func (node *DeleteNode) PrepareRollback() (err error) {

@@ -144,3 +144,11 @@ func (store *NoopTxnStore) GetDirty() *common.Tree                        { retu
 func (store *NoopTxnStore) HasTableDataChanges(id uint64) bool            { return false }
 func (store *NoopTxnStore) GetDirtyTableByID(id uint64) *common.TableTree { return nil }
 func (store *NoopTxnStore) HasCatalogChanges() bool                       { return false }
+
+func (store *NoopTxnStore) GetLogtails(
+	onDatabase func(db any),
+	onTable func(tbl any),
+	onRotateTable func(dbName, tblName string, dbid, tid uint64),
+	onMetadata func(block any),
+	onAppend func(bat any),
+	onDelete func(deletes []uint32, prefix []byte))

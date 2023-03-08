@@ -263,6 +263,13 @@ type TxnStore interface {
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
+	GetLogtails(
+		onDatabase func(db any),
+		onTable func(tbl any),
+		onRotateTable func(dbName, tblName string, dbid, tid uint64),
+		onMetadata func(block any),
+		onAppend func(bat any),
+		onDelete func(deletes []uint32, prefix []byte))
 }
 
 type TxnEntryType int16
@@ -275,4 +282,16 @@ type TxnEntry interface {
 	MakeCommand(uint32) (TxnCmd, error)
 	Is1PC() bool
 	Set1PC()
+	GetTxnEntryType() TxnEntryType
 }
+
+const (
+	TxnEntryDatabase TxnEntryType = iota
+	TxnEntryTable
+	TxnEntrySegment
+	TxnEntryBlock
+	TxnEntryAppend
+	TxnEntryDelete
+	TxnEntryCompact
+	TxnEntryMerge
+)

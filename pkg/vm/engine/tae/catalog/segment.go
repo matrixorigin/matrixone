@@ -201,6 +201,7 @@ func (entry *SegmentEntry) IsAppendable() bool {
 	return entry.state == ES_Appendable
 }
 
+func (entry *SegmentEntry) GetTxnEntryType() txnif.TxnEntryType { return txnif.TxnEntrySegment }
 func (entry *SegmentEntry) SetSorted() {
 	// modifing segment interface to supporte a borned sorted seg is verbose
 	// use Lock instead, the contention won't be intense

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -353,6 +354,46 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 	}
 	h = buildDB(db)
 	return
+}
+
+func (store *txnStore) GetLogtails(
+	onDatabase func(db any),
+	onTable func(tbl any),
+	onRotateTable func(dbName, tblName string, dbid, tid uint64),
+	onMetadata func(block any),
+	onAppend func(bat any),
+	onDelete func(deletes []uint32, prefix []byte)) {
+	for _, db := range store.dbs {
+		if db.createEntry != nil || db.dropEntry != nil {
+			onDatabase(db.entry)
+		}
+		dbName := db.entry.GetName()
+		dbid := db.entry.ID
+		for _, tbl := range db.tables {
+			tblName := tbl.entry.GetSchema().Name
+			tid := tbl.entry.ID
+			onRotateTable(dbName, tblName, dbid, tid)
+			if tbl.createEntry != nil || tbl.dropEntry != nil {
+				onTable(tbl.entry)
+			}
+			for _, iTxnEntry := range tbl.txnEntries.entries {
+				switch txnEntry := iTxnEntry.(type) {
+				case *catalog.BlockEntry:
+					onMetadata(txnEntry)
+				case *updates.DeleteNode:
+					deletes := txnEntry.DeletedRows()
+					prefix := txnEntry.GetPrefix()
+					onDelete(deletes, prefix)
+				}
+			}
+			for _, node := range tbl.localSegment.nodes {
+				anode, ok := node.(*anode)
+				if ok {
+					onAppend(anode.storage.mnode.data)
+				}
+			}
+		}
+	}
 }
 
 func (store *txnStore) DropDatabaseByID(id uint64) (h handle.Database, err error) {

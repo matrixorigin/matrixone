@@ -191,6 +191,7 @@ func (e *DBEntry) GetFullName() string {
 	return e.fullName
 }
 
+func (e *DBEntry) GetTxnEntryType() txnif.TxnEntryType { return txnif.TxnEntryDatabase }
 func (e *DBEntry) String() string {
 	e.RLock()
 	defer e.RUnlock()

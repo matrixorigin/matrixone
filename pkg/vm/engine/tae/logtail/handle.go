@@ -461,32 +461,35 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 }
 
 func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode *catalog.MetadataMVCCNode) {
+	visitBlkMeta(e, metaNode, b.blkMetaInsBatch, b.blkMetaDelBatch)
+}
+
+func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatch, delBatch *containers.Batch) {
 	logutil.Infof("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
 		e.AsCommonID().String(), e.IsAppendable(),
-		metaNode.CreatedAt.ToString(), metaNode.DeletedAt.ToString(), metaNode.MetaLoc, metaNode.DeltaLoc)
+		node.CreatedAt.ToString(), node.DeletedAt.ToString(), node.MetaLoc, node.DeltaLoc)
 	is_sorted := false
 	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
 		is_sorted = true
 	}
-	insBatch := b.blkMetaInsBatch
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.MetaLoc))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.DeltaLoc))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(node.GetEnd())
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID)
-	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.CreatedAt)
+	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.CreatedAt)
 	insBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
 
-	if metaNode.HasDropCommitted() {
-		if metaNode.DeletedAt.IsEmpty() {
+	if node.HasDropCommitted() {
+		if node.DeletedAt.IsEmpty() {
 			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
 		}
-		delBatch := b.blkMetaDelBatch
-		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.DeletedAt)
+		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt)
 		delBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
 	}
+
 }
 
 func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error) {

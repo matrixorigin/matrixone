@@ -115,6 +115,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.LogtailMgr = logtail.NewManager(
 		int(db.Opts.LogtailCfg.PageSize),
 		db.Opts.Clock,
+		db.TxnMgr,
 	)
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
 	db.TxnMgr.Start()
