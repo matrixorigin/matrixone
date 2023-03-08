@@ -177,7 +177,11 @@ func (txn *Transaction) DumpBatch(force bool) error {
 			for i := 0; i < len(mp[key]); i++ {
 				container.Put(mp[key][i], 0)
 			}
+			old_ctx := txn.proc.Ctx
+			// deal context Cancel error
+			txn.proc.Ctx = context.Background()
 			container.MergeBlock(0, len(mp[key]), txn.proc, false)
+			txn.proc.Ctx = old_ctx
 			metaLoc := container.GetMetaLocBat()
 
 			lenVecs := len(metaLoc.Attrs)
