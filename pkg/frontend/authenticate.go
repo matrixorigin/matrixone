@@ -2721,6 +2721,7 @@ handleFailed:
 func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	var err error
 	var vr *verifiedRole
+	var sql string
 	account := ses.GetTenantInfo()
 	err = normalizeNamesOfRoles(ctx, dr.Roles)
 	if err != nil {
@@ -2739,7 +2740,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	//step1: check roles exists or not.
 	//handle "IF EXISTS"
 	for _, role := range dr.Roles {
-		sql, err := getSqlForRoleIdOfRole(ctx, role.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
 		if err != nil {
 			goto handleFailed
 		}
@@ -2904,6 +2905,7 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 	var privLevel privilegeLevelType
 	var objId int64
 	var privType PrivilegeType
+	var sql string
 	err = normalizeNamesOfRoles(ctx, rp.Roles)
 	if err != nil {
 		return err
@@ -2930,7 +2932,7 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 			err = moerr.NewInternalError(ctx, "the privilege can not be revoked from the role %s", user.UserName)
 			goto handleFailed
 		}
-		sql, err := getSqlForRoleIdOfRole(ctx, user.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, user.UserName)
 		if err != nil {
 			goto handleFailed
 		}
@@ -3184,6 +3186,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	var objType objectType
 	var privLevel privilegeLevelType
 	var objId int64
+	var sql string
 
 	err = normalizeNamesOfRoles(ctx, gp.Roles)
 	if err != nil {
@@ -3211,7 +3214,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 			err = moerr.NewInternalError(ctx, "the privilege can not be granted to the role %s", role.UserName)
 			goto handleFailed
 		}
-		sql, err := getSqlForRoleIdOfRole(ctx, role.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
 		if err != nil {
 			goto handleFailed
 		}
@@ -3345,6 +3348,7 @@ handleFailed:
 // doRevokeRole accomplishes the RevokeRole statement
 func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error {
 	var err error
+	var sql string
 	err = normalizeNamesOfRoles(ctx, rr.Roles)
 	if err != nil {
 		return err
@@ -3373,7 +3377,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 	//handle "IF EXISTS"
 	//step1 : check Users are real Users or Roles,  exists or not
 	for i, user := range rr.Users {
-		sql, err := getSqlForRoleIdOfRole(ctx, user.Username)
+		sql, err = getSqlForRoleIdOfRole(ctx, user.Username)
 		if err != nil {
 			goto handleFailed
 		}
@@ -3406,7 +3410,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 	//handle "IF EXISTS"
 	//step2 : check roles before the FROM clause
 	for i, role := range rr.Roles {
-		sql, err := getSqlForRoleIdOfRole(ctx, role.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
 		if err != nil {
 			goto handleFailed
 		}
@@ -3523,6 +3527,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	var erArray []ExecResult
 	var err error
 	var withGrantOption int64
+	var sql string
 	err = normalizeNamesOfRoles(ctx, gr.Roles)
 	if err != nil {
 		return err
@@ -3555,7 +3560,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	}
 
 	for i, role := range gr.Roles {
-		sql, err := getSqlForRoleIdOfRole(ctx, role.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
 		if err != nil {
 			goto handleFailed
 		}
@@ -3572,7 +3577,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 
 	//step2 : check Users are real Users or Roles,  exists or not
 	for i, user := range gr.Users {
-		sql, err := getSqlForRoleIdOfRole(ctx, user.Username)
+		sql, err = getSqlForRoleIdOfRole(ctx, user.Username)
 		if err != nil {
 			goto handleFailed
 		}
@@ -5954,6 +5959,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 	var host string
 	var newRoleId int64
 	var status string
+	var sql string
 
 	err = normalizeNamesOfUsers(ctx, cu.Users)
 	if err != nil {
@@ -5984,12 +5990,12 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 	//TODO: get role and the id of role
 	newRoleId = publicRoleID
 	if cu.Role != nil {
-		sqlForRoleIdOfRole, err := getSqlForRoleIdOfRole(ctx, cu.Role.UserName)
+		sql, err = getSqlForRoleIdOfRole(ctx, cu.Role.UserName)
 		if err != nil {
 			goto handleFailed
 		}
 		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sqlForRoleIdOfRole)
+		err = bh.Exec(ctx, sql)
 		if err != nil {
 			goto handleFailed
 		}
@@ -6033,7 +6039,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 
 	for _, user := range cu.Users {
 		//dedup with user
-		sql, err := getSqlForPasswordOfUser(ctx, user.Username)
+		sql, err = getSqlForPasswordOfUser(ctx, user.Username)
 		if err != nil {
 			goto handleFailed
 		}
@@ -6054,12 +6060,12 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 
 		//dedup with the role
 		if exists == 0 {
-			sqlForRoleIdOfRole, err := getSqlForRoleIdOfRole(ctx, user.Username)
+			sql, err = getSqlForRoleIdOfRole(ctx, user.Username)
 			if err != nil {
 				goto handleFailed
 			}
 			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sqlForRoleIdOfRole)
+			err = bh.Exec(ctx, sql)
 			if err != nil {
 				goto handleFailed
 			}
@@ -6178,6 +6184,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	var err error
 	var exists int
 	var erArray []ExecResult
+	var sql string
 	err = normalizeNamesOfRoles(ctx, cr.Roles)
 	if err != nil {
 		return err
@@ -6197,12 +6204,12 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 			exists = 3
 		} else {
 			//dedup with role
-			sqlForRoleIdOfRole, err := getSqlForRoleIdOfRole(ctx, r.UserName)
+			sql, err = getSqlForRoleIdOfRole(ctx, r.UserName)
 			if err != nil {
 				goto handleFailed
 			}
 			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sqlForRoleIdOfRole)
+			err = bh.Exec(ctx, sql)
 			if err != nil {
 				goto handleFailed
 			}
@@ -6217,7 +6224,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 
 			//dedup with user
 			if exists == 0 {
-				sql, err := getSqlForPasswordOfUser(ctx, r.UserName)
+				sql, err = getSqlForPasswordOfUser(ctx, r.UserName)
 				if err != nil {
 					goto handleFailed
 				}
@@ -6627,12 +6634,13 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (string, error) {
 	var err error
 	var erArray []ExecResult
+	var sql string
 	defaultConfig := "0.7"
 	path := "$.version_compatibility"
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	sql, err := getSqlForGetConfiguationByDbName(ctx, path, dbName)
+	sql, err = getSqlForGetConfiguationByDbName(ctx, path, dbName)
 	if err != nil {
 		return defaultConfig, err
 	}
