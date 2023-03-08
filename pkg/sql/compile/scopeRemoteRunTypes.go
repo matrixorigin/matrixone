@@ -135,6 +135,7 @@ func (sender *messageSenderOnClient) send(
 			return err
 		}
 		cnt++
+		start = end
 	}
 	return nil
 }
@@ -234,7 +235,7 @@ func newMessageReceiverOnServer(
 		if m.GetSequence() == 0 { // status == Last && sequence == 0 means it is a complete data
 			receiver.scopeData = m.Data
 		} else {
-			completeData, err := getCompleteScopeDate(ctx, int(receiver.sequence), m, cs)
+			completeData, err := getCompleteScopeDate(ctx, int(m.GetSequence()), m, cs)
 			if err != nil {
 				logutil.Errorf("failed to get complete pipeline data. err = %s", err)
 				panic("failed to get complete pipeline data")
