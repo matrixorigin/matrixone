@@ -126,6 +126,7 @@ func (b *bufferHolder) putBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, 
 func (b *bufferHolder) Add(item batchpipe.HasName) {
 	b.mux.Lock()
 	if b.stopped {
+		b.mux.Unlock()
 		return
 	}
 	if b.buffer == nil {
