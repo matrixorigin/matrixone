@@ -285,7 +285,7 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		gtotalStats := TotalStats{
 			Name:  "Time spent",
 			Value: 0,
-			Unit:  "us",
+			Unit:  "ns",
 		}
 
 		for _, node := range graphData.Nodes {

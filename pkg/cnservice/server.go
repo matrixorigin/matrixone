@@ -203,11 +203,7 @@ func (s *service) acquireMessage() morpc.Message {
 
 func (s *service) releaseMessage(m *pipeline.Message) {
 	if s.responsePool != nil {
-		m.Sid = 0
-		m.Err = nil
-		m.Data = nil
-		m.ProcInfoData = nil
-		m.Analyse = nil
+		m.Reset()
 		s.responsePool.Put(m)
 	}
 }
@@ -217,6 +213,21 @@ func (s *service) handleRequest(
 	req morpc.Message,
 	_ uint64,
 	cs morpc.ClientSession) error {
+	msg, ok := req.(*pipeline.Message)
+	if !ok {
+		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", req)
+		panic("cn server receive a message with unexpected type")
+	}
+	switch msg.GetSid() {
+	case pipeline.WaitingNext:
+		return handleWaitingNextMsg(ctx, req, cs)
+	case pipeline.Last:
+		if msg.IsPipelineMessage() { // only pipeline type need assemble msg now.
+			if err := handleAssemblePipeline(ctx, req, cs); err != nil {
+				return err
+			}
+		}
+	}
 	go s.requestHandler(ctx,
 		req,
 		cs,
@@ -414,4 +425,47 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	})
 	c = s._txnClient
 	return
+}
+
+// put the waiting-next type msg into client session's cache and return directly
+func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+	msg, _ := message.(*pipeline.Message)
+	switch msg.GetCmd() {
+	case pipeline.PipelineMessage:
+		var cache morpc.MessageCache
+		var err error
+		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
+			return err
+		}
+		cache.Add(message)
+	}
+	return nil
+}
+
+func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+	var data []byte
+
+	cnt := uint64(0)
+	cache, err := cs.CreateCache(ctx, message.GetID())
+	if err != nil {
+		return err
+	}
+	for {
+		msg, ok, err := cache.Pop()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			cache.Close()
+			break
+		}
+		if cnt != msg.(*pipeline.Message).GetSequence() {
+			return moerr.NewInternalErrorNoCtx("Pipeline packages passed by morpc are out of order")
+		}
+		cnt++
+		data = append(data, msg.(*pipeline.Message).GetData()...)
+	}
+	msg := message.(*pipeline.Message)
+	msg.SetData(append(data, msg.GetData()...))
+	return nil
 }
