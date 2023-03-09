@@ -1262,6 +1262,12 @@ func decimal64ToOthers(ctx context.Context,
 		return decimal64ToUnsigned(ctx, source, rs, 64, length)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
+		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
+			v := source.GetSourceVector()
+			v.Typ = toType
+			rs.SetFromParameter(source)
+			return nil
+		}
 		return decimal64ToDecimal64(source, rs, length)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
@@ -1298,6 +1304,12 @@ func decimal128ToOthers(ctx context.Context,
 		return decimal128ToDecimal64(ctx, source, rs, length)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
+		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
+			v := source.GetSourceVector()
+			v.Typ = toType
+			rs.SetFromParameter(source)
+			return nil
+		}
 		return decimal128ToDecimal128(ctx, source, rs, length)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
