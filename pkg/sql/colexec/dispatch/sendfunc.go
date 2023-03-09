@@ -127,7 +127,7 @@ func sendBatchToClientSession(encodeBatData []byte, wcs *WrapperClientSession) e
 			msg.Id = wcs.msgId
 			msg.Data = encodeBatData
 			msg.Cmd = pipeline.BatchMessage
-			msg.Sid = pipeline.BatchEnd
+			msg.Sid = pipeline.Last
 			msg.Checksum = checksum
 		}
 		if err := wcs.cs.Write(timeoutCtx, msg); err != nil {
@@ -139,10 +139,10 @@ func sendBatchToClientSession(encodeBatData []byte, wcs *WrapperClientSession) e
 	start := 0
 	for start < len(encodeBatData) {
 		end := start + maxMessageSizeToMoRpc
-		sid := pipeline.BatchWaitingNext
+		sid := pipeline.WaitingNext
 		if end > len(encodeBatData) {
 			end = len(encodeBatData)
-			sid = pipeline.BatchEnd
+			sid = pipeline.Last
 		}
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
 		_ = cancel

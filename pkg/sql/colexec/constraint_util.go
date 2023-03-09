@@ -143,7 +143,7 @@ func FilterAndUpdateByRowId(
 			}
 
 			// write unique key table
-			writeUniqueTable(nil, eg, proc, updateBatch, tableDef, ref[i].SchemaName, info.updateNameToPos, info.pkPos, uniqueRel)
+			writeUniqueTable(nil, proc, updateBatch, tableDef, info.updateNameToPos, info.pkPos, uniqueRel)
 
 			// write origin table
 			err = rels[i].Write(proc.Ctx, updateBatch)
@@ -155,8 +155,8 @@ func FilterAndUpdateByRowId(
 	return affectedRows, nil
 }
 
-func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *process.Process, updateBatch *batch.Batch,
-	tableDef *plan.TableDef, dbName string, updateNameToPos map[string]int, pkPos int, rels []engine.Relation) error {
+func writeUniqueTable(s3Container *WriteS3Container, proc *process.Process, updateBatch *batch.Batch,
+	tableDef *plan.TableDef, updateNameToPos map[string]int, pkPos int, rels []engine.Relation) error {
 	var ukBatch *batch.Batch
 
 	defer func() {
@@ -438,47 +438,40 @@ func GetInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int
 
 func InsertBatch(
 	container *WriteS3Container,
-	eg engine.Engine,
 	proc *process.Process,
 	bat *batch.Batch,
 	rel engine.Relation,
-	ref *plan.ObjectRef,
 	tableDef *plan.TableDef,
-	parentIdx map[string]int32,
 	uniqueRel []engine.Relation) (uint64, error) {
-	var err error
 	affectedRows := bat.Vecs[0].Length()
 	defer func() {
-		if bat != nil {
-			bat.Clean(proc.Mp())
-		}
+		bat.Clean(proc.Mp())
 	}()
 
 	info := GetInfoForInsertAndUpdate(tableDef, nil)
 
 	if container != nil {
 		// write to s3
-		err = container.WriteS3Batch(bat, proc, 0)
+		err := container.WriteS3Batch(bat, proc, 0)
 		if err != nil {
 			return 0, err
 		}
 
-		err = writeUniqueTable(container, eg, proc, bat, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos, uniqueRel)
+		err = writeUniqueTable(container, proc, bat, tableDef, info.updateNameToPos, info.pkPos, uniqueRel)
 		if err != nil {
 			return 0, err
 		}
-
-	} else {
-		// write unique key table
-		err = writeUniqueTable(nil, eg, proc, bat, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos, uniqueRel)
-		if err != nil {
-			return 0, err
-		}
-
-		// write origin table
-		err = rel.Write(proc.Ctx, bat)
+		return uint64(affectedRows), nil
 	}
 
+	// write origin table
+	err := rel.Write(proc.Ctx, bat)
+	if err != nil {
+		return 0, err
+	}
+
+	// write unique key table
+	err = writeUniqueTable(nil, proc, bat, tableDef, info.updateNameToPos, info.pkPos, uniqueRel)
 	if err != nil {
 		return 0, err
 	}

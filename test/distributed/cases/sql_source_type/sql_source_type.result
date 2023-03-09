@@ -1,3 +1,4 @@
+create account if not exists `sql_source_type` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 /* cloud_user */drop table if exists __mo_t1;
 /* cloud_nonuser */ create table __mo_t1(a int);
 insert into __mo_t1 values(1);
@@ -8,10 +9,10 @@ a
 select sleep(15);
 sleep(15)
 0
-select statement, sql_source_type from statement_info where user="dump" order by request_at desc limit 5;
+select statement, sql_source_type from system.statement_info where user="dump" order by request_at desc limit 4;
 statement    sql_source_type
-select sleep(15)    external_sql
 show tables    cloud_user_sql
 use system    cloud_nonuser_sql
 select * from __mo_t1    external_sql
 insert into __mo_t1 values (1)    external_sql
+drop account if exists sql_source_type;
