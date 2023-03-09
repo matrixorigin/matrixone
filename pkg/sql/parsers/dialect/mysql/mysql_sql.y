@@ -2250,28 +2250,28 @@ alter_table_drop:
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropIndex,
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
         }
     }
 |   KEY ident
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropKey,
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
         }
     }
 |   COLUMN ident 
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropColumn,
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
         }
     }
 |   FOREIGN KEY ident 
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropForeignKey,
-            Name: tree.Identifier($3.ToLowerForConfig()),
+            Name: tree.Identifier($3.Compare()),
         }
     }
 |   PRIMARY KEY 
