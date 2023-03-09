@@ -87,7 +87,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 			for i := 0; i < size; i++ {
 				a.es = append(a.es, true)
 				a.srcs = append(a.srcs, make([]T1, 0, 1))
-				mp, err := hashmap.NewStrMap(true, 0, 0, m)
+				mp, err := hashmap.NewStrMap(false, 0, 0, m)
 				if err != nil {
 					return err
 				}
@@ -100,7 +100,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 				a.vs = append(a.vs, v)
 				a.srcs = append(a.srcs, make([]T1, 0, 1))
 			}
-			mp, err := hashmap.NewStrMap(true, 0, 0, m)
+			mp, err := hashmap.NewStrMap(false, 0, 0, m)
 			if err != nil {
 				return err
 			}
@@ -134,7 +134,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 	a.da = a.da[:(n+size)*sz]
 	for i := 0; i < size; i++ {
 		a.es = append(a.es, true)
-		mp, err := hashmap.NewStrMap(true, 0, 0, m)
+		mp, err := hashmap.NewStrMap(false, 0, 0, m)
 		if err != nil {
 			return err
 		}
