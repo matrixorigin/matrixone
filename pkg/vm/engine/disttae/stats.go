@@ -23,19 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func makeColumns(tableDef *plan.TableDef) []int {
-	lenCols := len(tableDef.Cols)
-	cols := make([]int, lenCols)
-	for i := 0; i < lenCols; i++ {
-		cols[i] = i
-	}
-	return cols
-}
-
 // get minval , maxval, datatype from zonemap
 func getInfoFromZoneMap(ctx context.Context, blocks *[][]BlockMeta, blockNumTotal int, tableDef *plan.TableDef) (*plan2.InfoFromZoneMap, error) {
 
-	columns := makeColumns(tableDef)
+	columns := plan2.MakeAllColumns(tableDef)
 	lenCols := len(columns)
 	info := plan2.NewInfoFromZoneMap(lenCols, blockNumTotal)
 
@@ -107,7 +98,6 @@ func CalcStats(ctx context.Context, blocks *[][]BlockMeta, expr *plan.Expr, tabl
 		if err != nil {
 			return plan2.DefaultStats(), nil
 		}
-
 		plan2.UpdateStatsInfoMap(info, columns, blockNumTotal, stats.TableCnt, tableDef, s)
 	}
 
