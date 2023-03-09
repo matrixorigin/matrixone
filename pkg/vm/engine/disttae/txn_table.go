@@ -533,7 +533,9 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
 		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
 		if ok {
-			encodedPrimaryKey = encodePrimaryKey(v, tbl.db.txn.engine.mp)
+			packer, put := tbl.db.txn.engine.packerPool.Get()
+			defer put()
+			encodedPrimaryKey = encodePrimaryKey(v, packer)
 			index = memorytable.Tuple{
 				index_PrimaryKey,
 				memorytable.ToOrdered(v),

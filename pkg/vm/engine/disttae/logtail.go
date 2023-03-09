@@ -30,7 +30,9 @@ func consumeEntry(
 	e *api.Entry,
 ) error {
 
-	state.HandleLogtailEntry(ctx, e, primaryIdx, engine.mp)
+	packer, put := engine.packerPool.Get()
+	defer put()
+	state.HandleLogtailEntry(ctx, e, primaryIdx, packer)
 
 	if isMetaTable(e.TableName) {
 		return nil

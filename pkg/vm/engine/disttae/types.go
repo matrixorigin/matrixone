@@ -61,15 +61,15 @@ type IDGenerator interface {
 
 type Engine struct {
 	sync.RWMutex
-	mp      *mpool.MPool
-	fs      fileservice.FileService
-	cli     client.TxnClient
-	idGen   IDGenerator
-	txns    map[string]*Transaction
-	catalog *cache.CatalogCache
-
+	mp         *mpool.MPool
+	fs         fileservice.FileService
+	cli        client.TxnClient
+	idGen      IDGenerator
+	txns       map[string]*Transaction
+	catalog    *cache.CatalogCache
 	dnMap      map[string]int
 	partitions map[[2]uint64]Partitions
+	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
 	usePushModel       bool

@@ -399,7 +399,7 @@ func randStringType() []byte {
 	return b
 }
 
-func encodeBufToPacker(tuple Tuple, p *packer) {
+func encodeBufToPacker(tuple Tuple, p *Packer) {
 	for _, e := range tuple {
 		switch e := e.(type) {
 		case bool:
