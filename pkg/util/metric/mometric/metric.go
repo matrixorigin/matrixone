@@ -81,6 +81,9 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	}
 	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
 
+	moDevMetricCollector := newMetricLogCollector(WithFlushInterval(initOpts.exportInterval))
+	moDevMetricExporter := newMetricExporter(metric.DefaultDevMetricRegistry, moDevMetricCollector, nodeUUID, role)
+
 	// register metrics and create tables
 	registerAllMetrics()
 	multiTable = initOpts.multiTable
@@ -92,6 +95,10 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	serviceCtx := context.Background()
 	moCollector.Start(serviceCtx)
 	moExporter.Start(serviceCtx)
+
+	moDevMetricCollector.Start(serviceCtx)
+	moDevMetricExporter.Start(serviceCtx)
+
 	metric.SetMetricExporter(moExporter)
 
 	if metric.GetExportToProm() {

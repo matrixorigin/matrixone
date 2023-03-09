@@ -372,6 +372,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	default:
 	}
 
+	//TODO: Need to define S3FS Stats and export it as DevMetrics
 	ctx, span := trace.Start(ctx, "S3FS.Read")
 	defer span.End()
 

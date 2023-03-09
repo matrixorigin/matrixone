@@ -16,9 +16,9 @@ package fileservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/prom"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type MemCache struct {
@@ -34,11 +34,17 @@ func NewMemCache(capacity int64) *MemCache {
 			fn()
 		}
 	}()
-	return &MemCache{
+
+	mc := &MemCache{
 		lru:   NewLRU(capacity),
 		stats: new(CacheStats),
 		ch:    ch,
 	}
+
+	mcStatsCollector := prom.NewMemCacheStatsCollector(mc, "MemCache")
+	metric.RegisterDevMetric(mcStatsCollector)
+
+	return mc
 }
 
 var _ Cache = new(MemCache)
@@ -49,8 +55,8 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
-	_, span := trace.Start(ctx, "MemCache.Read")
-	defer span.End()
+	//_, span := trace.Start(ctx, "MemCache.Read")
+	//defer span.End()
 
 	numHit := 0
 	defer func() {
