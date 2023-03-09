@@ -6,6 +6,7 @@ import (
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
+// TODO: Once this class is mature, it will be moved inside metric_collector.go
 type metricLogCollector struct {
 	*bp.BaseBatchPipe[*pb.MetricFamily, string]
 	opts collectorOpts
