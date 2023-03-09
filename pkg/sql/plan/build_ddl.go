@@ -137,10 +137,9 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 }
 
 func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *plan.CreateSequence) error {
-	// Sequence table got 1 row and 6 col
-	// sequence_value, maxvalue,minvalue,startvalue,increment,cycleornot
-	numOfSequenceParam := 6
-	cols := make([]*plan.ColDef, numOfSequenceParam)
+	// Sequence table got 1 row and 7 col
+	// sequence_value, maxvalue,minvalue,startvalue,increment,cycleornot,iscalled.
+	cols := make([]*plan.ColDef, len(Sequence_cols_name))
 
 	typ, err := getTypeFromAst(ctx.GetContext(), stmt.Type)
 	if err != nil {
@@ -151,7 +150,7 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 			break
 		}
 		cols[i] = &plan.ColDef{
-			Name: sequence_cols_name[i],
+			Name: Sequence_cols_name[i],
 			Alg:  plan.CompressType_Lz4,
 			Typ:  typ,
 			Default: &plan.Default{
@@ -162,7 +161,7 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 		}
 	}
 	cols[4] = &plan.ColDef{
-		Name: sequence_cols_name[4],
+		Name: Sequence_cols_name[4],
 		Alg:  plan.CompressType_Lz4,
 		Typ: &plan.Type{
 			Id:    int32(types.T_int64),
@@ -176,20 +175,22 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 			OriginString: "",
 		},
 	}
-	cols[5] = &plan.ColDef{
-		Name: sequence_cols_name[5],
-		Alg:  plan.CompressType_Lz4,
-		Typ: &plan.Type{
-			Id:    int32(types.T_bool),
-			Width: 0,
-			Size:  1,
-			Scale: 0,
-		},
-		Default: &plan.Default{
-			NullAbility:  true,
-			Expr:         nil,
-			OriginString: "",
-		},
+	for i := 5; i <= 6; i++ {
+		cols[i] = &plan.ColDef{
+			Name: Sequence_cols_name[i],
+			Alg:  plan.CompressType_Lz4,
+			Typ: &plan.Type{
+				Id:    int32(types.T_bool),
+				Width: 0,
+				Size:  1,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  true,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
 	}
 
 	cs.TableDef.Cols = cols
@@ -229,7 +230,6 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 		createSequence.Database = string(stmt.Name.SchemaName)
 	}
 
-	// TODO: Check exists.
 	err := buildSequenceTableDef(stmt, ctx, createSequence)
 	if err != nil {
 		return nil, err

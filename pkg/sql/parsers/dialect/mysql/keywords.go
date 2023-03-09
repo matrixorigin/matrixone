@@ -539,5 +539,6 @@ func init() {
 		"increment":                INCREMENT,
 		"cycle":                    CYCLE,
 		"minvalue":                 MINVALUE,
+		"nextval":                  NEXTVAL,
 	}
 }

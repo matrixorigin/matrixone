@@ -1,0 +1,10 @@
+drop table if exists s1;
+create sequence s1 as smallint increment by -10 minvalue 30 maxvalue 100 cycle; 
+select * from s1;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called    
+100    30    100    100    -10    true    false
+drop table if exists s1;
+create sequence s1 as bigint unsigned increment by -1000 maxvalue 300;
+select * from s1;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+300    0    300    300    -1000    false    false

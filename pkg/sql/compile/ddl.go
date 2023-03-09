@@ -1041,6 +1041,12 @@ func (s *Scope) CreateSequence(c *Compile) error {
 			return moerr.NewTableAlreadyExists(c.ctx, tblName)
 		}
 		bat, err := makeSequenceInitBatch(c.ctx, c.stmt.(*tree.CreateSequence), qry.GetTableDef(), c.proc)
+		defer func() {
+			if bat != nil {
+				bat.Clean(c.proc.Mp())
+			}
+		}()
+
 		if err != nil {
 			return err
 		}
@@ -1053,12 +1059,12 @@ func (s *Scope) CreateSequence(c *Compile) error {
 }
 
 /*
-Sequence table got 1 row and 6 columns.
-------------------------------------------------------------------------
-next_seq_num| min_value| max_value| start_value| increment_value| cycle|
-------------------------------------------------------------------------
+Sequence table got 1 row and 7 columns(besides row_id).
+-----------------------------------------------------------------------------------
+next_seq_num| min_value| max_value| start_value| increment_value| cycle| is_called |
+-----------------------------------------------------------------------------------
 
-------------------------------------------------------------------------
+------------------------------------------------------------------------------------
 */
 func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
 	var bat batch.Batch
@@ -1066,7 +1072,8 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 	bat.Zs = make([]int64, 1)
 	bat.Zs[0] = 1
 	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
-	vecs := make([]*vector.Vector, 6)
+	sequence_cols_num := 7
+	vecs := make([]*vector.Vector, sequence_cols_num)
 
 	// Make sequence vecs.
 	switch typ.Oid {
@@ -1169,7 +1176,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 			maxV = math.MaxUint16
 		}
 		if stmt.MinValue == nil && incr < 0 {
-			minV = 1
+			minV = 0
 		}
 		if stmt.StartWith == nil {
 			if incr > 0 {
@@ -1195,7 +1202,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 			maxV = math.MaxUint32
 		}
 		if stmt.MinValue == nil && incr < 0 {
-			minV = 1
+			minV = 0
 		}
 		if stmt.StartWith == nil {
 			if incr > 0 {
@@ -1221,7 +1228,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 			maxV = math.MaxUint64
 		}
 		if stmt.MinValue == nil && incr < 0 {
-			minV = 1
+			minV = 0
 		}
 		if stmt.StartWith == nil {
 			if incr > 0 {
@@ -1251,7 +1258,10 @@ func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.C
 		vecs[i] = vector.NewConst(typ, 0)
 	}
 	vecs[4] = vector.NewConst(types.T_int64.ToType(), 0)
-	vecs[5] = vector.NewConst(types.T_bool.ToType(), 0)
+	for i := 5; i <= 6; i++ {
+		vecs[i] = vector.NewConst(types.T_bool.ToType(), 0)
+	}
+
 	if stmt.Cycle {
 		err := vecs[5].Append(true, false, proc.Mp())
 		if err != nil {
@@ -1263,7 +1273,13 @@ func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.C
 			return err
 		}
 	}
-	err := vecs[0].Append(startN, false, proc.Mp())
+
+	err := vecs[6].Append(false, false, proc.Mp())
+	if err != nil {
+		return err
+	}
+
+	err = vecs[0].Append(startN, false, proc.Mp())
 	if err != nil {
 		return err
 	}

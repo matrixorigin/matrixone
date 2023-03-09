@@ -362,6 +362,9 @@ import (
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
+// Sequence function
+%token <str> NEXTVAL
+
 //JSON function
 %token <str> ARROW
 
@@ -6827,6 +6830,14 @@ function_call_generic:
             Type: $3,
         }
     }
+|   NEXTVAL '(' expression_list ')'
+    {
+        name := tree.SetUnresolvedName("nextval")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
+        }
+    }
 |   TRIM '(' expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
@@ -8696,6 +8707,7 @@ not_keyword:
 |   VAR_SAMP
 |   AVG
 |	TIMESTAMPDIFF
+|   NEXTVAL
 
 //mo_keywords:
 //    PROPERTIES
