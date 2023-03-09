@@ -19,12 +19,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1530,7 +1531,10 @@ func (th *TxnHandler) TxnClientNew() error {
 // Then it creates the new transaction.
 func (th *TxnHandler) NewTxn() error {
 	var err error
-	ctx := th.GetSession().GetRequestContext()
+	// RequestContext cannot be used here because line 187 of routine.go will be cancelled
+	// ctx := th.GetSession().GetRequestContext()
+	ctx, cancel := context.WithTimeout(context.TODO(), th.ses.pu.SV.SessionTimeout.Duration)
+	_ = cancel
 	if th.IsValidTxn() {
 		err = th.CommitTxn()
 		if err != nil {
