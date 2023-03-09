@@ -52,6 +52,9 @@ type statusServer struct {
 var registry *prom.Registry
 var moExporter metric.MetricExporter
 var moCollector MetricCollector
+var moDevMetricExporter metric.MetricExporter
+var moDevMetricCollector MetricCollector
+
 var statusSvr *statusServer
 var multiTable = false // need set before newMetricFSCollector and initTables
 
@@ -81,8 +84,8 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	}
 	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
 
-	moDevMetricCollector := newMetricLogCollector(WithFlushInterval(initOpts.exportInterval))
-	moDevMetricExporter := newMetricExporter(metric.DefaultDevMetricRegistry, moDevMetricCollector, nodeUUID, role)
+	moDevMetricCollector = newMetricLogCollector(WithFlushInterval(initOpts.exportInterval))
+	moDevMetricExporter = newMetricExporter(metric.DefaultDevMetricRegistry, moDevMetricCollector, nodeUUID, role)
 
 	// register metrics and create tables
 	registerAllMetrics()
@@ -138,6 +141,20 @@ func StopMetricSync() {
 		}
 		moExporter = nil
 	}
+
+	if moDevMetricCollector != nil {
+		if ch, effect := moDevMetricCollector.Stop(true); effect {
+			<-ch
+		}
+		moDevMetricCollector = nil
+	}
+	if moDevMetricExporter != nil {
+		if ch, effect := moDevMetricExporter.Stop(true); effect {
+			<-ch
+		}
+		moDevMetricExporter = nil
+	}
+
 	if statusSvr != nil {
 		_ = statusSvr.Shutdown(context.TODO())
 		statusSvr = nil
