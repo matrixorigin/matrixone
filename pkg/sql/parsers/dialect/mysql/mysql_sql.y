@@ -36,6 +36,10 @@ import (
     statement tree.Statement
     statements []tree.Statement
 
+    alterTable tree.AlterTable
+    alterTableOptions tree.AlterTableOptions
+    alterTableOption tree.AlterTableOption
+
     tableDef tree.TableDef
     tableDefs tree.TableDefs
     tableName *tree.TableName
@@ -382,7 +386,7 @@ import (
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
@@ -445,6 +449,8 @@ import (
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
+%type <alterTableOptions> alter_options
+%type <alterTableOption> alter_table_drop
 
 %type <tableOption> table_option
 %type <from> from_clause from_opt
@@ -2195,6 +2201,7 @@ alter_stmt:
 |   alter_account_stmt
 |   alter_database_config_stmt
 |   alter_view_stmt
+|   alter_table_stmt
 // |    alter_ddl_stmt
 
 alter_view_stmt:
@@ -2207,6 +2214,73 @@ alter_view_stmt:
             IfExists: $3,
         }
     }
+
+alter_table_stmt:
+    ALTER TABLE table_name alter_options
+    {
+        $$ = &tree.AlterTable{
+            Table: *$3,
+            Options: $4,
+        }
+    }
+
+alter_options:
+ADD table_elem
+    {
+        opt := &tree.AlterOptionAdd{
+            Def:  $2,
+        }
+        $$ = []tree.AlterTableOption{tree.AlterTableOption(opt)}
+    }
+|   DROP alter_table_drop
+    {
+        $$ = []tree.AlterTableOption{tree.AlterTableOption($2)}
+    }
+| table_option_list
+    {
+        opts := make([]tree.AlterTableOption, len($1))
+        for i, opt := range $1 {
+            opts[i] = tree.AlterTableOption(opt)
+        }
+        $$ =  opts
+    }
+
+alter_table_drop:
+    INDEX ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropIndex,
+            Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   KEY ident
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropKey,
+            Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   COLUMN ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropColumn,
+            Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   FOREIGN KEY ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropForeignKey,
+            Name: tree.Identifier($3.Compare()),
+        }
+    }
+|   PRIMARY KEY 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropPrimaryKey,
+        }
+    }
+    
 
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt

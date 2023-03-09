@@ -1976,6 +1976,28 @@ var (
 			input:  "UNLOCK TABLES",
 			output: "UnLock Tables",
 		},
+		{
+			input: "alter table tbl1 drop column col1",
+		},
+		{
+			input: "alter table tbl1 drop index idx_name",
+		},
+		{
+			input: "alter table tbl1 drop key idx_name",
+		},
+		{
+			input: "alter table tbl1 drop primary key",
+		},
+		{
+			input: "alter table tbl1 drop foreign key fk_name",
+		},
+		{
+			input: "alter table tbl1 add foreign key sdf (a, b) references b(a asc, b desc)",
+		},
+		{
+			input:  "alter table tbl1 checksum = 0, COMMENT = 'asdf'",
+			output: "alter table tbl1 checksum = 0, comment = asdf",
+		},
 	}
 )
 
