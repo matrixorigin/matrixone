@@ -19,32 +19,26 @@ import (
 )
 
 type CStr struct {
-	o     string
-	c     string
-	quote bool
+	o string
+	c string
+	// quote bool
 }
 
-func NewCStr(str string, hasQuote bool) *CStr {
-	return &CStr{
-		o:     str,
-		quote: hasQuote,
-	}
-}
-
-func (cs *CStr) SetConfig(config int64) {
-	switch config {
-	case 0:
+func NewCStr(str string, lower int64) *CStr {
+	cs := &CStr{o: str}
+	if lower == 0 {
 		cs.c = cs.o
-	case 1:
-		cs.c = strings.ToLower(cs.o)
+		return cs
 	}
+	cs.c = strings.ToLower(cs.o)
+	return cs
 }
 
-func (cs *CStr) ToLowerForConfig() string {
-	if cs.quote {
-		return cs.o
+func (cs *CStr) SetConfig(lower int64) {
+	if lower == 0 {
+		cs.c = cs.o
 	}
-	return strings.ToLower(cs.o)
+	cs.c = strings.ToLower(cs.o)
 }
 
 func (cs *CStr) ToLower() string {

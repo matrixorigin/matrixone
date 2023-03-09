@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metric
+package mometric
 
 import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"net/http"
 	"strings"
 	"sync"
@@ -37,35 +38,11 @@ import (
 )
 
 const (
-	MetricDBConst    = "system_metrics"
-	sqlCreateDBConst = "create database if not exists " + MetricDBConst
-	sqlDropDBConst   = "drop database if exists " + MetricDBConst
+	MetricDBConst    = metric.MetricDBConst
+	SqlCreateDBConst = "create database if not exists " + MetricDBConst
+	SqlDropDBConst   = "drop database if exists " + MetricDBConst
 	ALL_IN_ONE_MODE  = "monolithic"
 )
-
-var (
-	lblNodeConst  = "node"
-	lblRoleConst  = "role"
-	lblValueConst = "value"
-	lblTimeConst  = "collecttime"
-	occupiedLbls  = map[string]struct{}{lblTimeConst: {}, lblValueConst: {}, lblNodeConst: {}, lblRoleConst: {}}
-)
-
-type Collector interface {
-	prom.Collector
-	// cancelToProm remove the cost introduced by being compatible with prometheus
-	CancelToProm()
-	// collectorForProm returns a collector used in prometheus scrape registry
-	CollectorToProm() prom.Collector
-}
-
-type selfAsPromCollector struct {
-	self prom.Collector
-}
-
-func (s *selfAsPromCollector) init(self prom.Collector)        { s.self = self }
-func (s *selfAsPromCollector) CancelToProm()                   {}
-func (s *selfAsPromCollector) CollectorToProm() prom.Collector { return s.self }
 
 type statusServer struct {
 	*http.Server
@@ -73,7 +50,7 @@ type statusServer struct {
 }
 
 var registry *prom.Registry
-var moExporter MetricExporter
+var moExporter metric.MetricExporter
 var moCollector MetricCollector
 var statusSvr *statusServer
 var multiTable = false // need set before newMetricFSCollector and initTables
@@ -115,8 +92,9 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	serviceCtx := context.Background()
 	moCollector.Start(serviceCtx)
 	moExporter.Start(serviceCtx)
+	metric.SetMetricExporter(moExporter)
 
-	if getExportToProm() {
+	if metric.GetExportToProm() {
 		// http.HandleFunc("/query", makeDebugHandleFunc(ieFactory))
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(prom.DefaultGatherer, promhttp.HandlerOpts{}))
@@ -132,7 +110,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		logutil.Infof("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
 	}
 
-	SetUpdateStorageUsageInterval(initOpts.updateInterval)
+	metric.SetUpdateStorageUsageInterval(initOpts.updateInterval)
 	logutil.Infof("metric with ExportInterval: %v", initOpts.exportInterval)
 	logutil.Infof("metric with UpdateStorageUsageInterval: %v", initOpts.updateInterval)
 }
@@ -168,13 +146,25 @@ func mustRegiterToProm(collector prom.Collector) {
 	}
 }
 
-func mustRegister(collector Collector) {
+func mustRegister(collector metric.Collector) {
 	registry.MustRegister(collector)
-	if getExportToProm() {
+	if metric.GetExportToProm() {
 		mustRegiterToProm(collector.CollectorToProm())
 	} else {
 		collector.CancelToProm()
 	}
+}
+
+// register all defined collector here
+func registerAllMetrics() {
+	for _, c := range metric.InitCollectors {
+		mustRegister(c)
+	}
+}
+
+func initConfigByParamaterUnit(SV *config.ObservabilityParameters) {
+	metric.SetExportToProm(SV.EnableMetricToProm)
+	metric.SetGatherInterval(time.Second * time.Duration(SV.MetricGatherInterval))
 }
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
@@ -191,10 +181,10 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 			panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
 		}
 	}
-	if getForceInit() {
-		mustExec(sqlDropDBConst)
+	if metric.GetForceInit() {
+		mustExec(SqlDropDBConst)
 	}
-	mustExec(sqlCreateDBConst)
+	mustExec(SqlCreateDBConst)
 	var createCost time.Duration
 	defer func() {
 		logutil.Debugf(
@@ -206,7 +196,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 	descChan := make(chan *prom.Desc, 10)
 
 	go func() {
-		for _, c := range initCollectors {
+		for _, c := range metric.InitCollectors {
 			c.Describe(descChan)
 		}
 		close(descChan)
@@ -242,7 +232,7 @@ func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsF
 	buf.WriteString(opts.GetCreateOptions())
 	buf.WriteString(fmt.Sprintf(
 		"table if not exists %s.%s (`%s` datetime(6), `%s` double, `%s` varchar(36), `%s` varchar(20)",
-		MetricDBConst, extra.fqName, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
+		MetricDBConst, extra.fqName, metric.LblTimeConst, metric.LblValueConst, metric.LblNodeConst, metric.LblRoleConst,
 	))
 	for _, lbl := range extra.labels {
 		buf.WriteString(", `")
@@ -278,38 +268,6 @@ func newDescExtra(desc *prom.Desc) *descExtra {
 	varLblCnt := len(strings.Split(str, " "))
 	labels := prom.MakeLabelPairs(desc, make([]string, varLblCnt))
 	return &descExtra{orig: desc, fqName: fqName, labels: labels}
-}
-
-func mustValidLbls(name string, consts prom.Labels, vars []string) {
-	mustNotOccupied := func(lblName string) {
-		if _, ok := occupiedLbls[strings.ToLower(lblName)]; ok {
-			panic(fmt.Sprintf("%s contains a occupied label: %s", name, lblName))
-		}
-	}
-	for k := range consts {
-		mustNotOccupied(k)
-	}
-	for _, v := range vars {
-		mustNotOccupied(v)
-	}
-}
-
-type SubSystem struct {
-	Name              string
-	Comment           string
-	SupportUserAccess bool
-}
-
-var SubSystemSql = &SubSystem{"sql", "base on query action", true}
-var SubSystemServer = &SubSystem{"server", "MO Server status, observe from inside", true}
-var SubSystemProcess = &SubSystem{"process", "MO process status", false}
-var SubSystemSys = &SubSystem{"sys", "OS status", false}
-
-var allSubSystem = map[string]*SubSystem{
-	SubSystemSql.Name:     SubSystemSql,
-	SubSystemServer.Name:  SubSystemServer,
-	SubSystemProcess.Name: SubSystemProcess,
-	SubSystemSys.Name:     SubSystemSys,
 }
 
 type InitOptions struct {
@@ -402,8 +360,8 @@ func NewMetricView(tbl string, opts ...table.ViewOption) *table.View {
 func NewMetricViewWithLabels(ctx context.Context, tbl string, lbls []string) *table.View {
 	var options []table.ViewOption
 	// check SubSystem
-	var subSystem *SubSystem = nil
-	for _, ss := range allSubSystem {
+	var subSystem *metric.SubSystem = nil
+	for _, ss := range metric.AllSubSystem {
 		if strings.Index(tbl, ss.Name) == 0 {
 			subSystem = ss
 			break
@@ -452,7 +410,7 @@ func GetSchemaForAccount(ctx context.Context, account string) []string {
 
 	descChan := make(chan *prom.Desc, 10)
 	go func() {
-		for _, c := range initCollectors {
+		for _, c := range metric.InitCollectors {
 			c.Describe(descChan)
 		}
 		close(descChan)

@@ -146,7 +146,7 @@ func Test_ConnectionCount(t *testing.T) {
 			}
 			stmts = append(stmts, cmdFieldStmt)
 		} else {
-			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql)
+			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, 1)
 			if err != nil {
 				return nil, err
 			}
