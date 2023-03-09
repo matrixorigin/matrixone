@@ -1,4 +1,4 @@
-name: MatrixOne e2e CI
+name: MatrixOne e2e CI(LAUNCH, PULL)
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ jobs:
   bvt-linux-x86:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    name: e2e BVT Test on Linux/x64
+    name: e2e BVT Test on Linux/x64(LAUNCH, PULL, 1CN)
     timeout-minutes: 60
 
     steps:
@@ -31,7 +31,7 @@ jobs:
           cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
 
-      - name: echo dn.toml
+      - name: echo config
         run: |
           cd $GITHUB_WORKSPACE/head
           cat ./etc/launch-tae-CN-tae-DN/dn.toml
@@ -89,7 +89,7 @@ jobs:
 
   multi-cn-bvt-linux-x86:
     runs-on: ubuntu-latest
-    name: Multi-CN e2e BVT Test on Linux/x64
+    name: Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PULL)
     timeout-minutes: 60
 
     steps:
@@ -112,7 +112,7 @@ jobs:
       - name: echo dn.toml
         run: |
           cd $GITHUB_WORKSPACE/head
-          cat ./etc/launch-tae-CN-tae-DN/dn.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/dn.toml
 
       - name: Start MO
         run: |

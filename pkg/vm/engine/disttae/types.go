@@ -61,15 +61,15 @@ type IDGenerator interface {
 
 type Engine struct {
 	sync.RWMutex
-	mp      *mpool.MPool
-	fs      fileservice.FileService
-	cli     client.TxnClient
-	idGen   IDGenerator
-	txns    map[string]*Transaction
-	catalog *cache.CatalogCache
-
+	mp         *mpool.MPool
+	fs         fileservice.FileService
+	cli        client.TxnClient
+	idGen      IDGenerator
+	txns       map[string]*Transaction
+	catalog    *cache.CatalogCache
 	dnMap      map[string]int
 	partitions map[[2]uint64]Partitions
+	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
 	usePushModel       bool
@@ -85,6 +85,10 @@ type Partition struct {
 	lock  chan struct{}
 	state atomic.Pointer[PartitionState]
 	ts    timestamp.Timestamp // last updated timestamp
+
+	// lazy consume for ckpt.
+	sync.Mutex
+	ckptList []string
 }
 
 // Transaction represents a transaction
@@ -110,7 +114,8 @@ type Transaction struct {
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
 	// every statement is an element
-	writes    [][]Entry
+	writes [][]Entry
+
 	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
 	dnStores  []DNStore
 	proc      *process.Process
@@ -177,12 +182,10 @@ type txnTable struct {
 	dnList     []int
 	db         *txnDatabase
 	meta       *tableMeta
-	parts      Partitions
+	parts      []*PartitionState
 	insertExpr *plan.Expr
 	defs       []engine.TableDef
 	tableDef   *plan.TableDef
-
-	states []*PartitionState
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key

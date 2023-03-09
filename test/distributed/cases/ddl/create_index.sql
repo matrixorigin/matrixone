@@ -35,6 +35,8 @@ insert into t3 values(3,"Carol", 23,'zbcvdf');
 insert into t3 values(4,"Dora", 29,'zbcvdf');
 select * from t3;
 insert into t3 values(4,"Dora", 29,'zbcvdf');
+insert into t3 values(5,"Dora", 29,'zbcvdf');
+
 drop table t3;
 
 create table t4(a int, b int, key(c));
