@@ -280,7 +280,7 @@ func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64,
 	parts := e.getPartitions(databaseId, tableId)
 	for _, part := range parts {
 		part.Lock()
-		part.lock <- struct{}{}
+		<-part.lock
 		ckptList := part.ckptList
 		part.ckptList = nil
 		part.Unlock()
@@ -304,7 +304,7 @@ func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64,
 				}
 			}
 		}
-		<-part.lock
+		part.lock <- struct{}{}
 	}
 	return nil
 }
