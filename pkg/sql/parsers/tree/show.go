@@ -671,3 +671,46 @@ func (node *ShowAccounts) Format(ctx *FmtCtx) {
 
 func (node *ShowAccounts) GetStatementType() string { return "Show Accounts" }
 func (node *ShowAccounts) GetQueryType() string     { return QueryTypeOth }
+
+type ShowPublications struct {
+	showImpl
+	Like *ComparisonExpr
+}
+
+func (node *ShowPublications) Format(ctx *FmtCtx) {
+	ctx.WriteString("show publications")
+	if node.Like != nil {
+		ctx.WriteByte(' ')
+		node.Like.Format(ctx)
+	}
+}
+
+func (node *ShowPublications) GetStatementType() string { return "Show Publications" }
+func (node *ShowPublications) GetQueryType() string     { return QueryTypeOth }
+
+type ShowSubscriptions struct {
+	showImpl
+	Like *ComparisonExpr
+}
+
+func (node *ShowSubscriptions) Format(ctx *FmtCtx) {
+	ctx.WriteString("show subscriptions")
+	if node.Like != nil {
+		ctx.WriteByte(' ')
+		node.Like.Format(ctx)
+	}
+}
+func (node *ShowSubscriptions) GetStatementType() string { return "Show Subscriptions" }
+func (node *ShowSubscriptions) GetQueryType() string     { return QueryTypeOth }
+
+type ShowCreatePublications struct {
+	showImpl
+	Name string
+}
+
+func (node *ShowCreatePublications) Format(ctx *FmtCtx) {
+	ctx.WriteString("show create publication ")
+	ctx.WriteString(node.Name)
+}
+func (node *ShowCreatePublications) GetStatementType() string { return "Show Create Publication" }
+func (node *ShowCreatePublications) GetQueryType() string     { return QueryTypeOth }
