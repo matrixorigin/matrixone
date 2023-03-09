@@ -169,3 +169,79 @@ func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
 
 func (node *AlterDataBaseConfig) GetStatementType() string { return "Alter DataBase config" }
 func (node *AlterDataBaseConfig) GetQueryType() string     { return QueryTypeDDL }
+
+// AlterTable
+// see https://dev.mysql.com/doc/refman/8.0/en/alter-table.html
+type AlterTable struct {
+	statementImpl
+	Table   TableName
+	Options AlterTableOptions
+}
+
+func (node *AlterTable) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter table ")
+	node.Table.Format(ctx)
+
+	prefix := " "
+	for _, t := range node.Options {
+		ctx.WriteString(prefix)
+		t.Format(ctx)
+		prefix = ", "
+	}
+}
+
+type AlterTableOptions = []AlterTableOption
+
+type AlterTableOption interface {
+	NodeFormatter
+}
+
+type alterOptionImpl struct {
+	AlterTableOption
+}
+
+type AlterOptionAdd struct {
+	alterOptionImpl
+	Def TableDef
+}
+
+func (node *AlterOptionAdd) Format(ctx *FmtCtx) {
+	ctx.WriteString("add ")
+	node.Def.Format(ctx)
+}
+
+type AlterTableDropType int
+
+const (
+	AlterTableDropColumn AlterTableDropType = iota
+	AlterTableDropIndex
+	AlterTableDropKey
+	AlterTableDropPrimaryKey
+	AlterTableDropForeignKey
+)
+
+type AlterOptionDrop struct {
+	alterOptionImpl
+	Typ  AlterTableDropType
+	Name Identifier
+}
+
+func (node *AlterOptionDrop) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop ")
+	switch node.Typ {
+	case AlterTableDropColumn:
+		ctx.WriteString("column ")
+		node.Name.Format(ctx)
+	case AlterTableDropIndex:
+		ctx.WriteString("index ")
+		node.Name.Format(ctx)
+	case AlterTableDropKey:
+		ctx.WriteString("key ")
+		node.Name.Format(ctx)
+	case AlterTableDropPrimaryKey:
+		ctx.WriteString("primary key")
+	case AlterTableDropForeignKey:
+		ctx.WriteString("foreign key ")
+		node.Name.Format(ctx)
+	}
+}
