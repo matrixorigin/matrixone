@@ -28,7 +28,6 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.container = new(Container)
 	ap.container.mp = make(map[int]*batch.Batch)
-	ap.container.mp2 = make(map[int][]*batch.Batch)
 	return nil
 }
 
@@ -39,15 +38,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if bat == nil {
 		return true, nil
 	}
-
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-
 	if err := ap.Split(proc, bat); err != nil {
 		return false, err
 	}
-
 	if !ap.notFreeBatch {
 		defer func() {
 			for k := range ap.container.mp {
@@ -55,32 +51,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 		}()
 	}
-
 	for i := range ap.Unique_tbls {
-		if ap.container.mp[i+1].Length() > 0 {
-			if err = ap.Unique_tbls[i].Write(proc.Ctx, ap.container.mp[i+1]); err != nil {
-				return false, err
-			}
-		}
-
-		for _, bat := range ap.container.mp2[i+1] {
-			if err = ap.Unique_tbls[i].Write(proc.Ctx, bat); err != nil {
-				return false, err
-			}
-		}
-		ap.container.mp2[i+1] = ap.container.mp2[i+1][:0]
-	}
-	if ap.container.mp[0].Length() > 0 {
-		if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
+		if err = ap.Unique_tbls[i].Write(proc.Ctx, ap.container.mp[i+1]); err != nil {
 			return false, err
 		}
 	}
-
-	for _, bat := range ap.container.mp2[0] {
-		if err = ap.Tbl.Write(proc.Ctx, bat); err != nil {
-			return false, err
-		}
+	if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
+		return false, err
 	}
-	ap.container.mp2[0] = ap.container.mp2[0][:0]
 	return false, nil
 }

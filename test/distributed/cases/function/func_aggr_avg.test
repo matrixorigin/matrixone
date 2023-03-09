@@ -102,9 +102,7 @@ INSERT INTO t1 VALUES('innfj', 2, 2, 2, 2);
 SELECT DISTINCT SUM(  a ) FROM t1 GROUP BY a HAVING a IN ( AVG( 1 ), 1 + a);
 SELECT DISTINCT SUM(  b ) FROM t1 GROUP BY b HAVING b IN ( AVG( 1 ), 1 + b);
 SELECT DISTINCT SUM(  c ) FROM t1 GROUP BY c HAVING c IN ( AVG( 1 ), 1 + c);
--- @bvt:issue#1234
 SELECT DISTINCT SUM(  d ) FROM t1 GROUP BY d HAVING d IN ( AVG( 1 ), 1 + d);
--- @bvt:issue
 SELECT DISTINCT SUM(  e ) FROM t1 GROUP BY e HAVING e IN ( AVG( 1 ), 1 + e);
 DROP TABLE t1;
 

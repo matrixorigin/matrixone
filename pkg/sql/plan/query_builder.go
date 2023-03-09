@@ -1226,8 +1226,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 
 			colName := fmt.Sprintf("column_%d", i) // like MySQL
-			as := tree.NewCStr(colName, false)
-			as.SetConfig(0)
+			as := tree.NewCStr(colName, 0)
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: &tree.UnresolvedName{
 					NumParts: 1,
@@ -1798,7 +1797,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					return 0, err
 				}
 
-				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt)
+				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
 				if err != nil {
 					return 0, err
 				}

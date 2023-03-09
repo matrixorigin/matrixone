@@ -23,6 +23,44 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+func MakePlan2Decimal64ExprWithType(v types.Decimal64, typ *Type) *plan.Expr {
+	rawA := int64(v)
+	typ.Size = types.T_decimal64.ToType().Size
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_C{
+			C: &Const{
+				Isnull: false,
+				Value: &plan.Const_Decimal64Val{
+					Decimal64Val: &plan.Decimal64{
+						A: rawA,
+					},
+				},
+			},
+		},
+	}
+}
+
+func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
+	rawA := v.B0_63
+	rawB := v.B64_127
+	typ.Size = types.T_decimal128.ToType().Size
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_C{
+			C: &Const{
+				Isnull: false,
+				Value: &plan.Const_Decimal128Val{
+					Decimal128Val: &plan.Decimal128{
+						A: int64(rawA),
+						B: int64(rawB),
+					},
+				},
+			},
+		},
+	}
+}
+
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
 	_, scale, err := types.Parse128(v)
 	if err != nil {

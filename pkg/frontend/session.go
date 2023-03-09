@@ -2534,7 +2534,11 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 	//logutil.Debugf("-->bh:%s", sql)
-	statements, err := mysql.Parse(ctx, sql)
+	v, err := bh.ses.GetGlobalVar("lower_case_table_names")
+	if err != nil {
+		return err
+	}
+	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
 	}
