@@ -101,7 +101,7 @@ stmt:
 use_stmt:
     USE ID
     {
-        $$ = &tree.Use{Name: $2}
+        $$ = &tree.Use{Name: tree.NewCStr($2, 1)}
     }
 |   USE
     {
