@@ -89,31 +89,32 @@ func (b *TxnLogtailRespBuilder) onMetadata(iblk any) {
 	if b.batches[blkMetaDelBatch] == nil {
 		b.batches[blkMetaDelBatch] = makeRespBatchFromSchema(DelSchema)
 	}
-	visitBlkMeta(blk, node, b.batches[blkMetaInsBatch], b.batches[blkMetaDelBatch])
+	visitBlkMeta(blk, node, b.batches[blkMetaInsBatch], b.batches[blkMetaDelBatch], node.DeletedAt.Equal(txnif.UncommitTS))
 }
 
 func (b *TxnLogtailRespBuilder) onAppend(ibat any) {
 	bat := ibat.(*containers.Batch)
+	mybat := bat.CloneWindow(0, bat.Length())
 	commitVec := containers.MakeVector(types.T_TS.ToType(), false)
 	for i := 0; i < bat.Length(); i++ {
 		commitVec.Append(b.txn.GetPrepareTS())
 	}
-	bat.AddVector(catalog.AttrCommitTs, commitVec)
-	if b.batches[tblInsBatch] == nil {
-		b.batches[tblInsBatch] = bat
+	mybat.AddVector(catalog.AttrCommitTs, commitVec)
+	if b.batches[dataInsBatch] == nil {
+		b.batches[dataInsBatch] = mybat
 	} else {
-		b.batches[tblInsBatch].Extend(bat)
+		b.batches[dataInsBatch].Extend(mybat)
 	}
 }
 
 func (b *TxnLogtailRespBuilder) onDelete(deletes []uint32, prefix []byte) {
-	if b.batches[tblDelBatch] == nil {
-		b.batches[tblDelBatch] = makeRespBatchFromSchema(DelSchema)
+	if b.batches[dataDelBatch] == nil {
+		b.batches[dataDelBatch] = makeRespBatchFromSchema(DelSchema)
 	}
 	for _, del := range deletes {
 		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, del)
-		b.batches[tblDelBatch].GetVectorByName(catalog.AttrRowID).Append(rowid)
-		b.batches[tblDelBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS())
+		b.batches[dataDelBatch].GetVectorByName(catalog.AttrRowID).Append(rowid)
+		b.batches[dataDelBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS())
 	}
 }
 
@@ -135,14 +136,14 @@ func (b *TxnLogtailRespBuilder) onTable(itbl any) {
 	}
 	if node.CreatedAt.Equal(txnif.UncommitTS) {
 		if b.batches[columnInsBatch] == nil {
-			b.batches[columnInsBatch] = makeRespBatchFromSchema(catalog.SystemTableSchema)
+			b.batches[columnInsBatch] = makeRespBatchFromSchema(catalog.SystemColumnSchema)
 		}
 		for _, syscol := range catalog.SystemColumnSchema.ColDefs {
 			txnimpl.FillColumnRow(tbl, syscol.Name, b.batches[columnInsBatch].GetVectorByName(syscol.Name))
 		}
 		for _, usercol := range tbl.GetSchema().ColDefs {
-			b.batches[tblInsBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))))
-			b.batches[tblInsBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS())
+			b.batches[columnInsBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))))
+			b.batches[columnInsBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS())
 		}
 		if b.batches[tblInsBatch] == nil {
 			b.batches[tblInsBatch] = makeRespBatchFromSchema(catalog.SystemTableSchema)
@@ -203,7 +204,7 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 	*b.logtails = append(*b.logtails, tail)
 }
 
-func (b *TxnLogtailRespBuilder) onRotateTable(tableName, dbName string, tid, dbid uint64) {
+func (b *TxnLogtailRespBuilder) onRotateTable(dbName, tableName string, dbid, tid uint64) {
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
 	b.batches[blkMetaDelBatch] = nil
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaInsBatch, false)
@@ -219,8 +220,8 @@ func (b *TxnLogtailRespBuilder) onRotateTable(tableName, dbName string, tid, dbi
 }
 
 func (b *TxnLogtailRespBuilder) BuildResp() {
-	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, blkMetaDelBatch, true)
-	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, blkMetaInsBatch, false)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaInsBatch, false)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
 

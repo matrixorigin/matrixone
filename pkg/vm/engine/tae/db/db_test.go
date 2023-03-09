@@ -5734,3 +5734,29 @@ func TestForceCheckpoint(t *testing.T) {
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
 }
+
+func TestLogailAppend(t *testing.T) {
+	tae := newTestEngine(t, nil)
+	defer tae.Close()
+	tae.DB.LogtailMgr.RegisterCallback(logtail.MockCallback)
+	schema := catalog.MockSchemaAll(13, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	batch := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks)-1))
+	//create database, create table, append
+	tae.createRelAndAppend(batch, true)
+	//delete
+	err := tae.deleteAll(true)
+	assert.NoError(t, err)
+	//compact(metadata)
+	tae.DoAppend(batch)
+	tae.compactBlocks(false)
+	//drop table
+	tae.dropRelation(t)
+	//drop database
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	txn.DropDatabase("db")
+	assert.NoError(t, txn.Commit())
+}

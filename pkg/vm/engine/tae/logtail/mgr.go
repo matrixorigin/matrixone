@@ -23,7 +23,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	pblogtail "github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -41,15 +43,36 @@ type TxnMgr interface {
 	Lock()
 	Unlock()
 }
+
+type callback func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail)
+
+func MockCallback(from, to timestamp.Timestamp, tails ...pblogtail.TableLogtail) {
+	if len(tails) == 0 {
+		return
+	}
+	s := fmt.Sprintf("get logtail\nfrom %v, to %v, tails cnt %d", from, to, len(tails))
+	for _, tail := range tails {
+		s = fmt.Sprintf("%s\nts %v, dbid %d, tid %d,entries cnt %d", s, tail.Ts, tail.Table.DbId, tail.Table.TbId, len(tail.Commands))
+		for _, entry := range tail.Commands {
+			s = fmt.Sprintf("%s\n    db name %s, table name %s, insert %v, batch length %d\n    %v",
+				s, entry.DatabaseName, entry.TableName, entry.EntryType == api.Entry_Insert, entry.Bat.Vecs[0].Len, entry.Bat.Attrs)
+			for i, vec := range entry.Bat.Vecs {
+				s = fmt.Sprintf("%s\n        %v, type %v, len %d", s, entry.Bat.Attrs[i], vec.Type, vec.Len)
+			}
+		}
+	}
+	logutil.Infof(s)
+}
+
 type Manager struct {
 	txnbase.NoopCommitListener
 	table     *TxnTable
 	truncated types.TS
 
 	committingTS        types.TS
-	previousSaveTS      atomic.Value
+	previousSaveTS      types.TS
 	committedTS         atomic.Value
-	logtailCallback     func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail)
+	logtailCallback     atomic.Value
 	collectLogtailQueue sm.Queue
 	waitCommitQueue     sm.Queue
 	committedTxn        chan *txnWithLogtails
@@ -71,7 +94,7 @@ func NewManager(blockSize int, clock clock.Clock, txnMgr TxnMgr) *Manager {
 		wg:          sync.WaitGroup{},
 		txnMgr:      txnMgr,
 	}
-	mgr.previousSaveTS.Store(tsAlloc.Alloc())
+	mgr.previousSaveTS = tsAlloc.Alloc()
 	mgr.collectLogtailQueue = sm.NewSafeQueue(10000, 100, mgr.onCollectTxnLogtails)
 	mgr.waitCommitQueue = sm.NewSafeQueue(10000, 100, mgr.onWaitTxnCommit)
 	mgr.committedTxn = make(chan *txnWithLogtails)
@@ -88,10 +111,12 @@ func (mgr *Manager) OnCommittedTS(ts types.TS) {
 	mgr.committedTS.Store(ts)
 }
 func (mgr *Manager) generateHeartbeat() {
-	if mgr.logtailCallback != nil {
+	icallback := mgr.logtailCallback.Load()
+	if icallback != nil {
+		callback := icallback.(callback)
+		from := mgr.previousSaveTS
 		to := mgr.getSaveTS()
-		from := mgr.previousSaveTS.Load().(types.TS)
-		mgr.logtailCallback(from.ToTimestamp(), to.ToTimestamp())
+		callback(from.ToTimestamp(), to.ToTimestamp())
 	}
 }
 
@@ -105,6 +130,9 @@ func (mgr *Manager) onCollectTxnLogtails(items ...any) {
 	for _, item := range items {
 		txn := item.(txnif.AsyncTxn)
 		entries := builder.CollectLogtail(txn)
+		if len(*entries) == 0 {
+			continue
+		}
 		txnWithLogtails := &txnWithLogtails{
 			txn:   txn,
 			tails: entries,
@@ -128,9 +156,13 @@ func (mgr *Manager) onWaitTxnCommit(items ...any) {
 func (mgr *Manager) Stop() {
 	mgr.cancel()
 	mgr.wg.Wait()
+	mgr.collectLogtailQueue.Stop()
+	mgr.waitCommitQueue.Stop()
 }
 func (mgr *Manager) Start() {
 	mgr.wg.Add(1)
+	mgr.collectLogtailQueue.Start()
+	mgr.waitCommitQueue.Start()
 	go mgr.generateLogtails()
 }
 func (mgr *Manager) generateLogtails() {
@@ -148,10 +180,13 @@ func (mgr *Manager) generateLogtails() {
 	}
 }
 func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
-	if mgr.logtailCallback != nil {
+	icallback := mgr.logtailCallback.Load()
+	if icallback != nil {
+		callback := icallback.(callback)
 		to := (*txn.tails)[0].Ts
-		from := mgr.previousSaveTS.Load().(types.TS)
-		mgr.logtailCallback(from.ToTimestamp(), *to, *txn.tails...)
+		from := mgr.previousSaveTS
+		mgr.previousSaveTS = types.TimestampToTS(*to)
+		callback(from.ToTimestamp(), *to, *txn.tails...)
 	}
 }
 func (mgr *Manager) getSaveTS() types.TS {
@@ -160,20 +195,22 @@ func (mgr *Manager) getSaveTS() types.TS {
 	committingTS := mgr.committingTS
 	if committingTS.IsEmpty() {
 		ts := mgr.tmpAlloctor.Alloc()
-		mgr.previousSaveTS.Store(ts)
+		mgr.previousSaveTS = ts
 		return ts
 	}
 	committedTS := mgr.committedTS.Load()
 	if committedTS == nil {
-		return mgr.previousSaveTS.Load().(types.TS)
+		return mgr.previousSaveTS
 	}
 	ts := committedTS.(types.TS)
-	mgr.previousSaveTS.Store(ts)
+	mgr.previousSaveTS = ts
 	return ts
 }
 
 func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
 	mgr.table.AddTxn(txn)
+}
+func (mgr *Manager) OnEndPreApplyCommit(txn txnif.AsyncTxn) {
 	mgr.collectLogtailQueue.Enqueue(txn)
 }
 
@@ -212,7 +249,7 @@ func (mgr *Manager) GetTableOperator(
 	)
 }
 
-func (mgr *Manager) RegisterCallback(cb func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail)) error {
-	mgr.logtailCallback = cb
+func (mgr *Manager) RegisterCallback(cb callback) error {
+	mgr.logtailCallback.Store(cb)
 	return nil
 }

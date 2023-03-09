@@ -461,10 +461,10 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 }
 
 func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode *catalog.MetadataMVCCNode) {
-	visitBlkMeta(e, metaNode, b.blkMetaInsBatch, b.blkMetaDelBatch)
+	visitBlkMeta(e, metaNode, b.blkMetaInsBatch, b.blkMetaDelBatch, metaNode.HasDropCommitted())
 }
 
-func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatch, delBatch *containers.Batch) {
+func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatch, delBatch *containers.Batch, delete bool) {
 	logutil.Infof("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
 		e.AsCommonID().String(), e.IsAppendable(),
 		node.CreatedAt.ToString(), node.DeletedAt.ToString(), node.MetaLoc, node.DeltaLoc)
@@ -482,7 +482,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatc
 	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.CreatedAt)
 	insBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
 
-	if node.HasDropCommitted() {
+	if delete {
 		if node.DeletedAt.IsEmpty() {
 			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
 		}

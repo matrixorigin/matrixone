@@ -151,4 +151,5 @@ func (store *NoopTxnStore) GetLogtails(
 	onRotateTable func(dbName, tblName string, dbid, tid uint64),
 	onMetadata func(block any),
 	onAppend func(bat any),
-	onDelete func(deletes []uint32, prefix []byte))
+	onDelete func(deletes []uint32, prefix []byte)) {
+}

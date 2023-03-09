@@ -49,6 +49,8 @@ type txnStore struct {
 	warChecker    *warChecker
 	dataFactory   *tables.DataFactory
 	writeOps      atomic.Uint32
+
+	logtailwg sync.WaitGroup
 }
 
 var TxnStoreFactory = func(
@@ -77,6 +79,7 @@ func newStore(
 		logs:          make([]entry.Entry, 0),
 		dataFactory:   dataFactory,
 		nodesMgr:      txnBufMgr,
+		logtailwg:     sync.WaitGroup{},
 	}
 }
 
@@ -363,6 +366,7 @@ func (store *txnStore) GetLogtails(
 	onMetadata func(block any),
 	onAppend func(bat any),
 	onDelete func(deletes []uint32, prefix []byte)) {
+	defer store.logtailwg.Done()
 	for _, db := range store.dbs {
 		if db.createEntry != nil || db.dropEntry != nil {
 			onDatabase(db.entry)
@@ -386,10 +390,12 @@ func (store *txnStore) GetLogtails(
 					onDelete(deletes, prefix)
 				}
 			}
-			for _, node := range tbl.localSegment.nodes {
-				anode, ok := node.(*anode)
-				if ok {
-					onAppend(anode.storage.mnode.data)
+			if tbl.localSegment != nil {
+				for _, node := range tbl.localSegment.nodes {
+					anode, ok := node.(*anode)
+					if ok {
+						onAppend(anode.storage.mnode.data)
+					}
 				}
 			}
 		}
@@ -593,6 +599,7 @@ func (store *txnStore) WaitPrepared() (err error) {
 		}
 		e.Free()
 	}
+	store.logtailwg.Wait()
 	return
 }
 
@@ -638,6 +645,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 
 func (store *txnStore) PreApplyCommit() (err error) {
 	now := time.Now()
+	defer store.logtailwg.Add(1)
 	for _, db := range store.dbs {
 		if err = db.PreApplyCommit(); err != nil {
 			return

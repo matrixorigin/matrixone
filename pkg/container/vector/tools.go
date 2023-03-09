@@ -98,7 +98,7 @@ func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
 		Nullable: true,
 		Area:     vec.area,
 		IsConst:  vec.isConst,
-		Len:      uint32(vec.length),
+		Len:      uint32(vec.Length()),
 		Type:     TypeToProtoType(vec.Typ),
 		Data:     vec.encodeColToByteSlice(),
 	}, nil
