@@ -24,7 +24,7 @@ const (
 // Use statement
 type Use struct {
 	statementImpl
-	Name              string
+	Name              *CStr
 	SecondaryRole     bool
 	SecondaryRoleType SecondaryRoleType
 	Role              *Role
@@ -36,9 +36,9 @@ func (node *Use) Format(ctx *FmtCtx) {
 		if node.Role != nil {
 			ctx.WriteString(" role ")
 			node.Role.Format(ctx)
-		} else if node.Name != "" {
+		} else if node.Name != nil && !node.Name.Empty() {
 			ctx.WriteByte(' ')
-			ctx.WriteString(node.Name)
+			ctx.WriteString(node.Name.ToLower())
 		}
 	} else {
 		ctx.WriteString(" secondary role ")
@@ -60,8 +60,4 @@ func (node *Use) GetQueryType() string     { return QueryTypeOth }
 //	USE ROLE role;
 func (node *Use) IsUseRole() bool {
 	return node.SecondaryRole || node.Role != nil
-}
-
-func NewUse(n string) *Use {
-	return &Use{Name: n}
 }
