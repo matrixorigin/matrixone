@@ -1046,11 +1046,10 @@ func (s *Scope) CreateSequence(c *Compile) error {
 				bat.Clean(c.proc.Mp())
 			}
 		}()
-
 		if err != nil {
 			return err
 		}
-		err = colexec.SimpleInsertBatch(c.proc, bat, rel, qry.GetTableDef())
+		err = rel.Write(c.proc.Ctx, bat)
 		if err != nil {
 			return err
 		}
@@ -1068,9 +1067,16 @@ next_seq_num| min_value| max_value| start_value| increment_value| cycle| is_call
 */
 func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
 	var bat batch.Batch
-	bat.Cnt = 1
+	bat.Ro = true
+	bat.Cnt = 0
 	bat.Zs = make([]int64, 1)
 	bat.Zs[0] = 1
+	attrs := make([]string, len(plan2.Sequence_cols_name))
+	for i := range attrs {
+		attrs[i] = plan2.Sequence_cols_name[i]
+	}
+	bat.Attrs = attrs
+
 	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
 	sequence_cols_num := 7
 	vecs := make([]*vector.Vector, sequence_cols_num)
@@ -1298,6 +1304,11 @@ func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.C
 	err = vecs[4].Append(incr, false, proc.Mp())
 	if err != nil {
 		return err
+	}
+
+	// Set all length to 1
+	for i := range plan2.Sequence_cols_name {
+		vector.SetLength(vecs[i], 1)
 	}
 	return nil
 }

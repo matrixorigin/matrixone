@@ -436,25 +436,6 @@ func GetInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int
 	return info
 }
 
-// For sequence init.
-func SimpleInsertBatch(proc *process.Process, bat *batch.Batch, rel engine.Relation, tableDef *plan.TableDef) error {
-	var insertBatch *batch.Batch
-	var err error
-	info := getInfoForInsertAndUpdate(tableDef, nil)
-
-	//get insert batch
-	insertBatch, err = GetUpdateBatch(proc, bat, info.idxList, bat.Length(), info.attrs, nil, nil)
-	if err != nil {
-		return err
-	}
-
-	err = rel.Write(proc.Ctx, insertBatch)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 func InsertBatch(
 	container *WriteS3Container,
 	eg engine.Engine,
