@@ -110,7 +110,7 @@ func TestCompileWithFaults(t *testing.T) {
 func newTestCase(sql string, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess()
 	e, _, compilerCtx := testengine.New(context.Background())
-	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql)
+	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
 	require.NoError(t, err)
 	pn, err := plan2.BuildPlan(compilerCtx, stmts[0])
 	if err != nil {

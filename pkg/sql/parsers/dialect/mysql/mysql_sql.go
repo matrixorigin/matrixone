@@ -7030,7 +7030,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.MoDump{
 				DumpDatabase: true,
-				Database:     tree.Identifier(yyDollar[3].cstrUnion().ToLowerForConfig()),
+				Database:     tree.Identifier(yyDollar[3].cstrUnion().Compare()),
 				OutFile:      yyDollar[5].str,
 				MaxFileSize:  int64(yyDollar[6].int64ValUnion()),
 			}
@@ -7043,7 +7043,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.MoDump{
 				DumpDatabase: true,
-				Database:     tree.Identifier(yyDollar[3].cstrUnion().ToLowerForConfig()),
+				Database:     tree.Identifier(yyDollar[3].cstrUnion().Compare()),
 				Tables:       yyDollar[5].tableNamesUnion(),
 				OutFile:      yyDollar[7].str,
 				MaxFileSize:  int64(yyDollar[8].int64ValUnion()),
@@ -7180,7 +7180,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedName
 //line mysql_sql.y:859
 		{
-			yyLOCAL = tree.SetUnresolvedName(yyDollar[1].cstrUnion().ToLowerForConfig())
+			yyLOCAL = tree.SetUnresolvedName(yyDollar[1].cstrUnion().Compare())
 		}
 		yyVAL.union = yyLOCAL
 	case 54:
@@ -7188,7 +7188,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedName
 //line mysql_sql.y:863
 		{
-			yyLOCAL = tree.SetUnresolvedName(yyDollar[1].cstrUnion().ToLowerForConfig(), yyDollar[3].cstrUnion().ToLowerForConfig())
+			yyLOCAL = tree.SetUnresolvedName(yyDollar[1].cstrUnion().Compare(), yyDollar[3].cstrUnion().Compare())
 		}
 		yyVAL.union = yyLOCAL
 	case 55:
@@ -7196,7 +7196,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedName
 //line mysql_sql.y:867
 		{
-			yyLOCAL = tree.SetUnresolvedName(yyDollar[1].cstrUnion().ToLowerForConfig(), yyDollar[3].cstrUnion().ToLowerForConfig(), yyDollar[5].cstrUnion().ToLowerForConfig())
+			yyLOCAL = tree.SetUnresolvedName(yyDollar[1].cstrUnion().Compare(), yyDollar[3].cstrUnion().Compare(), yyDollar[5].cstrUnion().Compare())
 		}
 		yyVAL.union = yyLOCAL
 	case 56:
@@ -7710,7 +7710,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.PrivilegeLevel{
 				Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
-				DbName: yyDollar[1].cstrUnion().ToLowerForConfig(),
+				DbName: yyDollar[1].cstrUnion().Compare(),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -7721,8 +7721,8 @@ yydefault:
 		{
 			yyLOCAL = &tree.PrivilegeLevel{
 				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
-				DbName:  yyDollar[1].cstrUnion().ToLowerForConfig(),
-				TabName: yyDollar[3].cstrUnion().ToLowerForConfig(),
+				DbName:  yyDollar[1].cstrUnion().Compare(),
+				TabName: yyDollar[3].cstrUnion().Compare(),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -7733,7 +7733,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.PrivilegeLevel{
 				Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
-				TabName: yyDollar[1].cstrUnion().ToLowerForConfig(),
+				TabName: yyDollar[1].cstrUnion().Compare(),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -8562,13 +8562,13 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:1792
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 205:
 		yyDollar = yyS[yypt-3 : yypt+1]
 //line mysql_sql.y:1796
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig() + "." + yyDollar[3].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare() + "." + yyDollar[3].cstrUnion().Compare()
 		}
 	case 206:
 		yyDollar = yyS[yypt-1 : yypt+1]
@@ -8731,7 +8731,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.Use{
 				SecondaryRole: false,
-				Name:          yyDollar[2].cstrUnion().ToLowerForConfig(),
+				Name:          yyDollar[2].cstrUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -9527,7 +9527,7 @@ yydefault:
 //line mysql_sql.y:2498
 		{
 			s := &tree.ShowGrants{}
-			roles := []*tree.Role{tree.NewRole(yyDollar[5].cstrUnion().ToLowerForConfig())}
+			roles := []*tree.Role{tree.NewRole(yyDollar[5].cstrUnion().Compare())}
 			s.Roles = roles
 			s.ShowGrantType = tree.GrantForRole
 			yyLOCAL = s
@@ -9717,8 +9717,8 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:2624
 		{
-			prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yyDollar[7].cstrUnion().ToLowerForConfig()), ExplicitSchema: true}
-			tbl := tree.NewTableName(tree.Identifier(yyDollar[5].cstrUnion().ToLowerForConfig()), prefix)
+			prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yyDollar[7].cstrUnion().Compare()), ExplicitSchema: true}
+			tbl := tree.NewTableName(tree.Identifier(yyDollar[5].cstrUnion().Compare()), prefix)
 			yyLOCAL = &tree.ShowIndex{
 				TableName: *tbl,
 				Where:     yyDollar[8].whereUnion(),
@@ -9925,7 +9925,7 @@ yydefault:
 		yyDollar = yyS[yypt-2 : yypt+1]
 //line mysql_sql.y:2776
 		{
-			yyVAL.str = yyDollar[2].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[2].cstrUnion().Compare()
 		}
 	case 419:
 		yyDollar = yyS[yypt-2 : yypt+1]
@@ -9980,7 +9980,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedObjectName
 //line mysql_sql.y:2820
 		{
-			yyLOCAL = tree.SetUnresolvedObjectName(1, [3]string{yyDollar[1].cstrUnion().ToLowerForConfig()})
+			yyLOCAL = tree.SetUnresolvedObjectName(1, [3]string{yyDollar[1].cstrUnion().Compare()})
 		}
 		yyVAL.union = yyLOCAL
 	case 430:
@@ -9988,21 +9988,21 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedObjectName
 //line mysql_sql.y:2824
 		{
-			yyLOCAL = tree.SetUnresolvedObjectName(2, [3]string{yyDollar[3].cstrUnion().ToLowerForConfig(), yyDollar[1].cstrUnion().ToLowerForConfig()})
+			yyLOCAL = tree.SetUnresolvedObjectName(2, [3]string{yyDollar[3].cstrUnion().Compare(), yyDollar[1].cstrUnion().Compare()})
 		}
 		yyVAL.union = yyLOCAL
 	case 431:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:2830
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 432:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL *tree.UnresolvedObjectName
 //line mysql_sql.y:2836
 		{
-			yyLOCAL = tree.SetUnresolvedObjectName(1, [3]string{yyDollar[1].cstrUnion().ToLowerForConfig()})
+			yyLOCAL = tree.SetUnresolvedObjectName(1, [3]string{yyDollar[1].cstrUnion().Compare()})
 		}
 		yyVAL.union = yyLOCAL
 	case 433:
@@ -10010,7 +10010,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedObjectName
 //line mysql_sql.y:2840
 		{
-			yyLOCAL = tree.SetUnresolvedObjectName(2, [3]string{yyDollar[3].cstrUnion().ToLowerForConfig(), yyDollar[1].cstrUnion().ToLowerForConfig()})
+			yyLOCAL = tree.SetUnresolvedObjectName(2, [3]string{yyDollar[3].cstrUnion().Compare(), yyDollar[1].cstrUnion().Compare()})
 		}
 		yyVAL.union = yyLOCAL
 	case 434:
@@ -10018,7 +10018,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedObjectName
 //line mysql_sql.y:2844
 		{
-			yyLOCAL = tree.SetUnresolvedObjectName(3, [3]string{yyDollar[5].cstrUnion().ToLowerForConfig(), yyDollar[3].cstrUnion().ToLowerForConfig(), yyDollar[1].cstrUnion().ToLowerForConfig()})
+			yyLOCAL = tree.SetUnresolvedObjectName(3, [3]string{yyDollar[5].cstrUnion().Compare(), yyDollar[3].cstrUnion().Compare(), yyDollar[1].cstrUnion().Compare()})
 		}
 		yyVAL.union = yyLOCAL
 	case 435:
@@ -10103,7 +10103,7 @@ yydefault:
 //line mysql_sql.y:2920
 		{
 			yyLOCAL = &tree.DropIndex{
-				Name:      tree.Identifier(yyDollar[4].cstrUnion().ToLowerForConfig()),
+				Name:      tree.Identifier(yyDollar[4].cstrUnion().Compare()),
 				TableName: *yyDollar[6].tableNameUnion(),
 				IfExists:  yyDollar[3].boolValUnion(),
 			}
@@ -10130,7 +10130,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:2942
 		{
-			yyLOCAL = &tree.DropDatabase{Name: tree.Identifier(yyDollar[4].cstrUnion().ToLowerForConfig()), IfExists: yyDollar[3].boolValUnion()}
+			yyLOCAL = &tree.DropDatabase{Name: tree.Identifier(yyDollar[4].cstrUnion().Compare()), IfExists: yyDollar[3].boolValUnion()}
 		}
 		yyVAL.union = yyLOCAL
 	case 457:
@@ -10238,7 +10238,7 @@ yydefault:
 //line mysql_sql.y:3027
 		{
 			prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-			yyLOCAL = tree.NewTableName(tree.Identifier(yyDollar[1].cstrUnion().ToLowerForConfig()), prefix)
+			yyLOCAL = tree.NewTableName(tree.Identifier(yyDollar[1].cstrUnion().Compare()), prefix)
 		}
 		yyVAL.union = yyLOCAL
 	case 469:
@@ -10246,8 +10246,8 @@ yydefault:
 		var yyLOCAL *tree.TableName
 //line mysql_sql.y:3032
 		{
-			prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yyDollar[1].cstrUnion().ToLowerForConfig()), ExplicitSchema: true}
-			yyLOCAL = tree.NewTableName(tree.Identifier(yyDollar[3].cstrUnion().ToLowerForConfig()), prefix)
+			prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yyDollar[1].cstrUnion().Compare()), ExplicitSchema: true}
+			yyLOCAL = tree.NewTableName(tree.Identifier(yyDollar[3].cstrUnion().Compare()), prefix)
 		}
 		yyVAL.union = yyLOCAL
 	case 470:
@@ -10571,13 +10571,13 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:3263
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 509:
 		yyDollar = yyS[yypt-3 : yypt+1]
 //line mysql_sql.y:3267
 		{
-			yyVAL.str = yyDollar[3].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[3].cstrUnion().Compare()
 		}
 	case 510:
 		yyDollar = yyS[yypt-1 : yypt+1]
@@ -10661,7 +10661,7 @@ yydefault:
 		var yyLOCAL tree.IdentifierList
 //line mysql_sql.y:3325
 		{
-			yyLOCAL = tree.IdentifierList{tree.Identifier(yyDollar[1].cstrUnion().ToLowerForConfig())}
+			yyLOCAL = tree.IdentifierList{tree.Identifier(yyDollar[1].cstrUnion().Compare())}
 		}
 		yyVAL.union = yyLOCAL
 	case 524:
@@ -10669,7 +10669,7 @@ yydefault:
 		var yyLOCAL tree.IdentifierList
 //line mysql_sql.y:3329
 		{
-			yyLOCAL = append(yyDollar[1].identifierListUnion(), tree.Identifier(yyDollar[3].cstrUnion().ToLowerForConfig()))
+			yyLOCAL = append(yyDollar[1].identifierListUnion(), tree.Identifier(yyDollar[3].cstrUnion().Compare()))
 		}
 		yyVAL.union = yyLOCAL
 	case 525:
@@ -10860,7 +10860,7 @@ yydefault:
 //line mysql_sql.y:3462
 		{
 			yyLOCAL = make([]string, 0, 4)
-			yyLOCAL = append(yyLOCAL, yyDollar[1].cstrUnion().ToLowerForConfig())
+			yyLOCAL = append(yyLOCAL, yyDollar[1].cstrUnion().Compare())
 		}
 		yyVAL.union = yyLOCAL
 	case 542:
@@ -10868,7 +10868,7 @@ yydefault:
 		var yyLOCAL []string
 //line mysql_sql.y:3467
 		{
-			yyLOCAL = append(yyDollar[1].strsUnion(), yyDollar[3].cstrUnion().ToLowerForConfig())
+			yyLOCAL = append(yyDollar[1].strsUnion(), yyDollar[3].cstrUnion().Compare())
 		}
 		yyVAL.union = yyLOCAL
 	case 544:
@@ -10971,7 +10971,7 @@ yydefault:
 //line mysql_sql.y:3532
 		{
 			yyLOCAL = &tree.CTE{
-				Name: &tree.AliasClause{Alias: tree.Identifier(yyDollar[1].cstrUnion().ToLowerForConfig()), Cols: yyDollar[2].identifierListUnion()},
+				Name: &tree.AliasClause{Alias: tree.Identifier(yyDollar[1].cstrUnion().Compare()), Cols: yyDollar[2].identifierListUnion()},
 				Stmt: yyDollar[5].statementUnion(),
 			}
 		}
@@ -11527,7 +11527,7 @@ yydefault:
 		var yyLOCAL tree.SelectExpr
 //line mysql_sql.y:3899
 		{
-			yyLOCAL = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yyDollar[1].cstrUnion().ToLowerForConfig())}
+			yyLOCAL = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yyDollar[1].cstrUnion().Compare())}
 		}
 		yyVAL.union = yyLOCAL
 	case 616:
@@ -11535,7 +11535,7 @@ yydefault:
 		var yyLOCAL tree.SelectExpr
 //line mysql_sql.y:3903
 		{
-			yyLOCAL = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yyDollar[3].cstrUnion().ToLowerForConfig(), yyDollar[1].cstrUnion().ToLowerForConfig())}
+			yyLOCAL = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yyDollar[3].cstrUnion().Compare(), yyDollar[1].cstrUnion().Compare())}
 		}
 		yyVAL.union = yyLOCAL
 	case 617:
@@ -11728,7 +11728,7 @@ yydefault:
 		var yyLOCAL tree.JoinCond
 //line mysql_sql.y:4049
 		{
-			yyLOCAL = nil
+			yyLOCAL = tree.IdentifierList{tree.Identifier(yyDollar[1].cstrUnion().Compare())}
 		}
 		yyVAL.union = yyLOCAL
 	case 640:
@@ -11736,7 +11736,7 @@ yydefault:
 		var yyLOCAL tree.JoinCond
 //line mysql_sql.y:4053
 		{
-			yyLOCAL = &tree.OnJoinCond{Expr: yyDollar[2].exprUnion()}
+			yyLOCAL = append(yyDollar[1].identifierListUnion(), tree.Identifier(yyDollar[3].cstrUnion().Compare()))
 		}
 		yyVAL.union = yyLOCAL
 	case 641:
@@ -11871,7 +11871,7 @@ yydefault:
 		var yyLOCAL tree.TableExpr
 //line mysql_sql.y:4148
 		{
-			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].cstrUnion().ToLowerForConfig()))
+			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].cstrUnion().Compare()))
 			yyLOCAL = &tree.TableFunction{
 				Func: &tree.FuncExpr{
 					Func:  tree.FuncName2ResolvableFunctionReference(name),
@@ -12000,7 +12000,7 @@ yydefault:
 		var yyLOCAL []string
 //line mysql_sql.y:4233
 		{
-			yyLOCAL = []string{yyDollar[1].cstrUnion().ToLowerForConfig()}
+			yyLOCAL = []string{yyDollar[1].cstrUnion().Compare()}
 		}
 		yyVAL.union = yyLOCAL
 	case 672:
@@ -12008,7 +12008,7 @@ yydefault:
 		var yyLOCAL []string
 //line mysql_sql.y:4237
 		{
-			yyLOCAL = append(yyDollar[1].strsUnion(), yyDollar[3].cstrUnion().ToLowerForConfig())
+			yyLOCAL = append(yyDollar[1].strsUnion(), yyDollar[3].cstrUnion().Compare())
 		}
 		yyVAL.union = yyLOCAL
 	case 673:
@@ -12049,14 +12049,14 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:4264
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 680:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL *tree.CStr
 //line mysql_sql.y:4270
 		{
-			yyLOCAL = tree.NewCStr("", false)
+			yyLOCAL = tree.NewCStr("", yylex.(*Lexer).lower)
 		}
 		yyVAL.union = yyLOCAL
 	case 681:
@@ -12080,7 +12080,7 @@ yydefault:
 		var yyLOCAL *tree.CStr
 //line mysql_sql.y:4282
 		{
-			yyLOCAL = tree.NewCStr(yyDollar[1].str, true)
+			yyLOCAL = tree.NewCStr(yyDollar[1].str, yylex.(*Lexer).lower)
 		}
 		yyVAL.union = yyLOCAL
 	case 684:
@@ -12088,14 +12088,14 @@ yydefault:
 		var yyLOCAL *tree.CStr
 //line mysql_sql.y:4286
 		{
-			yyLOCAL = tree.NewCStr(yyDollar[2].str, true)
+			yyLOCAL = tree.NewCStr(yyDollar[2].str, yylex.(*Lexer).lower)
 		}
 		yyVAL.union = yyLOCAL
 	case 685:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:4292
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 696:
 		yyDollar = yyS[yypt-7 : yypt+1]
@@ -12113,13 +12113,13 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:4332
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 698:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:4338
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 699:
 		yyDollar = yyS[yypt-12 : yypt+1]
@@ -12141,7 +12141,7 @@ yydefault:
 //line mysql_sql.y:4357
 		{
 			prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-			yyLOCAL = tree.NewFuncName(tree.Identifier(yyDollar[1].cstrUnion().ToLowerForConfig()), prefix)
+			yyLOCAL = tree.NewFuncName(tree.Identifier(yyDollar[1].cstrUnion().Compare()), prefix)
 		}
 		yyVAL.union = yyLOCAL
 	case 701:
@@ -12149,8 +12149,8 @@ yydefault:
 		var yyLOCAL *tree.FunctionName
 //line mysql_sql.y:4362
 		{
-			prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yyDollar[1].cstrUnion().ToLowerForConfig()), ExplicitSchema: true}
-			yyLOCAL = tree.NewFuncName(tree.Identifier(yyDollar[3].cstrUnion().ToLowerForConfig()), prefix)
+			prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yyDollar[1].cstrUnion().Compare()), ExplicitSchema: true}
+			yyLOCAL = tree.NewFuncName(tree.Identifier(yyDollar[3].cstrUnion().Compare()), prefix)
 		}
 		yyVAL.union = yyLOCAL
 	case 702:
@@ -12213,7 +12213,7 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:4405
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 711:
 		yyDollar = yyS[yypt-1 : yypt+1]
@@ -12254,7 +12254,7 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:4440
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 715:
 		yyDollar = yyS[yypt-4 : yypt+1]
@@ -12278,7 +12278,7 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:4460
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 718:
 		yyDollar = yyS[yypt-3 : yypt+1]
@@ -12383,7 +12383,7 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:4535
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 728:
 		yyDollar = yyS[yypt-0 : yypt+1]
@@ -12551,7 +12551,7 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:4745
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 747:
 		yyDollar = yyS[yypt-4 : yypt+1]
@@ -12585,7 +12585,7 @@ yydefault:
 		var yyLOCAL *tree.Role
 //line mysql_sql.y:4771
 		{
-			yyLOCAL = &tree.Role{UserName: yyDollar[1].cstrUnion().ToLowerForConfig()}
+			yyLOCAL = &tree.Role{UserName: yyDollar[1].cstrUnion().Compare()}
 		}
 		yyVAL.union = yyLOCAL
 	case 751:
@@ -12593,7 +12593,7 @@ yydefault:
 		var yyLOCAL *tree.CStr
 //line mysql_sql.y:4785
 		{
-			yyLOCAL = tree.NewCStr(yyDollar[1].str, false)
+			yyLOCAL = tree.NewCStr(yyDollar[1].str, yylex.(*Lexer).lower)
 		}
 		yyVAL.union = yyLOCAL
 	case 752:
@@ -12601,7 +12601,7 @@ yydefault:
 		var yyLOCAL *tree.CStr
 //line mysql_sql.y:4789
 		{
-			yyLOCAL = tree.NewCStr(yyDollar[1].str, true)
+			yyLOCAL = tree.NewCStr(yyDollar[1].str, yylex.(*Lexer).lower)
 		}
 		yyVAL.union = yyLOCAL
 	case 753:
@@ -12609,7 +12609,7 @@ yydefault:
 		var yyLOCAL *tree.CStr
 //line mysql_sql.y:4793
 		{
-			yyLOCAL = tree.NewCStr(yyDollar[1].str, false)
+			yyLOCAL = tree.NewCStr(yyDollar[1].str, yylex.(*Lexer).lower)
 		}
 		yyVAL.union = yyLOCAL
 	case 754:
@@ -12657,7 +12657,7 @@ yydefault:
 				io.IType = yyDollar[5].indexTypeUnion()
 			}
 			yyLOCAL = &tree.CreateIndex{
-				Name:        tree.Identifier(yyDollar[4].cstrUnion().ToLowerForConfig()),
+				Name:        tree.Identifier(yyDollar[4].cstrUnion().Compare()),
 				Table:       *yyDollar[7].tableNameUnion(),
 				IndexCat:    yyDollar[2].indexCategoryUnion(),
 				KeyParts:    yyDollar[9].keyPartsUnion(),
@@ -12719,7 +12719,7 @@ yydefault:
 		var yyLOCAL *tree.IndexOption
 //line mysql_sql.y:4869
 		{
-			yyLOCAL = &tree.IndexOption{ParserName: yyDollar[3].cstrUnion().ToLowerForConfig()}
+			yyLOCAL = &tree.IndexOption{ParserName: yyDollar[3].cstrUnion().Compare()}
 		}
 		yyVAL.union = yyLOCAL
 	case 764:
@@ -12818,7 +12818,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.CreateDatabase{
 				IfNotExists:   yyDollar[3].ifNotExistsUnion(),
-				Name:          tree.Identifier(yyDollar[4].cstrUnion().ToLowerForConfig()),
+				Name:          tree.Identifier(yyDollar[4].cstrUnion().Compare()),
 				CreateOptions: yyDollar[5].createOptionsUnion(),
 			}
 		}
@@ -13175,7 +13175,7 @@ yydefault:
 //line mysql_sql.y:5166
 		{
 			yyLOCAL = &tree.Partition{
-				Name:    tree.Identifier(yyDollar[2].cstrUnion().ToLowerForConfig()),
+				Name:    tree.Identifier(yyDollar[2].cstrUnion().Compare()),
 				Values:  yyDollar[3].valuesUnion(),
 				Options: nil,
 				Subs:    yyDollar[4].subPartitionsUnion(),
@@ -13188,7 +13188,7 @@ yydefault:
 //line mysql_sql.y:5175
 		{
 			yyLOCAL = &tree.Partition{
-				Name:    tree.Identifier(yyDollar[2].cstrUnion().ToLowerForConfig()),
+				Name:    tree.Identifier(yyDollar[2].cstrUnion().Compare()),
 				Values:  yyDollar[3].valuesUnion(),
 				Options: yyDollar[4].tableOptionsUnion(),
 				Subs:    yyDollar[5].subPartitionsUnion(),
@@ -13233,7 +13233,7 @@ yydefault:
 //line mysql_sql.y:5205
 		{
 			yyLOCAL = &tree.SubPartition{
-				Name:    tree.Identifier(yyDollar[2].cstrUnion().ToLowerForConfig()),
+				Name:    tree.Identifier(yyDollar[2].cstrUnion().Compare()),
 				Options: nil,
 			}
 		}
@@ -13244,7 +13244,7 @@ yydefault:
 //line mysql_sql.y:5212
 		{
 			yyLOCAL = &tree.SubPartition{
-				Name:    tree.Identifier(yyDollar[2].cstrUnion().ToLowerForConfig()),
+				Name:    tree.Identifier(yyDollar[2].cstrUnion().Compare()),
 				Options: yyDollar[3].tableOptionsUnion(),
 			}
 		}
@@ -13634,7 +13634,7 @@ yydefault:
 		var yyLOCAL tree.TableOption
 //line mysql_sql.y:5448
 		{
-			yyLOCAL = &tree.TableOptionPackKeys{Value: yyDollar[3].item.(int64)}
+			yyLOCAL = tree.NewTableOptionTablespace(yyDollar[3].cstrUnion().Compare(), yyDollar[4].str)
 		}
 		yyVAL.union = yyLOCAL
 	case 866:
@@ -13845,7 +13845,7 @@ yydefault:
 //line mysql_sql.y:5579
 		{
 			prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-			yyLOCAL = tree.NewTableName(tree.Identifier(yyDollar[1].cstrUnion().ToLowerForConfig()), prefix)
+			yyLOCAL = tree.NewTableName(tree.Identifier(yyDollar[1].cstrUnion().Compare()), prefix)
 		}
 		yyVAL.union = yyLOCAL
 	case 897:
@@ -13853,8 +13853,8 @@ yydefault:
 		var yyLOCAL *tree.TableName
 //line mysql_sql.y:5584
 		{
-			prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yyDollar[1].cstrUnion().ToLowerForConfig()), ExplicitSchema: true}
-			yyLOCAL = tree.NewTableName(tree.Identifier(yyDollar[3].cstrUnion().ToLowerForConfig()), prefix)
+			prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yyDollar[1].cstrUnion().Compare()), ExplicitSchema: true}
+			yyLOCAL = tree.NewTableName(tree.Identifier(yyDollar[3].cstrUnion().Compare()), prefix)
 		}
 		yyVAL.union = yyLOCAL
 	case 898:
@@ -14058,7 +14058,7 @@ yydefault:
 //line mysql_sql.y:5735
 		{
 			yyLOCAL = make([]string, 2)
-			yyLOCAL[0] = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyLOCAL[0] = yyDollar[1].cstrUnion().Compare()
 			yyLOCAL[1] = yyDollar[3].str
 		}
 		yyVAL.union = yyLOCAL
@@ -14072,7 +14072,7 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:5753
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[1].cstrUnion().Compare()
 		}
 	case 928:
 		yyDollar = yyS[yypt-3 : yypt+1]
@@ -14080,6 +14080,86 @@ yydefault:
 //line mysql_sql.y:5759
 		{
 			yyLOCAL = tree.NewColumnTableDef(yyDollar[1].unresolvedNameUnion(), yyDollar[2].columnTypeUnion(), yyDollar[3].columnAttributesUnion())
+		}
+		yyVAL.union = yyLOCAL
+	case 919:
+		yyDollar = yyS[yypt-1 : yypt+1]
+		var yyLOCAL *tree.UnresolvedName
+//line mysql_sql.y:5691
+		{
+			yyLOCAL = tree.SetUnresolvedName(yyDollar[1].cstrUnion().Compare())
+		}
+		yyVAL.union = yyLOCAL
+	case 920:
+		yyDollar = yyS[yypt-3 : yypt+1]
+		var yyLOCAL *tree.UnresolvedName
+//line mysql_sql.y:5695
+		{
+			yyLOCAL = tree.SetUnresolvedName(yyDollar[1].cstrUnion().Compare(), yyDollar[3].cstrUnion().Compare())
+		}
+		yyVAL.union = yyLOCAL
+	case 921:
+		yyDollar = yyS[yypt-5 : yypt+1]
+		var yyLOCAL *tree.UnresolvedName
+//line mysql_sql.y:5699
+		{
+			yyLOCAL = tree.SetUnresolvedName(yyDollar[1].cstrUnion().Compare(), yyDollar[3].cstrUnion().Compare(), yyDollar[5].cstrUnion().Compare())
+		}
+		yyVAL.union = yyLOCAL
+	case 922:
+		yyDollar = yyS[yypt-1 : yypt+1]
+		var yyLOCAL *tree.CStr
+//line mysql_sql.y:5705
+		{
+			yyLOCAL = tree.NewCStr(yyDollar[1].str, yylex.(*Lexer).lower)
+		}
+		yyVAL.union = yyLOCAL
+	case 923:
+		yyDollar = yyS[yypt-1 : yypt+1]
+		var yyLOCAL *tree.CStr
+//line mysql_sql.y:5709
+		{
+			yyLOCAL = tree.NewCStr(yyDollar[1].str, yylex.(*Lexer).lower)
+		}
+		yyVAL.union = yyLOCAL
+	case 924:
+		yyDollar = yyS[yypt-1 : yypt+1]
+		var yyLOCAL *tree.CStr
+//line mysql_sql.y:5713
+		{
+			yyLOCAL = tree.NewCStr(yyDollar[1].str, yylex.(*Lexer).lower)
+		}
+		yyVAL.union = yyLOCAL
+	case 925:
+		yyDollar = yyS[yypt-1 : yypt+1]
+		var yyLOCAL *tree.CStr
+//line mysql_sql.y:5717
+		{
+			yyLOCAL = tree.NewCStr(yyDollar[1].str, yylex.(*Lexer).lower)
+		}
+		yyVAL.union = yyLOCAL
+	case 926:
+		yyDollar = yyS[yypt-1 : yypt+1]
+		var yyLOCAL *tree.UnresolvedName
+//line mysql_sql.y:5723
+		{
+			yyLOCAL = tree.SetUnresolvedName(yyDollar[1].cstrUnion().Compare())
+		}
+		yyVAL.union = yyLOCAL
+	case 927:
+		yyDollar = yyS[yypt-3 : yypt+1]
+		var yyLOCAL *tree.UnresolvedName
+//line mysql_sql.y:5727
+		{
+			yyLOCAL = tree.SetUnresolvedName(yyDollar[1].cstrUnion().Compare(), yyDollar[3].cstrUnion().Compare())
+		}
+		yyVAL.union = yyLOCAL
+	case 928:
+		yyDollar = yyS[yypt-5 : yypt+1]
+		var yyLOCAL *tree.UnresolvedName
+//line mysql_sql.y:5731
+		{
+			yyLOCAL = tree.SetUnresolvedName(yyDollar[1].cstrUnion().Compare(), yyDollar[3].cstrUnion().Compare(), yyDollar[5].cstrUnion().Compare())
 		}
 		yyVAL.union = yyLOCAL
 	case 929:
@@ -14362,7 +14442,7 @@ yydefault:
 		yyDollar = yyS[yypt-2 : yypt+1]
 //line mysql_sql.y:5925
 		{
-			yyVAL.str = yyDollar[2].cstrUnion().ToLowerForConfig()
+			yyVAL.str = yyDollar[2].cstrUnion().Compare()
 		}
 	case 964:
 		yyDollar = yyS[yypt-5 : yypt+1]

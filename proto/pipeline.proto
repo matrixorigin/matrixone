@@ -78,6 +78,12 @@ message Insert{
   plan.ClusterTable ClusterTable  = 8;
 }
 
+message PreInsert {
+  string             schema_name = 1;
+  plan.TableDef      table_def = 2;
+  map<string, int32> parent_idx_pre_insert   = 3;
+}
+
 message OnDuplicateKey{
   uint64 affected   = 1;
   repeated int32 on_duplicate_idx           = 2;
@@ -231,17 +237,18 @@ message Instruction{
   ExternalScan external_scan = 16;
   Insert insert = 17;
   OnDuplicateKey on_duplicate_key = 18;
-  repeated plan.OrderBySpec order_by = 19;
-  repeated plan.Expr    project_list = 20;
-  plan.Expr    filter = 21;
-  uint64    limit = 22;
-  uint64    offset = 23;
+  PreInsert pre_insert               = 19;
+  repeated plan.OrderBySpec order_by = 20;
+  repeated plan.Expr    project_list = 21;
+  plan.Expr    filter = 22;
+  uint64    limit = 23;
+  uint64    offset = 24;
   // isFirst identifies whether it is the first instruction of analyzeInfo corresponding to idx
-  bool isFirst = 24;
+  bool isFirst = 25;
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
-  bool isLast = 25;
+  bool isLast = 26;
   
-  RightJoin  right_join = 26;
+  RightJoin  right_join = 27;
 
 }
 
