@@ -393,7 +393,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	tableDef := info.tblInfo.tableDefs[0]
 	tableObjRef := info.tblInfo.objRef[0]
 	syntaxHasColumnNames := false
-	isClusterTable := info.tblInfo.isClusterTable[0]
 	colToIdx := make(map[string]int)
 	oldColPosMap := make(map[string]int)
 	tableDef.Name2ColIndex = make(map[string]int32)
@@ -406,24 +405,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
 
 	if stmt.Columns == nil {
-		if isClusterTable {
-			for _, col := range tableDef.Cols {
-				if !util.IsClusterTableAttribute(col.Name) {
-					insertColumns = append(insertColumns, col.Name)
-				}
-			}
-		} else {
-			for _, col := range tableDef.Cols {
-				insertColumns = append(insertColumns, col.Name)
-			}
+		for _, col := range tableDef.Cols {
+			insertColumns = append(insertColumns, col.Name)
 		}
 	} else {
 		syntaxHasColumnNames = true
 		for _, column := range stmt.Columns {
 			colName := string(column)
-			if isClusterTable && util.IsClusterTableAttribute(colName) {
-				return moerr.NewInvalidInput(builder.GetContext(), "do not specify the attribute %s for the cluster table", util.GetClusterTableAttributeName())
-			}
 			if _, exists := colToIdx[string(column)]; !exists {
 				return moerr.NewInvalidInput(builder.GetContext(), "insert value into unknown column '%s'", colName)
 			}
@@ -866,6 +854,9 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 }
 
 func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
+	if targetType.Id == 0 {
+		return expr, nil
+	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if t1.Oid == t2.Oid && t1.Width == t2.Width && t1.Size == t2.Size && t1.Scale == t2.Scale {
 		return expr, nil

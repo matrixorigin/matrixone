@@ -180,4 +180,6 @@ var pcsPool = NewPool(
 	func() []uintptr {
 		return make([]uintptr, 128)
 	},
+	nil,
+	nil,
 )
