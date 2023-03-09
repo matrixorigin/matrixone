@@ -102,7 +102,6 @@ type TxnChanger interface {
 	Commit() error
 	Rollback() error
 	SetCommitTS(cts types.TS) error
-	//  func (txn *Txn) GetPKDedupSkip() txnif.PKDedupSkipScope             { return txn.PKDedupSkip }
 	SetPKDedupSkip(skip PKDedupSkipScope)
 	SetParticipants(ids []uint64) error
 	SetError(error)
