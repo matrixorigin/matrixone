@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
@@ -390,6 +391,15 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			InsertCtx: t.InsertCtx,
 			// HasAutoCol:           t.HasAutoCol,
 		}
+	case vm.PreInsert:
+		t := sourceIns.Arg.(*preinsert.Argument)
+		res.Arg = &preinsert.Argument{
+			Ctx:        t.Ctx,
+			Eg:         t.Eg,
+			SchemaName: t.SchemaName,
+			TableDef:   t.TableDef,
+			ParentIdx:  t.ParentIdx,
+		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -501,6 +511,30 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Proce
 		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
 		Source:          originRel,
 		UniqueSource:    indexRels,
+	}, nil
+}
+
+func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
+	insertCtx := n.InsertCtx
+	schemaName := insertCtx.Ref.SchemaName
+	insertCtx.TableDef.TblId = uint64(insertCtx.Ref.Obj)
+
+	if insertCtx.Ref.SchemaName != "" {
+		dbSource, err := eg.Database(proc.Ctx, insertCtx.Ref.SchemaName, proc.TxnOperator)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = dbSource.Relation(proc.Ctx, insertCtx.Ref.ObjName); err != nil {
+			schemaName = defines.TEMPORARY_DBNAME
+		}
+	}
+
+	return &preinsert.Argument{
+		Ctx:        proc.Ctx,
+		Eg:         eg,
+		SchemaName: schemaName,
+		TableDef:   insertCtx.TableDef,
+		ParentIdx:  insertCtx.ParentIdx,
 	}, nil
 }
 
@@ -1320,7 +1354,7 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 		}
 		relation, err = dbSource.Relation(ctx, ref.ObjName)
 		if err == nil {
-			isTemp = false
+			isTemp = defines.TEMPORARY_DBNAME == ref.SchemaName
 		} else {
 			dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
 			if err != nil {

@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package insert
+package preinsert
 
 import (
 	"context"
 	"fmt"
-	"testing"
-	"time"
-
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,24 +26,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
+	"testing"
+	"time"
 )
-
-type mockRelation struct {
-	engine.Relation
-	result *batch.Batch
-}
-
-func (e *mockRelation) Write(_ context.Context, b *batch.Batch) error {
-	e.result = b
-	return nil
-}
 
 var (
 	i64typ     = &plan.Type{Id: int32(types.T_int64)}
 	varchartyp = &plan.Type{Id: int32(types.T_varchar)}
 )
 
-func TestInsertOperator(t *testing.T) {
+func TestPreInsertNormal(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -77,39 +66,80 @@ func TestInsertOperator(t *testing.T) {
 			testutil.MakeScalarVarchar("d", 3),
 			testutil.MakeScalarNull(types.T_int64, 3),
 		},
-		Attrs: []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
-		Zs:    []int64{1, 1, 1},
+		Zs: []int64{1, 1, 1},
 	}
 	argument1 := Argument{
-		Engine: eng,
-		InsertCtx: &InsertCtx{
-			Source: &mockRelation{},
-			Ref: &plan.ObjectRef{
-				Obj:        0,
-				SchemaName: "testDb",
-				ObjName:    "testTable",
+		Eg:         eng,
+		SchemaName: "testDb",
+
+		TableDef: &plan.TableDef{
+			Cols: []*plan.ColDef{
+				{Name: "int64_column", Typ: i64typ},
+				{Name: "scalar_int64", Typ: i64typ},
+				{Name: "varchar_column", Typ: varchartyp},
+				{Name: "scalar_varchar", Typ: varchartyp},
+				{Name: "int64_column", Typ: i64typ},
 			},
-			TableDef: &plan.TableDef{
-				Cols: []*plan.ColDef{
-					{Name: "int64_column", Typ: i64typ},
-					{Name: "scalar_int64", Typ: i64typ},
-					{Name: "varchar_column", Typ: varchartyp},
-					{Name: "scalar_varchar", Typ: varchartyp},
-					{Name: "int64_column", Typ: i64typ},
+		},
+	}
+	proc.SetInputBatch(batch1)
+	_, err := Call(0, proc, &argument1, false, false)
+	require.NoError(t, err)
+	{
+		result := proc.InputBatch()
+		// check attr names
+		require.Equal(t, []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"}, result.Attrs)
+		// check vector
+		require.Equal(t, len(batch1.Vecs), len(result.Vecs))
+		for i, vec := range result.Vecs {
+			require.Equal(t, len(batch1.Zs), vector.Length(vec), fmt.Sprintf("column number: %d", i))
+		}
+	}
+}
+
+func TestPreInsertNullCheck(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.TODO()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+
+	proc := testutil.NewProc()
+	proc.TxnClient = txnClient
+	proc.Ctx = ctx
+	batch2 := &batch.Batch{
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
+		},
+		Zs: []int64{1, 1, 1},
+	}
+	argument2 := Argument{
+		Eg:         eng,
+		SchemaName: "testDb",
+		TableDef: &plan.TableDef{
+			Cols: []*plan.ColDef{
+				{Name: "int64_column_primary", Primary: true, Typ: i64typ,
+					Default: &plan.Default{
+						NullAbility: false,
+					},
 				},
 			},
 		},
 	}
-	proc.Reg.InputBatch = batch1
-	_, err := Call(0, proc, &argument1, false, false)
-	require.NoError(t, err)
-
-	result := argument1.InsertCtx.Source.(*mockRelation).result
-	// check attr names
-	require.Equal(t, []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"}, result.Attrs)
-	// check vector
-	require.Equal(t, len(batch1.Vecs), len(result.Vecs))
-	for i, vec := range result.Vecs {
-		require.Equal(t, len(batch1.Zs), vector.Length(vec), fmt.Sprintf("column number: %d", i))
-	}
+	proc.Reg.InputBatch = batch2
+	_, err2 := Call(0, proc, &argument2, false, false)
+	require.Error(t, err2, "should return error when insert null into primary key column")
 }

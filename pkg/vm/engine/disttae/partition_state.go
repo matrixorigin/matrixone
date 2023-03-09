@@ -23,7 +23,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -177,14 +176,14 @@ func (p *PartitionState) HandleLogtailEntry(
 	ctx context.Context,
 	entry *api.Entry,
 	primaryKeyIndex int,
-	pool *mpool.MPool,
+	packer *types.Packer,
 ) {
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if isMetaTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, entry.Bat)
 		} else {
-			p.HandleRowsInsert(ctx, entry.Bat, primaryKeyIndex, pool)
+			p.HandleRowsInsert(ctx, entry.Bat, primaryKeyIndex, packer)
 		}
 	case api.Entry_Delete:
 		if isMetaTable(entry.TableName) {
@@ -203,7 +202,7 @@ func (p *PartitionState) HandleRowsInsert(
 	ctx context.Context,
 	input *api.Batch,
 	primaryKeyIndex int,
-	pool *mpool.MPool,
+	packer *types.Packer,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
@@ -218,7 +217,7 @@ func (p *PartitionState) HandleRowsInsert(
 	if primaryKeyIndex >= 0 {
 		primaryKeyBytesSet = encodePrimaryKeyVector(
 			batch.Vecs[2+primaryKeyIndex],
-			pool,
+			packer,
 		)
 	}
 
