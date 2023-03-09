@@ -1141,10 +1141,10 @@ var gSysVarsDefs = map[string]SystemVariable{
 	"lower_case_table_names": {
 		Name:              "lower_case_table_names",
 		Scope:             ScopeGlobal,
-		Dynamic:           false,
+		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("lower_case_table_names", 0, 2, false),
-		Default:           int64(0),
+		Default:           int64(1),
 	},
 	"net_write_timeout": {
 		Name:              "net_write_timeout",

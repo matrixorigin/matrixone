@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tree
+package preinsert
 
 import (
-	"github.com/stretchr/testify/assert"
-	"testing"
+	"context"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Test_CStr(t *testing.T) {
-	c1 := NewCStr("Hello", 1)
-	assert.Equal(t, "hello", c1.ToLower())
-	assert.Equal(t, "Hello", c1.Origin())
-	assert.Equal(t, false, c1.Empty())
-	c2 := NewCStr("Hello", 1)
-	assert.Equal(t, "hello", c2.ToLower())
-	c2.SetConfig(1)
-	assert.Equal(t, "hello", c2.Compare())
-	c2.SetConfig(0)
-	assert.Equal(t, "hello", c2.Compare())
+type proc = process.Process
+type eng = engine.Engine
+
+type Argument struct {
+	Ctx context.Context
+
+	Eg         eng
+	SchemaName string
+	TableDef   *pb.TableDef
+	ParentIdx  map[string]int32
 }
+
+func (arg *Argument) Free(*process.Process, bool) {}

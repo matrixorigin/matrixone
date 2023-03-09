@@ -1676,7 +1676,11 @@ func (mce *MysqlCmdExecutor) handlePrepareStmt(ctx context.Context, st *tree.Pre
 }
 
 func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) (*PrepareStmt, error) {
-	stmts, err := mysql.Parse(ctx, st.Sql)
+	v, err := ses.GetGlobalVar("lower_case_table_names")
+	if err != nil {
+		return nil, err
+	}
+	stmts, err := mysql.Parse(ctx, st.Sql, v.(int64))
 	if err != nil {
 		return nil, err
 	}
@@ -2357,7 +2361,12 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 		}
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
-		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql)
+		var v interface{}
+		v, err = ses.GetGlobalVar("lower_case_table_names")
+		if err != nil {
+			v = int64(1)
+		}
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, v.(int64))
 		if err != nil {
 			return nil, err
 		}
@@ -2830,7 +2839,11 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 		}
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
-		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql)
+		v, err := ses.GetGlobalVar("lower_case_table_names")
+		if err != nil {
+			return nil, err
+		}
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, v.(int64))
 		if err != nil {
 			return nil, err
 		}
@@ -3290,12 +3303,18 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.Use:
 			selfHandle = true
-			//use database
-			err = mce.handleChangeDB(requestCtx, st.Name)
+			var v interface{}
+			v, err = ses.GetGlobalVar("lower_case_table_names")
 			if err != nil {
 				goto handleFailed
 			}
-			err = changeVersion(requestCtx, ses, st.Name)
+			st.Name.SetConfig(v.(int64))
+			//use database
+			err = mce.handleChangeDB(requestCtx, st.Name.Compare())
+			if err != nil {
+				goto handleFailed
+			}
+			err = changeVersion(requestCtx, ses, st.Name.Compare())
 			if err != nil {
 				goto handleFailed
 			}
@@ -4248,7 +4267,11 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 	case *tree.PrepareStmt:
 		return StatementCanBeExecutedInUncommittedTransaction(ses, st.Stmt)
 	case *tree.PrepareString:
-		preStmt, err := mysql.ParseOne(ses.requestCtx, st.Sql)
+		v, err := ses.GetGlobalVar("lower_case_table_names")
+		if err != nil {
+			return false, err
+		}
+		preStmt, err := mysql.ParseOne(ses.requestCtx, st.Sql, v.(int64))
 		if err != nil {
 			return false, err
 		}

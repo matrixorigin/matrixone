@@ -708,7 +708,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line postgresql_sql.y:103
 		{
-			yyLOCAL = &tree.Use{Name: yyDollar[2].str}
+			yyLOCAL = &tree.Use{Name: tree.NewCStr(yyDollar[2].str, 1)}
 		}
 		yyVAL.union = yyLOCAL
 	case 6:
