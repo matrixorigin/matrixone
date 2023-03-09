@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -28,27 +27,25 @@ func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("insert")
 }
 
-func Prepare(proc *process.Process, arg any) error {
+func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	if ap.IsRemote {
-		container := colexec.NewWriteS3Container(ap.InsertCtx.TableDef)
-		ap.Container = container
+		ap.Container = colexec.NewWriteS3Container(ap.InsertCtx.TableDef)
 	}
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
-	var err error
-	var affectedRows uint64
-	t1 := time.Now()
+func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
+	defer analyze(proc, idx)()
+
 	insertArg := arg.(*Argument)
+	container := insertArg.Container
 	bat := proc.Reg.InputBatch
 	if bat == nil {
 		if insertArg.IsRemote {
 			// handle the last Batch that batchSize less than DefaultBlockMaxRows
 			// for more info, refer to the comments about reSizeBatch
-			err = insertArg.Container.WriteS3CacheBatch(proc)
-			if err != nil {
+			if err := container.WriteS3CacheBatch(proc); err != nil {
 				return false, err
 			}
 		}
@@ -58,37 +55,29 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return false, nil
 	}
 
-	insertCtx := insertArg.InsertCtx
-
-	var insertBat *batch.Batch
 	defer func() {
 		bat.Clean(proc.Mp())
-		if insertBat != nil {
-			insertBat.Clean(proc.Mp())
-		}
-		anal := proc.GetAnalyze(idx)
-		anal.AddInsertTime(t1)
 	}()
 
-	insertRows := func() error {
-		var affectedRow uint64
-
-		affectedRow, err = colexec.InsertBatch(insertArg.Container, insertArg.Engine, proc, bat, insertCtx.Source,
-			insertCtx.Ref, insertCtx.TableDef, insertCtx.ParentIdx, insertCtx.UniqueSource)
-		if err != nil {
-			return err
-		}
-
-		affectedRows = affectedRows + affectedRow
-		return nil
-	}
-
-	if err := insertRows(); err != nil {
+	insertCtx := insertArg.InsertCtx
+	affectedRows, err := colexec.InsertBatch(container, proc, bat, insertCtx.Source,
+		insertCtx.TableDef, insertCtx.UniqueSource)
+	if err != nil {
 		return false, err
 	}
 	if insertArg.IsRemote {
-		insertArg.Container.WriteEnd(proc)
+		container.WriteEnd(proc)
 	}
 	atomic.AddUint64(&insertArg.Affected, affectedRows)
 	return false, nil
+}
+
+func analyze(proc *process.Process, idx int) func() {
+	t := time.Now()
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	return func() {
+		anal.Stop()
+		anal.AddInsertTime(t)
+	}
 }
