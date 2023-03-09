@@ -210,6 +210,8 @@ type Session struct {
 
 	planCache *planCache
 
+	statsCache *plan2.StatsCache
+
 	autoIncrCaches defines.AutoIncrCaches
 }
 
@@ -293,9 +295,10 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
-		cache:     &privilegeCache{},
-		blockIdx:  0,
-		planCache: newPlanCache(100),
+		cache:      &privilegeCache{},
+		blockIdx:   0,
+		planCache:  newPlanCache(100),
+		statsCache: plan2.NewStatsCache(),
 	}
 	if flag {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
