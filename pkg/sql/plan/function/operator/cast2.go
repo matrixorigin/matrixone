@@ -2825,13 +2825,23 @@ func decimal64ToDecimal128(
 			if v.Sign() {
 				fromdec.B64_127 = ^fromdec.B64_127
 			}
-			dec := fromdec.Format(fromtype.Scale)
-			result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
-				return err
+			if totype.Width < fromtype.Width {
+				dec := fromdec.Format(fromtype.Scale)
+				result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
+			} else {
+				result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
 			}
 		}
 	}

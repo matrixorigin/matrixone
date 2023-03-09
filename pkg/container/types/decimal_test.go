@@ -92,7 +92,7 @@ func BenchmarkSub(b *testing.B) {
 
 func BenchmarkFloatMul(b *testing.B) {
 	x := float64(rand.Int())
-	y := float64(1)
+	y := float64(1.0001)
 	for i := 0; i < b.N; i++ {
 		x *= y
 	}
