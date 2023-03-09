@@ -846,6 +846,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				ClusterTable: t.ClusterTable,
 			},
 		}
+	case vm.PreInsert:
+		t := opr.GetPreInsert()
+		v.Arg = &preinsert.Argument{
+			SchemaName: t.GetSchemaName(),
+			TableDef:   t.GetTableDef(),
+			ParentIdx:  t.GetParentIdxPreInsert(),
+		}
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()
 		v.Arg = &onduplicatekey.Argument{
