@@ -358,9 +358,11 @@ func (r *TAEReader) ReadRow(row *table.Row) error {
 }
 
 func (r *TAEReader) Close() {
-	for _, b := range r.batchs {
-		b.Clean(r.mp)
+	for idx := range r.batchs {
+		// do NOT release it in mpool (like r.batchs[idx].Clean(r.mp)). right now, the buffer is new one.
+		r.batchs[idx] = nil
 	}
+	r.batchs = nil
 }
 
 func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
