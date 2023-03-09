@@ -16,9 +16,9 @@ package memoryengine
 
 import (
 	"context"
-	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -62,7 +62,9 @@ func (*CompilerContext) Stats(obj *plan.ObjectRef, e *plan.Expr) *plan.Stats {
 }
 
 func (c *CompilerContext) GetProcess() *process.Process {
-	return nil
+	proc := testutil.NewProcess()
+	proc.Ctx = context.Background()
+	return proc
 }
 
 func (c *CompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
@@ -176,7 +178,7 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 }
 
 func (*CompilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
-	return nil, errors.New("not implemented")
+	return "", nil
 }
 
 func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs []*engine.Attribute, err error) {

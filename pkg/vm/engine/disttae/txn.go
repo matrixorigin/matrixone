@@ -27,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -315,30 +313,6 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
-func (h transactionHeap) Len() int {
-	return len(h)
-}
-
-func (h transactionHeap) Less(i, j int) bool {
-	return h[i].meta.SnapshotTS.Less(h[j].meta.SnapshotTS)
-}
-
-func (h transactionHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-}
-
-func (h *transactionHeap) Push(x any) {
-	*h = append(*h, x.(*Transaction))
-}
-
-func (h *transactionHeap) Pop() any {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[0 : n-1]
-	return x
-}
-
 // needRead determine if a block needs to be read
 func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
 	var err error
@@ -401,47 +375,6 @@ func blockUnmarshal(data []byte) BlockMeta {
 
 	types.Decode(data, &meta)
 	return meta
-}
-
-// write a block to s3
-func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileService) ([]objectio.BlockObject, error) {
-	// 1. write bat
-	accountId, _, _ := getAccessInfo(ctx)
-	s3FileName, err := getNewBlockName(accountId)
-	if err != nil {
-		return nil, err
-	}
-	writer, err := objectio.NewObjectWriter(s3FileName, fs)
-	if err != nil {
-		return nil, err
-	}
-	fd, err := writer.Write(bat)
-	if err != nil {
-		return nil, err
-	}
-
-	// 2. write index (index and zonemap)
-	for i, vec := range bat.Vecs {
-		bloomFilter, zoneMap, err := getIndexDataFromVec(uint16(i), vec)
-		if err != nil {
-			return nil, err
-		}
-		if bloomFilter != nil {
-			err = writer.WriteIndex(fd, bloomFilter)
-			if err != nil {
-				return nil, err
-			}
-		}
-		if zoneMap != nil {
-			err = writer.WriteIndex(fd, zoneMap)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	// 3. get return
-	return writer.WriteEnd(ctx)
 }
 
 func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef,

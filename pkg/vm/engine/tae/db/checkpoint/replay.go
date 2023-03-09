@@ -22,9 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -63,11 +61,11 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	reader, err := objectio.NewObjectReader(CheckpointDir+dir.Name, r.fs.Service)
+	reader, err := blockio.NewFileReader(r.fs.Service, CheckpointDir+dir.Name)
 	if err != nil {
 		return
 	}
-	bs, err := reader.ReadAllMeta(ctx, dir.Size, common.DefaultAllocator)
+	bats, err := reader.LoadAllColumns(ctx, nil, dir.Size, common.DefaultAllocator)
 	if err != nil {
 		return
 	}
@@ -78,28 +76,14 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	nullables := CheckpointSchema.Nullables()
 	t0 := time.Now()
 	for i := range colNames {
-		if bs[0].GetExtent().End() == 0 {
+		if len(bats) == 0 {
 			continue
 		}
-		col, err2 := bs[0].GetColumn(uint16(i))
-		if err2 != nil {
-			return types.TS{}, err2
-		}
-		data, err2 := col.GetData(ctx, nil)
-		if err2 != nil {
-			return types.TS{}, err2
-		}
-		pkgVec := vector.NewVec(colTypes[i])
-		v := make([]byte, len(data.Entries[0].Object.([]byte)))
-		copy(v, data.Entries[0].Object.([]byte))
-		if err = pkgVec.UnmarshalBinary(v); err != nil {
-			return
-		}
 		var vec containers.Vector
-		if pkgVec.Length() == 0 {
+		if bats[0].Vecs[i].Length() == 0 {
 			vec = containers.MakeVector(colTypes[i], nullables[i])
 		} else {
-			vec = containers.NewVectorWithSharedMemory(pkgVec, nullables[i])
+			vec = containers.NewVectorWithSharedMemory(bats[0].Vecs[i], nullables[i])
 		}
 		bat.AddVector(colNames[i], vec)
 	}

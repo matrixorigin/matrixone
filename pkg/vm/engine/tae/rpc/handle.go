@@ -395,16 +395,12 @@ func (h *Handle) startLoadJobs(
 	req *db.WriteReq,
 ) (err error) {
 	var locations []string
-	var columnTypes []types.Type
-	var columnNames []string
 	var isNull []bool
 	var jobIds []string
 	var columnIdx int
 	if req.Type == db.EntryInsert {
 		//for loading primary keys of blocks
 		locations = append(locations, req.MetaLocs...)
-		columnTypes = append(columnTypes, req.Schema.GetSingleSortKey().Type)
-		columnNames = append(columnNames, req.Schema.GetSingleSortKey().Name)
 		columnIdx = req.Schema.GetSingleSortKeyIdx()
 		isNull = append(isNull, false)
 		req.Jobs = make([]*tasks.Job, len(req.MetaLocs))
@@ -416,9 +412,7 @@ func (h *Handle) startLoadJobs(
 	} else {
 		//for loading deleted rowid.
 		locations = append(locations, req.DeltaLocs...)
-		columnTypes = append(columnTypes, types.T_Rowid.ToType())
 		columnIdx = 0
-		columnNames = append(columnNames, catalog.Row_ID)
 		isNull = append(isNull, false)
 		req.Jobs = make([]*tasks.Job, len(req.DeltaLocs))
 		req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
@@ -445,29 +439,28 @@ func (h *Handle) startLoadJobs(
 				}
 				//reader, err := blockio.NewReader(ctx,
 				//	h.eng.GetTAE(ctx).Fs, req.MetaLocs[i])
-				reader, err := blockio.NewReader(ctx,
-					h.eng.GetTAE(ctx).Fs, loc)
+				_, id, _, _, err := blockio.DecodeLocation(loc)
 				if err != nil {
 					jobR.Err = err
 					return
 				}
-				meta, err := reader.ReadMeta(nil)
+				reader, err := blockio.NewObjectReader(
+					h.eng.GetTAE(ctx).Fs.Service, loc)
 				if err != nil {
 					jobR.Err = err
 					return
 				}
-				bat, err := reader.LoadBlkColumnsByMetaAndIdx(
-					columnTypes,
-					columnNames,
-					isNull,
-					meta,
-					columnIdx,
+				bat, err := reader.LoadColumns(
+					ctx,
+					[]uint16{uint16(columnIdx)},
+					[]uint32{id},
+					nil,
 				)
 				if err != nil {
 					jobR.Err = err
 					return
 				}
-				jobR.Res = bat.Vecs[0]
+				jobR.Res = containers.NewVectorWithSharedMemory(bat[0].Vecs[0], isNull[0])
 				return
 			},
 		)

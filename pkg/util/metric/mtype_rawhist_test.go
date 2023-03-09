@@ -70,13 +70,13 @@ func TestRawHistVec(t *testing.T) {
 
 	dummyExp := &dummyExp{}
 	var iexp MetricExporter = dummyExp
-	rawObserver.exporter = &iexp
+	rawObserver.exporter = NewExportHolder(iexp)
 	rawObserver.now = func() int64 { return 10000 }
 	exportCnt := 2
 	dummyExp.Add(exportCnt)
 
 	withModifiedConfig(func() {
-		defer setRawHistBufLimit(setRawHistBufLimit(10))
+		defer SetRawHistBufLimit(SetRawHistBufLimit(10))
 		// Add enough samples to trigger twice Export
 		for i := 0; i < exportCnt*10; i++ {
 			rawObserver.Observe(float64(i))
@@ -174,14 +174,14 @@ func TestRawHistGather(t *testing.T) {
 		Name:      "test_raw",
 		Help:      "test raw hist metric",
 	})
-	raw1.exporter = &iexp
+	raw1.exporter = NewExportHolder(iexp)
 
 	raw2 := NewRawHist(prom.HistogramOpts{
 		Subsystem: "stats",
 		Name:      "test_stats",
 		Help:      "test stats metric",
 	})
-	raw2.exporter = &iexp
+	raw2.exporter = NewExportHolder(iexp)
 
 	reg := prom.NewRegistry()
 	reg.MustRegister(raw1)

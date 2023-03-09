@@ -36,12 +36,10 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 	if sortOrder == -1 {
 		return cost
 	}
-	// coefficient is 0.15 when tableCnt equals cost, and 1 when tableCnt >> cost
-	coefficient1 := math.Pow(0.15, cost/tableCnt)
-	// coefficient is 0.5 when tableCnt is small, and 1 when very large table.
-	coefficient2 := math.Pow(0.5, (1 / math.Log(tableCnt)))
+	// coefficient is 0.1 when tableCnt equals cost, and 1 when tableCnt >> cost
+	coefficient := math.Pow(0.1, cost/tableCnt)
 
-	outCnt := cost * coefficient1 * coefficient2
+	outCnt := cost * coefficient
 	if sortOrder == 0 {
 		return outCnt * 0.9
 	} else if sortOrder == 1 {
@@ -175,41 +173,47 @@ func estimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 	}
 	if outcnt > cost {
 		//outcnt must be smaller than cost
-		return cost
+		outcnt = cost
+	} else if outcnt < 1 {
+		outcnt = 1
 	}
 	return outcnt
 }
 
-func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64, t types.Type) float64 {
+func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64, t types.Type) (ndv float64) {
 	ndv1 := calcNdvUsingMinMax(minVal, maxVal, t)
 	ndv2 := calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt)
 	if ndv1 <= 0 {
-		return ndv2
+		ndv = ndv2
+		return
 	}
 	if t.Oid == types.T_date {
-		return ndv1
+		ndv = ndv1
+		return
 	}
-	return math.Min(ndv1, ndv2)
+	ndv = math.Min(ndv1, ndv2)
+	if ndv > tableCnt {
+		ndv = tableCnt
+	}
+	return
 }
 
 // treat distinct val in zonemap like a sample , then estimate the ndv
 // more blocks, more accurate
-func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64) float64 {
+func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64) (ndv float64) {
 	// coefficient is 0.15 when 1 block, and 1 when many blocks.
-	coefficient := math.Pow(0.35, (1 / math.Log2(blockNumTotal*2)))
+	coefficient := math.Pow(0.15, (1 / math.Log2(blockNumTotal*2)))
 	// very little distinctValNum, assume ndv is very low
-	if distinctValNum <= 1 {
-		return 5
-	}
-	if distinctValNum <= 100 && distinctValNum/blockNumTotal < 0.4 {
-		return distinctValNum / coefficient
-	}
-	// assume ndv is high
-	// ndvRate is from 0 to 1. 1 means unique key, and 0 means ndv is only 1
-	ndvRate := (distinctValNum / blockNumTotal)
-	ndv := tableCnt * ndvRate * coefficient
-	if ndv < 1 {
-		ndv = 1
+	if distinctValNum <= 100 || distinctValNum/blockNumTotal < 0.4 {
+		ndv = (distinctValNum + 2) / coefficient
+	} else {
+		// assume ndv is high
+		// ndvRate is from 0 to 1. 1 means unique key, and 0 means ndv is only 1
+		ndvRate := (distinctValNum / blockNumTotal)
+		ndv = tableCnt * ndvRate * coefficient
+		if ndv < 1 {
+			ndv = 1
+		}
 	}
 	return ndv
 }

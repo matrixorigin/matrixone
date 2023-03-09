@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -95,10 +96,26 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	applyAndResetType := func(e *Expr) (*Expr, error) {
+		oldType := DeepCopyTyp(e.Typ)
+		e, err = rule.ApplyExpr(e)
+		if err != nil {
+			return nil, err
+		}
+		if (oldType.Id == int32(types.T_float32) || oldType.Id == int32(types.T_float64)) && (e.Typ.Id == int32(types.T_decimal64) || e.Typ.Id == int32(types.T_decimal128)) {
+			toTyp := types.New(types.T_varchar, 65000, 0)
+			e, err = forceCastExpr(ctx, e, makePlan2Type(&toTyp))
+			if err != nil {
+				return nil, err
+			}
+		}
+		return forceCastExpr(ctx, e, oldType)
+	}
+
 	if node.RowsetData != nil {
 		for i := range node.RowsetData.Cols {
 			for j := range node.RowsetData.Cols[i].Data {
-				node.RowsetData.Cols[i].Data[j], err = rule.ApplyExpr(node.RowsetData.Cols[i].Data[j])
+				node.RowsetData.Cols[i].Data[j], err = applyAndResetType(node.RowsetData.Cols[i].Data[j])
 				if err != nil {
 					return err
 				}
@@ -107,25 +124,13 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	}
 
 	for i := range node.ProjectList {
-		// if prepare statement is:   update set decimal_col = decimal_col + ? ;
-		// and then: 'set @a=12.22; execute stmt1 using @a;'  decimal_col + ? will be float64
 		if vq.isUpdatePlan {
-			pl, _ := vq.plan.Plan.(*Plan_Query)
-			num := len(pl.Query.Nodes) - int(idx)
-			// last project Node
-			if num == 2 {
-				oldType := DeepCopyTyp(node.ProjectList[i].Typ)
-				node.ProjectList[i], err = rule.ApplyExpr(node.ProjectList[i])
-				if node.ProjectList[i].Typ.Id != oldType.Id {
-					node.ProjectList[i], err = makePlan2CastExpr(ctx, node.ProjectList[i], oldType)
-				}
-			} else {
-				node.ProjectList[i], err = rule.ApplyExpr(node.ProjectList[i])
-			}
+			node.ProjectList[i], err = applyAndResetType(node.ProjectList[i])
+
 		} else {
 			node.ProjectList[i], err = rule.ApplyExpr(node.ProjectList[i])
-		}
 
+		}
 		if err != nil {
 			return err
 		}
