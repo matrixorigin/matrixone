@@ -116,8 +116,6 @@ func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
 
 func (entry *BlockEntry) GetCatalog() *Catalog { return entry.segment.table.db.catalog }
 
-func (entry *BlockEntry) GetTxnEntryType() txnif.TxnEntryType { return txnif.TxnEntryBlock }
-
 func (entry *BlockEntry) IsAppendable() bool {
 	return entry.state == ES_Appendable
 }

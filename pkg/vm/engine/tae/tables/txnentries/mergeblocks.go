@@ -83,8 +83,6 @@ func (entry *mergeBlocksEntry) ApplyCommit(index *wal.Index) (err error) {
 	return
 }
 
-func (entry *mergeBlocksEntry) GetTxnEntryType() txnif.TxnEntryType { return txnif.TxnEntryMerge }
-
 func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
 	droppedSegs := make([]*common.ID, 0)
 	for _, blk := range entry.droppedSegs {

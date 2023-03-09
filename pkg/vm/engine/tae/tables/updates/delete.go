@@ -90,10 +90,9 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	return n
 }
 
-func (node *DeleteNode) GetTxnEntryType() txnif.TxnEntryType { return txnif.TxnEntryAppend }
-func (node *DeleteNode) CloneAll() txnif.MVCCNode            { panic("todo") }
-func (node *DeleteNode) CloneData() txnif.MVCCNode           { panic("todo") }
-func (node *DeleteNode) Update(txnif.MVCCNode)               { panic("todo") }
+func (node *DeleteNode) CloneAll() txnif.MVCCNode  { panic("todo") }
+func (node *DeleteNode) CloneData() txnif.MVCCNode { panic("todo") }
+func (node *DeleteNode) Update(txnif.MVCCNode)     { panic("todo") }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }

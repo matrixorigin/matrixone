@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
-	pblogtail "github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -44,9 +43,9 @@ type TxnMgr interface {
 	Unlock()
 }
 
-type callback func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail)
+type Callback func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail)
 
-func MockCallback(from, to timestamp.Timestamp, tails ...pblogtail.TableLogtail) {
+func MockCallback(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) {
 	if len(tails) == 0 {
 		return
 	}
@@ -113,7 +112,7 @@ func (mgr *Manager) OnCommittedTS(ts types.TS) {
 func (mgr *Manager) generateHeartbeat() {
 	icallback := mgr.logtailCallback.Load()
 	if icallback != nil {
-		callback := icallback.(callback)
+		callback := icallback.(Callback)
 		from := mgr.previousSaveTS
 		to := mgr.getSaveTS()
 		callback(from.ToTimestamp(), to.ToTimestamp())
@@ -130,6 +129,7 @@ func (mgr *Manager) onCollectTxnLogtails(items ...any) {
 	for _, item := range items {
 		txn := item.(txnif.AsyncTxn)
 		entries := builder.CollectLogtail(txn)
+		txn.GetStore().DoneWaitEvent(1)
 		if len(*entries) == 0 {
 			continue
 		}
@@ -182,7 +182,7 @@ func (mgr *Manager) generateLogtails() {
 func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 	icallback := mgr.logtailCallback.Load()
 	if icallback != nil {
-		callback := icallback.(callback)
+		callback := icallback.(Callback)
 		to := (*txn.tails)[0].Ts
 		from := mgr.previousSaveTS
 		mgr.previousSaveTS = types.TimestampToTS(*to)
@@ -211,6 +211,7 @@ func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
 	mgr.table.AddTxn(txn)
 }
 func (mgr *Manager) OnEndPreApplyCommit(txn txnif.AsyncTxn) {
+	txn.GetStore().AddWaitEvent(1)
 	mgr.collectLogtailQueue.Enqueue(txn)
 }
 
@@ -249,7 +250,7 @@ func (mgr *Manager) GetTableOperator(
 	)
 }
 
-func (mgr *Manager) RegisterCallback(cb callback) error {
+func (mgr *Manager) RegisterCallback(cb Callback) error {
 	mgr.logtailCallback.Store(cb)
 	return nil
 }

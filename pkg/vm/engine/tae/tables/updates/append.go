@@ -116,7 +116,6 @@ func (node *AppendNode) GeneralVerboseString() string {
 	return node.GeneralDesc()
 }
 
-func (node *AppendNode) GetTxnEntryType() txnif.TxnEntryType { return txnif.TxnEntryAppend }
 func (node *AppendNode) SetLogIndex(idx *wal.Index) {
 	node.TxnMVCCNode.SetLogIndex(idx)
 }

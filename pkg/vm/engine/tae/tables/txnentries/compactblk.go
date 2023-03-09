@@ -76,8 +76,8 @@ func NewCompactBlockEntry(
 		deletes:   deletes,
 	}
 }
-func (entry *compactBlockEntry) GetTxnEntryType() txnif.TxnEntryType { return txnif.TxnEntryCompact }
-func (entry *compactBlockEntry) IsAborted() bool                     { return false }
+
+func (entry *compactBlockEntry) IsAborted() bool { return false }
 func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
 	_ = entry.scheduler.DeleteTransferPage(entry.from.Fingerprint())

@@ -260,6 +260,8 @@ type TxnStore interface {
 
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
 	LogTxnState(sync bool) (entry.Entry, error)
+	DoneWaitEvent(cnt int)
+	AddWaitEvent(cnt int)
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
@@ -282,16 +284,4 @@ type TxnEntry interface {
 	MakeCommand(uint32) (TxnCmd, error)
 	Is1PC() bool
 	Set1PC()
-	GetTxnEntryType() TxnEntryType
 }
-
-const (
-	TxnEntryDatabase TxnEntryType = iota
-	TxnEntryTable
-	TxnEntrySegment
-	TxnEntryBlock
-	TxnEntryAppend
-	TxnEntryDelete
-	TxnEntryCompact
-	TxnEntryMerge
-)

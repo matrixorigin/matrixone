@@ -258,8 +258,7 @@ func (entry *TableEntry) StringLocked() string {
 	return entry.StringLockedWithLevel(common.PPL1)
 }
 
-func (entry *TableEntry) GetTxnEntryType() txnif.TxnEntryType { return txnif.TxnEntryTable }
-func (entry *TableEntry) GetCatalog() *Catalog                { return entry.db.catalog }
+func (entry *TableEntry) GetCatalog() *Catalog { return entry.db.catalog }
 
 func (entry *TableEntry) GetTableData() data.Table { return entry.tableData }
 

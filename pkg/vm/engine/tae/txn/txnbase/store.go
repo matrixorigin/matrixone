@@ -47,6 +47,8 @@ func (store *NoopTxnStore) PreApplyCommit() error  { return nil }
 func (store *NoopTxnStore) ApplyCommit() error     { return nil }
 func (store *NoopTxnStore) Apply2PCPrepare() error { return nil }
 
+func (store *NoopTxnStore) DoneWaitEvent(cnt int)                                  {}
+func (store *NoopTxnStore) AddWaitEvent(cnt int)                                   {}
 func (store *NoopTxnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {}
 
 func (store *NoopTxnStore) CreateRelation(dbId uint64, def any) (rel handle.Relation, err error) {
