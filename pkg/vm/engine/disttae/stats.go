@@ -32,19 +32,12 @@ func makeColumns(tableDef *plan.TableDef) []int {
 	return cols
 }
 
-// get minval , maxval, datatype from zonemap, and calculate ndv
-// then put these in a statsInfoMap and return
-func updateStatsInfoMap(ctx context.Context, blocks *[][]BlockMeta, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *plan2.StatsInfoMap) error {
+// get minval , maxval, datatype from zonemap
+func getInfoFromZoneMap(ctx context.Context, blocks *[][]BlockMeta, blockNumTotal int, tableDef *plan.TableDef) (*plan2.InfoFromZoneMap, error) {
 
 	columns := makeColumns(tableDef)
 	lenCols := len(columns)
-	dataTypes := make([]types.Type, lenCols)
-	maxVal := make([]any, lenCols)         //maxvalue of all blocks for column
-	minVal := make([]any, lenCols)         //minvalue of all blocks for column
-	valMap := make([]map[any]int, lenCols) // all distinct value in blocks zonemap
-	for i := range columns {
-		valMap[i] = make(map[any]int, blockNumTotal)
-	}
+	info := plan2.NewInfoFromZoneMap(lenCols, blockNumTotal)
 
 	//first, get info needed from zonemap
 	var init bool
@@ -52,14 +45,14 @@ func updateStatsInfoMap(ctx context.Context, blocks *[][]BlockMeta, blockNumTota
 		for j := range (*blocks)[i] {
 			zonemapVal, blkTypes, err := getZonemapDataFromMeta(ctx, columns, (*blocks)[i][j], tableDef)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if !init {
 				init = true
 				for i := range zonemapVal {
-					minVal[i] = zonemapVal[i][0]
-					maxVal[i] = zonemapVal[i][1]
-					dataTypes[i] = types.T(blkTypes[i]).ToType()
+					info.MinVal[i] = zonemapVal[i][0]
+					info.MaxVal[i] = zonemapVal[i][1]
+					info.DataTypes[i] = types.T(blkTypes[i]).ToType()
 				}
 			}
 
@@ -67,58 +60,22 @@ func updateStatsInfoMap(ctx context.Context, blocks *[][]BlockMeta, blockNumTota
 				currentBlockMin := zonemapVal[colIdx][0]
 				currentBlockMax := zonemapVal[colIdx][1]
 				if s, ok := currentBlockMin.([]uint8); ok {
-					valMap[colIdx][string(s)] = 1
+					info.ValMap[colIdx][string(s)] = 1
 				} else {
-					valMap[colIdx][currentBlockMin] = 1
+					info.ValMap[colIdx][currentBlockMin] = 1
 				}
 
-				if compute.CompareGeneric(currentBlockMin, minVal[colIdx], dataTypes[colIdx]) < 0 {
-					minVal[i] = zonemapVal[i][0]
+				if compute.CompareGeneric(currentBlockMin, info.MinVal[colIdx], info.DataTypes[colIdx]) < 0 {
+					info.MinVal[i] = zonemapVal[i][0]
 				}
-				if compute.CompareGeneric(currentBlockMax, maxVal[colIdx], dataTypes[colIdx]) > 0 {
-					maxVal[i] = zonemapVal[i][1]
+				if compute.CompareGeneric(currentBlockMax, info.MaxVal[colIdx], info.DataTypes[colIdx]) > 0 {
+					info.MaxVal[i] = zonemapVal[i][1]
 				}
 			}
 		}
 	}
 
-	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
-	//set info in statsInfoMap
-	for i := range columns {
-		colName := tableDef.Cols[columns[i]].Name
-		s.NdvMap[colName] = plan2.CalcNdv(minVal[i], maxVal[i], float64(len(valMap[i])), float64(blockNumTotal), tableCnt, dataTypes[i])
-		s.DataTypeMap[colName] = dataTypes[i].Oid
-		switch dataTypes[i].Oid {
-		case types.T_int8:
-			s.MinValMap[colName] = float64(minVal[i].(int8))
-			s.MaxValMap[colName] = float64(maxVal[i].(int8))
-		case types.T_int16:
-			s.MinValMap[colName] = float64(minVal[i].(int16))
-			s.MaxValMap[colName] = float64(maxVal[i].(int16))
-		case types.T_int32:
-			s.MinValMap[colName] = float64(minVal[i].(int32))
-			s.MaxValMap[colName] = float64(maxVal[i].(int32))
-		case types.T_int64:
-			s.MinValMap[colName] = float64(minVal[i].(int64))
-			s.MaxValMap[colName] = float64(maxVal[i].(int64))
-		case types.T_uint8:
-			s.MinValMap[colName] = float64(minVal[i].(uint8))
-			s.MaxValMap[colName] = float64(maxVal[i].(uint8))
-		case types.T_uint16:
-			s.MinValMap[colName] = float64(minVal[i].(uint16))
-			s.MaxValMap[colName] = float64(maxVal[i].(uint16))
-		case types.T_uint32:
-			s.MinValMap[colName] = float64(minVal[i].(uint32))
-			s.MaxValMap[colName] = float64(maxVal[i].(uint32))
-		case types.T_uint64:
-			s.MinValMap[colName] = float64(minVal[i].(uint64))
-			s.MaxValMap[colName] = float64(maxVal[i].(uint64))
-		case types.T_date:
-			s.MinValMap[colName] = float64(minVal[i].(types.Date))
-			s.MaxValMap[colName] = float64(maxVal[i].(types.Date))
-		}
-	}
-	return nil
+	return info, nil
 }
 
 // calculate the stats for scan node.
@@ -144,13 +101,14 @@ func CalcStats(ctx context.Context, blocks *[][]BlockMeta, expr *plan.Expr, tabl
 	stats.TableCnt = float64(tableCnt)
 	stats.Cost = float64(cost)
 
-	var statsCache *plan2.StatsCache
-	s := plan2.GetStatsInfoMapFromCache(statsCache, tableDef.TblId)
+	s := plan2.GetStatsInfoMapFromCache(tableDef.TblId)
 	if s.NeedUpdate(blockNumTotal) {
-		err := updateStatsInfoMap(ctx, blocks, blockNumTotal, stats.TableCnt, tableDef, s)
+		info, err := getInfoFromZoneMap(ctx, blocks, blockNumTotal, tableDef)
 		if err != nil {
 			return plan2.DefaultStats(), nil
 		}
+
+		plan2.UpdateStatsInfoMap(info, columns, blockNumTotal, stats.TableCnt, tableDef, s)
 	}
 
 	if expr != nil {

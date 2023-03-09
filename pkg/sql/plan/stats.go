@@ -60,7 +60,8 @@ func (sc *StatsInfoMap) NeedUpdate(currentBlockNum int) bool {
 	return false
 }
 
-func GetStatsInfoMapFromCache(cache *StatsCache, tableID uint64) *StatsInfoMap {
+func GetStatsInfoMapFromCache(tableID uint64) *StatsInfoMap {
+	var cache *StatsCache
 	if s, ok := (cache.cachePool)[tableID]; ok {
 		return s
 	} else {
@@ -68,6 +69,66 @@ func GetStatsInfoMapFromCache(cache *StatsCache, tableID uint64) *StatsInfoMap {
 		(cache.cachePool)[tableID] = s
 		return s
 	}
+}
+
+type InfoFromZoneMap struct {
+	ValMap    []map[any]int // all distinct value in blocks zonemap
+	MinVal    []any         //minvalue of all blocks for column
+	MaxVal    []any         //maxvalue of all blocks for column
+	DataTypes []types.Type
+}
+
+func NewInfoFromZoneMap(lenCols, blockNumTotal int) *InfoFromZoneMap {
+	info := &InfoFromZoneMap{
+		ValMap:    make([]map[any]int, lenCols),
+		MinVal:    make([]any, lenCols),
+		MaxVal:    make([]any, lenCols),
+		DataTypes: make([]types.Type, lenCols),
+	}
+	for i := 0; i < lenCols; i++ {
+		info.ValMap[i] = make(map[any]int, blockNumTotal)
+	}
+	return info
+}
+
+func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) error {
+	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
+	//set info in statsInfoMap
+	for i := range columns {
+		colName := tableDef.Cols[columns[i]].Name
+		s.NdvMap[colName] = CalcNdv(info.MinVal[i], info.MaxVal[i], float64(len(info.ValMap[i])), float64(blockNumTotal), tableCnt, info.DataTypes[i])
+		s.DataTypeMap[colName] = info.DataTypes[i].Oid
+		switch info.DataTypes[i].Oid {
+		case types.T_int8:
+			s.MinValMap[colName] = float64(info.MinVal[i].(int8))
+			s.MaxValMap[colName] = float64(info.MaxVal[i].(int8))
+		case types.T_int16:
+			s.MinValMap[colName] = float64(info.MinVal[i].(int16))
+			s.MaxValMap[colName] = float64(info.MaxVal[i].(int16))
+		case types.T_int32:
+			s.MinValMap[colName] = float64(info.MinVal[i].(int32))
+			s.MaxValMap[colName] = float64(info.MaxVal[i].(int32))
+		case types.T_int64:
+			s.MinValMap[colName] = float64(info.MinVal[i].(int64))
+			s.MaxValMap[colName] = float64(info.MaxVal[i].(int64))
+		case types.T_uint8:
+			s.MinValMap[colName] = float64(info.MinVal[i].(uint8))
+			s.MaxValMap[colName] = float64(info.MaxVal[i].(uint8))
+		case types.T_uint16:
+			s.MinValMap[colName] = float64(info.MinVal[i].(uint16))
+			s.MaxValMap[colName] = float64(info.MaxVal[i].(uint16))
+		case types.T_uint32:
+			s.MinValMap[colName] = float64(info.MinVal[i].(uint32))
+			s.MaxValMap[colName] = float64(info.MaxVal[i].(uint32))
+		case types.T_uint64:
+			s.MinValMap[colName] = float64(info.MinVal[i].(uint64))
+			s.MaxValMap[colName] = float64(info.MaxVal[i].(uint64))
+		case types.T_date:
+			s.MinValMap[colName] = float64(info.MinVal[i].(types.Date))
+			s.MaxValMap[colName] = float64(info.MaxVal[i].(types.Date))
+		}
+	}
+	return nil
 }
 
 func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
