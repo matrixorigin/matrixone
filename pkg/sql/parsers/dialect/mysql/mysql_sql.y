@@ -8557,6 +8557,7 @@ non_reserved_keyword:
 |   NODE
 |   UUID
 |   PARALLEL
+|	PROCESSLIST
 
 func_not_keyword:
     DATE_ADD
