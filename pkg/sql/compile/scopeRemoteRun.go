@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"hash/crc32"
 	"runtime"
 	"time"
@@ -584,6 +585,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
+		}
+	case *preinsert.Argument:
+		in.PreInsert = &pipeline.PreInsert{
+			SchemaName:         t.SchemaName,
+			TableDef:           t.TableDef,
+			ParentIdxPreInsert: t.ParentIdx,
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
