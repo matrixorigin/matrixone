@@ -301,7 +301,7 @@ func (e *Engine) firstTimeConnectToLogTailServer(
 	go func() {
 		for _, ti := range tableIds {
 			er := e.tryToGetTableLogTail(ctx, databaseId, ti)
-			if err != nil {
+			if er != nil {
 				ch <- er
 				return
 			}
@@ -309,21 +309,15 @@ func (e *Engine) firstTimeConnectToLogTailServer(
 		ch <- nil
 	}()
 
-	count := 0
-	for {
-		select {
-		case <-ctx.Done():
-			return moerr.NewInternalError(ctx, "connect to dn log tail server failed")
-		case err = <-ch:
-			if err != nil {
-				return err
-			}
-			count++
-			if count == 3 {
-				e.receiveLogTailTime.ready.Store(true)
-				return nil
-			}
+	select {
+	case <-ctx.Done():
+		return moerr.NewInternalError(ctx, "connect to dn log tail server failed")
+	case err = <-ch:
+		if err != nil {
+			return err
 		}
+		e.receiveLogTailTime.ready.Store(true)
+		return nil
 	}
 }
 
