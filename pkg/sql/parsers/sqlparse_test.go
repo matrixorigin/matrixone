@@ -38,7 +38,7 @@ func TestMysql(t *testing.T) {
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := mysql.ParseOne(ctx, debugSQL.input)
+	ast, err := mysql.ParseOne(ctx, debugSQL.input, 1)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return

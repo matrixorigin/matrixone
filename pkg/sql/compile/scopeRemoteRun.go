@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"hash/crc32"
 	"runtime"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -86,8 +88,14 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	cli client.TxnClient,
 	messageAcquirer func() morpc.Message) error {
-	// new a receiver to receive message and write back result.
-	receiver := newMessageReceiverOnServer(ctx, message,
+
+	msg, ok := message.(*pipeline.Message)
+	if !ok {
+		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
+		panic("cn server receive a message with unexpected type")
+	}
+
+	receiver := newMessageReceiverOnServer(ctx, msg,
 		cs, messageAcquirer, storeEngine, fileService, cli)
 
 	// rebuild pipeline to run and send query result back.
@@ -189,7 +197,7 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		}
 		// XXX some order check just for safety ?
 		if sequence != m.Sequence {
-			return moerr.NewInternalErrorNoCtx("Packages passed by morpc are out of order")
+			return moerr.NewInternalErrorNoCtx("Batch packages passed by morpc are out of order")
 		}
 		sequence++
 
@@ -585,6 +593,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
+	case *preinsert.Argument:
+		in.PreInsert = &pipeline.PreInsert{
+			SchemaName:         t.SchemaName,
+			TableDef:           t.TableDef,
+			ParentIdxPreInsert: t.ParentIdx,
+		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
 			Ibucket:   t.Ibucket,
@@ -838,6 +852,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				ParentIdx:    t.ParentIdx,
 				ClusterTable: t.ClusterTable,
 			},
+		}
+	case vm.PreInsert:
+		t := opr.GetPreInsert()
+		v.Arg = &preinsert.Argument{
+			SchemaName: t.GetSchemaName(),
+			TableDef:   t.GetTableDef(),
+			ParentIdx:  t.GetParentIdxPreInsert(),
 		}
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()

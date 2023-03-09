@@ -437,7 +437,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), nil, false)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -488,7 +488,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), nil, false)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)

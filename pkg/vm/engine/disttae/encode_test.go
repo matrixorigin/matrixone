@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tree
+package disttae
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func Test_CStr(t *testing.T) {
-	c1 := NewCStr("Hello", 1)
-	assert.Equal(t, "hello", c1.ToLower())
-	assert.Equal(t, "Hello", c1.Origin())
-	assert.Equal(t, false, c1.Empty())
-	c2 := NewCStr("Hello", 1)
-	assert.Equal(t, "hello", c2.ToLower())
-	c2.SetConfig(1)
-	assert.Equal(t, "hello", c2.Compare())
-	c2.SetConfig(0)
-	assert.Equal(t, "hello", c2.Compare())
+func BenchmarkEncode(b *testing.B) {
+	pool := mpool.MustNewZero()
+	packer := types.NewPacker(pool)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		encodePrimaryKey(int64(i), packer)
+	}
+	b.StopTimer()
+	packer.FreeMem()
+	b.StartTimer()
 }
