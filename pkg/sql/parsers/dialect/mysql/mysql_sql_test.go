@@ -1980,6 +1980,28 @@ var (
 			input:  "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
 			output: "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
 		},
+		{
+			input: "alter table tbl1 drop column col1",
+		},
+		{
+			input: "alter table tbl1 drop index idx_name",
+		},
+		{
+			input: "alter table tbl1 drop key idx_name",
+		},
+		{
+			input: "alter table tbl1 drop primary key",
+		},
+		{
+			input: "alter table tbl1 drop foreign key fk_name",
+		},
+		{
+			input: "alter table tbl1 add foreign key sdf (a, b) references b(a asc, b desc)",
+		},
+		{
+			input:  "alter table tbl1 checksum = 0, COMMENT = 'asdf'",
+			output: "alter table tbl1 checksum = 0, comment = asdf",
+		},
 	}
 )
 
