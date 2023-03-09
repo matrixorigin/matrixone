@@ -53,7 +53,7 @@ insert into ct_04 select * from ct_04_temp;
 commit;
 select * from ct_04;
 
--- primary key conflict/insert infile
+-- primary key conflict/insert infile. There is a bug,pls refer to issue : #8348
 create table ct_05(a int,b varchar(25) primary key);
 begin;
 load data infile '$resources/load_data/ct_file.csv' into table ct_05;
