@@ -746,9 +746,9 @@ func timestampToDatetime(ctx context.Context, loc *time.Location, xs []types.Tim
 	return types.TimestampToDatetime(loc, xs, rs)
 }
 
-func timestampToVarchar(ctx context.Context, loc *time.Location, xs []types.Timestamp, rs []string, precision int32) ([]string, error) {
+func timestampToVarchar(ctx context.Context, loc *time.Location, xs []types.Timestamp, rs []string, scale int32) ([]string, error) {
 	for i, x := range xs {
-		rs[i] = x.String2(loc, precision)
+		rs[i] = x.String2(loc, scale)
 	}
 	return rs, nil
 }
@@ -788,29 +788,29 @@ func datetimeToDate(ctx context.Context, xs []types.Datetime, rs []types.Date) (
 	return rs, nil
 }
 
-func datetimeToBytes(ctx context.Context, xs []types.Datetime, rs []string, precision int32) ([]string, error) {
+func datetimeToBytes(ctx context.Context, xs []types.Datetime, rs []string, scale int32) ([]string, error) {
 	for i, x := range xs {
-		rs[i] = x.String2(precision)
+		rs[i] = x.String2(scale)
 	}
 	return rs, nil
 }
-func datetimeToTime(ctx context.Context, xs []types.Datetime, rs []types.Time, precision int32) ([]types.Time, error) {
+func datetimeToTime(ctx context.Context, xs []types.Datetime, rs []types.Time, scale int32) ([]types.Time, error) {
 	for i, x := range xs {
-		rs[i] = x.ToTime(precision)
-	}
-	return rs, nil
-}
-
-func timeToBytes(ctx context.Context, xs []types.Time, rs []string, precision int32) ([]string, error) {
-	for i, x := range xs {
-		rs[i] = x.String2(precision)
+		rs[i] = x.ToTime(scale)
 	}
 	return rs, nil
 }
 
-func timeToDatetime(ctx context.Context, xs []types.Time, rs []types.Datetime, precision int32) ([]types.Datetime, error) {
+func timeToBytes(ctx context.Context, xs []types.Time, rs []string, scale int32) ([]string, error) {
 	for i, x := range xs {
-		rs[i] = x.ToDatetime(precision)
+		rs[i] = x.String2(scale)
+	}
+	return rs, nil
+}
+
+func timeToDatetime(ctx context.Context, xs []types.Time, rs []types.Datetime, scale int32) ([]types.Datetime, error) {
+	for i, x := range xs {
+		rs[i] = x.ToDatetime(scale)
 	}
 	return rs, nil
 }
@@ -822,10 +822,10 @@ func timeToDate(ctx context.Context, xs []types.Time, rs []types.Date) ([]types.
 	return rs, nil
 }
 
-func NumericToTime[T constraints.Integer](ctx context.Context, xs []T, rs []types.Time, precision int32) ([]types.Time, error) {
+func NumericToTime[T constraints.Integer](ctx context.Context, xs []T, rs []types.Time, scale int32) ([]types.Time, error) {
 	for i, x := range xs {
 		var err error
-		rs[i], err = types.ParseInt64ToTime(int64(x), precision)
+		rs[i], err = types.ParseInt64ToTime(int64(x), scale)
 		if err != nil {
 			return rs, err
 		}
@@ -864,10 +864,10 @@ func TimeToNumeric[T constraints.Integer](ctx context.Context, xs []types.Time, 
 	return NumericToNumeric(ctx, tmp, rs)
 }
 
-func TimeToDecimal64(ctx context.Context, xs []types.Time, rs []types.Decimal64, width, precision int32) ([]types.Decimal64, error) {
+func TimeToDecimal64(ctx context.Context, xs []types.Time, rs []types.Decimal64, width, scale int32) ([]types.Decimal64, error) {
 	for i, x := range xs {
 		var err error
-		rs[i], err = x.ToDecimal64(ctx, width, precision)
+		rs[i], err = x.ToDecimal64(ctx, width, scale)
 		if err != nil {
 			return rs, err
 		}
@@ -875,10 +875,10 @@ func TimeToDecimal64(ctx context.Context, xs []types.Time, rs []types.Decimal64,
 	return rs, nil
 }
 
-func TimeToDecimal128(ctx context.Context, xs []types.Time, rs []types.Decimal128, width, precision int32) ([]types.Decimal128, error) {
+func TimeToDecimal128(ctx context.Context, xs []types.Time, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
 	for i, x := range xs {
 		var err error
-		rs[i], err = x.ToDecimal128(ctx, width, precision)
+		rs[i], err = x.ToDecimal128(ctx, width, scale)
 		if err != nil {
 			return rs, err
 		}
@@ -900,7 +900,7 @@ func NumericToTimestamp[T constraints.Integer](xs []T, rs []types.Timestamp) ([]
 	return rs, nil
 }
 
-func Decimal64ToTimestamp(xs []types.Decimal64, precision int32, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
+func Decimal64ToTimestamp(xs []types.Decimal64, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
 	for i, x := range xs {
 		ts := int64(uint64(x) / types.Pow10[scale])
 		rs[i] = types.Timestamp(ts)
@@ -908,7 +908,7 @@ func Decimal64ToTimestamp(xs []types.Decimal64, precision int32, scale int32, rs
 	return rs, nil
 }
 
-func Decimal128ToTimestamp(xs []types.Decimal128, precision int32, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
+func Decimal128ToTimestamp(xs []types.Decimal128, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
 	err := error(nil)
 	for i, x := range xs {
 		x, err = x.Scale(-scale)

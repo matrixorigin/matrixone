@@ -1109,20 +1109,20 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 	case "in", "not_in":
 		//if all the expr in the in list can safely cast to left type, we call it safe
-		var safe bool
+		safe := true
 		if rightList, ok := args[1].Expr.(*plan.Expr_List); ok {
 			typLeft := makeTypeByPlan2Expr(args[0])
+			// for now ,decimal type can not fold constant
+			if typLeft.Oid == types.T_decimal64 || typLeft.Oid == types.T_decimal128 {
+				safe = false
+			}
 			lenList := len(rightList.List.List)
 
-			for i := 0; i < lenList; i++ {
+			for i := 0; i < lenList && safe; i++ {
 				if constExpr, ok := rightList.List.List[i].Expr.(*plan.Expr_C); ok {
 					safe = checkNoNeedCast(makeTypeByPlan2Expr(rightList.List.List[i]), typLeft, constExpr)
-					if !safe {
-						break
-					}
 				} else {
 					safe = false
-					break
 				}
 			}
 
@@ -1244,7 +1244,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_decimal:
 		if typ != nil {
 			if typ.Id == int32(types.T_decimal64) {
-				d64, err := types.ParseDecimal64(astExpr.String(), typ.Precision, typ.Scale)
+				d64, err := types.ParseDecimal64(astExpr.String(), typ.Width, typ.Scale)
 				if err != nil {
 					return nil, err
 				}
@@ -1261,7 +1261,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				}, nil
 			}
 			if typ.Id == int32(types.T_decimal128) {
-				d128, err := types.ParseDecimal128(astExpr.String(), typ.Precision, typ.Scale)
+				d128, err := types.ParseDecimal128(astExpr.String(), typ.Width, typ.Scale)
 				if err != nil {
 					return nil, err
 				}
@@ -1300,7 +1300,6 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				Id:          int32(types.T_decimal128),
 				Width:       38,
 				Scale:       scale,
-				Precision:   38,
 				NotNullable: true,
 			},
 		}, nil

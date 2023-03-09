@@ -2828,7 +2828,7 @@ var operators = map[int]Functions{
 					if scale1 < scale2 {
 						scale1 = scale2
 					}
-					return types.New(types.T_decimal64, 0, scale1, 18)
+					return types.New(types.T_decimal64, 18, scale1)
 				},
 				Fn: operator.PlusDecimal64,
 			},
@@ -2841,7 +2841,7 @@ var operators = map[int]Functions{
 					if scale1 < scale2 {
 						scale1 = scale2
 					}
-					return types.New(types.T_decimal128, 0, scale1, 38)
+					return types.New(types.T_decimal128, 38, scale1)
 				},
 				Fn: operator.PlusDecimal128,
 			},
@@ -2929,7 +2929,7 @@ var operators = map[int]Functions{
 					if scale1 < scale2 {
 						scale1 = scale2
 					}
-					return types.New(types.T_decimal64, 0, scale1, 18)
+					return types.New(types.T_decimal64, 18, scale1)
 				},
 				Fn: operator.MinusDecimal64,
 			},
@@ -2942,7 +2942,7 @@ var operators = map[int]Functions{
 					if scale1 < scale2 {
 						scale1 = scale2
 					}
-					return types.New(types.T_decimal128, 0, scale1, 38)
+					return types.New(types.T_decimal128, 38, scale1)
 				},
 				Fn: operator.MinusDecimal128,
 			},
@@ -3043,7 +3043,7 @@ var operators = map[int]Functions{
 					if scale1+scale2 < scale {
 						scale = scale1 + scale2
 					}
-					return types.New(types.T_decimal128, 0, scale, 38)
+					return types.New(types.T_decimal128, 38, scale)
 				},
 				Fn: operator.MultDecimal64,
 			},
@@ -3063,7 +3063,7 @@ var operators = map[int]Functions{
 					if scale1+scale2 < scale {
 						scale = scale1 + scale2
 					}
-					return types.New(types.T_decimal128, 0, scale, 38)
+					return types.New(types.T_decimal128, 38, scale)
 				},
 				Fn: operator.MultDecimal128,
 			},
@@ -3100,7 +3100,7 @@ var operators = map[int]Functions{
 					if scale1+6 < scale {
 						scale = scale1 + 6
 					}
-					return types.New(types.T_decimal128, 0, scale, 38)
+					return types.New(types.T_decimal128, 38, scale)
 				},
 				Fn: operator.DivDecimal64,
 			},
@@ -3116,7 +3116,7 @@ var operators = map[int]Functions{
 					if scale1+6 < scale {
 						scale = scale1 + 6
 					}
-					return types.New(types.T_decimal128, 0, scale, 38)
+					return types.New(types.T_decimal128, 38, scale)
 				},
 				Fn: operator.DivDecimal128,
 			},
@@ -3322,7 +3322,7 @@ var operators = map[int]Functions{
 				Index: 10,
 				Args:  []types.T{types.T_decimal64},
 				FlexibleReturnType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_decimal64, 0, parameters[0].Scale, 18)
+					return types.New(types.T_decimal64, 18, parameters[0].Scale)
 				},
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]types.Decimal64)
@@ -3334,7 +3334,7 @@ var operators = map[int]Functions{
 				Index: 11,
 				Args:  []types.T{types.T_decimal128},
 				FlexibleReturnType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_decimal128, 0, parameters[0].Scale, 38)
+					return types.New(types.T_decimal128, 38, parameters[0].Scale)
 				},
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]types.Decimal128)
@@ -3390,7 +3390,7 @@ var operators = map[int]Functions{
 				Index: 6,
 				Args:  []types.T{types.T_decimal64},
 				FlexibleReturnType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_decimal64, 0, parameters[0].Scale, 18)
+					return types.New(types.T_decimal64, 18, parameters[0].Scale)
 				},
 				Fn: operator.UnaryMinusDecimal64,
 			},
@@ -3398,7 +3398,7 @@ var operators = map[int]Functions{
 				Index: 7,
 				Args:  []types.T{types.T_decimal128},
 				FlexibleReturnType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_decimal128, 0, parameters[0].Scale, 38)
+					return types.New(types.T_decimal128, 38, parameters[0].Scale)
 				},
 				Fn: operator.UnaryMinusDecimal128,
 			},

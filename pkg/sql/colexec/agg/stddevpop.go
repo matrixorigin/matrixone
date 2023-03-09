@@ -38,13 +38,13 @@ func StdDevPopReturnType(typs []types.Type) types.Type {
 	switch typs[0].Oid {
 	case types.T_decimal64, types.T_decimal128:
 		if typs[0].Scale > 12 {
-			return types.New(types.T_decimal128, 0, typs[0].Scale, 38)
+			return types.New(types.T_decimal128, 38, typs[0].Scale)
 		} else {
-			return types.New(types.T_decimal128, 0, 12, 38)
+			return types.New(types.T_decimal128, 38, 12)
 		}
 
 	default:
-		return types.New(types.T_float64, 0, 0, 0)
+		return types.New(types.T_float64, 0, 0)
 	}
 }
 

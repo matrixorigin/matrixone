@@ -899,7 +899,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	var err error
 
 	ef, ok := e.Expr.(*plan.Expr_F)
-	if !ok {
+	if !ok || proc == nil {
 		return e, nil
 	}
 	overloadID := ef.F.Func.GetObj()

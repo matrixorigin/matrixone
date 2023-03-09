@@ -98,10 +98,9 @@ type Type struct {
 
 	// Width means max Display width for float and double, char and varchar
 	// todo: need to add new attribute DisplayWidth ?
-	Size      int32
-	Width     int32
-	Scale     int32
-	Precision int32
+	Size  int32
+	Width int32
+	Scale int32
 }
 
 type Date int32
@@ -216,14 +215,13 @@ var Types map[string]T = map[string]T{
 	"rowid":                 T_Rowid,
 }
 
-func New(oid T, width, scale, precision int32) Type {
+func New(oid T, width, scale int32) Type {
 	return Type{
-		Oid:       oid,
-		Width:     width,
-		Scale:     scale,
-		Precision: precision,
-		Size:      int32(TypeSize(oid)),
-		Charset:   CharsetType(oid),
+		Oid:     oid,
+		Width:   width,
+		Scale:   scale,
+		Size:    int32(TypeSize(oid)),
+		Charset: CharsetType(oid),
 	}
 }
 
@@ -314,9 +312,9 @@ func (t Type) DescString() string {
 	case T_varbinary:
 		return fmt.Sprintf("VARBINARY(%d)", t.Width)
 	case T_decimal64:
-		return fmt.Sprintf("DECIMAL(%d,%d)", t.Precision, t.Scale)
+		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	case T_decimal128:
-		return fmt.Sprintf("DECIAML(%d,%d)", t.Precision, t.Scale)
+		return fmt.Sprintf("DECIAML(%d,%d)", t.Width, t.Scale)
 	}
 	return t.Oid.String()
 }
@@ -358,15 +356,15 @@ func (t T) ToType() Type {
 		typ.Size = 4
 	case T_float64:
 		typ.Size = 8
-		typ.Precision = 18
 	case T_decimal64:
 		typ.Size = 8
-		typ.Precision = 38
+		typ.Width = 18
 	case T_decimal128:
 		typ.Size = 16
-		typ.Precision = 76
+		typ.Width = 38
 	case T_decimal256:
 		typ.Size = 32
+		typ.Width = 76
 	case T_uuid:
 		typ.Size = 16
 	case T_TS:

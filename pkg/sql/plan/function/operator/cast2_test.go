@@ -1122,11 +1122,11 @@ func initCastTestCase() []tcTemp {
 				testutil.NewFunctionTestInput(types.T_float32.ToType(),
 					[]float32{125.1, 0}, []bool{false, true}),
 				testutil.NewFunctionTestInput(types.Type{
-					Oid: types.T_decimal128, Precision: 8, Scale: 1,
+					Oid: types.T_decimal128, Width: 8, Scale: 1,
 				}, []types.Decimal128{}, []bool{}),
 			},
 			expect: testutil.NewFunctionTestResult(types.Type{
-				Oid: types.T_decimal128, Precision: 8, Scale: 1,
+				Oid: types.T_decimal128, Width: 8, Scale: 1,
 			}, false,
 				[]types.Decimal128{f1251ToDec128, {B0_63: 0, B64_127: 0}},
 				[]bool{false, true}),
@@ -1240,11 +1240,11 @@ func initCastTestCase() []tcTemp {
 				testutil.NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{125.1, 0}, []bool{false, true}),
 				testutil.NewFunctionTestInput(types.Type{
-					Oid: types.T_decimal128, Precision: 8, Scale: 1,
+					Oid: types.T_decimal128, Width: 8, Scale: 1,
 				}, []types.Decimal128{}, []bool{}),
 			},
 			expect: testutil.NewFunctionTestResult(types.Type{
-				Oid: types.T_decimal128, Precision: 8, Scale: 1,
+				Oid: types.T_decimal128, Width: 8, Scale: 1,
 			}, false,
 				[]types.Decimal128{f1251ToDec128, {B0_63: 0, B64_127: 0}},
 				[]bool{false, true}),
@@ -1382,63 +1382,63 @@ func initCastTestCase() []tcTemp {
 			info: "decimal64 to decimal128",
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(
-					types.Type{Oid: types.T_decimal64, Size: 8, Precision: 10, Scale: 0},
+					types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 0},
 					[]types.Decimal64{types.Decimal64(333333000)}, nil),
 				testutil.NewFunctionTestInput(
-					types.Type{Oid: types.T_decimal128, Size: 16, Precision: 20, Scale: 0},
+					types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 0},
 					[]types.Decimal128{}, nil),
 			},
 			expect: testutil.NewFunctionTestResult(
-				types.Type{Oid: types.T_decimal128, Size: 16, Precision: 20, Scale: 0}, false,
+				types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 0}, false,
 				[]types.Decimal128{{B0_63: 333333000, B64_127: 0}}, nil),
 		},
 		{
 			info: "decimal64(10,5) to decimal64(10, 4)",
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(
-					types.Type{Oid: types.T_decimal64, Size: 8, Precision: 10, Scale: 5},
+					types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5},
 					[]types.Decimal64{types.Decimal64(33333300)}, nil),
 				testutil.NewFunctionTestInput(
-					types.Type{Oid: types.T_decimal64, Size: 8, Precision: 10, Scale: 4},
+					types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 4},
 					[]types.Decimal64{0}, nil),
 			},
 			expect: testutil.NewFunctionTestResult(
-				types.Type{Oid: types.T_decimal64, Size: 8, Precision: 10, Scale: 4}, false,
+				types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 4}, false,
 				[]types.Decimal64{types.Decimal64(3333330)}, nil),
 		},
 		{
 			info: "decimal64(10,5) to decimal128(20, 5)",
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(
-					types.Type{Oid: types.T_decimal64, Size: 8, Precision: 10, Scale: 5},
+					types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5},
 					[]types.Decimal64{types.Decimal64(333333000)}, nil),
 				testutil.NewFunctionTestInput(
-					types.Type{Oid: types.T_decimal128, Size: 16, Precision: 20, Scale: 5},
+					types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5},
 					[]types.Decimal128{}, nil),
 			},
 			expect: testutil.NewFunctionTestResult(
-				types.Type{Oid: types.T_decimal128, Size: 16, Precision: 20, Scale: 5}, false,
+				types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}, false,
 				[]types.Decimal128{{B0_63: 333333000, B64_127: 0}}, nil),
 		},
 		{
 			info: "decimal128(20,5) to decimal128(20, 4)",
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(
-					types.Type{Oid: types.T_decimal128, Size: 16, Precision: 20, Scale: 5},
+					types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5},
 					[]types.Decimal128{{B0_63: 333333000, B64_127: 0}}, nil),
 				testutil.NewFunctionTestInput(
 					types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 4},
 					[]types.Decimal128{}, nil),
 			},
 			expect: testutil.NewFunctionTestResult(
-				types.Type{Oid: types.T_decimal128, Size: 16, Precision: 20, Scale: 4}, false,
+				types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 4}, false,
 				[]types.Decimal128{{B0_63: 33333300, B64_127: 0}}, nil),
 		},
 		{
 			info: "decimal64 to str type",
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(
-					types.Type{Oid: types.T_decimal64, Size: 8, Precision: 10, Scale: 5},
+					types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5},
 					[]types.Decimal64{types.Decimal64(1234)}, nil),
 				testutil.NewFunctionTestInput(
 					types.T_varchar.ToType(),
@@ -1452,7 +1452,7 @@ func initCastTestCase() []tcTemp {
 			info: "decimal128 to str type",
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(
-					types.Type{Oid: types.T_decimal128, Size: 8, Precision: 20, Scale: 2},
+					types.Type{Oid: types.T_decimal128, Size: 8, Width: 20, Scale: 2},
 					[]types.Decimal128{{B0_63: 1234, B64_127: 0}}, nil),
 				testutil.NewFunctionTestInput(
 					types.T_varchar.ToType(),

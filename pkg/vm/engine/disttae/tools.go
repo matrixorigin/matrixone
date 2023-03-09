@@ -1111,7 +1111,7 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	var vecs []*vector.Vector
 
 	{
-		vec := vector.New(types.New(types.T_Rowid, 0, 0, 0))
+		vec := vector.New(types.New(types.T_Rowid, 0, 0))
 		for i := 0; i < bat.Length(); i++ {
 			val := types.Rowid(uuid.New())
 			if err := vec.Append(val, false, m); err != nil {
@@ -1124,7 +1124,7 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	{
 		var val types.TS
 
-		vec := vector.New(types.New(types.T_TS, 0, 0, 0))
+		vec := vector.New(types.New(types.T_TS, 0, 0))
 		for i := 0; i < bat.Length(); i++ {
 			if err := vec.Append(val, false, m); err != nil {
 				return nil, err
@@ -1142,9 +1142,9 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 	return fmt.Sprintf("%v-%v", tableId, name)
 }
 
-func inPartition(v types.Rowid, part *Partition,
+func inPartition(v types.Rowid, part *PartitionState,
 	ts timestamp.Timestamp, blocks []BlockMeta) bool {
-	if part.state.Load().RowExists(v, types.TimestampToTS(ts)) {
+	if part.RowExists(v, types.TimestampToTS(ts)) {
 		return true
 	}
 	if len(blocks) == 0 {

@@ -123,21 +123,19 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 
 func TypeToProtoType(typ types.Type) *plan.Type {
 	return &plan.Type{
-		Id:        int32(typ.Oid),
-		Width:     typ.Width,
-		Precision: typ.Precision,
-		Size:      typ.Size,
-		Scale:     typ.Scale,
+		Id:    int32(typ.Oid),
+		Width: typ.Width,
+		Size:  typ.Size,
+		Scale: typ.Scale,
 	}
 }
 
 func ProtoTypeToType(typ *plan.Type) types.Type {
 	return types.Type{
-		Oid:       types.T(typ.Id),
-		Size:      typ.Size,
-		Width:     typ.Width,
-		Scale:     typ.Scale,
-		Precision: typ.Precision,
+		Oid:   types.T(typ.Id),
+		Size:  typ.Size,
+		Width: typ.Width,
+		Scale: typ.Scale,
 	}
 }
 

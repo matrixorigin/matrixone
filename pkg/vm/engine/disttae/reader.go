@@ -80,7 +80,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 		}
 	}
 
-	bat, err := blockio.BlockRead(r.ctx, info, cols, r.colIdxs, r.colTypes, r.colNulls, r.tableDef, r.ts, r.fs, m)
+	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, m)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +146,7 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.E
 		}
 	}
 
-	bat, err := blockio.BlockRead(r.ctx, info, cols, r.colIdxs, r.colTypes, r.colNulls, r.tableDef, r.ts, r.fs, m)
+	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, m)
 	if err != nil {
 		return nil, err
 	}

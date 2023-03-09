@@ -483,9 +483,9 @@ a
 999999999999999.99
 -999999999999999.99
 insert into t1 values(999999999999999.995);
-invalid input: #2Can't convert string To Decimal128: 999999999999999.995(17,2)
+invalid input: Can't convert string To Decimal128: 999999999999999.995(17,2)
 insert into t1 values(-999999999999999.995);
-invalid input: #2Can't convert string To Decimal128: 999999999999999.995(17,2)
+invalid input: Can't convert string To Decimal128: 999999999999999.995(17,2)
 drop table t1;
 create table t1(a decimal(5,5));
 insert into t1 values(0), (0.9), (0.99), (0.999), (0.9999), (0.99999), (0.999994);
@@ -529,9 +529,9 @@ a
 -0.99999999999999999
 -0.99999999999999999
 insert into t1 values(0.999999999999999995);
-invalid input: #2Can't convert string To Decimal128: 0.999999999999999995(17,17)
+invalid input: Can't convert string To Decimal128: 0.999999999999999995(17,17)
 insert into t1 values(-0.999999999999999995);
-invalid input: #2Can't convert string To Decimal128: 0.999999999999999995(17,17)
+invalid input: Can't convert string To Decimal128: 0.999999999999999995(17,17)
 drop table if exists t1;
 create table t1 (a decimal(12,2), b decimal(12, 2));
 insert into t1 values (301934.27, 301934.27);

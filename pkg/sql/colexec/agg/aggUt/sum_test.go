@@ -24,10 +24,10 @@ import (
 
 // TODO: add decimal128 distinct test
 func TestSum(t *testing.T) {
-	int8Typ := types.New(types.T_int8, 0, 0, 0)
-	decimal64Typ := types.New(types.T_decimal128, 0, 0, 18)
-	decimal64Typ_12 := types.New(types.T_decimal128, 0, 12, 18)
-	decimal128Typ := types.New(types.T_decimal128, 0, 0, 38)
+	int8Typ := types.New(types.T_int8, 0, 0)
+	decimal64Typ := types.New(types.T_decimal128, 18, 0)
+	decimal64Typ_12 := types.New(types.T_decimal128, 18, 12)
+	decimal128Typ := types.New(types.T_decimal128, 38, 0)
 
 	testCases := []testCase{
 		// int8 sum test

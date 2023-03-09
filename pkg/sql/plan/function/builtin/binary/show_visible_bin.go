@@ -79,11 +79,7 @@ func showType(s [][]byte, showLen bool) ([]string, error) {
 			return nil, err
 		}
 		if showLen {
-			if types.IsDecimal(tp.Oid) {
-				ret[i] = fmt.Sprintf("%s(%d)", tp.String(), tp.Precision)
-			} else {
-				ret[i] = fmt.Sprintf("%s(%d)", tp.String(), tp.Width)
-			}
+			ret[i] = fmt.Sprintf("%s(%d)", tp.String(), tp.Width)
 		} else {
 			ret[i] = tp.String()
 		}

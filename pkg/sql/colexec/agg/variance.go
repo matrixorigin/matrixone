@@ -66,9 +66,9 @@ func VarianceReturnType(typs []types.Type) types.Type {
 		if typs[0].Scale > s {
 			s = typs[0].Scale
 		}
-		return types.New(types.T_decimal128, 0, s, 38)
+		return types.New(types.T_decimal128, 38, s)
 	default:
-		return types.New(types.T_float64, 0, 0, 0)
+		return types.New(types.T_float64, 0, 0)
 	}
 }
 

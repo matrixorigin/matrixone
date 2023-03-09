@@ -24,10 +24,10 @@ import (
 
 // TODO: add decimal128 distinct test
 func TestVariance(t *testing.T) {
-	int8Typ := types.New(types.T_int8, 0, 0, 0)
-	decimal64Typ := types.New(types.T_decimal64, 0, 0, 18)
-	decimal128Typ := types.New(types.T_decimal128, 0, 0, 38)
-	decimal128Typ_3 := types.New(types.T_decimal128, 0, 3, 38)
+	int8Typ := types.New(types.T_int8, 0, 0)
+	decimal64Typ := types.New(types.T_decimal64, 18, 0)
+	decimal128Typ := types.New(types.T_decimal128, 38, 0)
+	decimal128Typ_3 := types.New(types.T_decimal128, 38, 3)
 
 	testCases := []testCase{
 		// int8 variance test

@@ -1882,16 +1882,32 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 				buffer = mp.appendUint64(buffer, value)
 			}
 		case defines.MYSQL_TYPE_FLOAT:
-			if value, err := mrs.GetFloat64(ctx, rowIdx, i); err != nil {
+			if value, err := mrs.GetValue(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
-				buffer = mp.appendUint32(buffer, math.Float32bits(float32(value)))
+				switch v := value.(type) {
+				case float32:
+					buffer = mp.appendUint32(buffer, math.Float32bits(v))
+				case float64:
+					buffer = mp.appendUint32(buffer, math.Float32bits(float32(v)))
+				case string:
+					buffer = mp.appendStringLenEnc(buffer, v)
+				default:
+				}
 			}
 		case defines.MYSQL_TYPE_DOUBLE:
-			if value, err := mrs.GetFloat64(ctx, rowIdx, i); err != nil {
+			if value, err := mrs.GetValue(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
-				buffer = mp.appendUint64(buffer, math.Float64bits(value))
+				switch v := value.(type) {
+				case float32:
+					buffer = mp.appendUint64(buffer, math.Float64bits(float64(v)))
+				case float64:
+					buffer = mp.appendUint64(buffer, math.Float64bits(v))
+				case string:
+					buffer = mp.appendStringLenEnc(buffer, v)
+				default:
+				}
 			}
 
 		// Binary/varbinary will be sent out as varchar type.
@@ -2032,16 +2048,32 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 				}
 			}
 		case defines.MYSQL_TYPE_FLOAT:
-			if value, err2 := mrs.GetFloat64(ctx, r, i); err2 != nil {
-				return nil, err2
+			if value, err := mrs.GetValue(ctx, r, i); err != nil {
+				return nil, err
 			} else {
-				data = mp.appendStringLenEncOfFloat64(data, value, 32)
+				switch v := value.(type) {
+				case float32:
+					data = mp.appendStringLenEncOfFloat64(data, float64(v), 32)
+				case float64:
+					data = mp.appendStringLenEncOfFloat64(data, v, 32)
+				case string:
+					data = mp.appendStringLenEnc(data, v)
+				default:
+				}
 			}
 		case defines.MYSQL_TYPE_DOUBLE:
-			if value, err2 := mrs.GetFloat64(ctx, r, i); err2 != nil {
-				return nil, err2
+			if value, err := mrs.GetValue(ctx, r, i); err != nil {
+				return nil, err
 			} else {
-				data = mp.appendStringLenEncOfFloat64(data, value, 64)
+				switch v := value.(type) {
+				case float32:
+					data = mp.appendStringLenEncOfFloat64(data, float64(v), 64)
+				case float64:
+					data = mp.appendStringLenEncOfFloat64(data, v, 64)
+				case string:
+					data = mp.appendStringLenEnc(data, v)
+				default:
+				}
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
 			if uint32(mysqlColumn.Flag())&defines.UNSIGNED_FLAG != 0 {

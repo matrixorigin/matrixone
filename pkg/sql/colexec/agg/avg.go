@@ -48,7 +48,7 @@ func AvgReturnType(typs []types.Type) types.Type {
 		if s > typs[0].Scale+6 {
 			s = typs[0].Scale + 6
 		}
-		return types.New(types.T_decimal128, 0, s, 18)
+		return types.New(types.T_decimal128, 18, s)
 	case types.T_decimal128:
 		s := int32(12)
 		if s < typs[0].Scale {
@@ -57,13 +57,13 @@ func AvgReturnType(typs []types.Type) types.Type {
 		if s > typs[0].Scale+6 {
 			s = typs[0].Scale + 6
 		}
-		return types.New(types.T_decimal128, 0, s, 38)
+		return types.New(types.T_decimal128, 18, s)
 	case types.T_float32, types.T_float64:
-		return types.New(types.T_float64, 0, 0, 0)
+		return types.New(types.T_float64, 0, 0)
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		return types.New(types.T_float64, 0, 0, 0)
+		return types.New(types.T_float64, 0, 0)
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		return types.New(types.T_float64, 0, 0, 0)
+		return types.New(types.T_float64, 0, 0)
 	default:
 		return types.Type{}
 	}

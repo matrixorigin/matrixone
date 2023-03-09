@@ -407,14 +407,14 @@ func Test_GetBatchData(t *testing.T) {
 			},
 			{
 				Typ: &plan.Type{
-					Id:        int32(types.T_float32),
-					Precision: -1,
+					Id:    int32(types.T_float32),
+					Scale: -1,
 				},
 			},
 			{
 				Typ: &plan.Type{
-					Id:        int32(types.T_float64),
-					Precision: -1,
+					Id:    int32(types.T_float64),
+					Scale: -1,
 				},
 			},
 			{
@@ -439,16 +439,16 @@ func Test_GetBatchData(t *testing.T) {
 			},
 			{
 				Typ: &plan.Type{
-					Id:        int32(types.T_decimal64),
-					Precision: 15,
-					Scale:     0,
+					Id:    int32(types.T_decimal64),
+					Width: 15,
+					Scale: 0,
 				},
 			},
 			{
 				Typ: &plan.Type{
-					Id:        int32(types.T_decimal128),
-					Precision: 17,
-					Scale:     0,
+					Id:    int32(types.T_decimal128),
+					Width: 17,
+					Scale: 0,
 				},
 			},
 			{

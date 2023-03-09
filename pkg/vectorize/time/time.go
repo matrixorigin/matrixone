@@ -26,9 +26,9 @@ func DateToTime(xs []types.Date, rs []types.Time) []types.Time {
 	return rs
 }
 
-func DatetimeToTime(xs []types.Datetime, rs []types.Time, precision int32) []types.Time {
+func DatetimeToTime(xs []types.Datetime, rs []types.Time, scale int32) []types.Time {
 	for i, x := range xs {
-		rs[i] = x.ToTime(precision)
+		rs[i] = x.ToTime(scale)
 	}
 	return rs
 }
