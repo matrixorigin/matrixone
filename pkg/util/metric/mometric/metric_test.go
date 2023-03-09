@@ -11,12 +11,13 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package metric
+package mometric
 
 import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"io"
 	"net/http"
 	"strings"
@@ -46,8 +47,8 @@ func TestMetric(t *testing.T) {
 		SV.BatchProcessor = FileService
 		SV.MetricExportInterval = 1
 		SV.MetricMultiTable = true
-		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
-		defer setRawHistBufLimit(setRawHistBufLimit(5))
+		defer metric.SetGatherInterval(metric.SetGatherInterval(30 * time.Millisecond))
+		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 
@@ -102,8 +103,8 @@ func TestMetricNoProm(t *testing.T) {
 		SV.BatchProcessor = FileService
 		SV.MetricMultiTable = true
 
-		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
-		defer setRawHistBufLimit(setRawHistBufLimit(5))
+		defer metric.SetGatherInterval(metric.SetGatherInterval(30 * time.Millisecond))
+		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 
@@ -136,13 +137,13 @@ func TestCreateTable(t *testing.T) {
 	sql := createTableSqlFromMetricFamily(prom.NewDesc(name, "", []string{"zzz", "aaa"}, nil), buf, dummyOptionsFactory)
 	assert.Equal(t, sql, fmt.Sprintf(
 		"create table if not exists %s.%s (`%s` datetime(6), `%s` double, `%s` varchar(36), `%s` varchar(20), `aaa` varchar(20), `zzz` varchar(20))",
-		MetricDBConst, name, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
+		metric.MetricDBConst, name, metric.LblTimeConst, metric.LblValueConst, metric.LblNodeConst, metric.LblRoleConst,
 	))
 
 	sql = createTableSqlFromMetricFamily(prom.NewDesc(name, "", nil, nil), buf, dummyOptionsFactory)
 	assert.Equal(t, sql, fmt.Sprintf(
 		"create table if not exists %s.%s (`%s` datetime(6), `%s` double, `%s` varchar(36), `%s` varchar(20))",
-		MetricDBConst, name, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
+		metric.MetricDBConst, name, metric.LblTimeConst, metric.LblValueConst, metric.LblNodeConst, metric.LblRoleConst,
 	))
 }
 
@@ -159,8 +160,8 @@ func TestMetricSingleTable(t *testing.T) {
 		SV.BatchProcessor = FileService
 		SV.MetricExportInterval = 1
 		SV.MetricMultiTable = false
-		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
-		defer setRawHistBufLimit(setRawHistBufLimit(5))
+		defer metric.SetGatherInterval(metric.SetGatherInterval(30 * time.Millisecond))
+		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 

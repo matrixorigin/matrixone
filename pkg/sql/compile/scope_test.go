@@ -73,7 +73,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		e, _, compilerCtx := testengine.New(context.Background())
 		opt := plan2.NewBaseOptimizer(compilerCtx)
 		ctx := compilerCtx.GetContext()
-		stmts, err := mysql.Parse(ctx, sql)
+		stmts, err := mysql.Parse(ctx, sql, 1)
 		require.NoError(t1, err)
 		qry, err := opt.Optimize(stmts[0])
 		require.NoError(t1, err)

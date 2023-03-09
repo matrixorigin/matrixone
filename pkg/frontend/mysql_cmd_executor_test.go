@@ -104,7 +104,7 @@ func Test_mce(t *testing.T) {
 		ioses.EXPECT().Ref().AnyTimes()
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
 		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-		stmts, err := parsers.Parse(ctx, dialect.MYSQL, "use T")
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, "use T", 1)
 		if err != nil {
 			t.Error(err)
 		}
@@ -115,7 +115,7 @@ func Test_mce(t *testing.T) {
 		runner.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 
 		create_1 := mock_frontend.NewMockComputationWrapper(ctrl)
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "create table A(a varchar(100),b int,c float)")
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "create table A(a varchar(100),b int,c float)", 1)
 		if err != nil {
 			t.Error(err)
 		}
@@ -129,7 +129,7 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		select_1 := mock_frontend.NewMockComputationWrapper(ctrl)
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from A")
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from A", 1)
 		if err != nil {
 			t.Error(err)
 		}
@@ -209,7 +209,7 @@ func Test_mce(t *testing.T) {
 
 		for i := 0; i < len(self_handle_sql); i++ {
 			select_2 := mock_frontend.NewMockComputationWrapper(ctrl)
-			stmts, err = parsers.Parse(ctx, dialect.MYSQL, self_handle_sql[i])
+			stmts, err = parsers.Parse(ctx, dialect.MYSQL, self_handle_sql[i], 1)
 			convey.So(err, convey.ShouldBeNil)
 			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 			select_2.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
@@ -382,28 +382,28 @@ func Test_mce_selfhandle(t *testing.T) {
 		mce.SetSession(ses)
 
 		ses.mrs = &MysqlResultSet{}
-		st1, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@max_allowed_packet")
+		st1, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@max_allowed_packet", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv1 := st1.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		err = mce.handleSelectVariables(sv1)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
-		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@version_comment")
+		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@version_comment", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		err = mce.handleSelectVariables(sv2)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
-		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@global.version_comment")
+		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@global.version_comment", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv3 := st3.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		err = mce.handleSelectVariables(sv3)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
-		st4, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @version_comment")
+		st4, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @version_comment", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv4 := st4.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		err = mce.handleSelectVariables(sv4)
@@ -434,7 +434,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		set := "set @@tx_isolation=`READ-COMMITTED`"
-		setVar, err := parsers.ParseOne(ctx, dialect.MYSQL, set)
+		setVar, err := parsers.ParseOne(ctx, dialect.MYSQL, set, 1)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = mce.handleSetVar(ctx, setVar.(*tree.SetVar))
@@ -726,12 +726,12 @@ func Test_handleSelectVariables(t *testing.T) {
 
 		mce.SetSession(ses)
 		proto.SetSession(ses)
-		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@tx_isolation")
+		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@tx_isolation", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		convey.So(mce.handleSelectVariables(sv2), convey.ShouldBeNil)
 
-		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@XXX")
+		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@XXX", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv3 := st3.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
 		convey.So(mce.handleSelectVariables(sv3), convey.ShouldNotBeNil)
@@ -792,7 +792,8 @@ func Test_GetComputationWrapper(t *testing.T) {
 		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
 		proc := &process.Process{}
-		ses := &Session{planCache: newPlanCache(1)}
+		InitGlobalSystemVariables(GSysVariables)
+		ses := &Session{planCache: newPlanCache(1), gSysVars: GSysVariables}
 		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)
@@ -837,7 +838,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 
 func Test_HandlePrepareStmt(t *testing.T) {
 	ctx := context.TODO()
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "Prepare stmt1 from select 1, 2")
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "Prepare stmt1 from select 1, 2", 1)
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
@@ -850,7 +851,7 @@ func Test_HandlePrepareStmt(t *testing.T) {
 
 func Test_HandleDeallocate(t *testing.T) {
 	ctx := context.TODO()
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1")
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1", 1)
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
@@ -1107,7 +1108,7 @@ func TestSerializePlanToJson(t *testing.T) {
 }
 
 func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package metric
+package mometric
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 )
@@ -97,9 +98,9 @@ func TestExporter(t *testing.T) {
 	var exp *metricExporter
 
 	withModifiedConfig(func() {
-		defer setGatherInterval(setGatherInterval(20 * time.Millisecond))
-		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		defer setExportToProm(setExportToProm(false))
+		defer metric.SetGatherInterval(metric.SetGatherInterval(20 * time.Millisecond))
+		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
+		defer metric.SetExportToProm(metric.SetExportToProm(false))
 		reg := prom.NewRegistry()
 		iexp := newMetricExporter(reg, dumCollect, "node_uuid", "monolithic")
 		exp = iexp.(*metricExporter)
@@ -110,9 +111,9 @@ func TestExporter(t *testing.T) {
 		reg.MustRegister(c)
 		g := prom.NewGauge(prom.GaugeOpts{Subsystem: "test", Name: "test_gauge"})
 		reg.MustRegister(g)
-		h := NewRawHist(prom.HistogramOpts{Subsystem: "test", Name: "test_hist"})
-		h.exporter = &iexp
-		h.now = dumClock
+		h := metric.NewRawHist(prom.HistogramOpts{Subsystem: "test", Name: "test_hist"})
+		h.WithExporter(metric.NewExportHolder(iexp))
+		h.WithNowFunction(dumClock)
 		reg.MustRegister(h)
 
 		wg := new(sync.WaitGroup)

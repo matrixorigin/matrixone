@@ -13,11 +13,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.io/0.6.0/MatrixOne/Release-Notes/v0.6.0/">
-   <img src="https://img.shields.io/badge/Release-v0.6.0-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.io/0.7.0/MatrixOne/Release-Notes/v0.7.0/">
+   <img src="https://img.shields.io/badge/Release-v0.7.0-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.io/cn/0.6.0/">
+  <a href="https://docs.matrixorigin.io/cn/0.7.0/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -139,13 +139,13 @@ MatrixOne 的架构图如下图所示：
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.io/cn/0.6.0/MatrixOne/Overview/matrixone-architecture-design/)。
+关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.io/cn/0.7.0/MatrixOne/Overview/matrixone-architecture-design/)。
 
 ## ⚡️ <a id="quick-start">快速上手</a>
 
 ### ⚙️ 安装 MatrixOne
 
-MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装或者 docker 安装。其他安装方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.io/cn/0.6.0/MatrixOne/Get-Started/install-standalone-matrixone/)
+MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装或者 docker 安装。其他安装方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.io/cn/0.7.0/MatrixOne/Get-Started/install-standalone-matrixone/)
 
 #### 使用源代码搭建
 
@@ -178,11 +178,11 @@ MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装或�
 
 - *选项 2*：获取 MatrixOne(稳定版本) 代码，搭建 MatrixOne
 
-1. 如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.6.0** 版本分支。
+1. 如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.7.0** 版本分支。
 
     ```
     git clone https://github.com/matrixorigin/matrixone.git
-    git checkout 0.6.0
+    git checkout 0.7.0
     cd matrixone
     ```
 
@@ -212,7 +212,7 @@ MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装或�
 
     ```
     # Start mo-service in the backend
-    nohup ./mo-service -launch ./etc/quickstart/launch.toml &> test.log &
+    ./mo-service --daemon --launch ./etc/quickstart/launch.toml &> test.log &
 
     # Find mo-service PID
     ps aux | grep mo-service
@@ -250,11 +250,11 @@ Docker version 20.10.17, build 100c701
 
 使用以下命令将从 Docker Hub 中拉取 MatrixOne 镜像，你可以选择稳定版本镜像，或开发版本镜像。
 
-- 稳定版本的镜像（0.6.0）
+- 稳定版本的镜像（0.7.0）
 
 ```bash
-docker pull matrixorigin/matrixone:0.6.0
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.6.0
+docker pull matrixorigin/matrixone:0.7.0
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.7.0
 ```
 
 - 开发版本的镜像
@@ -309,7 +309,7 @@ Enter password:
 ## 🙌 <a id="contributing">参与贡献</a>
 
 欢迎大家对 MatrixOne 的贡献。  
-请查看[贡献指南](https://docs.matrixorigin.io/cn/0.6.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
+请查看[贡献指南](https://docs.matrixorigin.io/cn/0.7.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
 
 ### 👏贡献者们
 

@@ -54,7 +54,11 @@ create account test_account1 admin_name = 'test_user' identified by '111';
 drop account if exists test_account2;
 create account test_account2 admin_name = 'test_user' identified by '111';
 
-insert into cluster_table_1 accounts(sys,test_account1,test_account2) values(0,0),(1,1);
+insert into cluster_table_1 values(0,0,0),(1,1,0);
+insert into cluster_table_1 values(0,0,1),(1,1,1);
+insert into cluster_table_1 values(0,0,2),(1,1,2);
+update cluster_table_1 set account_id=(select account_id from mo_account where account_name="test_account1") where account_id=1;
+update cluster_table_1 set account_id=(select account_id from mo_account where account_name="test_account2") where account_id=2;
 select a,b from cluster_table_1;
 
 -- @session:id=2&user=test_account1:test_user&password=111
@@ -67,9 +71,9 @@ use mo_catalog;
 select * from cluster_table_1;
 -- @session
 
-insert into cluster_table_1 values(200,200);
-insert into cluster_table_1 values(100,100);
-insert into cluster_table_1 values(50,50);
+insert into cluster_table_1 values(200,200, 0);
+insert into cluster_table_1 values(100,100, 0);
+insert into cluster_table_1 values(50,50, 0);
 select a,b from cluster_table_1;
 
 -- @session:id=2&user=test_account1:test_user&password=111
@@ -99,10 +103,9 @@ col8 text,
 col9 varchar
 );
 
-load data infile '$resources/load_data/cluster_table.csv' into table cluster_table_2 accounts(sys,test_account1,test_account2);
-select col1,col2,col3,col4,col5,col6,col7,col8,col9 from cluster_table_2;
-
 load data infile '$resources/load_data/cluster_table.csv' into table cluster_table_2;
+update cluster_table_2 set account_id=(select account_id from mo_account where account_name="test_account1") where account_id=1;
+update cluster_table_2 set account_id=(select account_id from mo_account where account_name="test_account2") where account_id=2;
 select col1,col2,col3,col4,col5,col6,col7,col8,col9 from cluster_table_2;
 
 -- @session:id=2&user=test_account1:test_user&password=111
@@ -132,8 +135,14 @@ col8 text,
 col9 varchar
 );
 
-insert into cluster_table_3 accounts(sys,test_account1,test_account2) values (1,1.09,1.345,"2022-10-02",0,'{"a":1}',"你好","text","varchar");
-insert into cluster_table_3 accounts(sys,test_account1,test_account2) values (2,10.9,13.45,"2022-10-02",1,'{"b":2}',"nihao","文本","字符");
+insert into cluster_table_3 values (1,1.09,1.345,"2022-10-02",0,'{"a":1}',"你好","text","varchar", 0);
+insert into cluster_table_3 values (1,1.09,1.345,"2022-10-02",0,'{"a":1}',"你好","text","varchar", 1);
+insert into cluster_table_3 values (1,1.09,1.345,"2022-10-02",0,'{"a":1}',"你好","text","varchar", 2);
+insert into cluster_table_3 values (2,10.9,13.45,"2022-10-02",1,'{"b":2}',"nihao","文本","字符", 0);
+insert into cluster_table_3 values (2,10.9,13.45,"2022-10-02",1,'{"b":2}',"nihao","文本","字符", 1);
+insert into cluster_table_3 values (2,10.9,13.45,"2022-10-02",1,'{"b":2}',"nihao","文本","字符", 2);
+update cluster_table_3 set account_id=(select account_id from mo_account where account_name="test_account1") where account_id=1;
+update cluster_table_3 set account_id=(select account_id from mo_account where account_name="test_account2") where account_id=2;
 select col1,col2,col3,col4,col5,col6,col7,col8,col9 from cluster_table_3;
 
 update cluster_table_3 set col1=100 where account_id=0 and col1=1;
@@ -244,7 +253,11 @@ col1 int,
 col2 varchar
 );
 
-insert into cluster_table_4 accounts(sys,test_account1,test_account2) values (1,'a'),(2,'b');
+insert into cluster_table_4 values (1,'a',0),(2,'b',0);
+insert into cluster_table_4 values (1,'a',1),(2,'b',1);
+insert into cluster_table_4 values (1,'a',2),(2,'b',2);
+update cluster_table_4 set account_id=(select account_id from mo_account where account_name="test_account1") where account_id=1;
+update cluster_table_4 set account_id=(select account_id from mo_account where account_name="test_account2") where account_id=2;
 select col1,col2 from cluster_table_4;
 
 -- @session:id=2&user=test_account1:test_user&password=111
@@ -273,16 +286,22 @@ col1 int,
 col2 varchar
 );
 
-insert into cluster_table_5  accounts(sys,test_account1,test_account2) values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'f'),(6,'g');
-
-
+insert into cluster_table_5  values (1,'a',0),(2,'b',0),(3,'c',0),(4,'d',0),(5,'f',0),(6,'g',0);
+insert into cluster_table_5  values (1,'a',1),(2,'b',1),(3,'c',1),(4,'d',1),(5,'f',1),(6,'g',1);
+insert into cluster_table_5  values (1,'a',2),(2,'b',2),(3,'c',2),(4,'d',2),(5,'f',2),(6,'g',2);
+update cluster_table_5 set account_id=(select account_id from mo_account where account_name="test_account1") where account_id=1;
+update cluster_table_5 set account_id=(select account_id from mo_account where account_name="test_account2") where account_id=2;
 drop table if exists cluster_table_6;
 create cluster table cluster_table_6(
 a int,
 b varchar
 );
 
-insert into cluster_table_6  accounts(sys,test_account1,test_account2)  values (100,'a'),(200,'a'),(300,'a');
+insert into cluster_table_6 values (100,'a',0),(200,'a',0),(300,'a',0);
+insert into cluster_table_6 values (100,'a',1),(200,'a',1),(300,'a',1);
+insert into cluster_table_6 values (100,'a',2),(200,'a',2),(300,'a',2);
+update cluster_table_6 set account_id=(select account_id from mo_account where account_name="test_account1") where account_id=1;
+update cluster_table_6 set account_id=(select account_id from mo_account where account_name="test_account2") where account_id=2;
 
 select a1.col1,a1.col2,a2.a,a2.b from cluster_table_5 a1 left join cluster_table_6 a2 on a1.col2=a2.b;
 select a1.col1,a1.col2,a2.a,a2.b from cluster_table_5 a1 right join cluster_table_6 a2 on a1.col2=a2.b;
@@ -340,7 +359,11 @@ col1 int,
 col2 varchar
 );
 
-insert into cluster_table_7 accounts(sys,test_account1,test_account2) values (1,'a'),(2,'b');
+insert into cluster_table_7 values (1,'a',0),(2,'b',0);
+insert into cluster_table_7 values (1,'a',1),(2,'b',1);
+insert into cluster_table_7 values (1,'a',2),(2,'b',2);
+update cluster_table_7 set account_id=(select account_id from mo_account where account_name="test_account1") where account_id=1;
+update cluster_table_7 set account_id=(select account_id from mo_account where account_name="test_account2") where account_id=2;
 select col1,col2 from cluster_table_7;
 
 drop account test_account1;

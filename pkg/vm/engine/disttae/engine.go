@@ -15,8 +15,6 @@
 package disttae
 
 import (
-	"bytes"
-	"container/heap"
 	"context"
 	"math"
 	"runtime"
@@ -27,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -68,10 +67,21 @@ func New(
 		cli:        cli,
 		idGen:      idGen,
 		catalog:    cache.NewCatalog(),
-		txnHeap:    &transactionHeap{},
 		txns:       make(map[string]*Transaction),
 		dnMap:      dnMap,
 		partitions: make(map[[2]uint64]Partitions),
+		packerPool: fileservice.NewPool(
+			128,
+			func() *types.Packer {
+				return types.NewPacker(mp)
+			},
+			func(packer *types.Packer) {
+				packer.Reset()
+			},
+			func(packer *types.Packer) {
+				packer.FreeMem()
+			},
+		),
 	}
 
 	if err := e.init(ctx, mp); err != nil {
@@ -516,7 +526,6 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
 	e.Lock()
 	defer e.Unlock()
-	heap.Push(e.txnHeap, txn)
 	e.txns[string(op.Txn().ID)] = txn
 }
 
@@ -537,12 +546,6 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	txn.databaseMap = nil
 	e.Lock()
 	defer e.Unlock()
-	for i, tmp := range *e.txnHeap {
-		if bytes.Equal(txn.meta.ID, tmp.meta.ID) {
-			heap.Remove(e.txnHeap, i)
-			break
-		}
-	}
 	delete(e.txns, string(txn.meta.ID))
 }
 
