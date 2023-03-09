@@ -627,7 +627,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 func (m MarshalNodeImpl) GetTotalStats() TotalStats {
 	totalStats := TotalStats{
 		Name: "Time spent",
-		Unit: "us",
+		Unit: "ns",
 	}
 	if m.node.AnalyzeInfo != nil {
 		totalStats.Value = m.node.AnalyzeInfo.TimeConsumed
