@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -87,8 +88,14 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	cli client.TxnClient,
 	messageAcquirer func() morpc.Message) error {
-	// new a receiver to receive message and write back result.
-	receiver := newMessageReceiverOnServer(ctx, message,
+
+	msg, ok := message.(*pipeline.Message)
+	if !ok {
+		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
+		panic("cn server receive a message with unexpected type")
+	}
+
+	receiver := newMessageReceiverOnServer(ctx, msg,
 		cs, messageAcquirer, storeEngine, fileService, cli)
 
 	// rebuild pipeline to run and send query result back.
@@ -190,7 +197,7 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		}
 		// XXX some order check just for safety ?
 		if sequence != m.Sequence {
-			return moerr.NewInternalErrorNoCtx("Packages passed by morpc are out of order")
+			return moerr.NewInternalErrorNoCtx("Batch packages passed by morpc are out of order")
 		}
 		sequence++
 
