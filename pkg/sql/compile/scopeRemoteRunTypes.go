@@ -36,6 +36,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	maxMessageSizeToMoRpc = 64 * mpool.MB
+)
+
 // cnInformation records service information to help handle messages.
 type cnInformation struct {
 	storeEngine engine.Engine
@@ -85,12 +89,48 @@ func newMessageSenderOnClient(
 // XXX we can set a scope as argument directly next day.
 func (sender *messageSenderOnClient) send(
 	scopeData, procData []byte, messageType uint64) error {
-	message := cnclient.AcquireMessage()
-	message.SetID(sender.streamSender.ID())
-	message.SetMessageType(messageType)
-	message.SetData(scopeData)
-	message.SetProcData(procData)
-	return sender.streamSender.Send(sender.ctx, message)
+	sdLen := len(scopeData)
+	if sdLen <= maxMessageSizeToMoRpc {
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+		_ = cancel
+		message := cnclient.AcquireMessage()
+		message.SetID(sender.streamSender.ID())
+		message.SetMessageType(pipeline.PipelineMessage)
+		message.SetData(scopeData)
+		message.SetProcData(procData)
+		message.SetSequence(0)
+		message.SetSid(pipeline.Last)
+		return sender.streamSender.Send(timeoutCtx, message)
+	}
+
+	start := 0
+	cnt := uint64(0)
+	for start < sdLen {
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+		_ = cancel
+
+		end := start + maxMessageSizeToMoRpc
+
+		message := cnclient.AcquireMessage()
+		message.SetID(sender.streamSender.ID())
+		message.SetMessageType(pipeline.PipelineMessage)
+		message.SetSequence(cnt)
+		if end >= sdLen {
+			message.SetData(scopeData[start:sdLen])
+			message.SetProcData(procData)
+			message.SetSid(pipeline.Last)
+		} else {
+			message.SetData(scopeData[start:end])
+			message.SetSid(pipeline.WaitingNext)
+		}
+
+		if err := sender.streamSender.Send(timeoutCtx, message); err != nil {
+			return err
+		}
+		cnt++
+		start = end
+	}
+	return nil
 }
 
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
@@ -148,17 +188,12 @@ type messageReceiverOnServer struct {
 
 func newMessageReceiverOnServer(
 	ctx context.Context,
-	message morpc.Message,
+	m *pipeline.Message,
 	cs morpc.ClientSession,
 	messageAcquirer func() morpc.Message,
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
 	txnClient client.TxnClient) messageReceiverOnServer {
-	m, ok := message.(*pipeline.Message)
-	if !ok {
-		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
-		panic("cn server receive a message with unexpected type")
-	}
 
 	receiver := messageReceiverOnServer{
 		ctx:             ctx,
@@ -166,7 +201,7 @@ func newMessageReceiverOnServer(
 		messageTyp:      m.GetCmd(),
 		clientSession:   cs,
 		messageAcquirer: messageAcquirer,
-		maxMessageSize:  64 * mpool.MB,
+		maxMessageSize:  maxMessageSizeToMoRpc,
 		sequence:        0,
 	}
 
@@ -273,33 +308,37 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	}
 
 	checksum := crc32.ChecksumIEEE(data)
-	if len(data) <= receiver.maxMessageSize {
+	dataLen := len(data)
+	if dataLen <= receiver.maxMessageSize {
 		m, errA := receiver.acquireMessage()
 		if errA != nil {
 			return errA
 		}
+		m.SetMessageType(pipeline.BatchMessage)
 		m.SetData(data)
 		// XXX too bad.
 		m.SetCheckSum(checksum)
 		m.SetSequence(receiver.sequence)
+		m.SetSid(pipeline.Last)
 		receiver.sequence++
 		return receiver.clientSession.Write(receiver.ctx, m)
 	}
 	// if data is too large, cut and send
-	for start, end := 0, 0; start < len(data); start = end {
+	for start, end := 0, 0; start < dataLen; start = end {
 		m, errA := receiver.acquireMessage()
 		if errA != nil {
 			return errA
 		}
 		end = start + receiver.maxMessageSize
-		if end > len(data) {
-			end = len(data)
-			m.SetSid(pipeline.BatchEnd)
+		if end >= dataLen {
+			end = dataLen
+			m.SetSid(pipeline.Last)
+			m.SetCheckSum(checksum)
 		} else {
 			m.SetSid(pipeline.WaitingNext)
 		}
+		m.SetMessageType(pipeline.BatchMessage)
 		m.SetData(data[start:end])
-		m.SetCheckSum(checksum)
 		m.SetSequence(receiver.sequence)
 		receiver.sequence++
 
