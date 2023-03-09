@@ -62,6 +62,9 @@ func (sc *StatsInfoMap) NeedUpdate(currentBlockNum int) bool {
 
 func GetStatsInfoMapFromCache(tableID uint64) *StatsInfoMap {
 	var cache *StatsCache
+	if cache == nil {
+		return NewStatsInfoMap()
+	}
 	if s, ok := (cache.cachePool)[tableID]; ok {
 		return s
 	} else {
@@ -134,7 +137,7 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int,
 func MakeAllColumns(tableDef *plan.TableDef) []int {
 	lenCols := len(tableDef.Cols)
 	cols := make([]int, lenCols)
-	for i := 0; i < lenCols; i++ {
+	for i := 0; i < lenCols-1; i++ {
 		cols[i] = i
 	}
 	return cols
