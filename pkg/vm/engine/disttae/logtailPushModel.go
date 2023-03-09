@@ -18,6 +18,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -96,7 +97,6 @@ func (s *subscribedTable) getTableSubscribe(dbId, tblId uint64) bool {
 
 func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
 	s.mutex.Lock()
-	logutil.Debugf("cms that subscribe table [%d, %d]\n", dbId, tblId)
 	s.m[subscribeID{dbId, tblId}] = true
 	s.mutex.Unlock()
 }
@@ -110,6 +110,7 @@ func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.
 // support `getTimestamp()` method to get time of last received log.
 type syncLogTailTimestamp struct {
+	ready atomic.Bool
 	tList []struct {
 		time timestamp.Timestamp
 		sync.RWMutex
@@ -117,20 +118,11 @@ type syncLogTailTimestamp struct {
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp() {
-	baseTime := struct {
-		time timestamp.Timestamp
-		sync.RWMutex
-	}{
-		time: timestamp.Timestamp{PhysicalTime: -1, LogicalTime: 0},
-	}
-
+	r.ready.Store(false)
 	r.tList = make([]struct {
 		time timestamp.Timestamp
 		sync.RWMutex
 	}, parallelNums+1)
-	for i := range r.tList {
-		r.tList[i] = baseTime
-	}
 }
 
 func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
@@ -155,8 +147,11 @@ func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
-	t := r.getTimestamp()
-	return txnTime.LessEq(t)
+	if r.ready.Load() {
+		t := r.getTimestamp()
+		return txnTime.LessEq(t)
+	}
+	return false
 }
 
 func (r *syncLogTailTimestamp) blockUntilTxnTimeIsLegal(
@@ -305,8 +300,7 @@ func (e *Engine) firstTimeConnectToLogTailServer(
 	ch := make(chan error)
 	go func() {
 		for _, ti := range tableIds {
-			er := e.subscriber.subscribeTable(ctx,
-				api.TableID{DbId: databaseId, TbId: ti})
+			er := e.tryToGetTableLogTail(ctx, databaseId, ti)
 			if err != nil {
 				ch <- er
 				return
@@ -315,11 +309,21 @@ func (e *Engine) firstTimeConnectToLogTailServer(
 		ch <- nil
 	}()
 
-	select {
-	case <-ctx.Done():
-		return moerr.NewInternalError(ctx, "connect to dn log tail server failed")
-	case err = <-ch:
-		return err
+	count := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return moerr.NewInternalError(ctx, "connect to dn log tail server failed")
+		case err = <-ch:
+			if err != nil {
+				return err
+			}
+			count++
+			if count == 3 {
+				e.receiveLogTailTime.ready.Store(true)
+				return nil
+			}
+		}
 	}
 }
 
@@ -467,24 +471,16 @@ func distributeUpdateResponse(
 
 	// after sort, the smaller tblId, the smaller the index.
 	var index int
-
-	occurs := make([]bool, 4)
-
 	for index = 0; index < len(list); index++ {
 		table := list[index].Table
 		notDistribute := ifShouldNotDistribute(table.DbId, table.TbId)
 		if !notDistribute {
 			break
 		}
-		occurs[table.TbId] = true
 		if err := e.consumeUpdateLogTail(ctx, list[index]); err != nil {
 			return err
 		}
 	}
-	if occurs[2] && !occurs[3] {
-		panic("receive update tables but without columns")
-	}
-
 	for ; index < len(list); index++ {
 		table := list[index].Table
 		recIndex := table.TbId % parallelNums
