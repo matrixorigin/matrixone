@@ -1032,7 +1032,7 @@ func NewCheckIndex(e Expr, en bool) *CheckIndex {
 }
 
 type TableOption interface {
-	NodeFormatter
+	AlterTableOption
 }
 
 type tableOptionImpl struct {
