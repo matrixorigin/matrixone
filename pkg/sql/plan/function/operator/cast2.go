@@ -2793,13 +2793,23 @@ func decimal64ToDecimal64(
 				return err
 			}
 		} else {
-			dec := v.Format(fromtype.Scale)
-			result, err := types.ParseDecimal64(dec, totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
-				return err
+			if totype.Width < fromtype.Width {
+				dec := v.Format(fromtype.Scale)
+				result, err := types.ParseDecimal64(dec, totype.Width, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
+			} else {
+				result, err := v.Scale(totype.Scale - fromtype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -2895,13 +2905,23 @@ func decimal128ToDecimal128(
 				return err
 			}
 		} else {
-			dec := v.Format(fromtype.Scale)
-			result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
-				return err
+			if totype.Width < fromtype.Width {
+				dec := v.Format(fromtype.Scale)
+				result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
+			} else {
+				result, err := v.Scale(totype.Scale - fromtype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
 			}
 		}
 	}
