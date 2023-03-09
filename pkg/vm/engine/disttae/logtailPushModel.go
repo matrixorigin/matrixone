@@ -96,6 +96,7 @@ func (s *subscribedTable) getTableSubscribe(dbId, tblId uint64) bool {
 
 func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
 	s.mutex.Lock()
+	logutil.Debugf("cms that subscribe table [%d, %d]\n", dbId, tblId)
 	s.m[subscribeID{dbId, tblId}] = true
 	s.mutex.Unlock()
 }
@@ -107,7 +108,7 @@ func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 }
 
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.
-// support `getTimestamp()` method to get tiem of last received log.
+// support `getTimestamp()` method to get time of last received log.
 type syncLogTailTimestamp struct {
 	tList []struct {
 		time timestamp.Timestamp
@@ -116,10 +117,20 @@ type syncLogTailTimestamp struct {
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp() {
+	baseTime := struct {
+		time timestamp.Timestamp
+		sync.RWMutex
+	}{
+		time: timestamp.Timestamp{PhysicalTime: -1, LogicalTime: 0},
+	}
+
 	r.tList = make([]struct {
 		time timestamp.Timestamp
 		sync.RWMutex
 	}, parallelNums+1)
+	for i := range r.tList {
+		r.tList[i] = baseTime
+	}
 }
 
 func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
@@ -394,6 +405,8 @@ func (e *Engine) ParallelToReceiveTableLogTail() {
 			}
 
 		cleanAndReconnect:
+			e.subscriber.logTailClient.Close()
+			e.subscriber = nil
 			for _, r := range receiver {
 				r.close()
 			}
@@ -454,16 +467,24 @@ func distributeUpdateResponse(
 
 	// after sort, the smaller tblId, the smaller the index.
 	var index int
+
+	occurs := make([]bool, 4)
+
 	for index = 0; index < len(list); index++ {
 		table := list[index].Table
 		notDistribute := ifShouldNotDistribute(table.DbId, table.TbId)
 		if !notDistribute {
 			break
 		}
+		occurs[table.TbId] = true
 		if err := e.consumeUpdateLogTail(ctx, list[index]); err != nil {
 			return err
 		}
 	}
+	if occurs[2] && !occurs[3] {
+		panic("receive update tables but without columns")
+	}
+
 	for ; index < len(list); index++ {
 		table := list[index].Table
 		recIndex := table.TbId % parallelNums
