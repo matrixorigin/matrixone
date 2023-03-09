@@ -119,6 +119,8 @@ func (m *StrHashMap) InsertValue(val any) (bool, error) {
 	case float64:
 		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
 	case []byte:
+		length := uint16(len(v))
+		m.keys[0] = append(m.keys[0], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
 		m.keys[0] = append(m.keys[0], v...)
 	case types.Date:
 		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
@@ -271,18 +273,31 @@ func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, s
 	}
 	if vec.IsConst() {
 		data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), sz)
-		for i := 0; i < n; i++ {
-			m.keys[i] = append(m.keys[i], 0)
-			m.keys[i] = append(m.keys[i], data...)
+		if m.hasNull {
+			for i := 0; i < n; i++ {
+				m.keys[i] = append(m.keys[i], 0)
+				m.keys[i] = append(m.keys[i], data...)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				m.keys[i] = append(m.keys[i], data...)
+			}
 		}
 		return
 	}
 	data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), (n+start)*sz)
 	if !vec.GetNulls().Any() {
-		for i := 0; i < n; i++ {
-			bytes := data[(i+start)*sz : (i+start+1)*sz]
-			m.keys[i] = append(m.keys[i], 0)
-			m.keys[i] = append(m.keys[i], bytes...)
+		if m.hasNull {
+			for i := 0; i < n; i++ {
+				bytes := data[(i+start)*sz : (i+start+1)*sz]
+				m.keys[i] = append(m.keys[i], 0)
+				m.keys[i] = append(m.keys[i], bytes...)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				bytes := data[(i+start)*sz : (i+start+1)*sz]
+				m.keys[i] = append(m.keys[i], bytes...)
+			}
 		}
 	} else {
 		nsp := vec.GetNulls()
@@ -302,7 +317,6 @@ func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, s
 					continue
 				}
 				bytes := data[(i+start)*sz : (i+start+1)*sz]
-				m.keys[i] = append(m.keys[i], 0)
 				m.keys[i] = append(m.keys[i], bytes...)
 			}
 		}
