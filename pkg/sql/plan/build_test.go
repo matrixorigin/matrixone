@@ -1010,7 +1010,7 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 }
 
 func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

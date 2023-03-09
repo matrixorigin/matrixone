@@ -57,6 +57,7 @@ var debugInstructionNames = map[int]string{
 	vm.MergeOffset:  "merge offset",
 	vm.Deletion:     "delete",
 	vm.Insert:       "insert",
+	vm.PreInsert:    "pre insert",
 	vm.Update:       "update",
 	vm.External:     "external",
 	vm.Minus:        "minus",

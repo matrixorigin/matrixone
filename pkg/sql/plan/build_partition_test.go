@@ -1741,7 +1741,7 @@ func TestRangePartitionFunctionError(t *testing.T) {
 }
 
 func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
-	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
+	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		return nil, err
 	}

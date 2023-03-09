@@ -2880,7 +2880,7 @@ func Test_determineUseDatabase(t *testing.T) {
 		defer ctrl.Finish()
 
 		stmt := &tree.Use{
-			Name: "db",
+			Name: tree.NewCStr("db", 1),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
@@ -2917,7 +2917,7 @@ func Test_determineUseDatabase(t *testing.T) {
 		defer ctrl.Finish()
 
 		stmt := &tree.Use{
-			Name: "db",
+			Name: tree.NewCStr("db", 1),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
@@ -2964,7 +2964,7 @@ func Test_determineUseDatabase(t *testing.T) {
 		defer ctrl.Finish()
 
 		stmt := &tree.Use{
-			Name: "db",
+			Name: tree.NewCStr("db", 1),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)

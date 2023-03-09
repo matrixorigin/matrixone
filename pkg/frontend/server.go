@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -104,4 +105,6 @@ func initVarByConfig(pu *config.ParameterUnit) {
 	}
 	GSysVariables.sysVars["query_result_maxsize"] = pu.SV.QueryResultMaxsize
 	GSysVariables.sysVars["query_result_timeout"] = pu.SV.QueryResultTimeout
+	v, _ := strconv.ParseInt(pu.SV.LowerCaseTableNames, 10, 64)
+	GSysVariables.sysVars["lower_case_table_names"] = v
 }

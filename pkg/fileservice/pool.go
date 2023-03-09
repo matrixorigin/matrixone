@@ -20,9 +20,10 @@ import (
 )
 
 type Pool[T any] struct {
-	newFunc  func() T
-	pool     []_PoolElem[T]
-	capacity uint32
+	newFunc     func() T
+	finallyFunc func(T)
+	pool        []_PoolElem[T]
+	capacity    uint32
 }
 
 type _PoolElem[T any] struct {
@@ -34,18 +35,25 @@ type _PoolElem[T any] struct {
 func NewPool[T any](
 	capacity uint32,
 	newFunc func() T,
+	resetFunc func(T),
+	finallyFunc func(T),
 ) *Pool[T] {
 
 	pool := &Pool[T]{
-		capacity: capacity,
-		newFunc:  newFunc,
+		capacity:    capacity,
+		newFunc:     newFunc,
+		finallyFunc: finallyFunc,
 	}
 
 	for i := uint32(0); i < capacity; i++ {
 		i := i
+		value := newFunc()
 		pool.pool = append(pool.pool, _PoolElem[T]{
-			Value: newFunc(),
+			Value: value,
 			Put: func() {
+				if resetFunc != nil {
+					resetFunc(value)
+				}
 				if !atomic.CompareAndSwapUint32(&pool.pool[i].Taken, 1, 0) {
 					panic("bad put")
 				}
@@ -66,7 +74,13 @@ func (p *Pool[T]) Get() (value T, put func()) {
 		}
 	}
 	value = p.newFunc()
-	put = noopPut
+	if p.finallyFunc == nil {
+		put = noopPut
+	} else {
+		put = func() {
+			p.finallyFunc(value)
+		}
+	}
 	return
 }
 
@@ -77,6 +91,7 @@ var bytesPoolDefaultBlockSize = NewPool(
 	func() []byte {
 		return make([]byte, _DefaultBlockSize)
 	},
+	nil, nil,
 )
 
 //go:linkname fastrand runtime.fastrand
