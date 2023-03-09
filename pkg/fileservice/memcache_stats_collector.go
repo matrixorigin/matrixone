@@ -1,13 +1,12 @@
-package prom
+package fileservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 type memcacheStatsCollector struct {
-	memcache *fileservice.MemCache
+	memcache *MemCache
 
 	numRead *prometheus.Desc
 	numHit  *prometheus.Desc
@@ -15,7 +14,7 @@ type memcacheStatsCollector struct {
 
 // NewMemCacheStatsCollector Creates a Prometheus Batch Stats Collector for MemCache
 // Implementation is similar to https://pkg.go.dev/github.com/prometheus/client_golang/prometheus/collectors#NewDBStatsCollector
-func NewMemCacheStatsCollector(memcache *fileservice.MemCache, familyName string) prometheus.Collector {
+func NewMemCacheStatsCollector(memcache *MemCache, familyName string) prometheus.Collector {
 
 	return &memcacheStatsCollector{
 		memcache: memcache,

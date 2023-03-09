@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/prom"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"sync/atomic"
 )
@@ -41,7 +40,7 @@ func NewMemCache(capacity int64) *MemCache {
 		ch:    ch,
 	}
 
-	mcStatsCollector := prom.NewMemCacheStatsCollector(mc, "MemCache")
+	mcStatsCollector := NewMemCacheStatsCollector(mc, "MemCache")
 	metric.RegisterDevMetric(mcStatsCollector)
 
 	return mc
