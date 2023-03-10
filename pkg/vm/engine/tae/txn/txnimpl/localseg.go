@@ -216,8 +216,8 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			col, err := model.PreparePhyAddrData(
 				catalog.PhyAddrColumnType,
 				prefix,
-				anode.GetStartRow(),
-				anode.GetMaxRow()-anode.GetStartRow())
+				anode.GetMaxRow()-toAppend,
+				toAppend)
 			if err != nil {
 				return err
 			}
