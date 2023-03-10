@@ -61,17 +61,15 @@ type IDGenerator interface {
 
 type Engine struct {
 	sync.RWMutex
-	mp      *mpool.MPool
-	fs      fileservice.FileService
-	cli     client.TxnClient
-	idGen   IDGenerator
-	txns    map[string]*Transaction
-	catalog *cache.CatalogCache
-	// minimum heap of currently active transactions
-	txnHeap *transactionHeap
-
+	mp         *mpool.MPool
+	fs         fileservice.FileService
+	cli        client.TxnClient
+	idGen      IDGenerator
+	txns       map[string]*Transaction
+	catalog    *cache.CatalogCache
 	dnMap      map[string]int
 	partitions map[[2]uint64]Partitions
+	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
 	usePushModel       bool
@@ -112,7 +110,8 @@ type Transaction struct {
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
 	// every statement is an element
-	writes    [][]Entry
+	writes [][]Entry
+
 	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
 	dnStores  []DNStore
 	proc      *process.Process
@@ -143,8 +142,6 @@ type Entry struct {
 	bat     *batch.Batch
 	dnStore DNStore
 }
-
-type transactionHeap []*Transaction
 
 // txnDatabase represents an opened database in a transaction
 type txnDatabase struct {
@@ -181,7 +178,7 @@ type txnTable struct {
 	dnList     []int
 	db         *txnDatabase
 	meta       *tableMeta
-	parts      Partitions
+	parts      []*PartitionState
 	insertExpr *plan.Expr
 	defs       []engine.TableDef
 	tableDef   *plan.TableDef

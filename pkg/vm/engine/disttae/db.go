@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,6 +31,9 @@ import (
 func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	e.Lock()
 	defer e.Unlock()
+
+	packer, put := e.packerPool.Get()
+	defer put()
 
 	{
 		parts := make(Partitions, len(e.dnMap))
@@ -67,7 +71,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF, packer)
 		done()
 		e.catalog.InsertDatabase(bat)
 		bat.Clean(m)
@@ -94,7 +98,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, packer)
 		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
@@ -128,7 +132,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done = part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, packer)
 		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
@@ -154,7 +158,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, packer)
 		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
@@ -188,7 +192,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done = part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, packer)
 		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
@@ -214,7 +218,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, packer)
 		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
@@ -248,7 +252,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done = part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, packer)
 		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
@@ -269,6 +273,49 @@ func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
 		e.partitions[[2]uint64{databaseId, tableId}] = parts
 	}
 	return parts
+}
+
+func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64, tbl *txnTable) error {
+	parts := e.getPartitions(databaseId, tableId)
+
+	for _, part := range parts {
+
+		select {
+		case <-part.lock:
+			defer func() {
+				part.lock <- struct{}{}
+			}()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		state, doneMutate := part.MutateState()
+
+		for _, ckpt := range state.Checkpoints {
+			entries, err := logtail.LoadCheckpointEntries(
+				ctx,
+				ckpt,
+				tbl.tableId,
+				tbl.tableName,
+				tbl.db.databaseId,
+				tbl.db.databaseName,
+				tbl.db.txn.engine.fs)
+			if err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				if err = consumeEntry(ctx, tbl.primaryIdx, e, state, entry); err != nil {
+					return err
+				}
+			}
+		}
+		state.Checkpoints = state.Checkpoints[:0]
+
+		doneMutate()
+
+	}
+
+	return nil
 }
 
 func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
