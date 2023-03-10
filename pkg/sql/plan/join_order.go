@@ -232,7 +232,8 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		}
 		if node.NodeType == plan.Node_JOIN {
 			//swap join order for left & right join, inner join is not here
-			node.Children, node.JoinType = builder.swapJoinOrderByStatsUsedForLeftAndRight(node.OnList, node.Children, node.JoinType)
+			//revert for tpch q13, will fix in the future
+			//node.Children, node.JoinType = builder.swapJoinOrderByStatsUsedForLeftAndRight(node.OnList, node.Children, node.JoinType)
 		}
 		return nodeID
 	}
