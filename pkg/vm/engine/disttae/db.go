@@ -275,18 +275,23 @@ func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
 	return parts
 }
 
-func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64,
-	tbl *txnTable) error {
+func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64, tbl *txnTable) error {
 	parts := e.getPartitions(databaseId, tableId)
-	for _, part := range parts {
-		part.Lock()
-		<-part.lock
-		ckptList := part.ckptList
-		part.ckptList = nil
-		part.Unlock()
-		state := part.state.Load().Copy()
 
-		for _, ckpt := range ckptList {
+	for _, part := range parts {
+
+		select {
+		case <-part.lock:
+			defer func() {
+				part.lock <- struct{}{}
+			}()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		state, doneMutate := part.MutateState()
+
+		for _, ckpt := range state.Checkpoints {
 			entries, err := logtail.LoadCheckpointEntries(
 				ctx,
 				ckpt,
@@ -304,8 +309,11 @@ func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64,
 				}
 			}
 		}
-		part.lock <- struct{}{}
+		state.Checkpoints = state.Checkpoints[:0]
+
+		doneMutate()
 	}
+
 	return nil
 }
 

@@ -410,8 +410,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		syntaxHasColumnNames = true
 		for _, column := range stmt.Columns {
 			colName := string(column)
-			if _, exists := colToIdx[string(column)]; !exists {
-				return moerr.NewInvalidInput(builder.GetContext(), "insert value into unknown column '%s'", colName)
+			if _, ok := colToIdx[colName]; !ok {
+				return moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			insertColumns = append(insertColumns, colName)
 		}
@@ -428,14 +428,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault {
 			for j, row := range slt.Rows {
 				if row != nil {
-					return moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("Column count doesn't match value count at row '%v'", j))
+					return moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}
 		} else {
 			colCount := len(insertColumns)
 			for j, row := range slt.Rows {
 				if len(row) != colCount {
-					return moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("Column count doesn't match value count at row '%v'", j))
+					return moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}
 		}

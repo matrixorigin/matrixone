@@ -1101,7 +1101,7 @@ func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tre
 /*
 handle "SELECT @@xxx.yyyy"
 */
-func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
+func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr, cwIndex, cwsLen int) error {
 	var err error = nil
 	ses := mce.GetSession()
 	mrs := ses.GetMysqlResultSet()
@@ -1139,7 +1139,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 	mrs.AddRow(row)
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, mrs)
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err := proto.SendResponse(ses.GetRequestContext(), resp); err != nil {
 		return moerr.NewInternalError(ses.GetRequestContext(), "routine send response failed. error:%v ", err)
@@ -1370,7 +1370,7 @@ func doShowErrors(ses *Session) error {
 	return err
 }
 
-func (mce *MysqlCmdExecutor) handleShowErrors() error {
+func (mce *MysqlCmdExecutor) handleShowErrors(cwIndex, cwsLen int) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
@@ -1380,7 +1380,7 @@ func (mce *MysqlCmdExecutor) handleShowErrors() error {
 	}
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
 		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
@@ -1508,7 +1508,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 /*
 handle show variables
 */
-func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *process.Process) error {
+func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *process.Process, cwIndex, cwsLen int) error {
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	err := doShowVariables(ses, proc, sv)
@@ -1516,7 +1516,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 		return err
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
 		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
@@ -1855,7 +1855,7 @@ func (mce *MysqlCmdExecutor) handleKill(ctx context.Context, k *tree.Kill) error
 }
 
 // handleShowAccounts lists the info of accounts
-func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.ShowAccounts) error {
+func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.ShowAccounts, cwIndex, cwsLen int) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
@@ -1864,7 +1864,7 @@ func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.Sh
 		return err
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err = proto.SendResponse(ctx, resp); err != nil {
 		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
@@ -3371,13 +3371,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.ShowVariables:
 			selfHandle = true
-			err = mce.handleShowVariables(st, proc)
+			err = mce.handleShowVariables(st, proc, i, len(cws))
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.ShowErrors, *tree.ShowWarnings:
 			selfHandle = true
-			err = mce.handleShowErrors()
+			err = mce.handleShowErrors(i, len(cws))
 			if err != nil {
 				goto handleFailed
 			}
@@ -3515,7 +3515,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.ShowAccounts:
 			selfHandle = true
-			if err = mce.handleShowAccounts(requestCtx, st); err != nil {
+			if err = mce.handleShowAccounts(requestCtx, st, i, len(cws)); err != nil {
 				goto handleFailed
 			}
 		case *tree.Load:
@@ -3547,14 +3547,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleSucceeded
 			}
 		case *tree.ShowVariables:
-			err = mce.handleShowVariables(st, proc)
+			err = mce.handleShowVariables(st, proc, i, len(cws))
 			if err != nil {
 				goto handleFailed
 			} else {
 				goto handleSucceeded
 			}
 		case *tree.ShowErrors, *tree.ShowWarnings:
-			err = mce.handleShowErrors()
+			err = mce.handleShowErrors(i, len(cws))
 			if err != nil {
 				goto handleFailed
 			} else {
@@ -4051,6 +4051,18 @@ func (mce *MysqlCmdExecutor) setResponse(cwIndex, cwsLen int, rspLen uint64) *Re
 		return NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 	}
 
+}
+
+func SetNewResponse(category int, status uint16, cmd int, d interface{}, cwIndex, cwsLen int) *Response {
+
+	//if the stmt has next stmt, should set the server status equals to 10
+	var resp *Response
+	if cwIndex < cwsLen-1 {
+		resp = NewResponse(category, SERVER_MORE_RESULTS_EXISTS, cmd, d)
+	} else {
+		resp = NewResponse(category, 0, cmd, d)
+	}
+	return resp
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
