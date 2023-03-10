@@ -37,11 +37,6 @@ const (
 	LogtailHeartbeatDuration = time.Millisecond * 2
 )
 
-type TxnMgr interface {
-	Lock()
-	Unlock()
-}
-
 type Callback func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail)
 
 func MockCallback(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) {
@@ -66,7 +61,7 @@ type Manager struct {
 	txnbase.NoopCommitListener
 	table     *TxnTable
 	truncated types.TS
-	now func() types.TS
+	now       func() types.TS
 
 	committingTS        types.TS
 	previousSaveTS      types.TS
@@ -75,8 +70,6 @@ type Manager struct {
 	collectLogtailQueue sm.Queue
 	waitCommitQueue     sm.Queue
 	committedTxn        chan *txnWithLogtails
-	txnMgr              TxnMgr
-	tmpAlloctor         *types.TsAlloctor
 	wg                  sync.WaitGroup
 	ctx                 context.Context
 	cancel              context.CancelFunc
@@ -88,8 +81,8 @@ func NewManager(blockSize int, now func() types.TS) *Manager {
 			blockSize,
 			now,
 		),
-		wg:          sync.WaitGroup{},
-		now:now,
+		wg:  sync.WaitGroup{},
+		now: now,
 	}
 	mgr.previousSaveTS = now()
 	mgr.collectLogtailQueue = sm.NewSafeQueue(10000, 100, mgr.onCollectTxnLogtails)
@@ -100,7 +93,7 @@ func NewManager(blockSize int, now func() types.TS) *Manager {
 
 	return mgr
 }
-func (mgr *Manager) OnCommittingTS(ts types.TS) {
+func (mgr *Manager) OnAllocPrepareTS(ts types.TS) {
 	mgr.committingTS = ts
 }
 
@@ -149,6 +142,7 @@ func (mgr *Manager) onWaitTxnCommit(items ...any) {
 			continue
 		}
 		mgr.committedTxn <- txn
+		mgr.OnCommittedTS(txn.txn.GetPrepareTS())
 	}
 }
 func (mgr *Manager) Stop() {
@@ -188,21 +182,23 @@ func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 	}
 }
 func (mgr *Manager) getSaveTS() types.TS {
-	mgr.txnMgr.Lock()
-	defer mgr.txnMgr.Unlock()
+	now := mgr.now()
 	committingTS := mgr.committingTS
 	if committingTS.IsEmpty() {
-		ts := mgr.tmpAlloctor.Alloc()
-		mgr.previousSaveTS = ts
-		return ts
+		mgr.previousSaveTS = now
+		return now
 	}
-	committedTS := mgr.committedTS.Load()
-	if committedTS == nil {
+	icommittedTS := mgr.committedTS.Load()
+	if icommittedTS == nil {
 		return mgr.previousSaveTS
 	}
-	ts := committedTS.(types.TS)
-	mgr.previousSaveTS = ts
-	return ts
+	committedTS := icommittedTS.(types.TS)
+	if committedTS.Equal(committingTS) {
+		mgr.previousSaveTS = now
+		return now
+	}
+	mgr.previousSaveTS = committedTS
+	return committedTS
 }
 
 func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {

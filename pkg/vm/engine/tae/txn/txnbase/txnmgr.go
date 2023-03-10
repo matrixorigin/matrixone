@@ -33,6 +33,7 @@ type TxnCommitListener interface {
 	OnBeginPrePrepare(txnif.AsyncTxn)
 	OnEndPrePrepare(txnif.AsyncTxn)
 	OnEndPreApplyCommit(txnif.AsyncTxn)
+	OnAllocPrepareTS(ts types.TS)
 }
 
 type NoopCommitListener struct{}
@@ -69,6 +70,12 @@ func (bl *batchTxnCommitListener) OnEndPrePrepare(txn txnif.AsyncTxn) {
 func (bl *batchTxnCommitListener) OnEndPreApplyCommit(txn txnif.AsyncTxn) {
 	for _, l := range bl.listeners {
 		l.OnEndPreApplyCommit(txn)
+	}
+}
+
+func (bl *batchTxnCommitListener) OnAllocPrepareTS(ts types.TS) {
+	for _, l := range bl.listeners {
+		l.OnAllocPrepareTS(ts)
 	}
 }
 
@@ -269,6 +276,7 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 		// Should not fail here
 		_ = op.Txn.ToPreparingLocked(ts)
 	}
+	mgr.CommitListener.OnAllocPrepareTS(ts)
 	return
 }
 
