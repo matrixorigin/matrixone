@@ -478,28 +478,28 @@ func Test_GetBatchData(t *testing.T) {
 			param.Name2ColIndex[atrrs[i]] = int32(i)
 		}
 		plh := &ParseLineHandler{
-			batchSize:        1,
-			simdCsvLineArray: [][]string{line},
+			batchSize:      1,
+			moCsvLineArray: [][]string{line},
 		}
 
 		proc := testutil.NewProc()
 		_, err := GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 
-		plh.simdCsvLineArray = [][]string{line[:1]}
+		plh.moCsvLineArray = [][]string{line[:1]}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		for i := 0; i < len(atrrs); i++ {
 			line[i] = "\\N"
 		}
-		plh.simdCsvLineArray = [][]string{line}
+		plh.moCsvLineArray = [][]string{line}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 
 		line = []string{"0", "1.0", "2.0", "3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0", "11.0", "13", "2020-09-07",
 			"2020-09-07 00:00:00", "16", "17", "2020-09-07 00:00:00"}
-		plh.simdCsvLineArray = [][]string{line}
+		plh.moCsvLineArray = [][]string{line}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 
@@ -509,7 +509,7 @@ func Test_GetBatchData(t *testing.T) {
 			tmp := atrrs[i:]
 			param.Attrs = tmp
 			param.Cols = cols[i:]
-			plh.simdCsvLineArray = [][]string{line}
+			plh.moCsvLineArray = [][]string{line}
 			_, err = GetBatchData(param, plh, proc)
 			convey.So(err, convey.ShouldNotBeNil)
 		}
@@ -530,7 +530,7 @@ func Test_GetBatchData(t *testing.T) {
 			tmp := atrrs[i:]
 			param.Attrs = tmp
 			param.Cols = cols[i:]
-			plh.simdCsvLineArray = [][]string{line}
+			plh.moCsvLineArray = [][]string{line}
 			_, err = GetBatchData(param, plh, proc)
 			convey.So(err, convey.ShouldNotBeNil)
 		}
@@ -540,13 +540,13 @@ func Test_GetBatchData(t *testing.T) {
 		param.Extern.JsonData = tree.OBJECT
 		param.Attrs = atrrs
 		param.Cols = cols
-		plh.simdCsvLineArray = [][]string{jsonline_object}
+		plh.moCsvLineArray = [][]string{jsonline_object}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
-		plh.simdCsvLineArray = [][]string{jsonline_object_less}
+		plh.moCsvLineArray = [][]string{jsonline_object_less}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
-		plh.simdCsvLineArray = [][]string{jsonline_object_key_not_match}
+		plh.moCsvLineArray = [][]string{jsonline_object_key_not_match}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -557,16 +557,16 @@ func Test_GetBatchData(t *testing.T) {
 		param.Extern.Format = tree.JSONLINE
 		param.Extern.JsonData = tree.ARRAY
 		param.prevStr = ""
-		plh.simdCsvLineArray = [][]string{jsonline_array}
+		plh.moCsvLineArray = [][]string{jsonline_array}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 		prevStr, str := jsonline_array[0][:len(jsonline_array[0])-2], jsonline_array[0][len(jsonline_array[0])-2:]
-		plh.simdCsvLineArray = [][]string{{prevStr}}
+		plh.moCsvLineArray = [][]string{{prevStr}}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(param.prevStr, convey.ShouldEqual, prevStr)
 
-		plh.simdCsvLineArray = [][]string{{str}}
+		plh.moCsvLineArray = [][]string{{str}}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 
@@ -574,16 +574,16 @@ func Test_GetBatchData(t *testing.T) {
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		plh.simdCsvLineArray = [][]string{jsonline_array_less}
+		plh.moCsvLineArray = [][]string{jsonline_array_less}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		jsonline_array_less[0] = jsonline_object_less[0][1:]
-		plh.simdCsvLineArray = [][]string{jsonline_array_less}
+		plh.moCsvLineArray = [][]string{jsonline_array_less}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 		jsonline_array = append(jsonline_array, jsonline_array_less...)
-		plh.simdCsvLineArray = [][]string{jsonline_array}
+		plh.moCsvLineArray = [][]string{jsonline_array}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 	})

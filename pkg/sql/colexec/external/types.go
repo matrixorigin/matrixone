@@ -15,7 +15,9 @@
 package external
 
 import (
+	"bufio"
 	"context"
+	"encoding/csv"
 	"io"
 	"sync/atomic"
 
@@ -24,7 +26,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/simdcsv"
 )
 
 func ColumnCntLargerErrorInfo() string {
@@ -98,11 +99,72 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 type ParseLineHandler struct {
-	simdCsvReader *simdcsv.Reader
+	moCsvReader *MOCsvReader
 	//csv read put lines into the channel
-	simdCsvGetParsedLinesChan atomic.Value // chan simdcsv.LineOut
+	moCsvGetParsedLinesChan atomic.Value // chan simdcsv.LineOut
 	//batch
 	batchSize int
-	//simd csv
-	simdCsvLineArray [][]string
+	//mo csv
+	moCsvLineArray [][]string
+}
+
+type LineOut struct {
+	Lines [][]string
+	Line  []string
+}
+
+type MOCsvReader struct {
+	// Comma is the field delimiter.
+	// It is set to comma (',') by NewReader.
+	// Comma must be a valid rune and must not be \r, \n,
+	// or the Unicode replacement character (0xFFFD).
+	Comma rune
+
+	// Comment, if not 0, is the comment character. Lines beginning with the
+	// Comment character without preceding whitespace are ignored.
+	// With leading whitespace the Comment character becomes part of the
+	// field, even if TrimLeadingSpace is true.
+	// Comment must be a valid rune and must not be \r, \n,
+	// or the Unicode replacement character (0xFFFD).
+	// It must also not be equal to Comma.
+	Comment rune
+
+	// FieldsPerRecord is the number of expected fields per record.
+	// If FieldsPerRecord is positive, Read requires each record to
+	// have the given number of fields. If FieldsPerRecord is 0, Read sets it to
+	// the number of fields in the first record, so that future records must
+	// have the same field count. If FieldsPerRecord is negative, no check is
+	// made and records may have a variable number of fields.
+	FieldsPerRecord int
+
+	// If LazyQuotes is true, a quote may appear in an unquoted field and a
+	// non-doubled quote may appear in a quoted field.
+	LazyQuotes bool
+
+	// If TrimLeadingSpace is true, leading white space in a field is ignored.
+	// This is done even if the field delimiter, Comma, is white space.
+	TrimLeadingSpace bool
+
+	ReuseRecord   bool // Deprecated: Unused by simdcsv.
+	TrailingComma bool // Deprecated: No longer used.
+
+	r *bufio.Reader
+
+	//for ReadOneLine
+	first bool
+	rCsv  *csv.Reader
+}
+
+// NewReader returns a new Reader with options that reads from r.
+func NewReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *MOCsvReader {
+	return &MOCsvReader{
+		Comma:            cma,
+		Comment:          cmnt,
+		FieldsPerRecord:  -1,
+		LazyQuotes:       lazyQt,
+		TrimLeadingSpace: tls,
+		ReuseRecord:      false,
+		TrailingComma:    false,
+		r:                bufio.NewReader(r),
+	}
 }

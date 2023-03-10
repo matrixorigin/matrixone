@@ -22,6 +22,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,8 +35,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -54,9 +53,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/matrixorigin/simdcsv"
 	"github.com/pierrec/lz4"
 )
 
@@ -436,7 +436,7 @@ func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
 		return
 	}
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
-		Line := plh.simdCsvLineArray[rowIdx]
+		Line := plh.moCsvLineArray[rowIdx]
 		for i := 0; i < len(Line); i++ {
 			len := len(Line[i])
 			if len < 2 {
@@ -468,7 +468,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	deleteEnclosed(param, plh)
 	unexpectEOF := false
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
-		Line = plh.simdCsvLineArray[rowIdx]
+		Line = plh.moCsvLineArray[rowIdx]
 		if param.Extern.Format == tree.JSONLINE {
 			Line, err = transJson2Lines(proc.Ctx, Line[0], param.Attrs, param.Cols, param.Extern.JsonData, param)
 			if err != nil {
@@ -479,7 +479,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				}
 				return nil, err
 			}
-			plh.simdCsvLineArray[rowIdx] = Line
+			plh.moCsvLineArray[rowIdx] = Line
 		}
 		if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
 			//the column account_id of the cluster table do need to be filled here
@@ -531,8 +531,8 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	return bat, nil
 }
 
-// GetSimdcsvReader get file reader from external file
-func GetSimdcsvReader(param *ExternalParam, proc *process.Process) (*ParseLineHandler, error) {
+// GetmocsvReader get file reader from external file
+func GetMOcsvReader(param *ExternalParam, proc *process.Process) (*ParseLineHandler, error) {
 	var err error
 	param.reader, err = ReadFile(param, proc)
 	if err != nil || param.reader == nil {
@@ -545,20 +545,20 @@ func GetSimdcsvReader(param *ExternalParam, proc *process.Process) (*ParseLineHa
 
 	channelSize := 100
 	plh := &ParseLineHandler{}
-	plh.simdCsvGetParsedLinesChan = atomic.Value{}
-	plh.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, channelSize))
+	plh.moCsvGetParsedLinesChan = atomic.Value{}
+	plh.moCsvGetParsedLinesChan.Store(make(chan LineOut, channelSize))
 	if param.Extern.Tail.Fields == nil {
 		param.Extern.Tail.Fields = &tree.Fields{Terminated: ","}
 	}
 	if param.Extern.Format == tree.JSONLINE {
 		param.Extern.Tail.Fields.Terminated = "\t"
 	}
-	plh.simdCsvReader = simdcsv.NewReaderWithOptions(param.reader,
+	plh.moCsvReader = NewReaderWithOptions(param.reader,
 		rune(param.Extern.Tail.Fields.Terminated[0]),
 		'#',
 		true,
 		false)
-
+	plh.moCsvLineArray = make([][]string, ONE_BATCH_MAX_ROW)
 	return plh, nil
 }
 
@@ -570,15 +570,14 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	defer span.End()
 	if param.plh == nil {
 		param.IgnoreLine = param.IgnoreLineTag
-		param.plh, err = GetSimdcsvReader(param, proc)
+		param.plh, err = GetMOcsvReader(param, proc)
 		if err != nil || param.plh == nil {
 			return nil, err
 		}
 	}
 	plh := param.plh
-	plh.simdCsvLineArray = make([][]string, ONE_BATCH_MAX_ROW)
 	finish := false
-	plh.simdCsvLineArray, cnt, finish, err = plh.simdCsvReader.ReadLimitSize(ONE_BATCH_MAX_ROW, proc.Ctx, param.maxBatchSize, plh.simdCsvLineArray)
+	cnt, finish, err = plh.moCsvReader.ReadLimitSize(ONE_BATCH_MAX_ROW, proc.Ctx, param.maxBatchSize, plh.moCsvLineArray)
 	if err != nil {
 		return nil, err
 	}
@@ -588,7 +587,6 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 		if err != nil {
 			logutil.Errorf("close file failed. err:%v", err)
 		}
-		plh.simdCsvReader.Close()
 		param.plh = nil
 		param.Fileparam.FileFin++
 		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
@@ -598,10 +596,10 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	if param.IgnoreLine != 0 {
 		if !param.Extern.Parallel || param.FileOffset[param.Fileparam.FileIndex-1][0] == 0 {
 			if cnt >= param.IgnoreLine {
-				plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:cnt]
+				plh.moCsvLineArray = plh.moCsvLineArray[param.IgnoreLine:cnt]
 				cnt -= param.IgnoreLine
 			} else {
-				plh.simdCsvLineArray = nil
+				plh.moCsvLineArray = nil
 				cnt = 0
 			}
 			param.IgnoreLine = 0
@@ -1413,4 +1411,57 @@ func getOneRowData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalP
 		}
 	}
 	return nil
+}
+
+// Read reads len count records from r.
+// Each record is a slice of fields.
+// A successful call returns err == nil, not err == io.EOF. Because ReadAll is
+// defined to read until EOF, it does not treat end of file as an error to be
+// reported.
+func (r *MOCsvReader) ReadLimitSize(cnt int, ctx context.Context, size uint64, records [][]string) (int, bool, error) {
+	if !r.first {
+		r.first = true
+		r.rCsv = csv.NewReader(r.r)
+		r.rCsv.LazyQuotes = r.LazyQuotes
+		r.rCsv.TrimLeadingSpace = r.TrimLeadingSpace
+		r.rCsv.Comment = r.Comment
+		r.rCsv.Comma = r.Comma
+		r.rCsv.FieldsPerRecord = r.FieldsPerRecord
+		r.rCsv.ReuseRecord = r.ReuseRecord
+	}
+	cnt2, finish, err := ReadCountStringLimitSize(r.rCsv, ctx, cnt, size, records)
+	if err != nil {
+		return cnt2, finish, err
+	}
+	return cnt2, finish, nil
+}
+
+func ReadCountStringLimitSize(r *csv.Reader, ctx context.Context, cnt int, size uint64, records [][]string) (int, bool, error) {
+	var curBatchSize uint64 = 0
+	quit := false
+	for i := 0; i < cnt; i++ {
+		select {
+		case <-ctx.Done():
+			quit = true
+		default:
+		}
+		if quit {
+			return i, true, nil
+		}
+		record, err := r.Read()
+		if err == io.EOF {
+			return i, true, nil
+		}
+		if err != nil {
+			return i, true, err
+		}
+		records[i] = record
+		for j := 0; j < len(record); j++ {
+			curBatchSize += uint64(len(record[j]))
+		}
+		if curBatchSize >= size {
+			return i + 1, false, nil
+		}
+	}
+	return cnt, false, nil
 }

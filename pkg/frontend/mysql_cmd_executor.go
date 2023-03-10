@@ -1832,7 +1832,7 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 			c.SetCharset(0x3f)
 		}
 
-		c.SetDecimal(uint8(col.Typ.Scale))
+		c.SetDecimal(col.Typ.Scale)
 		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
 	}
@@ -2993,7 +2993,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var ret interface{}
 	var runner ComputationRunner
 	var selfHandle bool
-	var fromLoadData = false
 	var txnErr error
 	var rspLen uint64
 	var prepareStmt *PrepareStmt
@@ -3618,12 +3617,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	handleSucceeded:
 		//load data handle txn failure internally
 		incStatementCounter(tenant, stmt)
-		if !fromLoadData {
-			txnErr = ses.TxnCommitSingleStatement(stmt)
-			if txnErr != nil {
-				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
-				return txnErr
-			}
+		txnErr = ses.TxnCommitSingleStatement(stmt)
+		if txnErr != nil {
+			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
+			return txnErr
 		}
 		switch stmt.(type) {
 		case *tree.CreateTable, *tree.DropTable,
@@ -3727,12 +3724,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
 		logError(ses.GetConciseProfile(), err.Error())
-		if !fromLoadData {
-			txnErr = ses.TxnRollbackSingleStatement(stmt)
-			if txnErr != nil {
-				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
-				return txnErr
-			}
+		txnErr = ses.TxnRollbackSingleStatement(stmt)
+		if txnErr != nil {
+			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
+			return txnErr
 		}
 		logStatementStatus(requestCtx, ses, stmt, fail, err)
 		return err
