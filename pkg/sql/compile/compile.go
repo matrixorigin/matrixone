@@ -18,10 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"runtime"
 	"strings"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -133,6 +134,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 
 	// XXX PrintScope has a none-trivial amount of logging
 	// PrintScope(nil, []*Scope{c.scope})
+	fmt.Printf("[ccompile] %s\n", DebugShowScopes([]*Scope{c.scope}))
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -937,7 +939,6 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 				Arg: constructIntersectAll(n, c.proc, i, len(rs)),
 			}
 		}
-
 	}
 	return rs
 }
@@ -1026,15 +1027,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 		}
 	case plan.Node_RIGHT:
 		if isEq {
-			rs = make([]*Scope, len(ss))
-			for i := range rs {
-				rs[i] = new(Scope)
-				rs[i].Magic = Remote
-				rs[i].IsJoin = true
-				rs[i].NodeInfo = ss[i].NodeInfo
-				rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-			}
-			rs = c.newJoinScopeListWithBucket(rs, ss, children)
+			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, int(n.Stats.BlockNum)), ss, children)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
@@ -1393,6 +1386,22 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int) []*Scope {
 		})
 	}
 	c.anal.isFirst = false
+	return ss
+}
+
+func (c *Compile) newScopeListForRightJoin(childrenCount int, blocks int) []*Scope {
+	var ss []*Scope
+	for _, n := range c.cnList {
+		cpunum := c.generateCPUNumber(n.Mcpu, blocks)
+		tmps := make([]*Scope, cpunum)
+		for j := range tmps {
+			tmps[j] = new(Scope)
+			tmps[j].Magic = Remote
+			tmps[j].IsJoin = true
+			tmps[j].Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
+		}
+		ss = append(ss, tmps...)
+	}
 	return ss
 }
 
@@ -1768,8 +1777,8 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 }
 
 func isSameCN(addr string, currentCNAddr string) bool {
-	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
-	//return addr == currentCNAddr
+	//return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
+	return addr == currentCNAddr
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
