@@ -224,7 +224,6 @@ func TestAppend4(t *testing.T) {
 }
 
 func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
-	t.Skip("fsdfsdf")
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*(uint32(schema.SegmentMaxBlocks)+1)-1))
 	defer bat.Close()
 	bats := bat.Split(4)
@@ -292,13 +291,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 	assert.NoError(t, txn.Commit())
 
 	// t.Log(rel.GetMeta().(*catalog.TableEntry).PPString(common.PPL1, 0, ""))
-	txn, err = tae.StartTxn(nil)
-	assert.NoError(t, err)
-	db, err := txn.GetDatabase(defaultTestDB)
-	assert.NoError(t, err)
-	_, err = db.DropRelationByName(schema.Name)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	dropRelation(t, tae, defaultTestDB, schema.Name)
 }
 
 func TestCRUD(t *testing.T) {
@@ -389,13 +382,12 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		name := blockio.EncodeObjectName()
-		writer, err := blockio.NewBlockWriter(dataBlk.GetFs().Service, name)
-		assert.Nil(t, err)
+		writer := blockio.NewWriter(context.Background(), dataBlk.GetFs(), name)
 		_, err = writer.WriteBlock(bat)
 		assert.Nil(t, err)
-		blocks, _, err := writer.Sync(context.Background())
+		blocks, err := writer.Sync()
 		assert.Nil(t, err)
-		metaLoc, err := blockio.EncodeLocation(
+		metaLoc, err := blockio.EncodeMetaLocWithObject(
 			blocks[0].GetExtent(),
 			uint32(bat.Length()),
 			blocks)
@@ -665,16 +657,21 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 	{
 		schema.Name = "tb-1"
 		txn, _, rel := createRelationNoCommit(t, db, "db", schema, false)
-		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
-		err := rel.AddBlksWithMetaLoc(nil, []string{metaLoc1})
+		var pks []containers.Vector
+		var metaLocs []string
+		pks = append(pks, bats[0].Vecs[2])
+		pks = append(pks, bats[1].Vecs[2])
+		metaLocs = append(metaLocs, metaLoc1)
+		metaLocs = append(metaLocs, metaLoc2)
+		err := rel.AddBlksWithMetaLoc(pks, "", metaLocs, 0)
+		assert.Nil(t, err)
+		//local deduplication check
+		err = rel.Append(bats[2])
 		assert.Nil(t, err)
 		err = rel.Append(bats[0])
-		assert.Nil(t, err)
-
-		err = rel.AddBlksWithMetaLoc(nil, []string{metaLoc2})
-		assert.Nil(t, err)
+		assert.NotNil(t, err)
 		err = rel.Append(bats[1])
-		assert.Nil(t, err)
+		assert.NotNil(t, err)
 		//err = rel.RangeDeleteLocal(start, end)
 		//assert.Nil(t, err)
 		//assert.True(t, rel.IsLocalDeleted(start, end))
@@ -682,20 +679,16 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		assert.Nil(t, err)
 
 		//"tb-1" table now has one committed non-appendable segment which contains
-		//two non-appendable block, and one committed appendable segment which contains two appendable block.
+		//two non-appendable block, and one committed appendable segment which contains one appendable block.
 
-		//do deduplication check against sanpshot data.
+		//do deduplication check
 		txn, rel = getRelation(t, 0, db, "db", schema.Name)
-		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
 		err = rel.Append(bats[0])
 		assert.NotNil(t, err)
 		err = rel.Append(bats[1])
 		assert.NotNil(t, err)
-
-		err = rel.AddBlksWithMetaLoc(nil, []string{metaLoc1, metaLoc2})
-		assert.NotNil(t, err)
-
-		//check blk count.
+		err = rel.Append(bats[3])
+		assert.Nil(t, err)
 		cntOfAblk := 0
 		cntOfblk := 0
 		forEachBlock(rel, func(blk handle.Block) (err error) {
@@ -726,7 +719,6 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		assert.True(t, cntOfblk == 2)
 		assert.True(t, cntOfAblk == 2)
 		assert.Nil(t, txn.Commit())
-
 		//check count of committed segments.
 		cntOfAseg := 0
 		cntOfseg := 0
@@ -4034,66 +4026,65 @@ func TestBlockRead(t *testing.T) {
 	columns := make([]string, 0)
 	colIdxs := make([]uint16, 0)
 	colTyps := make([]types.Type, 0)
+	colNulls := make([]bool, 0)
 	defs := schema.ColDefs[:]
 	rand.Shuffle(len(defs), func(i, j int) { defs[i], defs[j] = defs[j], defs[i] })
 	for _, col := range defs {
 		columns = append(columns, col.Name)
 		colIdxs = append(colIdxs, uint16(col.Idx))
 		colTyps = append(colTyps, col.Type)
+		colNulls = append(colNulls, col.NullAbility)
 	}
 	t.Log("read columns: ", columns)
 	fs := tae.DB.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
-		context.Background(), info, colIdxs, colTyps,
+		context.Background(), info, len(schema.ColDefs),
+		columns, colIdxs, colTyps, colNulls,
 		beforeDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b1.Close()
+	assert.Equal(t, columns, b1.Attrs)
 	assert.Equal(t, len(columns), len(b1.Vecs))
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
 	b2, err := blockio.BlockReadInner(
-		context.Background(), info, colIdxs, colTyps,
+		context.Background(), info, len(schema.ColDefs),
+		columns, colIdxs, colTyps, colNulls,
 		afterFirstDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b2.Close()
+	assert.Equal(t, columns, b2.Attrs)
+	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 19, b2.Vecs[0].Length())
 	b3, err := blockio.BlockReadInner(
-		context.Background(), info, colIdxs, colTyps,
+		context.Background(), info, len(schema.ColDefs),
+		columns, colIdxs, colTyps, colNulls,
 		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b3.Close()
+	assert.Equal(t, columns, b2.Attrs)
 	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 16, b3.Vecs[0].Length())
 
 	// read rowid column only
 	b4, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
+		[]string{catalog.AttrRowID},
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
+		[]bool{false},
 		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b4.Close()
+	assert.Equal(t, []string{catalog.AttrRowID}, b4.Attrs)
 	assert.Equal(t, 1, len(b4.Vecs))
 	assert.Equal(t, 16, b4.Vecs[0].Length())
-
-	// read rowid column only
-	info.EntryState = false
-	b5, err := blockio.BlockReadInner(
-		context.Background(), info,
-		[]uint16{2},
-		[]types.Type{types.T_Rowid.ToType()},
-		afterSecondDel, fs, pool,
-	)
-	assert.NoError(t, err)
-	defer b5.Close()
-	assert.Equal(t, 1, len(b5.Vecs))
-	assert.Equal(t, 16, b5.Vecs[0].Length())
 }
 
 func TestCompactDeltaBlk(t *testing.T) {

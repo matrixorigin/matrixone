@@ -16,8 +16,6 @@ package checkpoint
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -438,18 +436,13 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 	bat := r.collectCheckpointMetadata(start, end)
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
-	writer, err := blockio.NewBlockWriter(r.fs.Service, name)
-	if err != nil {
-		return err
-	}
-	mobat := batch.New(true, bat.Attrs)
-	mobat.Vecs = containers.UnmarshalToMoVecs(bat.Vecs)
-	if _, err = writer.WriteBatchWithOutIndex(mobat); err != nil {
+	writer := blockio.NewWriter(context.Background(), r.fs, name)
+	if _, err = writer.WriteBlock(bat); err != nil {
 		return
 	}
 
 	// TODO: checkpoint entry should maintain the location
-	_, _, err = writer.Sync(context.Background())
+	_, err = writer.Sync()
 	return
 }
 
@@ -462,15 +455,12 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	defer data.Close()
 
 	filename := uuid.NewString()
-	writer, err := blockio.NewBlockWriter(r.fs.Service, filename)
-	if err != nil {
-		return err
-	}
+	writer := blockio.NewWriter(context.Background(), r.fs, filename)
 	blks, err := data.WriteTo(writer)
 	if err != nil {
 		return
 	}
-	location := blockio.EncodeLocationFromMetas(filename, blks)
+	location := blockio.EncodeMetalocFromMetas(filename, blks)
 	entry.SetLocation(location)
 	return
 }
@@ -485,15 +475,12 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	defer data.Close()
 
 	filename := uuid.NewString()
-	writer, err := blockio.NewBlockWriter(r.fs.Service, filename)
-	if err != nil {
-		return
-	}
+	writer := blockio.NewWriter(context.Background(), r.fs, filename)
 	blks, err := data.WriteTo(writer)
 	if err != nil {
 		return
 	}
-	location := blockio.EncodeLocationFromMetas(filename, blks)
+	location := blockio.EncodeMetalocFromMetas(filename, blks)
 	entry.SetLocation(location)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)

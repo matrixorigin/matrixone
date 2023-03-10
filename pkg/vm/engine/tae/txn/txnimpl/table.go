@@ -15,10 +15,7 @@
 package txnimpl
 
 import (
-	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -603,23 +600,8 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 
 func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 	if tbl.schema.HasPK() {
-		skip := tbl.store.txn.GetPKDedupSkip()
-		if skip == txnif.PKDedupSkipNone {
-			//do PK deduplication check against txn's work space.
-			if err = tbl.DedupWorkSpace(
-				data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
-				return
-			}
-			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupByPK(
-				data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
-				return
-			}
-		} else if skip == txnif.PKDedupSkipWorkSpace {
-			if err = tbl.DedupByPK(
-				data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
-				return
-			}
+		if err = tbl.DoBatchDedup(data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
+			return
 		}
 	}
 	if tbl.localSegment == nil {
@@ -629,34 +611,24 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 }
 
 func (tbl *txnTable) AddBlksWithMetaLoc(
-	zm []dataio.Index,
-	metaLocs []string) (err error) {
-	var pkVecs []containers.Vector
+	pkVecs []containers.Vector,
+	file string,
+	metaLocs []string,
+	flag int32) (err error) {
+	//TODO::If txn at CN had checked duplication against its snapshot and workspace,
+	// we should skip here.
 	if tbl.schema.HasPK() {
-		skip := tbl.store.txn.GetPKDedupSkip()
-		if skip == txnif.PKDedupSkipNone {
-			//TODO::parallel load pk.
-			for _, v := range pkVecs {
-				//do PK deduplication check against txn's work space.
-				if err = tbl.DedupWorkSpace(v); err != nil {
-					return
-				}
-			}
-			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupByMetaLocs(metaLocs); err != nil {
-				return
-			}
-		} else if skip == txnif.PKDedupSkipWorkSpace {
-			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupByMetaLocs(metaLocs); err != nil {
+		for _, v := range pkVecs {
+			if err = tbl.DoBatchDedup(v); err != nil {
 				return
 			}
 		}
 	}
 	if tbl.localSegment == nil {
+		//tbl.localSegment = newLocalSegmentWithID(tbl, sid)
 		tbl.localSegment = newLocalSegment(tbl)
 	}
-	return tbl.localSegment.AddBlksWithMetaLoc(pkVecs, zm, metaLocs)
+	return tbl.localSegment.AddBlksWithMetaLoc(pkVecs, file, metaLocs)
 }
 
 func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) (err error) {
@@ -857,33 +829,21 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
-	for _, node := range tbl.localSegment.nodes {
-		if node.IsPersisted() {
-			err = tbl.DoPrecommitDedupByNode(node)
-			if err != nil {
-				return
-			}
-			continue
-		}
-		bat, err := node.Window(0, node.Rows())
+	pkVecs := tbl.localSegment.GetPKVecs()
+	for _, pkVec := range pkVecs {
+		defer pkVec.Close()
+		err = tbl.DoPrecommitDedup(pkVec)
 		if err != nil {
-			return err
+			return
 		}
-		pkVec := bat.Vecs[tbl.schema.GetSingleSortKeyIdx()]
-		err = tbl.DoPrecommitDedupByPK(pkVec)
-		if err != nil {
-			bat.Close()
-			return err
-		}
-		bat.Close()
 	}
 	return
 }
 
-// DedupByPK 1. checks whether these primary keys are exist in the list of block
+// Dedup 1. checks whether these primary keys are duplicated in all the blocks
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending data into this table.
-func (tbl *txnTable) DedupByPK(keys containers.Vector) (err error) {
+func (tbl *txnTable) Dedup(keys containers.Vector) (err error) {
 	h := newRelation(tbl)
 	it := newRelationBlockIt(h)
 	for it.Valid() {
@@ -910,72 +870,12 @@ func (tbl *txnTable) DedupByPK(keys containers.Vector) (err error) {
 	return
 }
 
-// DedupByMetaLocs 1. checks whether the Primary Key of all the input blocks exist in the list of block
-// which are visible and not dropped at txn's snapshot timestamp.
-// 2. It is called when appending blocks into this table.
-func (tbl *txnTable) DedupByMetaLocs(metaLocs []string) (err error) {
-	loaded := make(map[int]containers.Vector)
-	for i, loc := range metaLocs {
-		h := newRelation(tbl)
-		it := newRelationBlockIt(h)
-		for it.Valid() {
-			blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
-			blkData := blk.GetBlockData()
-			if blkData == nil {
-				it.Next()
-				continue
-			}
-			var rowmask *roaring.Bitmap
-			if len(tbl.deleteNodes) > 0 {
-				fp := blk.AsCommonID()
-				deleteNode := tbl.deleteNodes[*fp]
-				if deleteNode != nil {
-					rowmask = deleteNode.GetRowMaskRefLocked()
-				}
-			}
-			//TODO::laod zm index first, then load pk column if necessary.
-			_, ok := loaded[i]
-			if !ok {
-				reader, err := blockio.NewObjectReader(tbl.store.dataFactory.Fs.Service, loc)
-				if err != nil {
-					return err
-				}
-				_, id, _, _, err := blockio.DecodeLocation(loc)
-				if err != nil {
-					return err
-				}
-				bats, err := reader.LoadColumns(
-					context.Background(),
-					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
-					[]uint32{id},
-					nil,
-				)
-				if err != nil {
-					return err
-				}
-				vec := containers.NewVectorWithSharedMemory(bats[0].Vecs[0], false)
-				loaded[i] = vec
-			}
-			if err = blkData.BatchDedup(tbl.store.txn, loaded[i], rowmask, false); err != nil {
-				// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
-				loaded[i].Close()
-				return
-			}
-			it.Next()
-		}
-		if v, ok := loaded[i]; ok {
-			v.Close()
-		}
-	}
-	return
-}
-
-// DoPrecommitDedupByPK 1. it do deduplication by traversing all the segments/blocks, and
+// DoPrecommitDedup 1. it do deduplication by traversing all the segments/blocks, and
 // skipping over some blocks/segments which being active or drop-committed or aborted;
 //  2. it is called when txn dequeues from preparing queue.
 //  3. we should make this function run quickly as soon as possible.
 //     TODO::it would be used to do deduplication with the logtail.
-func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
+func (tbl *txnTable) DoPrecommitDedup(pks containers.Vector) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload()
@@ -1043,114 +943,6 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
 			blkIt.Next()
 		}
 		segIt.Next()
-	}
-	return
-}
-
-func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
-	loaded := false
-	segIt := tbl.entry.MakeSegmentIt(false)
-	for segIt.Valid() {
-		seg := segIt.Get().GetPayload()
-		//FIXME::Where is this tbl.maxSegId assigned, it always be zero?
-		if seg.GetID() < tbl.maxSegId {
-			return
-		}
-		{
-			seg.RLock()
-			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
-			//needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
-			//if needwait {
-			//	seg.RUnlock()
-			//	txnToWait.GetTxnState(true)
-			//	seg.RLock()
-			//}
-			shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
-			seg.RUnlock()
-			if shouldSkip {
-				segIt.Next()
-				continue
-			}
-		}
-		segData := seg.GetSegmentData()
-
-		//TODO::load ZM/BF index first, then load PK column if necessary.
-		var pks containers.Vector
-		if !loaded {
-			colV, err := node.GetColumnDataById(tbl.schema.GetSingleSortKeyIdx(), nil)
-			if err != nil {
-				return err
-			}
-			colV.ApplyDeletes()
-			pks = colV.Orphan()
-			defer pks.Close()
-			loaded = true
-		}
-		// TODO: Add a new batch dedup method later
-		if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			return err
-		}
-		if err == nil {
-			segIt.Next()
-			continue
-		}
-		var shouldSkip bool
-		err = nil
-		blkIt := seg.MakeBlockIt(false)
-		for blkIt.Valid() {
-			blk := blkIt.Get().GetPayload()
-			if blk.GetID() < tbl.maxBlkId {
-				return
-			}
-			{
-				blk.RLock()
-				shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
-				blk.RUnlock()
-				if shouldSkip {
-					blkIt.Next()
-					continue
-				}
-			}
-			blkData := blk.GetBlockData()
-			var rowmask *roaring.Bitmap
-			if len(tbl.deleteNodes) > 0 {
-				if tbl.store.warChecker.HasConflict(blk.ID) {
-					continue
-				}
-				fp := blk.AsCommonID()
-				deleteNode := tbl.deleteNodes[*fp]
-				if deleteNode != nil {
-					rowmask = deleteNode.GetRowMaskRefLocked()
-				}
-			}
-			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true); err != nil {
-				return err
-			}
-			blkIt.Next()
-		}
-		segIt.Next()
-	}
-	return
-}
-
-func (tbl *txnTable) DedupWorkSpace(key containers.Vector) (err error) {
-	index := NewSimpleTableIndex()
-	//Check whether primary key is duplicated.
-	if err = index.BatchInsert(
-		tbl.schema.GetSingleSortKey().Name,
-		key,
-		0,
-		key.Length(),
-		0,
-		true); err != nil {
-		return
-	}
-
-	if tbl.localSegment != nil {
-		//Check whether primary key is duplicated in txn's workspace.
-		if err = tbl.localSegment.BatchDedup(key); err != nil {
-			return
-		}
 	}
 	return
 }
@@ -1169,13 +961,13 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 	}
 
 	if tbl.localSegment != nil {
-		//Check whether primary key is duplicated in txn's workspace.
+		//Check whether primary key is duplicated with localSegment.
 		if err = tbl.localSegment.BatchDedup(key); err != nil {
 			return
 		}
 	}
-	//Check whether primary key is duplicated in txn's snapshot data.
-	err = tbl.DedupByPK(key)
+	//Check whether primary key is duplicated with all the blocks which are visible to txn.
+	err = tbl.Dedup(key)
 	return
 }
 
