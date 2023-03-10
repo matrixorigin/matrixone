@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -182,15 +181,17 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 
 func (store *txnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
-	zm []dataio.Index,
+	pkVecs []containers.Vector,
+	file string,
 	metaLoc []string,
+	flag int32,
 ) error {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(tid, zm, metaLoc)
+	return db.AddBlksWithMetaLoc(tid, pkVecs, file, metaLoc, flag)
 }
 
 func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {

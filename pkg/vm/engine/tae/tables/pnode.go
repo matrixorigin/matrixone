@@ -28,10 +28,8 @@ var _ NodeT = (*persistedNode)(nil)
 
 type persistedNode struct {
 	common.RefHelper
-	block *baseBlock
-	//ZM and BF index for primary key column.
+	block   *baseBlock
 	pkIndex indexwrapper.Index
-	//ZM and BF index for all columns.
 	indexes map[int]indexwrapper.Index
 }
 
