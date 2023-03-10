@@ -22,38 +22,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func TimeDiff[T timediff.DiffT](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func TimeDiff[T timediff.DiffT](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	//input vectors
-	firstVector := vectors[0]
-	secondVector := vectors[1]
-	firstValues := vector.MustTCols[T](firstVector)
-	secondValues := vector.MustTCols[T](secondVector)
-	resultType := types.T_time.ToType()
+	firstVector := ivecs[0]
+	secondVector := ivecs[1]
+	firstValues := vector.MustFixedCol[T](firstVector)
+	secondValues := vector.MustFixedCol[T](secondVector)
+	rtyp := types.T_time.ToType()
 
-	resultScale := firstVector.Typ.Scale
-	if firstVector.Typ.Scale < secondVector.Typ.Scale {
-		resultScale = secondVector.Typ.Scale
+	scale := firstVector.GetType().Scale
+	if firstVector.GetType().Scale < secondVector.GetType().Scale {
+		scale = secondVector.GetType().Scale
 	}
-	resultType.Scale = resultScale
+	rtyp.Scale = scale
 
-	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+	if firstVector.IsConstNull() || secondVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, firstVector.Length(), proc.Mp()), nil
 	}
 
 	vectorLen := len(firstValues)
-	if firstVector.IsScalar() {
+	if firstVector.IsConst() {
 		vectorLen = len(secondValues)
 	}
 
-	resultVector, err := proc.AllocVectorOfRows(resultType, int64(vectorLen), nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, vectorLen, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	rs := vector.MustTCols[types.Time](resultVector)
-	nulls.Or(firstVector.Nsp, secondVector.Nsp, resultVector.Nsp)
+	rs := vector.MustFixedCol[types.Time](rvec)
+	nulls.Or(firstVector.GetNulls(), secondVector.GetNulls(), rvec.GetNulls())
 	if err = timediff.TimeDiffWithTimeFn(firstValues, secondValues, rs); err != nil {
 		return nil, err
 	}
-	return resultVector, nil
+	return rvec, nil
 }

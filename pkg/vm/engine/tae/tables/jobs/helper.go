@@ -16,12 +16,84 @@ package jobs
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
 )
+
+func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef *catalog.ColDef, columnData containers.Vector, isPk, isSorted bool) (metas []indexwrapper.IndexMeta, err error) {
+	zmPos := 0
+
+	zoneMapWriter := indexwrapper.NewZMWriter()
+	if err = zoneMapWriter.Init(writer, block, common.Plain, uint16(colDef.Idx), uint16(zmPos)); err != nil {
+		return
+	}
+	if isSorted && isPk && columnData.Length() > 2 {
+		slimForZmVec := containers.MakeVector(columnData.GetType(), columnData.Nullable())
+		defer slimForZmVec.Close()
+		slimForZmVec.Append(columnData.Get(0))
+		slimForZmVec.Append(columnData.Get(columnData.Length() - 1))
+		err = zoneMapWriter.AddValues(slimForZmVec)
+	} else {
+		err = zoneMapWriter.AddValues(columnData)
+	}
+	if err != nil {
+		return
+	}
+	zmMeta, err := zoneMapWriter.Finalize()
+	if err != nil {
+		return
+	}
+	metas = append(metas, *zmMeta)
+
+	if !isPk {
+		return
+	}
+
+	bfPos := 1
+	bfWriter := indexwrapper.NewBFWriter()
+	if err = bfWriter.Init(writer, block, common.Plain, uint16(colDef.Idx), uint16(bfPos)); err != nil {
+		return
+	}
+	if err = bfWriter.AddValues(columnData); err != nil {
+		return
+	}
+	bfMeta, err := bfWriter.Finalize()
+	if err != nil {
+		return
+	}
+	metas = append(metas, *bfMeta)
+	return
+}
+
+func BuildBlockIndex(writer objectio.Writer, block objectio.BlockObject, schema *catalog.Schema, columnsData *containers.Batch, isSorted bool) (err error) {
+	blkMetas := indexwrapper.NewEmptyIndicesMeta()
+	pkIdx := -10086
+	if schema.HasPK() {
+		pkIdx = schema.GetSingleSortKey().Idx
+	}
+
+	for _, colDef := range schema.ColDefs {
+		if colDef.IsPhyAddr() {
+			continue
+		}
+		data := columnsData.GetVectorByName(colDef.GetName())
+		isPk := colDef.Idx == pkIdx
+		colMetas, err := BuildColumnIndex(writer, block, colDef, data, isPk, isSorted)
+		if err != nil {
+			return err
+		}
+		blkMetas.AddIndex(colMetas...)
+	}
+	return nil
+}
 
 type delSegTask struct {
 	*tasks.BaseTask

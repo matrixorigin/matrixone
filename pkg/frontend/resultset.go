@@ -150,12 +150,10 @@ func (mc *MysqlColumn) Decimal() uint8 {
 	return mc.decimal
 }
 
-func (mc *MysqlColumn) SetDecimal(decimal uint8) {
-	if mc.columnType == defines.MYSQL_TYPE_FLOAT || mc.columnType == defines.MYSQL_TYPE_DOUBLE {
-		mc.decimal = 31
-		return
+func (mc *MysqlColumn) SetDecimal(decimal int32) {
+	if decimal >= 0 {
+		mc.decimal = uint8(decimal)
 	}
-	mc.decimal = decimal
 }
 
 func (mc *MysqlColumn) Flag() uint16 {

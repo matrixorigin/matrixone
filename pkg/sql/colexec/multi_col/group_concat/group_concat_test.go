@@ -99,7 +99,7 @@ func RunTestCases(cases []GroupConcatTestCase, t *testing.T, proc *process.Proce
 		gc.Fill(0, 1, 1, case_.vecs)
 		gc.Fill(0, 2, 1, case_.vecs)
 		res, _ := gc.Eval(case_.proc.Mp())
-		require.Equal(t, case_.expect, res.GetString(0))
+		require.Equal(t, case_.expect, res.GetStringAt(0))
 		gc.Free(case_.proc.Mp())
 		for i := 0; i < len(case_.vecs); i++ {
 			case_.vecs[i].Free(case_.proc.Mp())

@@ -190,7 +190,7 @@ int32_t Logic_VecXor(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, in
         }
     } else if ((flag & RIGHT_IS_SCALAR) != 0) {
         for (uint64_t i = 0; i < n; i++) {
-            rt[i] = (at[i] || bt[0]) && !(at[i] || bt[0]);
+            rt[i] = (at[i] || bt[0]) && !(at[i] && bt[0]);
         }
     } else {
         for (uint64_t i = 0; i < n; i++) {
