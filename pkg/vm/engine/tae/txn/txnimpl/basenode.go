@@ -361,3 +361,16 @@ func (n *baseNode) TryUpgrade() (err error) {
 	}
 	return
 }
+
+func (n *baseNode) LoadPersistedColumnData(colIdx int, buffer *bytes.Buffer) (vec containers.Vector, err error) {
+	def := n.meta.GetSchema().ColDefs[colIdx]
+	location := n.meta.GetMetaLoc()
+	return tables.LoadPersistedColumnData(
+		n.bufMgr,
+		n.fs,
+		n.meta.AsCommonID(),
+		def,
+		location,
+		buffer,
+	)
+}
