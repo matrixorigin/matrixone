@@ -17,7 +17,7 @@ package fileservice
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/cache_replacement"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/cache_replacement/lfu"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/cache_replacement/clock"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/cache_replacement/lru"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync/atomic"
@@ -55,9 +55,9 @@ func WithLRU(capacity int64) Options {
 	}
 }
 
-func WithLFU(capacity int64) Options {
+func WithClock(capacity int64) Options {
 	return func(o *options) {
-		o.policy = lfu.NewPolicy(capacity)
+		o.policy = clock.NewPolicy(capacity)
 	}
 }
 

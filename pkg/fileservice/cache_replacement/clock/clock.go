@@ -12,31 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lfu
+package clock
 
-type LFU struct {
+// TODO: Will be implemented in a later PR : https://github.com/matrixorigin/matrixone/issues/8173
+
+type Clock struct {
 }
 
-func NewPolicy(capacity int64) *LFU {
-	return &LFU{}
+func NewPolicy(capacity int64) *Clock {
+	return &Clock{}
 }
 
-func (l *LFU) Set(key any, value any, size int64) {
+func (c *Clock) Set(key any, value any, size int64) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (l *LFU) Get(key any) (value any, size int64, ok bool) {
+func (c *Clock) Get(key any) (value any, size int64, ok bool) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (l *LFU) Flush() {
+func (c *Clock) Flush() {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (l *LFU) Size() int64 {
+func (c *Clock) Size() int64 {
 	//TODO implement me
 	panic("implement me")
 }
