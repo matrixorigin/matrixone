@@ -30,15 +30,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type tableInfo struct {
-	hasAutoCol         bool
+type TableInfo struct {
+	HasAutoCol         bool
 	pkPos              int
 	updateNameToPos    map[string]int
 	hasCompositePkey   bool     // Whether the table contains composite primary key
 	compositePkeyParts []string // Part name of composite primary key
 	clusterBy          string
-	attrs              []string
-	idxList            []int32
+	Attrs              []string
+	IdxList            []int32
 }
 
 func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int32, rels []engine.Relation) (uint64, error) {
@@ -84,7 +84,7 @@ func FilterAndUpdateByRowId(
 	}()
 
 	for i, setIdxList := range idxList {
-		// get attrs, hasAutoCol
+		// get Attrs, HasAutoCol
 		tableDef := tableDefs[i]
 		updateCol := updateCols[i]
 		uniqueRel := uniqueRels[i]
@@ -92,9 +92,9 @@ func FilterAndUpdateByRowId(
 		if len(parentIdxs) > 0 {
 			parentIdx = parentIdxs[i]
 		}
-		info := getInfoForInsertAndUpdate(tableDef, updateCol)
+		info := GetInfoForInsertAndUpdate(tableDef, updateCol)
 
-		delBatch, updateBatch, err = filterRowIdForUpdate(proc, bat, setIdxList, info.attrs, parentIdx)
+		delBatch, updateBatch, err = filterRowIdForUpdate(proc, bat, setIdxList, info.Attrs, parentIdx)
 		if err != nil {
 			return 0, err
 		}
@@ -110,14 +110,14 @@ func FilterAndUpdateByRowId(
 			}
 
 			// fill auto incr column
-			if info.hasAutoCol {
+			if info.HasAutoCol {
 				if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, updateBatch, uint64(ref[i].Obj), ref[i].SchemaName, tableDef.Name); err != nil {
 					return 0, err
 				}
 			}
 
 			// check new rows not null
-			err := batchDataNotNullCheck(updateBatch, tableDef, proc.Ctx)
+			err := BatchDataNotNullCheck(updateBatch, tableDef, proc.Ctx)
 			if err != nil {
 				return 0, err
 			}
@@ -143,7 +143,7 @@ func FilterAndUpdateByRowId(
 			}
 
 			// write unique key table
-			writeUniqueTable(nil, eg, proc, updateBatch, tableDef, ref[i].SchemaName, info.updateNameToPos, info.pkPos, uniqueRel)
+			writeUniqueTable(nil, proc, updateBatch, tableDef, info.updateNameToPos, info.pkPos, uniqueRel)
 
 			// write origin table
 			err = rels[i].Write(proc.Ctx, updateBatch)
@@ -155,8 +155,8 @@ func FilterAndUpdateByRowId(
 	return affectedRows, nil
 }
 
-func writeUniqueTable(s3Container *WriteS3Container, eg engine.Engine, proc *process.Process, updateBatch *batch.Batch,
-	tableDef *plan.TableDef, dbName string, updateNameToPos map[string]int, pkPos int, rels []engine.Relation) error {
+func writeUniqueTable(s3Container *WriteS3Container, proc *process.Process, updateBatch *batch.Batch,
+	tableDef *plan.TableDef, updateNameToPos map[string]int, pkPos int, rels []engine.Relation) error {
 	var ukBatch *batch.Batch
 
 	defer func() {
@@ -391,16 +391,16 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 	return updateBatch, nil
 }
 
-func getInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int32) *tableInfo {
-	info := &tableInfo{
-		hasAutoCol:         false,
+func GetInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int32) *TableInfo {
+	info := &TableInfo{
+		HasAutoCol:         false,
 		pkPos:              -1,
 		updateNameToPos:    make(map[string]int),
 		hasCompositePkey:   false,
 		compositePkeyParts: make([]string, 0),
 		clusterBy:          "",
-		attrs:              make([]string, 0, len(tableDef.Cols)),
-		idxList:            make([]int32, 0, len(tableDef.Cols)),
+		Attrs:              make([]string, 0, len(tableDef.Cols)),
+		IdxList:            make([]int32, 0, len(tableDef.Cols)),
 	}
 	if tableDef.CompositePkey != nil {
 		info.hasCompositePkey = true
@@ -414,17 +414,17 @@ func getInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int
 	for j, col := range tableDef.Cols {
 		if col.Typ.AutoIncr {
 			if updateCol == nil { // update statement
-				info.hasAutoCol = true
+				info.HasAutoCol = true
 			} else if _, ok := updateCol[col.Name]; ok { // insert statement
-				info.hasAutoCol = true
+				info.HasAutoCol = true
 			}
 		}
 		if !info.hasCompositePkey && col.Name != catalog.Row_ID && col.Primary {
 			info.pkPos = j
 		}
 		if col.Name != catalog.Row_ID {
-			info.attrs = append(info.attrs, col.Name)
-			info.idxList = append(info.idxList, int32(pos))
+			info.Attrs = append(info.Attrs, col.Name)
+			info.IdxList = append(info.IdxList, int32(pos))
 			info.updateNameToPos[col.Name] = pos
 			pos++
 		}
@@ -438,82 +438,40 @@ func getInfoForInsertAndUpdate(tableDef *plan.TableDef, updateCol map[string]int
 
 func InsertBatch(
 	container *WriteS3Container,
-	eg engine.Engine,
 	proc *process.Process,
 	bat *batch.Batch,
 	rel engine.Relation,
-	ref *plan.ObjectRef,
 	tableDef *plan.TableDef,
-	parentIdx map[string]int32,
 	uniqueRel []engine.Relation) (uint64, error) {
-	var insertBatch *batch.Batch
-	var err error
 	affectedRows := bat.Vecs[0].Length()
 	defer func() {
-		if insertBatch != nil {
-			insertBatch.Clean(proc.Mp())
-		}
+		bat.Clean(proc.Mp())
 	}()
 
-	info := getInfoForInsertAndUpdate(tableDef, nil)
-
-	//get insert batch
-	insertBatch, err = GetUpdateBatch(proc, bat, info.idxList, bat.Length(), info.attrs, nil, parentIdx)
-	if err != nil {
-		return 0, err
-	}
-
-	// fill auto incr column
-	if info.hasAutoCol {
-		if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, insertBatch, uint64(ref.Obj), ref.SchemaName, tableDef.Name); err != nil {
-			return 0, err
-		}
-	}
-
-	// check new rows not null
-	err = batchDataNotNullCheck(insertBatch, tableDef, proc.Ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	// append hidden columns
-	if info.hasCompositePkey {
-		err = util.FillCompositeKeyBatch(insertBatch, catalog.CPrimaryKeyColName, info.compositePkeyParts, proc)
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	if info.clusterBy != "" && util.JudgeIsCompositeClusterByColumn(info.clusterBy) {
-		err = util.FillCompositeClusterByBatch(insertBatch, info.clusterBy, proc)
-		if err != nil {
-			return 0, err
-		}
-	}
+	info := GetInfoForInsertAndUpdate(tableDef, nil)
 
 	if container != nil {
 		// write to s3
-		err = container.WriteS3Batch(insertBatch, proc, 0)
+		err := container.WriteS3Batch(bat, proc, 0)
 		if err != nil {
 			return 0, err
 		}
 
-		err = writeUniqueTable(container, eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos, uniqueRel)
+		err = writeUniqueTable(container, proc, bat, tableDef, info.updateNameToPos, info.pkPos, uniqueRel)
 		if err != nil {
 			return 0, err
 		}
-
-	} else {
-		// write unique key table
-		err = writeUniqueTable(nil, eg, proc, insertBatch, tableDef, ref.SchemaName, info.updateNameToPos, info.pkPos, uniqueRel)
-		if err != nil {
-			return 0, err
-		}
-
-		// write origin table
-		err = rel.Write(proc.Ctx, insertBatch)
+		return uint64(affectedRows), nil
 	}
 
+	// write origin table
+	err := rel.Write(proc.Ctx, bat)
+	if err != nil {
+		return 0, err
+	}
+
+	// write unique key table
+	err = writeUniqueTable(nil, proc, bat, tableDef, info.updateNameToPos, info.pkPos, uniqueRel)
 	if err != nil {
 		return 0, err
 	}
@@ -521,7 +479,7 @@ func InsertBatch(
 	return uint64(affectedRows), nil
 }
 
-func batchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx context.Context) error {
+func BatchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx context.Context) error {
 	compNameMap := make(map[string]struct{})
 
 	// judge whether the table contains composite primary key

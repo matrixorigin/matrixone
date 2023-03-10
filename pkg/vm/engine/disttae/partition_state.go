@@ -23,7 +23,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -43,17 +42,20 @@ type PartitionState struct {
 	Rows         *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
 	Blocks       *btree.BTreeG[BlockEntry]
 	PrimaryIndex *btree.BTreeG[*PrimaryIndexEntry]
+	Checkpoints  []string
 }
 
+// RowEntry represents a version of a row
 type RowEntry struct {
-	BlockID uint64
+	BlockID uint64 // we need to iter by block id, so put it first to allow faster iteration
 	RowID   types.Rowid
 	Time    types.TS
 
-	ID      int64
-	Deleted bool
-	Batch   *batch.Batch
-	Offset  int64
+	ID                int64 // a unique version id, for primary index building and validating
+	Deleted           bool
+	Batch             *batch.Batch
+	Offset            int64
+	PrimaryIndexBytes []byte
 }
 
 func (r RowEntry) Less(than RowEntry) bool {
@@ -133,10 +135,13 @@ func NewPartitionState() *PartitionState {
 }
 
 func (p *PartitionState) Copy() *PartitionState {
+	checkpoints := make([]string, len(p.Checkpoints))
+	copy(checkpoints, p.Checkpoints)
 	return &PartitionState{
 		Rows:         p.Rows.Copy(),
 		Blocks:       p.Blocks.Copy(),
 		PrimaryIndex: p.PrimaryIndex.Copy(),
+		Checkpoints:  checkpoints,
 	}
 }
 
@@ -175,14 +180,14 @@ func (p *PartitionState) HandleLogtailEntry(
 	ctx context.Context,
 	entry *api.Entry,
 	primaryKeyIndex int,
-	pool *mpool.MPool,
+	packer *types.Packer,
 ) {
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if isMetaTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, entry.Bat)
 		} else {
-			p.HandleRowsInsert(ctx, entry.Bat, primaryKeyIndex, pool)
+			p.HandleRowsInsert(ctx, entry.Bat, primaryKeyIndex, packer)
 		}
 	case api.Entry_Delete:
 		if isMetaTable(entry.TableName) {
@@ -201,7 +206,7 @@ func (p *PartitionState) HandleRowsInsert(
 	ctx context.Context,
 	input *api.Batch,
 	primaryKeyIndex int,
-	pool *mpool.MPool,
+	packer *types.Packer,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
@@ -216,7 +221,7 @@ func (p *PartitionState) HandleRowsInsert(
 	if primaryKeyIndex >= 0 {
 		primaryKeyBytesSet = encodePrimaryKeyVector(
 			batch.Vecs[2+primaryKeyIndex],
-			pool,
+			packer,
 		)
 	}
 
@@ -237,10 +242,13 @@ func (p *PartitionState) HandleRowsInsert(
 
 			entry.Batch = batch
 			entry.Offset = int64(i)
+			if i < len(primaryKeyBytesSet) {
+				entry.PrimaryIndexBytes = primaryKeyBytesSet[i]
+			}
 
 			p.Rows.Set(entry)
 
-			if primaryKeyIndex >= 0 && len(primaryKeyBytesSet[i]) > 0 {
+			if i < len(primaryKeyBytesSet) && len(primaryKeyBytesSet[i]) > 0 {
 				p.PrimaryIndex.Set(&PrimaryIndexEntry{
 					Bytes:      primaryKeyBytesSet[i],
 					RowEntryID: entry.ID,
@@ -348,7 +356,15 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					if entry.BlockID != blockID {
 						break
 					}
+					// delete row entry
 					p.Rows.Delete(entry)
+					// delete primary index entry
+					if len(entry.PrimaryIndexBytes) > 0 {
+						p.PrimaryIndex.Delete(&PrimaryIndexEntry{
+							Bytes:      entry.PrimaryIndexBytes,
+							RowEntryID: entry.ID,
+						})
+					}
 				}
 				iter.Release()
 			}

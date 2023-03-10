@@ -22,16 +22,15 @@ import (
 )
 
 const (
-	// Basic message type
+	// For cmd. Basic message type
 	UnknowType = iota
 	PipelineMessage
 	BatchMessage
 	PrepareDoneNotifyMessage // for dispatch
 
-	// Status type
-	BatchEnd
-	BatchWaitingNext
+	// For Sid. Status type
 	WaitingNext
+	Last
 	MessageEnd
 )
 
@@ -120,8 +119,8 @@ func (m *Message) WaitingNextToMerge() bool {
 	return m.Sid == WaitingNext
 }
 
-func (m *Message) BatcWaitingNextToMerge() bool {
-	return m.Sid == BatchWaitingNext
+func (m *Message) IsLast() bool {
+	return m.Sid == Last
 }
 
 func EncodedMessageError(ctx context.Context, err error) []byte {

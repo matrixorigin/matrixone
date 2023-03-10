@@ -422,3 +422,7 @@ type EntireEngine struct {
 	Engine     Engine // original engine
 	TempEngine Engine // new engine for temporarily table
 }
+
+func IsMemtable(tblRange []byte) bool {
+	return len(tblRange) == 0
+}

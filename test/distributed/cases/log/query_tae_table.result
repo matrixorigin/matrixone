@@ -22,7 +22,7 @@ select account from system.statement_info where statement_id = @uuid_create_tabl
 account
 query_tae_table
 select account, statement from system.statement_info where statement = 'insert into query_tae_table values (1)' and statement_id = @uuid_insert_table limit 1;
-account
+account    statement
 query_tae_table    insert into query_tae_table values (1)
 select span_kind from system.rawlog where `raw_item` = "span_info" and span_name = "NOT_EXIST_SPAN" limit 1;
 span_kind

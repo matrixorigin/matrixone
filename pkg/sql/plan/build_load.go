@@ -18,8 +18,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -47,10 +45,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	}
 	tableDef := tblInfo.tableDefs[0]
 	objRef := tblInfo.objRef[0]
-	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
-	if err != nil {
-		return nil, err
-	}
 	// if tblInfo.haveConstraint {
 	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "table '%v' have contraint, can not use load statement", tblName)
 	// }
@@ -59,7 +53,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	node1 := &plan.Node{}
 	node1.NodeType = plan.Node_EXTERNAL_SCAN
 	node1.Stats = &plan.Stats{}
-	node1.ClusterTable = clusterTable
 
 	node2 := &plan.Node{}
 	node2.NodeType = plan.Node_PROJECT
@@ -72,7 +65,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	node3.Stats = &plan.Stats{}
 	node3.NodeId = 2
 	node3.Children = []int32{1}
-	// node3.ClusterTable = clusterTable
 
 	for i := 0; i < len(tableDef.Cols); i++ {
 		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = int32(i)
@@ -88,7 +80,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 		node1.ProjectList = append(node1.ProjectList, tmp)
 		// node3.ProjectList = append(node3.ProjectList, tmp)
 	}
-	if err := GetProjectNode(stmt, ctx, node2, tableDef.Name2ColIndex, clusterTable); err != nil {
+	if err := GetProjectNode(stmt, ctx, node2, tableDef.Name2ColIndex); err != nil {
 		return nil, err
 	}
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
@@ -98,9 +90,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	// node3.TableDef = tableDef
 	// node3.ObjRef = objRef
 	node3.InsertCtx = &plan.InsertCtx{
-		Ref:          objRef,
-		TableDef:     tableDef,
-		ClusterTable: clusterTable,
+		Ref:      objRef,
+		TableDef: tableDef,
 		// ParentIdx:    map[string]int32{},
 	}
 
@@ -162,7 +153,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) error {
 	return nil
 }
 
-func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2ColIndex map[string]int32, clusterTable *ClusterTable) error {
+func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2ColIndex map[string]int32) error {
 	tblName := string(stmt.Table.ObjectName)
 	dbName := string(stmt.Table.SchemaName)
 	_, tableDef := ctx.Resolve(dbName, tblName)
@@ -185,12 +176,6 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 					return moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.Parts[0])
 				}
 				colToIndex[int32(i)] = realCol.Parts[0]
-				if clusterTable.GetIsClusterTable() {
-					//user can not specify the column account_id of the cluster table in the syntax
-					if util.IsClusterTableAttribute(realCol.Parts[0]) {
-						return moerr.NewInvalidInput(ctx.GetContext(), "do not specify the attribute %s for the cluster table", util.GetClusterTableAttributeName())
-					}
-				}
 			case *tree.VarExpr:
 				//NOTE:variable like '@abc' will be passed by.
 			default:

@@ -21,6 +21,8 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -81,14 +83,14 @@ type ZonemapFileparam struct {
 }
 
 type FilterParam struct {
-	maxCol       int
-	exprMono     bool
-	columns      []uint16 // save real index in table to read column's data from files
-	defColumns   []uint16 // save col index in tableDef.Cols, cooperate with columnMap
-	columnMap    map[int]int
-	File2Size    map[string]int64
-	FilterExpr   *plan.Expr
-	objectReader objectio.Reader
+	maxCol      int
+	exprMono    bool
+	columns     []uint16 // save real index in table to read column's data from files
+	defColumns  []uint16 // save col index in tableDef.Cols, cooperate with columnMap
+	columnMap   map[int]int
+	File2Size   map[string]int64
+	FilterExpr  *plan.Expr
+	blockReader *blockio.BlockReader
 }
 
 type Argument struct {
