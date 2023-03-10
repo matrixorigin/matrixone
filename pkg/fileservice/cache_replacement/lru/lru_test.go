@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package lru
 
 import "testing"
 
 func BenchmarkLRUSet(b *testing.B) {
 	const capacity = 1024
-	l := NewLRU(capacity)
+	l := NewPolicy(capacity)
 	for i := 0; i < b.N; i++ {
 		l.Set(i%capacity, i, 1)
 	}
@@ -26,7 +26,7 @@ func BenchmarkLRUSet(b *testing.B) {
 
 func BenchmarkLRUParallelSet(b *testing.B) {
 	const capacity = 1024
-	l := NewLRU(capacity)
+	l := NewPolicy(capacity)
 	b.RunParallel(func(pb *testing.PB) {
 		for i := 0; pb.Next(); i++ {
 			l.Set(i%capacity, i, 1)
@@ -36,7 +36,7 @@ func BenchmarkLRUParallelSet(b *testing.B) {
 
 func BenchmarkLRUParallelSetOrGet(b *testing.B) {
 	const capacity = 1024
-	l := NewLRU(capacity)
+	l := NewPolicy(capacity)
 	b.RunParallel(func(pb *testing.PB) {
 		for i := 0; pb.Next(); i++ {
 			l.Set(i%capacity, i, 1)

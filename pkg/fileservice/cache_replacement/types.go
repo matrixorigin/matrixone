@@ -12,23 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package cache_replacement
 
-import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-)
-
-func TestReleasable(t *testing.T) {
-	l := NewLRU(1)
-	n := 0
-
-	r := NewReleasable(1, func() {
-		n++
-	})
-	l.Set(1, r, 1)
-
-	l.Set(2, 42, 1)
-	assert.Equal(t, 1, n)
+type Policy interface {
+	Set(key any, value any, size int64)
+	Get(key any) (value any, size int64, ok bool)
+	Flush()
+	Size() int64
 }

@@ -16,29 +16,59 @@ package fileservice
 
 import (
 	"context"
-	"sync/atomic"
-
+	"github.com/matrixorigin/matrixone/pkg/fileservice/cache_replacement"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/cache_replacement/lfu"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/cache_replacement/lru"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"sync/atomic"
 )
 
 type MemCache struct {
-	lru   *LRU
-	stats *CacheStats
-	ch    chan func()
+	policy cache_replacement.Policy
+	stats  *CacheStats
+	ch     chan func()
 }
 
-func NewMemCache(capacity int64) *MemCache {
+func NewMemCache(opts ...Options) *MemCache {
 	ch := make(chan func(), 65536)
 	go func() {
 		for fn := range ch {
 			fn()
 		}
 	}()
-	return &MemCache{
-		lru:   NewLRU(capacity),
-		stats: new(CacheStats),
-		ch:    ch,
+
+	initOpts := defaultOptions()
+	for _, optFunc := range opts {
+		optFunc(&initOpts)
 	}
+
+	return &MemCache{
+		policy: initOpts.policy,
+		stats:  new(CacheStats),
+		ch:     ch,
+	}
+}
+
+func WithLRU(capacity int64) Options {
+	return func(o *options) {
+		o.policy = lru.NewPolicy(capacity)
+	}
+}
+
+func WithLFU(capacity int64) Options {
+	return func(o *options) {
+		o.policy = lfu.NewPolicy(capacity)
+	}
+}
+
+type Options func(*options)
+
+type options struct {
+	policy cache_replacement.Policy
+}
+
+func defaultOptions() options {
+	return options{}
 }
 
 var _ Cache = new(MemCache)
@@ -72,7 +102,7 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		obj, size, ok := m.lru.Get(key)
+		obj, size, ok := m.policy.Get(key)
 		if ok {
 			vector.Entries[i].Object = obj
 			vector.Entries[i].ObjectSize = size
@@ -107,17 +137,17 @@ func (m *MemCache) Update(
 			obj := entry.Object // copy from loop variable
 			objSize := entry.ObjectSize
 			m.ch <- func() {
-				m.lru.Set(key, obj, objSize)
+				m.policy.Set(key, obj, objSize)
 			}
 		} else {
-			m.lru.Set(key, entry.Object, entry.ObjectSize)
+			m.policy.Set(key, entry.Object, entry.ObjectSize)
 		}
 	}
 	return nil
 }
 
 func (m *MemCache) Flush() {
-	m.lru.Flush()
+	m.policy.Flush()
 }
 
 func (m *MemCache) CacheStats() *CacheStats {

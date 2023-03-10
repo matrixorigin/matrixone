@@ -12,42 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package lfu
 
-import (
-	"testing"
+type LFU struct {
+}
 
-	"github.com/stretchr/testify/assert"
-)
+func NewPolicy(capacity int64) *LFU {
+	return &LFU{}
+}
 
-func TestRC(t *testing.T) {
-	l := NewLRU(1)
+func (l *LFU) Set(key any, value any, size int64) {
+	//TODO implement me
+	panic("implement me")
+}
 
-	r := NewRC(42)
-	r.IncRef()
-	l.Set(1, r, 1)
-	_, ok := l.kv[1]
-	assert.True(t, ok)
+func (l *LFU) Get(key any) (value any, size int64, ok bool) {
+	//TODO implement me
+	panic("implement me")
+}
 
-	l.Set(2, 42, 1)
-	_, ok = l.kv[1]
-	assert.True(t, ok)
-	_, ok = l.kv[2]
-	assert.False(t, ok)
+func (l *LFU) Flush() {
+	//TODO implement me
+	panic("implement me")
+}
 
-	r.DecRef()
-	l.Set(2, 42, 1)
-	_, ok = l.kv[1]
-	assert.False(t, ok)
-	_, ok = l.kv[2]
-	assert.True(t, ok)
-
-	r2 := NewRC(42)
-	r2.IncRef()
-	l.Set(3, r2, 1)
-	_, ok = l.kv[3]
-	assert.True(t, ok)
-	_, ok = l.kv[2]
-	assert.False(t, ok)
-
+func (l *LFU) Size() int64 {
+	//TODO implement me
+	panic("implement me")
 }
