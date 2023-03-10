@@ -101,6 +101,8 @@ func (b BlockEntry) Less(than BlockEntry) bool {
 }
 
 func (b *BlockEntry) Visible(ts types.TS) bool {
+	return true
+	//TODO
 	return b.CreateTime.LessEq(ts) &&
 		(b.DeleteTime.IsEmpty() || ts.Less(b.DeleteTime))
 }
