@@ -202,9 +202,9 @@ a	big
 1	92233720368547
 1	18446744073709515
 select distinct BIT_AND(big),BIT_OR(big), BIT_XOR(big),BIT_AND(big)-1, BIT_OR(big)-1, BIT_XOR(big)-1  from t1;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 select BIT_AND(big),BIT_OR(big), BIT_XOR(big),BIT_AND(big)-1, BIT_OR(big)-1, BIT_XOR(big)-1 from t1 group by a;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 insert into t1 (big) values (184467440737615);
 select * from t1;
 a	big
@@ -214,9 +214,9 @@ a	big
 1	18446744073709515
 1	184467440737615
 select distinct BIT_AND(big),BIT_OR(big), BIT_XOR(big),BIT_AND(big)-1, BIT_OR(big)-1, BIT_XOR(big)-1  from t1;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 select BIT_AND(big),BIT_OR(big), BIT_XOR(big),BIT_AND(big)-1, BIT_OR(big)-1, BIT_XOR(big)-1 from t1 group by a;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 drop table t1;
 CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
 INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);

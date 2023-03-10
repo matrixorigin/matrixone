@@ -54,7 +54,7 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 		cvec := containers.NewVectorWithSharedMemory(vec, true)
 
 		// create zone map
-		zm := index.NewZoneMap(vec.Typ)
+		zm := index.NewZoneMap(*vec.GetType())
 		ctx := new(index.KeysCtx)
 		ctx.Keys = cvec
 		ctx.Count = vec.Length()
@@ -183,7 +183,7 @@ func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *p
 	if err != nil {
 		return false, 0
 	}
-	list := vector.MustTCols[int64](ret)
+	list := vector.MustFixedCol[int64](ret)
 	return true, uint64(list[0])
 }
 
@@ -703,105 +703,105 @@ func checkIfDataInBlock(data any, meta BlockMeta, colIdx int, typ types.Type) (b
 }
 
 func findRowByPkValue(vec *vector.Vector, v any) int {
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_int8:
-		rows := vector.MustTCols[int8](vec)
+		rows := vector.MustFixedCol[int8](vec)
 		val := v.(int8)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_int16:
-		rows := vector.MustTCols[int16](vec)
+		rows := vector.MustFixedCol[int16](vec)
 		val := v.(int16)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_int32:
-		rows := vector.MustTCols[int32](vec)
+		rows := vector.MustFixedCol[int32](vec)
 		val := v.(int32)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_int64:
-		rows := vector.MustTCols[int64](vec)
+		rows := vector.MustFixedCol[int64](vec)
 		val := v.(int64)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_uint8:
-		rows := vector.MustTCols[uint8](vec)
+		rows := vector.MustFixedCol[uint8](vec)
 		val := v.(uint8)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_uint16:
-		rows := vector.MustTCols[uint16](vec)
+		rows := vector.MustFixedCol[uint16](vec)
 		val := v.(uint16)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_uint32:
-		rows := vector.MustTCols[uint32](vec)
+		rows := vector.MustFixedCol[uint32](vec)
 		val := v.(uint32)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_uint64:
-		rows := vector.MustTCols[uint64](vec)
+		rows := vector.MustFixedCol[uint64](vec)
 		val := v.(uint64)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_float32:
-		rows := vector.MustTCols[float32](vec)
+		rows := vector.MustFixedCol[float32](vec)
 		val := v.(float32)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_float64:
-		rows := vector.MustTCols[float64](vec)
+		rows := vector.MustFixedCol[float64](vec)
 		val := v.(float64)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_date:
-		rows := vector.MustTCols[types.Date](vec)
+		rows := vector.MustFixedCol[types.Date](vec)
 		val := v.(types.Date)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_time:
-		rows := vector.MustTCols[types.Time](vec)
+		rows := vector.MustFixedCol[types.Time](vec)
 		val := v.(types.Time)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_datetime:
-		rows := vector.MustTCols[types.Datetime](vec)
+		rows := vector.MustFixedCol[types.Datetime](vec)
 		val := v.(types.Datetime)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_timestamp:
-		rows := vector.MustTCols[types.Timestamp](vec)
+		rows := vector.MustFixedCol[types.Timestamp](vec)
 		val := v.(types.Timestamp)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_uuid:
-		rows := vector.MustTCols[types.Uuid](vec)
+		rows := vector.MustFixedCol[types.Uuid](vec)
 		val := v.(types.Uuid)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx].Ge(val)
 		})
 	case types.T_decimal64:
-		rows := vector.MustTCols[types.Decimal64](vec)
+		rows := vector.MustFixedCol[types.Decimal64](vec)
 		val := v.(types.Decimal64)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx].Ge(val)
 		})
 	case types.T_decimal128:
-		rows := vector.MustTCols[types.Decimal128](vec)
+		rows := vector.MustFixedCol[types.Decimal128](vec)
 		val := v.(types.Decimal128)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx].Ge(val)
@@ -813,7 +813,7 @@ func findRowByPkValue(vec *vector.Vector, v any) int {
 		// return sort.SearchStrings(rows, val)
 		val := v.([]byte)
 		area := vec.GetArea()
-		varlenas := vector.MustTCols[types.Varlena](vec)
+		varlenas := vector.MustFixedCol[types.Varlena](vec)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			colVal := varlenas[idx].GetByteSlice(area)
 			return bytes.Compare(colVal, val) >= 0

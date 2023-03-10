@@ -155,8 +155,9 @@ func (container *WriteS3Container) resetMetaLocBat() {
 	// vecs[1] store relative block metadata
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
 	metaLocBat := batch.New(true, attrs)
-	metaLocBat.Vecs[0] = vector.New(types.Type{Oid: types.T(types.T_uint16)})
-	metaLocBat.Vecs[1] = vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+	metaLocBat.Vecs[0] = vector.NewVec(types.T_uint16.ToType())
+	metaLocBat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+
 	container.metaLocBat = metaLocBat
 }
 
@@ -203,14 +204,14 @@ func (container *WriteS3Container) Put(bat *batch.Batch, idx int) int {
 
 func GetFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T) {
 	for i := range bats {
-		cols = append(cols, vector.GetFixedVectorValues[T](bats[i].Vecs[idx]))
+		cols = append(cols, vector.ExpandFixedCol[T](bats[i].Vecs[idx]))
 	}
 	return
 }
 
 func GetStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
 	for i := range bats {
-		cols = append(cols, vector.GetStrVectorValues(bats[i].Vecs[idx]))
+		cols = append(cols, vector.ExpandStrCol(bats[i].Vecs[idx]))
 	}
 	return
 }
@@ -245,10 +246,10 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 		var merge MergeInterface
 		var nulls []*nulls.Nulls
 		for i := 0; i < len(bats); i++ {
-			nulls = append(nulls, bats[i].Vecs[container.sortIndex[0]].Nsp)
+			nulls = append(nulls, bats[i].Vecs[container.sortIndex[0]].GetNulls())
 		}
 		pos := container.sortIndex[0]
-		switch bats[0].Vecs[sortIdx].Typ.Oid {
+		switch bats[0].Vecs[sortIdx].GetType().Oid {
 		case types.T_bool:
 			merge = NewMerge(len(bats), sort.NewBoolLess(), GetFixedCols[bool](bats, pos), nulls)
 		case types.T_int8:
@@ -298,7 +299,7 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 		for size > 0 {
 			batchIndex, rowIndex, size = merge.GetNextPos()
 			for i := range container.buffers[idx].Vecs {
-				vector.UnionOne(container.buffers[idx].Vecs[i], bats[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
+				container.buffers[idx].Vecs[i].UnionOne(bats[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
 			}
 			lens++
 			if lens == int(options.DefaultBlockMaxRows) {
@@ -354,7 +355,7 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 	copy(attrs, bat.Attrs)
 	newBat := batch.New(true, attrs)
 	for i := range bat.Vecs {
-		newBat.Vecs[i] = vector.New(bat.Vecs[i].GetType())
+		newBat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 	}
 	return newBat
 }
@@ -381,7 +382,7 @@ func GenerateWriter(container *WriteS3Container, proc *process.Process) error {
 func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpool.MPool) error {
 	// Not-Null Check
 	for i := 0; i < len(sortIndex); i++ {
-		if nulls.Any(bat.Vecs[i].Nsp) {
+		if nulls.Any(bat.Vecs[i].GetNulls()) {
 			// return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.InsertCtx.TableDef.Cols[i].GetName()))
 			return moerr.NewConstraintViolation(proc.Ctx, "Primary key can not be null")
 		}
@@ -393,8 +394,8 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 		sels[i] = int64(i)
 	}
 	ovec := bat.GetVector(int32(sortIndex[0]))
-	if ovec.Typ.IsString() {
-		strCol = vector.GetStrVectorValues(ovec)
+	if ovec.GetType().IsString() {
+		strCol = vector.MustStrCol(ovec)
 	} else {
 		strCol = nil
 	}
@@ -407,8 +408,8 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 	for i, j := 1, len(sortIndex); i < j; i++ {
 		ps = partition.Partition(sels, ds, ps, ovec)
 		vec := bat.Vecs[sortIndex[i]]
-		if vec.Typ.IsString() {
-			strCol = vector.GetStrVectorValues(vec)
+		if vec.GetType().IsString() {
+			strCol = vector.MustStrCol(vec)
 		} else {
 			strCol = nil
 		}
@@ -506,8 +507,8 @@ func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int)
 		if err != nil {
 			return err
 		}
-		container.metaLocBat.Vecs[0].Append(uint16(idx), false, proc.GetMPool())
-		container.metaLocBat.Vecs[1].Append([]byte(metaLoc), false, proc.GetMPool())
+		vector.AppendFixed(container.metaLocBat.Vecs[0], uint16(idx), false, proc.GetMPool())
+		vector.AppendBytes(container.metaLocBat.Vecs[1], []byte(metaLoc), false, proc.GetMPool())
 	}
 	// for i := range container.unique_writer {
 	// 	if blocks, err = container.unique_writer[i].WriteEnd(proc.Ctx); err != nil {

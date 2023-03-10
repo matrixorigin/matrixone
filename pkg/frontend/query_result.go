@@ -18,23 +18,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -315,17 +312,17 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 		}
 		bat := batch.NewWithSize(len(idxs))
 		for i, e := range iov.Entries {
-			bat.Vecs[i] = vector.New(catalog.MetaColTypes[idxs[i]])
-			if err = bat.Vecs[i].Read(e.Object.([]byte)); err != nil {
+			bat.Vecs[i] = vector.NewVec(catalog.MetaColTypes[idxs[i]])
+			if err = bat.Vecs[i].UnmarshalBinaryWithMpool(e.Object.([]byte), ses.mp); err != nil {
 				return err
 			}
 		}
-		p := vector.MustStrCols(bat.Vecs[0])[0]
+		p := vector.MustStrCol(bat.Vecs[0])[0]
 		pn := &plan.Plan{}
 		if err = pn.Unmarshal([]byte(p)); err != nil {
 			return err
 		}
-		a := vector.MustStrCols(bat.Vecs[1])[0]
+		a := vector.MustStrCol(bat.Vecs[1])[0]
 		var ast tree.Statement
 		if ast, err = simpleAstUnmarshal([]byte(a)); err != nil {
 			return err
@@ -427,48 +424,48 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	bat := batch.NewWithSize(len(catalog.MetaColTypes))
 	bat.SetAttributes(catalog.MetaColNames)
 	for i, t := range catalog.MetaColTypes {
-		bat.Vecs[i] = vector.New(t)
+		bat.Vecs[i] = vector.NewVec(t)
 	}
-	if err = bat.Vecs[catalog.QUERY_ID_IDX].Append(types.Uuid(m.QueryId), false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.QUERY_ID_IDX], types.Uuid(m.QueryId), false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.STATEMENT_IDX].Append([]byte(m.Statement), false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.STATEMENT_IDX], []byte(m.Statement), false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.ACCOUNT_ID_IDX].Append(m.AccountId, false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.ACCOUNT_ID_IDX], m.AccountId, false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.ROLE_ID_IDX].Append(m.RoleId, false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.ROLE_ID_IDX], m.RoleId, false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.RESULT_PATH_IDX].Append([]byte(m.ResultPath), false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.RESULT_PATH_IDX], []byte(m.ResultPath), false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.CREATE_TIME_IDX].Append(m.CreateTime, false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.CREATE_TIME_IDX], m.CreateTime, false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.RESULT_SIZE_IDX].Append(m.ResultSize, false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.RESULT_SIZE_IDX], m.ResultSize, false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.COLUMNS_IDX].Append([]byte(m.Columns), false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.COLUMNS_IDX], []byte(m.Columns), false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.TABLES_IDX].Append([]byte(m.Tables), false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.TABLES_IDX], []byte(m.Tables), false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.USER_ID_IDX].Append(m.UserId, false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.USER_ID_IDX], m.UserId, false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.EXPIRED_TIME_IDX].Append(m.ExpiredTime, false, mp); err != nil {
+	if err = vector.AppendFixed(bat.Vecs[catalog.EXPIRED_TIME_IDX], m.ExpiredTime, false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.PLAN_IDX].Append([]byte(m.Plan), false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.PLAN_IDX], []byte(m.Plan), false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.AST_IDX].Append([]byte(m.Ast), false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.AST_IDX], []byte(m.Ast), false, mp); err != nil {
 		return nil, err
 	}
-	if err = bat.Vecs[catalog.COLUMN_MAP_IDX].Append([]byte(m.ColumnMap), false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[catalog.COLUMN_MAP_IDX], []byte(m.ColumnMap), false, mp); err != nil {
 		return nil, err
 	}
 	return bat, nil
@@ -587,8 +584,8 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 			}
 			//read every column
 			for colIndex, entry := range ioVector.Entries {
-				tmpBatch.Vecs[colIndex] = vector.New(typs[colIndex])
-				err = tmpBatch.Vecs[colIndex].Read(entry.Object.([]byte))
+				tmpBatch.Vecs[colIndex] = vector.NewVec(typs[colIndex])
+				err = tmpBatch.Vecs[colIndex].UnmarshalBinaryWithMpool(entry.Object.([]byte), ses.GetMemPool())
 				if err != nil {
 					return err
 				}
@@ -597,7 +594,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 
 			//step2.1: converts it into the csv string
 			//step2.2: writes the csv string into the outfile
-			n := vector.Length(tmpBatch.Vecs[0])
+			n := tmpBatch.Vecs[0].Length()
 			for j := 0; j < n; j++ { //row index
 				select {
 				case <-ctx.Done():
@@ -612,7 +609,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				if tmpBatch.Zs[j] <= 0 {
 					continue
 				}
-				_, err = extractRowFromEveryVector(ses, tmpBatch, int64(j), oq)
+				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq)
 				if err != nil {
 					return err
 				}
@@ -663,12 +660,12 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	if err != nil {
 		return nil, err
 	}
-	vec := vector.New(catalog.MetaColTypes[catalog.COLUMNS_IDX])
-	defer vector.Clean(vec, ses.GetMemPool())
-	if err = vec.Read(iov.Entries[0].Object.([]byte)); err != nil {
+	vec := vector.NewVec(catalog.MetaColTypes[catalog.COLUMNS_IDX])
+	defer vec.Free(ses.GetMemPool())
+	if err = vec.UnmarshalBinaryWithMpool(iov.Entries[0].Object.([]byte), ses.GetMemPool()); err != nil {
 		return nil, err
 	}
-	def := vector.MustStrCols(vec)[0]
+	def := vector.MustStrCol(vec)[0]
 	r := &plan.ResultColDef{}
 	if err = r.Unmarshal([]byte(def)); err != nil {
 		return nil, err

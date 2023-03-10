@@ -22,30 +22,37 @@ import (
 )
 
 // Cast to binary but no right-padding.
-func Binary(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstv := vs[0]
-	resultVector, err := proc.AllocVectorOfRows(types.T_binary.ToType(), 0, nil)
+func Binary(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtyp := types.T_binary.ToType()
+
+	if ivecs[0].IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	}
+
+	ivals := vector.MustBytesCol(ivecs[0])
+	if ivecs[0].IsConst() {
+		return vector.NewConstBytes(rtyp, doBinary(ivals[0]), ivecs[0].Length(), proc.Mp()), nil
+	}
+
+	rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	firstss := vector.MustStrCols(firstv)
-
-	// Cast varchar to binary.
-	sbytess := make([][]byte, 0)
-	for i, s := range firstss {
+	nulls.Set(rvec.GetNulls(), ivecs[0].GetNulls())
+	for i, s := range ivals {
 		//Check nulls.
-		if nulls.Contains(firstv.Nsp, uint64(i)) {
-			nulls.Add(resultVector.Nsp, uint64(i))
+		if !rvec.GetNulls().Contains(uint64(i)) {
+			vector.SetBytesAt(rvec, i, doBinary(s), proc.Mp())
 		}
-		sbytes := []byte(s)
-		// Truncation.
-		if len(sbytes) > types.MaxBinaryLen {
-			sbytes = sbytes[:256]
-		}
-		// No right-padding.
-		sbytess = append(sbytess, sbytes)
 	}
-	vector.AppendBytes(resultVector, sbytess, proc.Mp())
-	return resultVector, nil
+	return rvec, nil
+}
+
+func doBinary(orig []byte) []byte {
+	if len(orig) > types.MaxBinaryLen {
+		return orig[:types.MaxBinaryLen]
+	} else {
+		return orig
+	}
 }

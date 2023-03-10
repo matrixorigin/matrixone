@@ -17,6 +17,9 @@ package blockio
 import (
 	"context"
 	"fmt"
+	"path"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,8 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"path"
-	"testing"
 )
 
 const (
@@ -79,7 +80,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	fd := blocks[0]
 	col, err := fd.GetColumn(0)
 	assert.Nil(t, err)
-	zm := index.NewZoneMap(bat.Vecs[0].Typ)
+	zm := index.NewZoneMap(*bat.Vecs[0].GetType())
 	colZoneMap := col.GetMeta().GetZoneMap()
 
 	err = zm.Unmarshal(colZoneMap.GetData())

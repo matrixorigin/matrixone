@@ -429,8 +429,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 func constructValueScanBatch(ctx context.Context, proc *process.Process, node *plan.Node) (*batch.Batch, error) {
 	if node == nil || node.TableDef == nil { // like : select 1, 2
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-		bat.Vecs[0].Col = make([]int64, 1)
+		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
 		bat.InitZsOne(1)
 		return bat, nil
 	}
@@ -626,8 +625,7 @@ func (c *Compile) ConstructScope() *Scope {
 	ds.Proc.LoadTag = true
 	bat := batch.NewWithSize(1)
 	{
-		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-		bat.Vecs[0].Col = make([]int64, 1)
+		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
 		bat.InitZsOne(1)
 	}
 	ds.DataSource = &Source{Bat: bat}
@@ -1111,7 +1109,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			panic(err)
 		}
 		defer vec.Free(c.proc.Mp())
-		return c.compileTop(n, vec.Col.([]int64)[0], ss)
+		return c.compileTop(n, vector.MustFixedCol[int64](vec)[0], ss)
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
@@ -1125,7 +1123,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			panic(err)
 		}
 		defer vec2.Free(c.proc.Mp())
-		limit, offset := vec1.Col.([]int64)[0], vec2.Col.([]int64)[0]
+		limit, offset := vector.MustFixedCol[int64](vec1)[0], vector.MustFixedCol[int64](vec2)[0]
 		topN := limit + offset
 		if topN <= 8192*2 {
 			// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
@@ -1782,13 +1780,13 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 	for _, e := range exprs {
 		if e.Typ.Id != int32(types.T_any) {
 			typ = plan2.MakeTypeByPlan2Type(e.Typ)
-			vec = vector.New(typ)
+			vec = vector.NewVec(typ)
 			break
 		}
 	}
 	if vec == nil {
 		typ = types.T_int32.ToType()
-		vec = vector.New(typ)
+		vec = vector.NewVec(typ)
 	}
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
@@ -1799,50 +1797,49 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		if err != nil {
 			return nil, err
 		}
-		if tmp.IsScalarNull() {
-			vec.Append(vector.GetInitConstVal(typ), true, proc.Mp())
+		if tmp.IsConstNull() {
+			vector.AppendFixed(vec, 0, true, proc.Mp())
 			continue
 		}
 		switch typ.Oid {
 		case types.T_bool:
-			vec.Append(vector.MustTCols[bool](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[bool](tmp)[0], false, proc.Mp())
 		case types.T_int8:
-			vec.Append(vector.MustTCols[int8](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[int8](tmp)[0], false, proc.Mp())
 		case types.T_int16:
-			vec.Append(vector.MustTCols[int16](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[int16](tmp)[0], false, proc.Mp())
 		case types.T_int32:
-			vec.Append(vector.MustTCols[int32](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[int32](tmp)[0], false, proc.Mp())
 		case types.T_int64:
-			vec.Append(vector.MustTCols[int64](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[int64](tmp)[0], false, proc.Mp())
 		case types.T_uint8:
-			vec.Append(vector.MustTCols[uint8](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[uint8](tmp)[0], false, proc.Mp())
 		case types.T_uint16:
-			vec.Append(vector.MustTCols[uint16](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[uint16](tmp)[0], false, proc.Mp())
 		case types.T_uint32:
-			vec.Append(vector.MustTCols[uint32](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[uint32](tmp)[0], false, proc.Mp())
 		case types.T_uint64:
-			vec.Append(vector.MustTCols[uint64](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[uint64](tmp)[0], false, proc.Mp())
 		case types.T_float32:
-			vec.Append(vector.MustTCols[float32](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[float32](tmp)[0], false, proc.Mp())
 		case types.T_float64:
-			vec.Append(vector.MustTCols[float64](tmp)[0], false, proc.Mp())
-		case types.T_char, types.T_varchar, types.T_json,
-			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			vec.Append(vector.MustBytesCols(tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[float64](tmp)[0], false, proc.Mp())
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+			vector.AppendBytes(vec, tmp.GetBytesAt(0), false, proc.Mp())
 		case types.T_date:
-			vec.Append(vector.MustTCols[types.Date](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Date](tmp)[0], false, proc.Mp())
 		case types.T_datetime:
-			vec.Append(vector.MustTCols[types.Datetime](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Datetime](tmp)[0], false, proc.Mp())
 		case types.T_time:
-			vec.Append(vector.MustTCols[types.Time](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Time](tmp)[0], false, proc.Mp())
 		case types.T_timestamp:
-			vec.Append(vector.MustTCols[types.Timestamp](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Timestamp](tmp)[0], false, proc.Mp())
 		case types.T_decimal64:
-			vec.Append(vector.MustTCols[types.Decimal64](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Decimal64](tmp)[0], false, proc.Mp())
 		case types.T_decimal128:
-			vec.Append(vector.MustTCols[types.Decimal128](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Decimal128](tmp)[0], false, proc.Mp())
 		case types.T_uuid:
-			vec.Append(vector.MustTCols[types.Uuid](tmp)[0], false, proc.Mp())
+			vector.AppendFixed(vec, vector.MustFixedCol[types.Uuid](tmp)[0], false, proc.Mp())
 		default:
 			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", e))
 		}

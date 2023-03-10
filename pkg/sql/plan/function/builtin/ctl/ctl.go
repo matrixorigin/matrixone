@@ -33,9 +33,9 @@ import (
 // command: command in supportedCmds
 // command parameter: the parameter of the command
 func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	service := serviceType(strings.ToUpper(vector.MustStrCols(vs[0])[0]))
-	command := strings.ToUpper(vector.MustStrCols(vs[1])[0])
-	parameter := vector.MustStrCols(vs[2])[0]
+	service := serviceType(strings.ToUpper(vector.MustStrCol(vs[0])[0]))
+	command := strings.ToUpper(vector.MustStrCol(vs[1])[0])
+	parameter := vector.MustStrCol(vs[2])[0]
 
 	if _, ok := supportedServiceTypes[service]; !ok {
 		return nil, moerr.NewNotSupported(proc.Ctx, "service type %s not supported", service)
@@ -94,8 +94,8 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		return nil, err
 	}
 
-	value := vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
-	if err := value.Append(json.Pretty(result), false, proc.Mp()); err != nil {
+	value := vector.NewVec(types.T_varchar.ToType())
+	if err := vector.AppendBytes(value, json.Pretty(result), false, proc.Mp()); err != nil {
 		return nil, err
 	}
 	return value, nil

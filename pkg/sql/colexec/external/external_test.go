@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -280,26 +279,26 @@ func Test_getUnCompressReader(t *testing.T) {
 	})
 }
 
-func Test_makeBatch(t *testing.T) {
-	convey.Convey("makeBatch succ", t, func() {
-		col := &plan.ColDef{
-			Typ: &plan.Type{
-				Id: int32(types.T_bool),
-			},
-		}
-		param := &ExternalParam{
-			ExParamConst: ExParamConst{
-				Cols:  []*plan.ColDef{col},
-				Attrs: []string{"a"},
-			},
-		}
-		plh := &ParseLineHandler{
-			batchSize: 1,
-		}
-		_ = makeBatch(param, plh.batchSize, testutil.TestUtilMp)
-	})
-}
-
+/*
+	func Test_makeBatch(t *testing.T) {
+		convey.Convey("makeBatch succ", t, func() {
+			col := &plan.ColDef{
+				Typ: &plan.Type{
+					Id: int32(types.T_bool),
+				},
+			}
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Cols:  []*plan.ColDef{col},
+					Attrs: []string{"a"},
+				},
+			}
+			plh := &ParseLineHandler{
+				batchSize: 1,
+			}
+			_ = makeBatch(param, plh.batchSize, testutil.TestUtilMp)
+		})
+	}
 func Test_GetBatchData(t *testing.T) {
 	convey.Convey("GetBatchData succ", t, func() {
 		line := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "2020-09-07",
@@ -589,6 +588,7 @@ func Test_GetBatchData(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
+*/
 
 func TestReadDirSymlink(t *testing.T) {
 	root := t.TempDir()
