@@ -278,6 +278,7 @@ func (n *persistedNode) init() {
 	for i := range schema.ColDefs {
 		index := indexwrapper.NewImmutableIndex()
 		if err := index.ReadFrom(
+			n.bnode.bufMgr,
 			n.bnode.fs,
 			n.bnode.meta.AsCommonID(),
 			n.bnode.meta.GetMetaLoc(),
@@ -360,17 +361,4 @@ func (n *baseNode) TryUpgrade() (err error) {
 		n.storage.pnode.Ref()
 	}
 	return
-}
-
-func (n *baseNode) LoadPersistedColumnData(colIdx int, buffer *bytes.Buffer) (vec containers.Vector, err error) {
-	def := n.meta.GetSchema().ColDefs[colIdx]
-	location := n.meta.GetMetaLoc()
-	return tables.LoadPersistedColumnData(
-		n.bufMgr,
-		n.fs,
-		n.meta.AsCommonID(),
-		def,
-		location,
-		buffer,
-	)
 }

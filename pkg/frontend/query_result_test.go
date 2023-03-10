@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
@@ -74,18 +75,17 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	return ses
 }
 
-func newBatch(ts []types.Type, rows int) *batch.Batch {
+func newBatch(ts []types.Type, rows int, proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(len(ts))
 	bat.InitZsOne(rows)
 	for i, typ := range ts {
 		switch typ.Oid {
 		case types.T_int8:
-			vec := vector.New(typ)
-			vs := make([]int8, rows)
+			vec, _ := proc.AllocVectorOfRows(typ, rows, nil)
+			vs := vector.MustFixedCol[int8](vec)
 			for j := range vs {
 				vs[j] = int8(j)
 			}
-			vec.Col = vs
 			bat.Vecs[i] = vec
 		default:
 			panic("invalid type")
@@ -157,8 +157,9 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	//result string
 	wantResult := "0,0,0\n1,1,1\n2,2,2\n0,0,0\n1,1,1\n2,2,2\n0,0,0\n1,1,1\n2,2,2\n"
 	//save blocks
+	proc := testutil.NewProcess()
 	for i := 0; i < blockCnt; i++ {
-		data := newBatch(typs, blockCnt)
+		data := newBatch(typs, blockCnt, proc)
 		err = saveQueryResult(ses, data)
 		assert.Nil(t, err)
 	}

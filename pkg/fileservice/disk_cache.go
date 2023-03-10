@@ -78,6 +78,10 @@ func (d *DiskCache) Read(
 			continue
 		}
 
+		updateCounters(ctx, func(c *Counter) {
+			atomic.AddInt64(&c.DiskCacheRead, 1)
+		})
+
 		linkPath := d.entryLinkPath(vector, entry)
 		file, err := os.Open(linkPath)
 		if err != nil {
@@ -114,6 +118,9 @@ func (d *DiskCache) Read(
 		vector.Entries[i] = entry
 		numHit++
 		d.cacheHit()
+		updateCounters(ctx, func(c *Counter) {
+			atomic.AddInt64(&c.DiskCacheHit, 1)
+		})
 	}
 
 	return nil

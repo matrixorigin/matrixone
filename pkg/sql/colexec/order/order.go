@@ -83,17 +83,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
-	for i := 0; i < bat.VectorCount(); i++ {
+	/*for i := 0; i < bat.VectorCount(); i++ {
 		vec := bat.GetVector(int32(i))
 		if vec.IsOriginal() {
-			nvec, err := vector.Dup(bat.Vecs[i], proc.Mp())
+			nvec, err := bat.Vecs[i].Dup(proc.Mp())
 			if err != nil {
 				return false, err
 			}
 			bat.SetVector(int32(i), nvec)
 
 		}
-	}
+	}*/
 	for i, f := range ap.Fs {
 		vec, err := colexec.EvalExpr(bat, proc, f.Expr)
 		if err != nil {
@@ -117,15 +117,17 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 		sels[i] = int64(i)
 	}
 
-	nullCnt := nulls.Length(ovec.Nsp)
-	// skip sort for all nulls
-	if nullCnt < ovec.Length() {
-		if ovec.Typ.IsString() {
-			strCol = vector.GetStrVectorValues(ovec)
-		} else {
-			strCol = nil
+	// skip sort for const vector
+	if !ovec.IsConst() {
+		nullCnt := nulls.Length(ovec.GetNulls())
+		if nullCnt < ovec.Length() {
+			if ovec.GetType().IsString() {
+				strCol = vector.MustStrCol(ovec)
+			} else {
+				strCol = nil
+			}
+			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, sels, ovec, strCol)
 		}
-		sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, sels, ovec, strCol)
 	}
 	if len(ctr.vecs) == 1 {
 		if err := bat.Shuffle(sels, proc.Mp()); err != nil {
@@ -140,19 +142,21 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 		nullsLast := ctr.nullsLast[i]
 		ps = partition.Partition(sels, ds, ps, ovec)
 		vec := ctr.vecs[i].vec
-		nullCnt = nulls.Length(vec.Nsp)
-		// skip sort for all nulls
-		if nullCnt < vec.Length() {
-			if vec.Typ.IsString() {
-				strCol = vector.GetStrVectorValues(vec)
-			} else {
-				strCol = nil
-			}
-			for i, j := 0, len(ps); i < j; i++ {
-				if i == j-1 {
-					sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[i]:], vec, strCol)
+		// skip sort for const vector
+		if !vec.IsConst() {
+			nullCnt := nulls.Length(vec.GetNulls())
+			if nullCnt < vec.Length() {
+				if vec.GetType().IsString() {
+					strCol = vector.MustStrCol(vec)
 				} else {
-					sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[i]:ps[i+1]], vec, strCol)
+					strCol = nil
+				}
+				for i, j := 0, len(ps); i < j; i++ {
+					if i == j-1 {
+						sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[i]:], vec, strCol)
+					} else {
+						sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[i]:ps[i+1]], vec, strCol)
+					}
 				}
 			}
 		}

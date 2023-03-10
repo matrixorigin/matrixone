@@ -59,14 +59,14 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	// check parent, if have any null, throw error
 	// can not check here.  because 'update c1 set a = null where a =1' is ok. that's not constraint fail
 	// for _, idx := range updateCtx.ParentIdx {
-	// 	if nulls.Any(bat.Vecs[idx].Nsp) {
+	// 	if nulls.Any(bat.Vecs[idx].GetNulls()) {
 	// 		return false, moerr.NewInternalError(proc.Ctx, "Cannot add or update a child row: a foreign key constraint fails")
 	// 	}
 	// }
 
 	// check child on restrict, if is not all null, throw error
 	for _, idx := range updateCtx.OnRestrictIdx {
-		if bat.Vecs[idx].Length() != bat.Vecs[idx].Nsp.Np.Count() {
+		if bat.Vecs[idx].Length() != bat.Vecs[idx].GetNulls().Np.Count() {
 			return false, moerr.NewInternalError(proc.Ctx, "Cannot delete or update a parent row: a foreign key constraint fails")
 		}
 	}

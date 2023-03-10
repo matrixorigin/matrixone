@@ -17,102 +17,83 @@ package unary
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func DateToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Scale: 6, Size: 8}
-	inputValues := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func DateToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.New(types.T_timestamp, 0, 6)
+	ivals := vector.MustFixedCol[types.Date](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Timestamp, 1)
-		vector.SetCol(resultVector, timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
-		vector.SetCol(resultVector, resultValues)
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, ivals[0].ToTimestamp(proc.SessionInfo.TimeZone), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[types.Timestamp](rvec)
+		for i := range ivals {
+			rvals[i] = ivals[i].ToTimestamp(proc.SessionInfo.TimeZone)
+		}
+		return rvec, nil
 	}
 }
 
-func DatetimeToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Scale: inputVector.Typ.Scale, Size: 8}
-	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func DatetimeToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.New(types.T_timestamp, 0, inputVector.GetType().Scale)
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Timestamp, 1)
-		vector.SetCol(resultVector, timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, ivals[0].ToTimestamp(proc.SessionInfo.TimeZone), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[types.Timestamp](rvec)
+		for i := range ivals {
+			rvals[i] = ivals[i].ToTimestamp(proc.SessionInfo.TimeZone)
+		}
+		return rvec, nil
 	}
 }
 
-func TimestampToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	// XXX should this be an Noop?
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Scale: inputVector.Typ.Scale, Size: 8}
-	inputValues := vector.MustTCols[types.Timestamp](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Timestamp, 1)
-		copy(resultValues, inputValues)
-		vector.SetCol(resultVector, resultValues)
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
-		if err != nil {
-			return nil, err
-		}
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		copy(resultValues, inputValues)
-		return resultVector, nil
-	}
+func TimestampToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return ivecs[0].Dup(proc.Mp())
 }
 
-func DateStringToTimestamp(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_timestamp, Scale: 6, Size: 8}
-	inputValues := vector.MustStrCols(inputVector)
+func DateStringToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.New(types.T_timestamp, 0, 6)
+	ivals := vector.MustStrCol(inputVector)
 
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Timestamp, 1)
-		vector.SetCol(resultVector, timestamp.DateStringToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues))
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		ts, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, ivals[0], 6)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Timestamp](resultVector)
-		timestamp.DateStringToTimestamp(proc.SessionInfo.TimeZone, inputValues, resultVector.Nsp, resultValues)
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, ts, ivecs[0].Length(), proc.Mp()), nil
+	} else {
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
+		if err != nil {
+			return nil, err
+		}
+		rvals := vector.MustFixedCol[types.Timestamp](rvec)
+		for i := range ivals {
+			rvals[i], err = types.ParseTimestamp(proc.SessionInfo.TimeZone, ivals[i], 6)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return rvec, nil
 	}
 }

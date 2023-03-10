@@ -246,9 +246,9 @@ func TestRtrim(t *testing.T) {
 		ivec := testutil.MakeScalarNull(types.T_char, 10)
 		wantvec := testutil.MakeScalarNull(types.T_char, 10)
 		proc := testutil.NewProc()
-		ovec, err := Rtrim([]*vector.Vector{ivec}, proc)
+		rvec, err := Rtrim([]*vector.Vector{ivec}, proc)
 		convey.So(err, convey.ShouldBeNil)
-		ret := testutil.CompareVectors(wantvec, ovec)
+		ret := testutil.CompareVectors(wantvec, rvec)
 		convey.So(ret, convey.ShouldBeTrue)
 
 	})
@@ -257,9 +257,9 @@ func TestRtrim(t *testing.T) {
 		ivec := testutil.MakeScalarVarchar("abc   ", 5)
 		wantvec := testutil.MakeScalarVarchar("abc", 5)
 		proc := testutil.NewProc()
-		ovec, err := Rtrim([]*vector.Vector{ivec}, proc)
+		rvec, err := Rtrim([]*vector.Vector{ivec}, proc)
 		convey.So(err, convey.ShouldBeNil)
-		ret := testutil.CompareVectors(wantvec, ovec)
+		ret := testutil.CompareVectors(wantvec, rvec)
 		convey.So(ret, convey.ShouldBeTrue)
 	})
 }

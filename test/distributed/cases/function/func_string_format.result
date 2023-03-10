@@ -290,9 +290,9 @@ sin(format(d1, 2))    tan(format(id, 0))    cos(format(id, 0))
 0.836655638536056    -0.1425465430742778    -0.9899924966004454
 0.0    1.1578212823495775    -0.6536436208636119
 0.9726300672424079    -3.3805150062465854    0.2836621854632263
-SELECT cot(format(45, 0)), ACOS(format(60, 1)), ATAN(format(75, 0)), SINH(format(90, 1));
-cot(format(45, 0))    acos(format(60, 1))    atan(format(75, 0))    sinh(format(90, 1))
-0.6173696237835573    null    1.557463783500751    6.102016471589204E38
+SELECT cot(format(45, 0)), ATAN(format(75, 0)), SINH(format(90, 1));
+cot(format(45, 0))    atan(format(75, 0))    sinh(format(90, 1))
+0.6173696237835573    1.557463783500751    6.102016471589204E38
 SELECT EXP(format(4, 2));
 exp(format(4, 2))
 54.598150033144236

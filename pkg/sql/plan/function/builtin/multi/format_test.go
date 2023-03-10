@@ -75,7 +75,7 @@ func TestFormatWithTwo(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, tc.expect.Col, gotV.Col)
+			require.Equal(t, vector.MustStrCol(tc.expect), vector.MustStrCol(gotV))
 		})
 	}
 }
@@ -352,7 +352,7 @@ func TestFormatWithThree(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, tc.expect.Col, gotV.Col)
+			require.Equal(t, vector.MustStrCol(tc.expect), vector.MustStrCol(gotV))
 		})
 	}
 }

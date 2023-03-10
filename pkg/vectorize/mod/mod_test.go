@@ -76,7 +76,7 @@ func TestI32Mod(t *testing.T) {
 		t.Fatalf("int32 mod failed")
 	}
 
-	res := vector.MustTCols[int32](cv)
+	res := vector.MustFixedCol[int32](cv)
 	for i := 0; i < 10; i++ {
 		if res[i] != as[i]%bs[i] {
 			t.Fatalf("int mod wrong result")
@@ -102,7 +102,7 @@ func TestUI32Mod(t *testing.T) {
 		t.Fatalf("uint32 mod failed")
 	}
 
-	res := vector.MustTCols[uint32](cv)
+	res := vector.MustFixedCol[uint32](cv)
 	for i := 0; i < 10; i++ {
 		if res[i] != as[i]%bs[i] {
 			t.Fatalf("int mod wrong result")
@@ -128,7 +128,7 @@ func TestF32Mod(t *testing.T) {
 		t.Fatalf("uint32 mod failed")
 	}
 
-	res := vector.MustTCols[float64](cv)
+	res := vector.MustFixedCol[float64](cv)
 	for i := 0; i < 10; i++ {
 		if res[i] != math.Mod(as[i], bs[i]) {
 			t.Fatalf("int mod wrong result")
