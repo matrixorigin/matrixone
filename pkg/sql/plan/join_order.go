@@ -180,8 +180,16 @@ func (builder *QueryBuilder) swapJoinOrderByStats(onList []*plan.Expr, children 
 		//do not swap
 		return children, joinType
 	}
+
+	//for tpch q13, always left join. will fix this in the future
+	if joinType == plan.Node_RIGHT {
+		return []int32{children[1], children[0]}, plan.Node_LEFT
+	} else if joinType == plan.Node_LEFT {
+		return children, plan.Node_LEFT
+	}
+
 	//for left and right join, only swap equal join
-	if !IsEquiJoin(onList) {
+	/*if !IsEquiJoin(onList) {
 		switch joinType {
 		case plan.Node_LEFT:
 			return children, joinType
@@ -189,7 +197,7 @@ func (builder *QueryBuilder) swapJoinOrderByStats(onList []*plan.Expr, children 
 			return []int32{children[1], children[0]}, plan.Node_LEFT
 		default:
 		}
-	}
+	}*/
 
 	//left deep tree is preferred for pipeline
 	//if scan compare with join, scan should be 5% bigger than join, then we can swap
