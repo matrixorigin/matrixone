@@ -98,6 +98,16 @@ func NewInfoFromZoneMap(lenCols, blockNumTotal int) *InfoFromZoneMap {
 	return info
 }
 
+func GetHighNDVColumns(s *StatsInfoMap, b *Binding) []int32 {
+	cols := make([]int32, 0)
+	for colName, ndv := range s.NdvMap {
+		if ndv/s.TableCnt > 0.9 {
+			cols = append(cols, b.FindColumn(colName))
+		}
+	}
+	return cols
+}
+
 func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) {
 
 	logutil.Infof("need to update statsCache for table %v", tableDef.Name)
