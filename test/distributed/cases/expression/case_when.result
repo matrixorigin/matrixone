@@ -113,10 +113,10 @@ insert into t1 (a, b) values (1,4572794622775114594), (2,18196094287899841997),
 insert into t2 (c) values (1), (2), (3);
 select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
 join t2 on t1.a=t2.c order by d;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '18196094287899841997'
 select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
 join t2 on t1.a=t2.c where b=11120436154190595086 order by d;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '11120436154190595086'
 drop table if exists small;
 drop table if exists big;
 CREATE TABLE small (id int not null,PRIMARY KEY (id));

@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -55,7 +56,7 @@ func (w *Writer) WriteBlockAndZoneMap(batch *batch.Batch, idxs []uint16) (object
 	for _, idx := range idxs {
 		var zoneMap objectio.IndexData
 		vec := containers.NewVectorWithSharedMemory(batch.Vecs[idx], true)
-		zm := index.NewZoneMap(batch.Vecs[idx].Typ)
+		zm := index.NewZoneMap(*batch.Vecs[idx].GetType())
 		ctx := new(index.KeysCtx)
 		ctx.Keys = vec
 		ctx.Count = batch.Vecs[idx].Length()

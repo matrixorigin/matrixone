@@ -102,7 +102,7 @@ func TestIsNullScalar(t *testing.T) {
 
 func TestIsNullScalarNull(t *testing.T) {
 	procs := testutil.NewProc()
-	vecs := []*vector.Vector{testutil.MakeScalarNull(types.T_any, 0)}
+	vecs := []*vector.Vector{testutil.MakeScalarNull(types.T_any, 1)}
 	expected := []bool{true}
 
 	t.Run("test null scalar null", func(t *testing.T) {
@@ -116,8 +116,8 @@ func TestIsNullScalarNull(t *testing.T) {
 }
 
 func checkIsNullResult(t *testing.T, result *vector.Vector, expected []bool, isScalar bool) {
-	col := result.Col.([]bool)
+	col := vector.MustFixedCol[bool](result)
 
 	require.Equal(t, expected, col)
-	require.Equal(t, isScalar, result.IsScalar())
+	require.Equal(t, isScalar, result.IsConst())
 }

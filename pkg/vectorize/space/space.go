@@ -41,7 +41,7 @@ func FillSpacesNumber[T types.BuiltinNumber](originalVecCol []T, rs []string) ([
 				return nil, moerr.NewInvalidInputNoCtx("the space count is greater than max allowed value %d", MaxAllowedValue)
 			}
 		}
-		rs[i] = strings.Repeat(" ", int(ilen))
+		rs[i] = strings.Repeat(" ", ilen)
 	}
 	return rs, nil
 }

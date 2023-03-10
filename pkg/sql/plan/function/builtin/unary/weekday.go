@@ -17,52 +17,49 @@ package unary
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/weekday"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	inputValues := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func DateToWeekday(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_int64, Size: 8}
+	ivals := vector.MustFixedCol[types.Date](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]int64, 1)
-		vector.SetCol(resultVector, weekday.DateToWeekday(inputValues, resultValues))
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, int64(ivals[0].DayOfWeek2()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[int64](resultVector)
-		weekday.DateToWeekday(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[int64](rvec)
+		for i := range ivals {
+			rvals[i] = int64(ivals[i].DayOfWeek2())
+		}
+		return rvec, nil
 	}
 }
 
-func DatetimeToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func DatetimeToWeekday(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_int64, Size: 8}
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]int64, 1)
-		vector.SetCol(resultVector, weekday.DatetimeToWeekday(inputValues, resultValues))
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, int64(ivals[0].DayOfWeek2()), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[int64](resultVector)
-		weekday.DatetimeToWeekday(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[int64](rvec)
+		for i := range ivals {
+			rvals[i] = int64(ivals[i].DayOfWeek2())
+		}
+		return rvec, nil
 	}
 }

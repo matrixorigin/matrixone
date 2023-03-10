@@ -111,7 +111,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 		ana.Input(bat, isFirst)
 
 		itr := ctr.hashTable.NewIterator()
-		count := vector.Length(bat.Vecs[0])
+		count := bat.Vecs[0].Length()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := count - i
 			if n > hashmap.UnitLimit {
@@ -152,10 +152,10 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 
 		ctr.bat = batch.NewWithSize(len(bat.Vecs))
 		for i := range bat.Vecs {
-			ctr.bat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
+			ctr.bat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 		}
 
-		count := vector.Length(bat.Vecs[0])
+		count := bat.Vecs[0].Length()
 		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			oldHashGroup := ctr.hashTable.GroupCount()
