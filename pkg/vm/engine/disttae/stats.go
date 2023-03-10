@@ -56,10 +56,10 @@ func getInfoFromZoneMap(columns []int, ctx context.Context, blocks *[][]BlockMet
 				}
 
 				if compute.CompareGeneric(currentBlockMin, info.MinVal[colIdx], info.DataTypes[colIdx]) < 0 {
-					info.MinVal[i] = zonemapVal[i][0]
+					info.MinVal[colIdx] = currentBlockMin
 				}
 				if compute.CompareGeneric(currentBlockMax, info.MaxVal[colIdx], info.DataTypes[colIdx]) > 0 {
-					info.MaxVal[i] = zonemapVal[i][1]
+					info.MaxVal[colIdx] = currentBlockMax
 				}
 			}
 		}

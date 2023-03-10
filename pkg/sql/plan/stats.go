@@ -62,7 +62,7 @@ func (sc *StatsInfoMap) NeedUpdate(currentBlockNum int) bool {
 	if sc.BlockNumber == 0 || sc.BlockNumber != currentBlockNum {
 		return true
 	}
-	return false
+	return true
 }
 
 func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
@@ -101,7 +101,7 @@ func NewInfoFromZoneMap(lenCols, blockNumTotal int) *InfoFromZoneMap {
 func GetHighNDVColumns(s *StatsInfoMap, b *Binding) []int32 {
 	cols := make([]int32, 0)
 	for colName, ndv := range s.NdvMap {
-		if ndv/s.TableCnt > 0.9 {
+		if ndv/s.TableCnt > 0.99 {
 			cols = append(cols, b.FindColumn(colName))
 		}
 	}
@@ -331,13 +331,13 @@ func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64
 func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64) (ndv float64) {
 	// coefficient is 0.15 when 1 block, and 1 when many blocks.
 	coefficient := math.Pow(0.15, (1 / math.Log2(blockNumTotal*2)))
-	// very little distinctValNum, assume ndv is very low
-	if distinctValNum <= 100 || distinctValNum/blockNumTotal < 0.4 {
+	ndvRate := (distinctValNum / blockNumTotal)
+	if distinctValNum <= 100 || ndvRate < 0.4 {
+		// very little distinctValNum, assume ndv is very low
 		ndv = (distinctValNum + 2) / coefficient
 	} else {
 		// assume ndv is high
 		// ndvRate is from 0 to 1. 1 means unique key, and 0 means ndv is only 1
-		ndvRate := (distinctValNum / blockNumTotal)
 		ndv = tableCnt * ndvRate * coefficient
 		if ndv < 1 {
 			ndv = 1
