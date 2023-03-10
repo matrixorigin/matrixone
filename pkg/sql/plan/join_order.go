@@ -184,6 +184,8 @@ func (builder *QueryBuilder) swapJoinOrderByStats(onList []*plan.Expr, children 
 	//for tpch q13, always left join. will fix this in the future
 	if joinType == plan.Node_RIGHT {
 		return []int32{children[1], children[0]}, plan.Node_LEFT
+	} else if joinType == plan.Node_LEFT {
+		return children, plan.Node_LEFT
 	}
 
 	//for left and right join, only swap equal join
