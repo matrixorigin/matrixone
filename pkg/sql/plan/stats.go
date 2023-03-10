@@ -79,18 +79,20 @@ func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
 }
 
 type InfoFromZoneMap struct {
-	ValMap    []map[any]int // all distinct value in blocks zonemap
-	MinVal    []any         //minvalue of all blocks for column
-	MaxVal    []any         //maxvalue of all blocks for column
-	DataTypes []types.Type
+	ValMap         []map[any]int // all distinct value in blocks zonemap
+	MinVal         []any         //minvalue of all blocks for column
+	MaxVal         []any         //maxvalue of all blocks for column
+	DataTypes      []types.Type
+	MaybeUniqueMap []bool
 }
 
 func NewInfoFromZoneMap(lenCols, blockNumTotal int) *InfoFromZoneMap {
 	info := &InfoFromZoneMap{
-		ValMap:    make([]map[any]int, lenCols),
-		MinVal:    make([]any, lenCols),
-		MaxVal:    make([]any, lenCols),
-		DataTypes: make([]types.Type, lenCols),
+		ValMap:         make([]map[any]int, lenCols),
+		MinVal:         make([]any, lenCols),
+		MaxVal:         make([]any, lenCols),
+		DataTypes:      make([]types.Type, lenCols),
+		MaybeUniqueMap: make([]bool, lenCols),
 	}
 	for i := 0; i < lenCols; i++ {
 		info.ValMap[i] = make(map[any]int, blockNumTotal)
@@ -117,7 +119,7 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int,
 	//set info in statsInfoMap
 	for i := range columns {
 		colName := tableDef.Cols[columns[i]].Name
-		s.NdvMap[colName] = calcNdv(info.MinVal[i], info.MaxVal[i], float64(len(info.ValMap[i])), float64(blockNumTotal), tableCnt, info.DataTypes[i])
+		s.NdvMap[colName] = calcNdv(info.MinVal[i], info.MaxVal[i], float64(len(info.ValMap[i])), float64(blockNumTotal), tableCnt, info.DataTypes[i], info.MaybeUniqueMap[i])
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
 		switch info.DataTypes[i].Oid {
 		case types.T_int8:
@@ -308,13 +310,17 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 	return outcnt
 }
 
-func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64, t types.Type) float64 {
+func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64, t types.Type, maybeUnique bool) float64 {
 	ndv1 := calcNdvUsingMinMax(minVal, maxVal, t)
 	ndv2 := calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt)
 	if ndv1 <= 0 || ndv1 > tableCnt {
 		return ndv2
 	}
-	return ndv1
+	if maybeUnique {
+		return ndv1
+	} else {
+		return ndv1 / 2
+	}
 }
 
 // treat distinct val in zonemap like a sample , then estimate the ndv

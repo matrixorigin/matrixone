@@ -23,6 +23,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func maybeUnique(v1, v2 any, rows int64) bool {
+	switch value1 := v1.(type) {
+	case int8:
+		value2 := v2.(int8)
+		return int64(value2-value1+1) >= rows
+	case int16:
+		value2 := v2.(int16)
+		return int64(value2-value1+1) >= rows
+	case int32:
+		value2 := v2.(int32)
+		return int64(value2-value1+1) >= rows
+	case int64:
+		value2 := v2.(int64)
+		return value2-value1+1 >= rows
+	case uint8:
+		value2 := v2.(uint8)
+		return int64(value2-value1+1) >= rows
+	case uint16:
+		value2 := v2.(uint16)
+		return int64(value2-value1+1) >= rows
+	case uint32:
+		value2 := v2.(uint32)
+		return int64(value2-value1+1) >= rows
+	case uint64:
+		value2 := v2.(uint64)
+		return int64(value2-value1+1) >= rows
+	}
+	return true
+}
+
 // get minval , maxval, datatype from zonemap
 func getInfoFromZoneMap(columns []int, ctx context.Context, blocks *[][]BlockMeta, blockNumTotal int, tableDef *plan.TableDef) (*plan2.InfoFromZoneMap, error) {
 
@@ -43,12 +73,18 @@ func getInfoFromZoneMap(columns []int, ctx context.Context, blocks *[][]BlockMet
 					info.MinVal[i] = zonemapVal[i][0]
 					info.MaxVal[i] = zonemapVal[i][1]
 					info.DataTypes[i] = types.T(blkTypes[i]).ToType()
+					info.MaybeUniqueMap[i] = true
 				}
 			}
 
 			for colIdx := range zonemapVal {
 				currentBlockMin := zonemapVal[colIdx][0]
 				currentBlockMax := zonemapVal[colIdx][1]
+
+				if !maybeUnique(currentBlockMin, currentBlockMax, (*blocks)[i][j].Rows) {
+					info.MaybeUniqueMap[colIdx] = false
+				}
+
 				if s, ok := currentBlockMin.([]uint8); ok {
 					info.ValMap[colIdx][string(s)] = 1
 				} else {
