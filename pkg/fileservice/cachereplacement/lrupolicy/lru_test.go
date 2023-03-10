@@ -12,35 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lru
+package lrupolicy
 
-import "sync/atomic"
+import "testing"
 
-// RC represents a reference counted value that will not evict in LRU if refs is greater than 0
-type RC[T any] struct {
-	refs  int64
-	Value T
-}
-
-// NewRC creates an RC value with 0 reference
-func NewRC[T any](value T) *RC[T] {
-	return &RC[T]{
-		Value: value,
-		refs:  0,
+func BenchmarkLRUSet(b *testing.B) {
+	const capacity = 1024
+	l := New(capacity)
+	for i := 0; i < b.N; i++ {
+		l.Set(i%capacity, i, 1)
 	}
 }
 
-// IncRef increases reference count
-func (r *RC[T]) IncRef() {
-	atomic.AddInt64(&r.refs, 1)
+func BenchmarkLRUParallelSet(b *testing.B) {
+	const capacity = 1024
+	l := New(capacity)
+	b.RunParallel(func(pb *testing.PB) {
+		for i := 0; pb.Next(); i++ {
+			l.Set(i%capacity, i, 1)
+		}
+	})
 }
 
-// DecRef decreases reference count
-func (r *RC[T]) DecRef() {
-	atomic.AddInt64(&r.refs, -1)
-}
-
-// RefCount returns reference count
-func (r *RC[T]) RefCount() int64 {
-	return atomic.LoadInt64(&r.refs)
+func BenchmarkLRUParallelSetOrGet(b *testing.B) {
+	const capacity = 1024
+	l := New(capacity)
+	b.RunParallel(func(pb *testing.PB) {
+		for i := 0; pb.Next(); i++ {
+			l.Set(i%capacity, i, 1)
+			if i%2 == 0 {
+				l.Get(i % capacity)
+			}
+		}
+	})
 }

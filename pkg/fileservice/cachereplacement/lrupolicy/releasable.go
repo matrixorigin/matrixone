@@ -12,33 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package clock
+package lrupolicy
 
-// TODO: Will be implemented in a later PR : https://github.com/matrixorigin/matrixone/issues/8173
-
-type Clock struct {
+type Releasable interface {
+	Release()
 }
 
-func NewPolicy(capacity int64) *Clock {
-	return &Clock{}
+type ReleasableValue[T any] struct {
+	Value       T
+	releaseFunc func()
 }
 
-func (c *Clock) Set(key any, value any, size int64) {
-	//TODO implement me
-	panic("implement me")
+func (r ReleasableValue[T]) Release() {
+	r.releaseFunc()
 }
 
-func (c *Clock) Get(key any) (value any, size int64, ok bool) {
-	//TODO implement me
-	panic("implement me")
+func NewReleasable[T any](v T, releaseFunc func()) ReleasableValue[T] {
+	return ReleasableValue[T]{
+		Value:       v,
+		releaseFunc: releaseFunc,
+	}
 }
 
-func (c *Clock) Flush() {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (c *Clock) Size() int64 {
-	//TODO implement me
-	panic("implement me")
-}
+var _ Releasable = NewReleasable(42, func() {})

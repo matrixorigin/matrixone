@@ -16,15 +16,15 @@ package fileservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/cache_replacement"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/cache_replacement/clock"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/cache_replacement/lru"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/cachereplacement"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/cachereplacement/clockpolicy"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/cachereplacement/lrupolicy"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync/atomic"
 )
 
 type MemCache struct {
-	policy cache_replacement.Policy
+	policy cachereplacement.Policy
 	stats  *CacheStats
 	ch     chan func()
 }
@@ -51,20 +51,20 @@ func NewMemCache(opts ...Options) *MemCache {
 
 func WithLRU(capacity int64) Options {
 	return func(o *options) {
-		o.policy = lru.NewPolicy(capacity)
+		o.policy = lrupolicy.New(capacity)
 	}
 }
 
 func WithClock(capacity int64) Options {
 	return func(o *options) {
-		o.policy = clock.NewPolicy(capacity)
+		o.policy = clockpolicy.New(capacity)
 	}
 }
 
 type Options func(*options)
 
 type options struct {
-	policy cache_replacement.Policy
+	policy cachereplacement.Policy
 }
 
 func defaultOptions() options {

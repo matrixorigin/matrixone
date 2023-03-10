@@ -12,23 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lru
+package clockpolicy
 
-import (
-	"testing"
+// TODO: Will be implemented in a later PR : https://github.com/matrixorigin/matrixone/issues/8173
 
-	"github.com/stretchr/testify/assert"
-)
+type Clock struct {
+}
 
-func TestReleasable(t *testing.T) {
-	l := NewPolicy(1)
-	n := 0
+func New(capacity int64) *Clock {
+	return &Clock{}
+}
 
-	r := NewReleasable(1, func() {
-		n++
-	})
-	l.Set(1, r, 1)
+func (c *Clock) Set(key any, value any, size int64) {
+	//TODO implement me
+	panic("implement me")
+}
 
-	l.Set(2, 42, 1)
-	assert.Equal(t, 1, n)
+func (c *Clock) Get(key any) (value any, size int64, ok bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *Clock) Flush() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *Clock) Size() int64 {
+	//TODO implement me
+	panic("implement me")
 }

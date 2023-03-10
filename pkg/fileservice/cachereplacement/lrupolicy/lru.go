@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lru
+package lrupolicy
 
 import (
 	"container/list"
@@ -33,7 +33,7 @@ type lruItem struct {
 	Size  int64
 }
 
-func NewPolicy(capacity int64) *LRU {
+func New(capacity int64) *LRU {
 	return &LRU{
 		capacity: capacity,
 		evicts:   list.New(),
