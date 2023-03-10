@@ -25,7 +25,7 @@ import (
 )
 
 func Hash(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vec := vector.New(types.New(types.T_int64, 0, 0))
+	vec := vector.NewVec(types.T_int64.ToType())
 	count := vecs[0].Length()
 	keys := make([][]byte, hashmap.UnitLimit)
 	states := make([][3]uint64, hashmap.UnitLimit)
@@ -37,7 +37,7 @@ func Hash(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		encodeHashKeys(keys, vecs, i, n)
 		hashtable.BytesBatchGenHashStates(&keys[0], &states[0], n)
 		for j := 0; j < n; j++ {
-			if err := vec.Append(int64(states[j][0]), false, proc.Mp()); err != nil {
+			if err := vector.AppendFixed(vec, int64(states[j][0]), false, proc.Mp()); err != nil {
 				vec.Free(proc.Mp())
 				return nil, err
 			}
@@ -63,7 +63,7 @@ func encodeHashKeys(keys [][]byte, vecs []*vector.Vector, start, count int) {
 
 func fillStringGroupStr(keys [][]byte, vec *vector.Vector, n int, start int) {
 	area := vec.GetArea()
-	vs := vector.MustTCols[types.Varlena](vec)
+	vs := vector.MustFixedCol[types.Varlena](vec)
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
 			keys[i] = append(keys[i], byte(0))

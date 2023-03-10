@@ -27,17 +27,17 @@ import (
 
 func TestCurrentTimestamp(t *testing.T) {
 	myProc := testutil.NewProc()
-	resultVector, err := CurrentTimestamp(nil, myProc)
+	rvec, err := CurrentTimestamp(nil, myProc)
 	require.NoError(t, err)
-	resultValues := vector.MustTCols[types.Timestamp](resultVector)
-	resultStr := resultValues[0].String2(time.Local, 6)
+	rvals := vector.MustFixedCol[types.Timestamp](rvec)
+	resultStr := rvals[0].String2(time.Local, 6)
 	fmt.Println(resultStr)
 
 	inputVector0 := testutil.MakeScalarInt64(3, 4)
 	inputVectors := []*vector.Vector{inputVector0}
-	resultVector, err = CurrentTimestamp(inputVectors, myProc)
+	rvec, err = CurrentTimestamp(inputVectors, myProc)
 	require.NoError(t, err)
-	resultValues = vector.MustTCols[types.Timestamp](resultVector)
-	resultStr = resultValues[0].String2(time.Local, resultVector.Typ.Scale)
+	rvals = vector.MustFixedCol[types.Timestamp](rvec)
+	resultStr = rvals[0].String2(time.Local, rvec.GetType().Scale)
 	fmt.Println(resultStr)
 }

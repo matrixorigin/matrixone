@@ -75,9 +75,9 @@ func TestIs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := result.Col.([]bool)
+			col := vector.MustFixedCol[bool](result)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalar, result.IsScalar())
+			require.Equal(t, c.isScalar, result.IsConst())
 		})
 	}
 }
@@ -87,13 +87,14 @@ func makeIsAndIsNotTestVectors(left []bool, right bool, isScalar bool) []*vector
 	if left != nil {
 		vec[0] = testutil.MakeBoolVector(left)
 		if isScalar {
-			vec[0].MakeScalar(1)
+			vec[0].SetClass(vector.CONSTANT)
+			vec[0].SetLength(1)
 		}
 	} else {
-		vec[0] = testutil.MakeScalarNull(types.T_bool, 0)
+		vec[0] = testutil.MakeScalarNull(types.T_bool, 1)
 	}
 
-	vec[1] = testutil.MakeScalarBool(right, len(left))
+	vec[1] = testutil.MakeScalarBool(right, 1)
 
 	return vec
 }

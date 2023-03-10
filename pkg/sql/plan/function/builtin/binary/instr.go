@@ -33,23 +33,22 @@ func Instr(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, er
 	if v2.Length() > v1.Length() {
 		maxLen = v2.Length()
 	}
-	resultType := types.T_int64.ToType()
-	if v1.IsScalarNull() || v2.IsScalarNull() {
-		ret = proc.AllocConstNullVector(resultType, maxLen)
+	rtyp := types.T_int64.ToType()
+	if v1.IsConstNull() || v2.IsConstNull() {
+		ret = vector.NewConstNull(rtyp, v1.Length(), proc.Mp())
 		return
 	}
-	s1, s2 := vector.MustStrCols(v1), vector.MustStrCols(v2)
-	if v1.IsScalar() && v2.IsScalar() {
-		ret = proc.AllocScalarVector(resultType)
+	s1, s2 := vector.MustStrCol(v1), vector.MustStrCol(v2)
+	if v1.IsConst() && v2.IsConst() {
 		str, substr := s1[0], s2[0]
-		err = ret.Append(instr.Single(str, substr), false, proc.Mp())
+		ret = vector.NewConstFixed(rtyp, instr.Single(str, substr), v1.Length(), proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+	ret, err = proc.AllocVectorOfRows(rtyp, maxLen, nil)
 	if err != nil {
 		return
 	}
-	rs := vector.MustTCols[int64](ret)
-	instr.Instr(s1, s2, []*nulls.Nulls{v1.Nsp, v2.Nsp}, rs, ret.Nsp)
+	rs := vector.MustFixedCol[int64](ret)
+	instr.Instr(s1, s2, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls()}, rs, ret.GetNulls())
 	return
 }

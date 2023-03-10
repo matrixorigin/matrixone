@@ -36,17 +36,17 @@ const (
 )
 
 func And(xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[bool](xs), vector.MustTCols[bool](ys), vector.MustTCols[bool](rs)
+	xt, yt, rt := vector.MustFixedCol[bool](xs), vector.MustFixedCol[bool](ys), vector.MustFixedCol[bool](rs)
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 	//int32_t Logic_VecAnd(void *r, void *a, void  *b, uint64_t n, uint64_t *anulls, uint64_t *bnulls, uint64_t *rnulls, int32_t flag)
 	rc := C.Logic_VecAnd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(xs.Nsp)), (*C.uint64_t)(nulls.Ptr(ys.Nsp)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		(*C.uint64_t)(nulls.Ptr(xs.GetNulls())), (*C.uint64_t)(nulls.Ptr(ys.GetNulls())), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
 		return moerr.NewInternalErrorNoCtx("logical AND")
 	}
@@ -54,16 +54,16 @@ func And(xs, ys, rs *vector.Vector) error {
 }
 
 func Or(xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[bool](xs), vector.MustTCols[bool](ys), vector.MustTCols[bool](rs)
+	xt, yt, rt := vector.MustFixedCol[bool](xs), vector.MustFixedCol[bool](ys), vector.MustFixedCol[bool](rs)
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 	rc := C.Logic_VecOr(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(xs.Nsp)), (*C.uint64_t)(nulls.Ptr(ys.Nsp)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		(*C.uint64_t)(nulls.Ptr(xs.GetNulls())), (*C.uint64_t)(nulls.Ptr(ys.GetNulls())), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
 		return moerr.NewInternalErrorNoCtx("logic OR")
 	}
@@ -71,17 +71,17 @@ func Or(xs, ys, rs *vector.Vector) error {
 }
 
 func Xor(xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[bool](xs), vector.MustTCols[bool](ys), vector.MustTCols[bool](rs)
+	xt, yt, rt := vector.MustFixedCol[bool](xs), vector.MustFixedCol[bool](ys), vector.MustFixedCol[bool](rs)
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 	// int32_t Logic_VecXor(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag)
 	rc := C.Logic_VecXor(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
 		return moerr.NewInternalErrorNoCtx("logic XOR")
 	}
@@ -89,13 +89,13 @@ func Xor(xs, ys, rs *vector.Vector) error {
 }
 
 func Not(xs, rs *vector.Vector) error {
-	xt, rt := vector.MustTCols[bool](xs), vector.MustTCols[bool](rs)
+	xt, rt := vector.MustFixedCol[bool](xs), vector.MustFixedCol[bool](rs)
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
 	rc := C.Logic_VecNot(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
 		return moerr.NewInternalErrorNoCtx("logic NOT")
 	}

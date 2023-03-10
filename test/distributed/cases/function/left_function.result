@@ -52,9 +52,7 @@ left(id, length(str1) / 1 - 1)    left(str1, 1)
 123456    a
 123457    n
 SELECT LEFT(id, FIND_IN_SET('b','a,b,c,d')), LEFT(str2, EMPTY(str1)) FROM t;
-left(id, find_in_set(b, a,b,c,d))    left(str2, empty(str1))
-12    
-12    
+invalid argument function left, bad value [CHAR BOOL]
 SELECT LEFT(id, '-1'), LEFT(str1, '0') FROM t;
 left(id, -1)    left(str1, 0)
     

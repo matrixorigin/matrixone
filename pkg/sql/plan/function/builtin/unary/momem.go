@@ -22,39 +22,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func MoMemUsage(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if len(vectors) != 1 {
+func MoMemUsage(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if len(ivecs) != 1 {
 		return nil, moerr.NewInvalidInput(proc.Ctx, "no mpool name")
 	}
-	inputVector := vectors[0]
-	resultType := types.T_varchar.ToType()
-	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	inputVector := ivecs[0]
+	rtyp := types.T_varchar.ToType()
+	ivals := vector.MustStrCol(inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
 
-		memUsage := mpool.ReportMemUsage(inputValues[0])
-		return vector.NewConstString(resultType, inputVector.Length(), memUsage, proc.Mp()), nil
+		memUsage := mpool.ReportMemUsage(ivals[0])
+		return vector.NewConstBytes(rtyp, []byte(memUsage), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		panic(moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))
 	}
 }
 
-func moMemUsageCmd(cmd string, vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if len(vectors) != 1 {
+func moMemUsageCmd(cmd string, ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if len(ivecs) != 1 {
 		return nil, moerr.NewInvalidInput(proc.Ctx, "no mpool name")
 	}
-	inputVector := vectors[0]
-	resultType := types.T_varchar.ToType()
-	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	inputVector := ivecs[0]
+	rtyp := types.T_varchar.ToType()
+	ivals := vector.MustStrCol(inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
 
-		ok := mpool.MPoolControl(inputValues[0], cmd)
-		return vector.NewConstString(resultType, inputVector.Length(), ok, proc.Mp()), nil
+		ok := mpool.MPoolControl(ivals[0], cmd)
+		return vector.NewConstBytes(rtyp, []byte(ok), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		panic(moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))
 	}

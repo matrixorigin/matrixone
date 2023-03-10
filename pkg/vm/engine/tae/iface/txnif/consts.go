@@ -48,14 +48,6 @@ const (
 // TxnStatusRollbacked
 )
 
-type PKDedupSkipScope uint8
-
-const (
-	PKDedupSkipNone PKDedupSkipScope = iota
-	PKDedupSkipWorkSpace
-	PKDedupSkipSnapshot
-)
-
 func TxnStrState(state TxnState) string {
 	switch state {
 	case TxnStateActive:

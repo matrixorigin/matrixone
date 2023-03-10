@@ -7601,6 +7601,10 @@ decimal_type:
             yylex.Error("Display width for double out of range (max = 255)")
             return 1
         }
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for double out of range (max = 30)")
+            return 1
+        }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
             yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
                 return 1
@@ -7622,6 +7626,10 @@ decimal_type:
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for float out of range (max = 255)")
+            return 1
+        }
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for float out of range (max = 30)")
             return 1
         }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {

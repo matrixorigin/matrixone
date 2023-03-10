@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -584,6 +583,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			TableDef:     t.InsertCtx.TableDef,
 			ClusterTable: t.InsertCtx.ClusterTable,
 			ParentIdx:    t.InsertCtx.ParentIdx,
+			IdxIdx:       t.InsertCtx.IdxIdx,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
@@ -706,6 +706,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			ColList: colList,
 			Expr:    t.Cond,
 			Types:   convertToPlanTypes(t.Typs),
+		}
+	case *loopmark.Argument:
+		in.MarkJoin = &pipeline.MarkJoin{
+			Expr:   t.Cond,
+			Types:  convertToPlanTypes(t.Typs),
+			Result: t.Result,
 		}
 	case *offset.Argument:
 		in.Offset = t.Offset
@@ -1286,7 +1292,7 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	err := types.Decode(data, bat)
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
-		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)
+		bat.Vecs[i], err = bat.Vecs[i].Dup(mp)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				bat.Vecs[j].Free(mp)

@@ -28,6 +28,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -459,7 +460,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 
 	arg.Args = makeInt64List(1, 3, 1)
 
-	bat := makeGenerateSeriesBatch()
+	bat := makeGenerateSeriesBatch(proc)
 	proc.SetInputBatch(bat)
 	end, err = generateSeriesCall(0, proc, arg)
 	require.Nil(t, err)
@@ -500,10 +501,9 @@ func TestGenerateSeriesCall(t *testing.T) {
 
 }
 
-func makeGenerateSeriesBatch() *batch.Batch {
+func makeGenerateSeriesBatch(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-	bat.Vecs[0].Col = make([]int64, 1)
+	bat.Vecs[0] = vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
 	bat.InitZsOne(1)
 	return bat
 }

@@ -100,7 +100,7 @@ func TestDateDiff(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]int64)[0])
+			require.Equal(t, c.want, vector.MustFixedCol[int64](date)[0])
 		})
 	}
 }
@@ -111,7 +111,7 @@ func makeDateDiffVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.
 	firstDate, _ := types.ParseDateCast(firstStr)
 	secondDate, _ := types.ParseDateCast(secondStr)
 
-	vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, firstDate, mp)
-	vec[1] = vector.NewConstFixed(types.T_date.ToType(), 1, secondDate, mp)
+	vec[0] = vector.NewConstFixed(types.T_date.ToType(), firstDate, 1, mp)
+	vec[1] = vector.NewConstFixed(types.T_date.ToType(), secondDate, 1, mp)
 	return vec
 }
