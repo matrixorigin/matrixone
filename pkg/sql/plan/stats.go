@@ -598,6 +598,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 		if node.ObjRef != nil {
 			expr, num := HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess())
 			node.Stats = builder.compCtx.Stats(node.ObjRef, expr)
+
 			//if there is non monotonic filters
 			if num > 0 {
 				node.Stats.Selectivity *= 0.15

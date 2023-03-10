@@ -1773,6 +1773,12 @@ func (tcc *TxnCompilerContext) GetBuildingAlterView() (bool, string, string) {
 	return tcc.buildAlterView, tcc.dbOfView, tcc.nameOfView
 }
 
+func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.ses.statsCache
+}
+
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
 	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
 }

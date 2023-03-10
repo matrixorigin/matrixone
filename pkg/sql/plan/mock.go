@@ -748,6 +748,10 @@ func (m *MockCompilerContext) Stats(obj *ObjectRef, e *Expr) *Stats {
 	return m.stats[obj.ObjName]
 }
 
+func (m *MockCompilerContext) GetStatsCache() *StatsCache {
+	return nil
+}
+
 func (m *MockCompilerContext) GetAccountId() uint32 {
 	return 0
 }
