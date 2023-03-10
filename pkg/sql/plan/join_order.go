@@ -217,9 +217,9 @@ func (builder *QueryBuilder) swapJoinOrderByStatsUsedForInner(children []int32, 
 	return builder.swapJoinOrderByStats([]*plan.Expr{}, children, joinType)
 }
 
-func (builder *QueryBuilder) swapJoinOrderByStatsUsedForLeftAndRight(onList []*plan.Expr, children []int32, joinType plan.Node_JoinFlag) ([]int32, plan.Node_JoinFlag) {
-	return builder.swapJoinOrderByStats(onList, children, joinType)
-}
+//func (builder *QueryBuilder) swapJoinOrderByStatsUsedForLeftAndRight(onList []*plan.Expr, children []int32, joinType plan.Node_JoinFlag) ([]int32, plan.Node_JoinFlag) {
+//	return builder.swapJoinOrderByStats(onList, children, joinType)
+//}
 
 func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
@@ -230,11 +230,11 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				node.Children[i] = builder.determineJoinOrder(child)
 			}
 		}
-		if node.NodeType == plan.Node_JOIN {
-			//swap join order for left & right join, inner join is not here
-			//revert for tpch q13, will fix in the future
-			//node.Children, node.JoinType = builder.swapJoinOrderByStatsUsedForLeftAndRight(node.OnList, node.Children, node.JoinType)
-		}
+		//if node.NodeType == plan.Node_JOIN {
+		//swap join order for left & right join, inner join is not here
+		//revert for tpch q13, will fix in the future
+		//node.Children, node.JoinType = builder.swapJoinOrderByStatsUsedForLeftAndRight(node.OnList, node.Children, node.JoinType)
+		//}
 		return nodeID
 	}
 
