@@ -136,7 +136,6 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int,
 			s.MaxValMap[colName] = float64(info.MaxVal[i].(types.Date))
 		}
 	}
-	return
 }
 
 func MakeAllColumns(tableDef *plan.TableDef) []int {
