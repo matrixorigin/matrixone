@@ -2388,7 +2388,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		cols, _ := table.TableColumns(ctx)
 		fixColumnName(cols, e)
 	}
-	stats, _ = table.Stats(ctx, e)
+	stats, _ = table.Stats(ctx, e, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
 	return stats
 }
 

@@ -70,7 +70,7 @@ func getInfoFromZoneMap(columns []int, ctx context.Context, blocks *[][]BlockMet
 
 // calculate the stats for scan node.
 // we need to get the zonemap from cn, and eval the filters with zonemap
-func CalcStats(ctx context.Context, blocks *[][]BlockMeta, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process, sortKeyName string) (*plan.Stats, error) {
+func CalcStats(ctx context.Context, blocks *[][]BlockMeta, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process, sortKeyName string, s *plan2.StatsInfoMap) (*plan.Stats, error) {
 	var blockNumNeed, blockNumTotal int
 	var tableCnt, cost int64
 	exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
@@ -90,8 +90,6 @@ func CalcStats(ctx context.Context, blocks *[][]BlockMeta, expr *plan.Expr, tabl
 	stats.BlockNum = int32(blockNumNeed)
 	stats.TableCnt = float64(tableCnt)
 	stats.Cost = float64(cost)
-
-	s := plan2.GetStatsInfoMapFromCache(tableDef.TblId)
 
 	columns = plan2.MakeAllColumns(tableDef)
 	if s.NeedUpdate(blockNumTotal) {

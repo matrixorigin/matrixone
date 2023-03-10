@@ -33,9 +33,12 @@ import (
 
 var _ engine.Relation = new(txnTable)
 
-func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, error) {
-	switch tbl.tableId {
-	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
+	if !plan2.NeedStats(tbl.getTableDef()) {
+		return plan2.DefaultStats(), nil
+	}
+	s, ok := statsInfoMap.(*plan2.StatsInfoMap)
+	if !ok {
 		return plan2.DefaultStats(), nil
 	}
 
@@ -46,7 +49,7 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr) (*plan.Stats, e
 		}
 	}
 	if tbl.meta != nil {
-		return CalcStats(ctx, &tbl.meta.blocks, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName())
+		return CalcStats(ctx, &tbl.meta.blocks, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName(), s)
 	} else {
 		// no meta means not flushed yet, very small table
 		return plan2.DefaultStats(), nil

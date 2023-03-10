@@ -16,12 +16,15 @@ package plan
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"sort"
+	"strings"
 )
 
 // stats cache is small, no need to use LRU for now
@@ -60,16 +63,15 @@ func (sc *StatsInfoMap) NeedUpdate(currentBlockNum int) bool {
 	return false
 }
 
-func GetStatsInfoMapFromCache(tableID uint64) *StatsInfoMap {
-	var cache *StatsCache
-	if cache == nil {
+func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
+	if sc == nil {
 		return NewStatsInfoMap()
 	}
-	if s, ok := (cache.cachePool)[tableID]; ok {
+	if s, ok := (sc.cachePool)[tableID]; ok {
 		return s
 	} else {
 		s = NewStatsInfoMap()
-		(cache.cachePool)[tableID] = s
+		(sc.cachePool)[tableID] = s
 		return s
 	}
 }
@@ -95,6 +97,9 @@ func NewInfoFromZoneMap(lenCols, blockNumTotal int) *InfoFromZoneMap {
 }
 
 func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) {
+
+	logutil.Infof("need to update statsCache for table %v", tableDef.Name)
+	s.BlockNumber = blockNumTotal
 	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
 	//set info in statsInfoMap
 	for i := range columns {
@@ -612,6 +617,21 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 			node.Stats = DefaultStats()
 		}
 	}
+}
+
+func NeedStats(tableDef *TableDef) bool {
+	switch tableDef.TblId {
+	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+		return false
+	}
+	switch tableDef.Name {
+	case "sys_async_task", "sys_cron_task":
+		return false
+	}
+	if strings.HasPrefix(tableDef.Name, "mo_") {
+		return false
+	}
+	return true
 }
 
 func DefaultStats() *plan.Stats {
