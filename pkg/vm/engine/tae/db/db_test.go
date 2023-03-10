@@ -665,21 +665,16 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 	{
 		schema.Name = "tb-1"
 		txn, _, rel := createRelationNoCommit(t, db, "db", schema, false)
-		var pks []containers.Vector
-		var metaLocs []string
-		pks = append(pks, bats[0].Vecs[2])
-		pks = append(pks, bats[1].Vecs[2])
-		metaLocs = append(metaLocs, metaLoc1)
-		metaLocs = append(metaLocs, metaLoc2)
-		err := rel.AddBlksWithMetaLoc(pks, "", metaLocs, 0)
-		assert.Nil(t, err)
-		//local deduplication check
-		err = rel.Append(bats[2])
+		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
+		err := rel.AddBlksWithMetaLoc(nil, []string{metaLoc1})
 		assert.Nil(t, err)
 		err = rel.Append(bats[0])
-		assert.NotNil(t, err)
+		assert.Nil(t, err)
+
+		err = rel.AddBlksWithMetaLoc(nil, []string{metaLoc2})
+		assert.Nil(t, err)
 		err = rel.Append(bats[1])
-		assert.NotNil(t, err)
+		assert.Nil(t, err)
 		//err = rel.RangeDeleteLocal(start, end)
 		//assert.Nil(t, err)
 		//assert.True(t, rel.IsLocalDeleted(start, end))
@@ -687,16 +682,20 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		assert.Nil(t, err)
 
 		//"tb-1" table now has one committed non-appendable segment which contains
-		//two non-appendable block, and one committed appendable segment which contains one appendable block.
+		//two non-appendable block, and one committed appendable segment which contains two appendable block.
 
-		//do deduplication check
+		//do deduplication check against sanpshot data.
 		txn, rel = getRelation(t, 0, db, "db", schema.Name)
+		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
 		err = rel.Append(bats[0])
 		assert.NotNil(t, err)
 		err = rel.Append(bats[1])
 		assert.NotNil(t, err)
-		err = rel.Append(bats[3])
-		assert.Nil(t, err)
+
+		err = rel.AddBlksWithMetaLoc(nil, []string{metaLoc1, metaLoc2})
+		assert.NotNil(t, err)
+
+		//check blk count.
 		cntOfAblk := 0
 		cntOfblk := 0
 		forEachBlock(rel, func(blk handle.Block) (err error) {
@@ -727,6 +726,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		assert.True(t, cntOfblk == 2)
 		assert.True(t, cntOfAblk == 2)
 		assert.Nil(t, txn.Commit())
+
 		//check count of committed segments.
 		cntOfAseg := 0
 		cntOfseg := 0

@@ -182,6 +182,7 @@ const (
 
 type LocationKey struct{}
 
+// writeReq responds to entry
 type WriteReq struct {
 	Type         EntryType
 	DatabaseId   uint64
