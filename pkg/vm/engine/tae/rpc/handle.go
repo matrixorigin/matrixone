@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"os"
 	"sync"
 	"syscall"
@@ -396,24 +395,30 @@ func (h *Handle) startLoadJobs(
 	req *db.WriteReq,
 ) (err error) {
 	var locations []string
+	var columnTypes []types.Type
+	var columnNames []string
 	var isNull []bool
 	var jobIds []string
 	var columnIdx int
 	if req.Type == db.EntryInsert {
-		//for loading ZM index of primary key
+		//for loading primary keys of blocks
 		locations = append(locations, req.MetaLocs...)
+		columnTypes = append(columnTypes, req.Schema.GetSingleSortKey().Type)
+		columnNames = append(columnNames, req.Schema.GetSingleSortKey().Name)
 		columnIdx = req.Schema.GetSingleSortKeyIdx()
 		isNull = append(isNull, false)
 		req.Jobs = make([]*tasks.Job, len(req.MetaLocs))
 		req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
 		for i := range req.MetaLocs {
 			jobIds = append(jobIds,
-				fmt.Sprintf("load-zm-%s", req.MetaLocs[i]))
+				fmt.Sprintf("load-primarykey-%s", req.MetaLocs[i]))
 		}
 	} else {
 		//for loading deleted rowid.
 		locations = append(locations, req.DeltaLocs...)
+		columnTypes = append(columnTypes, types.T_Rowid.ToType())
 		columnIdx = 0
+		columnNames = append(columnNames, catalog.Row_ID)
 		isNull = append(isNull, false)
 		req.Jobs = make([]*tasks.Job, len(req.DeltaLocs))
 		req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
@@ -440,42 +445,29 @@ func (h *Handle) startLoadJobs(
 				}
 				//reader, err := blockio.NewReader(ctx,
 				//	h.eng.GetTAE(ctx).Fs, req.MetaLocs[i])
-				_, id, _, _, err := blockio.DecodeLocation(loc)
+				reader, err := blockio.NewReader(ctx,
+					h.eng.GetTAE(ctx).Fs, loc)
 				if err != nil {
 					jobR.Err = err
 					return
 				}
-				reader, err := blockio.NewObjectReader(
-					h.eng.GetTAE(ctx).Fs.Service, loc)
+				meta, err := reader.ReadMeta(nil)
 				if err != nil {
 					jobR.Err = err
 					return
 				}
-				if req.Type == db.EntryDelete {
-					bat, err := reader.LoadColumns(
-						ctx,
-						[]uint16{uint16(columnIdx)},
-						[]uint32{id},
-						nil,
-					)
-					if err != nil {
-						jobR.Err = err
-						return
-					}
-					jobR.Res = containers.NewVectorWithSharedMemory(bat[0].Vecs[0], isNull[0])
-					return
-				}
-				zmIndex, err := reader.LoadZoneMaps(
-					ctx,
-					[]uint16{uint16(columnIdx)},
-					[]uint32{id},
-					nil,
+				bat, err := reader.LoadBlkColumnsByMetaAndIdx(
+					columnTypes,
+					columnNames,
+					isNull,
+					meta,
+					columnIdx,
 				)
 				if err != nil {
 					jobR.Err = err
 					return
 				}
-				jobR.Res = zmIndex[0][columnIdx]
+				jobR.Res = bat.Vecs[0]
 				return
 			},
 		)
@@ -497,13 +489,43 @@ func (h *Handle) EvaluateTxnRequest(
 	for _, e := range txnCtx.reqs {
 		if r, ok := e.(*db.WriteReq); ok {
 			if r.FileName != "" {
-				if r.Type == db.EntryDelete {
-					//start to load deleted row ids
-					err = h.startLoadJobs(ctx, meta, r)
-					if err != nil {
-						return
+				if r.Type == db.EntryInsert {
+					v, ok := txnCtx.toCreate[r.TableID]
+					if !ok {
+						txn, err := h.eng.GetOrCreateTxnWithMeta(
+							nil,
+							meta.GetID(),
+							types.TimestampToTS(meta.GetSnapshotTS()))
+						if err != nil {
+							return err
+						}
+						dbase, err := h.eng.GetDatabaseByID(ctx, r.DatabaseId, txn)
+						if err != nil {
+							return err
+						}
+						tb, err := dbase.GetRelationByID(ctx, r.TableID)
+						if err != nil {
+							return err
+						}
+						r.Schema = tb.GetSchema(ctx)
+					} else {
+						r.Schema = v
 					}
+					if r.Schema.HasPK() {
+						//start to load primary keys
+						err = h.startLoadJobs(ctx, meta, r)
+						if err != nil {
+							return
+						}
+					}
+					continue
 				}
+				//start to load deleted row ids
+				err = h.startLoadJobs(ctx, meta, r)
+				if err != nil {
+					return
+				}
+
 			}
 		}
 	}
@@ -811,7 +833,6 @@ func (h *Handle) HandleWrite(
 	if err != nil {
 		return
 	}
-	txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
 
 	logutil.Infof("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
 		req.Type, req.TableID,
@@ -836,10 +857,23 @@ func (h *Handle) HandleWrite(
 	if req.Type == db.EntryInsert {
 		//Add blocks which had been bulk-loaded into S3 into table.
 		if req.FileName != "" {
+			//wait for loading primary key done.
+			var pkVecs []containers.Vector
+			for i, job := range req.Jobs {
+				req.JobRes[i] = job.WaitDone()
+				if req.JobRes[i].Err != nil {
+					return req.JobRes[i].Err
+				}
+				pkVecs = append(
+					pkVecs,
+					req.JobRes[i].Res.(containers.Vector))
+			}
 			err = tb.AddBlksWithMetaLoc(
 				ctx,
-				nil,
-				req.MetaLocs)
+				pkVecs,
+				req.FileName,
+				req.MetaLocs,
+				0)
 			return
 		}
 		//Appends a batch of data into table.
@@ -855,12 +889,11 @@ func (h *Handle) HandleWrite(
 				return req.JobRes[i].Err
 			}
 			rowidVec := req.JobRes[i].Res.(containers.Vector)
-			err = tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(rowidVec))
-			if err != nil {
-				rowidVec.Close()
-				return
-			}
-			rowidVec.Close()
+			//FIXME::??
+			//defer taeVec.Close()
+			//TODO::check whether rowid is generated by DN in debug mode.
+			// IsGeneratedByDN(rowidVec)
+			tb.DeleteByPhyAddrKeys(ctx, containers.UnmarshalToMoVec(rowidVec))
 		}
 		return
 	}

@@ -17,7 +17,6 @@ package indexwrapper
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"path"
 	"testing"
 
@@ -69,7 +68,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	interIdx := uint16(0)
 	// var visibility *roaring.Bitmap
 
-	writer := blockio.NewZMWriter()
+	writer := NewZMWriter()
 	err = writer.Init(objectWriter, blocks[0], cType, pkColIdx, interIdx)
 	require.NoError(t, err)
 
@@ -77,7 +76,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	err = writer.AddValues(keys)
 	require.NoError(t, err)
 
-	err = writer.Finalize()
+	_, err = writer.Finalize()
 	require.NoError(t, err)
 	t.Log(writer.String())
 

@@ -16,6 +16,7 @@ package tables
 
 import (
 	"bytes"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -28,10 +29,8 @@ var _ NodeT = (*persistedNode)(nil)
 
 type persistedNode struct {
 	common.RefHelper
-	block *baseBlock
-	//ZM and BF index for primary key column.
+	block   *baseBlock
 	pkIndex indexwrapper.Index
-	//ZM and BF index for all columns.
 	indexes map[int]indexwrapper.Index
 }
 
@@ -64,6 +63,7 @@ func (node *persistedNode) init() {
 	for i := range schema.ColDefs {
 		index := indexwrapper.NewImmutableIndex()
 		if err := index.ReadFrom(
+			node.block.bufMgr,
 			node.block.fs,
 			node.block.meta.AsCommonID(),
 			node.block.meta.GetMetaLoc(),
