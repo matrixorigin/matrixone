@@ -42,6 +42,7 @@ type PartitionState struct {
 	Rows         *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
 	Blocks       *btree.BTreeG[BlockEntry]
 	PrimaryIndex *btree.BTreeG[*PrimaryIndexEntry]
+	Checkpoints  []string
 }
 
 // RowEntry represents a version of a row
@@ -134,10 +135,13 @@ func NewPartitionState() *PartitionState {
 }
 
 func (p *PartitionState) Copy() *PartitionState {
+	checkpoints := make([]string, len(p.Checkpoints))
+	copy(checkpoints, p.Checkpoints)
 	return &PartitionState{
 		Rows:         p.Rows.Copy(),
 		Blocks:       p.Blocks.Copy(),
 		PrimaryIndex: p.PrimaryIndex.Copy(),
+		Checkpoints:  checkpoints,
 	}
 }
 

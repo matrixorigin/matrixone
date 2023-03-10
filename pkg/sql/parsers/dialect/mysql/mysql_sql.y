@@ -8744,6 +8744,7 @@ non_reserved_keyword:
 |   INCREMENT
 |   CYCLE
 |   MINVALUE
+|	PROCESSLIST
 
 func_not_keyword:
     DATE_ADD
