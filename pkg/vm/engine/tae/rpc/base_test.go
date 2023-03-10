@@ -367,17 +367,17 @@ func genCreateDatabaseTuple(
 		}
 		idx = catalog.MO_DATABASE_DAT_NAME_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx]) // datname
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(name), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(name), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_DATABASE_DAT_CATALOG_NAME_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx]) // dat_catalog_name
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(catalog.MO_CATALOG), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(catalog.MO_CATALOG), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_DATABASE_CREATESQL_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx])                      // dat_createsql
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(sql), false, m); err != nil { // TODO
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(sql), false, m); err != nil { // TODO
 			return nil, err
 		}
 		idx = catalog.MO_DATABASE_OWNER_IDX
@@ -414,7 +414,7 @@ func genCreateColumnTuple(
 	{
 		idx := catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_uniq_name
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(""), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ACCOUNT_ID_IDX
@@ -429,7 +429,7 @@ func genCreateColumnTuple(
 		}
 		idx = catalog.MO_COLUMNS_ATT_DATABASE_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_database
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(col.databaseName), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(col.databaseName), false, m); err != nil {
 			return nil, err
 		}
 
@@ -441,18 +441,18 @@ func genCreateColumnTuple(
 
 		idx = catalog.MO_COLUMNS_ATT_RELNAME_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_relname_id
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(col.tableName), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(col.tableName), false, m); err != nil {
 			return nil, err
 		}
 		//idx = catalog.MO_COLUMNS_ATTNUM_IDX
 		idx = catalog.MO_COLUMNS_ATTNAME_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // attname
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(col.name), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(col.name), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATTTYP_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_relname
-		if err := vector.AppendFixed(bat.Vecs[idx], col.typ, false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], col.typ, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATTNUM_IDX
@@ -477,7 +477,7 @@ func genCreateColumnTuple(
 		}
 		idx = catalog.MO_COLUMNS_ATT_DEFAULT_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_default
-		if err := vector.AppendFixed(bat.Vecs[idx], col.defaultExpr, false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], col.defaultExpr, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATTISDROPPED_IDX
@@ -487,7 +487,7 @@ func genCreateColumnTuple(
 		}
 		idx = catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_constraint_type
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(col.constraintType), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(col.constraintType), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_IS_UNSIGNED_IDX
@@ -502,7 +502,7 @@ func genCreateColumnTuple(
 		}
 		idx = catalog.MO_COLUMNS_ATT_COMMENT_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_comment
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(col.comment), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(col.comment), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATT_IS_HIDDEN_IDX
@@ -518,7 +518,7 @@ func genCreateColumnTuple(
 		}
 		idx = catalog.MO_COLUMNS_ATT_UPDATE_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_update
-		if err := vector.AppendFixed(bat.Vecs[idx], col.updateExpr, false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], col.updateExpr, false, m); err != nil {
 			return nil, err
 		}
 
@@ -642,12 +642,12 @@ func genCreateTableTuple(
 		}
 		idx = catalog.MO_TABLES_REL_NAME_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // relname
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(name), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(name), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_RELDATABASE_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // reldatabase
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(databaseName), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(databaseName), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_RELDATABASE_ID_IDX
@@ -657,22 +657,22 @@ func genCreateTableTuple(
 		}
 		idx = catalog.MO_TABLES_RELPERSISTENCE_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // relpersistence
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(""), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_RELKIND_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // relkind
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(""), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_COMMENT_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // rel_comment
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(comment), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(comment), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_CREATESQL_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // rel_createsql
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(sql), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(sql), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_CREATED_TIME_IDX
@@ -697,17 +697,17 @@ func genCreateTableTuple(
 		}
 		idx = catalog.MO_TABLES_PARTITIONED_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partition
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(""), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_VIEWDEF_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // viewdef
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(""), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_CONSTRAINT_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // constraint
-		if err := vector.AppendFixed(bat.Vecs[idx], []byte(""), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
 

@@ -336,7 +336,7 @@ var (
 		if err != nil {
 			panic(err)
 		}
-		return makeScalar(dec128Val, length, decimal64Type)
+		return makeScalar(dec128Val, length, decimal128Type)
 	}
 )
 

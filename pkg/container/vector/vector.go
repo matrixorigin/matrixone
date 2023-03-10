@@ -1384,60 +1384,6 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 	return fmt.Sprintf("%v-%s", col, v.nsp)
 }
 
-func GetInitConstVal(typ types.Type) any {
-	switch typ.Oid {
-	case types.T_bool:
-		return false
-	case types.T_int8:
-		return int8(0)
-	case types.T_int16:
-		return int16(0)
-	case types.T_int32:
-		return int32(0)
-	case types.T_int64:
-		return int64(0)
-	case types.T_uint8:
-		return uint8(0)
-	case types.T_uint16:
-		return uint16(0)
-	case types.T_uint32:
-		return uint32(0)
-	case types.T_uint64:
-		return uint64(0)
-	case types.T_float32:
-		return float32(0)
-	case types.T_float64:
-		return float64(0)
-	case types.T_date:
-		return types.Date(0)
-	case types.T_time:
-		return types.Time(0)
-	case types.T_datetime:
-		return types.Datetime(0)
-	case types.T_timestamp:
-		return types.Timestamp(0)
-	case types.T_decimal64:
-		return types.Decimal64{}
-	case types.T_decimal128:
-		return types.Decimal128{}
-	case types.T_uuid:
-		var emptyUuid [16]byte
-		return emptyUuid[:]
-	case types.T_TS:
-		var emptyTs [types.TxnTsSize]byte
-		return emptyTs[:]
-	case types.T_Rowid:
-		var emptyRowid [types.RowidSize]byte
-		return emptyRowid[:]
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_json, types.T_text:
-		var emptyVarlena [types.VarlenaSize]byte
-		return emptyVarlena[:]
-	default:
-		//T_any T_star T_tuple T_interval
-		return int64(0)
-	}
-}
-
 func CopyConst(toVec, fromVec *Vector, length int, mp *mpool.MPool) error {
 	typ := fromVec.GetType()
 	switch typ.Oid {
@@ -1522,4 +1468,20 @@ func CopyConst(toVec, fromVec *Vector, length int, mp *mpool.MPool) error {
 	}
 
 	return nil
+}
+
+// Window just returns a window out of input and no deep copy.
+func Window(v *Vector, start, end int, w *Vector) *Vector {
+	w.typ = v.typ
+	w.nsp = nulls.Range(v.nsp, uint64(start), uint64(end), uint64(start), w.nsp)
+	length := (end - start) * v.typ.TypeSize()
+	w.data = make([]byte, length)
+	copy(w.data, v.data[start*v.typ.TypeSize():end*v.typ.TypeSize()])
+	w.length = end - start
+	w.setupColFromData()
+	if v.typ.IsString() {
+		w.area = make([]byte, len(v.area))
+		copy(w.area, v.area)
+	}
+	return w
 }

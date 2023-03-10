@@ -30,9 +30,7 @@ func TestVectorGobEncoding(t *testing.T) {
 	//})
 	//vec.Col = &types.Bytes{}
 
-	vec := vector.NewVec(types.Type{
-		Oid: types.T_int16,
-	})
+	vec := vector.NewVec(types.T_int16.ToType())
 
 	buf := new(bytes.Buffer)
 	err := gob.NewEncoder(buf).Encode(vec)
@@ -42,6 +40,6 @@ func TestVectorGobEncoding(t *testing.T) {
 	err = gob.NewDecoder(buf).Decode(&v)
 	assert.Nil(t, err)
 
-	ok := (vector.MustFixedCol[int16](&v) != nil)
+	ok := (len(vector.MustFixedCol[int16](&v)) == 0)
 	assert.True(t, ok)
 }

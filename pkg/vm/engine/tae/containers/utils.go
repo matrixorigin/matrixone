@@ -252,7 +252,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 			newBat := batch.New(true, bat.Attrs)
 			for j := 0; j < len(bat.Vecs); j++ {
 				window := movec.NewVec(*bat.Vecs[j].GetType())
-				//movec.Window(bat.Vecs[j], i*rows, (i+1)*rows, window)
+				movec.Window(bat.Vecs[j], i*rows, (i+1)*rows, window)
 				newBat.Vecs[j] = window
 			}
 			bats = append(bats, newBat)
@@ -281,7 +281,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 		newBat := batch.New(true, bat.Attrs)
 		for j := 0; j < len(bat.Vecs); j++ {
 			window := movec.NewVec(*bat.Vecs[j].GetType())
-			//movec.Window(bat.Vecs[j], start, start+row, window)
+			movec.Window(bat.Vecs[j], start, start+row, window)
 			newBat.Vecs[j] = window
 		}
 		start += row
