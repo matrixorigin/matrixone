@@ -95,6 +95,7 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 			originSize: uint32(originSize),
 		}
 		block.(*Block).columns[i].(*ColumnBlock).meta.alg = compress.Lz4
+		block.(*Block).columns[i].(*ColumnBlock).meta.typ = uint8(vec.GetType().Oid)
 	}
 	return block, nil
 }
