@@ -421,7 +421,7 @@ import (
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
 %type <str> insert_column
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_opt accounts_list
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 
 %type <functionName> func_name
@@ -781,17 +781,16 @@ mo_dump_stmt:
 
 
 load_data_stmt:
-    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name accounts_opt tail_param_opt parallel_opt
+    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt parallel_opt
     {
         $$ = &tree.Load{
             Local: $3,
             Param: $4,
             DuplicateHandling: $5,
             Table: $8,
-            Accounts: $9,
         }
-        $$.(*tree.Load).Param.Tail = $10
-        $$.(*tree.Load).Param.Parallel = $11
+        $$.(*tree.Load).Param.Tail = $9
+        $$.(*tree.Load).Param.Parallel = $10
     }
 
 load_extension_stmt:
@@ -3131,31 +3130,11 @@ insert_stmt:
         $$ = ins
     }
 
-accounts_opt:
-    {
-        $$ = nil
-    }
-|   ACCOUNTS '(' accounts_list ')'
-    {
-        $$ = $3
-    }
-
-accounts_list:
-    account_name
-    {
-        $$ = tree.IdentifierList{tree.Identifier($1)}
-    }
-|   accounts_list ',' account_name
-    {
-        $$ = append($1, tree.Identifier($3))
-    }
-
 insert_data:
-    accounts_opt VALUES values_list
+    VALUES values_list
     {
-        vc := tree.NewValuesClause($3)
+        vc := tree.NewValuesClause($2)
         $$ = &tree.Insert{
-            Accounts: $1,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -3165,54 +3144,43 @@ insert_data:
             Rows: $1,
         }
     }
-|   ACCOUNTS '(' accounts_list ')' select_stmt
-   {
-        $$ = &tree.Insert{
-            Accounts: $3,
-	    Rows: $5,
-        }
-    }
-|   '(' insert_column_list ')' accounts_opt VALUES values_list
-    {
-        vc := tree.NewValuesClause($6)
-        $$ = &tree.Insert{
-            Columns: $2,
-            Accounts: $4,
-            Rows: tree.NewSelect(vc, nil, nil),
-        }
-    }
-|   '(' ')' accounts_opt VALUES values_list
+|   '(' insert_column_list ')' VALUES values_list
     {
         vc := tree.NewValuesClause($5)
         $$ = &tree.Insert{
-            Accounts: $3,
+            Columns: $2,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
-|   '(' insert_column_list ')' accounts_opt select_stmt
+|   '(' ')' VALUES values_list
+    {
+        vc := tree.NewValuesClause($4)
+        $$ = &tree.Insert{
+            Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   '(' insert_column_list ')' select_stmt
     {
         $$ = &tree.Insert{
             Columns: $2,
-            Accounts: $4,
-            Rows: $5,
+            Rows: $4,
         }
     }
-|   accounts_opt SET set_value_list
+|   SET set_value_list
     {
-        if $3 == nil {
+        if $2 == nil {
             yylex.Error("the set list of insert can not be empty")
             return 1
         }
         var identList tree.IdentifierList
         var valueList tree.Exprs
-        for _, a := range $3 {
+        for _, a := range $2 {
             identList = append(identList, a.Column)
             valueList = append(valueList, a.Expr)
         }
         vc := tree.NewValuesClause([]tree.Exprs{valueList})
         $$ = &tree.Insert{
             Columns: identList,
-            Accounts: $1,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
