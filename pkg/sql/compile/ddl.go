@@ -1399,14 +1399,14 @@ func valueCheckOut[T constraints.Integer](maxValue, minValue, startNum T, ctx co
 
 func getValue[T constraints.Integer](minus bool, num any) T {
 	var v T
-	switch num.(type) {
+	switch num := num.(type) {
 	case uint64:
-		v = T(num.(uint64))
+		v = T(num)
 	case int64:
 		if minus {
-			v = -T(num.(int64))
+			v = -T(num)
 		} else {
-			v = T(num.(int64))
+			v = T(num)
 		}
 	}
 	return v

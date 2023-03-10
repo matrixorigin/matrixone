@@ -65,9 +65,6 @@ func (node *CreateSequence) Format(ctx *FmtCtx) {
 func (node *CreateSequence) GetStatementType() string { return "Create Sequence" }
 func (node *CreateSequence) GetQueryType() string     { return QueryTypeDDL }
 
-func makeValue(minus bool, num any) {
-}
-
 type IncrementByOption struct {
 	Minus bool
 	Num   any
@@ -109,15 +106,15 @@ func (node *StartWithOption) Format(ctx *FmtCtx) {
 }
 
 func formatAny(minus bool, num any, ctx *FmtCtx) {
-	switch num.(type) {
+	switch num := num.(type) {
 	case uint64:
-		ctx.WriteString(fmt.Sprintf("%v ", num.(uint64)))
+		ctx.WriteString(fmt.Sprintf("%v ", num))
 	case int64:
 		var v int64
 		if minus {
-			v = -num.(int64)
+			v = -num
 		} else {
-			v = num.(int64)
+			v = num
 		}
 		ctx.WriteString(fmt.Sprintf("%v ", v))
 	}
