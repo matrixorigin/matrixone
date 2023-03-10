@@ -28,8 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -97,26 +99,28 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//write taeBats[0], taeBats[1] two blocks into file service
 	id := 1
 	objName1 := fmt.Sprintf("%d.seg", id)
-	writer, err := blockio.NewBlockWriter(fs, objName1)
-	assert.Nil(t, err)
-	writer.SetPrimaryKey(1)
+	writer := blockio.NewWriter(context.Background(),
+		objectio.NewObjectFS(fs, "data"), objName1)
 	for i, bat := range taeBats {
 		if i == 2 {
 			break
 		}
-		_, err := writer.WriteBlock(bat)
+		block, err := writer.WriteBlock(bat)
+		assert.Nil(t, err)
+		err = jobs.BuildBlockIndex(writer.GetWriter(), block,
+			schema, bat, true)
 		assert.Nil(t, err)
 	}
-	blocks, _, err := writer.Sync(context.Background())
+	blocks, err := writer.Sync()
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
-	metaLoc1, err := blockio.EncodeLocation(
+	metaLoc1, err := blockio.EncodeMetaLocWithObject(
 		blocks[0].GetExtent(),
 		uint32(taeBats[0].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	metaLoc2, err := blockio.EncodeLocation(
+	metaLoc2, err := blockio.EncodeMetaLocWithObject(
 		blocks[1].GetExtent(),
 		uint32(taeBats[1].Vecs[0].Length()),
 		blocks,
@@ -126,15 +130,17 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//write taeBats[3] into file service
 	id += 1
 	objName2 := fmt.Sprintf("%d.seg", id)
-	writer, err = blockio.NewBlockWriter(fs, objName2)
+	writer = blockio.NewWriter(context.Background(),
+		objectio.NewObjectFS(fs, "data"), objName2)
+	block, err := writer.WriteBlock(taeBats[3])
 	assert.Nil(t, err)
-	writer.SetPrimaryKey(1)
-	_, err = writer.WriteBlock(taeBats[3])
+	err = jobs.BuildBlockIndex(writer.GetWriter(),
+		block, schema, taeBats[3], true)
 	assert.Nil(t, err)
-	blocks, _, err = writer.Sync(context.Background())
+	blocks, err = writer.Sync()
 	assert.Equal(t, 1, len(blocks))
 	assert.Nil(t, err)
-	metaLoc3, err := blockio.EncodeLocation(
+	metaLoc3, err := blockio.EncodeMetaLocWithObject(
 		blocks[0].GetExtent(),
 		uint32(taeBats[3].Vecs[0].Length()),
 		blocks,
@@ -291,36 +297,36 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//write deleted row ids into FS
 	id += 1
 	objName3 := fmt.Sprintf("%d.del", id)
-	writer, err = blockio.NewBlockWriter(fs, objName3)
-	assert.Nil(t, err)
+	writer = blockio.NewWriter(context.Background(),
+		objectio.NewObjectFS(fs, "data"), objName3)
 	for _, bat := range hideBats {
 		taeBat := toTAEBatchWithSharedMemory(schema, bat)
 		//defer taeBat.Close()
-		_, err := writer.WriteBlockWithOutIndex(taeBat)
+		_, err := writer.WriteBlock(taeBat)
 		assert.Nil(t, err)
 	}
-	blocks, _, err = writer.Sync(context.Background())
+	blocks, err = writer.Sync()
 	assert.Nil(t, err)
 	assert.Equal(t, len(hideBats), len(blocks))
-	delLoc1, err := blockio.EncodeLocation(
+	delLoc1, err := blockio.EncodeMetaLocWithObject(
 		blocks[0].GetExtent(),
 		uint32(hideBats[0].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	delLoc2, err := blockio.EncodeLocation(
+	delLoc2, err := blockio.EncodeMetaLocWithObject(
 		blocks[1].GetExtent(),
 		uint32(hideBats[1].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	delLoc3, err := blockio.EncodeLocation(
+	delLoc3, err := blockio.EncodeMetaLocWithObject(
 		blocks[2].GetExtent(),
 		uint32(hideBats[2].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	delLoc4, err := blockio.EncodeLocation(
+	delLoc4, err := blockio.EncodeMetaLocWithObject(
 		blocks[3].GetExtent(),
 		uint32(hideBats[3].Vecs[0].Length()),
 		blocks,

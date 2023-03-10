@@ -584,6 +584,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			TableDef:     t.InsertCtx.TableDef,
 			ClusterTable: t.InsertCtx.ClusterTable,
 			ParentIdx:    t.InsertCtx.ParentIdx,
+			IdxIdx:       t.InsertCtx.IdxIdx,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{

@@ -73,12 +73,18 @@ func (m *MemCache) Read(
 			Size:   entry.Size,
 		}
 		obj, size, ok := m.lru.Get(key)
+		updateCounters(ctx, func(c *Counter) {
+			atomic.AddInt64(&c.MemCacheRead, 1)
+		})
 		if ok {
 			vector.Entries[i].Object = obj
 			vector.Entries[i].ObjectSize = size
 			vector.Entries[i].done = true
 			numHit++
 			m.cacheHit()
+			updateCounters(ctx, func(c *Counter) {
+				atomic.AddInt64(&c.MemCacheHit, 1)
+			})
 		}
 	}
 

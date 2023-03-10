@@ -204,6 +204,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range tbl.dnList {
+
 		blocks := tbl.meta.blocks[i]
 		blks := make([]BlockMeta, 0, len(blocks))
 		deletes := make(map[uint64][]int)

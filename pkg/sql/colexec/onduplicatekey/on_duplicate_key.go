@@ -106,6 +106,14 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	oldRowIdVec := vector.MustTCols[types.Rowid](originBatch.Vecs[rowIdIdx])
 	delRowIdVec := vector.New(types.T_Rowid.ToType())
 
+	var oldUniqueRowIdVec []types.Rowid
+	var delUniqueRowIdVec *vector.Vector
+	if len(insertArg.IdxIdx) > 0 {
+		// for now, only support one unique constraint
+		oldUniqueRowIdVec = vector.MustTCols[types.Rowid](originBatch.Vecs[insertArg.IdxIdx[0]])
+		delUniqueRowIdVec = vector.New(types.T_Rowid.ToType())
+	}
+
 	for i := 0; i < originBatch.Length(); i++ {
 		newBatch, err := fetchOneRowAsBatch(i, originBatch, proc, attrs)
 		if err != nil {
@@ -159,6 +167,13 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					return nil, err
 				}
 
+				if len(insertArg.IdxIdx) > 0 {
+					err := delUniqueRowIdVec.Append(oldUniqueRowIdVec[i], false, proc.GetMPool())
+					if err != nil {
+						return nil, err
+					}
+				}
+
 				newBatch, err := updateOldBatch(newBatch, i, originBatch, updateExpr, proc, columnCount, attrs)
 				if err != nil {
 					return nil, err
@@ -183,10 +198,23 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		deleteBatch.SetZs(delRowIdVec.Length(), proc.Mp())
 		deleteBatch.SetVector(0, delRowIdVec)
 
+		// delete origin rows
 		err := insertArg.Source.Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
 		if err != nil {
 			deleteBatch.Clean(proc.Mp())
 			return nil, err
+		}
+
+		// delete unique table rows
+		if len(insertArg.IdxIdx) > 0 {
+			deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID})
+			deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
+			deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
+			err := insertArg.UniqueSource[0].Delete(proc.Ctx, deleteUniqueBatch, catalog.Row_ID)
+			if err != nil {
+				deleteUniqueBatch.Clean(proc.Mp())
+				return nil, err
+			}
 		}
 	}
 	return insertBatch, nil

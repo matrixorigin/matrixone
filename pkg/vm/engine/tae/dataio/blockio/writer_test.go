@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -64,14 +65,15 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(c)
 	assert.Nil(t, err)
-	writer, _ := NewBlockWriter(service, name)
+	fs := objectio.NewObjectFS(service, "local")
+	writer := NewWriter(context.Background(), fs, name)
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 4
-	_, err = writer.WriteBatch(bat)
+	_, err = writer.WriteBlockAndZoneMap(bat, idxs)
 	assert.Nil(t, err)
-	blocks, _, err := writer.Sync(context.Background())
+	blocks, err := writer.Sync()
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
 	fd := blocks[0]
@@ -80,7 +82,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	zm := index.NewZoneMap(bat.Vecs[0].Typ)
 	colZoneMap := col.GetMeta().GetZoneMap()
 
-	err = zm.Unmarshal(colZoneMap.GetData().([]byte))
+	err = zm.Unmarshal(colZoneMap.GetData())
 	require.NoError(t, err)
 	res := zm.Contains(int32(500))
 	require.True(t, res)

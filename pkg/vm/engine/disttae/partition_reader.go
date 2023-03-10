@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -42,7 +42,7 @@ type PartitionReader struct {
 	// the following attributes are used to support cn2s3
 	procMPool       *mpool.MPool
 	s3FileService   fileservice.FileService
-	s3BlockReader   dataio.Reader
+	s3BlockReader   objectio.Reader
 	extendId2s3File map[string]int
 
 	// used to get idx of sepcified col
@@ -106,8 +106,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		var bat *batch.Batch
 		if p.blockBatch.hasRows() || p.inserts[0].Attrs[0] == catalog.BlockMeta_MetaLoc {
 			var err error
-			//var ivec *fileservice.IOVector
-			var bats []*batch.Batch
+			var ivec *fileservice.IOVector
 			// read block
 			// These blocks may have been written to s3 before the transaction was committed if the transaction is huge, but note that these blocks are only invisible to other transactions
 			if !p.blockBatch.hasRows() {
@@ -117,26 +116,32 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			metaLoc := p.blockBatch.read()
 			name := strings.Split(metaLoc, ":")[0]
 			if name != p.currentFileName {
-				p.s3BlockReader, err = blockio.NewObjectReader(p.s3FileService, metaLoc)
+				p.s3BlockReader, err = objectio.NewObjectReader(name, p.s3FileService)
 				p.extendId2s3File[name] = 0
 				p.currentFileName = name
 				if err != nil {
 					return nil, err
 				}
 			}
-			_, _, extent, _, _ := blockio.DecodeLocation(metaLoc)
+			_, extent, _ := blockio.DecodeMetaLoc(metaLoc)
 			for _, name := range colNames {
 				if name == catalog.Row_ID {
 					return nil, moerr.NewInternalError(ctx, "The current version does not support modifying the data read from s3 within a transaction")
 				}
 			}
-			bats, err = p.s3BlockReader.LoadColumns(context.Background(), p.getIdxs(colNames), []uint32{extent.Id()}, p.procMPool)
+			ivec, err = p.s3BlockReader.Read(ctx, extent, p.getIdxs(colNames), p.procMPool)
 			if err != nil {
 				return nil, err
 			}
-			rbat := bats[0]
+			rbat := batch.NewWithSize(len(colNames))
 			rbat.SetAttributes(colNames)
 			rbat.Cnt = 1
+			for i, e := range ivec.Entries {
+				rbat.Vecs[i] = vector.New(p.typsMap[colNames[i]])
+				if err = rbat.Vecs[i].Read(e.Object.([]byte)); err != nil {
+					return nil, err
+				}
+			}
 			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
 			return rbat, nil
 		} else {

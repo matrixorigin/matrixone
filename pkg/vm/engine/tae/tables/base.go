@@ -170,24 +170,25 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if location == "" {
 		return
 	}
-	reader, err := blockio.NewObjectReader(blk.fs.Service, location)
+	reader, err := blockio.NewReader(context.Background(), blk.fs, location)
 	if err != nil {
 		return
 	}
-	_, id, _, _, err := blockio.DecodeLocation(location)
+	meta, err := reader.ReadMeta(nil)
 	if err != nil {
 		return
 	}
-	bat, err := reader.LoadColumns(
-		context.Background(),
-		[]uint16{uint16(len(blk.meta.GetSchema().NameIndex))},
-		[]uint32{id},
-		nil,
+	bat, err := reader.LoadBlkColumnsByMetaAndIdx(
+		[]types.Type{types.T_TS.ToType()},
+		[]string{catalog.AttrCommitTs},
+		[]bool{false},
+		meta,
+		len(blk.meta.GetSchema().NameIndex),
 	)
 	if err != nil {
 		return
 	}
-	vec = containers.NewVectorWithSharedMemory(bat[0].Vecs[0], false)
+	vec = bat.Vecs[0]
 	return
 }
 
@@ -294,13 +295,6 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	blk.RLock()
 	defer blk.RUnlock()
 	err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
-	if view.BaseView.DeleteMask != nil {
-		for _, colIdx := range colIdxs {
-			vec := data.Vecs[colIdx]
-			view.SetData(colIdx, vec.CloneWindow(0, vec.Length(), nil))
-			vec.Close()
-		}
-	}
 	return
 }
 
@@ -334,10 +328,6 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	blk.RLock()
 	defer blk.RUnlock()
 	err = blk.FillInMemoryDeletesLocked(view.BaseView, blk.RWMutex)
-	if view.BaseView.DeleteMask != nil {
-		view.SetData(vec.CloneWindow(0, vec.Length(), nil))
-		vec.Close()
-	}
 	return
 }
 
