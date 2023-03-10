@@ -114,11 +114,11 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			}
 			if bat.Vecs[0] == nil {
 				for i, vec := range bat0.Vecs {
-					bat.Vecs[i] = vector.New(vec.GetType())
+					bat.Vecs[i] = vector.NewVec(*vec.GetType())
 				}
 			}
 			for i, vec := range bat0.Vecs {
-				if err := vector.UnionOne(bat.Vecs[i], vec, 0, m); err != nil {
+				if err := bat.Vecs[i].UnionOne(vec, 0, m); err != nil {
 					bat.Clean(m)
 					bat0.Clean(m)
 					return err
@@ -174,11 +174,11 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			}
 			if bat.Vecs[0] == nil {
 				for i, vec := range bat0.Vecs {
-					bat.Vecs[i] = vector.New(vec.GetType())
+					bat.Vecs[i] = vector.NewVec(*vec.GetType())
 				}
 			}
 			for i, vec := range bat0.Vecs {
-				if err := vector.UnionOne(bat.Vecs[i], vec, 0, m); err != nil {
+				if err := bat.Vecs[i].UnionOne(vec, 0, m); err != nil {
 					bat.Clean(m)
 					bat0.Clean(m)
 					return err
@@ -234,11 +234,11 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			}
 			if bat.Vecs[0] == nil {
 				for i, vec := range bat0.Vecs {
-					bat.Vecs[i] = vector.New(vec.GetType())
+					bat.Vecs[i] = vector.NewVec(*vec.GetType())
 				}
 			}
 			for i, vec := range bat0.Vecs {
-				if err := vector.UnionOne(bat.Vecs[i], vec, 0, m); err != nil {
+				if err := bat.Vecs[i].UnionOne(vec, 0, m); err != nil {
 					bat.Clean(m)
 					bat0.Clean(m)
 					return err
@@ -275,17 +275,23 @@ func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
 	return parts
 }
 
-func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64,
-	tbl *txnTable) error {
+func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64, tbl *txnTable) error {
 	parts := e.getPartitions(databaseId, tableId)
-	for _, part := range parts {
-		part.Lock()
-		ckptList := part.ckptList
-		part.ckptList = nil
-		part.Unlock()
-		state := part.state.Load().Copy()
 
-		for _, ckpt := range ckptList {
+	for _, part := range parts {
+
+		select {
+		case <-part.lock:
+			defer func() {
+				part.lock <- struct{}{}
+			}()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		state, doneMutate := part.MutateState()
+
+		for _, ckpt := range state.Checkpoints {
 			entries, err := logtail.LoadCheckpointEntries(
 				ctx,
 				ckpt,
@@ -303,7 +309,12 @@ func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64,
 				}
 			}
 		}
+		state.Checkpoints = state.Checkpoints[:0]
+
+		doneMutate()
+
 	}
+
 	return nil
 }
 

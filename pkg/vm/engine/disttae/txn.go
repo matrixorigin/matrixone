@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -114,9 +116,9 @@ func (txn *Transaction) WriteBatch(
 	bat.Cnt = 1
 	if typ == INSERT {
 		len := bat.Length()
-		vec := vector.New(types.New(types.T_Rowid, 0, 0))
+		vec := vector.NewVec(types.T_Rowid.ToType())
 		for i := 0; i < len; i++ {
-			if err := vec.Append(txn.genRowId(), false,
+			if err := vector.AppendFixed(vec, txn.genRowId(), false,
 				txn.proc.Mp()); err != nil {
 				return err
 			}
@@ -193,7 +195,7 @@ func (txn *Transaction) checkPrimaryKey(
 			if len(entries) > 0 {
 				return moerr.NewDuplicateEntry(
 					txn.proc.Ctx,
-					common.TypeStringValue(bat.Vecs[idx].Typ, tuple[idx].Value),
+					common.TypeStringValue(*bat.Vecs[idx].GetType(), tuple[idx].Value),
 					bat.Attrs[idx],
 				)
 			}
@@ -262,7 +264,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	}()
 
 	mp := make(map[types.Rowid]uint8)
-	rowids := vector.MustTCols[types.Rowid](bat.GetVector(0))
+	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
 	for _, rowid := range rowids {
 		mp[rowid] = 0
 		// update workspace
@@ -277,7 +279,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		for j, e := range txn.writes[i] {
 			sels = sels[:0]
 			if e.tableId == tableId && e.databaseId == databaseId {
-				vs := vector.MustTCols[types.Rowid](e.bat.GetVector(0))
+				vs := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
 				for k, v := range vs {
 					if _, ok := mp[v]; !ok {
 						sels = append(sels, int64(k))
@@ -375,6 +377,47 @@ func blockUnmarshal(data []byte) BlockMeta {
 
 	types.Decode(data, &meta)
 	return meta
+}
+
+// write a block to s3
+func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileService) ([]objectio.BlockObject, error) {
+	// 1. write bat
+	accountId, _, _ := getAccessInfo(ctx)
+	s3FileName, err := getNewBlockName(accountId)
+	if err != nil {
+		return nil, err
+	}
+	writer, err := objectio.NewObjectWriter(s3FileName, fs)
+	if err != nil {
+		return nil, err
+	}
+	fd, err := writer.Write(bat)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. write index (index and zonemap)
+	for i, vec := range bat.Vecs {
+		bloomFilter, zoneMap, err := getIndexDataFromVec(uint16(i), vec)
+		if err != nil {
+			return nil, err
+		}
+		if bloomFilter != nil {
+			err = writer.WriteIndex(fd, bloomFilter)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if zoneMap != nil {
+			err = writer.WriteIndex(fd, zoneMap)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// 3. get return
+	return writer.WriteEnd(ctx)
 }
 
 func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef,

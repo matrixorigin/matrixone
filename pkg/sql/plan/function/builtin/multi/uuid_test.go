@@ -33,7 +33,7 @@ func TestUUID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	uuids := vector.GetStrVectorValues(res)
+	uuids := vector.MustFixedCol[types.Uuid](res)
 
 	for i := 0; i < 5; i++ {
 		for j := 0; j < 5; j++ {
@@ -55,7 +55,7 @@ func TestUUID2(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	uuids := vector.GetStrVectorValues(res)
+	uuids := vector.MustFixedCol[types.Uuid](res)
 
 	require.Equal(t, len(uuids), 1)
 	t.Log(uuids[0])

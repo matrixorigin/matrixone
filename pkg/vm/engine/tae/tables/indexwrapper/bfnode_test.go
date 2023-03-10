@@ -17,7 +17,6 @@ package indexwrapper
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"path"
 	"testing"
 
@@ -34,7 +33,13 @@ import (
 
 func TestStaticFilterIndex(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	//bufManager := buffer.NewNodeManager(1024*1024, nil)
 	var err error
+	//var res bool
+	//var exist bool
+	//var ans *roaring.Bitmap
+
+	// var res bool
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
 	id := 1
@@ -58,7 +63,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	colIdx := uint16(0)
 	interIdx := uint16(0)
 
-	writer := blockio.NewBFWriter()
+	writer := NewBFWriter()
 	err = writer.Init(objectWriter, block, cType, colIdx, interIdx)
 	require.NoError(t, err)
 
@@ -66,9 +71,27 @@ func TestStaticFilterIndex(t *testing.T) {
 	err = writer.AddValues(keys)
 	require.NoError(t, err)
 
-	err = writer.Finalize()
+	_, err = writer.Finalize()
 	require.NoError(t, err)
 	blocks, err := objectWriter.WriteEnd(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
+
+	/*reader := NewBFReader(bufManager, file, new(common.ID))
+
+	res, err = reader.MayContainsKey(int32(500))
+	require.NoError(t, err)
+	require.True(t, res)
+
+	res, err = reader.MayContainsKey(int32(2000))
+	require.NoError(t, err)
+	require.False(t, res)
+
+	query := containers.MockVector2(typ, 1000, 1500)
+	exist, ans, err = reader.MayContainsAnyKeys(query, nil)
+	require.NoError(t, err)
+	require.True(t, ans.GetCardinality() < uint64(10))
+	require.True(t, exist)*/
+
+	//t.Log(bufManager.String())
 }

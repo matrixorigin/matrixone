@@ -15,8 +15,8 @@
 package objectio
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/pierrec/lz4"
 )
 
@@ -35,18 +35,18 @@ type IndexData interface {
 	GetIdx() uint16
 }
 
-type ZoneMapUnmarshalFunc = func(buf []byte, t types.Type) (any, error)
-
 type ZoneMap struct {
-	idx           uint16
-	data          any
-	unmarshalFunc ZoneMapUnmarshalFunc
+	idx uint16
+	buf []byte
 }
 
-func NewZoneMap(idx uint16, data any) (IndexData, error) {
+func NewZoneMap(idx uint16, buf []byte) (IndexData, error) {
+	if len(buf) != ZoneMapMinSize+ZoneMapMaxSize {
+		return nil, moerr.NewInternalErrorNoCtx("object io: New ZoneMap failed")
+	}
 	zoneMap := &ZoneMap{
-		idx:  idx,
-		data: data,
+		idx: idx,
+		buf: buf,
 	}
 	return zoneMap, nil
 }
@@ -61,30 +61,21 @@ func (z *ZoneMap) Write(_ *ObjectWriter, block *Block) error {
 	return err
 }
 
-func (z *ZoneMap) GetData() any {
-	return z.data
-}
-
-func (z *ZoneMap) Unmarshal(buf []byte, t types.Type) (err error) {
-	if z.unmarshalFunc == nil {
-		z.data = buf
-		return err
-	}
-	z.data, err = z.unmarshalFunc(buf, t)
-	return err
+func (z *ZoneMap) GetData() []byte {
+	return z.buf
 }
 
 type BloomFilter struct {
-	idx  uint16
-	alg  uint8
-	data any
+	idx uint16
+	alg uint8
+	buf []byte
 }
 
-func NewBloomFilter(idx uint16, alg uint8, data any) IndexData {
+func NewBloomFilter(idx uint16, alg uint8, buf []byte) IndexData {
 	bloomFilter := &BloomFilter{
-		idx:  idx,
-		alg:  alg,
-		data: data,
+		idx: idx,
+		alg: alg,
+		buf: buf,
 	}
 	return bloomFilter
 }
@@ -93,15 +84,14 @@ func (b *BloomFilter) GetIdx() uint16 {
 	return b.idx
 }
 
-func (b *BloomFilter) GetData() any {
-	return b.data
+func (b *BloomFilter) GetData() []byte {
+	return b.buf
 }
 
 func (b *BloomFilter) Write(writer *ObjectWriter, block *Block) error {
 	var err error
-	dataLen := len(b.data.([]byte))
-	data := make([]byte, lz4.CompressBlockBound(dataLen))
-	if data, err = compress.Compress(b.data.([]byte), data, compress.Lz4); err != nil {
+	data := make([]byte, lz4.CompressBlockBound(len(b.buf)))
+	if data, err = compress.Compress(b.buf, data, compress.Lz4); err != nil {
 		return err
 	}
 	offset, length, err := writer.buffer.Write(data)
@@ -110,6 +100,6 @@ func (b *BloomFilter) Write(writer *ObjectWriter, block *Block) error {
 	}
 	block.columns[b.idx].(*ColumnBlock).meta.bloomFilter.offset = uint32(offset)
 	block.columns[b.idx].(*ColumnBlock).meta.bloomFilter.length = uint32(length)
-	block.columns[b.idx].(*ColumnBlock).meta.bloomFilter.originSize = uint32(dataLen)
+	block.columns[b.idx].(*ColumnBlock).meta.bloomFilter.originSize = uint32(len(b.buf))
 	return err
 }
