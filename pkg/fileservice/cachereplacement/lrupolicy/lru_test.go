@@ -33,6 +33,38 @@ func TestLRUReleasable(t *testing.T) {
 	assert.Equal(t, 1, n)
 }
 
+func TestLRURefCount(t *testing.T) {
+	l := New(1)
+
+	r := cachereplacement.NewRC(42)
+	r.IncRef()
+	l.Set(1, r, 1)
+	_, ok := l.kv[1]
+	assert.True(t, ok)
+
+	l.Set(2, 42, 1)
+	_, ok = l.kv[1]
+	assert.True(t, ok)
+	_, ok = l.kv[2]
+	assert.False(t, ok)
+
+	r.DecRef()
+	l.Set(2, 42, 1)
+	_, ok = l.kv[1]
+	assert.False(t, ok)
+	_, ok = l.kv[2]
+	assert.True(t, ok)
+
+	r2 := cachereplacement.NewRC(42)
+	r2.IncRef()
+	l.Set(3, r2, 1)
+	_, ok = l.kv[3]
+	assert.True(t, ok)
+	_, ok = l.kv[2]
+	assert.False(t, ok)
+
+}
+
 func BenchmarkLRUSet(b *testing.B) {
 	const capacity = 1024
 	l := New(capacity)
