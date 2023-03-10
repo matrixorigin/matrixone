@@ -20,9 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -59,7 +58,11 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		return false, err
 	}
 	// read meta's meta
-	reader, err := blockio.NewFileReader(proc.FileService, path)
+	reader, err := objectio.NewObjectReader(path, proc.FileService)
+	if err != nil {
+		return false, err
+	}
+	bs, err := reader.ReadAllMeta(proc.Ctx, e.Size, proc.Mp())
 	if err != nil {
 		return false, err
 	}
@@ -72,13 +75,19 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		}
 	}
 	// read meta's data
-	bats, err := reader.LoadAllColumns(proc.Ctx, idxs, e.Size, common.DefaultAllocator)
+	iov, err := reader.Read(proc.Ctx, bs[0].GetExtent(), idxs, proc.Mp())
 	if err != nil {
 		return false, err
 	}
-	rbat = bats[0]
+	rbat = batch.NewWithSize(len(idxs))
 	rbat.SetAttributes(catalog.MetaColNames)
 	rbat.Cnt = 1
+	for i, e := range iov.Entries {
+		rbat.Vecs[i] = vector.New(catalog.MetaColTypes[idxs[i]])
+		if err = rbat.Vecs[i].Read(e.Object.([]byte)); err != nil {
+			return false, err
+		}
+	}
 	rbat.InitZsOne(1)
 	proc.SetInputBatch(rbat)
 	return false, nil

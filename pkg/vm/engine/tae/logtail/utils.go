@@ -15,12 +15,7 @@
 package logtail
 
 import (
-	"context"
 	"fmt"
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -33,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
@@ -443,79 +439,23 @@ func (data *CheckpointData) PrintData() {
 }
 
 func (data *CheckpointData) WriteTo(
-	writer *blockio.BlockWriter) (blks []objectio.BlockObject, err error) {
+	writer *blockio.Writer) (blks []objectio.BlockObject, err error) {
 	for _, bat := range data.bats {
-		mobat := batch.New(true, bat.Attrs)
-		mobat.Vecs = containers.UnmarshalToMoVecs(bat.Vecs)
-		if _, err = writer.WriteBatchWithOutIndex(mobat); err != nil {
+		if _, err = writer.WriteBlock(bat); err != nil {
 			return
 		}
 	}
-	blks, _, err = writer.Sync(context.Background())
+	blks, err = writer.Sync()
 	return
-}
-
-func LoadBlkColumnsByMeta(
-	cxt context.Context,
-	colTypes []types.Type,
-	colNames []string,
-	nullables []bool,
-	block objectio.BlockObject,
-	reader dataio.Reader) (*containers.Batch, error) {
-	bat := containers.NewBatch()
-	if block.GetExtent().End() == 0 {
-		return bat, nil
-	}
-	idxs := make([]uint16, len(colNames))
-	for i := range colNames {
-		idxs[i] = uint16(i)
-	}
-	ioResult, err := reader.LoadColumns(cxt, idxs, []uint32{block.GetID()}, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	for i, idx := range idxs {
-		pkgVec := ioResult[0].Vecs[i]
-		var vec containers.Vector
-		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(colTypes[i], nullables[i])
-		} else {
-			vec = containers.NewVectorWithSharedMemory(pkgVec, nullables[i])
-		}
-		bat.AddVector(colNames[idx], vec)
-		bat.Vecs[i] = vec
-
-	}
-	return bat, nil
-}
-
-func BlkColumnByMetaLoadJob(
-	cxt context.Context,
-	colTypes []types.Type,
-	colNames []string,
-	nullables []bool,
-	block objectio.BlockObject,
-	reader dataio.Reader,
-) *tasks.Job {
-	exec := func(_ context.Context) (result *tasks.JobResult) {
-		bat, err := LoadBlkColumnsByMeta(cxt, colTypes, colNames, nullables, block, reader)
-		return &tasks.JobResult{
-			Err: err,
-			Res: bat,
-		}
-	}
-	return tasks.NewJob(uuid.NewString(), cxt, exec)
 }
 
 // TODO:
 // There need a global io pool
 func (data *CheckpointData) ReadFrom(
-	ctx context.Context,
-	reader dataio.Reader,
+	reader *blockio.Reader,
 	scheduler tasks.JobScheduler,
 	m *mpool.MPool) (err error) {
-	metas, err := reader.LoadBlocksMeta(ctx, m)
+	metas, err := reader.ReadMetas(m)
 	if err != nil {
 		return
 	}
@@ -528,13 +468,11 @@ func (data *CheckpointData) ReadFrom(
 	jobs := make([]*tasks.Job, MaxIDX)
 
 	for idx, item := range checkpointDataRefer {
-		job := BlkColumnByMetaLoadJob(
-			ctx,
+		job := reader.BlkColumnByMetaLoadJob(
 			item.types,
 			item.attrs,
 			item.nullables,
 			metas[idx],
-			reader,
 		)
 		if err = scheduler.Schedule(job); err != nil {
 			break

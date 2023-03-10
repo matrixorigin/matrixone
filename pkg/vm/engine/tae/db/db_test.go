@@ -224,7 +224,6 @@ func TestAppend4(t *testing.T) {
 }
 
 func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
-	t.Skip("fsdfsdf")
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*(uint32(schema.SegmentMaxBlocks)+1)-1))
 	defer bat.Close()
 	bats := bat.Split(4)
@@ -292,13 +291,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 	assert.NoError(t, txn.Commit())
 
 	// t.Log(rel.GetMeta().(*catalog.TableEntry).PPString(common.PPL1, 0, ""))
-	txn, err = tae.StartTxn(nil)
-	assert.NoError(t, err)
-	db, err := txn.GetDatabase(defaultTestDB)
-	assert.NoError(t, err)
-	_, err = db.DropRelationByName(schema.Name)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	dropRelation(t, tae, defaultTestDB, schema.Name)
 }
 
 func TestCRUD(t *testing.T) {
@@ -389,13 +382,12 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		name := blockio.EncodeObjectName()
-		writer, err := blockio.NewBlockWriter(dataBlk.GetFs().Service, name)
-		assert.Nil(t, err)
+		writer := blockio.NewWriter(context.Background(), dataBlk.GetFs(), name)
 		_, err = writer.WriteBlock(bat)
 		assert.Nil(t, err)
-		blocks, _, err := writer.Sync(context.Background())
+		blocks, err := writer.Sync()
 		assert.Nil(t, err)
-		metaLoc, err := blockio.EncodeLocation(
+		metaLoc, err := blockio.EncodeMetaLocWithObject(
 			blocks[0].GetExtent(),
 			uint32(bat.Length()),
 			blocks)
@@ -4034,66 +4026,65 @@ func TestBlockRead(t *testing.T) {
 	columns := make([]string, 0)
 	colIdxs := make([]uint16, 0)
 	colTyps := make([]types.Type, 0)
+	colNulls := make([]bool, 0)
 	defs := schema.ColDefs[:]
 	rand.Shuffle(len(defs), func(i, j int) { defs[i], defs[j] = defs[j], defs[i] })
 	for _, col := range defs {
 		columns = append(columns, col.Name)
 		colIdxs = append(colIdxs, uint16(col.Idx))
 		colTyps = append(colTyps, col.Type)
+		colNulls = append(colNulls, col.NullAbility)
 	}
 	t.Log("read columns: ", columns)
 	fs := tae.DB.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
-		context.Background(), info, colIdxs, colTyps,
+		context.Background(), info, len(schema.ColDefs),
+		columns, colIdxs, colTyps, colNulls,
 		beforeDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b1.Close()
+	assert.Equal(t, columns, b1.Attrs)
 	assert.Equal(t, len(columns), len(b1.Vecs))
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
 	b2, err := blockio.BlockReadInner(
-		context.Background(), info, colIdxs, colTyps,
+		context.Background(), info, len(schema.ColDefs),
+		columns, colIdxs, colTyps, colNulls,
 		afterFirstDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b2.Close()
+	assert.Equal(t, columns, b2.Attrs)
+	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 19, b2.Vecs[0].Length())
 	b3, err := blockio.BlockReadInner(
-		context.Background(), info, colIdxs, colTyps,
+		context.Background(), info, len(schema.ColDefs),
+		columns, colIdxs, colTyps, colNulls,
 		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b3.Close()
+	assert.Equal(t, columns, b2.Attrs)
 	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 16, b3.Vecs[0].Length())
 
 	// read rowid column only
 	b4, err := blockio.BlockReadInner(
-		context.Background(), info,
+		context.Background(), info, len(schema.ColDefs),
+		[]string{catalog.AttrRowID},
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
+		[]bool{false},
 		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b4.Close()
+	assert.Equal(t, []string{catalog.AttrRowID}, b4.Attrs)
 	assert.Equal(t, 1, len(b4.Vecs))
 	assert.Equal(t, 16, b4.Vecs[0].Length())
-
-	// read rowid column only
-	info.EntryState = false
-	b5, err := blockio.BlockReadInner(
-		context.Background(), info,
-		[]uint16{2},
-		[]types.Type{types.T_Rowid.ToType()},
-		afterSecondDel, fs, pool,
-	)
-	assert.NoError(t, err)
-	defer b5.Close()
-	assert.Equal(t, 1, len(b5.Vecs))
-	assert.Equal(t, 16, b5.Vecs[0].Length())
 }
 
 func TestCompactDeltaBlk(t *testing.T) {

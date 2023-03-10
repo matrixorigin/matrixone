@@ -45,8 +45,9 @@ type TAEWriter struct {
 	filename     string
 	fs           fileservice.FileService
 	//writer       objectio.Writer
-	writer *blockio.BlockWriter
-	rows   []*table.Row
+	objectFS *objectio.ObjectFS
+	writer   *blockio.Writer
+	rows     []*table.Row
 }
 
 func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePath string, fs fileservice.FileService) *TAEWriter {
@@ -65,7 +66,8 @@ func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePa
 		w.columnsTypes = append(w.columnsTypes, c.ColType.ToType())
 		w.idxs[idx] = uint16(idx)
 	}
-	w.writer, _ = blockio.NewBlockWriter(fs, filename)
+	w.objectFS = objectio.NewObjectFS(fs, "")
+	w.writer = blockio.NewWriter(ctx, w.objectFS, filename)
 	return w
 }
 
@@ -155,7 +157,7 @@ func (w *TAEWriter) writeBatch() error {
 			return err
 		}
 	}
-	_, err := w.writer.WriteBatch(batch)
+	_, err := w.writer.WriteBlockAndZoneMap(batch, w.idxs)
 	if err != nil {
 		return err
 	}
@@ -170,7 +172,7 @@ func (w *TAEWriter) writeBatch() error {
 
 func (w *TAEWriter) flush() error {
 	w.writeBatch()
-	_, _, err := w.writer.Sync(w.ctx)
+	_, err := w.writer.Sync()
 	if err != nil {
 		return err
 	}
@@ -292,7 +294,7 @@ type TAEReader struct {
 	typs     []types.Type
 	idxs     []uint16
 
-	blockReader *blockio.BlockReader
+	objectReader objectio.Reader
 
 	bs       []objectio.BlockObject
 	batchs   []*batch.Batch
@@ -315,19 +317,41 @@ func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesi
 		r.typs = append(r.typs, c.ColType.ToType())
 		r.idxs[idx] = uint16(idx)
 	}
-	r.blockReader, err = blockio.NewFileReader(r.fs, r.filepath)
+	r.objectReader, err = objectio.NewObjectReader(r.filepath, r.fs)
 	if err != nil {
 		return nil, err
 	}
 	return r, nil
 }
 
+func (r *TAEReader) readAllMeta(ctx context.Context) error {
+	var err error
+	if len(r.bs) == 0 {
+		r.bs, err = r.objectReader.ReadAllMeta(ctx, r.filesize, r.mp)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *TAEReader) ReadAll(ctx context.Context) ([]*batch.Batch, error) {
-	ioVec, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.filesize, r.mp)
-	if err != nil {
+	var err error
+	if err = r.readAllMeta(ctx); err != nil {
 		return nil, err
 	}
-	r.batchs = append(r.batchs, ioVec...)
+	for _, bss := range r.bs {
+		ioVec, err := r.objectReader.Read(context.Background(), bss.GetExtent(), r.idxs, r.mp)
+		if err != nil {
+			return nil, err
+		}
+		batch := batch.NewWithSize(len(r.typs))
+		for idx, entry := range ioVec.Entries {
+			vec := newVector(r.typs[idx], entry.Object.([]byte))
+			batch.Vecs[idx] = vec
+		}
+		r.batchs = append(r.batchs, batch)
+	}
 	return r.batchs, nil
 }
 
@@ -425,4 +449,10 @@ const timestampFormatter = "2006-01-02 15:04:05.000000"
 
 func Time2DatetimeString(t time.Time) string {
 	return t.Format(timestampFormatter)
+}
+
+func newVector(tye types.Type, buf []byte) *vector.Vector {
+	vector := vector.New(tye)
+	vector.Read(buf)
+	return vector
 }
