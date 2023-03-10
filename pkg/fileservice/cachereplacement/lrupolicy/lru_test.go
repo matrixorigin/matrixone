@@ -14,25 +14,35 @@
 
 package lrupolicy
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/fileservice/cachereplacement"
-	"testing"
-)
+import "testing"
 
 func BenchmarkLRUSet(b *testing.B) {
-	cachereplacement.BenchmarkSet(func(capacity int64) cachereplacement.Policy {
-		return New(capacity)
-	}, b)
+	const capacity = 1024
+	l := New(capacity)
+	for i := 0; i < b.N; i++ {
+		l.Set(i%capacity, i, 1)
+	}
 }
 
 func BenchmarkLRUParallelSet(b *testing.B) {
-	cachereplacement.BenchmarkParallelSet(func(capacity int64) cachereplacement.Policy {
-		return New(capacity)
-	}, b)
+	const capacity = 1024
+	l := New(capacity)
+	b.RunParallel(func(pb *testing.PB) {
+		for i := 0; pb.Next(); i++ {
+			l.Set(i%capacity, i, 1)
+		}
+	})
 }
 
 func BenchmarkLRUParallelSetOrGet(b *testing.B) {
-	cachereplacement.BenchmarkParallelSetOrGet(func(capacity int64) cachereplacement.Policy {
-		return New(capacity)
-	}, b)
+	const capacity = 1024
+	l := New(capacity)
+	b.RunParallel(func(pb *testing.PB) {
+		for i := 0; pb.Next(); i++ {
+			l.Set(i%capacity, i, 1)
+			if i%2 == 0 {
+				l.Get(i % capacity)
+			}
+		}
+	})
 }
