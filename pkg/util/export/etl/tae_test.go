@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -111,8 +110,8 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 
 	// read index
 	for _, bbs := range r.bs {
-		_, err = r.objectReader.ReadIndex(context.Background(), bbs.GetExtent(),
-			r.idxs, objectio.ZoneMapType, mp)
+		_, err = r.blockReader.LoadZoneMaps(context.Background(),
+			r.idxs, []uint32{bbs.GetExtent().Id()}, mp)
 		require.Nil(t, err)
 	}
 
@@ -344,8 +343,8 @@ func TestTaeReadFile(t *testing.T) {
 
 	// read index
 	for _, bbs := range r.bs {
-		_, err = r.objectReader.ReadIndex(context.Background(), bbs.GetExtent(),
-			r.idxs, objectio.ZoneMapType, mp)
+		_, err = r.blockReader.LoadZoneMaps(context.Background(),
+			r.idxs, []uint32{bbs.GetExtent().Id()}, mp)
 		require.Nil(t, err)
 	}
 
@@ -420,8 +419,8 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 
 		// read index
 		for _, bbs := range r.bs {
-			_, err = r.objectReader.ReadIndex(context.Background(), bbs.GetExtent(),
-				r.idxs, objectio.ZoneMapType, mp)
+			_, err = r.blockReader.LoadZoneMaps(context.Background(),
+				r.idxs, []uint32{bbs.GetExtent().Id()}, mp)
 			require.Nil(t, err)
 		}
 

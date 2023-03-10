@@ -17,19 +17,16 @@ package disttae
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func encodePrimaryKeyVector(vec *vector.Vector, pool *mpool.MPool) (ret [][]byte) {
+func encodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]byte) {
+	packer.Reset()
 
 	if vec.IsScalarNull() {
 		return make([][]byte, vec.Length())
 	}
-
-	packer := types.NewPacker(pool)
-	defer packer.FreeMem()
 
 	switch vec.Typ.Oid {
 
@@ -206,9 +203,8 @@ func encodePrimaryKeyVector(vec *vector.Vector, pool *mpool.MPool) (ret [][]byte
 	return
 }
 
-func encodePrimaryKey(v any, pool *mpool.MPool) []byte {
-	packer := types.NewPacker(pool)
-	defer packer.FreeMem()
+func encodePrimaryKey(v any, packer *types.Packer) []byte {
+	packer.Reset()
 
 	switch v := v.(type) {
 

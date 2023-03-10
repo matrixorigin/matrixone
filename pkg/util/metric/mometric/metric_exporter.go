@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metric
+package mometric
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,13 +25,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
-
-type MetricExporter interface {
-	// ExportMetricFamily can be used by a metric to push data. this method must be thread safe
-	ExportMetricFamily(context.Context, *pb.MetricFamily) error
-	Start(context.Context) bool
-	Stop(bool) (<-chan struct{}, bool)
-}
 
 type metricExporter struct {
 	localCollector MetricCollector
@@ -45,7 +39,7 @@ type metricExporter struct {
 	now          func() int64
 }
 
-func newMetricExporter(gather prom.Gatherer, collector MetricCollector, node, role string) MetricExporter {
+func newMetricExporter(gather prom.Gatherer, collector MetricCollector, node, role string) metric.MetricExporter {
 	m := &metricExporter{
 		localCollector: collector,
 		nodeUUID:       node,
@@ -58,7 +52,7 @@ func newMetricExporter(gather prom.Gatherer, collector MetricCollector, node, ro
 
 func (e *metricExporter) ExportMetricFamily(ctx context.Context, mf *pb.MetricFamily) error {
 	// already batched RawHist metric will be send immediately
-	if isFullBatchRawHist(mf) {
+	if metric.IsFullBatchRawHist(mf) {
 		mfs := []*pb.MetricFamily{mf}
 		mfs = e.prepareSend(mfs)
 		e.send(mfs)
@@ -89,7 +83,7 @@ func (e *metricExporter) Start(inputCtx context.Context) bool {
 	e.stopWg.Add(1)
 	go func() {
 		defer e.stopWg.Done()
-		ticker := time.NewTicker(getGatherInterval())
+		ticker := time.NewTicker(metric.GetGatherInterval())
 		defer ticker.Stop()
 		for {
 			select {

@@ -60,10 +60,18 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		OnDuplicateIdx: make([]int32, len(ctx.OnDuplicateIdx)),
 		TableDef:       DeepCopyTableDef(ctx.TableDef),
 
+		IdxIdx: make([]int32, len(ctx.IdxIdx)),
+		IdxRef: make([]*plan.ObjectRef, len(ctx.IdxRef)),
+
 		ClusterTable: DeepCopyClusterTable(ctx.ClusterTable),
 	}
 
 	copy(newCtx.OnDuplicateIdx, ctx.OnDuplicateIdx)
+	copy(newCtx.IdxIdx, ctx.IdxIdx)
+
+	for i, ref := range ctx.IdxRef {
+		newCtx.IdxRef[i] = DeepCopyObjectRef(ref)
+	}
 
 	if ctx.ParentIdx != nil {
 		newCtx.ParentIdx = make(map[string]int32)
@@ -758,6 +766,12 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 				TableLocks: df.LockTables.TableLocks,
 			},
 		}
+
+	case *plan.DataDefinition_UnlockTables:
+		newDf.Definition = &plan.DataDefinition_UnlockTables{
+			UnlockTables: &plan.UnLockTables{},
+		}
+
 	}
 
 	return newDf

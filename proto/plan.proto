@@ -465,9 +465,12 @@ message InsertCtx {
 	repeated int32 on_duplicate_idx		= 3;
 	map<string, Expr> on_duplicate_expr	= 4;
 
-	map<string, int32> parent_idx 	= 5;
+	repeated ObjectRef idx_ref 			= 5;
+	repeated int32 idx_idx 				= 6;
 
-	ClusterTable cluster_table = 6;
+	map<string, int32> parent_idx 	= 7;
+
+	ClusterTable cluster_table = 8;
 }
 
 message UpdateCtx {
@@ -794,6 +797,7 @@ message DataDefinition {
 		SHOW_TARGET 		= 25;
 		SHOW_COLLATION 		= 26;
 		LOCK_TABLES         = 27;
+		UNLOCK_TABLES       = 28;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -817,6 +821,7 @@ message DataDefinition {
 		ShowVariables show_variables 	= 13;
 		AlterView alter_view			= 14;
 		LockTables lock_tables          = 15;
+		UnLockTables unlock_tables      = 16;
 	}
 }
 
@@ -960,3 +965,5 @@ message TableLockInfo {
 message LockTables {
 	repeated TableLockInfo tableLocks = 1;
 }
+
+message UnLockTables{}

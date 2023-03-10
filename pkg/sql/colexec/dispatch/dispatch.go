@@ -99,3 +99,18 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	proc.SetInputBatch(nil)
 	return false, nil
 }
+
+func (arg *Argument) waitRemoteRegsReady(proc *process.Process) {
+	cnt := len(arg.RemoteRegs)
+	for cnt > 0 {
+		csinfo := <-proc.DispatchNotifyCh
+		arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, &WrapperClientSession{
+			msgId:  csinfo.MsgId,
+			cs:     csinfo.Cs,
+			uuid:   csinfo.Uid,
+			doneCh: csinfo.DoneCh,
+		})
+		cnt--
+	}
+	arg.prepared = true
+}

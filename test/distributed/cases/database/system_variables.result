@@ -44,10 +44,10 @@ Variable_name    Value
 interactive_timeout    30100
 show variables like 'lower%';
 Variable_name    Value
-lower_case_table_names    0
+lower_case_table_names    1
 show variables like 'lower_case_table_names';
 Variable_name    Value
-lower_case_table_names    0
+lower_case_table_names    1
 show variables like 'net_write_timeout';
 Variable_name    Value
 net_write_timeout    60
@@ -123,11 +123,11 @@ drop database db1;
 drop account acc_idx;
 use information_schema;
 show tables;
-tables_in_information_schema
+Tables_in_information_schema
 key_column_usage
 columns
 profiling
-PROCESSLIST
+processlist
 user_privileges
 schemata
 character_sets
