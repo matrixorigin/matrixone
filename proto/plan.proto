@@ -889,6 +889,10 @@ message CreateSequence {
 }
 
 message DropSequence {
+	bool if_exists 		= 1;
+	string database 	=2;
+	string table 		=3;
+	uint64	table_id 	= 4;
 }
 
 message AlterSequence {

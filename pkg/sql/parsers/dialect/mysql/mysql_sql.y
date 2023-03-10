@@ -387,7 +387,7 @@ import (
 %type <statements> stmt_list
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt drop_sequence_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_sequence_stmt
@@ -1397,6 +1397,10 @@ priv_type:
 |   CREATE SEQUENCE
     {
         $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_SEQUENCE
+    }
+|   DROP SEQUENCE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_DROP_SEQUENCE
     }
 |    TRIGGER
     {
@@ -2886,6 +2890,16 @@ drop_ddl_stmt:
 |   drop_user_stmt
 |   drop_account_stmt
 |   drop_function_stmt
+|   drop_sequence_stmt
+
+drop_sequence_stmt:
+    DROP SEQUENCE exists_opt table_name_list
+    {
+        $$ = &tree.DropSequence{
+            IfExists: $3,
+            Names:   $4,
+        }
+    }
 
 drop_account_stmt:
     DROP ACCOUNT exists_opt account_name

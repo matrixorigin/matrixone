@@ -462,9 +462,11 @@ const (
 	PrivilegeTypeDropObject
 	PrivilegeTypeDropTable
 	PrivilegeTypeDropView
+	PrivilegeTypeDropSequence
 	PrivilegeTypeAlterObject
 	PrivilegeTypeAlterTable
 	PrivilegeTypeAlterView
+	PrivilegeTypeAlterSequence
 	PrivilegeTypeDatabaseAll
 	PrivilegeTypeDatabaseOwnership
 	PrivilegeTypeSelect
@@ -583,12 +585,16 @@ func (pt PrivilegeType) String() string {
 		return "drop table"
 	case PrivilegeTypeDropView:
 		return "drop view"
+	case PrivilegeTypeDropSequence:
+		return "drop sequence"
 	case PrivilegeTypeAlterObject:
 		return "alter object"
 	case PrivilegeTypeAlterTable:
 		return "alter table"
 	case PrivilegeTypeAlterView:
 		return "alter view"
+	case PrivilegeTypeAlterSequence:
+		return "alter sequence"
 	case PrivilegeTypeDatabaseAll:
 		return "database all"
 	case PrivilegeTypeDatabaseOwnership:
@@ -663,9 +669,9 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeDatabase
 	case PrivilegeTypeCreateObject, PrivilegeTypeCreateTable, PrivilegeTypeCreateView, PrivilegeTypeCreateSequence:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeDropObject, PrivilegeTypeDropTable, PrivilegeTypeDropView:
+	case PrivilegeTypeDropObject, PrivilegeTypeDropTable, PrivilegeTypeDropView, PrivilegeTypeDropSequence:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeAlterObject, PrivilegeTypeAlterTable, PrivilegeTypeAlterView:
+	case PrivilegeTypeAlterObject, PrivilegeTypeAlterTable, PrivilegeTypeAlterView, PrivilegeTypeAlterSequence:
 		return PrivilegeScopeDatabase
 	case PrivilegeTypeDatabaseAll:
 		return PrivilegeScopeDatabase
@@ -1677,9 +1683,11 @@ var (
 		PrivilegeTypeDropObject:        {PrivilegeTypeDropObject, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDropTable:         {PrivilegeTypeDropTable, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDropView:          {PrivilegeTypeDropView, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
+		PrivilegeTypeDropSequence:      {PrivilegeTypeDropSequence, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeAlterObject:       {PrivilegeTypeAlterObject, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeAlterTable:        {PrivilegeTypeAlterTable, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeAlterView:         {PrivilegeTypeAlterView, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
+		PrivilegeTypeAlterSequence:     {PrivilegeTypeAlterSequence, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDatabaseAll:       {PrivilegeTypeDatabaseAll, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDatabaseOwnership: {PrivilegeTypeDatabaseOwnership, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeSelect:            {PrivilegeTypeSelect, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
@@ -1716,6 +1724,8 @@ var (
 		PrivilegeTypeDropTable,
 		PrivilegeTypeAlterTable,
 		PrivilegeTypeCreateSequence,
+		PrivilegeTypeDropSequence,
+		PrivilegeTypeAlterSequence,
 		PrivilegeTypeCreateView,
 		PrivilegeTypeDropView,
 		PrivilegeTypeAlterView,
@@ -1748,9 +1758,11 @@ var (
 		PrivilegeTypeAccountAll,
 		PrivilegeTypeShowTables,
 		PrivilegeTypeCreateTable,
-		PrivilegeTypeCreateSequence,
 		PrivilegeTypeDropTable,
 		PrivilegeTypeAlterTable,
+		PrivilegeTypeCreateSequence,
+		PrivilegeTypeDropSequence,
+		PrivilegeTypeAlterSequence,
 		PrivilegeTypeCreateView,
 		PrivilegeTypeDropView,
 		PrivilegeTypeAlterView,
@@ -3887,7 +3899,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		dbName = string(st.Table.SchemaName)
 	case *tree.CreateView:
 		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeCreateSequence, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
@@ -3923,6 +3935,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.DropView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropView, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if len(st.Names) != 0 {
+			dbName = string(st.Names[0].SchemaName)
+		}
+	case *tree.DropSequence:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeDropSequence, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
@@ -5212,6 +5231,8 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		privType = PrivilegeTypeCreateTable
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_SEQUENCE:
 		privType = PrivilegeTypeCreateSequence
+	case tree.PRIVILEGE_TYPE_STATIC_DROP_SEQUENCE:
+		privType = PrivilegeTypeDropSequence
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_TABLE:
 		privType = PrivilegeTypeDropTable
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_VIEW:

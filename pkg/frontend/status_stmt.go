@@ -407,6 +407,11 @@ type CreateSequenceExecutor struct {
 	cs *tree.CreateSequence
 }
 
+type DropSequenceExecutor struct {
+	*statusStmtExecutor
+	ds *tree.DropSequence
+}
+
 type DropViewExecutor struct {
 	*statusStmtExecutor
 	dv *tree.DropView

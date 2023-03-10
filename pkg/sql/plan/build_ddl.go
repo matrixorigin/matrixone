@@ -216,6 +216,39 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 	return nil
 }
 
+func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, error) {
+	dropSequence := &plan.DropSequence{
+		IfExists: stmt.IfExists,
+	}
+	if len(stmt.Names) != 1 {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "drop multiple (%d) Sequence in one statement", len(stmt.Names))
+	}
+	dropSequence.Database = string(stmt.Names[0].SchemaName)
+	if dropSequence.Database == "" {
+		dropSequence.Database = ctx.DefaultDatabase()
+	}
+	dropSequence.Table = string(stmt.Names[0].ObjectName)
+
+	_, tableDef := ctx.Resolve(dropSequence.Database, dropSequence.Table)
+	if tableDef == nil || tableDef.TableType != catalog.SystemSequenceRel {
+		if !dropSequence.IfExists {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropSequence.Database, dropSequence.Table)
+		}
+		dropSequence.Table = ""
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_DROP_SEQUENCE,
+				Definition: &plan.DataDefinition_DropSequence{
+					DropSequence: dropSequence,
+				},
+			},
+		},
+	}, nil
+}
+
 func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan, error) {
 	createSequence := &plan.CreateSequence{
 		IfNotExists: stmt.IfNotExists,
@@ -1099,6 +1132,14 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		} else if isView {
 			// drop table if exists v0, v0 is view
+			dropTable.Table = ""
+		}
+
+		// Can not use drop table to drop sequence.
+		if tableDef.TableType == catalog.SystemSequenceRel && !dropTable.IfExists {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "Should use 'drop sequence' to drop a sequence")
+		} else if tableDef.TableType == catalog.SystemSequenceRel {
+			// If exists, don't drop anything.
 			dropTable.Table = ""
 		}
 

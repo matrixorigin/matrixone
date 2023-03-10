@@ -184,9 +184,11 @@ accountadmin    account    manage grants    *
 accountadmin    account    account all    *
 accountadmin    database    show tables    *
 accountadmin    database    create table    *
-accountadmin    database    create sequence    *
 accountadmin    database    drop table    *
 accountadmin    database    alter table    *
+accountadmin    database    create sequence    *
+accountadmin    database    drop sequence    *
+accountadmin    database    alter sequence    *
 accountadmin    database    create view    *
 accountadmin    database    drop view    *
 accountadmin    database    alter view    *

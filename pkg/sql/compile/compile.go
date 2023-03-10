@@ -18,10 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"runtime"
 	"strings"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -176,6 +177,8 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return c.scope.AlterView(c)
 	case DropTable:
 		return c.scope.DropTable(c)
+	case DropSequence:
+		return c.scope.DropSequence(c)
 	case CreateSequence:
 		return c.scope.CreateSequence(c)
 	case CreateIndex:
@@ -241,6 +244,11 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) (*Scope, erro
 		case plan.DataDefinition_DROP_TABLE:
 			return &Scope{
 				Magic: DropTable,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_DROP_SEQUENCE:
+			return &Scope{
+				Magic: DropSequence,
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_TRUNCATE_TABLE:

@@ -77,6 +77,8 @@ GRANT create table ON database * `dump`@`localhost`
 GRANT drop table ON database * `dump`@`localhost`
 GRANT alter table ON database * `dump`@`localhost`
 GRANT create sequence ON database * `dump`@`localhost`
+GRANT drop sequence ON database * `dump`@`localhost`
+GRANT alter sequence ON database * `dump`@`localhost`
 GRANT create view ON database * `dump`@`localhost`
 GRANT drop view ON database * `dump`@`localhost`
 GRANT alter view ON database * `dump`@`localhost`
@@ -114,6 +116,8 @@ GRANT create table ON database * `root`@`localhost`
 GRANT drop table ON database * `root`@`localhost`
 GRANT alter table ON database * `root`@`localhost`
 GRANT create sequence ON database * `root`@`localhost`
+GRANT drop sequence ON database * `root`@`localhost`
+GRANT alter sequence ON database * `root`@`localhost`
 GRANT create view ON database * `root`@`localhost`
 GRANT drop view ON database * `root`@`localhost`
 GRANT alter view ON database * `root`@`localhost`

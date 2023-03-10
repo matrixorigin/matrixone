@@ -739,6 +739,31 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	return nil
 }
 
+func (s *Scope) DropSequence(c *Compile) error {
+	qry := s.Plan.GetDdl().GetDropSequence()
+	dbName := qry.GetDatabase()
+	var dbSource engine.Database
+	var err error
+
+	tblName := qry.GetTable()
+	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return err
+	}
+
+	if _, err = dbSource.Relation(c.ctx, tblName); err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return err
+	}
+
+	return dbSource.Delete(c.ctx, tblName)
+}
+
 func (s *Scope) DropTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetDropTable()
 

@@ -122,3 +122,21 @@ func formatAny(minus bool, num any, ctx *FmtCtx) {
 		ctx.WriteString(fmt.Sprintf("%v ", v))
 	}
 }
+
+type DropSequence struct {
+	statementImpl
+	IfExists bool
+	Names    TableNames
+}
+
+func (node *DropSequence) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop sequence")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
+	ctx.WriteByte(' ')
+	node.Names.Format(ctx)
+}
+
+func (node *DropSequence) GetStatementType() string { return "Drop Sequence" }
+func (node *DropSequence) GetQueryType() string     { return QueryTypeDDL }
