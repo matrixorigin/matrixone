@@ -24,4 +24,13 @@ delete from t where a = 3;
 select mo_ctl('dn','checkpoint','');
 select * from t;
 
+drop table if exists t;
+create table t (a int);
+insert into t values (1), (2), (3), (4), (5);
+-- @separator:table
+select mo_ctl('dn','checkpoint','');
+-- @separator:table
+select mo_ctl('dn','checkpoint','');
+select * from t;
+
 drop database if exists db1;
