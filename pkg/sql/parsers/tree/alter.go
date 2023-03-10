@@ -247,20 +247,19 @@ func (node *AlterOptionDrop) Format(ctx *FmtCtx) {
 }
 
 type AccountsSetOption struct {
-	All bool
-	SetAccounts IdentifierList
-	AddAccounts IdentifierList
+	All          bool
+	SetAccounts  IdentifierList
+	AddAccounts  IdentifierList
 	DropAccounts IdentifierList
 }
 
 type AlterPublication struct {
 	statementImpl
-	IfExists       bool
-	Name           Identifier
+	IfExists    bool
+	Name        Identifier
 	AccountsSet *AccountsSetOption
-	Comment        string
+	Comment     string
 }
-
 
 func (node *AlterPublication) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter publication ")
@@ -269,7 +268,7 @@ func (node *AlterPublication) Format(ctx *FmtCtx) {
 	}
 	node.Name.Format(ctx)
 	ctx.WriteString(" account ")
-	if node.AccountsSet!=nil {
+	if node.AccountsSet != nil {
 		if node.AccountsSet.All {
 			ctx.WriteString("all")
 		} else {

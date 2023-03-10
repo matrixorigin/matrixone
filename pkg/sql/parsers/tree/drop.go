@@ -205,7 +205,7 @@ func (node *DropAccount) GetQueryType() string     { return QueryTypeDCL }
 
 type DropPublication struct {
 	statementImpl
-	Name    Identifier
+	Name     Identifier
 	IfExists bool
 }
 
