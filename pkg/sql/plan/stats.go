@@ -136,7 +136,7 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int,
 
 func MakeAllColumns(tableDef *plan.TableDef) []int {
 	lenCols := len(tableDef.Cols)
-	cols := make([]int, lenCols)
+	cols := make([]int, lenCols-1)
 	for i := 0; i < lenCols-1; i++ {
 		cols[i] = i
 	}

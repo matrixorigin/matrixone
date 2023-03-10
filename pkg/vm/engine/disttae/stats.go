@@ -26,8 +26,6 @@ import (
 // get minval , maxval, datatype from zonemap
 func getInfoFromZoneMap(columns []int, ctx context.Context, blocks *[][]BlockMeta, blockNumTotal int, tableDef *plan.TableDef) (*plan2.InfoFromZoneMap, error) {
 
-	//columns := plan2.MakeAllColumns(tableDef)
-	
 	lenCols := len(columns)
 	info := plan2.NewInfoFromZoneMap(lenCols, blockNumTotal)
 
@@ -94,6 +92,8 @@ func CalcStats(ctx context.Context, blocks *[][]BlockMeta, expr *plan.Expr, tabl
 	stats.Cost = float64(cost)
 
 	s := plan2.GetStatsInfoMapFromCache(tableDef.TblId)
+
+	columns = plan2.MakeAllColumns(tableDef)
 	if s.NeedUpdate(blockNumTotal) {
 		info, err := getInfoFromZoneMap(columns, ctx, blocks, blockNumTotal, tableDef)
 		if err != nil {
