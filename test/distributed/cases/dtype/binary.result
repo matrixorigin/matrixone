@@ -10,7 +10,7 @@ a
 NULL
 æ¶
 insert into t1 values(rpad("1", 500, "1"));
-internal error: Can't cast column from VARCHAR type to BINARY type because of one or more values in that column. Src length 500 is larger than Dest length 2
+internal error: Can't cast '1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111...' from VARCHAR type to BINARY type. Src length 500 is larger than Dest length 2
 delete from t1 where a="时";
 insert into t1 values("6");
 insert into t1 values("66");

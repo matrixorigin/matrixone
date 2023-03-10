@@ -4,8 +4,8 @@ insert into t1 values('', 'abcd');
 insert into t1 values('1111', '');
 select empty(a),empty(b) from t1;
 empty(a)	empty(b)
-1	0
-0	1
+true	false
+false	true
 drop table t1;
 drop table if exists t1;
 create table t1(a varchar(255),b char(255));

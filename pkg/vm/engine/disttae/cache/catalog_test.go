@@ -46,9 +46,9 @@ func TestGC(t *testing.T) {
 		PhysicalTime: 100,
 	})
 	{
-		timestamps := vector.MustTCols[types.TS](dbBat.GetVector(MO_TIMESTAMP_IDX))
-		names := vector.MustStrCols(dbBat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
-		accounts := vector.MustTCols[uint32](dbBat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
+		timestamps := vector.MustFixedCol[types.TS](dbBat.GetVector(MO_TIMESTAMP_IDX))
+		names := vector.MustStrCol(dbBat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
+		accounts := vector.MustFixedCol[uint32](dbBat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
 		key := new(DatabaseItem)
 		for i, account := range accounts {
 			key.Name = names[i]
@@ -60,10 +60,10 @@ func TestGC(t *testing.T) {
 	}
 	{
 
-		timestamps := vector.MustTCols[types.TS](tblBat.GetVector(MO_TIMESTAMP_IDX))
-		accounts := vector.MustTCols[uint32](tblBat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
-		names := vector.MustStrCols(tblBat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
-		databaseIds := vector.MustTCols[uint64](tblBat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
+		timestamps := vector.MustFixedCol[types.TS](tblBat.GetVector(MO_TIMESTAMP_IDX))
+		accounts := vector.MustFixedCol[uint32](tblBat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
+		names := vector.MustStrCol(tblBat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
+		databaseIds := vector.MustFixedCol[uint64](tblBat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
 		key := new(TableItem)
 		for i, account := range accounts {
 			key.Name = names[i]
@@ -84,8 +84,8 @@ func TestTables(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cc := NewCatalog()
 	bat := newTestTableBatch(mp)
-	accounts := vector.MustTCols[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
-	databaseIds := vector.MustTCols[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
+	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
+	databaseIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
 	{ // reset account id
 		for i := range accounts {
 			accounts[i] = 1
@@ -110,7 +110,7 @@ func TestDatabases(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cc := NewCatalog()
 	bat := newTestDatabaseBatch(mp)
-	accounts := vector.MustTCols[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
+	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
 	{ // reset account id
 		for i := range accounts {
 			accounts[i] = 0
@@ -130,8 +130,8 @@ func TestDatabasesWithMultiVersion(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cc := NewCatalog()
 	bat := newTestDatabaseBatch(mp)
-	names := vector.MustTCols[types.Varlena](bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
-	accounts := vector.MustTCols[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
+	names := vector.MustFixedCol[types.Varlena](bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
+	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
 	{ // reset account id
 		for i := range accounts {
 			accounts[i] = 0
@@ -158,9 +158,9 @@ func TestDatabaseCache(t *testing.T) {
 	cc := NewCatalog()
 	bat := newTestDatabaseBatch(mp)
 	cc.InsertDatabase(bat)
-	timestamps := vector.MustTCols[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
-	names := vector.MustStrCols(bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
-	accounts := vector.MustTCols[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
+	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
+	names := vector.MustStrCol(bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
+	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
 	key := new(DatabaseItem)
 	// test get
 	for i, account := range accounts {
@@ -195,10 +195,10 @@ func TestTableInsert(t *testing.T) {
 	colBat := newTestColumnBatch(t, bat, mp)
 	cc.InsertTable(bat)
 	cc.InsertColumns(colBat)
-	timestamps := vector.MustTCols[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
-	accounts := vector.MustTCols[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
-	names := vector.MustStrCols(bat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
-	databaseIds := vector.MustTCols[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
+	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
+	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
+	names := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
+	databaseIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
 	key := new(TableItem)
 	// test get
 	for i, account := range accounts {
@@ -251,67 +251,67 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 	typs = append(typs, types.New(types.T_Rowid, 0, 0))
 	typs = append(typs, types.New(types.T_TS, 0, 0))
 	typs = append(typs, catalog.MoColumnsTypes...)
-	timestamps := vector.MustTCols[types.TS](ibat.GetVector(MO_TIMESTAMP_IDX))
-	accounts := vector.MustTCols[uint32](ibat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
-	names := vector.MustBytesCols(ibat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
-	databaseIds := vector.MustTCols[uint64](ibat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
+	timestamps := vector.MustFixedCol[types.TS](ibat.GetVector(MO_TIMESTAMP_IDX))
+	accounts := vector.MustFixedCol[uint32](ibat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
+	names := vector.MustBytesCol(ibat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
+	databaseIds := vector.MustFixedCol[uint64](ibat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
 	bat := batch.NewWithSize(len(typs))
 	bat.SetZs(Rows, mp)
 	for i := range bat.Vecs {
-		bat.Vecs[i] = vector.New(typs[i])
+		bat.Vecs[i] = vector.NewVec(typs[i])
 	}
 	for i, account := range accounts {
 		for j, typ := range typs {
 			switch j {
 			case MO_TIMESTAMP_IDX:
-				vec = vector.New(typ)
+				vec = vector.NewVec(typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(timestamps[i], false, mp)
+					err := vector.AppendFixed(vec, timestamps[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ACCOUNT_ID_IDX + MO_OFF:
-				vec = vector.New(typ)
+				vec = vector.NewVec(typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(account, false, mp)
+					err := vector.AppendFixed(vec, account, false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX + MO_OFF:
-				vec = vector.New(typ)
+				vec = vector.NewVec(typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(databaseIds[i], false, mp)
+					err := vector.AppendFixed(vec, databaseIds[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_RELNAME_IDX + MO_OFF:
-				vec = vector.New(typ)
+				vec = vector.NewVec(typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(names[i], false, mp)
+					err := vector.AppendBytes(vec, names[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF:
 				data, err := types.Encode(typ) // reuse the type for test
 				require.NoError(t, err)
-				vec = vector.New(typ)
+				vec = vector.NewVec(typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(data, false, mp)
+					err := vector.AppendBytes(vec, data, false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATTHASDEF_IDX + MO_OFF:
-				vec = vector.New(typ)
+				vec = vector.NewVec(typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(int8(0), false, mp)
+					err := vector.AppendFixed(vec, int8(0), false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX + MO_OFF:
-				vec = vector.New(typ)
+				vec = vector.NewVec(typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(int8(0), false, mp)
+					err := vector.AppendFixed(vec, int8(0), false, mp)
 					require.NoError(t, err)
 				}
 			default:
 				vec = testutil.NewVector(Rows, typ, mp, false, nil)
 			}
 			for k := 0; k < Rows; k++ {
-				err := vector.UnionOne(bat.Vecs[j], vec, int64(k), mp)
+				err := bat.Vecs[j].UnionOne(vec, int64(k), mp)
 				require.NoError(t, err)
 			}
 			vec.Free(mp)

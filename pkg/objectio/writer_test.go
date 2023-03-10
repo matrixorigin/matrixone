@@ -17,12 +17,11 @@ package objectio
 import (
 	"context"
 	"fmt"
-	"time"
-
 	"os"
 	"path"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -72,7 +71,7 @@ func TestNewObjectWriter(t *testing.T) {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c)
+	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 
 	objectWriter, err := NewObjectWriter(name, service)
@@ -123,11 +122,11 @@ func TestNewObjectWriter(t *testing.T) {
 	vec, err := objectReader.Read(context.Background(), blocks[0].GetExtent(), idxs, []uint32{blocks[0].GetExtent().id}, pool, nil, newDecompressToObject)
 	assert.Nil(t, err)
 	vector1 := newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Object.([]byte))
-	assert.Equal(t, int8(3), vector1.Col.([]int8)[3])
+	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
 	vector2 := newVector(types.Type{Oid: types.T_int32}, vec.Entries[1].Object.([]byte))
-	assert.Equal(t, int32(3), vector2.Col.([]int32)[3])
+	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
 	vector3 := newVector(types.Type{Oid: types.T_int64}, vec.Entries[2].Object.([]byte))
-	assert.Equal(t, int64(3), vector3.Col.([]int64)[3])
+	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
 	blk, err := blocks[0].GetColumn(idxs[0])
 	assert.Nil(t, err)
 	index, err := blk.GetIndex(context.Background(), ZoneMapType, nil, pool)
@@ -158,11 +157,11 @@ func TestNewObjectWriter(t *testing.T) {
 	vec, err = objectReader.Read(context.Background(), bs[0].GetExtent(), idxs, []uint32{bs[0].GetExtent().id}, pool, nil, newDecompressToObject)
 	assert.Nil(t, err)
 	vector1 = newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Object.([]byte))
-	assert.Equal(t, int8(3), vector1.Col.([]int8)[3])
+	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
 	vector2 = newVector(types.Type{Oid: types.T_int32}, vec.Entries[1].Object.([]byte))
-	assert.Equal(t, int32(3), vector2.Col.([]int32)[3])
+	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
 	vector3 = newVector(types.Type{Oid: types.T_int64}, vec.Entries[2].Object.([]byte))
-	assert.Equal(t, int64(3), vector3.Col.([]int64)[3])
+	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
 	blk, err = blocks[0].GetColumn(idxs[0])
 	assert.Nil(t, err)
 	index, err = blk.GetIndex(context.Background(), ZoneMapType, nil, pool)
@@ -192,7 +191,7 @@ func newBatch(mp *mpool.MPool) *batch.Batch {
 }
 
 func newVector(tye types.Type, buf []byte) *vector.Vector {
-	vector := vector.New(tye)
-	vector.Read(buf)
+	vector := vector.NewVec(tye)
+	vector.UnmarshalBinary(buf)
 	return vector
 }

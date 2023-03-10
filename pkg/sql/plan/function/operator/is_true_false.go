@@ -40,25 +40,27 @@ func IsNotFalse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 func funcIs(vectors []*vector.Vector, proc *process.Process, nullValue bool, eqBool bool) (*vector.Vector, error) {
 	input := vectors[0]
 	retType := types.T_bool.ToType()
-	if input.IsScalar() {
-		if input.IsScalarNull() {
-			return vector.NewConstFixed(retType, input.Length(), nullValue, proc.Mp()), nil
-		} else {
-			col := vector.MustTCols[bool](input)
-			return vector.NewConstFixed(retType, input.Length(), col[0] == eqBool, proc.Mp()), nil
-		}
+	if input.IsConstNull() {
+		return vector.NewConstFixed(retType, nullValue, input.Length(), proc.Mp()), nil
+	}
+	if input.IsConst() {
+		col := vector.MustFixedCol[bool](input)
+		return vector.NewConstFixed(retType, col[0] == eqBool, input.Length(), proc.Mp()), nil
 	} else {
 		vlen := input.Length()
-		vec := vector.PreAllocType(retType, vlen, vlen, proc.Mp())
-		vals := vector.MustTCols[bool](vec)
-		olds := vector.MustTCols[bool](input)
+		rvec, err := proc.AllocVectorOfRows(retType, vlen, nil)
+		if err != nil {
+			return nil, err
+		}
+		vals := vector.MustFixedCol[bool](rvec)
+		olds := vector.MustFixedCol[bool](input)
 		for i := range vals {
-			if nulls.Contains(input.Nsp, uint64(i)) {
+			if nulls.Contains(input.GetNulls(), uint64(i)) {
 				vals[i] = nullValue
 			} else {
 				vals[i] = olds[i] == eqBool
 			}
 		}
-		return vec, nil
+		return rvec, nil
 	}
 }

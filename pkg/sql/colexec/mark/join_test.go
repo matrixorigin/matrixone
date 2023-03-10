@@ -87,7 +87,7 @@ func TestMark(t *testing.T) {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		batWithNull := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		batWithNull.Vecs[0].Nsp.Np.Add(0)
+		batWithNull.Vecs[0].GetNulls().Np.Add(0)
 		tc.proc.Reg.MergeReceivers[0].Ch <- batWithNull
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)

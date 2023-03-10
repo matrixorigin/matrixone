@@ -35,7 +35,7 @@ func Test_Ltrim(t *testing.T) {
 			log.Fatal(err)
 		}
 
-		data := vector.GetStrVectorValues(vec)
+		data := vector.MustStrCol(vec)
 		compVec := []string{"123", "123", "123 ", "8 ", "8 a ", ""}
 		compNsp := []int64{5}
 
@@ -46,13 +46,13 @@ func Test_Ltrim(t *testing.T) {
 		for i := 0; i < len(compVec); i++ {
 			if j < len(compNsp) {
 				if compNsp[j] == int64(i) {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeTrue)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeTrue)
 					j++
 				} else {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 				}
 			} else {
-				convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+				convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 			}
 		}
 	})

@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -67,6 +66,7 @@ type Manager struct {
 	txnbase.NoopCommitListener
 	table     *TxnTable
 	truncated types.TS
+	now func() types.TS
 
 	committingTS        types.TS
 	previousSaveTS      types.TS
@@ -82,18 +82,16 @@ type Manager struct {
 	cancel              context.CancelFunc
 }
 
-func NewManager(blockSize int, clock clock.Clock, txnMgr TxnMgr) *Manager {
-	tsAlloc := types.NewTsAlloctor(clock)
+func NewManager(blockSize int, now func() types.TS) *Manager {
 	mgr := &Manager{
 		table: NewTxnTable(
 			blockSize,
-			tsAlloc,
+			now,
 		),
-		tmpAlloctor: tsAlloc,
 		wg:          sync.WaitGroup{},
-		txnMgr:      txnMgr,
+		now:now,
 	}
-	mgr.previousSaveTS = tsAlloc.Alloc()
+	mgr.previousSaveTS = now()
 	mgr.collectLogtailQueue = sm.NewSafeQueue(10000, 100, mgr.onCollectTxnLogtails)
 	mgr.waitCommitQueue = sm.NewSafeQueue(10000, 100, mgr.onWaitTxnCommit)
 	mgr.committedTxn = make(chan *txnWithLogtails)

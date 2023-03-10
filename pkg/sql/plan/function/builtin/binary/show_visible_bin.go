@@ -16,6 +16,7 @@ package binary
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -31,14 +32,14 @@ const (
 )
 
 func ShowVisibleBin(vec []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if !vec[1].IsScalar() {
+	if !vec[1].IsConst() {
 		return nil, moerr.NewInvalidInput(proc.Ctx, "show visible bin, the second argument must be a scalar")
 	}
 	var err error
-	tpSlice := vector.MustTCols[uint8](vec[1])
-	srcSlice := vector.MustBytesCols(vec[0])
+	tpSlice := vector.MustFixedCol[uint8](vec[1])
+	srcSlice := vector.MustBytesCol(vec[0])
 	tp := tpSlice[0]
-	resultVec := vector.New(types.T_varchar.ToType())
+	resultVec := vector.NewVec(types.T_varchar.ToType())
 	defer func() {
 		if err != nil {
 			resultVec.Free(proc.Mp())
@@ -61,7 +62,7 @@ func ShowVisibleBin(vec []*vector.Vector, proc *process.Process) (*vector.Vector
 		return nil, err
 	}
 	for i := range ret {
-		err = resultVec.Append([]byte(ret[i]), len(ret[i]) == 0, proc.Mp())
+		err = vector.AppendBytes(resultVec, []byte(ret[i]), len(ret[i]) == 0, proc.Mp())
 		if err != nil {
 			return nil, err
 		}

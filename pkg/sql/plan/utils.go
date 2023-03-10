@@ -808,10 +808,10 @@ func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc
 		if err != nil {
 			return false, err
 		}
-		if vec.Typ.Oid != types.T_bool {
+		if vec.GetType().Oid != types.T_bool {
 			return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 		}
-		cols := vector.MustTCols[bool](vec)
+		cols := vector.MustFixedCol[bool](vec)
 		for _, isNeed := range cols {
 			if isNeed {
 				return true, nil
@@ -828,7 +828,7 @@ func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vect
 			exchangeVectors(datas, depth+1, tmpResult, result, mp)
 		} else {
 			for j, val := range tmpResult {
-				(*result)[j].Append(val, false, mp)
+				vector.AppendAny((*result)[j], val, false, mp)
 			}
 		}
 	}
@@ -837,7 +837,7 @@ func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vect
 func BuildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*vector.Vector {
 	vectors := make([]*vector.Vector, len(dataTypes))
 	for i, typ := range dataTypes {
-		vectors[i] = vector.New(types.T(typ).ToType())
+		vectors[i] = vector.NewVec(types.T(typ).ToType())
 	}
 
 	tmpResult := make([]any, len(datas))

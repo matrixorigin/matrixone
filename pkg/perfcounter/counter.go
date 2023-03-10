@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,20 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package week
+package perfcounter
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import "sync/atomic"
 
-func DateToWeek(xs []types.Date, rs []uint8) []uint8 {
-	for i, x := range xs {
-		_, rs[i] = x.WeekOfYear()
+type Counter struct {
+	S3 struct {
+		List        atomic.Int64
+		Head        atomic.Int64
+		Put         atomic.Int64
+		Get         atomic.Int64
+		Delete      atomic.Int64
+		DeleteMulti atomic.Int64
 	}
-	return rs
-}
 
-func DatetimeToWeek(xs []types.Datetime, rs []uint8) []uint8 {
-	for i, x := range xs {
-		_, rs[i] = x.WeekOfYear()
+	Cache struct {
+		Read     atomic.Int64
+		Hit      atomic.Int64
+		MemRead  atomic.Int64
+		MemHit   atomic.Int64
+		DiskRead atomic.Int64
+		DiskHit  atomic.Int64
 	}
-	return rs
 }

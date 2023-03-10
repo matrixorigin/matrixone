@@ -16,20 +16,19 @@ package blockio
 
 import (
 	"context"
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"io"
-
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 type BlockReader struct {
@@ -265,8 +264,8 @@ func LoadColumnFunc(size int64) objectio.ToObjectFunc {
 		if err != nil {
 			return nil, 0, err
 		}
-		vec := vector.New(types.Type{})
-		if err = vec.Read(decompressed); err != nil {
+		vec := vector.NewVec(types.Type{})
+		if err = vec.UnmarshalBinary(decompressed); err != nil {
 			return nil, 0, err
 		}
 		return vec, int64(len(decompressed)), nil

@@ -36,7 +36,7 @@ func TestAnd(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{true, false, false, false, false, true}, cols)
 }
 
@@ -52,15 +52,15 @@ func TestAnd2(t *testing.T) {
 	av := testutil.MakeBooleanlVector(as, []uint64{3, 7})
 	bv := testutil.MakeBooleanlVector(bs, []uint64{3, 5})
 	cv := testutil.MakeBoolVector(cs)
-	nulls.Or(av.Nsp, bv.Nsp, cv.Nsp)
+	nulls.Or(av.GetNulls(), bv.GetNulls(), cv.GetNulls())
 
 	err := And(av, bv, cv)
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{false, false, false, false, false, false, false, false, false, false}, cols)
-	require.Equal(t, []uint64{3, 5}, cv.Nsp.Np.ToArray())
+	require.Equal(t, []uint64{3, 5}, cv.GetNulls().Np.ToArray())
 }
 
 func TestOr(t *testing.T) {
@@ -76,7 +76,7 @@ func TestOr(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{true, false, true, true, true, true}, cols)
 }
 
@@ -92,15 +92,15 @@ func TestOr2(t *testing.T) {
 	av := testutil.MakeBooleanlVector(as, []uint64{3, 7})
 	bv := testutil.MakeBooleanlVector(bs, []uint64{3, 5})
 	cv := testutil.MakeBoolVector(cs)
-	nulls.Or(av.Nsp, bv.Nsp, cv.Nsp)
+	nulls.Or(av.GetNulls(), bv.GetNulls(), cv.GetNulls())
 
 	err := Or(av, bv, cv)
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{true, true, true, true, true, true, true, true, true, true}, cols)
-	require.Equal(t, []uint64{3, 7}, cv.Nsp.Np.ToArray())
+	require.Equal(t, []uint64{3, 7}, cv.GetNulls().Np.ToArray())
 }
 
 func TestXor(t *testing.T) {
@@ -116,7 +116,7 @@ func TestXor(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{false, false, true, true, true, false}, cols)
 }
 
@@ -132,15 +132,15 @@ func TestXor2(t *testing.T) {
 	av := testutil.MakeBooleanlVector(as, []uint64{3, 7})
 	bv := testutil.MakeBooleanlVector(bs, []uint64{3, 5})
 	cv := testutil.MakeBoolVector(cs)
-	nulls.Or(av.Nsp, bv.Nsp, cv.Nsp)
+	nulls.Or(av.GetNulls(), bv.GetNulls(), cv.GetNulls())
 
 	err := Xor(av, bv, cv)
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{true, true, true, true, true, true, true, true, true, true}, cols)
-	require.Equal(t, []uint64{3, 5, 7}, cv.Nsp.Np.ToArray())
+	require.Equal(t, []uint64{3, 5, 7}, cv.GetNulls().Np.ToArray())
 }
 
 func TestNot(t *testing.T) {
@@ -154,7 +154,7 @@ func TestNot(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{false, true, true, false, false}, cols)
 }
 
@@ -164,15 +164,15 @@ func TestNot2(t *testing.T) {
 	cs := make([]bool, 5)
 	av := testutil.MakeBooleanlVector(as, []uint64{5})
 	cv := testutil.MakeBoolVector(cs)
-	nulls.Or(av.Nsp, nil, cv.Nsp)
+	nulls.Or(av.GetNulls(), nil, cv.GetNulls())
 
 	err := Not(av, cv)
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{false, true, true, false, false}, cols)
-	require.Equal(t, []uint64{5}, cv.Nsp.Np.ToArray())
+	require.Equal(t, []uint64{5}, cv.GetNulls().Np.ToArray())
 }
 
 func TestNot3(t *testing.T) {
@@ -180,12 +180,12 @@ func TestNot3(t *testing.T) {
 	av := testutil.MakeScalarBool(true, 5)
 
 	cv := testutil.MakeBoolVector(cs)
-	nulls.Or(av.Nsp, nil, cv.Nsp)
+	nulls.Or(av.GetNulls(), nil, cv.GetNulls())
 
 	err := Not(av, cv)
 	if err != nil {
 		panic(err)
 	}
-	cols := vector.MustTCols[bool](cv)
+	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{false}, cols)
 }

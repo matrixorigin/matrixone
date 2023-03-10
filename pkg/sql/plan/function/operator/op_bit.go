@@ -66,117 +66,75 @@ func OpBinaryBitXor(args []*vector.Vector, proc *process.Process) (*vector.Vecto
 	return opBinaryBitAll(args, proc, types.BitXor)
 }
 
-func makeRsbytes(vc *vector.Vector, values, rsbytes [][]byte) {
-	for i := range rsbytes {
-		if nulls.Contains(vc.Nsp, uint64(i)) {
-			rsbytes[i] = make([]byte, 0)
-			continue
-		}
-		rsbytes[i] = make([]byte, len(values[i]))
-	}
-}
+func opBinaryBitAll(ivecs []*vector.Vector, proc *process.Process, opt func([]byte, []byte, []byte)) (*vector.Vector, error) {
+	left, right := ivecs[0], ivecs[1]
 
-func opBinaryBitAll(args []*vector.Vector, proc *process.Process, opt func([]byte, []byte, []byte)) (*vector.Vector, error) {
-	left, right := args[0], args[1]
-	leftValues, rightValues := vector.MustBytesCols(left), vector.MustBytesCols(right)
-
-	maxLen := vector.Length(left)
-	if vector.Length(right) > maxLen {
-		maxLen = vector.Length(right)
+	rtyp := left.GetType()
+	if left.IsConstNull() || right.IsConstNull() {
+		return vector.NewConstNull(*rtyp, left.Length(), proc.Mp()), nil
 	}
 
-	if left.IsScalarNull() || right.IsScalarNull() {
-		return proc.AllocScalarNullVector(types.T_varbinary.ToType()), nil
+	var rval [types.MaxBinaryLen]byte
+
+	if left.IsConst() && right.IsConst() {
+		val0 := left.GetBytesAt(0)
+		opt(rval[:], val0, right.GetBytesAt(0))
+		return vector.NewConstBytes(*rtyp, rval[:len(val0)], left.Length(), proc.Mp()), nil
 	}
-	resultVector, err := proc.AllocVectorOfRows(types.T_varbinary.ToType(), 0, nil)
+
+	rvec, err := proc.AllocVectorOfRows(*rtyp, 0, nil)
 	if err != nil {
 		return nil, err
 	}
+	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
 
-	rsbytes := make([][]byte, maxLen)
-
-	// Get bytes length.
-	if vector.Length(right) > vector.Length(left) {
-		maxLen = vector.Length(right)
-		makeRsbytes(right, rightValues, rsbytes)
-	} else {
-		maxLen = vector.Length(left)
-		makeRsbytes(left, leftValues, rsbytes)
+	for i := 0; i < left.Length(); i++ {
+		if !rvec.GetNulls().Contains(uint64(i)) {
+			val0 := left.GetBytesAt(i)
+			opt(rval[:], val0, right.GetBytesAt(i))
+			vector.SetBytesAt(rvec, i, rval[:len(val0)], proc.Mp())
+		}
 	}
 
-	for i := range rsbytes {
-		rsbytes[i] = make([]byte, len(leftValues[0]))
-	}
-
-	if vector.Length(right) == 1 {
-		for i := 0; i < maxLen; i++ {
-			// Nulls determine.
-			if nulls.Contains(left.Nsp, uint64(i)) || nulls.Contains(right.Nsp, 0) {
-				nulls.Add(resultVector.Nsp, uint64(i))
-				continue
-			}
-			opt(rsbytes[i], leftValues[i], rightValues[0])
-		}
-		vector.AppendBytes(resultVector, rsbytes, proc.Mp())
-	} else if vector.Length(left) == 1 {
-		for i := 0; i < maxLen; i++ {
-			if nulls.Contains(left.Nsp, 0) || nulls.Contains(right.Nsp, uint64(i)) {
-				nulls.Add(resultVector.Nsp, uint64(i))
-				continue
-			}
-			opt(rsbytes[i], leftValues[0], rightValues[i])
-		}
-		vector.AppendBytes(resultVector, rsbytes, proc.Mp())
-	} else {
-		for i := 0; i < maxLen; i++ {
-			if nulls.Contains(left.Nsp, uint64(i)) || nulls.Contains(right.Nsp, uint64(i)) {
-				nulls.Add(resultVector.Nsp, uint64(i))
-				continue
-			}
-			opt(rsbytes[i], leftValues[i], rightValues[i])
-		}
-		vector.AppendBytes(resultVector, rsbytes, proc.Mp())
-	}
-
-	return resultVector, nil
+	return rvec, nil
 }
 
 func OpBitAndFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+	return Arith[T, T](args, proc, *args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
 		return goOpBitGeneral(xs, ys, rs, opBitAnd[T])
 	})
 }
 
 func OpBitOrFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+	return Arith[T, T](args, proc, *args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
 		return goOpBitGeneral(xs, ys, rs, opBitOr[T])
 	})
 }
 
 func OpBitXorFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+	return Arith[T, T](args, proc, *args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
 		return goOpBitGeneral(xs, ys, rs, opBitXor[T])
 	})
 }
 
 func OpBitRightShiftFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+	return Arith[T, T](args, proc, *args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
 		return goOpBitGeneral(xs, ys, rs, opBitRightShift[T])
 	})
 }
 
 func OpBitLeftShiftFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+	return Arith[T, T](args, proc, *args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
 		return goOpBitGeneral(xs, ys, rs, opBitLeftShift[T])
 	})
 }
 
 func goOpBitGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
-	if xs.IsScalar() {
-		if nulls.Any(ys.Nsp) {
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
+	if xs.IsConst() {
+		if nulls.Any(ys.GetNulls()) {
 			for i, y := range yt {
-				if !nulls.Contains(rs.Nsp, uint64(i)) {
+				if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 					rt[i] = bfn(xt[0], y)
 				}
 			}
@@ -186,10 +144,10 @@ func goOpBitGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error 
 			}
 		}
 		return nil
-	} else if ys.IsScalar() {
-		if nulls.Any(xs.Nsp) {
+	} else if ys.IsConst() {
+		if nulls.Any(xs.GetNulls()) {
 			for i, x := range xt {
-				if !nulls.Contains(rs.Nsp, uint64(i)) {
+				if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 					rt[i] = bfn(x, yt[0])
 				}
 			}
@@ -200,9 +158,9 @@ func goOpBitGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error 
 		}
 		return nil
 	} else {
-		if nulls.Any(rs.Nsp) {
+		if nulls.Any(rs.GetNulls()) {
 			for i, x := range xt {
-				if !nulls.Contains(rs.Nsp, uint64(i)) {
+				if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 					rt[i] = bfn(x, yt[i])
 				}
 			}

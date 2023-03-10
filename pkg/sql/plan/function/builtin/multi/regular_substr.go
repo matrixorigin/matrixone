@@ -15,23 +15,28 @@
 package multi
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/regular"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func RegularSubstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vectors[0]
-	secondVector := vectors[1]
-	firstValues := vector.MustStrCols(firstVector)
-	secondValues := vector.MustStrCols(secondVector)
-	resultType := types.T_varchar.ToType()
+func RegularSubstr(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	firstVector := ivecs[0]
+	secondVector := ivecs[1]
+	rtyp := types.T_varchar.ToType()
+	if firstVector.IsConstNull() || secondVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, firstVector.Length(), proc.Mp()), nil
+	}
+
+	firstValues := vector.MustStrCol(firstVector)
+	secondValues := vector.MustStrCol(secondVector)
 
 	//maxLen
-	maxLen := vector.Length(vectors[0])
-	for i := range vectors {
-		val := vector.Length(vectors[i])
+	maxLen := ivecs[0].Length()
+	for i := range ivecs {
+		val := ivecs[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
@@ -43,33 +48,31 @@ func RegularSubstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	var match_type []string
 
 	//different parameter length conditions
-	switch len(vectors) {
+	switch len(ivecs) {
 	case 2:
 		pos = []int64{1}
 		occ = []int64{1}
 		match_type = []string{"c"}
 
 	case 3:
-		pos = vector.MustTCols[int64](vectors[2])
+		pos = vector.MustFixedCol[int64](ivecs[2])
 		occ = []int64{1}
 		match_type = []string{"c"}
 	case 4:
-		pos = vector.MustTCols[int64](vectors[2])
-		occ = vector.MustTCols[int64](vectors[3])
+		pos = vector.MustFixedCol[int64](ivecs[2])
+		occ = vector.MustFixedCol[int64](ivecs[3])
 		match_type = []string{"c"}
 	}
 
-	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+	rvec, err := proc.AllocVectorOfRows(rtyp, firstVector.Length(), nil)
+	if err != nil {
+		return nil, err
+	}
+	nulls.Or(firstVector.GetNulls(), secondVector.GetNulls(), rvec.GetNulls())
+	err = regular.RegularSubstrWithArrays(firstValues, secondValues, pos, occ, match_type, rvec, proc, maxLen)
+	if err != nil {
+		return nil, err
 	}
 
-	resultVector, err := proc.AllocVectorOfRows(resultType, 0, nil)
-	if err != nil {
-		return nil, err
-	}
-	err = regular.RegularSubstrWithArrays(firstValues, secondValues, pos, occ, match_type, firstVector.Nsp, secondVector.Nsp, resultVector, proc, maxLen)
-	if err != nil {
-		return nil, err
-	}
-	return resultVector, nil
+	return rvec, nil
 }

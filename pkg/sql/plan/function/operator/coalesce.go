@@ -129,18 +129,17 @@ func CoalesceTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 // coalesceGeneral is a general evaluate function for coalesce operator
 // when return type is uint / int / float / bool / date / datetime
 func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
-	vecLen := vector.Length(vs[0])
+	vecLen := vs[0].Length()
 	startIdx := 0
 	for i := 0; i < len(vs); i++ {
 		input := vs[i]
-		if input.IsScalar() {
-			if !input.IsScalarNull() {
-				cols := vector.MustTCols[T](input)
-				r := proc.AllocScalarVector(t)
-				r.Typ.Width = input.Typ.Width
-				r.Typ.Scale = input.Typ.Scale
-				r.Col = make([]T, 1)
-				r.Col.([]T)[0] = cols[0]
+		if input.IsConst() {
+			if !input.IsConstNull() {
+				cols := vector.MustFixedCol[T](input)
+				r := vector.NewConstFixed(t, cols[0], vecLen, proc.Mp())
+				r.GetType().Width = input.GetType().Width
+				r.GetType().Scale = input.GetType().Scale
+				r.SetLength(1)
 				return r, nil
 			}
 		} else {
@@ -149,60 +148,57 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 		}
 	}
 
-	rs, err := proc.AllocVector(t, int64(vecLen*t.Oid.TypeLen()))
+	rs, err := proc.AllocVectorOfRows(t, vecLen, nil)
 	if err != nil {
 		return nil, err
 	}
-	rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.TypeLen())
-	rs.Col = rs.Col.([]T)[:vecLen]
-	rsCols := rs.Col.([]T)
+	rsCols := vector.MustFixedCol[T](rs)
 
-	rs.Nsp = nulls.NewWithSize(vecLen)
-	rs.Nsp.Np.AddRange(0, uint64(vecLen))
+	rs.SetNulls(nulls.NewWithSize(vecLen))
+	rs.GetNulls().Np.AddRange(0, uint64(vecLen))
 
 	for i := startIdx; i < len(vs); i++ {
 		input := vs[i]
-		if input.Typ.Oid != types.T_any {
-			rs.Typ = input.Typ
+		if input.GetType().Oid != types.T_any {
+			rs.SetType(*input.GetType())
 		}
-		cols := vector.MustTCols[T](input)
-		if input.IsScalar() {
-			if input.IsScalarNull() {
-				continue
-			}
-
+		if input.IsConstNull() {
+			continue
+		}
+		cols := vector.MustFixedCol[T](input)
+		if input.IsConst() {
 			for j := 0; j < vecLen; j++ {
-				if rs.Nsp.Contains(uint64(j)) {
+				if rs.GetNulls().Contains(uint64(j)) {
 					rsCols[j] = cols[0]
 				}
 			}
-			rs.Nsp.Np = nil
+			rs.GetNulls().Np = nil
 			return rs, nil
 		} else {
-			nullsLength := nulls.Length(input.Nsp)
+			nullsLength := nulls.Length(input.GetNulls())
 			if nullsLength == vecLen {
 				// all null do nothing
 				continue
 			} else if nullsLength == 0 {
 				// all not null
 				for j := 0; j < vecLen; j++ {
-					if rs.Nsp.Contains(uint64(j)) {
+					if rs.GetNulls().Contains(uint64(j)) {
 						rsCols[j] = cols[j]
 					}
 				}
-				rs.Nsp.Np = nil
+				rs.GetNulls().Np = nil
 				return rs, nil
 			} else {
 				// some nulls
 				for j := 0; j < vecLen; j++ {
-					if rs.Nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
+					if rs.GetNulls().Contains(uint64(j)) && !input.GetNulls().Contains(uint64(j)) {
 						rsCols[j] = cols[j]
-						rs.Nsp.Np.Remove(uint64(j))
+						rs.GetNulls().Np.Remove(uint64(j))
 					}
 				}
 
-				if rs.Nsp.Np.IsEmpty() {
-					rs.Nsp.Np = nil
+				if rs.GetNulls().Np.IsEmpty() {
+					rs.GetNulls().Np = nil
 					return rs, nil
 				}
 			}
@@ -215,17 +211,18 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 // coalesceGeneral is a general evaluate function for coalesce operator
 // when return type is char / varchar
 func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vector.Vector, error) {
-	vecLen := vector.Length(vs[0])
+	vecLen := vs[0].Length()
 	startIdx := 0
 
 	// If leading expressions are non null scalar, return.   Otherwise startIdx
 	// is positioned at the first non scalar vector.
 	for i := 0; i < len(vs); i++ {
 		input := vs[i]
-		if input.IsScalar() {
-			if !input.IsScalarNull() {
-				cols := vector.MustStrCols(input)
-				return vector.NewConstString(typ, input.Length(), cols[0], proc.Mp()), nil
+		if input.IsConst() {
+			if !input.IsConstNull() {
+				cols := vector.MustStrCol(input)
+				vec := vector.NewConstBytes(typ, []byte(cols[0]), vecLen, proc.Mp())
+				return vec, nil
 			}
 		} else {
 			startIdx = i
@@ -239,11 +236,11 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 
 	for i := startIdx; i < len(vs); i++ {
 		input := vs[i]
-		cols := vector.MustStrCols(input)
-		if input.IsScalar() {
-			if input.IsScalarNull() {
-				continue
-			}
+		if input.IsConstNull() {
+			continue
+		}
+		cols := vector.MustStrCol(input)
+		if input.IsConst() {
 			for j := 0; j < vecLen; j++ {
 				if nsp.Contains(uint64(j)) {
 					rs[j] = cols[0]
@@ -252,7 +249,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			nsp = nil
 			break
 		} else {
-			nullsLength := nulls.Length(input.Nsp)
+			nullsLength := nulls.Length(input.GetNulls())
 			if nullsLength == vecLen {
 				// all null do nothing
 				continue
@@ -268,7 +265,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			} else {
 				// some nulls
 				for j := 0; j < vecLen; j++ {
-					if nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
+					if nsp.Contains(uint64(j)) && !input.GetNulls().Contains(uint64(j)) {
 						rs[j] = cols[j]
 						nsp.Np.Remove(uint64(j))
 					}
@@ -282,6 +279,8 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			}
 		}
 	}
-
-	return vector.NewWithStrings(typ, rs, nsp, proc.Mp()), nil
+	vec := vector.NewVec(typ)
+	vector.AppendStringList(vec, rs, nil, proc.Mp())
+	vec.SetNulls(nsp)
+	return vec, nil
 }

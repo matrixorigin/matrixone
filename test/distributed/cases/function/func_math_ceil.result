@@ -2,7 +2,7 @@ select ceiling(5.5),ceiling(-5.5);
 ceiling(5.5)	ceiling(-5.5)
 6	-5
 select ceiling(cast(-2 as unsigned)), ceiling(18446744073709551614), ceiling(-2);
-Data truncation: data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, value '-2'
 select ceiling(1.1e5);
 ceiling(1.1e5)
 110000.0

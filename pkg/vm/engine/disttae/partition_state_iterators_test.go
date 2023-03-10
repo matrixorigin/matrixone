@@ -65,13 +65,13 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	{
 		// insert
-		rowIDVec := vector.New(types.T_Rowid.ToType())
-		tsVec := vector.New(types.T_TS.ToType())
-		vec1 := vector.New(types.T_int64.ToType())
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
+		vec1 := vector.NewVec(types.T_int64.ToType())
 		for i := 0; i < num; i++ {
-			rowIDVec.Append(buildRowID(i+1), false, pool)
-			tsVec.Append(types.BuildTS(int64(i), 0), false, pool)
-			vec1.Append(int64(i), false, pool)
+			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
+			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 0), false, pool)
+			vector.AppendFixed(vec1, int64(i), false, pool)
 		}
 		state.HandleRowsInsert(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
@@ -117,13 +117,13 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	{
 		// duplicated rows
-		rowIDVec := vector.New(types.T_Rowid.ToType())
-		tsVec := vector.New(types.T_TS.ToType())
-		vec1 := vector.New(types.T_int64.ToType())
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
+		vec1 := vector.NewVec(types.T_int64.ToType())
 		for i := 0; i < num; i++ {
-			rowIDVec.Append(buildRowID(i+1), false, pool)
-			tsVec.Append(types.BuildTS(int64(i), 1), false, pool)
-			vec1.Append(int64(i), false, pool)
+			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
+			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
+			vector.AppendFixed(vec1, int64(i), false, pool)
 		}
 		state.HandleRowsInsert(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
@@ -152,11 +152,11 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	deleteAt := 1000
 	{
 		// delete
-		rowIDVec := vector.New(types.T_Rowid.ToType())
-		tsVec := vector.New(types.T_TS.ToType())
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
 		for i := 0; i < num; i++ {
-			rowIDVec.Append(buildRowID(i+1), false, pool)
-			tsVec.Append(types.BuildTS(int64(deleteAt+i), 1), false, pool)
+			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
+			vector.AppendFixed(tsVec, types.BuildTS(int64(deleteAt+i), 1), false, pool)
 		}
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
@@ -201,11 +201,11 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	deleteAt = 2000
 	{
 		// duplicate delete
-		rowIDVec := vector.New(types.T_Rowid.ToType())
-		tsVec := vector.New(types.T_TS.ToType())
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
 		for i := 0; i < num; i++ {
-			rowIDVec.Append(buildRowID(i+1), false, pool)
-			tsVec.Append(types.BuildTS(int64(deleteAt+i), 1), false, pool)
+			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
+			vector.AppendFixed(tsVec, types.BuildTS(int64(deleteAt+i), 1), false, pool)
 		}
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
