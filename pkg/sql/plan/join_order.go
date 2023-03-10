@@ -180,8 +180,14 @@ func (builder *QueryBuilder) swapJoinOrderByStats(onList []*plan.Expr, children 
 		//do not swap
 		return children, joinType
 	}
+
+	//for tpch q13, always left join. will fix this in the future
+	if joinType == plan.Node_RIGHT {
+		return []int32{children[1], children[0]}, plan.Node_LEFT
+	}
+
 	//for left and right join, only swap equal join
-	if !IsEquiJoin(onList) {
+	/*if !IsEquiJoin(onList) {
 		switch joinType {
 		case plan.Node_LEFT:
 			return children, joinType
@@ -189,7 +195,7 @@ func (builder *QueryBuilder) swapJoinOrderByStats(onList []*plan.Expr, children 
 			return []int32{children[1], children[0]}, plan.Node_LEFT
 		default:
 		}
-	}
+	}*/
 
 	//left deep tree is preferred for pipeline
 	//if scan compare with join, scan should be 5% bigger than join, then we can swap
@@ -217,9 +223,9 @@ func (builder *QueryBuilder) swapJoinOrderByStatsUsedForInner(children []int32, 
 	return builder.swapJoinOrderByStats([]*plan.Expr{}, children, joinType)
 }
 
-//func (builder *QueryBuilder) swapJoinOrderByStatsUsedForLeftAndRight(onList []*plan.Expr, children []int32, joinType plan.Node_JoinFlag) ([]int32, plan.Node_JoinFlag) {
-//	return builder.swapJoinOrderByStats(onList, children, joinType)
-//}
+func (builder *QueryBuilder) swapJoinOrderByStatsUsedForLeftAndRight(onList []*plan.Expr, children []int32, joinType plan.Node_JoinFlag) ([]int32, plan.Node_JoinFlag) {
+	return builder.swapJoinOrderByStats(onList, children, joinType)
+}
 
 func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
@@ -230,11 +236,10 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				node.Children[i] = builder.determineJoinOrder(child)
 			}
 		}
-		//if node.NodeType == plan.Node_JOIN {
-		//swap join order for left & right join, inner join is not here
-		//revert for tpch q13, will fix in the future
-		//node.Children, node.JoinType = builder.swapJoinOrderByStatsUsedForLeftAndRight(node.OnList, node.Children, node.JoinType)
-		//}
+		if node.NodeType == plan.Node_JOIN {
+			//swap join order for left & right join, inner join is not here
+			node.Children, node.JoinType = builder.swapJoinOrderByStatsUsedForLeftAndRight(node.OnList, node.Children, node.JoinType)
+		}
 		return nodeID
 	}
 
