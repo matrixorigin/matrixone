@@ -14,6 +14,10 @@
 
 package cachereplacement
 
+type Releasable interface {
+	Release()
+}
+
 type ReleasableValue[T any] struct {
 	Value       T
 	releaseFunc func()
