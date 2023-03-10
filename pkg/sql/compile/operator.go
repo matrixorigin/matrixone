@@ -511,6 +511,8 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Proce
 		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
 		Source:          originRel,
 		UniqueSource:    indexRels,
+
+		IdxIdx: oldCtx.IdxIdx,
 	}, nil
 }
 
