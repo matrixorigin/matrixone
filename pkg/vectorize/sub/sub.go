@@ -38,10 +38,10 @@ const (
 )
 
 func goNumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
-	if xs.IsScalar() {
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
+	if xs.IsConst() {
 		for i, y := range yt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = xt[0] - y
 				if overflow.OverflowUIntSub(xt[i], y, rt[i]) {
 					return moerr.NewOutOfRangeNoCtx("unsigned int", "unsigned int SUB")
@@ -49,9 +49,9 @@ func goNumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) err
 			}
 		}
 		return nil
-	} else if ys.IsScalar() {
+	} else if ys.IsConst() {
 		for i, x := range xt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = x - yt[0]
 				if overflow.OverflowUIntSub(x, yt[0], rt[0]) {
 					return moerr.NewOutOfRangeNoCtx("unsigned int", "unsigned int SUB")
@@ -61,7 +61,7 @@ func goNumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) err
 		return nil
 	} else {
 		for i, x := range xt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = x - yt[i]
 				if overflow.OverflowUIntSub(x, yt[i], rt[i]) {
 					return moerr.NewOutOfRangeNoCtx("unsigned int", "unsigned int SUB")
@@ -73,10 +73,10 @@ func goNumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) err
 }
 
 func goNumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
-	if xs.IsScalar() {
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
+	if xs.IsConst() {
 		for i, y := range yt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = xt[0] - y
 				if overflow.OverflowIntSub(xt[0], y, rt[i]) {
 					return moerr.NewOutOfRangeNoCtx("int", "int SUB")
@@ -84,9 +84,9 @@ func goNumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 			}
 		}
 		return nil
-	} else if ys.IsScalar() {
+	} else if ys.IsConst() {
 		for i, x := range xt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = x - yt[0]
 				if overflow.OverflowIntSub(x, yt[0], rt[i]) {
 					return moerr.NewOutOfRangeNoCtx("int", "int SUB")
@@ -96,7 +96,7 @@ func goNumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 		return nil
 	} else {
 		for i, x := range xt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = x - yt[i]
 				if overflow.OverflowIntSub(x, yt[i], rt[i]) {
 					return moerr.NewOutOfRangeNoCtx("int", "int SUB")
@@ -108,24 +108,24 @@ func goNumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 }
 
 func goNumericSubFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
-	if xs.IsScalar() {
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
+	if xs.IsConst() {
 		for i, y := range yt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = xt[0] - y
 			}
 		}
 		return nil
-	} else if ys.IsScalar() {
+	} else if ys.IsConst() {
 		for i, x := range xt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = x - yt[0]
 			}
 		}
 		return nil
 	} else {
 		for i, x := range xt {
-			if !nulls.Contains(rs.Nsp, uint64(i)) {
+			if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 				rt[i] = x - yt[i]
 			}
 		}
@@ -134,17 +134,17 @@ func goNumericSubFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 }
 
 func NumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 
 	rc := C.SignedInt_VecSub(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(rs.GetType().TypeSize()))
 	if rc != 0 {
 		return moerr.NewOutOfRangeNoCtx("int", "int SUB")
 	}
@@ -152,16 +152,16 @@ func NumericSubSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 }
 
 func NumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 	rc := C.UnsignedInt_VecSub(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(rs.GetType().TypeSize()))
 	if rc != 0 {
 		return moerr.NewOutOfRangeNoCtx("unsigned int", "unsigned int SUB")
 	}
@@ -169,17 +169,17 @@ func NumericSubUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error
 }
 
 func NumericSubFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 
 	rc := C.Float_VecSub(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(rs.GetType().TypeSize()))
 	if rc != 0 {
 		return moerr.NewOutOfRangeNoCtx("float", "float SUB")
 	}

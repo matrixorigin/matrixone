@@ -18,6 +18,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -109,21 +110,26 @@ func (index *immutableIndex) Destroy() (err error) {
 }
 
 func (index *immutableIndex) ReadFrom(
+	bufMgr base.INodeManager,
 	fs *objectio.ObjectFS,
 	id *common.ID,
 	location string,
 	colDef *catalog.ColDef) (err error) {
 	id.Idx = uint16(colDef.Idx)
-	index.zmReader = NewZmReader(
+	index.zmReader = newZmReader(
+		bufMgr,
+		colDef.Type,
+		*id,
 		fs,
 		id.Idx,
 		location)
 
 	if colDef.IsPrimary() {
-		index.bfReader = NewBfReader(
+		index.bfReader = newBfReader(
 			id,
 			colDef.Type,
 			location,
+			bufMgr,
 			fs,
 		)
 	}

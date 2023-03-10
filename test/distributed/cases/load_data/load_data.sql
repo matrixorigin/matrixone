@@ -167,10 +167,11 @@ col2 int,
 col3 int
 );
 
--- echo duplicate,pls refer to issue :#8348
+-- echo duplicate
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6;
 select * from t6;
-
+load data infile '$resources/load_data/auto_increment_2.csv' into table t6 FIELDS ESCAPED BY '\\';
+load data infile '$resources/load_data/auto_increment_2.csv' into table t6 LINES STARTING BY 'aaa';
 drop table t6;
 
 create table t7(

@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -32,8 +33,8 @@ func Test_makeAutoIncrBatch(t *testing.T) {
 		bat := makeAutoIncrBatch(name, uint64(num), uint64(step), mp)
 		convey.So(bat.Attrs, convey.ShouldResemble, catalog.AutoIncrColumnNames[1:])
 		convey.So(len(bat.Vecs), convey.ShouldEqual, 3)
-		convey.So(bat.Vecs[1].Col, convey.ShouldResemble, []uint64{uint64(num)})
-		convey.So(bat.Vecs[2].Col, convey.ShouldResemble, []uint64{uint64(step)})
+		convey.So(vector.MustFixedCol[uint64](bat.Vecs[1]), convey.ShouldResemble, []uint64{uint64(num)})
+		convey.So(vector.MustFixedCol[uint64](bat.Vecs[2]), convey.ShouldResemble, []uint64{uint64(step)})
 	})
 }
 

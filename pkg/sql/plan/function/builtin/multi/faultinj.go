@@ -22,57 +22,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func EnableFaultInjection(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func EnableFaultInjection(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	fault.Enable()
-	return proc.AllocBoolScalarVector(true), nil
+	return vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp()), nil
 }
 
-func DisableFaultInjection(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func DisableFaultInjection(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	fault.Disable()
-	return proc.AllocBoolScalarVector(true), nil
+	return vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp()), nil
 }
 
-func AddFaultPoint(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func AddFaultPoint(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	for i := 0; i < 5; i++ {
-		if vecs[i].IsScalarNull() || !vecs[i].IsScalar() {
+		if ivecs[i].IsConstNull() || !ivecs[i].IsConst() {
 			return nil, moerr.NewInvalidArg(proc.Ctx, "AddFaultPoint", "not scalar")
 		}
 	}
 
-	name := vecs[0].GetString(0)
-	freq := vecs[1].GetString(0)
-	action := vecs[2].GetString(0)
-	iarg := vector.GetValueAt[int64](vecs[3], 0)
-	sarg := vecs[4].GetString(0)
+	name := ivecs[0].GetStringAt(0)
+	freq := ivecs[1].GetStringAt(0)
+	action := ivecs[2].GetStringAt(0)
+	iarg := vector.MustFixedCol[int64](ivecs[3])[0]
+	sarg := ivecs[4].GetStringAt(0)
 
 	if err := fault.AddFaultPoint(proc.Ctx, name, freq, action, iarg, sarg); err != nil {
 		return nil, err
 	}
 
-	return proc.AllocBoolScalarVector(true), nil
+	return vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp()), nil
 }
 
-func RemoveFaultPoint(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if vecs[0].IsScalarNull() || !vecs[0].IsScalar() {
+func RemoveFaultPoint(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if ivecs[0].IsConstNull() || !ivecs[0].IsConst() {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "RemoveFaultPoint", "not scalar")
 	}
 
-	name := vecs[0].GetString(0)
+	name := ivecs[0].GetStringAt(0)
 	if err := fault.RemoveFaultPoint(proc.Ctx, name); err != nil {
 		return nil, err
 	}
-	return proc.AllocBoolScalarVector(true), nil
+	return vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp()), nil
 }
 
-func TriggerFaultPoint(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if vecs[0].IsScalarNull() || !vecs[0].IsScalar() {
+func TriggerFaultPoint(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if ivecs[0].IsConstNull() || !ivecs[0].IsConst() {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "TriggerFaultPoint", "not scalar")
 	}
 
-	name := vecs[0].GetString(0)
+	name := ivecs[0].GetStringAt(0)
 	iv, _, ok := fault.TriggerFault(name)
 	if !ok {
-		return proc.AllocScalarNullVector(types.T_int64.ToType()), nil
+		return vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp()), nil
 	}
-	return proc.AllocInt64ScalarVector(iv), nil
+	return vector.NewConstFixed(types.T_int64.ToType(), iv, 1, proc.Mp()), nil
 }

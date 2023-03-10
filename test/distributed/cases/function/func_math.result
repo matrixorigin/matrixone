@@ -17,13 +17,9 @@ atan(d)	atan(fl)
 null	null
 0.0	0.0
 select acos(d),acos(fl)from t1;
-acos(d)	acos(fl)
-0.0	null
-null	null
-null	null
-1.5707963267948966	1.5707963267948966
+invalid argument acos, bad value 2
 select cot(d),cot(fl) from t1;
-invalid argument cot, bad value cot(0)
+invalid argument cot, bad value 0
 select cot(d),cot(fl) from t1 where d <> 0;
 cot(d)	cot(fl)
 0.6420926159343306	1.8340266997618755
