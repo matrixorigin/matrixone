@@ -69,7 +69,7 @@ INSERT INTO split_part_01 VALUES(7, '83092i3f2o.dkwec<>dhwkjv<>789392-3<>', NULL
 INSERT INTO split_part_01 VALUES(8, NULL, '.',11);
 INSERT INTO split_part_01 VALUES(9, '442+562++++——----吃饭了',',',NULL);
 INSERT INTO split_part_01 VALUES(1, 'ewjj32..3,l43/.43', 0);
-internal error: Column count doesn't match value count at row '0'
+Column count doesn't match value count at row 1
 INSERT INTO split_part_01 VALUES(11, 'vhjdwewj3902i302o302($#$%^&*()_POJHFTY&(*UIOPL:<DQ87*q8JIFWJLWKMDXKLSMDXKSLMKCw54545484154444489897897o8u8&92)(','few',4);
 internal error: Can't cast 'vhjdwewj3902i302o302($#$%!^(MISSING)&*()_POJHFTY&(*UIOPL:<DQ87*q8JIFWJLWKMDXKLSMDXKSLMKCw545454841544444898978...' from VARCHAR type to VARCHAR type. Src length 111 is larger than Dest length 100
 INSERT INTO split_part_01 VALUES(12, '', 'vjdkelwvrew', 32769);

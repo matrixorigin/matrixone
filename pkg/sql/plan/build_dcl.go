@@ -62,7 +62,12 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		}
 
 	case *tree.PrepareString:
-		stmts, err := mysql.Parse(ctx.GetContext(), pstmt.Sql)
+		var v interface{}
+		v, err = ctx.ResolveVariable("lower_case_table_names", true, true)
+		if err != nil {
+			v = int64(1)
+		}
+		stmts, err := mysql.Parse(ctx.GetContext(), pstmt.Sql, v.(int64))
 		if err != nil {
 			return nil, err
 		}

@@ -32,6 +32,9 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	e.Lock()
 	defer e.Unlock()
 
+	packer, put := e.packerPool.Get()
+	defer put()
+
 	{
 		parts := make(Partitions, len(e.dnMap))
 		for i := range parts {
@@ -68,7 +71,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF, packer)
 		done()
 		e.catalog.InsertDatabase(bat)
 		bat.Clean(m)
@@ -95,7 +98,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, packer)
 		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
@@ -129,7 +132,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done = part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, packer)
 		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
@@ -155,7 +158,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, packer)
 		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
@@ -189,7 +192,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done = part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, packer)
 		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
@@ -215,7 +218,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, packer)
 		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
@@ -249,7 +252,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		state, done = part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, m)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, packer)
 		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
@@ -272,17 +275,23 @@ func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
 	return parts
 }
 
-func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64,
-	tbl *txnTable) error {
+func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64, tbl *txnTable) error {
 	parts := e.getPartitions(databaseId, tableId)
-	for _, part := range parts {
-		part.Lock()
-		ckptList := part.ckptList
-		part.ckptList = nil
-		part.Unlock()
-		state := part.state.Load().Copy()
 
-		for _, ckpt := range ckptList {
+	for _, part := range parts {
+
+		select {
+		case <-part.lock:
+			defer func() {
+				part.lock <- struct{}{}
+			}()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		state, doneMutate := part.MutateState()
+
+		for _, ckpt := range state.Checkpoints {
 			entries, err := logtail.LoadCheckpointEntries(
 				ctx,
 				ckpt,
@@ -300,7 +309,12 @@ func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64,
 				}
 			}
 		}
+		state.Checkpoints = state.Checkpoints[:0]
+
+		doneMutate()
+
 	}
+
 	return nil
 }
 

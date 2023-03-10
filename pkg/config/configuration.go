@@ -284,6 +284,8 @@ type FrontendParameters struct {
 	QueryResultMaxsize uint64 `toml:"queryResultMaxsize"`
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
+
+	LowerCaseTableNames string `toml:"lowerCaseTableNames"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -401,6 +403,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.AutoIncrCacheSize == 0 {
 		fp.AutoIncrCacheSize = 3000
+	}
+
+	if fp.LowerCaseTableNames == "" {
+		fp.LowerCaseTableNames = "1"
 	}
 }
 

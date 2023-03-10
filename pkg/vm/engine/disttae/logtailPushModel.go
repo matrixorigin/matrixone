@@ -582,19 +582,23 @@ func updatePartitionOfPush(
 	partitions := e.getPartitions(dbId, tblId)
 	partition := partitions[dnId]
 
+	select {
+	case <-partition.lock:
+		defer func() {
+			partition.lock <- struct{}{}
+		}()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 	state, doneMutate := partition.MutateState()
 
 	key := e.catalog.GetTableById(dbId, tblId)
 
-	partition.Lock()
-	partition.ckptList = append(partition.ckptList, tl.CkpLocation)
-	partition.Unlock()
+	state.Checkpoints = append(state.Checkpoints, tl.CkpLocation)
+
 	if err = consumeLogTailOfPush(
 		ctx,
-		dbId,
-		"",
-		key.Id,
-		key.Name,
 		key.PrimaryIdx,
 		e,
 		state,
@@ -604,41 +608,20 @@ func updatePartitionOfPush(
 		return err
 	}
 
-	doneMutate()
-
-	select {
-	case <-partition.lock:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 	partition.ts = *tl.Ts
-	partition.lock <- struct{}{}
+
+	doneMutate()
 
 	return nil
 }
 
 func consumeLogTailOfPush(
 	ctx context.Context,
-	databaseId uint64,
-	databaseName string,
-	tableId uint64,
-	tableName string,
 	primaryIdx int,
 	engine *Engine,
 	state *PartitionState,
 	lt *logtail.TableLogtail,
 ) (err error) {
-	/*
-		var entries []*api.Entry
-
-		if entries, err = logtail2.LoadCheckpointEntries(
-			ctx,
-			lt.CkpLocation,
-			tableId, tableName,
-			databaseId, databaseName, engine.fs); err != nil {
-			return
-		}
-	*/
 	for i := 0; i < len(lt.Commands); i++ {
 		if err = consumeEntry(ctx, primaryIdx,
 			engine, state, &lt.Commands[i]); err != nil {

@@ -27,17 +27,16 @@ var (
 		input  string
 		output string
 	}{
-		input:  "create table t1 (a int comment '\"123123\\'')",
-		output: "create table t1 (a int comment \"123123'')",
+		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
+		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
 	}
 )
 
-// character set latin1 NOT NULL default
 func TestDebug(t *testing.T) {
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := ParseOne(context.TODO(), debugSQL.input)
+	ast, err := ParseOne(context.TODO(), debugSQL.input, 1)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return
@@ -49,10 +48,42 @@ func TestDebug(t *testing.T) {
 }
 
 var (
+	orginSQL = struct {
+		input  string
+		output string
+	}{
+		input:  "select A from t1",
+		output: "select A from t1",
+	}
+)
+
+// character set latin1 NOT NULL default
+func TestOriginSQL(t *testing.T) {
+	if orginSQL.output == "" {
+		orginSQL.output = orginSQL.input
+	}
+	ast, err := ParseOne(context.TODO(), orginSQL.input, 0)
+	if err != nil {
+		t.Errorf("Parse(%q) err: %v", orginSQL.input, err)
+		return
+	}
+	out := tree.String(ast, dialect.MYSQL)
+	if orginSQL.output != out {
+		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", orginSQL.output, out)
+	}
+}
+
+var (
 	validSQL = []struct {
 		input  string
 		output string
 	}{{
+		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
+		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
+	}, {
+		input:  "SHOW CREATE TABLE information_schema.PROCESSLIST;",
+		output: "show create table information_schema.processlist",
+	}, {
 		input:  "create table t1 (a int comment '\"123123\\'')",
 		output: "create table t1 (a int comment \"123123'')",
 	}, {
@@ -104,10 +135,10 @@ var (
 		output: "select id, cid, status, ip, stream from camera where (cid_type = ?)",
 	}, {
 		input:  "CREATE  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
-		output: "create view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
+		output: "create view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
 	}, {
 		input:  "ALTER  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
-		output: "alter view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
+		output: "alter view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
 	}, {
 		input: "select time from t1 as value",
 	}, {
@@ -484,7 +515,7 @@ var (
 		output: "select md.datname as Database from tt as md",
 	}, {
 		input:  "select * from t where a = `Hello`",
-		output: "select * from t where a = Hello",
+		output: "select * from t where a = hello",
 	}, {
 		input:  "CREATE VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
 		output: "create view v as select * from t where t.id = f(t.name)",
@@ -1951,6 +1982,28 @@ var (
 			input:  "UNLOCK TABLES",
 			output: "UnLock Tables",
 		},
+		{
+			input: "alter table tbl1 drop column col1",
+		},
+		{
+			input: "alter table tbl1 drop index idx_name",
+		},
+		{
+			input: "alter table tbl1 drop key idx_name",
+		},
+		{
+			input: "alter table tbl1 drop primary key",
+		},
+		{
+			input: "alter table tbl1 drop foreign key fk_name",
+		},
+		{
+			input: "alter table tbl1 add foreign key sdf (a, b) references b(a asc, b desc)",
+		},
+		{
+			input:  "alter table tbl1 checksum = 0, COMMENT = 'asdf'",
+			output: "alter table tbl1 checksum = 0, comment = asdf",
+		},
 	}
 )
 
@@ -1960,7 +2013,7 @@ func TestValid(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(ctx, tcase.input)
+		ast, err := ParseOne(ctx, tcase.input, 1)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -1992,7 +2045,7 @@ func TestMulti(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		asts, err := Parse(ctx, tcase.input)
+		asts, err := Parse(ctx, tcase.input, 1)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
