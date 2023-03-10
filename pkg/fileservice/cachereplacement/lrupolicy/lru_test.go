@@ -36,7 +36,7 @@ func TestLRUReleasable(t *testing.T) {
 func TestLRURefCount(t *testing.T) {
 	l := New(1)
 
-	r := cachereplacement.NewRC(42)
+	r := cachereplacement.NewRCValue(42)
 	r.IncRef()
 	l.Set(1, r, 1)
 	_, ok := l.kv[1]
@@ -55,7 +55,7 @@ func TestLRURefCount(t *testing.T) {
 	_, ok = l.kv[2]
 	assert.True(t, ok)
 
-	r2 := cachereplacement.NewRC(42)
+	r2 := cachereplacement.NewRCValue(42)
 	r2.IncRef()
 	l.Set(3, r2, 1)
 	_, ok = l.kv[3]

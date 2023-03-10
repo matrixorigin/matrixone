@@ -57,7 +57,7 @@ func TestCacheWithRCExample(t *testing.T) {
 				ToObject: func(_ io.Reader, data []byte) (any, int64, error) {
 					i, err := strconv.Atoi(string(data))
 					assert.Nil(t, err)
-					return cachereplacement.NewRC(i), 8, nil
+					return cachereplacement.NewRCValue(i), 8, nil
 				},
 			},
 		},
@@ -65,7 +65,7 @@ func TestCacheWithRCExample(t *testing.T) {
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 
-	value := vec.Entries[0].Object.(*cachereplacement.RC[int])
+	value := vec.Entries[0].Object.(*cachereplacement.RCValue[int])
 	assert.Equal(t, 42, value.Value)
 
 	value.IncRef()       // pin, cache will not evict this item
