@@ -456,22 +456,16 @@ func InsertBatch(
 		if err != nil {
 			return 0, err
 		}
-
-		err = writeUniqueTable(container, proc, bat, tableDef, info.updateNameToPos, info.pkPos, uniqueRel)
+	} else {
+		// write origin table
+		err := rel.Write(proc.Ctx, bat)
 		if err != nil {
 			return 0, err
 		}
-		return uint64(affectedRows), nil
-	}
-
-	// write origin table
-	err := rel.Write(proc.Ctx, bat)
-	if err != nil {
-		return 0, err
 	}
 
 	// write unique key table
-	err = writeUniqueTable(nil, proc, bat, tableDef, info.updateNameToPos, info.pkPos, uniqueRel)
+	err := writeUniqueTable(container, proc, bat, tableDef, info.updateNameToPos, info.pkPos, uniqueRel)
 	if err != nil {
 		return 0, err
 	}
