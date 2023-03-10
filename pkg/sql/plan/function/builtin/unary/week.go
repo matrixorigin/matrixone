@@ -17,52 +17,49 @@ package unary
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/week"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func DateToWeek(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint8, Size: 1}
-	inputValues := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func DateToWeek(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint8.ToType()
+	ivals := vector.MustFixedCol[types.Date](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, week.DateToWeek(inputValues, resultValues))
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, ivals[0].WeekOfYear2(), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint8](resultVector)
-		week.DateToWeek(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[uint8](rvec)
+		for i := range ivals {
+			rvals[i] = ivals[i].WeekOfYear2()
+		}
+		return rvec, nil
 	}
 }
 
-func DatetimeToWeek(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint8, Size: 1}
-	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func DatetimeToWeek(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_uint8, Size: 1}
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, week.DatetimeToWeek(inputValues, resultValues))
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, ivals[0].ToDate().WeekOfYear2(), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint8](resultVector)
-		week.DatetimeToWeek(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[uint8](rvec)
+		for i := range ivals {
+			rvals[i] = ivals[i].ToDate().WeekOfYear2()
+		}
+		return rvec, nil
 	}
 }

@@ -15,11 +15,12 @@
 package ctl
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestMOLogDate(t *testing.T) {

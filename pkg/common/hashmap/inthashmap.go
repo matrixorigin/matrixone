@@ -91,7 +91,7 @@ func (m *IntHashMap) Cardinality() uint64 {
 
 func (m *IntHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
-		switch vec.Typ.TypeSize() {
+		switch vec.GetType().TypeSize() {
 		case 1:
 			fillKeys[uint8](m, vec, 1, start, count)
 		case 2:
@@ -109,7 +109,25 @@ func (m *IntHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 func fillKeys[T types.FixedSizeT](m *IntHashMap, vec *vector.Vector, size uint32, start int, n int) {
 	keys := m.keys
 	keyOffs := m.keyOffs
-	if !vec.GetNulls().Any() {
+	if vec.IsConstNull() {
+		if m.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				m.zValues[i] = 0
+			}
+		}
+	} else if vec.IsConst() {
+		ptr := (*T)(vector.GetPtrAt(vec, 0))
+		for i := 0; i < n; i++ {
+			*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+			*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = *ptr
+		}
+		uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
+	} else if !vec.GetNulls().Any() {
 		if m.hasNull {
 			for i := 0; i < n; i++ {
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
@@ -153,21 +171,30 @@ func fillKeys[T types.FixedSizeT](m *IntHashMap, vec *vector.Vector, size uint32
 }
 
 func fillStrKey(m *IntHashMap, vec *vector.Vector, start int, n int) {
-	area := vec.GetArea()
-	vs := vector.MustTCols[types.Varlena](vec)
 	keys := m.keys
 	keyOffs := m.keyOffs
-	if !vec.GetNulls().Any() {
+	if vec.IsConstNull() {
 		if m.hasNull {
 			for i := 0; i < n; i++ {
-				v := vs[i+start].GetByteSlice(area)
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				m.zValues[i] = 0
+			}
+		}
+	} else if !vec.GetNulls().Any() {
+		if m.hasNull {
+			for i := 0; i < n; i++ {
+				v := vec.GetBytesAt(i + start)
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
 				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], v)
 				m.keyOffs[i] += uint32(len(v) + 1)
 			}
 		} else {
 			for i := 0; i < n; i++ {
-				v := vs[i+start].GetByteSlice(area)
+				v := vec.GetBytesAt(i + start)
 				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], v)
 				m.keyOffs[i] += uint32(len(v))
 			}
@@ -176,7 +203,7 @@ func fillStrKey(m *IntHashMap, vec *vector.Vector, start int, n int) {
 		nsp := vec.GetNulls()
 		if m.hasNull {
 			for i := 0; i < n; i++ {
-				v := vs[i+start].GetByteSlice(area)
+				v := vec.GetBytesAt(i + start)
 				if nsp.Contains(uint64(i + start)) {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
 					keyOffs[i]++
@@ -188,7 +215,7 @@ func fillStrKey(m *IntHashMap, vec *vector.Vector, start int, n int) {
 			}
 		} else {
 			for i := 0; i < n; i++ {
-				v := vs[i+start].GetByteSlice(area)
+				v := vec.GetBytesAt(i + start)
 				if nsp.Contains(uint64(i + start)) {
 					m.zValues[i] = 0
 					continue

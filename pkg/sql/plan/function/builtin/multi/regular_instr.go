@@ -21,17 +21,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func RegularInstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vectors[0]
-	secondVector := vectors[1]
-	firstValues := vector.MustStrCols(firstVector)
-	secondValues := vector.MustStrCols(secondVector)
-	resultType := types.T_int64.ToType()
+func RegularInstr(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	firstVector := ivecs[0]
+	secondVector := ivecs[1]
+	firstValues := vector.MustStrCol(firstVector)
+	secondValues := vector.MustStrCol(secondVector)
+	rtyp := types.T_int64.ToType()
 
 	//maxLen
-	maxLen := vector.Length(vectors[0])
-	for i := range vectors {
-		val := vector.Length(vectors[i])
+	maxLen := ivecs[0].Length()
+	for i := range ivecs {
+		val := ivecs[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
@@ -44,7 +44,7 @@ func RegularInstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	var match_type []string
 
 	//different parameter length conditions
-	switch len(vectors) {
+	switch len(ivecs) {
 	case 2:
 		pos = []int64{1}
 		occ = []int64{1}
@@ -52,35 +52,35 @@ func RegularInstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		match_type = []string{"c"}
 
 	case 3:
-		pos = vector.MustTCols[int64](vectors[2])
+		pos = vector.MustFixedCol[int64](ivecs[2])
 		occ = []int64{1}
 		opt = []uint8{0}
 		match_type = []string{"c"}
 	case 4:
-		pos = vector.MustTCols[int64](vectors[2])
-		occ = vector.MustTCols[int64](vectors[3])
+		pos = vector.MustFixedCol[int64](ivecs[2])
+		occ = vector.MustFixedCol[int64](ivecs[3])
 		opt = []uint8{0}
 		match_type = []string{"c"}
 	case 5:
-		pos = vector.MustTCols[int64](vectors[2])
-		occ = vector.MustTCols[int64](vectors[3])
-		opt = vector.MustTCols[uint8](vectors[4])
+		pos = vector.MustFixedCol[int64](ivecs[2])
+		occ = vector.MustFixedCol[int64](ivecs[3])
+		opt = vector.MustFixedCol[uint8](ivecs[4])
 		match_type = []string{"c"}
 	}
 
-	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+	if firstVector.IsConstNull() || secondVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, maxLen, proc.Mp()), nil
 	}
 
-	resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, maxLen, nil)
 	if err != nil {
 		return nil, err
 	}
-	resultValues := vector.MustTCols[int64](resultVector)
-	err = regular.RegularInstrWithArrays(firstValues, secondValues, pos, occ, opt, match_type, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues, maxLen)
+	rvals := vector.MustFixedCol[int64](rvec)
+	err = regular.RegularInstrWithArrays(firstValues, secondValues, pos, occ, opt, match_type, firstVector.GetNulls(), secondVector.GetNulls(), rvec.GetNulls(), rvals, maxLen)
 	if err != nil {
 		return nil, err
 	}
-	return resultVector, nil
+	return rvec, nil
 
 }

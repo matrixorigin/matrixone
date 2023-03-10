@@ -523,8 +523,8 @@ func Test_getDataFromPipeline(t *testing.T) {
 		batchCase2 := func() *batch.Batch {
 			bat := genBatch()
 			for i := 0; i < len(bat.Attrs); i++ {
-				for j := 0; j < vector.Length(bat.Vecs[0]); j++ {
-					nulls.Add(bat.Vecs[i].Nsp, uint64(j))
+				for j := 0; j < bat.Vecs[0].Length(); j++ {
+					nulls.Add(bat.Vecs[i].GetNulls(), uint64(j))
 				}
 			}
 			return bat
@@ -595,7 +595,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 			for i := 0; i < len(bat.Attrs); i++ {
 				for j := 0; j < 1; j++ {
-					nulls.Add(bat.Vecs[i].Nsp, uint64(j))
+					nulls.Add(bat.Vecs[i].GetNulls(), uint64(j))
 				}
 			}
 			return bat
@@ -604,7 +604,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		err = getDataFromPipeline(ses, batchCase2)
 		convey.So(err, convey.ShouldBeNil)
 
-		batchCase2.Vecs = append(batchCase2.Vecs, &vector.Vector{Typ: types.Type{Oid: 88}})
+		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.Type{Oid: 88}))
 		err = getDataFromPipeline(ses, batchCase2)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -674,7 +674,9 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
-		vec := vector.PreAllocType(tt[i], batchSize, batchSize, testutil.TestUtilMp)
+		vec := vector.NewVec(tt[i])
+		vec.PreExtend(batchSize, testutil.TestUtilMp)
+		vec.SetLength(batchSize)
 		batchData.Vecs[i] = vec
 	}
 
@@ -1037,8 +1039,8 @@ func TestDump2File(t *testing.T) {
 			cnt += 1
 			if cnt == 1 {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.New(types.T_int64.ToType())
-				err := bat.Vecs[0].Append(int64(1), false, testutil.TestUtilMp)
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				err := vector.AppendFixed(bat.Vecs[0], int64(1), false, testutil.TestUtilMp)
 				convey.So(err, convey.ShouldBeNil)
 			}
 			return nil, nil

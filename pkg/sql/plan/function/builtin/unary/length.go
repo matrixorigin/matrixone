@@ -20,24 +20,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Length(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	if inputVector.IsScalarNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+func Length(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_int64.ToType()
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
-	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		ret := vector.NewConstFixed(resultType, inputVector.Length(), int64(len(inputValues[0])), proc.Mp())
-		return ret, nil
+	ivals := vector.MustStrCol(inputVector)
+	if inputVector.IsConst() {
+		return vector.NewConstFixed(rtyp, int64(len(ivals[0])), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[int64](resultVector)
-		strLength(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[int64](rvec)
+		strLength(ivals, rvals)
+		return rvec, nil
 	}
 }
 

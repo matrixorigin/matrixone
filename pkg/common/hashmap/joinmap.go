@@ -17,11 +17,10 @@ package hashmap
 import (
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func NewJoinMap(sels [][]int32, nullSels []int32, expr *plan.Expr, mp *StrHashMap, hasNull bool, idx *index.LowCardinalityIndex) *JoinMap {
+func NewJoinMap(sels [][]int32, nullSels []int32, expr *plan.Expr, mp *StrHashMap, hasNull bool) *JoinMap {
 	cnt := int64(1)
 	return &JoinMap{
 		cnt:      &cnt,
@@ -29,7 +28,6 @@ func NewJoinMap(sels [][]int32, nullSels []int32, expr *plan.Expr, mp *StrHashMa
 		expr:     expr,
 		sels:     sels,
 		hasNull:  hasNull,
-		idx:      idx,
 		nullSels: nullSels,
 	}
 }
@@ -48,10 +46,6 @@ func (jm *JoinMap) Expr() *plan.Expr {
 
 func (jm *JoinMap) HasNull() bool {
 	return jm.hasNull
-}
-
-func (jm *JoinMap) Index() *index.LowCardinalityIndex {
-	return jm.idx
 }
 
 func (jm *JoinMap) Nullsels() []int32 {
@@ -76,7 +70,6 @@ func (jm *JoinMap) Dup() *JoinMap {
 		sels:     jm.sels,
 		hasNull:  jm.hasNull,
 		cnt:      jm.cnt,
-		idx:      jm.idx,
 		nullSels: jm.nullSels,
 	}
 	if atomic.AddInt64(jm.dupCnt, -1) == 0 {

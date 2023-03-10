@@ -17,15 +17,16 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
 
@@ -243,6 +244,22 @@ func TestNeedRead(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestBlockWrite(t *testing.T) {
+	ctx := context.TODO()
+	testFs := testutil.NewFS()
+	inputBat := testutil.NewBatch([]types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	}, true, 20, mpool.MustNewZero())
+
+	_, err := blockWrite(ctx, inputBat, testFs)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
 }
 
 func TestGetNonIntPkValueByExpr(t *testing.T) {
@@ -596,3 +613,36 @@ func TestComputeRangeByIntPk(t *testing.T) {
 // 		}
 // 	})
 // }
+
+func TestCheckIfDataInBlock(t *testing.T) {
+	meta := BlockMeta{
+		Zonemap: [][64]byte{
+			makeZonemapForTest(types.T_int64, int64(10), int64(100)),
+			makeZonemapForTest(types.T_blob, []byte("a"), []byte("h")),
+			// makeZonemapForTest(types.T_varchar, "a", "h"),
+		},
+	}
+
+	type asserts = struct {
+		result bool
+		data   any
+		colIdx int
+		typ    types.Type
+	}
+
+	testCases := []asserts{
+		{true, int64(12), 0, types.T_int64.ToType()},   // 12 in [10, 100]
+		{false, int64(120), 0, types.T_int64.ToType()}, // 120 not in [10, 100]
+		{true, []byte("b"), 1, types.T_blob.ToType()},  // "b" in ["a", "h"]
+		{false, []byte("i"), 1, types.T_blob.ToType()}, // "i" not in ["a", "h"]
+	}
+
+	t.Run("test checkIfDataInBlock", func(t *testing.T) {
+		for i, testCase := range testCases {
+			result, _ := checkIfDataInBlock(testCase.data, meta, testCase.colIdx, testCase.typ)
+			if result != testCase.result {
+				t.Fatalf("test checkIfDataInBlock at cases[%d], result is not match", i)
+			}
+		}
+	})
+}

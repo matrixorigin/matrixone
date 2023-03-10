@@ -42,7 +42,7 @@ func TestI32Eq(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("%+v == %+v \n", as[i], bs[i])
 		fmt.Printf("actual res:%+v\n", res[i])
@@ -71,7 +71,7 @@ func TestU32Eq(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("%+v == %+v \n", as[i], bs[i])
 		fmt.Printf("actual res:%+v\n", res[i])
@@ -99,7 +99,7 @@ func TestF32Eq(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 2; i++ {
 		//fmt.Printf("%+v == %+v \n", as[i], bs[i])
 		//fmt.Printf("actual res:%+v\n", res[i])
@@ -127,7 +127,7 @@ func TestF64Eq(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 2; i++ {
 		//fmt.Printf("%+v == %+v \n", as[i], bs[i])
 		//fmt.Printf("actual res:%+v\n", res[i])
@@ -155,7 +155,7 @@ func TestBoolEq(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 2; i++ {
 		fmt.Printf("%+v == %+v : %v \n", as[i], bs[i], res[i])
 		assert.Equal(t, as[i] == bs[i], res[i])
@@ -180,7 +180,7 @@ func TestDec64Eq(t *testing.T) {
 		t.Fatalf("decimal64 equal failed")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("%+v == %+v \n", as[i], bs[i])
 		fmt.Printf("actual res:%+v\n", res[i])
@@ -209,7 +209,7 @@ func TestDec128Eq(t *testing.T) {
 		t.Fatalf("decimal128 equal failed")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("%+v == %+v \n", as[i], bs[i])
 		fmt.Printf("actual res:%+v\n", res[i])

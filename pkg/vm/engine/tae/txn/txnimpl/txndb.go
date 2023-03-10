@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"sync"
 	"time"
 
@@ -124,8 +123,10 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 
 func (db *txnDB) AddBlksWithMetaLoc(
 	tid uint64,
-	zm []dataio.Index,
-	metaLocs []string) error {
+	pkVecs []containers.Vector,
+	file string,
+	metaLocs []string,
+	flag int32) error {
 	table, err := db.getOrSetTable(tid)
 	if err != nil {
 		return err
@@ -133,7 +134,7 @@ func (db *txnDB) AddBlksWithMetaLoc(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.AddBlksWithMetaLoc(zm, metaLocs)
+	return table.AddBlksWithMetaLoc(pkVecs, file, metaLocs, flag)
 }
 
 func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {

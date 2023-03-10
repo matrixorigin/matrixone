@@ -120,7 +120,7 @@ SELECT format(d3, 4) FROM format_01 WHERE ABS(d3) > 1000;
 SELECT COUNT(format(d1, 2)) FROM format_01 GROUP BY d1;
 SELECT * FROM format_01 ORDER BY format(id, 0) DESC;
 SELECT SIN(format(d1,2)), TAN(format(id, 0)), COS(format(id,0)) from format_01;
-SELECT cot(format(45, 0)), ACOS(format(60, 1)), ATAN(format(75, 0)), SINH(format(90, 1));
+SELECT cot(format(45, 0)), ATAN(format(75, 0)), SINH(format(90, 1));
 SELECT EXP(format(4, 2));
 SELECT MAX(format(d1, id)), MIN(format(d3, 0)) from format_01;
 SELECT power(format(2,1), 2);

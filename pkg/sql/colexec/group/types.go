@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -45,7 +44,7 @@ type container struct {
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
-	idx        *index.LowCardinalityIndex
+	//idx        *index.LowCardinalityIndex
 
 	aggVecs   []evalVector
 	groupVecs []evalVector
@@ -85,7 +84,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 func (ctr *container) ToInputType(idx int) (t []types.Type) {
 	for i := range ctr.multiVecs[idx] {
-		t = append(t, ctr.multiVecs[idx][i].vec.Typ)
+		t = append(t, *ctr.multiVecs[idx][i].vec.GetType())
 	}
 	return
 }

@@ -33,17 +33,17 @@ func CeilInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 
 // Parse string to float instead of int.
 func CeilStr(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	values := vector.MustStrCols(vecs[0])
+	values := vector.MustStrCol(vecs[0])
 	floatvector, err := proc.AllocVectorOfRows(types.T_float64.ToType(), 0, nil)
 	if err != nil {
 		return nil, err
 	}
 	for _, v := range values {
-		float, err := strconv.ParseFloat(v, 64)
+		floatVal, err := strconv.ParseFloat(v, 64)
 		if err != nil {
 			return nil, err
 		}
-		if err := floatvector.Append(float, false, proc.Mp()); err != nil {
+		if err := vector.AppendFixed(floatvector, floatVal, false, proc.Mp()); err != nil {
 			floatvector.Free(proc.Mp())
 			return nil, err
 		}
@@ -58,7 +58,7 @@ func CeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 }
 
 func CeilDecimal128(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	scale := vecs[0].Typ.Scale
+	scale := vecs[0].GetType().Scale
 	cb := func(vs []types.Decimal128, rs []types.Decimal128, digits int64) []types.Decimal128 {
 		return ceil.CeilDecimal128(scale, vs, rs, digits)
 	}
