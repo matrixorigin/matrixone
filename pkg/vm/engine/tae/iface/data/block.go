@@ -91,10 +91,6 @@ type Block interface {
 	HasDeleteIntentsPreparedIn(from, to types.TS) bool
 
 	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap, precommit bool) error
-	//TODO::
-	//BatchDedupByMetaLoc(txn txnif.AsyncTxn, fs *objectio.ObjectFS,
-	//	metaLoc string, rowmask *roaring.Bitmap, precommit bool) error
-
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(txn txnif.AsyncTxn, row, col int) (any, error)
 	PPString(level common.PPLevel, depth int, prefix string) string

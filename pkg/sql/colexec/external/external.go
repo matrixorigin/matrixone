@@ -25,8 +25,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"io"
 	"math"
 	"os"
@@ -37,6 +35,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -617,7 +617,7 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	return bat, nil
 }
 
-func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) (*batch.Batch, error) {
+func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader objectio.Reader) (*batch.Batch, error) {
 	ctx, span := trace.Start(ctx, "getBatchFromZonemapFile")
 	defer span.End()
 	bat := makeBatch(param, 0, proc.Mp())
@@ -638,7 +638,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
-	bats, err := objectReader.LoadColumns(ctx, idxs, []uint32{param.Zoneparam.bs[param.Zoneparam.offset].GetExtent().Id()}, proc.GetMPool())
+	vec, err := objectReader.Read(ctx, param.Zoneparam.bs[param.Zoneparam.offset].GetExtent(), idxs, proc.GetMPool())
 	if err != nil {
 		return nil, err
 	}
@@ -652,7 +652,8 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 			}
 		} else if catalog.ContainExternalHidenCol(param.Attrs[i]) {
 			if rows == 0 {
-				vecTmp = bats[0].Vecs[i]
+				vecTmp = vector.New(makeType(param.OriginCols, 0))
+				err = vecTmp.Read(vec.Entries[i].Object.([]byte))
 				if err != nil {
 					return nil, err
 				}
@@ -667,7 +668,8 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 				}
 			}
 		} else {
-			vecTmp = bats[0].Vecs[i]
+			vecTmp = vector.New(bat.Vecs[i].Typ)
+			err = vecTmp.Read(vec.Entries[i].Object.([]byte))
 			if err != nil {
 				return nil, err
 			}
@@ -696,14 +698,14 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	return bat, nil
 }
 
-func needRead(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) bool {
+func needRead(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader objectio.Reader) bool {
 	_, span := trace.Start(ctx, "needRead")
 	defer span.End()
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		return true
 	}
-	indexes, err := objectReader.LoadZoneMap(context.Background(), param.Filter.columns,
-		param.Zoneparam.bs[param.Zoneparam.offset], proc.GetMPool())
+	indexes, err := objectReader.ReadIndex(context.Background(), param.Zoneparam.bs[param.Zoneparam.offset].GetExtent(),
+		param.Filter.columns, objectio.ZoneMapType, proc.GetMPool())
 	if err != nil {
 		return true
 	}
@@ -726,8 +728,10 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process, 
 	for i := 0; i < dataLength; i++ {
 		idx := param.Filter.defColumns[i]
 		dataTypes[i] = uint8(param.Cols[idx].Typ.Id)
+		typ := types.T(dataTypes[i]).ToType()
 
-		zm := indexes[i]
+		zm := index.NewZoneMap(typ)
+		err = zm.Unmarshal(indexes[i].(*objectio.ZoneMap).GetData())
 		if err != nil {
 			return true
 		}
@@ -759,17 +763,17 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process, 
 	return ifNeed
 }
 
-func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, size int64, objectReader *blockio.BlockReader) (*batch.Batch, error) {
+func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, size int64, objectReader objectio.Reader) (*batch.Batch, error) {
 	var err error
 	if param.Extern.QueryResult {
-		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, size, proc.GetMPool())
+		param.Zoneparam.bs, err = objectReader.ReadAllMeta(param.Ctx, size, proc.GetMPool())
 		if err != nil {
 			return nil, err
 		}
 	} else if param.Zoneparam.bs == nil {
 		param.plh = &ParseLineHandler{}
 		var err error
-		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, size, proc.GetMPool())
+		param.Zoneparam.bs, err = objectReader.ReadAllMeta(param.Ctx, size, proc.GetMPool())
 		if err != nil {
 			return nil, err
 		}
@@ -790,7 +794,7 @@ func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Pr
 }
 
 func ScanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	if param.Filter.blockReader == nil || param.Extern.QueryResult {
+	if param.Filter.objectReader == nil || param.Extern.QueryResult {
 		dir, _ := filepath.Split(param.Fileparam.Filepath)
 		var service fileservice.FileService
 		var err error
@@ -841,7 +845,7 @@ func ScanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 			}
 		}
 
-		param.Filter.blockReader, err = blockio.NewFileReader(service, param.Fileparam.Filepath)
+		param.Filter.objectReader, err = objectio.NewObjectReader(param.Fileparam.Filepath, service)
 		if err != nil {
 			return nil, err
 		}
@@ -851,13 +855,13 @@ func ScanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx("can' t find the filepath %s", param.Fileparam.Filepath)
 	}
-	bat, err := getZonemapBatch(ctx, param, proc, size, param.Filter.blockReader)
+	bat, err := getZonemapBatch(ctx, param, proc, size, param.Filter.objectReader)
 	if err != nil {
 		return nil, err
 	}
 
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
-		param.Filter.blockReader = nil
+		param.Filter.objectReader = nil
 		param.Zoneparam.bs = nil
 		param.plh = nil
 		param.Fileparam.FileFin++
