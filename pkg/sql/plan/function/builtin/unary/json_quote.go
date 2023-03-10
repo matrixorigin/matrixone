@@ -21,35 +21,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func JsonQuote(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
-	vec := vecs[0]
+func JsonQuote(ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
+	vec := ivecs[0]
 	defer func() {
 		if err != nil && ret != nil {
 			ret.Free(proc.Mp())
 		}
 	}()
-	resultType := types.T_json.ToType()
-	if vec.IsScalarNull() {
-		ret = proc.AllocScalarNullVector(resultType)
+	rtyp := types.T_json.ToType()
+	if vec.IsConstNull() {
+		ret = vector.NewConstNull(rtyp, vec.Length(), proc.Mp())
 		return
 	}
-	vs := vector.MustStrCols(vec)
-	if vec.IsScalar() {
+	vs := vector.MustStrCol(vec)
+	if vec.IsConst() {
 		var dt []byte
 		dt, err = json_quote.Single(vs[0])
 		if err != nil {
 			return
 		}
-		ret = proc.AllocScalarVector(resultType)
-		err = vector.SetBytesAt(ret, 0, dt, proc.Mp())
+		ret = vector.NewConstBytes(rtyp, dt, vec.Length(), proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.Nsp)
+	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())
 	if err != nil {
 		return
 	}
-	rs := vector.MustBytesCols(ret)
-	rs, err = json_quote.Batch(vs, rs, ret.Nsp)
+	rs := vector.MustBytesCol(ret)
+	rs, err = json_quote.Batch(vs, rs, ret.GetNulls())
 	if err != nil {
 		return
 	}

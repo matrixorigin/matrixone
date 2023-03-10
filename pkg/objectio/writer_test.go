@@ -123,11 +123,11 @@ func TestNewObjectWriter(t *testing.T) {
 	vec, err := objectReader.Read(context.Background(), blocks[0].GetExtent(), idxs, pool)
 	assert.Nil(t, err)
 	vector1 := newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Object.([]byte))
-	assert.Equal(t, int8(3), vector1.Col.([]int8)[3])
+	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
 	vector2 := newVector(types.Type{Oid: types.T_int32}, vec.Entries[1].Object.([]byte))
-	assert.Equal(t, int32(3), vector2.Col.([]int32)[3])
+	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
 	vector3 := newVector(types.Type{Oid: types.T_int64}, vec.Entries[2].Object.([]byte))
-	assert.Equal(t, int64(3), vector3.Col.([]int64)[3])
+	assert.Equal(t, int64(3), vector.MustFixedCol[int64](vector3)[3])
 	indexes, err := objectReader.ReadIndex(context.Background(), blocks[0].GetExtent(), idxs, ZoneMapType, pool)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(indexes))
@@ -157,11 +157,11 @@ func TestNewObjectWriter(t *testing.T) {
 	vec, err = objectReader.Read(context.Background(), bs[0].GetExtent(), idxs, pool)
 	assert.Nil(t, err)
 	vector1 = newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Object.([]byte))
-	assert.Equal(t, int8(3), vector1.Col.([]int8)[3])
+	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
 	vector2 = newVector(types.Type{Oid: types.T_int32}, vec.Entries[1].Object.([]byte))
-	assert.Equal(t, int32(3), vector2.Col.([]int32)[3])
+	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
 	vector3 = newVector(types.Type{Oid: types.T_int64}, vec.Entries[2].Object.([]byte))
-	assert.Equal(t, int64(3), vector3.Col.([]int64)[3])
+	assert.Equal(t, int64(3), vector.MustFixedCol[int64](vector3)[3])
 	indexes, err = objectReader.ReadIndex(context.Background(), bs[0].GetExtent(), idxs, ZoneMapType, pool)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(indexes))
@@ -190,7 +190,7 @@ func newBatch(mp *mpool.MPool) *batch.Batch {
 }
 
 func newVector(tye types.Type, buf []byte) *vector.Vector {
-	vector := vector.New(tye)
-	vector.Read(buf)
+	vector := vector.NewVec(tye)
+	vector.UnmarshalBinary(buf)
 	return vector
 }

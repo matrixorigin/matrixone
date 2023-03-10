@@ -547,8 +547,8 @@ func TestDateFormatWithScalar(t *testing.T) {
 			panic(err)
 		}
 
-		vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime, mp)
-		vec[1] = vector.NewConstString(types.T_varchar.ToType(), 1, format, mp)
+		vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), datetime, 1, mp)
+		vec[1] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(format), 1, mp)
 		return vec
 	}
 
@@ -661,7 +661,7 @@ func TestDateFormatWithScalar(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, []byte(c.expect), formatVec.GetBytes(0))
+			require.Equal(t, []byte(c.expect), formatVec.GetBytesAt(0))
 		})
 	}
 }

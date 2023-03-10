@@ -27,22 +27,19 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"

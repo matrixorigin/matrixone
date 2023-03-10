@@ -21,37 +21,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func TimeStampDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func TimestampDiff(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	//input vectors
-	firstVector := vectors[0]
-	secondVector := vectors[1]
-	thirdVector := vectors[2]
-	firstValues := vector.MustStrCols(firstVector)
-	secondValues := vector.MustTCols[types.Datetime](secondVector)
-	thirdValues := vector.MustTCols[types.Datetime](thirdVector)
-	resultType := types.T_int64.ToType()
+	firstVector := ivecs[0]
+	secondVector := ivecs[1]
+	thirdVector := ivecs[2]
+	firstValues := vector.MustStrCol(firstVector)
+	secondValues := vector.MustFixedCol[types.Datetime](secondVector)
+	thirdValues := vector.MustFixedCol[types.Datetime](thirdVector)
+	rtyp := types.T_int64.ToType()
 
 	//the max Length of all vectors
-	maxLen := vector.Length(vectors[0])
-	for i := range vectors {
-		val := vector.Length(vectors[i])
+	maxLen := ivecs[0].Length()
+	for i := range ivecs {
+		val := ivecs[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
 	}
 
-	if firstVector.IsScalarNull() || secondVector.IsScalarNull() || thirdVector.IsScalarNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+	if firstVector.IsConstNull() || secondVector.IsConstNull() || thirdVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
 
-	resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, maxLen, nil)
 	if err != nil {
 		return nil, err
 	}
-	resultValues := vector.MustTCols[int64](resultVector)
-	err = datediff.TimeStampDiffWithCols(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, thirdVector.Nsp, resultVector.Nsp, resultValues, maxLen)
+	rvals := vector.MustFixedCol[int64](rvec)
+	err = datediff.TimestampDiffWithCols(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), thirdVector.GetNulls(), rvec.GetNulls(), rvals, maxLen)
 	if err != nil {
 		return nil, err
 	}
-	return resultVector, nil
+	return rvec, nil
 }

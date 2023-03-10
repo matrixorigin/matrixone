@@ -25,9 +25,9 @@ import (
 These functions get information from the session and system status.
 */
 
-func adapter(vectors []*vector.Vector,
+func adapter(ivecs []*vector.Vector,
 	proc *process.Process,
-	resultType types.Type,
+	rtyp types.Type,
 	parameterCount int,
 	evaluateMemoryCapacityForJobFunc func(proc *process.Process, params ...interface{}) (int, error),
 	jobFunc func(proc *process.Process, params ...interface{}) (interface{}, error),
@@ -40,7 +40,7 @@ func adapter(vectors []*vector.Vector,
 		var svals []string
 		var uvals []uint64
 		var resultSpace interface{}
-		if resultType.IsString() {
+		if rtyp.IsString() {
 			svals = make([]string, 1)
 			resultSpace = svals
 		} else {
@@ -54,11 +54,11 @@ func adapter(vectors []*vector.Vector,
 		}
 		//step 4: fill the result vector
 		if result == nil {
-			return vector.NewConstNull(resultType, 1), nil
-		} else if resultType.IsString() {
-			return vector.NewConstString(resultType, 1, svals[0], proc.Mp()), nil
+			return vector.NewConstNull(rtyp, 1, proc.Mp()), nil
+		} else if rtyp.IsString() {
+			return vector.NewConstBytes(rtyp, []byte(svals[0]), 1, proc.Mp()), nil
 		} else {
-			return vector.NewConstFixed(resultType, 1, uvals[0], proc.Mp()), nil
+			return vector.NewConstFixed(rtyp, uvals[0], 1, proc.Mp()), nil
 		}
 	}
 	return nil, moerr.NewInternalError(proc.Ctx, "the parameter is invalid")
@@ -242,7 +242,7 @@ func LastQueryID(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 				return nil, nil
 			}
 			result := params[0].([]string)
-			loc := vector.MustTCols[int64](vectors[0])[0]
+			loc := vector.MustFixedCol[int64](vectors[0])[0]
 			idx, err := makeQueryIdIdx(loc, cnt, proc)
 			if err != nil {
 				return nil, err

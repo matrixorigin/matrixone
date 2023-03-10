@@ -2423,21 +2423,21 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 		return nil, "", err
 	}
 	// cols
-	vec := vector.New(catalog.MetaColTypes[catalog.COLUMNS_IDX])
-	if err = vec.Read(iov.Entries[0].Object.([]byte)); err != nil {
+	vec := vector.NewVec(catalog.MetaColTypes[catalog.COLUMNS_IDX])
+	if err = vec.UnmarshalBinaryWithMpool(iov.Entries[0].Object.([]byte), tcc.ses.mp); err != nil {
 		return nil, "", err
 	}
-	def := vector.MustStrCols(vec)[0]
+	def := vector.MustStrCol(vec)[0]
 	r := &plan.ResultColDef{}
 	if err = r.Unmarshal([]byte(def)); err != nil {
 		return nil, "", err
 	}
 	// paths
-	vec = vector.New(catalog.MetaColTypes[catalog.RESULT_PATH_IDX])
-	if err = vec.Read(iov.Entries[1].Object.([]byte)); err != nil {
+	vec = vector.NewVec(catalog.MetaColTypes[catalog.RESULT_PATH_IDX])
+	if err = vec.UnmarshalBinaryWithMpool(iov.Entries[1].Object.([]byte), tcc.ses.mp); err != nil {
 		return nil, "", err
 	}
-	str := vector.MustStrCols(vec)[0]
+	str := vector.MustStrCol(vec)[0]
 	return r.ResultCols, str, nil
 }
 
@@ -2456,12 +2456,12 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 
 	ses := handle.(*Session)
 	oq := newFakeOutputQueue(ses.GetMysqlResultSet())
-	n := vector.Length(dataSet.Vecs[0])
+	n := dataSet.Vecs[0].Length()
 	for j := 0; j < n; j++ { //row index
 		if dataSet.Zs[j] <= 0 {
 			continue
 		}
-		_, err := extractRowFromEveryVector(ses, dataSet, int64(j), oq)
+		_, err := extractRowFromEveryVector(ses, dataSet, j, oq)
 		if err != nil {
 			return err
 		}
