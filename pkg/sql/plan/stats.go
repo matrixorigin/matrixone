@@ -308,22 +308,13 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 	return outcnt
 }
 
-func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64, t types.Type) (ndv float64) {
+func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64, t types.Type) float64 {
 	ndv1 := calcNdvUsingMinMax(minVal, maxVal, t)
 	ndv2 := calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt)
-	if ndv1 <= 0 {
-		ndv = ndv2
-		return
+	if ndv1 <= 0 || ndv1 > tableCnt {
+		return ndv2
 	}
-	if t.Oid == types.T_date {
-		ndv = ndv1
-		return
-	}
-	ndv = math.Min(ndv1, ndv2)
-	if ndv > tableCnt {
-		ndv = tableCnt
-	}
-	return
+	return ndv1
 }
 
 // treat distinct val in zonemap like a sample , then estimate the ndv
@@ -337,7 +328,6 @@ func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64)
 		ndv = (distinctValNum + 2) / coefficient
 	} else {
 		// assume ndv is high
-		// ndvRate is from 0 to 1. 1 means unique key, and 0 means ndv is only 1
 		ndv = tableCnt * ndvRate * coefficient
 		if ndv < 1 {
 			ndv = 1
