@@ -134,7 +134,6 @@ func (c *Compile) Run(_ uint64) (err error) {
 
 	// XXX PrintScope has a none-trivial amount of logging
 	// PrintScope(nil, []*Scope{c.scope})
-	fmt.Printf("[ccompile] %s\n", DebugShowScopes([]*Scope{c.scope}))
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
