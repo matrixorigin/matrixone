@@ -16,7 +16,7 @@ package lrupolicy
 
 import (
 	"container/list"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/cachereplacement"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
 	"sync"
 )
 
@@ -99,7 +99,7 @@ func (l *LRU) evict() {
 			}
 
 			// Releasable
-			if v, ok := item.Value.(cachereplacement.Releasable); ok {
+			if v, ok := item.Value.(memcachepolicy.Releasable); ok {
 				v.Release()
 			}
 

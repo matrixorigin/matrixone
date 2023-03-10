@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cachereplacement
+package memcachepolicy
 
-type Releasable interface {
-	Release()
+type Policy interface {
+	Set(key any, value any, size int64)
+	Get(key any) (value any, size int64, ok bool)
+	Flush()
+	Size() int64
 }
-
-type ReleasableValue[T any] struct {
-	Value       T
-	releaseFunc func()
-}
-
-func NewReleasableValue[T any](v T, releaseFunc func()) ReleasableValue[T] {
-	return ReleasableValue[T]{
-		Value:       v,
-		releaseFunc: releaseFunc,
-	}
-}
-
-func (r ReleasableValue[T]) Release() {
-	r.releaseFunc()
-}
-
-var _ Releasable = NewReleasableValue(42, func() {})
