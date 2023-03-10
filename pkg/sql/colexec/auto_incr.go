@@ -505,7 +505,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 		}
 		bat.Clean(mp)
 	}
-	return 0, 0, nil, nil
+	panic("unreachable")
 }
 
 func updateAutoIncrTable(param *AutoIncrParam, delBat *batch.Batch, curNum uint64, name string, txn client.TxnOperator, mp *mpool.MPool) error {

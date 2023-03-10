@@ -30,6 +30,8 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	state := NewPartitionState()
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
+	packer := types.NewPacker(pool)
+	defer packer.FreeMem()
 
 	{
 		// empty rows
@@ -78,7 +80,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
 			},
-		}, 0, pool)
+		}, 0, packer)
 	}
 
 	for i := 0; i < num; i++ {
@@ -103,7 +105,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	// primary key iter
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
-		bs := encodePrimaryKey(int64(i), pool)
+		bs := encodePrimaryKey(int64(i), packer)
 		iter := state.NewPrimaryKeyIter(ts, bs)
 		n := 0
 		for iter.Next() {
@@ -130,7 +132,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
 			},
-		}, 0, pool)
+		}, 0, packer)
 	}
 
 	for i := 0; i < num; i++ {

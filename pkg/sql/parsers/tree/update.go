@@ -244,6 +244,10 @@ func (node *Load) Format(ctx *FmtCtx) {
 				ctx.WriteString("'format'='" + node.Param.Option[i+1] + "'")
 			case "jsondata":
 				ctx.WriteString("'jsondata'='" + node.Param.Option[i+1] + "'")
+			case "role_arn":
+				ctx.WriteString("'role_arn'='" + node.Param.Option[i+1] + "'")
+			case "external_id":
+				ctx.WriteString("'external_id'='" + node.Param.Option[i+1] + "'")
 			}
 			if i != len(node.Param.Option)-2 {
 				ctx.WriteString(", ")

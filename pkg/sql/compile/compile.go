@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -355,6 +356,11 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			}
 		}
 
+		preArg, err := constructPreInsert(insertNode, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
@@ -364,14 +370,8 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
-			rs = c.newInsertMergeScope(arg, ss)
+			rs = c.newInsertMergeScope(arg, preArg, ss)
 			rs.Magic = MergeInsert
-			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-				rs.Instructions = append(rs.Instructions, vm.Instruction{
-					Op:  vm.OnDuplicateKey,
-					Arg: onDuplicateKeyArg,
-				})
-			}
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
 				Arg: &mergeblock.Argument{
@@ -389,6 +389,10 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 					Arg: onDuplicateKeyArg,
 				})
 			}
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.PreInsert,
+				Arg: preArg,
+			})
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Insert,
 				Arg: arg,
@@ -504,7 +508,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
-		needSwap, joinTyp := joinType(ctx, n, ns)
+
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
@@ -517,10 +521,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 			return nil, err
 		}
 		c.SetAnalyzeCurrent(children, curr)
-		if needSwap {
-			return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], children, ss, joinTyp)), nil
-		}
-		return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[1]], ss, children, joinTyp)), nil
+
+		return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], ns[n.Children[1]], ss, children)), nil
 	case plan.Node_SORT:
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
@@ -764,12 +766,12 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scope {
+	var err error
 	var s *Scope
 	var tblDef *plan.TableDef
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
-	var err error
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -944,15 +946,21 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
+func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	var rs []*Scope
+	isEq := plan2.IsEquiJoin(n.OnList)
 
-	isEq := isEquiJoin(n.OnList)
-	typs := make([]types.Type, len(right.ProjectList))
+	right_typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		typs[i] = dupType(expr.Typ)
+		right_typs[i] = dupType(expr.Typ)
 	}
-	switch joinTyp {
+
+	left_typs := make([]types.Type, len(left.ProjectList))
+	for i, expr := range left.ProjectList {
+		left_typs[i] = dupType(expr.Typ)
+	}
+
+	switch n.JoinType {
 	case plan.Node_INNER:
 		rs = c.newBroadcastJoinScopeList(ss, children)
 		if len(n.OnList) == 0 {
@@ -960,7 +968,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Product,
 					Idx: c.anal.curr,
-					Arg: constructProduct(n, typs, c.proc),
+					Arg: constructProduct(n, right_typs, c.proc),
 				})
 			}
 		} else {
@@ -969,13 +977,13 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.Join,
 						Idx: c.anal.curr,
-						Arg: constructJoin(n, typs, c.proc),
+						Arg: constructJoin(n, right_typs, c.proc),
 					})
 				} else {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.LoopJoin,
 						Idx: c.anal.curr,
-						Arg: constructLoopJoin(n, typs, c.proc),
+						Arg: constructLoopJoin(n, right_typs, c.proc),
 					})
 				}
 			}
@@ -987,13 +995,13 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Semi,
 					Idx: c.anal.curr,
-					Arg: constructSemi(n, typs, c.proc),
+					Arg: constructSemi(n, right_typs, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSemi,
 					Idx: c.anal.curr,
-					Arg: constructLoopSemi(n, typs, c.proc),
+					Arg: constructLoopSemi(n, right_typs, c.proc),
 				})
 			}
 		}
@@ -1004,15 +1012,36 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Left,
 					Idx: c.anal.curr,
-					Arg: constructLeft(n, typs, c.proc),
+					Arg: constructLeft(n, right_typs, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopLeft,
 					Idx: c.anal.curr,
-					Arg: constructLoopLeft(n, typs, c.proc),
+					Arg: constructLoopLeft(n, right_typs, c.proc),
 				})
 			}
+		}
+	case plan.Node_RIGHT:
+		if isEq {
+			rs = make([]*Scope, len(ss))
+			for i := range rs {
+				rs[i] = new(Scope)
+				rs[i].Magic = Remote
+				rs[i].IsJoin = true
+				rs[i].NodeInfo = ss[i].NodeInfo
+				rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+			}
+			rs = c.newJoinScopeListWithBucket(rs, ss, children)
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Right,
+					Idx: c.anal.curr,
+					Arg: constructRight(n, left_typs, right_typs, uint64(i), uint64(len(rs)), c.proc),
+				})
+			}
+		} else {
+			panic("dont pass any no-equal right join plan to this function,it should be changed to left join by the planner")
 		}
 	case plan.Node_SINGLE:
 		rs = c.newBroadcastJoinScopeList(ss, children)
@@ -1021,13 +1050,13 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Single,
 					Idx: c.anal.curr,
-					Arg: constructSingle(n, typs, c.proc),
+					Arg: constructSingle(n, right_typs, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSingle,
 					Idx: c.anal.curr,
-					Arg: constructLoopSingle(n, typs, c.proc),
+					Arg: constructLoopSingle(n, right_typs, c.proc),
 				})
 			}
 		}
@@ -1039,13 +1068,13 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Anti,
 					Idx: c.anal.curr,
-					Arg: constructAnti(n, typs, c.proc),
+					Arg: constructAnti(n, right_typs, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopAnti,
 					Idx: c.anal.curr,
-					Arg: constructLoopAnti(n, typs, c.proc),
+					Arg: constructLoopAnti(n, right_typs, c.proc),
 				})
 			}
 		}
@@ -1062,7 +1091,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 			rs[i].appendInstruction(vm.Instruction{
 				Op:  vm.LoopMark,
 				Idx: c.anal.curr,
-				Arg: constructLoopMark(n, typs, c.proc),
+				Arg: constructLoopMark(n, right_typs, c.proc),
 			})
 			//}
 		}
@@ -1274,7 +1303,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	return []*Scope{c.newMergeScope(append(rs, ss...))}
 }
 
-func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
+func (c *Compile) newInsertMergeScope(arg *insert.Argument, preArg *preinsert.Argument, ss []*Scope) *Scope {
 	ss2 := make([]*Scope, 0, len(ss))
 	for _, s := range ss {
 		if s.IsEnd {
@@ -1282,11 +1311,16 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 		}
 		ss2 = append(ss2, s)
 	}
+	preInsertInstr := &vm.Instruction{
+		Op:  vm.PreInsert,
+		Arg: preArg,
+	}
 	insert := &vm.Instruction{
 		Op:  vm.Insert,
 		Arg: arg,
 	}
 	for i := range ss2 {
+		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(preInsertInstr, nil))
 		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil))
 	}
 	return c.newMergeScope(ss2)
@@ -1568,11 +1602,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var rel engine.Relation
 	var ranges [][]byte
 	var nodes engine.Nodes
+
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
-
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
 		return nil, err
@@ -1614,7 +1648,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 		return nodes, nil
 	}
-	if len(ranges[0]) == 0 {
+	if engine.IsMemtable(ranges[0]) {
 		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{
 				Rel:  rel,
@@ -1637,6 +1671,12 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		j := i / step
 		if i+step >= len(ranges) {
 			if isSameCN(c.addr, c.cnList[j].Addr) {
+				if len(nodes) == 0 {
+					nodes = append(nodes, engine.Node{
+						Rel:  rel,
+						Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
+					})
+				}
 				nodes[0].Data = append(nodes[0].Data, ranges[i:]...)
 			} else {
 				nodes = append(nodes, engine.Node{
@@ -1649,6 +1689,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			}
 		} else {
 			if isSameCN(c.addr, c.cnList[j].Addr) {
+				if len(nodes) == 0 {
+					nodes = append(nodes, engine.Node{
+						Rel:  rel,
+						Mcpu: c.generateCPUNumber(runtime.NumCPU(), int(n.Stats.BlockNum)),
+					})
+				}
+
 				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
 			} else {
 				nodes = append(nodes, engine.Node{
@@ -1691,27 +1738,6 @@ func extraRegisters(ss []*Scope, i int) []*process.WaitRegister {
 	return regs
 }
 
-func joinType(ctx context.Context, n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
-	switch n.JoinType {
-	case plan.Node_INNER:
-		return false, plan.Node_INNER
-	case plan.Node_LEFT:
-		return false, plan.Node_LEFT
-	case plan.Node_SEMI:
-		return false, plan.Node_SEMI
-	case plan.Node_ANTI:
-		return false, plan.Node_ANTI
-	case plan.Node_RIGHT:
-		return true, plan.Node_LEFT
-	case plan.Node_SINGLE:
-		return false, plan.Node_SINGLE
-	case plan.Node_MARK:
-		return false, plan.Node_MARK
-	default:
-		panic(moerr.NewNYI(ctx, fmt.Sprintf("join typ '%v'", n.JoinType)))
-	}
-}
-
 func dupType(typ *plan.Type) types.Type {
 	return types.Type{
 		Oid:   types.T(typ.Id),
@@ -1741,6 +1767,7 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 
 func isSameCN(addr string, currentCNAddr string) bool {
 	return strings.Split(addr, ":")[0] == strings.Split(currentCNAddr, ":")[0]
+	//return addr == currentCNAddr
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {

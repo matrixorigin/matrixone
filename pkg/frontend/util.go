@@ -19,33 +19,30 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
-
-	"go.uber.org/zap"
-
-	"path/filepath"
-	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	dumpUtils "github.com/matrixorigin/matrixone/pkg/vectorize/dump"
-
-	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	dumpUtils "github.com/matrixorigin/matrixone/pkg/vectorize/dump"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 type CloseFlag struct {
@@ -292,12 +289,12 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		if err != nil {
 			return nil, err
 		}
-		return getValueFromVector(vec, ses)
+		return getValueFromVector(vec, ses, planExpr)
 	}
 }
 
-func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
-	if vec.IsConstNull() {
+func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (interface{}, error) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 		return nil, nil
 	}
 	switch vec.GetType().Oid {
@@ -326,11 +323,11 @@ func getValueFromVector(vec *vector.Vector, ses *Session) (interface{}, error) {
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
 		return vec.GetStringAt(0), nil
 	case types.T_decimal64:
-		val := vector.MustFixedCol[types.Decimal64](vec)[0]
-		return val.String(), nil
+		val := vector.GetFixedAt[types.Decimal64](vec, 0)
+		return plan2.MakePlan2Decimal64ExprWithType(val, plan2.DeepCopyTyp(expr.Typ)), nil
 	case types.T_decimal128:
-		val := vector.MustFixedCol[types.Decimal128](vec)[0]
-		return val.String(), nil
+		val := vector.GetFixedAt[types.Decimal128](vec, 0)
+		return plan2.MakePlan2Decimal128ExprWithType(val, plan2.DeepCopyTyp(expr.Typ)), nil
 	case types.T_json:
 		val := vec.GetBytesAt(0)
 		byteJson := types.DecodeJson(val)

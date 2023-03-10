@@ -67,14 +67,16 @@ const (
 	ErrTruncatedWrongValueForField uint16 = 20204
 
 	// Group 3: invalid input
-	ErrBadConfig           uint16 = 20300
-	ErrInvalidInput        uint16 = 20301
-	ErrSyntaxError         uint16 = 20302
-	ErrParseError          uint16 = 20303
-	ErrConstraintViolation uint16 = 20304
-	ErrDuplicate           uint16 = 20305
-	ErrRoleGrantedToSelf   uint16 = 20306
-	ErrDuplicateEntry      uint16 = 20307
+	ErrBadConfig            uint16 = 20300
+	ErrInvalidInput         uint16 = 20301
+	ErrSyntaxError          uint16 = 20302
+	ErrParseError           uint16 = 20303
+	ErrConstraintViolation  uint16 = 20304
+	ErrDuplicate            uint16 = 20305
+	ErrRoleGrantedToSelf    uint16 = 20306
+	ErrDuplicateEntry       uint16 = 20307
+	ErrWrongValueCountOnRow uint16 = 20308
+	ErrBadFieldError        uint16 = 20309
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                 uint16 = 20400
@@ -213,14 +215,16 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 
 	// Group 3: invalid input
-	ErrBadConfig:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
-	ErrInvalidInput:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid input: %s"},
-	ErrSyntaxError:         {ER_SYNTAX_ERROR, []string{MySQLDefaultSqlState}, "SQL syntax error: %s"},
-	ErrParseError:          {ER_PARSE_ERROR, []string{MySQLDefaultSqlState}, "SQL parser error: %s"},
-	ErrConstraintViolation: {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
-	ErrDuplicate:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
-	ErrRoleGrantedToSelf:   {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
-	ErrDuplicateEntry:      {ER_DUP_ENTRY, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
+	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
+	ErrInvalidInput:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid input: %s"},
+	ErrSyntaxError:          {ER_SYNTAX_ERROR, []string{MySQLDefaultSqlState}, "SQL syntax error: %s"},
+	ErrParseError:           {ER_PARSE_ERROR, []string{MySQLDefaultSqlState}, "SQL parser error: %s"},
+	ErrConstraintViolation:  {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
+	ErrDuplicate:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
+	ErrRoleGrantedToSelf:    {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
+	ErrDuplicateEntry:       {ER_DUP_ENTRY, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
+	ErrWrongValueCountOnRow: {ER_WRONG_VALUE_COUNT_ON_ROW, []string{MySQLDefaultSqlState}, "Column count doesn't match value count at row %d"},
+	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Unknown column '%s' in '%s'"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -856,6 +860,14 @@ func NewDuplicate(ctx context.Context) *Error {
 
 func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
 	return newError(ctx, ErrDuplicateEntry, entry, key)
+}
+
+func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
+	return newError(ctx, ErrWrongValueCountOnRow, row)
+}
+
+func NewBadFieldError(ctx context.Context, column, table string) *Error {
+	return newError(ctx, ErrBadFieldError, column, table)
 }
 
 func NewRoleGrantedToSelf(ctx context.Context, from, to string) *Error {

@@ -393,37 +393,27 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	tableDef := info.tblInfo.tableDefs[0]
 	tableObjRef := info.tblInfo.objRef[0]
 	syntaxHasColumnNames := false
-	isClusterTable := info.tblInfo.isClusterTable[0]
 	colToIdx := make(map[string]int)
 	oldColPosMap := make(map[string]int)
+	tableDef.Name2ColIndex = make(map[string]int32)
 	for i, col := range tableDef.Cols {
 		colToIdx[col.Name] = i
 		oldColPosMap[col.Name] = i
+		tableDef.Name2ColIndex[col.Name] = int32(i)
 	}
 	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
 
 	if stmt.Columns == nil {
-		if isClusterTable {
-			for _, col := range tableDef.Cols {
-				if !util.IsClusterTableAttribute(col.Name) {
-					insertColumns = append(insertColumns, col.Name)
-				}
-			}
-		} else {
-			for _, col := range tableDef.Cols {
-				insertColumns = append(insertColumns, col.Name)
-			}
+		for _, col := range tableDef.Cols {
+			insertColumns = append(insertColumns, col.Name)
 		}
 	} else {
 		syntaxHasColumnNames = true
 		for _, column := range stmt.Columns {
 			colName := string(column)
-			if isClusterTable && util.IsClusterTableAttribute(colName) {
-				return moerr.NewInvalidInput(builder.GetContext(), "do not specify the attribute %s for the cluster table", util.GetClusterTableAttributeName())
-			}
-			if _, exists := colToIdx[string(column)]; !exists {
-				return moerr.NewInvalidInput(builder.GetContext(), "insert value into unknown column '%s'", colName)
+			if _, ok := colToIdx[colName]; !ok {
+				return moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			insertColumns = append(insertColumns, colName)
 		}
@@ -440,14 +430,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault {
 			for j, row := range slt.Rows {
 				if row != nil {
-					return moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("Column count doesn't match value count at row '%v'", j))
+					return moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}
 		} else {
 			colCount := len(insertColumns)
 			for j, row := range slt.Rows {
 				if len(row) != colCount {
-					return moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("Column count doesn't match value count at row '%v'", j))
+					return moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}
 		}
@@ -675,7 +665,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 					if condIdx == 0 {
 						condExpr = eqExpr
 					} else {
-						condExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, condExpr})
+						condExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, eqExpr})
 						if err != nil {
 							return err
 						}
@@ -864,6 +854,9 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 }
 
 func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
+	if targetType.Id == 0 {
+		return expr, nil
+	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if t1.Oid == t2.Oid && t1.Width == t2.Width && t1.Size == t2.Size && t1.Scale == t2.Scale {
 		return expr, nil
@@ -1008,7 +1001,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 	}
 
 	// rewrite index, to get rows of unique table to delete
-	if info.typ != "insert" {
+	if info.typ != "insert" || (info.typ == "insert" && len(info.onDuplicateIdx) > 0) {
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
 				if indexdef.Unique {
@@ -1029,6 +1022,13 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					rightTag := builder.qry.Nodes[rightId].BindingTags[0]
 					baseTag := builder.qry.Nodes[baseNodeId].BindingTags[0]
 					rightTableDef := builder.qry.Nodes[rightId].TableDef
+
+					if info.typ == "insert" {
+						hiddenCol := builder.compCtx.GetHideKeyDef(idxRef.SchemaName, idxRef.ObjName)
+						rightTableDef.Cols = append(rightTableDef.Cols, hiddenCol)
+						rightTableDef.Name2ColIndex[catalog.Row_ID] = int32(len(rightTableDef.Cols)) - 1
+					}
+
 					rightRowIdPos := int32(len(rightTableDef.Cols)) - 1
 					rightIdxPos := int32(0)
 
@@ -1470,10 +1470,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 		info.parentIdx = append(info.parentIdx, parentIdx)
 	}
-
-	// check for OnDuplicateUpdate
-
-	// todo check for replace
 
 	return nil
 }

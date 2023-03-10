@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -46,8 +45,6 @@ type WriteS3Container struct {
 
 	writer  objectio.Writer
 	lengths []uint64
-
-	UniqueRels []engine.Relation
 
 	metaLocBat *batch.Batch
 
@@ -70,6 +67,8 @@ const (
 	// when batches's  size of table is over this, we will
 	// trigger write s3
 	WriteS3Threshold uint64 = 64 * mpool.MB
+	// when over 10M, give a tag
+	TagS3Size uint64 = 10 * mpool.MB
 )
 
 func NewWriteS3Container(tableDef *plan.TableDef) *WriteS3Container {
@@ -217,6 +216,7 @@ func GetStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
 	return
 }
 
+// cacheOvershold means whether we need to cahce the data part which is over 64M
 // len(sortIndex) is always only one.
 func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process.Process) error {
 	bats := container.tableBatches[idx][:length]
@@ -235,7 +235,7 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 			return err
 		}
 		for i := range bats {
-			if err := WriteBlock(container, bats[i], proc); err != nil {
+			if err := WriteBlock(container, bats[i]); err != nil {
 				return err
 			}
 		}
@@ -304,7 +304,7 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 			lens++
 			if lens == int(options.DefaultBlockMaxRows) {
 				lens = 0
-				if err := WriteBlock(container, container.buffers[idx], proc); err != nil {
+				if err := WriteBlock(container, container.buffers[idx]); err != nil {
 					return err
 				}
 				// force clean
@@ -312,7 +312,7 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 			}
 		}
 		if lens > 0 {
-			if err := WriteBlock(container, container.buffers[idx], proc); err != nil {
+			if err := WriteBlock(container, container.buffers[idx]); err != nil {
 				return err
 			}
 		}
@@ -329,14 +329,19 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 	return nil
 }
 
-// the first pr for cn-write-s3 logic of insert will result this:
-// and now we need to change it, there will be 64Mb data in one seg.
+// write s3 batch logic:
+// container will cache the batches in memory
+// and when the batches size is over 10M, we will
+// give a tag to say we need to write these data into
+// s3, but not immediately. We will continuelly wait until
+// no more data or the data size is over 64M,at this time
+// we will trigger write s3
 func (container *WriteS3Container) WriteS3Batch(bat *batch.Batch, proc *process.Process, idx int) error {
 	container.InitBuffers(bat, idx)
 	res := container.Put(bat, idx)
 	switch res {
 	case 1:
-		container.MergeBlock(idx, len(container.tableBatches[idx])-1, proc)
+		container.MergeBlock(idx, len(container.tableBatches[idx]), proc)
 	case 0:
 		container.MergeBlock(idx, len(container.tableBatches[idx]), proc)
 	case -1:
@@ -422,7 +427,7 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 
 // WriteBlock WriteBlock writes one batch to a buffer and generate related indexes for this batch
 // For more information, please refer to the comment about func Write in Writer interface
-func WriteBlock(container *WriteS3Container, bat *batch.Batch, proc *process.Process) error {
+func WriteBlock(container *WriteS3Container, bat *batch.Batch) error {
 	fd, err := container.writer.Write(bat)
 
 	if err != nil {
