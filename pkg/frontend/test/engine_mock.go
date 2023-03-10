@@ -788,3 +788,17 @@ func (mr *MockEngineMockRecorder) Rollback(ctx, op interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rollback", reflect.TypeOf((*MockEngine)(nil).Rollback), ctx, op)
 }
+
+
+func (m *MockEngine) AllocateID(ctx context.Context) (uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AllocateID", ctx)
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (mr *MockEngineMockRecorder) AllocateID(ctx context.Context) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllocateID", reflect.TypeOf((*MockEngine)(nil).AllocateID), ctx)
+}

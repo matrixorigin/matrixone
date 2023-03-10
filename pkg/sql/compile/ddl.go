@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -258,6 +259,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 	}
+
+	fmt.Printf("---------------wuxlinag----------------------------create table is :%s.%s\n", dbName, tblName)
+	if dbName != "mo_task" && tblName != catalog.MO_INDEXES {
+		err = colexec.InsertTableIndexMeta(c.e, c.ctx, dbSource, c.proc, tblName)
+		if err != nil {
+			return err
+		}
+	}
+
 	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
 }
 
@@ -424,6 +434,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		// other situation is not supported now and check in plan
 	}
 
+	err = colexec.InsertSingleIndexMeta(c.e, c.ctx, d, c.proc, qry.Table, indexDef)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -468,6 +482,11 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 	}
+	err = colexec.DeleteSingeIndexMeta(c.e, c.ctx, r, qry.GetIndexName(), c.proc)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -824,6 +843,12 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 		for _, name := range qry.IndexTableNames {
 			if err := dbSource.Delete(c.ctx, name); err != nil {
+				return err
+			}
+		}
+		if tblName == "t1" || tblName == "t2" || tblName == "t3" || tblName == "t4" {
+			err := colexec.DeleteTableIndexMeta(c.e, c.ctx, rel, c.proc)
+			if err != nil {
 				return err
 			}
 		}

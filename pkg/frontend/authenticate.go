@@ -728,8 +728,22 @@ var (
 		"mo_user_defined_function":   0,
 		"mo_mysql_compatbility_mode": 0,
 		catalog.AutoIncrTableName:    0,
+		"mo_indexes":                 0,
 	}
 	createAutoTableSql = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
+	// mo_indexes is a data dictionary table, which must be created first
+	createMoIndexesSql = `create table mo_indexes(
+				id 			bigint unsigned not null,
+				table_id 	bigint unsigned not null,
+				name 		varchar(64) not null,
+				type        varchar(11) not null,
+				algorithm   varchar(11) not null,
+				is_visible  tinyint not null,
+				hidden      tinyint not null,
+				comment 	varchar(2048) not null,
+				options     text,
+				index_table_name varchar(5000)
+			);`
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
@@ -814,6 +828,23 @@ var (
 				configuration  json,
 				primary key(configuration_id)
 			);`,
+		//`create table mo_indexes(
+		//		index_id       int signed auto_increment,
+		//		index_name     varchar(64),
+		//		index_type     varchar(11),
+		//		table_id       bigint unsigned,
+		//		table_name     varchar(64),
+		//		database_id    bigint unsigned,
+		//		database_name  varchar(64),
+		//		nullable       varchar(3),
+		//		index_fields   int,
+		//		column_name    varchar(64),
+		//		seq_in_index   int unsigned,
+		//		non_unique     int,
+		//		index_comment  varchar(2048),
+		//		is_visible     varchar(3)
+		//	);`,
+
 	}
 
 	//drop tables for the tenant
@@ -825,6 +856,7 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_mysql_compatbility_mode;`,
+		`drop table if exists mo_catalog.mo_indexes;`,
 		fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.AutoIncrTableName),
 	}
 
@@ -919,6 +951,37 @@ var (
 				granted_time,
 				with_grant_option
 			) values(%d,%d,"%s",%v);`
+	initMoIndexesFormat = `insert into mo_catalog.mo_indexes(
+				index_id,
+				index_name,
+				index_type,
+				table_id,
+				table_name,
+                database_id,
+				database_name,
+				nullable,
+				index_fields,
+				column_name,
+				seq_in_index,
+				non_unique,
+				index_comment,
+				is_visible
+			) values (%d, "%s", "%s", %d, "%s", %d, "%s", "%s", %d, "%s", %d, %d, "%s", "%s");`
+	initMoIndexesWithoutIDFormat = `insert into mo_catalog.mo_indexes(
+				index_name,
+				index_type,
+				table_id,
+				table_name,
+                database_id,
+				database_name,
+				nullable,
+				index_fields,
+				column_name,
+				seq_in_index,
+				non_unique,
+				index_comment,
+				is_visible
+			) values ("%s", "%s", %d, "%s", %d, "%s", "%s", %d, "%s", %d, %d, "%s", "%s");`
 )
 
 const (
@@ -5173,6 +5236,11 @@ func InitSysTenant(ctx context.Context, autoincrcaches defines.AutoIncrCaches) e
 
 	//USE the mo_catalog
 	err = bh.Exec(ctx, "use mo_catalog;")
+	if err != nil {
+		return err
+	}
+
+	bh.Exec(ctx, createMoIndexesSql)
 	if err != nil {
 		return err
 	}

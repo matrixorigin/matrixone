@@ -306,6 +306,10 @@ func (e *testEngine) GetRelationById(ctx context.Context, op client.TxnOperator,
 	return "", "", nil, nil
 }
 
+func (e *testEngine) AllocateID(ctx context.Context) (uint64, error) {
+	return 0, nil
+}
+
 func newtestOperator() *testOperator {
 	return &testOperator{}
 }
