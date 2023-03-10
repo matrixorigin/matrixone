@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"strings"
 
@@ -122,6 +123,12 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		constraint:   item.Constraint,
 		parts:        db.txn.engine.getPartitions(db.databaseId, item.Id).Snapshot(),
 	}
+
+	// XXX Debug Info XXX
+	if item.TableDef == nil {
+		logutil.Errorf("disttae: get table %s[id: %d]'s table def failed\n", item.Name, item.Id)
+	}
+
 	columnLength := len(item.TableDef.Cols) - 1 // we use this data to fetch zonemap, but row_id has no zonemap
 	meta, err := db.txn.getTableMeta(ctx, db.databaseId, item.Id,
 		true, columnLength, true)

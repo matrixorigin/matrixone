@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
 
@@ -439,7 +440,7 @@ func distributeSubscribeResponse(
 	tbl := lt.GetTable()
 	notDistribute := ifShouldNotDistribute(tbl.DbId, tbl.TbId)
 	if notDistribute {
-		if err := e.consumeSubscribeResponse(ctx, response); err != nil {
+		if err := e.consumeSubscribeResponse(ctx, response, false); err != nil {
 			return err
 		}
 		e.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
@@ -471,7 +472,7 @@ func distributeUpdateResponse(
 		if !notDistribute {
 			break
 		}
-		if err := e.consumeUpdateLogTail(ctx, list[index]); err != nil {
+		if err := e.consumeUpdateLogTail(ctx, list[index], false); err != nil {
 			return err
 		}
 	}
@@ -551,7 +552,7 @@ type cmdToUpdateTime struct{ time timestamp.Timestamp }
 
 func (cmd cmdToConsumeSub) action(e *Engine, ctrl *routineController) error {
 	response := cmd.log
-	if err := e.consumeSubscribeResponse(ctrl.ctx, response); err != nil {
+	if err := e.consumeSubscribeResponse(ctrl.ctx, response, true); err != nil {
 		return err
 	}
 	lt := response.GetLogtail()
@@ -562,7 +563,7 @@ func (cmd cmdToConsumeSub) action(e *Engine, ctrl *routineController) error {
 
 func (cmd cmdToConsumeLog) action(e *Engine, ctrl *routineController) error {
 	response := cmd.log
-	if err := e.consumeUpdateLogTail(ctrl.ctx, response); err != nil {
+	if err := e.consumeUpdateLogTail(ctrl.ctx, response, true); err != nil {
 		return err
 	}
 	return nil
@@ -573,20 +574,22 @@ func (cmd cmdToUpdateTime) action(e *Engine, ctrl *routineController) error {
 	return nil
 }
 
-func (e *Engine) consumeSubscribeResponse(ctx context.Context, rp *logtail.SubscribeResponse) error {
+func (e *Engine) consumeSubscribeResponse(ctx context.Context, rp *logtail.SubscribeResponse,
+	lazyLoad bool) error {
 	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, e.subscriber.dnNodeID, e, &lt, *lt.Ts)
+	return updatePartitionOfPush(ctx, e.subscriber.dnNodeID, e, &lt, lazyLoad)
 }
 
-func (e *Engine) consumeUpdateLogTail(ctx context.Context, rp logtail.TableLogtail) error {
-	return updatePartitionOfPush(ctx, e.subscriber.dnNodeID, e, &rp, *rp.Ts)
+func (e *Engine) consumeUpdateLogTail(ctx context.Context, rp logtail.TableLogtail,
+	lazyLoad bool) error {
+	return updatePartitionOfPush(ctx, e.subscriber.dnNodeID, e, &rp, lazyLoad)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
 func updatePartitionOfPush(
 	ctx context.Context,
 	dnId int,
-	e *Engine, tl *logtail.TableLogtail, _ timestamp.Timestamp) (err error) {
+	e *Engine, tl *logtail.TableLogtail, lazyLoad bool) (err error) {
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
@@ -608,13 +611,19 @@ func updatePartitionOfPush(
 
 	state.Checkpoints = append(state.Checkpoints, tl.CkpLocation)
 
-	if err = consumeLogTailOfPush(
-		ctx,
-		key.PrimaryIdx,
-		e,
-		state,
-		tl,
-	); err != nil {
+	if lazyLoad {
+		err = consumeLogTailOfPushWithLazyLoad(
+			ctx,
+			key.PrimaryIdx,
+			e,
+			state,
+			tl,
+		)
+	} else {
+		err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimaryIdx, e, state, tl, dbId, key.Id, key.Name)
+	}
+
+	if err != nil {
 		logutil.Errorf("consume %d-%s log tail error: %v\n", key.Id, key.Name, err)
 		return err
 	}
@@ -626,13 +635,47 @@ func updatePartitionOfPush(
 	return nil
 }
 
-func consumeLogTailOfPush(
+func consumeLogTailOfPushWithLazyLoad(
 	ctx context.Context,
 	primaryIdx int,
 	engine *Engine,
 	state *PartitionState,
 	lt *logtail.TableLogtail,
 ) (err error) {
+	for i := 0; i < len(lt.Commands); i++ {
+		if err = consumeEntry(ctx, primaryIdx,
+			engine, state, &lt.Commands[i]); err != nil {
+			return
+		}
+	}
+	return nil
+}
+
+func consumeLogTailOfPushWithoutLazyLoad(
+	ctx context.Context,
+	primaryIdx int,
+	engine *Engine,
+	state *PartitionState,
+	lt *logtail.TableLogtail,
+	databaseId uint64,
+	tableId uint64,
+	tableName string,
+) (err error) {
+	var entries []*api.Entry
+	if entries, err = taeLogtail.LoadCheckpointEntries(
+		ctx,
+		lt.CkpLocation,
+		tableId, tableName,
+		databaseId, "", engine.fs); err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if err = consumeEntry(ctx, primaryIdx,
+			engine, state, entry); err != nil {
+			return
+		}
+	}
+
 	for i := 0; i < len(lt.Commands); i++ {
 		if err = consumeEntry(ctx, primaryIdx,
 			engine, state, &lt.Commands[i]); err != nil {
