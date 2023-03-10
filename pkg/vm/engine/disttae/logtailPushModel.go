@@ -281,7 +281,7 @@ func (e *Engine) InitLogTailPushModel(
 
 func (e *Engine) initTableLogTailSubscriber() error {
 	// close the old rpc client.
-	if e.subscriber != nil {
+	if e.subscriber != nil && e.subscriber.logTailClient != nil {
 		if err := e.subscriber.logTailClient.Close(); err != nil {
 			return err
 		}
