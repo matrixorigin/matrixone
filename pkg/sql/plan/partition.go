@@ -29,8 +29,15 @@ import (
 )
 
 const (
-	// Reference link https://dev.mysql.com/doc/mysql-reslimits-excerpt/5.6/en/partitioning-limitations.html
-	PartitionNumberLimit = 8192
+	/*
+		https://dev.mysql.com/doc/refman/8.0/en/create-table.html
+		PARTITION BY
+			If used, a partition_options clause begins with PARTITION BY. This clause contains the function that is used
+			to determine the partition; the function returns an integer value ranging from 1 to num, where num is
+			the number of partitions. (The maximum number of user-defined partitions which a table may contain is 1024;
+			the number of subpartitions—discussed later in this section—is included in this maximum.)
+	*/
+	PartitionNumberLimit = 1024
 )
 
 // buildHashPartition handle Hash Partitioning
@@ -744,14 +751,45 @@ func buildListPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tre
 }
 
 func buildHashPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree.Partition, partitionInfo *plan.PartitionByDef) error {
-	for i := uint64(0); i < partitionInfo.PartitionNum; i++ {
-		partition := &plan.PartitionItem{
-			PartitionName:   "p" + strconv.FormatUint(i, 10),
-			OrdinalPosition: uint32(i + 1),
-		}
-		partitionInfo.Partitions[i] = partition
+	//step 1: verify the partition defs valid or not
+	if partitionInfo.PartitionNum != uint64(len(defs)) {
+		return moerr.NewInvalidInput(partitionBinder.GetContext(), "Wrong number of partitions defined")
 	}
+
+	//step 2: decide the real defs of the partition
+	if len(defs) == 0 {
+		//step 2.1: generate the partition defs when there is no partition def in the syntax
+		for i := uint64(0); i < partitionInfo.PartitionNum; i++ {
+			partition := &plan.PartitionItem{
+				PartitionName:   "p" + strconv.FormatUint(i, 10),
+				OrdinalPosition: uint32(i + 1),
+			}
+			partitionInfo.Partitions[i] = partition
+		}
+	} else {
+		//step 2.2: get the partition defs from the syntax
+		//step 2.2.1: check the supported fields in the partition defs
+		//Only COMMENT
+	}
+
 	return nil
+}
+
+func verifyOptionsInPartitionDefIsSupported(def *tree.Partition) error {
+	var err error
+
+	return err
+}
+
+func isSupportedOptionInPartitionDef(opt tree.TableOption) error {
+	switch opt.(type) {
+	//only support COMMENT
+	case *tree.TableOptionComment:
+		return nil
+	//unsupported options
+	case *tree.TableOptionEngine:
+
+	}
 }
 
 func buildKeyPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree.Partition, partitionInfo *plan.PartitionByDef) error {

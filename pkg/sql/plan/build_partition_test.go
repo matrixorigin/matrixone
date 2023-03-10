@@ -289,6 +289,34 @@ func TestHashPartition(t *testing.T) {
 	}
 }
 
+func TestHashPartition2(t *testing.T) {
+	// HASH(expr) Partition
+	sqls := []string{
+		"CREATE TABLE t2 (col1 INT, col2 CHAR(5)) " +
+			"PARTITION BY HASH(col1) PARTITIONS 1 " +
+			"( PARTITION p0 " +
+			"ENGINE = 'engine_name' " +
+			"COMMENT = 'p0_comment' " +
+			"DATA DIRECTORY = 'data_dir' " +
+			"INDEX DIRECTORY = 'data_dir' " +
+			"MAX_ROWS = 100 " +
+			"MIN_ROWS = 100 " +
+			"TABLESPACE = space " +
+			"(SUBPARTITION sub_name) " +
+			");",
+	}
+
+	mock := NewMockOptimizer(false)
+	for _, sql := range sqls {
+		t.Log(sql)
+		logicPlan, err := buildSingleStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		outPutPlan(logicPlan, true, t)
+	}
+}
+
 func TestHashPartitionError(t *testing.T) {
 	// HASH(expr) Partition
 	sqls := []string{
