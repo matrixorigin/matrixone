@@ -16,6 +16,7 @@ package lrupolicy
 
 import (
 	"container/list"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/cachereplacement"
 	"sync"
 )
 
@@ -98,7 +99,7 @@ func (l *LRU) evict() {
 			}
 
 			// Releasable
-			if v, ok := item.Value.(Releasable); ok {
+			if v, ok := item.Value.(cachereplacement.Releasable); ok {
 				v.Release()
 			}
 

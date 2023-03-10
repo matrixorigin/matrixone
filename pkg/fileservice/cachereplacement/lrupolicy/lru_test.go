@@ -14,7 +14,24 @@
 
 package lrupolicy
 
-import "testing"
+import (
+	"github.com/matrixorigin/matrixone/pkg/fileservice/cachereplacement"
+	"github.com/stretchr/testify/assert"
+	"testing"
+)
+
+func TestLRUReleasable(t *testing.T) {
+	l := New(1)
+	n := 0
+
+	val := cachereplacement.NewReleasableValue(1, func() {
+		n++
+	})
+	l.Set(1, val, 1)
+
+	l.Set(2, 42, 1)
+	assert.Equal(t, 1, n)
+}
 
 func BenchmarkLRUSet(b *testing.B) {
 	const capacity = 1024

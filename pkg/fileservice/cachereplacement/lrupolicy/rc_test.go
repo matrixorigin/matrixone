@@ -15,6 +15,7 @@
 package lrupolicy
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/fileservice/cachereplacement"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,7 +24,7 @@ import (
 func TestRC(t *testing.T) {
 	l := New(1)
 
-	r := NewRC(42)
+	r := cachereplacement.NewRC(42)
 	r.IncRef()
 	l.Set(1, r, 1)
 	_, ok := l.kv[1]
@@ -42,7 +43,7 @@ func TestRC(t *testing.T) {
 	_, ok = l.kv[2]
 	assert.True(t, ok)
 
-	r2 := NewRC(42)
+	r2 := cachereplacement.NewRC(42)
 	r2.IncRef()
 	l.Set(3, r2, 1)
 	_, ok = l.kv[3]

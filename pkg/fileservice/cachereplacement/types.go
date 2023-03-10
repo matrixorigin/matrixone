@@ -20,3 +20,7 @@ type Policy interface {
 	Flush()
 	Size() int64
 }
+
+type Releasable interface {
+	Release()
+}

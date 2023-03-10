@@ -12,23 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lrupolicy
+package cachereplacement
 
-import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-)
-
-func TestReleasable(t *testing.T) {
-	l := New(1)
-	n := 0
-
-	r := NewReleasable(1, func() {
-		n++
-	})
-	l.Set(1, r, 1)
-
-	l.Set(2, 42, 1)
-	assert.Equal(t, 1, n)
+type ReleasableValue[T any] struct {
+	Value       T
+	releaseFunc func()
 }
+
+func NewReleasableValue[T any](v T, releaseFunc func()) ReleasableValue[T] {
+	return ReleasableValue[T]{
+		Value:       v,
+		releaseFunc: releaseFunc,
+	}
+}
+
+func (r ReleasableValue[T]) Release() {
+	r.releaseFunc()
+}
+
+var _ Releasable = NewReleasableValue(42, func() {})
