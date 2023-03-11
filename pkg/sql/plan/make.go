@@ -23,17 +23,63 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+func MakePlan2Decimal64ExprWithType(v types.Decimal64, typ *Type) *plan.Expr {
+	rawA := types.Decimal64ToInt64Raw(v)
+	typ.Size = types.T_decimal64.ToType().Size
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_C{
+			C: &Const{
+				Isnull: false,
+				Value: &plan.Const_Decimal64Val{
+					Decimal64Val: &plan.Decimal64{
+						A: rawA,
+					},
+				},
+			},
+		},
+	}
+}
+
+func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
+	rawA, rawB := types.Decimal128ToInt64Raw(v)
+	typ.Size = types.T_decimal128.ToType().Size
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_C{
+			C: &Const{
+				Isnull: false,
+				Value: &plan.Const_Decimal128Val{
+					Decimal128Val: &plan.Decimal128{
+						A: rawA,
+						B: rawB,
+					},
+				},
+			},
+		},
+	}
+}
+
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
 	_, scale, err := types.ParseStringToDecimal128WithoutTable(v, isBin...)
 	if err != nil {
 		return nil, err
 	}
-	typ := &plan.Type{
-		Id:          int32(types.T_decimal128),
-		Width:       34,
-		Scale:       scale,
-		Precision:   34,
-		NotNullable: true,
+	var typ *plan.Type
+	if scale < types.DECIMAL64_WIDTH && len(v) < types.DECIMAL64_WIDTH {
+		typ = &plan.Type{
+			Id:          int32(types.T_decimal64),
+			Width:       types.DECIMAL64_WIDTH,
+			Scale:       scale,
+			NotNullable: true,
+		}
+	} else {
+		typ = &plan.Type{
+			Id:          int32(types.T_decimal128),
+			Width:       types.DECIMAL128_WIDTH,
+			Scale:       scale,
+			NotNullable: true,
+		}
 	}
 	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
 }
@@ -63,7 +109,6 @@ func makePlan2Decimal128ConstNullExpr() *plan.Expr {
 			Id:          int32(types.T_decimal128),
 			Width:       34,
 			Scale:       0,
-			Precision:   34,
 			NotNullable: false,
 		},
 	}
@@ -246,17 +291,17 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr
 	}, nil
 }
 
-// if typ is decimal128 and decimal64 without scalar and precision
+// if typ is decimal128 and decimal64 without scalar and width
 // set a default value for it.
 func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
 	if typ.Id == int32(types.T_decimal128) && typ.Scale == 0 && typ.Width == 0 {
 		typ.Scale = 10
-		typ.Width = 38 // precision
+		typ.Width = 38 // width
 		typ.Size = int32(types.T_decimal128.TypeLen())
 	}
 	if typ.Id == int32(types.T_decimal64) && typ.Scale == 0 && typ.Width == 0 {
 		typ.Scale = 2
-		typ.Width = 6 // precision
+		typ.Width = 6 // width
 		typ.Size = int32(types.T_decimal64.TypeLen())
 	}
 	return typ
@@ -266,11 +311,10 @@ var MakePlan2Type = makePlan2Type
 
 func makePlan2Type(typ *types.Type) *plan.Type {
 	return &plan.Type{
-		Id:        int32(typ.Oid),
-		Width:     typ.Width,
-		Precision: typ.Precision,
-		Size:      typ.Size,
-		Scale:     typ.Scale,
+		Id:    int32(typ.Oid),
+		Width: typ.Width,
+		Size:  typ.Size,
+		Scale: typ.Scale,
 	}
 }
 
@@ -283,11 +327,10 @@ func makeTypeByPlan2Type(typ *plan.Type) types.Type {
 		size = int32(oid.TypeLen())
 	}
 	return types.Type{
-		Oid:       types.T(typ.Id),
-		Size:      size,
-		Width:     typ.Width,
-		Scale:     typ.Scale,
-		Precision: typ.Precision,
+		Oid:   types.T(typ.Id),
+		Size:  size,
+		Width: typ.Width,
+		Scale: typ.Scale,
 	}
 }
 
@@ -300,10 +343,9 @@ func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 		size = int32(oid.TypeLen())
 	}
 	return types.Type{
-		Oid:       oid,
-		Size:      size,
-		Width:     expr.Typ.Width,
-		Scale:     expr.Typ.Scale,
-		Precision: expr.Typ.Precision,
+		Oid:   oid,
+		Size:  size,
+		Width: expr.Typ.Width,
+		Scale: expr.Typ.Scale,
 	}
 }

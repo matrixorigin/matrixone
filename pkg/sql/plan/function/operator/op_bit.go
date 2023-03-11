@@ -16,6 +16,7 @@ package operator
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -53,42 +54,87 @@ func opBitLeftShift[T opBitT](v1, v2 T) T {
 	return v1 << v2
 }
 
+func OpBinaryBitAnd(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return opBinaryBitAll(args, proc, types.BitAnd)
+}
+
+func OpBinaryBitOr(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return opBinaryBitAll(args, proc, types.BitOr)
+}
+
+func OpBinaryBitXor(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return opBinaryBitAll(args, proc, types.BitXor)
+}
+
+func opBinaryBitAll(ivecs []*vector.Vector, proc *process.Process, opt func([]byte, []byte, []byte)) (*vector.Vector, error) {
+	left, right := ivecs[0], ivecs[1]
+
+	rtyp := left.GetType()
+	if left.IsConstNull() || right.IsConstNull() {
+		return vector.NewConstNull(*rtyp, left.Length(), proc.Mp()), nil
+	}
+
+	var rval [types.MaxBinaryLen]byte
+
+	if left.IsConst() && right.IsConst() {
+		val0 := left.GetBytesAt(0)
+		opt(rval[:], val0, right.GetBytesAt(0))
+		return vector.NewConstBytes(*rtyp, rval[:len(val0)], left.Length(), proc.Mp()), nil
+	}
+
+	rvec, err := proc.AllocVectorOfRows(*rtyp, 0, nil)
+	if err != nil {
+		return nil, err
+	}
+	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
+
+	for i := 0; i < left.Length(); i++ {
+		if !rvec.GetNulls().Contains(uint64(i)) {
+			val0 := left.GetBytesAt(i)
+			opt(rval[:], val0, right.GetBytesAt(i))
+			vector.SetBytesAt(rvec, i, rval[:len(val0)], proc.Mp())
+		}
+	}
+
+	return rvec, nil
+}
+
 func OpBitAndFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+	return Arith[T, T](args, proc, *args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
 		return goOpBitGeneral(xs, ys, rs, opBitAnd[T])
 	})
 }
 
 func OpBitOrFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+	return Arith[T, T](args, proc, *args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
 		return goOpBitGeneral(xs, ys, rs, opBitOr[T])
 	})
 }
 
 func OpBitXorFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+	return Arith[T, T](args, proc, *args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
 		return goOpBitGeneral(xs, ys, rs, opBitXor[T])
 	})
 }
 
 func OpBitRightShiftFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+	return Arith[T, T](args, proc, *args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
 		return goOpBitGeneral(xs, ys, rs, opBitRightShift[T])
 	})
 }
 
 func OpBitLeftShiftFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+	return Arith[T, T](args, proc, *args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
 		return goOpBitGeneral(xs, ys, rs, opBitLeftShift[T])
 	})
 }
 
 func goOpBitGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[T](rs)
-	if xs.IsScalar() {
-		if nulls.Any(ys.Nsp) {
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[T](rs)
+	if xs.IsConst() {
+		if nulls.Any(ys.GetNulls()) {
 			for i, y := range yt {
-				if !nulls.Contains(rs.Nsp, uint64(i)) {
+				if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 					rt[i] = bfn(xt[0], y)
 				}
 			}
@@ -98,10 +144,10 @@ func goOpBitGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error 
 			}
 		}
 		return nil
-	} else if ys.IsScalar() {
-		if nulls.Any(xs.Nsp) {
+	} else if ys.IsConst() {
+		if nulls.Any(xs.GetNulls()) {
 			for i, x := range xt {
-				if !nulls.Contains(rs.Nsp, uint64(i)) {
+				if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 					rt[i] = bfn(x, yt[0])
 				}
 			}
@@ -112,9 +158,9 @@ func goOpBitGeneral[T opBitT](xs, ys, rs *vector.Vector, bfn opBitFun[T]) error 
 		}
 		return nil
 	} else {
-		if nulls.Any(rs.Nsp) {
+		if nulls.Any(rs.GetNulls()) {
 			for i, x := range xt {
-				if !nulls.Contains(rs.Nsp, uint64(i)) {
+				if !nulls.Contains(rs.GetNulls(), uint64(i)) {
 					rt[i] = bfn(x, yt[i])
 				}
 			}

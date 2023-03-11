@@ -35,9 +35,9 @@ type StdD128 struct {
 func StdDevPopReturnType(typs []types.Type) types.Type {
 	switch typs[0].Oid {
 	case types.T_decimal64, types.T_decimal128:
-		return types.New(types.T_decimal128, 0, typs[0].Scale, typs[0].Precision)
+		return types.New(types.T_decimal128, 0, typs[0].Scale)
 	default:
-		return types.New(types.T_float64, 0, 0, 0)
+		return types.New(types.T_float64, 0, 0)
 	}
 }
 

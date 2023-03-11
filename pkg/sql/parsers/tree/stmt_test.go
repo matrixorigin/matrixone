@@ -15,8 +15,9 @@
 package tree
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestQueryType(t *testing.T) {
@@ -58,7 +59,6 @@ func TestQueryType(t *testing.T) {
 					&Update{}: QueryTypeDML,
 					&Delete{}: QueryTypeDML,
 					&Load{}:   QueryTypeDML,
-					&Import{}: QueryTypeDML,
 					// DCL
 					&CreateAccount{}:   QueryTypeDCL,
 					&CreateRole{}:      QueryTypeDCL,

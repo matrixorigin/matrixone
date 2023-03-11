@@ -1,9 +1,9 @@
 SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
 character_set_name    default_collate_name    description    maxlen
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
-table_catalog    table_schema    table_name    column_name    ordinal_position    column_default    is_nullable    data_type    character_maximum_length    character_octet_length    numeric_precision    numeric_scale    datetime_precision    character_set_name    collation_name    column_type    column_key    extra    PRIVILEGES    column_comment    generation_expression    srs_id
-def    mo_catalog    mo_tables    rel_id    1    null    NO    BIGINT UNSIGNED    90    90    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(0)    PRI        select,insert,update,references            0
-def    mo_catalog    mo_tables    relname    2    null    NO    VARCHAR    94    94    0    0    0    utf8    utf8_bin    VARCHAR(5000)            select,insert,update,references            0
+table_catalog    table_schema    table_name    column_name    ordinal_position    column_default    is_nullable    data_type    character_maximum_length    character_octet_length    numeric_precision    numeric_scale    datetime_precision    character_set_name    collation_name    column_type    column_key    extra    privileges    column_comment    generation_expression    srs_id
+def    mo_catalog    mo_tables    rel_id    1    null    NO    BIGINT UNSIGNED    null    null    null    null    null    null    null    BIGINT UNSIGNED(0)    PRI        select,insert,update,references            null
+def    mo_catalog    mo_tables    relname    2    null    NO    VARCHAR    5000    120000    null    null    null    utf8    utf8_bin    VARCHAR(5000)            select,insert,update,references            null
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 constraint_catalog    constraint_schema    constraint_name    table_catalog    table_schema    table_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_schema    referenced_table_name    referenced_column_name
 SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;
@@ -12,7 +12,7 @@ SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
 query_id    seq    state    duration    cpu_user    cpu_system    context_voluntary    context_involuntary    block_ops_in    block_ops_out    messages_sent    messages_received    page_faults_major    page_faults_minor    swaps    source_function    source_file    source_line
 SELECT * FROM `information_schema`.`schemata` where schema_name = 'information_schema';
 catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
-def    information_schema    utf8mb4    utf8mb4_0900_ai_ci        NO
+def    information_schema    utf8mb4    utf8mb4_0900_ai_ci    null    NO
 SELECT * FROM `information_schema`.`triggers` LIMIT 0,1000;
 trigger_catalog    trigger_schema    trigger_name    event_manipulation    event_object_catalog    event_object_schema    event_object_table    action_order    action_condition    action_statement    action_orientation    action_timing    action_reference_old_table    action_reference_new_table    action_reference_old_row    action_reference_new_row    created    sql_mode    definer    character_set_client    collation_connection    database_collation
 SELECT * FROM `information_schema`.`user_privileges` LIMIT 0,1000;
@@ -143,26 +143,79 @@ user    CHAR(32)    NO    PRI    ''
 column_priv    VARCHAR(10)    NO        ''
 use information_schema;
 show tables;
-tables_in_information_schema
+Tables_in_information_schema
 key_column_usage
 columns
 profiling
-PROCESSLIST
+processlist
 user_privileges
 schemata
 character_sets
 triggers
 tables
+views
 engines
 routines
 parameters
 keywords
 show columns from `KEY_COLUMN_USAGE`;
-no such table information_schema.KEY_COLUMN_USAGE
+Field    Type    Null    Key    Default    Extra    Comment
+constraint_name    VARCHAR(64)    YES        null    
+constraint_schema    VARCHAR(64)    YES        null    
+table_catalog    VARCHAR(64)    YES        null    
+referenced_table_name    VARCHAR(64)    YES        null    
+referenced_table_schema    VARCHAR(64)    YES        null    
+table_name    VARCHAR(64)    YES        null    
+table_schema    VARCHAR(64)    YES        null    
+referenced_column_name    VARCHAR(64)    YES        null    
+column_name    VARCHAR(64)    YES        null    
+constraint_catalog    VARCHAR(64)    YES        null    
+ordinal_position    INT UNSIGNED(32)    YES        null    
+position_in_unique_constraint    INT UNSIGNED(32)    YES        null
 show columns from `COLUMNS`;
-no such table information_schema.COLUMNS
+Field    Type    Null    Key    Default    Extra    Comment
+table_catalog    VARCHAR(3)    YES        null
+table_schema    VARCHAR(256)    YES        null    
+table_name    VARCHAR(256)    YES        null    
+column_name    VARCHAR(256)    YES        null
+ordinal_position    INT(0)    YES        null
+column_default    VARCHAR(65535)    YES        null
+is_nullable    VARCHAR(3)    YES        null
+data_type    VARCHAR(65535)    YES        null
+character_maximum_length    BIGINT(0)    YES        null
+character_octet_length    BIGINT(0)    YES        null
+numeric_precision    BIGINT(0)    YES        null
+numeric_scale    BIGINT(0)    YES        null
+datetime_precision    BIGINT(0)    YES        null
+character_set_name    VARCHAR(4)    YES        null
+collation_name    VARCHAR(8)    YES        null
+column_type    VARCHAR(65535)    YES        null
+column_key    VARCHAR(3)    YES        null
+extra    VARCHAR(14)    YES        null
+privileges    VARCHAR(31)    YES        null
+column_comment    VARCHAR(2048)    YES        null
+generation_expression    VARCHAR(500)    YES        null
+srs_id    BIGINT(0)    YES        null
 show columns from `PROFILING`;
-no such table information_schema.PROFILING
+Field    Type    Null    Key    Default    Extra    Comment
+messages_sent    INT(32)    YES        null
+messages_received    INT(32)    YES        null
+cpu_user    DECIMAL64(9)    YES        null
+duration    DECIMAL64(9)    NO        '0.000000'
+query_id    INT(32)    NO        '0'
+seq    INT(32)    NO        '0'
+state    VARCHAR(30)    NO        ''
+swaps    INT(32)    YES        null
+cpu_system    DECIMAL64(9)    YES        null
+context_involuntary    INT(32)    YES        null
+source_function    VARCHAR(30)    YES        null
+block_ops_in    INT(32)    YES        null
+page_faults_minor    INT(32)    YES        null
+page_faults_major    INT(32)    YES        null
+source_line    INT(32)    YES        null
+source_file    VARCHAR(20)    YES        null
+context_voluntary    INT(32)    YES        null
+block_ops_out    INT(32)    YES        null
 show columns from `PROCESSLIST`;
 Field    Type    Null    Key    Default    Extra    Comment
 command    VARCHAR(16)    NO        ''
@@ -174,12 +227,80 @@ state    VARCHAR(64)    YES        null
 time    INT(32)    NO        '0'
 user    VARCHAR(32)    NO        ''
 show columns from `USER_PRIVILEGES`;
-no such table information_schema.USER_PRIVILEGES
+Field    Type    Null    Key    Default    Extra    Comment
+table_catalog    VARCHAR(512)    NO        ''
+grantee    VARCHAR(292)    NO        ''
+privilege_type    VARCHAR(64)    NO        ''
+is_grantable    VARCHAR(3)    NO        ''
 show columns from `SCHEMATA`;
-no such table information_schema.SCHEMATA
+Field    Type    Null    Key    Default    Extra    Comment
+catalog_name    VARCHAR(5000)    YES        null
+schema_name    VARCHAR(5000)    YES        null
+default_character_set_name    VARCHAR(7)    YES        null
+default_collation_name    VARCHAR(18)    YES        null
+sql_path    VARCHAR(0)    YES        null
+default_encryption    VARCHAR(3)    YES        null
 show columns from `CHARACTER_SETS`;
-no such table information_schema.CHARACTER_SETS
+Field    Type    Null    Key    Default    Extra    Comment
+maxlen    INT UNSIGNED(32)    YES        null
+character_set_name    VARCHAR(64)    YES        null
+description    VARCHAR(2048)    YES        null
+default_collate_name    VARCHAR(64)    YES        null
 show columns from `TRIGGERS`;
-no such table information_schema.TRIGGERS
+Field    Type    Null    Key    Default    Extra    Comment
+trigger_catalog    VARCHAR(64)    YES        null
+trigger_schema    VARCHAR(64)    YES        null
+trigger_name    VARCHAR(64)    YES        null
+event_manipulation    VARCHAR(10)    YES        null
+event_object_catalog    VARCHAR(64)    YES        null
+event_object_schema    VARCHAR(64)    YES        null
+event_object_table    VARCHAR(64)    YES        null
+action_order    INT UNSIGNED(32)    YES        null
+action_condition    BINARY(0)    YES        null
+action_statement    TEXT(0)    YES        null
+action_orientation    VARCHAR(3)    YES        null
+action_timing    VARCHAR(10)    YES        null
+action_reference_old_table    BINARY(0)    YES        null
+action_reference_new_table    BINARY(0)    YES        null
+action_reference_old_row    VARCHAR(3)    YES        null
+action_reference_new_row    VARCHAR(3)    YES        null
+created    TIMESTAMP(0)    YES        null
+sql_mode    VARCHAR(10)    YES        null
+definer    VARCHAR(288)    YES        null
+character_set_client    VARCHAR(64)    YES        null
+collation_connection    VARCHAR(64)    YES        null
+database_collation    VARCHAR(64)    YES        null
 show columns from `TABLES`;
-no such table information_schema.TABLES
+Field    Type    Null    Key    Default    Extra    Comment
+table_catalog    VARCHAR(3)    YES        null
+table_schema    VARCHAR(5000)    YES        null
+table_name    VARCHAR(5000)    YES        null
+table_type    VARCHAR(18)    YES        null
+engine    VARCHAR(3)    YES        null
+version    BIGINT(0)    YES        null
+row_format    VARCHAR(10)    YES        null
+table_rows    BIGINT(0)    YES        null
+avg_row_length    BIGINT(0)    YES        null
+data_length    BIGINT(0)    YES        null
+max_data_length    BIGINT(0)    YES        null
+index_length    BIGINT(0)    YES        null
+data_free    BIGINT(0)    YES        null
+auto_increment    BIGINT UNSIGNED(0)    YES        null
+create_time    TIMESTAMP(0)    YES        null
+update_time    TIMESTAMP(0)    YES        null
+check_time    TIMESTAMP(0)    YES        null
+table_collation    VARCHAR(18)    YES        null
+checksum    BIGINT(0)    YES        null
+create_options    VARCHAR(256)    YES        null
+table_comment    TEXT(0)    YES        null
+drop database if exists test;
+create database test;
+use test;
+drop table if exists t2;
+create table t2(b int, a int);
+desc t2;
+Field    Type    Null    Key    Default    Extra    Comment
+b    INT(32)    YES        null
+a    INT(32)    YES        null
+drop table t2;
+drop database test;

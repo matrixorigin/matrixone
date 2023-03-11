@@ -39,6 +39,20 @@ func initOperators() {
 
 // operators contains the operator function indexed by function id.
 var operators = map[int]Functions{
+	BINARY: {
+		Id:     BINARY,
+		Flag:   plan.Function_STRICT,
+		Layout: CAST_EXPRESSION,
+		Overloads: []Function{
+			{
+				Args: []types.T{
+					types.T_varchar,
+				},
+				ReturnTyp: types.T_binary,
+				Fn:        operator.Binary,
+			},
+		},
+	},
 	ISTRUE: {
 		Id:     ISTRUE,
 		Flag:   plan.Function_PRODUCE_NO_NULL,
@@ -514,6 +528,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_int64,
 				Fn:        operator.OpBitXorFun[int64],
 			},
+			{
+				Index: 1,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_binary,
+				Fn:        operator.OpBinaryBitXor,
+			},
+			{
+				Index: 2,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_varbinary,
+				Fn:        operator.OpBinaryBitXor,
+			},
 		},
 	},
 
@@ -531,6 +563,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_int64,
 				Fn:        operator.OpBitOrFun[int64],
 			},
+			{
+				Index: 1,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_binary,
+				Fn:        operator.OpBinaryBitOr,
+			},
+			{
+				Index: 2,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_varbinary,
+				Fn:        operator.OpBinaryBitOr,
+			},
 		},
 	},
 
@@ -547,6 +597,24 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_int64,
 				Fn:        operator.OpBitAndFun[int64],
+			},
+			{
+				Index: 1,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_binary,
+				Fn:        operator.OpBinaryBitAnd,
+			},
+			{
+				Index: 2,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_varbinary,
+				Fn:        operator.OpBinaryBitAnd,
 			},
 		},
 	},
@@ -815,6 +883,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.EqString,
 			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_binary,
+				Fn:        operator.EqString,
+			},
+			{
+				Index: 24,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_varbinary,
+				Fn:        operator.EqString,
+			},
 		},
 	},
 
@@ -1021,6 +1107,24 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.INGeneral[types.Time],
+			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.INString,
 			},
 		},
 	},
@@ -1229,6 +1333,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.NotINGeneral[types.Time],
 			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_tuple,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotINString,
+			},
 		},
 	},
 
@@ -1435,6 +1557,24 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.GtGeneral[types.Time],
+			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GtString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GtString,
 			},
 		},
 	},
@@ -1643,6 +1783,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.GeGeneral[types.Time],
 			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GeString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GeString,
+			},
 		},
 	},
 
@@ -1849,6 +2007,24 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.LtGeneral[types.Time],
+			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LtString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LtString,
 			},
 		},
 	},
@@ -2057,6 +2233,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.LeGeneral[types.Time],
 			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LeString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LeString,
+			},
 		},
 	},
 
@@ -2263,6 +2457,24 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.NeGeneral[types.Time],
+			},
+			{
+				Index: 22,
+				Args: []types.T{
+					types.T_binary,
+					types.T_binary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NeString,
+			},
+			{
+				Index: 23,
+				Args: []types.T{
+					types.T_varbinary,
+					types.T_varbinary,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NeString,
 			},
 		},
 	},
@@ -2935,9 +3147,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint8},
 				ReturnTyp: types.T_uint8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint8)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -2945,9 +3155,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint16},
 				ReturnTyp: types.T_uint16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint16)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -2955,9 +3163,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint32},
 				ReturnTyp: types.T_uint32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -2965,9 +3171,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_uint64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -2975,9 +3179,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int8},
 				ReturnTyp: types.T_int8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int8)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -2985,9 +3187,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int16},
 				ReturnTyp: types.T_int16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int16)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -2995,9 +3195,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int32},
 				ReturnTyp: types.T_int32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3005,9 +3203,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3015,9 +3211,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_float32},
 				ReturnTyp: types.T_float32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]float32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3025,9 +3219,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]float64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3035,9 +3227,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_decimal64},
 				ReturnTyp: types.T_decimal64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]types.Decimal64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3045,9 +3235,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]types.Decimal128)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 		},

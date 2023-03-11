@@ -33,7 +33,7 @@ invalid input: ' ' is not a valid bool expression
 SELECT * FROM is_test WHERE str1 IS FALSE;
 invalid input: '' is not a valid bool expression
 SELECT * FROM is_test WHERE str2 IS TRUE AND str1 IS TRUE;
-invalid input: ' ' is not a valid bool expression
+invalid input: '' is not a valid bool expression
 SELECT * FROM is_test WHERE LENGTH(str2) IS TRUE;
 str1    str2    d1    d2    d3
          null    null    null

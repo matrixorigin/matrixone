@@ -150,12 +150,10 @@ func (mc *MysqlColumn) Decimal() uint8 {
 	return mc.decimal
 }
 
-func (mc *MysqlColumn) SetDecimal(decimal uint8) {
-	if mc.columnType == defines.MYSQL_TYPE_FLOAT || mc.columnType == defines.MYSQL_TYPE_DOUBLE {
-		mc.decimal = 31
-		return
+func (mc *MysqlColumn) SetDecimal(decimal int32) {
+	if decimal >= 0 {
+		mc.decimal = uint8(decimal)
 	}
-	mc.decimal = decimal
 }
 
 func (mc *MysqlColumn) Flag() uint16 {
@@ -226,7 +224,7 @@ func (mc *MysqlColumn) GetAutoIncr() bool {
 	return mc.auto_incr
 }
 
-// Discussion: for some MatrixOne types, the Type.Precision and Type.Scale value are needed for stringification, I think we
+// Discussion: for some MatrixOne types and Type.Scale value are needed for stringification, I think we
 // need to add a field
 // MoTypes []types.Type
 // in this struct, what's your opinion on this matter?@Daviszhen

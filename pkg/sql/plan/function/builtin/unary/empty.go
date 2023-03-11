@@ -17,28 +17,27 @@ package unary
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/empty"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Empty(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint8, Size: 1}
-	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultValues := make([]uint8, 1)
-		empty.Empty(inputValues, resultValues)
-		return vector.NewConstFixed(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
+func Empty(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_bool, Size: 1}
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	}
+	ivals := vector.MustStrCol(inputVector)
+	if inputVector.IsConst() {
+		return vector.NewConstFixed(rtyp, len(ivals[0]) == 0, ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint8](resultVector)
-		empty.Empty(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[bool](rvec)
+		for i := range ivals {
+			rvals[i] = len(ivals[i]) == 0
+		}
+		return rvec, nil
 	}
 }

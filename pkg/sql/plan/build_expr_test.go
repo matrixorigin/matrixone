@@ -386,7 +386,7 @@ func TestExpr_B(t *testing.T) {
 }
 
 func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -406,8 +406,8 @@ func makeTimeExpr(s string, p int32) *plan.Expr {
 	dt, _ := types.ParseTime(s, 0)
 	return &plan.Expr{
 		Typ: &plan.Type{
-			Id:        int32(types.T_time),
-			Precision: p,
+			Id:    int32(types.T_time),
+			Scale: p,
 		},
 		Expr: &plan.Expr_C{
 			C: &plan.Const{

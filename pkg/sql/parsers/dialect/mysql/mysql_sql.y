@@ -36,6 +36,10 @@ import (
     statement tree.Statement
     statements []tree.Statement
 
+    alterTable tree.AlterTable
+    alterTableOptions tree.AlterTableOptions
+    alterTableOption tree.AlterTableOption
+
     tableDef tree.TableDef
     tableDefs tree.TableDefs
     tableName *tree.TableName
@@ -382,7 +386,7 @@ import (
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
@@ -445,6 +449,8 @@ import (
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
+%type <alterTableOptions> alter_options
+%type <alterTableOption> alter_table_drop
 
 %type <tableOption> table_option
 %type <from> from_clause from_opt
@@ -484,7 +490,7 @@ import (
 %type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
 %type <exprs> expression_list row_value window_partition_by window_partition_by_opt
-%type <expr> datetime_precision_opt datetime_precision
+%type <expr> datetime_scale_opt datetime_scale
 %type <tuple> tuple_expression
 %type <comparisonOp> comparison_operator and_or_some
 %type <createOption> create_option
@@ -554,7 +560,7 @@ import (
 %type <insert> insert_data
 %type <replace> replace_data
 %type <rowsExprs> values_list
-%type <str> name_datetime_precision braces_opt name_braces
+%type <str> name_datetime_scale braces_opt name_braces
 %type <str> std_dev_pop extended_opt
 %type <expr> expr_or_default
 %type <exprs> data_values data_opt row_value
@@ -738,7 +744,7 @@ mo_dump_stmt:
     {
 	$$ = &tree.MoDump{
 	    DumpDatabase: true,
-	    Database: tree.Identifier($3.ToLowerForConfig()),
+	    Database: tree.Identifier($3.Compare()),
 	    OutFile: $5,
 	    MaxFileSize: int64($6),
 	}
@@ -747,7 +753,7 @@ mo_dump_stmt:
     {
 	$$ = &tree.MoDump{
 	    DumpDatabase: true,
-	    Database: tree.Identifier($3.ToLowerForConfig()),
+	    Database: tree.Identifier($3.Compare()),
 	    Tables: $5,
 	    OutFile: $7,
 	    MaxFileSize: int64($8),
@@ -851,15 +857,15 @@ parallel_opt:
 normal_ident:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare())
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig(), $5.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
     }
 
 columns_or_variable_list_opt:
@@ -1243,22 +1249,22 @@ priv_level:
     {
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
-            DbName: $1.ToLowerForConfig(),
+            DbName: $1.Compare(),
         }
     }
 |   ident '.' ident
     {
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
-            DbName: $1.ToLowerForConfig(),
-            TabName: $3.ToLowerForConfig(),
+            DbName: $1.Compare(),
+            TabName: $3.Compare(),
         }
     }
 |   ident
     {
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE,
-            TabName: $1.ToLowerForConfig(),
+            TabName: $1.Compare(),
         }
     }
 
@@ -1784,11 +1790,11 @@ equal_or_assignment:
 var_name:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 |   ident '.' ident
     {
-        $$ = $1.ToLowerForConfig() + "." + $3.ToLowerForConfig()
+        $$ = $1.Compare() + "." + $3.Compare()
     }
 
 var_name_list:
@@ -1888,7 +1894,7 @@ use_stmt:
     {
         $$ = &tree.Use{
             SecondaryRole: false,
-            Name: $2.ToLowerForConfig(),
+            Name: $2,
         }
     }
 |   USE
@@ -1982,13 +1988,13 @@ table_lock_list:
     }
 |   table_lock_list ',' table_lock_elem
     {
-       $$ = append($1, $3);
+       $$ = append($1, $3)
     }
 
 table_lock_elem:
     table_name table_lock_type
     {
-        $$ = tree.TableLock{$1, $2}
+        $$ = tree.TableLock{*$1, $2}
     }
 
 table_lock_type:  
@@ -2195,6 +2201,7 @@ alter_stmt:
 |   alter_account_stmt
 |   alter_database_config_stmt
 |   alter_view_stmt
+|   alter_table_stmt
 // |    alter_ddl_stmt
 
 alter_view_stmt:
@@ -2207,6 +2214,73 @@ alter_view_stmt:
             IfExists: $3,
         }
     }
+
+alter_table_stmt:
+    ALTER TABLE table_name alter_options
+    {
+        $$ = &tree.AlterTable{
+            Table: *$3,
+            Options: $4,
+        }
+    }
+
+alter_options:
+ADD table_elem
+    {
+        opt := &tree.AlterOptionAdd{
+            Def:  $2,
+        }
+        $$ = []tree.AlterTableOption{tree.AlterTableOption(opt)}
+    }
+|   DROP alter_table_drop
+    {
+        $$ = []tree.AlterTableOption{tree.AlterTableOption($2)}
+    }
+| table_option_list
+    {
+        opts := make([]tree.AlterTableOption, len($1))
+        for i, opt := range $1 {
+            opts[i] = tree.AlterTableOption(opt)
+        }
+        $$ =  opts
+    }
+
+alter_table_drop:
+    INDEX ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropIndex,
+            Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   KEY ident
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropKey,
+            Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   COLUMN ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropColumn,
+            Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   FOREIGN KEY ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropForeignKey,
+            Name: tree.Identifier($3.Compare()),
+        }
+    }
+|   PRIMARY KEY 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropPrimaryKey,
+        }
+    }
+    
 
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
@@ -2423,7 +2497,7 @@ show_grants_stmt:
 |   SHOW GRANTS FOR ROLE ident
     {
         s := &tree.ShowGrants{}
-        roles := []*tree.Role{tree.NewRole($5.ToLowerForConfig())}
+        roles := []*tree.Role{tree.NewRole($5.Compare())}
         s.Roles = roles
         s.ShowGrantType = tree.GrantForRole
         $$ = s
@@ -2548,8 +2622,8 @@ show_index_stmt:
     }
 |	SHOW extended_opt index_kwd from_or_in ident from_or_in ident where_expression_opt
      {
-     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7.ToLowerForConfig()), ExplicitSchema: true}
-         tbl := tree.NewTableName(tree.Identifier($5.ToLowerForConfig()), prefix)
+     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7.Compare()), ExplicitSchema: true}
+         tbl := tree.NewTableName(tree.Identifier($5.Compare()), prefix)
          $$ = &tree.ShowIndex{
              TableName: *tbl,
              Where: $8,
@@ -2700,7 +2774,7 @@ database_name_opt:
     }
 |   from_or_in ident
     {
-        $$ = $2.ToLowerForConfig()
+        $$ = $2.Compare()
     }
 
 table_column_name:
@@ -2744,31 +2818,31 @@ show_create_stmt:
 table_name_unresolved:
     ident
     {
-        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.Compare()})
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.ToLowerForConfig(), $1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.Compare(), $1.Compare()})
     }
 
 db_name:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 
 unresolved_object_name:
     ident
     {
-        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.Compare()})
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.ToLowerForConfig(), $1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.Compare(), $1.Compare()})
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(3, [3]string{$5.ToLowerForConfig(), $3.ToLowerForConfig(), $1.ToLowerForConfig()})
+        $$ = tree.SetUnresolvedObjectName(3, [3]string{$5.Compare(), $3.Compare(), $1.Compare()})
     }
 
 truncate_table_stmt:
@@ -2845,7 +2919,7 @@ drop_index_stmt:
     DROP INDEX exists_opt ident ON table_name
     {
         $$ = &tree.DropIndex{
-            Name: tree.Identifier($4.ToLowerForConfig()),
+            Name: tree.Identifier($4.Compare()),
             TableName: *$6,
             IfExists: $3,
         }
@@ -2866,7 +2940,7 @@ drop_view_stmt:
 drop_database_stmt:
     DROP DATABASE exists_opt ident
     {
-        $$ = &tree.DropDatabase{Name: tree.Identifier($4.ToLowerForConfig()), IfExists: $3}
+        $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
     }
 
 drop_prepare_stmt:
@@ -2952,12 +3026,12 @@ table_name_opt_wild:
     ident wild_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.ToLowerForConfig()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
     }
 |    ident '.' ident wild_opt
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLowerForConfig()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.ToLowerForConfig()), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
     }
 
 wild_opt:
@@ -3187,11 +3261,11 @@ insert_column_list:
 insert_column:
     ident
     {
-        $$ = $1.ToLowerForConfig()
+        $$ = $1.Compare()
     }
 |   ident '.' ident
     {
-        $$ = $3.ToLowerForConfig()
+        $$ = $3.Compare()
     }
 
 values_list:
@@ -3249,11 +3323,11 @@ partition_clause_opt:
 partition_id_list:
     ident
     {
-        $$ = tree.IdentifierList{tree.Identifier($1.ToLowerForConfig())}
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
     }
 |   partition_id_list ',' ident
     {
-        $$ = append($1 , tree.Identifier($3.ToLowerForConfig()))
+        $$ = append($1 , tree.Identifier($3.Compare()))
     }
 
 into_table_name:
@@ -3387,11 +3461,11 @@ force_quote_list:
     ident
     {
         $$ = make([]string, 0, 4)
-        $$ = append($$, $1.ToLowerForConfig())
+        $$ = append($$, $1.Compare())
     }
 |   force_quote_list ',' ident
     {
-        $$ = append($1, $3.ToLowerForConfig())
+        $$ = append($1, $3.Compare())
     }
 
 select_stmt:
@@ -3457,7 +3531,7 @@ common_table_expr:
     ident column_list_opt AS '(' stmt ')'
     {
         $$ = &tree.CTE{
-            Name: &tree.AliasClause{Alias: tree.Identifier($1.ToLowerForConfig()), Cols: $2},
+            Name: &tree.AliasClause{Alias: tree.Identifier($1.Compare()), Cols: $2},
             Stmt: $5,
         }
     }
@@ -3823,11 +3897,11 @@ select_expression:
     }
 |   ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($1.ToLowerForConfig())}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($1.Compare())}
     }
 |   ident '.' ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($3.ToLowerForConfig(), $1.ToLowerForConfig())}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($3.Compare(), $1.Compare())}
     }
 
 from_opt:
@@ -4023,11 +4097,11 @@ join_condition:
 column_list:
     ident
     {
-        $$ = tree.IdentifierList{tree.Identifier($1.ToLowerForConfig())}
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
     }
 |   column_list ',' ident
     {
-        $$ = append($1, tree.Identifier($3.ToLowerForConfig()))
+        $$ = append($1, tree.Identifier($3.Compare()))
     }
 
 table_factor:
@@ -4072,7 +4146,7 @@ table_subquery:
 table_function:
     ident '(' expression_list_opt ')'
     {
-        name := tree.SetUnresolvedName(strings.ToLower($1.ToLowerForConfig()))
+        name := tree.SetUnresolvedName(strings.ToLower($1.Compare()))
         $$ = &tree.TableFunction{
        	    Func: &tree.FuncExpr{
         	Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -4157,11 +4231,11 @@ index_name_list:
 	}
 |	ident
 	{
-		$$ = []string{$1.ToLowerForConfig()}
+		$$ = []string{$1.Compare()}
 	}
 |	index_name_list ',' ident
 	{
-		$$ = append($1, $3.ToLowerForConfig())
+		$$ = append($1, $3.Compare())
 	}
 |	PRIMARY
 	{
@@ -4188,13 +4262,13 @@ as_opt_id:
 table_alias:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 |   STRING
 
 as_name_opt:
     {
-        $$ = tree.NewCStr("", false)
+        $$ = tree.NewCStr("", yylex.(*Lexer).lower)
     }
 |   ident
     {
@@ -4206,17 +4280,17 @@ as_name_opt:
     }
 |   STRING
     {
-        $$ = tree.NewCStr($1, true)
+        $$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   AS STRING
     {
-        $$ = tree.NewCStr($2, true)
+        $$ = tree.NewCStr($2, yylex.(*Lexer).lower)
     }
 
 stmt_name:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 
 //table_id:
@@ -4256,13 +4330,13 @@ create_extension_stmt:
 extension_lang:
     ident
     {
-        $$ = $1.ToLowerForConfig()
+        $$ = $1.Compare()
     }
 
 extension_name:
     ident
     {
-        $$ = $1.ToLowerForConfig()
+        $$ = $1.Compare()
     }
 
 
@@ -4282,12 +4356,12 @@ func_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewFuncName(tree.Identifier($1.ToLowerForConfig()), prefix)
+        $$ = tree.NewFuncName(tree.Identifier($1.Compare()), prefix)
     }
 |   ident '.' ident
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLowerForConfig()), ExplicitSchema: true}
-        $$ = tree.NewFuncName(tree.Identifier($3.ToLowerForConfig()), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        $$ = tree.NewFuncName(tree.Identifier($3.Compare()), prefix)
     }
 
 func_args_list_opt:
@@ -4329,7 +4403,7 @@ func_arg_decl:
 func_lang:
     ident
     {
-        $$ = $1.ToLowerForConfig()
+        $$ = $1.Compare()
     }
 
 func_return:
@@ -4364,7 +4438,7 @@ create_account_stmt:
 account_name:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 
 account_auth_option:
@@ -4384,7 +4458,7 @@ account_admin_name:
     }
 |	ident
 	{
-		$$ = $1.ToLowerForConfig()
+		$$ = $1.Compare()
 	}
 
 account_identified:
@@ -4459,7 +4533,7 @@ create_user_stmt:
 account_role_name:
     ident
     {
-   		$$ = $1.ToLowerForConfig()
+   		$$ = $1.Compare()
     }
 
 user_comment_or_attribute_opt:
@@ -4669,7 +4743,7 @@ user_identified:
 name_string:
     ident
     {
-    	$$ = $1.ToLowerForConfig()
+    	$$ = $1.Compare()
     }
 |   STRING
 
@@ -4695,7 +4769,7 @@ role_spec_list:
 role_spec:
     role_name
     {
-        $$ = &tree.Role{UserName: $1.ToLowerForConfig()}
+        $$ = &tree.Role{UserName: $1.Compare()}
     }
 //|   name_string '@' name_string
 //    {
@@ -4709,15 +4783,15 @@ role_spec:
 role_name:
     ID
 	{
-		$$ = tree.NewCStr($1, false)
+		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   QUOTE_ID
 	{
-		$$ = tree.NewCStr($1, true)
+		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   STRING
 	{
-    	$$ = tree.NewCStr($1, false)
+    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 
 index_prefix:
@@ -4748,7 +4822,7 @@ create_index_stmt:
             io.IType = $5
         }
         $$ = &tree.CreateIndex{
-            Name: tree.Identifier($4.ToLowerForConfig()),
+            Name: tree.Identifier($4.Compare()),
             Table: *$7,
             IndexCat: $2,
             KeyParts: $9,
@@ -4793,7 +4867,7 @@ index_option:
     }
 |   WITH PARSER ident
     {
-        $$ = &tree.IndexOption{ParserName: $3.ToLowerForConfig()}
+        $$ = &tree.IndexOption{ParserName: $3.Compare()}
     }
 |   VISIBLE
     {
@@ -4851,7 +4925,7 @@ create_database_stmt:
     {
         $$ = &tree.CreateDatabase{
             IfNotExists: $3,
-            Name: tree.Identifier($4.ToLowerForConfig()),
+            Name: tree.Identifier($4.Compare()),
             CreateOptions: $5,
         }
     }
@@ -5091,7 +5165,7 @@ partition:
     PARTITION ident values_opt sub_partition_list_opt
     {
         $$ = &tree.Partition{
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
             Values: $3,
             Options: nil,
             Subs: $4,
@@ -5100,7 +5174,7 @@ partition:
 |   PARTITION ident values_opt partition_option_list sub_partition_list_opt
     {
         $$ = &tree.Partition{
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
             Values: $3,
             Options: $4,
             Subs: $5,
@@ -5130,14 +5204,14 @@ sub_partition:
     SUBPARTITION ident
     {
         $$ = &tree.SubPartition{
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
             Options: nil,
         }
     }
 |   SUBPARTITION ident partition_option_list
     {
         $$ = &tree.SubPartition{
-            Name: tree.Identifier($2.ToLowerForConfig()),
+            Name: tree.Identifier($2.Compare()),
             Options: $3,
         }
     }
@@ -5412,7 +5486,7 @@ table_option:
     }
 |   TABLESPACE equal_opt ident storage_opt
     {
-        $$= tree.NewTableOptionTablespace($3.ToLowerForConfig(), $4)
+        $$= tree.NewTableOptionTablespace($3.Compare(), $4)
     }
 |   UNION equal_opt '(' table_name_list ')'
     {
@@ -5504,12 +5578,12 @@ table_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.ToLowerForConfig()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
     }
 |   ident '.' ident
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLowerForConfig()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.ToLowerForConfig()), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
     }
 
 table_elem_list_opt:
@@ -5660,7 +5734,7 @@ index_name_and_type_opt:
 |    ident TYPE index_type
     {
         $$ = make([]string, 2)
-        $$[0] = $1.ToLowerForConfig()
+        $$[0] = $1.Compare()
         $$[1] = $3
     }
 
@@ -5677,7 +5751,7 @@ index_name:
     }
 |    ident
 	{
-		$$ = $1.ToLowerForConfig()
+		$$ = $1.Compare()
 	}
 
 column_def:
@@ -5689,47 +5763,47 @@ column_def:
 column_name_unresolved:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare())
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig(), $5.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
     }
 
 ident:
     ID
     {
-		$$ = tree.NewCStr($1, false)
+		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |	QUOTE_ID
 	{
-    	$$ = tree.NewCStr($1, true)
+    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   not_keyword
 	{
-    	$$ = tree.NewCStr($1, false)
+    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 |   non_reserved_keyword
 	{
-    	$$ = tree.NewCStr($1, false)
+    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
 
 column_name:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare())
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.ToLowerForConfig(), $3.ToLowerForConfig(), $5.ToLowerForConfig())
+        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
     }
 
 column_attribute_list_opt:
@@ -5805,7 +5879,7 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeCheck($4, $6, $1)
     }
-|   ON UPDATE name_datetime_precision datetime_precision_opt
+|   ON UPDATE name_datetime_scale datetime_scale_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($3))
         var es tree.Exprs = nil
@@ -5849,7 +5923,7 @@ constraint_keyword:
     }
 |   CONSTRAINT ident
     {
-        $$ = $2.ToLowerForConfig()
+        $$ = $2.Compare()
     }
 
 references_def:
@@ -6105,18 +6179,7 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   BINARY '(' expression ')'
-    {
-        locale := ""
-        $$ = tree.NewCastExpr($3, &tree.T{
-            InternalType: tree.InternalType{
-                Family: tree.StringFamily,
-                FamilyString: "BINARY",
-                Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
-            },
-        })
-    }
+
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -6220,7 +6283,7 @@ mo_cast_type:
 
 mysql_cast_type:
     decimal_type
-|   BINARY length_opt
+|   BINARY length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -6278,7 +6341,7 @@ mysql_cast_type:
         $$ = &tree.T{
             InternalType: tree.InternalType{
                 Family:             tree.TimestampFamily,
-                Precision:          $2,
+                Scale:          $2,
                 FamilyString: $1,
                 DisplayWith: $2,
                 TimePrecisionIsSet: false,
@@ -6295,7 +6358,7 @@ mysql_cast_type:
                 Family: tree.TimeFamily,
                 FamilyString: $1,
                 DisplayWith: $2,
-                Precision: $2,
+                Scale: $2,
                 TimePrecisionIsSet: false,
                 Locale: &locale,
                 Oid: uint32(defines.MYSQL_TYPE_TIME),
@@ -6725,7 +6788,7 @@ function_call_generic:
     }
 |   VALUES '(' insert_column ')'
     {
-    	column := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        column := tree.SetUnresolvedName(strings.ToLower($3))
         name := tree.SetUnresolvedName(strings.ToLower($1))
     	$$ = &tree.FuncExpr{
                     Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -6781,7 +6844,7 @@ time_stamp_unit:
 |    SQL_TSI_YEAR
 
 function_call_nonkeyword:
-    CURTIME datetime_precision
+    CURTIME datetime_scale
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         var es tree.Exprs = nil
@@ -6793,7 +6856,7 @@ function_call_nonkeyword:
             Exprs: es,
         }
     }
-|   SYSDATE datetime_precision
+|   SYSDATE datetime_scale
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         var es tree.Exprs = nil
@@ -6838,7 +6901,7 @@ function_call_keyword:
             Func: tree.FuncName2ResolvableFunctionReference(name),
         }
     }
-|   name_datetime_precision datetime_precision_opt
+|   name_datetime_scale datetime_scale_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         var es tree.Exprs = nil
@@ -6848,6 +6911,14 @@ function_call_keyword:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: es,
+        }
+    }
+|   BINARY '(' expression_list ')' 
+    {
+        name := tree.SetUnresolvedName("binary")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
         }
     }
 |   CHAR '(' expression_list ')'
@@ -6923,16 +6994,16 @@ function_call_keyword:
         }
     }
 
-datetime_precision_opt:
+datetime_scale_opt:
     {
         $$ = nil
     }
-|   datetime_precision
+|   datetime_scale
     {
         $$ = $1
     }
 
-datetime_precision:
+datetime_scale:
    '(' ')'
     {
         $$ = nil
@@ -6948,7 +7019,7 @@ datetime_precision:
         $$ = tree.NewNumValWithType(constant.MakeInt64(ival), str, false, tree.P_int64)
     }
 
-name_datetime_precision:
+name_datetime_scale:
     CURRENT_TIME
 |   CURRENT_TIMESTAMP
 |   LOCALTIME
@@ -7530,7 +7601,11 @@ decimal_type:
             yylex.Error("Display width for double out of range (max = 255)")
             return 1
         }
-        if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for double out of range (max = 30)")
+            return 1
+        }
+        if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
             yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
                 return 1
         }
@@ -7542,14 +7617,22 @@ decimal_type:
         		Locale: &locale,
        			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
-                Precision: $2.Precision,
+                Scale: $2.Scale,
         	},
         }
     }
 |   FLOAT_TYPE float_length_opt
     {
         locale := ""
-        if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
+        if $2.DisplayWith > 255 {
+            yylex.Error("Display width for float out of range (max = 255)")
+            return 1
+        }
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for float out of range (max = 30)")
+            return 1
+        }
+        if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
         	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         	return 1
         }
@@ -7562,7 +7645,7 @@ decimal_type:
             		Locale: &locale,
            			Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
             		DisplayWith: $2.DisplayWith,
-            		Precision: $2.Precision,
+            		Scale: $2.Scale,
             	},
             }
         } else {
@@ -7574,7 +7657,7 @@ decimal_type:
             		Locale: &locale,
             		Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
             		DisplayWith: $2.DisplayWith,
-            		Precision: $2.Precision,
+            		Scale: $2.Scale,
             	},
             }
         }
@@ -7583,7 +7666,7 @@ decimal_type:
 |   DECIMAL decimal_length_opt
     {
         locale := ""
-        if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
+        if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         return 1
         }
@@ -7599,7 +7682,7 @@ decimal_type:
             Locale: &locale,
             Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
             DisplayWith: $2.DisplayWith,
-            Precision: $2.Precision,
+            Scale: $2.Scale,
             },
         }
         } else {
@@ -7611,7 +7694,7 @@ decimal_type:
             Locale: &locale,
             Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
             DisplayWith: $2.DisplayWith,
-            Precision: $2.Precision,
+            Scale: $2.Scale,
             },
                 }
         }
@@ -7620,13 +7703,13 @@ decimal_type:
 //     {
 //         $$ = tree.TYPE_DOUBLE
 //         $$.InternalType.DisplayWith = $2.DisplayWith
-//         $$.InternalType.Precision = $2.Precision
+//         $$.InternalType.Scale = $2.Scale
 //     }
 // |   NUMERIC decimal_length_opt
 //     {
 //         $$ = tree.TYPE_DOUBLE
 //         $$.InternalType.DisplayWith = $2.DisplayWith
-//         $$.InternalType.Precision = $2.Precision
+//         $$.InternalType.Scale = $2.Scale
 //     }
 |   REAL float_length_opt
     {
@@ -7639,7 +7722,7 @@ decimal_type:
                 Locale: &locale,
                 Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
-                Precision: $2.Precision,
+                Scale: $2.Scale,
             },
         }
     }
@@ -7667,7 +7750,7 @@ time_type:
                 $$ = &tree.T{
                     InternalType: tree.InternalType{
                 Family:             tree.TimeFamily,
-                Precision:          $2,
+                Scale:          $2,
                     FamilyString: $1,
                     DisplayWith: 26,
                 TimePrecisionIsSet: true,
@@ -7687,7 +7770,7 @@ time_type:
                 $$ = &tree.T{
                     InternalType: tree.InternalType{
                 Family:             tree.TimestampFamily,
-                Precision:          $2,
+                Scale:          $2,
                     FamilyString: $1,
                     DisplayWith: 26,
                 TimePrecisionIsSet: true,
@@ -7707,7 +7790,7 @@ time_type:
                 $$ = &tree.T{
                     InternalType: tree.InternalType{
                 Family:             tree.TimestampFamily,
-                Precision:          $2,
+                Scale:          $2,
                     FamilyString: $1,
                     DisplayWith: 26,
                 TimePrecisionIsSet: true,
@@ -7759,7 +7842,7 @@ char_type:
             },
         }
     }
-|   BINARY length_opt
+|   BINARY length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -7772,7 +7855,7 @@ char_type:
             },
         }
     }
-|   VARBINARY length_opt
+|   VARBINARY length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -8031,21 +8114,21 @@ float_length_opt:
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.NotDefineDisplayWidth,
-            Precision: tree.NotDefineDec,
+            Scale: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ')'
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Precision: tree.NotDefineDec,
+            Scale: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Precision: int32($4.(int64)),
+            Scale: int32($4.(int64)),
         }
     }
 
@@ -8053,22 +8136,22 @@ decimal_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: 34,           // this is the default precision for decimal
-            Precision: 0,
+            DisplayWith: 34,           // this is the default scale for decimal
+            Scale: 0,
         }
     }
 |   '(' INTEGRAL ')'
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Precision: 0,
+            Scale: 0,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Precision: int32($4.(int64)),
+            Scale: int32($4.(int64)),
         }
     }
 
@@ -8482,6 +8565,7 @@ non_reserved_keyword:
 |   NODE
 |   UUID
 |   PARALLEL
+|	PROCESSLIST
 
 func_not_keyword:
     DATE_ADD

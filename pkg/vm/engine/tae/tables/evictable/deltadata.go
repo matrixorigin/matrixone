@@ -17,6 +17,7 @@ package evictable
 import (
 	"bytes"
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -110,8 +111,8 @@ func (n *DeltaDataNode) fetchData() (containers.Vector, error) {
 	//srcBuf := fsVector.Entries[0].Object.([]byte)
 	srcBuf := make([]byte, len(fsVector.Entries[0].Object.([]byte)))
 	copy(srcBuf, fsVector.Entries[0].Object.([]byte))
-	v := vector.New(n.typ)
-	v.Read(srcBuf)
+	v := vector.NewVec(n.typ)
+	v.UnmarshalBinary(srcBuf)
 	return containers.NewVectorWithSharedMemory(v, false /* rowid committs abort are all non-nullable */), nil
 }
 

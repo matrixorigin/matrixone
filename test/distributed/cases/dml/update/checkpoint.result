@@ -37,4 +37,20 @@ a
 4
 5
 6
+drop table if exists t;
+create table t (a int);
+insert into t values (1), (2), (3), (4), (5);
+select mo_ctl('dn','checkpoint','');
+mo_ctl(dn, checkpoint, )
+{\n  "method": "Checkpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn','checkpoint','');
+mo_ctl(dn, checkpoint, )
+{\n  "method": "Checkpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select * from t;
+a
+1
+2
+3
+4
+5
 drop database if exists db1;

@@ -102,10 +102,10 @@ var (
 		CheckpointAttr_EntryType,
 	}
 	CheckpointSchemaTypes = []types.Type{
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_TS, 0, 0, 0),
-		types.New(types.T_varchar, types.MaxVarcharLen, 0, 0),
-		types.New(types.T_bool, 0, 0, 0), // true for incremental
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_bool, 0, 0), // true for incremental
 	}
 )
 

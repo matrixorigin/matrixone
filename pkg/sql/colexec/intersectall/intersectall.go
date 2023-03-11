@@ -168,7 +168,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		{
 			outputBat = batch.NewWithSize(len(bat.Vecs))
 			for i := range bat.Vecs {
-				outputBat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
+				outputBat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 			}
 		}
 

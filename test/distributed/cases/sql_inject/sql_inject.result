@@ -1,0 +1,8 @@
+drop user `foo" or "1"="1`;
+internal error: invalid input
+drop user `foo"; drop table foo; select "1`;
+internal error: invalid input
+create role 'foo"; drop table foo; select "1';
+internal error: invalid input
+alter database `foo"; drop table foo; select "1` set mysql_compatbility_mode = '{"lower_case_table_names": 1}';
+internal error: invalid input

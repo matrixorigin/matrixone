@@ -17,13 +17,13 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -57,16 +57,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -121,6 +125,17 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Cond:       t.Cond,
 			Result:     t.Result,
 			Typs:       t.Typs,
+			Conditions: t.Conditions,
+		}
+	case vm.Right:
+		t := sourceIns.Arg.(*right.Argument)
+		res.Arg = &right.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Cond:       t.Cond,
+			Result:     t.Result,
+			Right_typs: t.Right_typs,
+			Left_typs:  t.Left_typs,
 			Conditions: t.Conditions,
 		}
 	case vm.Limit:
@@ -377,6 +392,15 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			InsertCtx: t.InsertCtx,
 			// HasAutoCol:           t.HasAutoCol,
 		}
+	case vm.PreInsert:
+		t := sourceIns.Arg.(*preinsert.Argument)
+		res.Arg = &preinsert.Argument{
+			Ctx:        t.Ctx,
+			Eg:         t.Eg,
+			SchemaName: t.SchemaName,
+			TableDef:   t.TableDef,
+			ParentIdx:  t.ParentIdx,
+		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -468,6 +492,55 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	}, nil
 }
 
+func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Process) (*onduplicatekey.Argument, error) {
+	oldCtx := n.InsertCtx
+	ctx := proc.Ctx
+	if oldCtx.GetClusterTable().GetIsClusterTable() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
+	if err != nil {
+		return nil, err
+	}
+
+	return &onduplicatekey.Argument{
+		Engine:   eg,
+		Ref:      oldCtx.Ref,
+		TableDef: oldCtx.TableDef,
+
+		OnDuplicateIdx:  oldCtx.OnDuplicateIdx,
+		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
+		Source:          originRel,
+		UniqueSource:    indexRels,
+
+		IdxIdx: oldCtx.IdxIdx,
+	}, nil
+}
+
+func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
+	insertCtx := n.InsertCtx
+	schemaName := insertCtx.Ref.SchemaName
+	insertCtx.TableDef.TblId = uint64(insertCtx.Ref.Obj)
+
+	if insertCtx.Ref.SchemaName != "" {
+		dbSource, err := eg.Database(proc.Ctx, insertCtx.Ref.SchemaName, proc.TxnOperator)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = dbSource.Relation(proc.Ctx, insertCtx.Ref.ObjName); err != nil {
+			schemaName = defines.TEMPORARY_DBNAME
+		}
+	}
+
+	return &preinsert.Argument{
+		Ctx:        proc.Ctx,
+		Eg:         eg,
+		SchemaName: schemaName,
+		TableDef:   insertCtx.TableDef,
+		ParentIdx:  insertCtx.ParentIdx,
+	}, nil
+}
+
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
 	oldCtx := n.InsertCtx
 	ctx := proc.Ctx
@@ -478,8 +551,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		Ref:      oldCtx.Ref,
 		TableDef: oldCtx.TableDef,
 
-		ParentIdx:    oldCtx.ParentIdx,
-		ClusterTable: oldCtx.ClusterTable,
+		ParentIdx: oldCtx.ParentIdx,
 	}
 
 	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
@@ -697,6 +769,23 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	}
 }
 
+func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *right.Argument {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	return &right.Argument{
+		Left_typs:  left_typs,
+		Right_typs: right_typs,
+		Nbucket:    Nbucket,
+		Ibucket:    Ibucket,
+		Result:     result,
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds, proc),
+	}
+}
+
 func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
@@ -786,7 +875,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 	defer vec.Free(proc.Mp())
 	return &limit.Argument{
-		Limit: uint64(vec.Col.([]int64)[0]),
+		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
@@ -802,7 +891,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 			if len(f.F.Args) > 1 {
 				// vec is separator
 				vec, _ := colexec.EvalExpr(constBat, proc, f.F.Args[len(f.F.Args)-1])
-				sepa := vec.GetString(0)
+				sepa := vec.GetStringAt(0)
 				multiaggs[lenMultiAggs] = group_concat.Argument{
 					Dist:      distinct,
 					GroupExpr: f.F.Args[:len(f.F.Args)-1],
@@ -832,7 +921,6 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 		typs[i].Width = e.Typ.Width
 		typs[i].Size = e.Typ.Size
 		typs[i].Scale = e.Typ.Scale
-		typs[i].Precision = e.Typ.Precision
 	}
 	return &group.Argument{
 		Aggs:      aggs,
@@ -897,7 +985,7 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, 
 		}
 
 		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
-			strings.Split(currentCNAddr, ":")[0] == strings.Split(s.NodeInfo.Addr, ":")[0] {
+			isSameCN(currentCNAddr, s.NodeInfo.Addr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
@@ -949,7 +1037,7 @@ func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argu
 	}
 	defer vec.Free(proc.Mp())
 	return &mergeoffset.Argument{
-		Offset: uint64(vec.Col.([]int64)[0]),
+		Offset: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
@@ -960,7 +1048,7 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 	}
 	defer vec.Free(proc.Mp())
 	return &mergelimit.Argument{
-		Limit: uint64(vec.Col.([]int64)[0]),
+		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
@@ -1089,6 +1177,16 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 			Typs:           arg.Typs,
 			Conditions:     arg.Conditions[1],
 		}
+	case vm.Right:
+		arg := in.Arg.(*right.Argument)
+		return &hashbuild.Argument{
+			Ibucket:     arg.Ibucket,
+			Nbucket:     arg.Nbucket,
+			IsRight:     true,
+			NeedHashMap: true,
+			Typs:        arg.Right_typs,
+			Conditions:  arg.Conditions[1],
+		}
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
 		return &hashbuild.Argument{
@@ -1196,7 +1294,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		}
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
+	if !ok || !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
 		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
@@ -1205,48 +1303,17 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	return e.F.Args[0], e.F.Args[1]
 }
 
-func isEquiJoin(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !supportedJoinCondition(e.F.Func.GetObj()) {
-				continue
-			}
-			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				continue
-			}
-			return true
-		}
-	}
-	return false || isEquiJoin0(exprs)
-}
-
-func isEquiJoin0(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !supportedJoinCondition(e.F.Func.GetObj()) {
-				return false
-			}
-			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	exprs = colexec.SplitAndExprs(exprs)
 	eqConds := make([]*plan.Expr, 0, len(exprs))
 	notEqConds := make([]*plan.Expr, 0, len(exprs))
 	for i, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !supportedJoinCondition(e.F.Func.GetObj()) {
+			if !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
 			}
-			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
+			lpos, rpos := plan2.HasColExpr(e.F.Args[0], -1), plan2.HasColExpr(e.F.Args[1], -1)
 			if lpos == -1 || rpos == -1 || (lpos == rpos) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
@@ -1258,38 +1325,6 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 		return nil, eqConds
 	}
 	return colexec.RewriteFilterExprList(notEqConds), eqConds
-}
-
-func supportedJoinCondition(id int64) bool {
-	fid, _ := function.DecodeOverloadID(id)
-	return fid == function.EQUAL
-}
-
-func hasColExpr(expr *plan.Expr, pos int32) int32 {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if pos == -1 {
-			return e.Col.RelPos
-		}
-		if pos != e.Col.RelPos {
-			return -1
-		}
-		return pos
-	case *plan.Expr_F:
-		for i := range e.F.Args {
-			pos0 := hasColExpr(e.F.Args[i], pos)
-			switch {
-			case pos0 == -1:
-			case pos == -1:
-				pos = pos0
-			case pos != pos0:
-				return -1
-			}
-		}
-		return pos
-	default:
-		return pos
-	}
 }
 
 func exprRelPos(expr *plan.Expr) int32 {
@@ -1322,7 +1357,7 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 		}
 		relation, err = dbSource.Relation(ctx, ref.ObjName)
 		if err == nil {
-			isTemp = false
+			isTemp = defines.TEMPORARY_DBNAME == ref.SchemaName
 		} else {
 			dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
 			if err != nil {

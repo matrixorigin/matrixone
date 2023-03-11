@@ -17,7 +17,6 @@ package multi
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -63,7 +62,7 @@ func TestLpadVarchar(t *testing.T) {
 		{
 			name:      "Tx",
 			vecs:      makeLpadVectors("hello", 1, "", []int{1, 1, 1}),
-			wantBytes: []byte(""),
+			wantBytes: []byte("h"),
 		},
 		{
 			name:      "Tx2",
@@ -155,10 +154,9 @@ func TestLpadVarchar(t *testing.T) {
 				t.Fatal(err)
 			}
 			if c.wantBytes == nil {
-				ret := nulls.Contains(lpad.Nsp, 0)
-				require.Equal(t, ret, true)
+				require.Equal(t, lpad.IsConstNull(), true)
 			} else {
-				require.Equal(t, c.wantBytes, lpad.GetBytes(0))
+				require.Equal(t, c.wantBytes, lpad.GetBytesAt(0))
 			}
 
 		})
@@ -168,12 +166,12 @@ func TestLpadVarchar(t *testing.T) {
 
 func makeLpadVectors(src string, length int64, pad string, nils []int) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
-	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, src, testutil.TestUtilMp)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, length, testutil.TestUtilMp)
-	vec[2] = vector.NewConstString(types.T_varchar.ToType(), 1, pad, testutil.TestUtilMp)
+	vec[0] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(src), 1, testutil.TestUtilMp)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), length, 1, testutil.TestUtilMp)
+	vec[2] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(pad), 1, testutil.TestUtilMp)
 	for i, n := range nils {
 		if n == 0 {
-			nulls.Add(vec[i].Nsp, uint64(i))
+			vector.SetConstNull(vec[i], 1, testutil.TestUtilMp)
 		}
 	}
 	return vec

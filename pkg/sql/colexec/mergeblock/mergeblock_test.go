@@ -73,7 +73,7 @@ func TestMergeBlock(t *testing.T) {
 		// check vector
 		require.Equal(t, 1, len(result.Vecs))
 		for i, vec := range result.Vecs {
-			require.Equal(t, 1, vector.Length(vec), fmt.Sprintf("column number: %d", i))
+			require.Equal(t, 1, vec.Length(), fmt.Sprintf("column number: %d", i))
 		}
 	}
 	// Check UniqueTables
@@ -88,7 +88,7 @@ func TestMergeBlock(t *testing.T) {
 		// check vector
 		require.Equal(t, 1, len(result.Vecs))
 		for i, vec := range result.Vecs {
-			require.Equal(t, 1, vector.Length(vec), fmt.Sprintf("column number: %d", i))
+			require.Equal(t, 1, vec.Length(), fmt.Sprintf("column number: %d", i))
 		}
 	}
 	argument1.Free(proc, false)

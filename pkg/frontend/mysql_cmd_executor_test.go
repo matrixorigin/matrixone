@@ -65,7 +65,7 @@ func init() {
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 	stm := &motrace.StatementInfo{}
 	ctx = motrace.ContextWithStatement(ctx, stm)
-	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, bool) context.Context {
+	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, string, bool) context.Context {
 		return ctx
 	})
 	return ctx, stubs
@@ -104,7 +104,7 @@ func Test_mce(t *testing.T) {
 		ioses.EXPECT().Ref().AnyTimes()
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
 		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-		stmts, err := parsers.Parse(ctx, dialect.MYSQL, "use T")
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, "use T", 1)
 		if err != nil {
 			t.Error(err)
 		}
@@ -115,7 +115,7 @@ func Test_mce(t *testing.T) {
 		runner.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 
 		create_1 := mock_frontend.NewMockComputationWrapper(ctrl)
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "create table A(a varchar(100),b int,c float)")
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "create table A(a varchar(100),b int,c float)", 1)
 		if err != nil {
 			t.Error(err)
 		}
@@ -129,7 +129,7 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		select_1 := mock_frontend.NewMockComputationWrapper(ctrl)
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from A")
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from A", 1)
 		if err != nil {
 			t.Error(err)
 		}
@@ -209,7 +209,7 @@ func Test_mce(t *testing.T) {
 
 		for i := 0; i < len(self_handle_sql); i++ {
 			select_2 := mock_frontend.NewMockComputationWrapper(ctrl)
-			stmts, err = parsers.Parse(ctx, dialect.MYSQL, self_handle_sql[i])
+			stmts, err = parsers.Parse(ctx, dialect.MYSQL, self_handle_sql[i], 1)
 			convey.So(err, convey.ShouldBeNil)
 			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 			select_2.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
@@ -382,31 +382,31 @@ func Test_mce_selfhandle(t *testing.T) {
 		mce.SetSession(ses)
 
 		ses.mrs = &MysqlResultSet{}
-		st1, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@max_allowed_packet")
+		st1, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@max_allowed_packet", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv1 := st1.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		err = mce.handleSelectVariables(sv1)
+		err = mce.handleSelectVariables(sv1, 0, 1)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
-		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@version_comment")
+		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@version_comment", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		err = mce.handleSelectVariables(sv2)
+		err = mce.handleSelectVariables(sv2, 0, 1)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
-		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@global.version_comment")
+		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@global.version_comment", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv3 := st3.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		err = mce.handleSelectVariables(sv3)
+		err = mce.handleSelectVariables(sv3, 0, 1)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
-		st4, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @version_comment")
+		st4, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @version_comment", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv4 := st4.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		err = mce.handleSelectVariables(sv4)
+		err = mce.handleSelectVariables(sv4, 0, 1)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
@@ -434,7 +434,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		set := "set @@tx_isolation=`READ-COMMITTED`"
-		setVar, err := parsers.ParseOne(ctx, dialect.MYSQL, set)
+		setVar, err := parsers.ParseOne(ctx, dialect.MYSQL, set, 1)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = mce.handleSetVar(ctx, setVar.(*tree.SetVar))
@@ -523,8 +523,8 @@ func Test_getDataFromPipeline(t *testing.T) {
 		batchCase2 := func() *batch.Batch {
 			bat := genBatch()
 			for i := 0; i < len(bat.Attrs); i++ {
-				for j := 0; j < vector.Length(bat.Vecs[0]); j++ {
-					nulls.Add(bat.Vecs[i].Nsp, uint64(j))
+				for j := 0; j < bat.Vecs[0].Length(); j++ {
+					nulls.Add(bat.Vecs[i].GetNulls(), uint64(j))
 				}
 			}
 			return bat
@@ -595,7 +595,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 			for i := 0; i < len(bat.Attrs); i++ {
 				for j := 0; j < 1; j++ {
-					nulls.Add(bat.Vecs[i].Nsp, uint64(j))
+					nulls.Add(bat.Vecs[i].GetNulls(), uint64(j))
 				}
 			}
 			return bat
@@ -604,7 +604,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		err = getDataFromPipeline(ses, batchCase2)
 		convey.So(err, convey.ShouldBeNil)
 
-		batchCase2.Vecs = append(batchCase2.Vecs, &vector.Vector{Typ: types.Type{Oid: 88}})
+		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.Type{Oid: 88}))
 		err = getDataFromPipeline(ses, batchCase2)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -674,7 +674,9 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
-		vec := vector.PreAllocType(tt[i], batchSize, batchSize, testutil.TestUtilMp)
+		vec := vector.NewVec(tt[i])
+		vec.PreExtend(batchSize, testutil.TestUtilMp)
+		vec.SetLength(batchSize)
 		batchData.Vecs[i] = vec
 	}
 
@@ -726,15 +728,15 @@ func Test_handleSelectVariables(t *testing.T) {
 
 		mce.SetSession(ses)
 		proto.SetSession(ses)
-		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@tx_isolation")
+		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@tx_isolation", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		convey.So(mce.handleSelectVariables(sv2), convey.ShouldBeNil)
+		convey.So(mce.handleSelectVariables(sv2, 0, 1), convey.ShouldBeNil)
 
-		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@XXX")
+		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@XXX", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv3 := st3.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		convey.So(mce.handleSelectVariables(sv3), convey.ShouldNotBeNil)
+		convey.So(mce.handleSelectVariables(sv3, 0, 1), convey.ShouldNotBeNil)
 
 	})
 }
@@ -774,7 +776,7 @@ func Test_handleShowVariables(t *testing.T) {
 		proto.SetSession(ses)
 
 		sv := &tree.ShowVariables{Global: true}
-		convey.So(mce.handleShowVariables(sv, nil), convey.ShouldBeNil)
+		convey.So(mce.handleShowVariables(sv, nil, 0, 1), convey.ShouldBeNil)
 	})
 }
 
@@ -792,7 +794,8 @@ func Test_GetComputationWrapper(t *testing.T) {
 		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
 		proc := &process.Process{}
-		ses := &Session{planCache: newPlanCache(1)}
+		InitGlobalSystemVariables(GSysVariables)
+		ses := &Session{planCache: newPlanCache(1), gSysVars: GSysVariables}
 		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)
@@ -837,7 +840,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 
 func Test_HandlePrepareStmt(t *testing.T) {
 	ctx := context.TODO()
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "Prepare stmt1 from select 1, 2")
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "Prepare stmt1 from select 1, 2", 1)
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
@@ -850,7 +853,7 @@ func Test_HandlePrepareStmt(t *testing.T) {
 
 func Test_HandleDeallocate(t *testing.T) {
 	ctx := context.TODO()
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1")
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1", 1)
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
@@ -1036,8 +1039,8 @@ func TestDump2File(t *testing.T) {
 			cnt += 1
 			if cnt == 1 {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.New(types.T_int64.ToType())
-				err := bat.Vecs[0].Append(int64(1), false, testutil.TestUtilMp)
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				err := vector.AppendFixed(bat.Vecs[0], int64(1), false, testutil.TestUtilMp)
 				convey.So(err, convey.ShouldBeNil)
 			}
 			return nil, nil
@@ -1107,7 +1110,7 @@ func TestSerializePlanToJson(t *testing.T) {
 }
 
 func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
@@ -1121,7 +1124,7 @@ func Test_getSqlType(t *testing.T) {
 		sql := "use db"
 		ses := &Session{}
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, intereSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, intereSql)
 
 		user := "special_user"
 		tenant := &TenantInfo{
@@ -1130,23 +1133,23 @@ func Test_getSqlType(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 		SetSpecialUser(user, nil)
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, intereSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, intereSql)
 
 		tenant.User = "dump"
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, externSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, externSql)
 
 		sql = "/* cloud_user */ use db"
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudUserSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, cloudUserSql)
 
 		sql = "/* cloud_nonuser */ use db"
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, cloudNoUserSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, cloudNoUserSql)
 
 		sql = "/* json */ use db"
 		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType, convey.ShouldEqual, externSql)
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, externSql)
 	})
 }
 

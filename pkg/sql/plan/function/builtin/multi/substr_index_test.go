@@ -127,7 +127,7 @@ func TestSubstrIndedxInt64(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, tc.expect.Col, gotV.Col)
+			require.Equal(t, vector.MustStrCol(tc.expect), vector.MustStrCol(gotV))
 		})
 	}
 }
@@ -201,7 +201,7 @@ func TestSubstrIndedxUint64(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, tc.expect.Col, gotV.Col)
+			require.Equal(t, vector.MustStrCol(tc.expect), vector.MustStrCol(gotV))
 		})
 	}
 }
@@ -323,7 +323,7 @@ func TestSubstrIndedxFloat64(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, tc.expect.Col, gotV.Col)
+			require.Equal(t, vector.MustStrCol(tc.expect), vector.MustStrCol(gotV))
 		})
 	}
 }

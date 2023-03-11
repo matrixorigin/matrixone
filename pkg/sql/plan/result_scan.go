@@ -58,7 +58,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	if err != nil {
 		return 0, err
 	}
-	uuid := vector.MustTCols[types.Uuid](vec)[0]
+	uuid := vector.MustFixedCol[types.Uuid](vec)[0]
 	// get cols
 	cols, path, err := builder.compCtx.GetQueryResultMeta(uuid.ToString())
 	if err != nil {
@@ -69,7 +69,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	}
 	typs := make([]types.Type, len(cols))
 	for i, c := range cols {
-		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale, c.Typ.Precision)
+		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale)
 	}
 	builder.compCtx.GetProcess().SessionInfo.ResultColTypes = typs
 	name2ColIndex := map[string]int32{}

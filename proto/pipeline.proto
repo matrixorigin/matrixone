@@ -70,12 +70,28 @@ message Insert{
   bool IsRemote     = 2;
 
   // InsertCtx
-  repeated int32 idx              = 3;
-  plan.ObjectRef ref              = 4;
-  plan.TableDef table_def         = 5;
-  repeated int32 idx_idx          = 6;
+  repeated int32 on_duplicate_idx           = 3;
+  map<string, plan.Expr> on_duplicate_expr  = 4;
+  plan.ObjectRef ref              = 5;
+  plan.TableDef table_def         = 6;
   map<string, int32> parent_idx   = 7;
   plan.ClusterTable ClusterTable  = 8;
+	repeated int32 idx_idx 				  = 9;
+
+}
+
+message PreInsert {
+  string             schema_name = 1;
+  plan.TableDef      table_def = 2;
+  map<string, int32> parent_idx_pre_insert   = 3;
+}
+
+message OnDuplicateKey{
+  uint64 affected   = 1;
+  repeated int32 on_duplicate_idx           = 2;
+  map<string, plan.Expr> on_duplicate_expr  = 3;
+  plan.ObjectRef ref              = 4;
+  plan.TableDef table_def         = 5;
 }
 
 message Join {
@@ -119,6 +135,18 @@ message LeftJoin {
   repeated plan.Type  types = 6;
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
+}
+
+message RightJoin {
+  uint64 ibucket = 1;
+  uint64 nbucket = 2;
+  repeated int32 rel_list = 3;
+  repeated int32 col_list = 4;
+  plan.Expr  expr = 5;
+  repeated plan.Type  left_types = 6;
+  repeated plan.Type  right_types = 7;
+  repeated plan.Expr left_cond = 8;
+  repeated plan.Expr right_cond = 9;
 }
 
 message SemiJoin {
@@ -210,15 +238,20 @@ message Instruction{
   HashBuild hash_build = 15;
   ExternalScan external_scan = 16;
   Insert insert = 17;
-  repeated plan.OrderBySpec order_by = 18;
-  repeated plan.Expr    project_list = 19;
-  plan.Expr    filter = 20;
-  uint64    limit = 21;
-  uint64    offset = 22;
+  OnDuplicateKey on_duplicate_key = 18;
+  PreInsert pre_insert               = 19;
+  repeated plan.OrderBySpec order_by = 20;
+  repeated plan.Expr    project_list = 21;
+  plan.Expr    filter = 22;
+  uint64    limit = 23;
+  uint64    offset = 24;
   // isFirst identifies whether it is the first instruction of analyzeInfo corresponding to idx
-  bool isFirst = 23;
+  bool isFirst = 25;
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
-  bool isLast = 24;
+  bool isLast = 26;
+  
+  RightJoin  right_join = 27;
+
 }
 
 message AnalysisList {

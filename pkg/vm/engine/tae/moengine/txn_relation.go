@@ -51,13 +51,6 @@ func (rel *txnRelation) Write(ctx context.Context, bat *batch.Batch) error {
 		//v := MOToVector(vec, allNullables[i])
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
-	if schema.HasSortKey() && !schema.HasPK() { // has cluster by key
-		clusterby := schema.GetSingleSortKey()
-		vec := taeBatch.GetVectorByName(clusterby.Name)
-		if vec.HasNull() {
-			return moerr.NewInternalError(ctx, "null value is not supported in cluster by column for now")
-		}
-	}
 	return rel.handle.Append(taeBatch)
 }
 
@@ -86,8 +79,8 @@ func (rel *txnRelation) Delete(_ context.Context, bat *batch.Batch, col string) 
 	logutil.Debugf("Delete col: %v", col)
 	allNullables := schema.AllNullables()
 	idx := catalog.GetAttrIdx(schema.AllNames(), col)
-	if data.Typ.Oid == types.T_any {
-		data.Typ = schema.ColDefs[idx].Type
+	if data.GetType().Oid == types.T_any {
+		data.SetType(schema.ColDefs[idx].Type)
 	}
 	vec := containers.NewVectorWithSharedMemory(data, allNullables[idx])
 	defer vec.Close()

@@ -84,7 +84,7 @@ func TestCacheWithReleasableExample(t *testing.T) {
 	ctx := context.Background()
 	pool := NewPool(64, func() []byte {
 		return make([]byte, 1024)
-	})
+	}, nil, nil)
 
 	// write
 	err = fs.Write(ctx, IOVector{

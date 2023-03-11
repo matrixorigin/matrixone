@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/inside"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/unary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
@@ -109,7 +111,8 @@ var builtins = map[int]Functions{
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob && t != types.T_text {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any &&
+						t != types.T_binary && t != types.T_varbinary && t != types.T_blob && t != types.T_text {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -128,10 +131,17 @@ var builtins = map[int]Functions{
 		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Args:      []types.T{},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Concat_ws,
+				Index: 0,
+				Args:  []types.T{},
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					for _, p := range parameters {
+						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
+							return types.T_blob.ToType()
+						}
+					}
+					return types.T_varchar.ToType()
+				},
+				Fn: multi.Concat_ws,
 			},
 		},
 	},
@@ -210,7 +220,7 @@ var builtins = map[int]Functions{
 				Index:         0,
 				Volatile:      true,
 				AppendHideArg: true,
-				ReturnTyp:     types.T_varchar,
+				ReturnTyp:     types.T_uuid,
 				Fn:            multi.UUID,
 			},
 		},
@@ -410,7 +420,7 @@ var builtins = map[int]Functions{
 			{
 				Index:     0,
 				Args:      []types.T{types.T_char},
-				ReturnTyp: types.T_uint8,
+				ReturnTyp: types.T_bool,
 				Fn:        unary.Empty,
 			},
 		},
@@ -539,6 +549,12 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Ltrim,
 			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        unary.Ltrim,
+			},
 		},
 	},
 	MONTH: {
@@ -650,6 +666,12 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Reverse,
 			},
+			{
+				Index:     2,
+				Args:      []types.T{types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        unary.Reverse,
+			},
 		},
 	},
 	RTRIM: {
@@ -661,6 +683,12 @@ var builtins = map[int]Functions{
 				Index:     0,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_varchar,
+				Fn:        unary.Rtrim,
+			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_blob},
+				ReturnTyp: types.T_blob,
 				Fn:        unary.Rtrim,
 			},
 		},
@@ -975,13 +1003,9 @@ var builtins = map[int]Functions{
 			},
 			{
 				Index:     1,
-				Args:      []types.T{types.T_varchar, types.T_float64, types.T_varchar},
-				ReturnTyp: types.T_varchar, Fn: multi.Lpad,
-			},
-			{
-				Index:     2,
-				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_varchar},
-				ReturnTyp: types.T_varchar, Fn: multi.Lpad,
+				Args:      []types.T{types.T_blob, types.T_int64, types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        multi.Lpad,
 			},
 		},
 	},
@@ -1048,302 +1072,14 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Args:      []types.T{types.T_varchar, types.T_int64, types.T_int64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     1,
-				Args:      []types.T{types.T_varchar, types.T_int64, types.T_uint64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     2,
-				Args:      []types.T{types.T_varchar, types.T_int64, types.T_float64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     3,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
-				Index:     4,
-				Args:      []types.T{types.T_varchar, types.T_int64, types.T_char},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     5,
-				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_int64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     6,
-				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_uint64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     7,
-				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_float64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     8,
-				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_varchar},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     9,
-				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_char},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     10,
-				Args:      []types.T{types.T_varchar, types.T_float64, types.T_int64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     11,
-				Args:      []types.T{types.T_varchar, types.T_float64, types.T_uint64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     12,
-				Args:      []types.T{types.T_varchar, types.T_float64, types.T_float64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     13,
-				Args:      []types.T{types.T_varchar, types.T_float64, types.T_varchar},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     14,
-				Args:      []types.T{types.T_varchar, types.T_float64, types.T_char},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     15,
-				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     16,
-				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_uint64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     17,
-				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_float64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     18,
-				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     19,
-				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_char},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     20,
-				Args:      []types.T{types.T_varchar, types.T_char, types.T_int64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     21,
-				Args:      []types.T{types.T_varchar, types.T_char, types.T_uint64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     22,
-				Args:      []types.T{types.T_varchar, types.T_char, types.T_float64},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     23,
-				Args:      []types.T{types.T_varchar, types.T_char, types.T_varchar},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     24,
-				Args:      []types.T{types.T_varchar, types.T_char, types.T_char},
-				ReturnTyp: types.T_varchar,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     25,
-				Args:      []types.T{types.T_char, types.T_int64, types.T_int64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     26,
-				Args:      []types.T{types.T_char, types.T_int64, types.T_uint64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     27,
-				Args:      []types.T{types.T_char, types.T_int64, types.T_float64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     28,
-				Args:      []types.T{types.T_char, types.T_int64, types.T_varchar},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     29,
-				Args:      []types.T{types.T_char, types.T_int64, types.T_char},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     30,
-				Args:      []types.T{types.T_char, types.T_uint64, types.T_int64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     31,
-				Args:      []types.T{types.T_char, types.T_uint64, types.T_uint64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     32,
-				Args:      []types.T{types.T_char, types.T_uint64, types.T_float64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     33,
-				Args:      []types.T{types.T_char, types.T_uint64, types.T_varchar},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     34,
-				Args:      []types.T{types.T_char, types.T_uint64, types.T_char},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     35,
-				Args:      []types.T{types.T_char, types.T_float64, types.T_int64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     36,
-				Args:      []types.T{types.T_char, types.T_float64, types.T_uint64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     37,
-				Args:      []types.T{types.T_char, types.T_float64, types.T_float64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     38,
-				Args:      []types.T{types.T_char, types.T_float64, types.T_varchar},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     39,
-				Args:      []types.T{types.T_char, types.T_float64, types.T_char},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     40,
-				Args:      []types.T{types.T_char, types.T_varchar, types.T_int64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     41,
-				Args:      []types.T{types.T_char, types.T_varchar, types.T_uint64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     42,
-				Args:      []types.T{types.T_char, types.T_varchar, types.T_float64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     43,
-				Args:      []types.T{types.T_char, types.T_varchar, types.T_varchar},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     44,
-				Args:      []types.T{types.T_char, types.T_varchar, types.T_char},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     45,
-				Args:      []types.T{types.T_char, types.T_char, types.T_int64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     46,
-				Args:      []types.T{types.T_char, types.T_char, types.T_uint64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     47,
-				Args:      []types.T{types.T_char, types.T_char, types.T_float64},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     48,
-				Args:      []types.T{types.T_char, types.T_char, types.T_varchar},
-				ReturnTyp: types.T_char,
-				Fn:        multi.Rpad,
-			},
-			{
-				Index:     49,
-				Args:      []types.T{types.T_char, types.T_char, types.T_char},
-				ReturnTyp: types.T_char,
+				Index:     1,
+				Args:      []types.T{types.T_blob, types.T_int64, types.T_blob},
+				ReturnTyp: types.T_blob,
 				Fn:        multi.Rpad,
 			},
 		},
@@ -1464,25 +1200,25 @@ var builtins = map[int]Functions{
 			{
 				Index:     18,
 				Args:      []types.T{types.T_blob, types.T_int64, types.T_int64},
-				ReturnTyp: types.T_char,
+				ReturnTyp: types.T_blob,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     19,
 				Args:      []types.T{types.T_blob, types.T_int64, types.T_uint64},
-				ReturnTyp: types.T_char,
+				ReturnTyp: types.T_blob,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     20,
 				Args:      []types.T{types.T_blob, types.T_uint64, types.T_int64},
-				ReturnTyp: types.T_char,
+				ReturnTyp: types.T_blob,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     21,
 				Args:      []types.T{types.T_blob, types.T_uint64, types.T_uint64},
-				ReturnTyp: types.T_char,
+				ReturnTyp: types.T_blob,
 				Fn:        multi.Substring,
 			},
 
@@ -1508,6 +1244,24 @@ var builtins = map[int]Functions{
 				Index:     25,
 				Args:      []types.T{types.T_text, types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     26,
+				Args:      []types.T{types.T_blob, types.T_float64},
+				ReturnTyp: types.T_blob,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     27,
+				Args:      []types.T{types.T_blob, types.T_uint64},
+				ReturnTyp: types.T_blob,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     28,
+				Args:      []types.T{types.T_blob, types.T_int64},
+				ReturnTyp: types.T_blob,
 				Fn:        multi.Substring,
 			},
 		},
@@ -1647,7 +1401,7 @@ var builtins = map[int]Functions{
 				Volatile:  true,
 				Args:      []types.T{types.T_timestamp, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_timestamp,
-				Fn:        multi.TimeStampAdd,
+				Fn:        multi.TimestampAdd,
 			},
 			{
 				Index:     5,
@@ -1696,7 +1450,7 @@ var builtins = map[int]Functions{
 				Volatile:  true,
 				Args:      []types.T{types.T_timestamp, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_timestamp,
-				Fn:        multi.TimeStampSub,
+				Fn:        multi.TimestampSub,
 			},
 		},
 	},
@@ -1744,7 +1498,7 @@ var builtins = map[int]Functions{
 			{
 				Index:     0,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_date,
 				Fn:        binary.ToDate,
 			},
 		},
@@ -2548,7 +2302,7 @@ var builtins = map[int]Functions{
 				Volatile:  true,
 				Args:      []types.T{types.T_varchar, types.T_datetime, types.T_datetime},
 				ReturnTyp: types.T_int64,
-				Fn:        multi.TimeStampDiff,
+				Fn:        multi.TimestampDiff,
 			},
 		},
 	},
@@ -2977,6 +2731,111 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	INTERNAL_CHAR_LENGTH: {
+		Id:     INTERNAL_CHAR_LENGTH,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              inside.InternalCharLength,
+			},
+		},
+	},
+	INTERNAL_CHAR_SIZE: {
+		Id:     INTERNAL_CHAR_SIZE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              inside.InternalCharSize,
+			},
+		},
+	},
+	INTERNAL_NUMERIC_PRECISION: {
+		Id:     INTERNAL_NUMERIC_PRECISION,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              inside.InternalNumericPrecision,
+			},
+		},
+	},
+	INTERNAL_NUMERIC_SCALE: {
+		Id:     INTERNAL_NUMERIC_SCALE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              inside.InternalNumericScale,
+			},
+		},
+	},
+	INTERNAL_DATETIME_SCALE: {
+		Id:     INTERNAL_DATETIME_SCALE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              inside.InternalDatetimeScale,
+			},
+		},
+	},
+	INTERNAL_COLUMN_CHARACTER_SET: {
+		Id:     INTERNAL_COLUMN_CHARACTER_SET,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar},
+				ReturnTyp:       types.T_int64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              inside.InternalColumnCharacterSet,
+			},
+		},
+	},
+	INTERNAL_AUTO_INCREMENT: {
+		Id:     INTERNAL_AUTO_INCREMENT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp:       types.T_uint64,
+				Volatile:        true,
+				RealTimeRelated: true,
+				Fn:              inside.InternalAutoIncrement,
+			},
+		},
+	},
 	CURRENT_ACCOUNT_ID: {
 		Id:     CURRENT_ACCOUNT_ID,
 		Flag:   plan.Function_STRICT,
@@ -3006,7 +2865,7 @@ var builtins = map[int]Functions{
 				UseNewFramework: true,
 				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 					res := vector.MustFunctionResult[types.Varlena](result)
-					return res.AppendStr([]byte(proc.SessionInfo.Account), false)
+					return res.AppendBytes([]byte(proc.SessionInfo.Account), false)
 				},
 			},
 		},
@@ -3040,7 +2899,7 @@ var builtins = map[int]Functions{
 				UseNewFramework: true,
 				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 					res := vector.MustFunctionResult[types.Varlena](result)
-					return res.AppendStr([]byte(proc.SessionInfo.Role), false)
+					return res.AppendBytes([]byte(proc.SessionInfo.Role), false)
 				},
 			},
 		},
@@ -3074,7 +2933,7 @@ var builtins = map[int]Functions{
 				UseNewFramework: true,
 				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 					res := vector.MustFunctionResult[types.Varlena](result)
-					return res.AppendStr([]byte(proc.SessionInfo.User), false)
+					return res.AppendBytes([]byte(proc.SessionInfo.User), false)
 				},
 			},
 		},
@@ -3136,6 +2995,28 @@ var builtins = map[int]Functions{
 				Volatile:        true,
 				RealTimeRelated: true,
 				Fn:              ctl.MOLogDate,
+			},
+		},
+	},
+
+	VALUES: {
+		Id:     VALUES,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) != 1 {
+				return wrongFunctionParameters, nil
+			}
+			return 0, nil
+		},
+		Overloads: []Function{
+			{
+				Index:           0,
+				UseNewFramework: true,
+				FlexibleReturnType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				NewFn: unary.Values,
 			},
 		},
 	},

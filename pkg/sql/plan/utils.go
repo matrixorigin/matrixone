@@ -808,10 +808,10 @@ func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc
 		if err != nil {
 			return false, err
 		}
-		if vec.Typ.Oid != types.T_bool {
+		if vec.GetType().Oid != types.T_bool {
 			return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 		}
-		cols := vector.MustTCols[bool](vec)
+		cols := vector.MustFixedCol[bool](vec)
 		for _, isNeed := range cols {
 			if isNeed {
 				return true, nil
@@ -828,7 +828,7 @@ func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vect
 			exchangeVectors(datas, depth+1, tmpResult, result, mp)
 		} else {
 			for j, val := range tmpResult {
-				(*result)[j].Append(val, false, mp)
+				vector.AppendAny((*result)[j], val, false, mp)
 			}
 		}
 	}
@@ -837,7 +837,7 @@ func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vect
 func BuildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*vector.Vector {
 	vectors := make([]*vector.Vector, len(dataTypes))
 	for i, typ := range dataTypes {
-		vectors[i] = vector.New(types.T(typ).ToType())
+		vectors[i] = vector.NewVec(types.T(typ).ToType())
 	}
 
 	tmpResult := make([]any, len(datas))
@@ -1107,6 +1107,20 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return false
 		}
 
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		switch columnT.Oid {
+		case types.T_binary, types.T_varbinary:
+			if constT.Width <= columnT.Width {
+				return true
+			} else {
+				return false
+			}
+		case types.T_blob:
+			return true
+		default:
+			return false
+		}
+
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
 		if !valOk {
@@ -1133,8 +1147,12 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		case types.T_varchar:
 			return true
 		case types.T_float32:
-			//float32 has 6-7 significant digits.
+			//float32 has 6 significant digits.
 			return constVal <= 100000 && constVal >= -100000
+		case types.T_float64:
+			//float64 has 15 significant digits.
+			//return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
+			return false // filtering zonemap is slow for now. will change this in the future
 		case types.T_decimal64:
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		default:
@@ -1164,8 +1182,12 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		case types.T_uint64:
 			return true
 		case types.T_float32:
-			//float32 has 6-7 significant digits.
+			//float32 has 6 significant digits.
 			return constVal <= 100000
+		case types.T_float64:
+			//float64 has 15 significant digits.
+			//return constVal <= math.MaxUint32
+			return false // filtering zonemap is slow for now. will change this in the future
 		case types.T_decimal64:
 			return constVal <= math.MaxInt32
 		default:
@@ -1343,4 +1365,140 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 		l2.Remove(l2.Front())
 	}
 	return fileList, fileSize, err
+}
+
+// GetUniqueColAndIdxFromTableDef
+// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
+// return : []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
+func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
+	uniqueCols := make([]map[string]int, 0, len(tableDef.Cols))
+	if tableDef.Pkey != nil {
+		pkMap := make(map[string]int)
+		for _, colName := range tableDef.Pkey.Names {
+			pkMap[colName] = int(tableDef.Name2ColIndex[colName])
+		}
+		uniqueCols = append(uniqueCols, pkMap)
+	}
+
+	for _, index := range tableDef.Indexes {
+		if index.Unique {
+			pkMap := make(map[string]int)
+			for _, part := range index.Parts {
+				pkMap[part] = int(tableDef.Name2ColIndex[part])
+			}
+			uniqueCols = append(uniqueCols, pkMap)
+		}
+	}
+	return uniqueCols
+}
+
+// GenUniqueColJoinExpr
+// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
+// uniqueCols is: []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
+// we will get expr like: 'leftTag.a = rightTag.a or (leftTag.b = rightTag.b and leftTag.c = rightTag. c)
+func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, leftTag int32, rightTag int32) (*Expr, error) {
+	var checkExpr *Expr
+	var err error
+
+	for i, uniqueColMap := range uniqueCols {
+		var condExpr *Expr
+		condIdx := int(0)
+		for _, colIdx := range uniqueColMap {
+			col := tableDef.Cols[colIdx]
+			leftExpr := &Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: leftTag,
+						ColPos: int32(colIdx),
+					},
+				},
+			}
+			rightExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: rightTag,
+						ColPos: int32(colIdx),
+					},
+				},
+			}
+			eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
+			if err != nil {
+				return nil, err
+			}
+			if condIdx == 0 {
+				condExpr = eqExpr
+			} else {
+				condExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
+				if err != nil {
+					return nil, err
+				}
+			}
+			condIdx++
+		}
+
+		if i == 0 {
+			checkExpr = condExpr
+		} else {
+			checkExpr, err = bindFuncExprImplByPlanExpr(ctx, "or", []*Expr{checkExpr, condExpr})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return checkExpr, nil
+}
+
+// GenUniqueColCheckExpr   like GenUniqueColJoinExpr. but use for on duplicate key clause to check conflict
+// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
+// we get batch like [1,2,3,4, origin_a, origin_b, origin_c, origin_d, row_id ....]。
+// we get expr like:  []*Expr{ 1=origin_a ,  (2 = origin_b and 3 = origin_c) }
+func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int) ([]*Expr, error) {
+	checkExpr := make([]*Expr, len(uniqueCols))
+	colCount := len(tableDef.Cols)
+
+	for i, uniqueColMap := range uniqueCols {
+		var condExpr *Expr
+		condIdx := int(0)
+		for _, colIdx := range uniqueColMap {
+			col := tableDef.Cols[colIdx]
+			// insert values
+			leftExpr := &Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(colIdx),
+					},
+				},
+			}
+			rightExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: int32(colIdx + colCount),
+					},
+				},
+			}
+			eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
+			if err != nil {
+				return nil, err
+			}
+			if condIdx == 0 {
+				condExpr = eqExpr
+			} else {
+				condExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
+				if err != nil {
+					return nil, err
+				}
+			}
+			condIdx++
+		}
+		checkExpr[i] = condExpr
+	}
+
+	return checkExpr, nil
 }

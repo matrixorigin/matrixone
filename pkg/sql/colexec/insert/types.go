@@ -42,9 +42,10 @@ type InsertCtx struct {
 	TableDef     *plan.TableDef
 	UniqueSource []engine.Relation
 
-	ParentIdx map[string]int32
-
+	ParentIdx    map[string]int32
 	ClusterTable *plan.ClusterTable
+
+	IdxIdx []int32
 }
 
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.

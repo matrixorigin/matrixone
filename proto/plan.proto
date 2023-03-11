@@ -28,10 +28,9 @@ message Type {
 	bool notNullable	= 2;
 	bool auto_incr      = 3;
 	int32 width			= 4;
-	int32 precision		= 5;
-	int32 size 			= 6;
-	int32 scale 		= 7;
-	string table 		= 8;
+	int32 size 			= 5;
+	int32 scale 		= 6;
+	string table 		= 7;
 };
 
 // Const: if a const value can be reprensented by int64 or
@@ -397,6 +396,8 @@ message TableDef {
 	repeated DefType defs	= 31;
 	map<string, int32> name2col_index = 32;
 	ColDef composite_pkey = 33;
+	bool isLocked = 34;
+	TableLockType tableLockType = 35;
 }
 
 message TableFunction{
@@ -459,12 +460,17 @@ message WindowSpec {
 
 message InsertCtx {
 	ObjectRef ref 					= 1;
-	repeated int32 idx 				= 2;
-	TableDef table_def 				= 3;
+	TableDef table_def 				= 2;
 
-	map<string, int32> parent_idx 	= 4;
+	repeated int32 on_duplicate_idx		= 3;
+	map<string, Expr> on_duplicate_expr	= 4;
 
-	ClusterTable cluster_table = 5;
+	repeated ObjectRef idx_ref 			= 5;
+	repeated int32 idx_idx 				= 6;
+
+	map<string, int32> parent_idx 	= 7;
+
+	ClusterTable cluster_table = 8;
 }
 
 message UpdateCtx {
@@ -790,6 +796,8 @@ message DataDefinition {
 		SHOW_TABLE_STATUS 	= 24;
 		SHOW_TARGET 		= 25;
 		SHOW_COLLATION 		= 26;
+		LOCK_TABLES         = 27;
+		UNLOCK_TABLES       = 28;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -812,6 +820,8 @@ message DataDefinition {
 		TruncateTable truncate_table	= 12;
 		ShowVariables show_variables 	= 13;
 		AlterView alter_view			= 14;
+		LockTables lock_tables          = 15;
+		UnLockTables unlock_tables      = 16;
 	}
 }
 
@@ -936,3 +946,24 @@ message Execute {
 message Deallocate {
 	string name			= 1;
 }
+
+enum TableLockType {
+	TableLockNone = 0;
+	TableLockRead = 1;
+	TableLockReadLocal = 2;
+	TableLockWrite = 3;
+	TableLockLowPriorityWrite = 4;
+}
+
+message TableLockInfo {
+	TableLockType lockType = 1;
+	uint64 tableID = 2;
+	bytes SessionID = 3;
+	repeated bytes rows = 4;
+}
+
+message LockTables {
+	repeated TableLockInfo tableLocks = 1;
+}
+
+message UnLockTables{}

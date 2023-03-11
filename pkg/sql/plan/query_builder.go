@@ -711,6 +711,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootId, _ = builder.pushdownFilters(rootId, nil)
 		ReCalcNodeStats(rootId, builder, true)
 		rootId = builder.determineJoinOrder(rootId)
+		SortFilterListByStats(builder.GetContext(), rootId, builder)
 		rootId = builder.pushdownSemiAntiJoins(rootId)
 		builder.qry.Steps[i] = rootId
 
@@ -838,7 +839,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 
 			if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
 				for i := 0; i < len(argsCastType); i++ {
-					argsCastType[i].Precision = 0
+					argsCastType[i].Scale = 0
 				}
 			}
 			var targetType *plan.Type
@@ -851,6 +852,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			// if string union string, different length may cause error. use text type as the output
 			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
 				targetArgType = types.T_text.ToType()
+			}
+
+			if targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary {
+				targetArgType = types.T_blob.ToType()
 			}
 			targetType = makePlan2Type(&targetArgType)
 
@@ -1221,8 +1226,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 
 			colName := fmt.Sprintf("column_%d", i) // like MySQL
-			as := tree.NewCStr(colName, false)
-			as.SetConfig(0)
+			as := tree.NewCStr(colName, 0)
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: &tree.UnresolvedName{
 					NumParts: 1,
@@ -1345,9 +1349,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if len(selectList) == 0 {
 			return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
 		}
-
-		// rewrite right join to left join
-		builder.rewriteRightJoinToLeftJoin(nodeID)
 
 		if clause.Where != nil {
 			whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
@@ -1635,21 +1636,6 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	return nodeID
 }
 
-func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeID int32) {
-	node := builder.qry.Nodes[nodeID]
-	if node.NodeType == plan.Node_JOIN {
-		builder.rewriteRightJoinToLeftJoin(node.Children[0])
-		builder.rewriteRightJoinToLeftJoin(node.Children[1])
-
-		if node.JoinType == plan.Node_RIGHT {
-			node.JoinType = plan.Node_LEFT
-			node.Children = []int32{node.Children[1], node.Children[0]}
-		}
-	} else if len(node.Children) > 0 {
-		builder.rewriteRightJoinToLeftJoin(node.Children[0])
-	}
-}
-
 func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (int32, error) {
 	if len(stmt) == 1 {
 		return builder.buildTable(stmt[0], ctx)
@@ -1811,7 +1797,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					return 0, err
 				}
 
-				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt)
+				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
 				if err != nil {
 					return 0, err
 				}
@@ -2283,7 +2269,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				}
 			}
 
-			if canTurnInner && node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0 && rejectsNull(filter, builder.compCtx.GetProcess()) {
+			canTurnInner = canTurnInner && rejectsNull(filter, builder.compCtx.GetProcess())
+			leftOrRightJoin := (node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0) || (node.JoinType == plan.Node_RIGHT && joinSides[i]&JoinSideLeft != 0)
+			if canTurnInner && leftOrRightJoin {
 				for _, cond := range node.OnList {
 					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
 				}
@@ -2345,14 +2333,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 				}
 
 			case JoinSideLeft:
-				if node.JoinType != plan.Node_OUTER {
+				if node.JoinType != plan.Node_OUTER && node.JoinType != plan.Node_RIGHT {
 					leftPushdown = append(leftPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
 				}
 
 			case JoinSideRight:
-				if node.JoinType == plan.Node_INNER {
+				if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_RIGHT {
 					rightPushdown = append(rightPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)

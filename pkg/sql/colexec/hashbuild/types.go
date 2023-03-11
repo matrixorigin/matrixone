@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -49,7 +48,7 @@ type container struct {
 
 	mp *hashmap.StrHashMap
 
-	idx *index.LowCardinalityIndex
+	nullSels []int32
 }
 
 type Argument struct {
@@ -62,6 +61,8 @@ type Argument struct {
 	Nbucket        uint64
 	Typs           []types.Type
 	Conditions     []*plan.Expr
+
+	IsRight bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

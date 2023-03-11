@@ -56,19 +56,33 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		return nil
 	}
 	newCtx := &plan.InsertCtx{
-		Ref:      DeepCopyObjectRef(ctx.Ref),
-		Idx:      make([]int32, len(ctx.Idx)),
-		TableDef: DeepCopyTableDef(ctx.TableDef),
+		Ref:            DeepCopyObjectRef(ctx.Ref),
+		OnDuplicateIdx: make([]int32, len(ctx.OnDuplicateIdx)),
+		TableDef:       DeepCopyTableDef(ctx.TableDef),
+
+		IdxIdx: make([]int32, len(ctx.IdxIdx)),
+		IdxRef: make([]*plan.ObjectRef, len(ctx.IdxRef)),
 
 		ClusterTable: DeepCopyClusterTable(ctx.ClusterTable),
 	}
 
-	copy(newCtx.Idx, ctx.Idx)
+	copy(newCtx.OnDuplicateIdx, ctx.OnDuplicateIdx)
+	copy(newCtx.IdxIdx, ctx.IdxIdx)
+
+	for i, ref := range ctx.IdxRef {
+		newCtx.IdxRef[i] = DeepCopyObjectRef(ref)
+	}
 
 	if ctx.ParentIdx != nil {
 		newCtx.ParentIdx = make(map[string]int32)
 		for k, v := range ctx.ParentIdx {
 			newCtx.ParentIdx[k] = v
+		}
+	}
+	if ctx.OnDuplicateExpr != nil {
+		newCtx.OnDuplicateExpr = make(map[string]*Expr)
+		for k, v := range ctx.OnDuplicateExpr {
+			newCtx.OnDuplicateExpr[k] = DeepCopyExpr(v)
 		}
 	}
 
@@ -379,7 +393,6 @@ func DeepCopyTyp(typ *plan.Type) *plan.Type {
 		Id:          typ.Id,
 		NotNullable: typ.NotNullable,
 		Width:       typ.Width,
-		Precision:   typ.Precision,
 		Size:        typ.Size,
 		Scale:       typ.Scale,
 		AutoIncr:    typ.AutoIncr,
@@ -745,6 +758,18 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 
 		newDf.Definition = &plan.DataDefinition_ShowVariables{
 			ShowVariables: showVariables,
+		}
+
+	case *plan.DataDefinition_LockTables:
+		newDf.Definition = &plan.DataDefinition_LockTables{
+			LockTables: &plan.LockTables{
+				TableLocks: df.LockTables.TableLocks,
+			},
+		}
+
+	case *plan.DataDefinition_UnlockTables:
+		newDf.Definition = &plan.DataDefinition_UnlockTables{
+			UnlockTables: &plan.UnLockTables{},
 		}
 
 	}

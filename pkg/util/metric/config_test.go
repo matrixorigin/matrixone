@@ -23,32 +23,32 @@ import (
 
 func TestEnvOrDefaultBool(t *testing.T) {
 	key := "MO_TEST"
-	assert.Equal(t, envOrDefaultBool(key, 42), int32(42))
+	assert.Equal(t, EnvOrDefaultBool(key, 42), int32(42))
 	for _, s := range []string{"1", "True", "T", "true"} {
 		t.Setenv(key, s)
-		assert.Equal(t, envOrDefaultBool(key, 42), int32(1))
+		assert.Equal(t, EnvOrDefaultBool(key, 42), int32(1))
 	}
 	for _, s := range []string{"0", "f", "false"} {
 		t.Setenv(key, s)
-		assert.Equal(t, envOrDefaultBool(key, 42), int32(0))
+		assert.Equal(t, EnvOrDefaultBool(key, 42), int32(0))
 	}
 
 	for _, s := range []string{"", "nope", "stop"} {
 		t.Setenv(key, s)
-		assert.Equal(t, envOrDefaultBool(key, 42), int32(42))
+		assert.Equal(t, EnvOrDefaultBool(key, 42), int32(42))
 	}
 }
 
 func TestEnvOrDefaultInt(t *testing.T) {
 	key := "MO_TEST"
-	assert.Equal(t, envOrDefaultInt[int32](key, 42), int32(42))
+	assert.Equal(t, EnvOrDefaultInt[int32](key, 42), int32(42))
 
 	for _, i := range []int{1, 2, 3, 5} {
 		t.Setenv(key, strconv.Itoa(i))
-		assert.Equal(t, envOrDefaultInt[int32](key, 42), int32(i))
+		assert.Equal(t, EnvOrDefaultInt[int32](key, 42), int32(i))
 	}
 	for _, s := range []string{"x", "02f1", "ffs", "0x12"} {
 		t.Setenv(key, s)
-		assert.Equal(t, envOrDefaultInt[int64](key, 42), int64(42))
+		assert.Equal(t, EnvOrDefaultInt[int64](key, 42), int64(42))
 	}
 }

@@ -47,7 +47,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		t.Errorf("Cannot open ddl file, error %v", err)
 	}
 
-	ddls, err := parsers.Parse(ctx, dialect.MYSQL, string(ddlf))
+	ddls, err := parsers.Parse(ctx, dialect.MYSQL, string(ddlf), 1)
 	if ddls == nil || err != nil {
 		t.Errorf("DDL Parser failed, error %v", err)
 	}
@@ -68,7 +68,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 	if err != nil {
 		t.Errorf("Cannot open queries file, error %v", err)
 	}
-	qs, err := parsers.Parse(ctx, dialect.MYSQL, string(qf))
+	qs, err := parsers.Parse(ctx, dialect.MYSQL, string(qf), 1)
 	if qs == nil || err != nil {
 		t.Errorf("Query Parser failed, error %v", err)
 	}
@@ -97,7 +97,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		t.Logf("--<%d> tpch file: %s/tpch/q%d.sql\n", qn, dir, qn)
 		t.Logf("SQL : %v \n", string(qnf))
 
-		qns, err := parsers.Parse(ctx, dialect.MYSQL, string(qnf))
+		qns, err := parsers.Parse(ctx, dialect.MYSQL, string(qnf), 1)
 		if qns == nil || err != nil {
 			t.Errorf("Query %d Parser failed, error %v", qn, err)
 		}

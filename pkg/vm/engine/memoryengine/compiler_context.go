@@ -18,12 +18,12 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type CompilerContext struct {
@@ -61,7 +61,9 @@ func (*CompilerContext) Stats(obj *plan.ObjectRef, e *plan.Expr) *plan.Stats {
 }
 
 func (c *CompilerContext) GetProcess() *process.Process {
-	return nil
+	proc := testutil.NewProcess()
+	proc.Ctx = context.Background()
+	return proc
 }
 
 func (c *CompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
@@ -175,7 +177,7 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 }
 
 func (*CompilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
-	panic("unimplemented")
+	return "", nil
 }
 
 func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs []*engine.Attribute, err error) {
@@ -221,7 +223,6 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 			Id:          int32(attr.Type.Oid),
 			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),
 			Width:       attr.Type.Width,
-			Precision:   attr.Type.Precision,
 			Size:        attr.Type.Size,
 			Scale:       attr.Type.Scale,
 		},

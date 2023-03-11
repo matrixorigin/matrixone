@@ -61,23 +61,17 @@ select rpad('hello', 4294967297, '1');
 rpad('hello', 4294967297, '1')
 null
 select rpad('hello', -18446744073709551615, '1');
-rpad('hello', -18446744073709551615, '1')
-null
+Data truncation: data out of range: data type int64, value '-18446744073709551615'
 select rpad('hello', 18446744073709551615, '1');
-rpad('hello', 18446744073709551615, '1')
-null
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 select rpad('hello', -18446744073709551616, '1');
-rpad('hello', -18446744073709551616, '1')
-null
+Data truncation: data out of range: data type int64, value '-18446744073709551616'
 select rpad('hello', 18446744073709551616, '1');
-rpad('hello', 18446744073709551616, '1')
-null
+Data truncation: data out of range: data type int64, value '18446744073709551616'
 select rpad('hello', -18446744073709551617, '1');
-rpad('hello', -18446744073709551617, '1')
-null
+Data truncation: data out of range: data type int64, value '-18446744073709551617'
 select rpad('hello', 18446744073709551617, '1');
-rpad('hello', 18446744073709551617, '1')
-null
+Data truncation: data out of range: data type int64, value '18446744073709551617'
 select lpad('hello', -1, '1');
 lpad('hello', -1, '1')
 null
@@ -100,23 +94,17 @@ select lpad('hello', 4294967297, '1');
 lpad('hello', 4294967297, '1')
 null
 select lpad('hello', -18446744073709551615, '1');
-lpad(hello, -18446744073709551615, 1)
-null
+Data truncation: data out of range: data type int64, value '-18446744073709551615'
 select lpad('hello', 18446744073709551615, '1');
-lpad(hello, 18446744073709551615, 1)
-null
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 select lpad('hello', -18446744073709551616, '1');
-lpad(hello, -18446744073709551616, 1)
-null
+Data truncation: data out of range: data type int64, value '-18446744073709551616'
 select lpad('hello', 18446744073709551616, '1');
-lpad(hello, 18446744073709551616, 1)
-null
+Data truncation: data out of range: data type int64, value '18446744073709551616'
 select lpad('hello', -18446744073709551617, '1');
-lpad(hello, -18446744073709551617, 1)
-null
+Data truncation: data out of range: data type int64, value '-18446744073709551617'
 select lpad('hello', 18446744073709551617, '1');
-lpad(hello, 18446744073709551617, 1)
-null
+Data truncation: data out of range: data type int64, value '18446744073709551617'
 SELECT RPAD('hi', year(FROM_UNIXTIME(-1)),'?');
 RPAD('hi', year(FROM_UNIXTIME(-1)),'?')
 null
