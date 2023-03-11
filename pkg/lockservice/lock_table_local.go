@@ -119,7 +119,19 @@ func (l *localLockTable) close() {
 	defer l.mu.Unlock()
 	l.mu.closed = true
 
-	// TODO: release all locks, use abort error
+	l.mu.store.Iter(func(key []byte, lock Lock) bool {
+		w := lock.waiter
+		for {
+			w = w.close()
+			if w == nil {
+				break
+			}
+			// notify next blocked waiter
+			w.notify(ErrLockTableNotFound)
+		}
+		return true
+	})
+	l.mu.store.Clear()
 }
 
 func (l *localLockTable) doAcquireLock(

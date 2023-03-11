@@ -50,6 +50,10 @@ type LockStorage interface {
 	Delete(key []byte)
 	// Seek returns the first KV Pair that is >= the given key
 	Seek(key []byte) ([]byte, Lock, bool)
+	// Iter iter all values
+	Iter(func([]byte, Lock) bool)
+	// Clear clear the lock
+	Clear()
 }
 
 // LockService lock service is running at the CN node. The lockservice maintains a set
