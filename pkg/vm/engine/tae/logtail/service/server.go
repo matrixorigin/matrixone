@@ -149,7 +149,7 @@ func NewLogtailServer(
 		logger:     rt.Logger(),
 		cfg:        cfg,
 		ssmgr:      NewSessionManager(),
-		waterline:  NewWaterliner(rt.Clock()),
+		waterline:  NewWaterliner(nowFn),
 		subscribed: NewTableStacker(),
 		errChan:    make(chan sessionError),
 		subChan:    make(chan subscription, 10),
