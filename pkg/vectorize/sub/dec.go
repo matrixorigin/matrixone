@@ -40,20 +40,20 @@ func dec128PtrToC(p *types.Decimal128) *C.int64_t {
 }
 
 func Decimal64VecSub(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal64](xs)
-	yt := vector.MustTCols[types.Decimal64](ys)
-	rt := vector.MustTCols[types.Decimal64](rs)
+	xt := vector.MustFixedCol[types.Decimal64](xs)
+	yt := vector.MustFixedCol[types.Decimal64](ys)
+	rt := vector.MustFixedCol[types.Decimal64](rs)
 
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 
 	rc := C.Decimal64_VecSub(dec64PtrToC(&rt[0]), dec64PtrToC(&xt[0]), dec64PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
 		return moerr.NewOutOfRangeNoCtx("decimal64", "decimal SUB")
 	}
@@ -61,19 +61,19 @@ func Decimal64VecSub(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal128VecSub(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal128](xs)
-	yt := vector.MustTCols[types.Decimal128](ys)
-	rt := vector.MustTCols[types.Decimal128](rs)
+	xt := vector.MustFixedCol[types.Decimal128](xs)
+	yt := vector.MustFixedCol[types.Decimal128](ys)
+	rt := vector.MustFixedCol[types.Decimal128](rs)
 
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 	rc := C.Decimal128_VecSub(dec128PtrToC(&rt[0]), dec128PtrToC(&xt[0]), dec128PtrToC(&yt[0]),
-		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
+		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag))
 	if rc != 0 {
 		return moerr.NewOutOfRangeNoCtx("decimal128", "decimal SUB")
 	}
@@ -81,9 +81,9 @@ func Decimal128VecSub(xs, ys, rs *vector.Vector) error {
 }
 
 func DatetimeSub(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Datetime](xs)
-	yt := vector.MustTCols[types.Datetime](ys)
-	rt := vector.MustTCols[int64](rs)
+	xt := vector.MustFixedCol[types.Datetime](xs)
+	yt := vector.MustFixedCol[types.Datetime](ys)
+	rt := vector.MustFixedCol[int64](rs)
 
 	if len(xt) == 1 && len(yt) == 1 {
 		res := xt[0].DatetimeMinusWithSecond(yt[0])

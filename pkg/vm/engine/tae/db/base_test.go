@@ -317,6 +317,16 @@ func dropDB(t *testing.T, e *DB, dbName string) {
 	assert.NoError(t, txn.Commit())
 }
 
+func dropRelation(t *testing.T, e *DB, dbName, name string) {
+	txn, err := e.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabase(dbName)
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+}
+
 func createRelation(t *testing.T, e *DB, dbName string, schema *catalog.Schema, createDB bool) (db handle.Database, rel handle.Relation) {
 	txn, db, rel := createRelationNoCommit(t, e, dbName, schema, createDB)
 	assert.NoError(t, txn.Commit())

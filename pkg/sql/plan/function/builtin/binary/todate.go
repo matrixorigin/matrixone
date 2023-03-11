@@ -19,43 +19,43 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// var usage = "to_date usage: "
-var usage = ""
-
-func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if !vectors[1].IsScalar() {
+func ToDate(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if !ivecs[1].IsConst() {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "the second parameter of function to_date", "not constant")
 	}
-	inputBytes0 := vector.MustStrCols(vectors[0])
-	inputBytes1 := vector.MustStrCols(vectors[1])
-	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
-	if vectors[0].IsScalar() && vectors[1].IsScalar() {
-		results := make([]string, 1)
-		format := inputBytes1[0]
-		inputNsp := vectors[0].Nsp
-		result, resultNsp, err := ToDateInputBytes(proc.Ctx, inputBytes0, format, inputNsp, results)
+	rtyp := types.T_date.ToType()
+	if ivecs[0].IsConstNull() || ivecs[1].IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	}
+	ivals := vector.MustStrCol(ivecs[0])
+	format := ivecs[1].GetStringAt(0)
+	if ivecs[0].IsConst() && ivecs[1].IsConst() {
+		result, err := ToDateInputBytes(proc.Ctx, ivals[0], format)
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.NewConstString(resultType, 1, result[0], proc.Mp())
-		nulls.Set(resultVector.Nsp, resultNsp)
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, result, ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		results := make([]string, len(inputBytes0))
-		format := inputBytes1[0]
-		inputNsp := vectors[0].Nsp
-		results, resultNsp, err := ToDateInputBytes(proc.Ctx, inputBytes0, format, inputNsp, results)
+		rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), ivecs[0].GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.NewWithStrings(resultType, results, resultNsp, proc.Mp())
-		return resultVector, nil
+		rvals := vector.MustFixedCol[types.Date](rvec)
+		for i := range ivals {
+			if rvec.GetNulls().Contains(uint64(i)) {
+				continue
+			}
+			rvals[i], err = ToDateInputBytes(proc.Ctx, ivals[i], format)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return rvec, nil
 	}
 }
 
@@ -69,27 +69,11 @@ var otherFormats = map[string]string{
 	"YYYYMMDD HHMMSS": "20060102 15:04:05",
 }
 
-func ToDateInputBytes(ctx context.Context, inputs []string, format string, inputNsp *nulls.Nulls, result []string) ([]string, *nulls.Nulls, error) {
-	resultNsp := new(nulls.Nulls)
-	for i := range inputs {
-		if nulls.Contains(inputNsp, uint64(i)) {
-			nulls.Add(resultNsp, uint64(i))
-			continue
-		}
-		if val, ok := otherFormats[format]; ok {
-			t, err := time.Parse(val, inputs[i])
-			if err != nil {
-				return nil, nil, moerr.NewInvalidArg(ctx, "date format", format)
-			}
-			result[i] = t.Format("2006-01-02") // this is our output format
-		} else {
-			//  XXX the only diff from if branch is error message.  Is this really correct?
-			t, err := time.Parse(val, inputs[i])
-			if err != nil {
-				return nil, nil, moerr.NewInvalidArg(ctx, "date format", format)
-			}
-			result[i] = t.Format("2006-01-02") // this is our output format
-		}
+func ToDateInputBytes(ctx context.Context, input string, format string) (types.Date, error) {
+	val := otherFormats[format]
+	t, err := time.Parse(val, input)
+	if err != nil {
+		return 0, err
 	}
-	return result, resultNsp, nil
+	return types.DateFromCalendar(int32(t.Year()), uint8(t.Month()), uint8(t.Day())), nil
 }

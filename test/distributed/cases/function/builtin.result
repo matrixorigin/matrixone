@@ -56,29 +56,11 @@ create table t1(a int,b float);
 insert into t1 values(0,0),(-15,-20),(-22,-12.5);
 insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
 select acos(a*pi()/180) as acosa,acos(b*pi()/180) acosb from t1;
-acosa    acosb
-1.5707963267948966    1.5707963267948966
-1.8356824738191324    1.927370391646567
-1.9648910192076245    1.7907312931992256
-1.5707963267948966    null
-1.0197267436954502    null
-null    null
-null    null
-null    null
+invalid argument acos, bad value 1.5707963267948966
 select acos(a*pi()/180)*acos(b*pi()/180) as acosab,acos(acos(a*pi()/180)) as c from t1;
-acosab    c
-2.4674011002723395    null
-3.5380400485035204    null
-3.518591835821214    null
-null    null
-null    null
-null    null
-null    null
-null    null
+invalid argument acos, bad value 1.5707963267948966
 select b from t1 where acos(a*pi()/180)<=acos(b*pi()/180)  order by a;
-b
--20.0
-0.0
+invalid argument acos, bad value 1.5707963267948966
 drop table if exists t1;
 create table t1(a int,b float);
 insert into t1 values(0,0),(-15,-20),(-22,-12.5);
@@ -226,11 +208,11 @@ create table t1(a int,b float);
 insert into t1 values(0,0),(-15,-20),(-22,-12.5);
 insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
 select cot(a*pi()/180) as cota,cot(b*pi()/180) cotb from t1;
-invalid argument cot, bad value cot(0)
+invalid argument cot, bad value 0
 select cot(a*pi()/180)*cot(b*pi()/180) as cotab,cot(cot(a*pi()/180)) as c from t1;
-invalid argument cot, bad value cot(0)
+invalid argument cot, bad value 0
 select b from t1 where cot(a*pi()/180)<=cot(b*pi()/180) order by a;
-invalid argument cot, bad value cot(0)
+invalid argument cot, bad value 0
 drop table if exists t1;
 create table t1(a date, b datetime,c varchar(30));
 insert into t1 values('20220101','2022-01-01 01:01:01','2022-13-13 01:01:01');

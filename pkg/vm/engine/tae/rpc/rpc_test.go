@@ -25,20 +25,21 @@ import (
 	"time"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/assert"
@@ -97,26 +98,28 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//write taeBats[0], taeBats[1] two blocks into file service
 	id := 1
 	objName1 := fmt.Sprintf("%d.seg", id)
-	writer, err := blockio.NewBlockWriter(fs, objName1)
-	assert.Nil(t, err)
-	writer.SetPrimaryKey(1)
+	writer := blockio.NewWriter(context.Background(),
+		objectio.NewObjectFS(fs, "data"), objName1)
 	for i, bat := range taeBats {
 		if i == 2 {
 			break
 		}
-		_, err := writer.WriteBlock(bat)
+		block, err := writer.WriteBlock(bat)
+		assert.Nil(t, err)
+		err = jobs.BuildBlockIndex(writer.GetWriter(), block,
+			schema, bat, true)
 		assert.Nil(t, err)
 	}
-	blocks, _, err := writer.Sync(context.Background())
+	blocks, err := writer.Sync()
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
-	metaLoc1, err := blockio.EncodeLocation(
+	metaLoc1, err := blockio.EncodeMetaLocWithObject(
 		blocks[0].GetExtent(),
 		uint32(taeBats[0].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	metaLoc2, err := blockio.EncodeLocation(
+	metaLoc2, err := blockio.EncodeMetaLocWithObject(
 		blocks[1].GetExtent(),
 		uint32(taeBats[1].Vecs[0].Length()),
 		blocks,
@@ -126,15 +129,17 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//write taeBats[3] into file service
 	id += 1
 	objName2 := fmt.Sprintf("%d.seg", id)
-	writer, err = blockio.NewBlockWriter(fs, objName2)
+	writer = blockio.NewWriter(context.Background(),
+		objectio.NewObjectFS(fs, "data"), objName2)
+	block, err := writer.WriteBlock(taeBats[3])
 	assert.Nil(t, err)
-	writer.SetPrimaryKey(1)
-	_, err = writer.WriteBlock(taeBats[3])
+	err = jobs.BuildBlockIndex(writer.GetWriter(),
+		block, schema, taeBats[3], true)
 	assert.Nil(t, err)
-	blocks, _, err = writer.Sync(context.Background())
+	blocks, err = writer.Sync()
 	assert.Equal(t, 1, len(blocks))
 	assert.Nil(t, err)
-	metaLoc3, err := blockio.EncodeLocation(
+	metaLoc3, err := blockio.EncodeMetaLocWithObject(
 		blocks[0].GetExtent(),
 		uint32(taeBats[3].Vecs[0].Length()),
 		blocks,
@@ -213,8 +218,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	addS3BlkEntry1, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName1, metaLocMoBat1)
 	assert.NoError(t, err)
-	loc1 := vector.GetStrVectorValues(metaLocMoBat1.GetVector(0))[0]
-	loc2 := vector.GetStrVectorValues(metaLocMoBat1.GetVector(0))[1]
+	loc1 := vector.MustStrCol(metaLocMoBat1.GetVector(0))[0]
+	loc2 := vector.MustStrCol(metaLocMoBat1.GetVector(0))[1]
 	assert.Equal(t, metaLoc1, loc1)
 	assert.Equal(t, metaLoc2, loc2)
 	entries = append(entries, addS3BlkEntry1)
@@ -264,7 +269,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 			handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			rows += vector.Length(bat.Vecs[0])
+			rows += bat.Vecs[0].Length()
 		}
 	}
 	assert.Equal(t, taeBat.Length(), rows)
@@ -291,36 +296,36 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//write deleted row ids into FS
 	id += 1
 	objName3 := fmt.Sprintf("%d.del", id)
-	writer, err = blockio.NewBlockWriter(fs, objName3)
-	assert.Nil(t, err)
+	writer = blockio.NewWriter(context.Background(),
+		objectio.NewObjectFS(fs, "data"), objName3)
 	for _, bat := range hideBats {
 		taeBat := toTAEBatchWithSharedMemory(schema, bat)
 		//defer taeBat.Close()
-		_, err := writer.WriteBlockWithOutIndex(taeBat)
+		_, err := writer.WriteBlock(taeBat)
 		assert.Nil(t, err)
 	}
-	blocks, _, err = writer.Sync(context.Background())
+	blocks, err = writer.Sync()
 	assert.Nil(t, err)
 	assert.Equal(t, len(hideBats), len(blocks))
-	delLoc1, err := blockio.EncodeLocation(
+	delLoc1, err := blockio.EncodeMetaLocWithObject(
 		blocks[0].GetExtent(),
 		uint32(hideBats[0].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	delLoc2, err := blockio.EncodeLocation(
+	delLoc2, err := blockio.EncodeMetaLocWithObject(
 		blocks[1].GetExtent(),
 		uint32(hideBats[1].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	delLoc3, err := blockio.EncodeLocation(
+	delLoc3, err := blockio.EncodeMetaLocWithObject(
 		blocks[2].GetExtent(),
 		uint32(hideBats[2].Vecs[0].Length()),
 		blocks,
 	)
 	assert.Nil(t, err)
-	delLoc4, err := blockio.EncodeLocation(
+	delLoc4, err := blockio.EncodeMetaLocWithObject(
 		blocks[3].GetExtent(),
 		uint32(hideBats[3].Vecs[0].Length()),
 		blocks,
@@ -379,7 +384,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 			handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			rows += vector.Length(bat.Vecs[0])
+			rows += bat.Vecs[0].Length()
 		}
 	}
 	assert.Equal(t, len(taeBats)*taeBats[0].Length()-5*len(taeBats), rows)
@@ -562,7 +567,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			len := vector.Length(bat.Vecs[0])
+			len := bat.Vecs[0].Length()
 			assert.Equal(t, 100, len)
 		}
 	}
@@ -613,7 +618,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			len := vector.Length(bat.Vecs[0])
+			len := bat.Vecs[0].Length()
 			assert.Equal(t, 80, len)
 		}
 	}
@@ -817,7 +822,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			len := vector.Length(bat.Vecs[0])
+			len := bat.Vecs[0].Length()
 			assert.Equal(t, 100, len)
 		}
 	}
@@ -900,7 +905,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			len := vector.Length(bat.Vecs[0])
+			len := bat.Vecs[0].Length()
 			assert.Equal(t, 80, len)
 		}
 	}
@@ -1124,7 +1129,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			len := vector.Length(bat.Vecs[0])
+			len := bat.Vecs[0].Length()
 			assert.Equal(t, 100, len)
 		}
 	}
@@ -1208,7 +1213,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			len := vector.Length(bat.Vecs[0])
+			len := bat.Vecs[0].Length()
 			assert.Equal(t, 80, len)
 		}
 	}
@@ -1438,7 +1443,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 			bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 			assert.Nil(t, err)
 			if bat != nil {
-				len := vector.Length(bat.Vecs[0])
+				len := bat.Vecs[0].Length()
 				assert.Equal(t, 100, len)
 			}
 		}
@@ -1519,7 +1524,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 			bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 			assert.Nil(t, err)
 			if bat != nil {
-				len := vector.Length(bat.Vecs[0])
+				len := bat.Vecs[0].Length()
 				assert.Equal(t, 80, len)
 			}
 		}

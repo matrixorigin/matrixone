@@ -21,24 +21,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func BitLengthFunc(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	inputValues := vector.MustBytesCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func BitLengthFunc(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_int64.ToType()
+	ivals := vector.MustBytesCol(inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultValues := make([]int64, 1)
-		bit_length.StrBitLength(inputValues, resultValues)
-		return vector.NewConstFixed(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
+		var rvals [1]int64
+		bit_length.StrBitLength(ivals, rvals[:])
+		vec := vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp())
+		return vec, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[int64](resultVector)
-		bit_length.StrBitLength(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[int64](rvec)
+		bit_length.StrBitLength(ivals, rvals)
+		return rvec, nil
 	}
 }

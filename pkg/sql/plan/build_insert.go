@@ -84,6 +84,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		Ref:      rewriteInfo.tblInfo.objRef[0],
 		TableDef: rewriteInfo.tblInfo.tableDefs[0],
 
+		IdxRef: rewriteInfo.onIdxTbl,
+		IdxIdx: rewriteInfo.onIdx,
+
 		OnDuplicateIdx:  rewriteInfo.onDuplicateIdx,
 		OnDuplicateExpr: rewriteInfo.onDuplicateExpr,
 	}

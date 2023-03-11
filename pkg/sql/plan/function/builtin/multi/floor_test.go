@@ -36,7 +36,8 @@ func Test_FloorUint64(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.([]uint64)
+		data := vector.MustFixedCol[uint64](vec)
+		ok := (data != nil)
 		if !ok {
 			log.Fatal(moerr.NewInternalError(proc.Ctx, "the AbsUint64 function return value type is not []uint64"))
 		}
@@ -50,13 +51,13 @@ func Test_FloorUint64(t *testing.T) {
 		for i := 0; i < len(compVec); i++ {
 			if j < len(compNsp) {
 				if compNsp[j] == int64(i) {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeTrue)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeTrue)
 					j++
 				} else {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 				}
 			} else {
-				convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+				convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 			}
 		}
 
@@ -74,7 +75,8 @@ func Test_FloorInt64(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.([]int64)
+		data := vector.MustFixedCol[int64](vec)
+		ok := (data != nil)
 		if !ok {
 			log.Fatal(moerr.NewInternalError(proc.Ctx, "the AbsUint64 function return value type is not []int64"))
 		}
@@ -88,13 +90,13 @@ func Test_FloorInt64(t *testing.T) {
 		for i := 0; i < len(compVec); i++ {
 			if j < len(compNsp) {
 				if compNsp[j] == int64(i) {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeTrue)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeTrue)
 					j++
 				} else {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 				}
 			} else {
-				convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+				convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 			}
 		}
 	})
@@ -112,7 +114,8 @@ func Test_FloorFloat64(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.([]float64)
+		data := vector.MustFixedCol[float64](vec)
+		ok := (data != nil)
 		if !ok {
 			log.Fatal(moerr.NewInternalError(proc.Ctx, "the AbsUint64 function return value type is not []int64"))
 		}
@@ -127,13 +130,13 @@ func Test_FloorFloat64(t *testing.T) {
 		for i := 0; i < len(compVec); i++ {
 			if j < len(compNsp) {
 				if compNsp[j] == int64(i) {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeTrue)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeTrue)
 					j++
 				} else {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 				}
 			} else {
-				convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+				convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 			}
 		}
 	})

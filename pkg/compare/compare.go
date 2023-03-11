@@ -128,9 +128,10 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
 		return &strCompare{
-			desc:      desc,
-			nullsLast: nullsLast,
-			vs:        make([]*vector.Vector, 2),
+			desc:        desc,
+			nullsLast:   nullsLast,
+			vs:          make([]*vector.Vector, 2),
+			isConstNull: make([]bool, 2),
 		}
 	}
 	return nil
@@ -241,12 +242,13 @@ func genericCopy[T types.OrderedT](vecDst, vecSrc []T, dst, src int64) {
 
 func newCompare[T any](cmp func(T, T) int, cpy func([]T, []T, int64, int64), nullsLast bool) *compare[T] {
 	return &compare[T]{
-		cmp:       cmp,
-		cpy:       cpy,
-		xs:        make([][]T, 2),
-		ns:        make([]*nulls.Nulls, 2),
-		vs:        make([]*vector.Vector, 2),
-		nullsLast: nullsLast,
+		cmp:         cmp,
+		cpy:         cpy,
+		xs:          make([][]T, 2),
+		ns:          make([]*nulls.Nulls, 2),
+		vs:          make([]*vector.Vector, 2),
+		isConstNull: make([]bool, 2),
+		nullsLast:   nullsLast,
 	}
 }
 
@@ -256,23 +258,23 @@ func (c *compare[T]) Vector() *vector.Vector {
 
 func (c *compare[T]) Set(idx int, vec *vector.Vector) {
 	c.vs[idx] = vec
-	c.ns[idx] = vec.Nsp
-	c.xs[idx] = vec.Col.([]T)
+	c.ns[idx] = vec.GetNulls()
+	c.xs[idx] = vector.ExpandFixedCol[T](vec)
+	c.isConstNull[idx] = vec.IsConstNull()
 }
 
 func (c *compare[T]) Compare(veci, vecj int, vi, vj int64) int {
-	cmp := nullsCompare(c.ns[veci], c.ns[vecj], vi, vj, c.nullsLast)
+	n0 := c.isConstNull[veci] || c.ns[veci].Contains(uint64(vi))
+	n1 := c.isConstNull[vecj] || c.ns[vecj].Contains(uint64(vj))
+	cmp := nullsCompare(n0, n1, c.nullsLast)
 	if cmp != 0 {
-		return cmp
-	}
-	if nulls.Contains(c.vs[veci].Nsp, uint64(vi)) && nulls.Contains(c.vs[veci].Nsp, uint64(vj)) {
-		return 0
+		return cmp - nullsCompareFlag
 	}
 	return c.cmp(c.xs[veci][vi], c.xs[vecj][vj])
 }
 
 func (c *compare[T]) Copy(vecSrc, vecDst int, src, dst int64, _ *process.Process) error {
-	if nulls.Contains(c.ns[vecSrc], uint64(src)) {
+	if c.isConstNull[vecSrc] || c.ns[vecSrc].Contains(uint64(src)) {
 		nulls.Add(c.ns[vecDst], uint64(dst))
 	} else {
 		nulls.Del(c.ns[vecDst], uint64(dst))

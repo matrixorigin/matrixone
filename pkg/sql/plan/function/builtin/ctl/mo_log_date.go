@@ -29,19 +29,18 @@ const regexpMask = `\d{1,4}/\d{1,2}/\d{1,2}`
 // MOLogDate parse 'YYYY/MM/DD' date from input string.
 // return '0001-01-01' if input string not container 'YYYY/MM/DD' substr, until DateParse Function support return NULL for invalid date string.
 func MOLogDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-
-	regexpVec := vector.NewWithStrings(types.T_varchar.ToType(), []string{regexpMask}, nil, proc.Mp())
+	regexpVec := vector.NewConstBytes(types.T_varchar.ToType(), []byte(regexpMask), 1, proc.Mp())
 	regexpInput := append(vectors, regexpVec)
 	parsedInput, err := multi.RegularSubstr(regexpInput, proc)
 	if err != nil {
 		return nil, err
 	}
 
-	formatVec := vector.NewConstString(types.T_char.ToType(), len(formatMask), formatMask, proc.Mp())
+	formatVec := vector.NewConstBytes(types.T_char.ToType(), []byte(formatMask), 1, proc.Mp())
 	strToDateInput := []*vector.Vector{parsedInput, formatVec}
-	resultVector, err := binary.StrToDate(strToDateInput, proc)
+	rvec, err := binary.StrToDate(strToDateInput, proc)
 	if err != nil {
 		return nil, err
 	}
-	return resultVector, err
+	return rvec, err
 }

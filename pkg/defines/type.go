@@ -67,7 +67,7 @@ const (
 func (typ *MysqlType) GetLength(width int32) uint32 {
 	switch *typ {
 	case MYSQL_TYPE_DECIMAL:
-		return uint32(width)
+		return uint32(width) + 2
 	case MYSQL_TYPE_BOOL:
 		return 1
 	case MYSQL_TYPE_TINY:
@@ -79,8 +79,14 @@ func (typ *MysqlType) GetLength(width int32) uint32 {
 	case MYSQL_TYPE_LONGLONG:
 		return 64
 	case MYSQL_TYPE_FLOAT:
+		if width != 32 && width != 0 {
+			return uint32(width)
+		}
 		return 32
 	case MYSQL_TYPE_DOUBLE:
+		if width != 64 && width != 0 {
+			return uint32(width)
+		}
 		return 64
 	case MYSQL_TYPE_VARCHAR, MYSQL_TYPE_STRING, MYSQL_TYPE_BLOB, MYSQL_TYPE_TEXT:
 		return uint32(width) * 3

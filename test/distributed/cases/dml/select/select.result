@@ -262,9 +262,9 @@ a	big
 1	9223372036854775807
 1	18446744073709551615
 select min(big),max(big),max(big)-1 from t1;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 select min(big),max(big),max(big)-1 from t1 group by a;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 drop table if exists t1;
 create table t1 (
 value64 bigint unsigned not null,

@@ -15,7 +15,6 @@
 package txnif
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"io"
 	"sync"
 
@@ -48,12 +47,10 @@ type TxnReader interface {
 	RUnlock()
 	IsReplay() bool
 	Is2PC() bool
-	GetPKDedupSkip() PKDedupSkipScope
 	GetID() string
 	GetCtx() []byte
 	GetStartTS() types.TS
 	GetCommitTS() types.TS
-
 	GetPrepareTS() types.TS
 	GetParticipants() []uint64
 	GetInfo() []byte
@@ -102,7 +99,6 @@ type TxnChanger interface {
 	Commit() error
 	Rollback() error
 	SetCommitTS(cts types.TS) error
-	SetPKDedupSkip(skip PKDedupSkipScope)
 	SetParticipants(ids []uint64) error
 	SetError(error)
 
@@ -226,7 +222,8 @@ type TxnStore interface {
 
 	Append(dbId, id uint64, data *containers.Batch) error
 	AddBlksWithMetaLoc(dbId, id uint64,
-		zm []dataio.Index, metaLocs []string) error
+		pkVecs []containers.Vector,
+		file string, metaLocs []string, flag int32) error
 
 	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
