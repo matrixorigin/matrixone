@@ -737,13 +737,15 @@ var (
 				table_id 	bigint unsigned not null,
 				name 		varchar(64) not null,
 				type        varchar(11) not null,
-				algorithm   varchar(11) not null,
 				is_visible  tinyint not null,
 				hidden      tinyint not null,
 				comment 	varchar(2048) not null,
+				column_name    varchar(256) not null,
+				ordinal_position  int unsigned  not null,
 				options     text,
 				index_table_name varchar(5000)
 			);`
+
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
@@ -828,23 +830,6 @@ var (
 				configuration  json,
 				primary key(configuration_id)
 			);`,
-		//`create table mo_indexes(
-		//		index_id       int signed auto_increment,
-		//		index_name     varchar(64),
-		//		index_type     varchar(11),
-		//		table_id       bigint unsigned,
-		//		table_name     varchar(64),
-		//		database_id    bigint unsigned,
-		//		database_name  varchar(64),
-		//		nullable       varchar(3),
-		//		index_fields   int,
-		//		column_name    varchar(64),
-		//		seq_in_index   int unsigned,
-		//		non_unique     int,
-		//		index_comment  varchar(2048),
-		//		is_visible     varchar(3)
-		//	);`,
-
 	}
 
 	//drop tables for the tenant
@@ -951,37 +936,6 @@ var (
 				granted_time,
 				with_grant_option
 			) values(%d,%d,"%s",%v);`
-	initMoIndexesFormat = `insert into mo_catalog.mo_indexes(
-				index_id,
-				index_name,
-				index_type,
-				table_id,
-				table_name,
-                database_id,
-				database_name,
-				nullable,
-				index_fields,
-				column_name,
-				seq_in_index,
-				non_unique,
-				index_comment,
-				is_visible
-			) values (%d, "%s", "%s", %d, "%s", %d, "%s", "%s", %d, "%s", %d, %d, "%s", "%s");`
-	initMoIndexesWithoutIDFormat = `insert into mo_catalog.mo_indexes(
-				index_name,
-				index_type,
-				table_id,
-				table_name,
-                database_id,
-				database_name,
-				nullable,
-				index_fields,
-				column_name,
-				seq_in_index,
-				non_unique,
-				index_comment,
-				is_visible
-			) values ("%s", "%s", %d, "%s", %d, "%s", "%s", %d, "%s", %d, %d, "%s", "%s");`
 )
 
 const (
@@ -5701,6 +5655,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		err = bh.Exec(ctx, "commit;")
 		if err != nil {
 			goto handleFailed
+		}
+
+		err = bh.Exec(newTenantCtx, createMoIndexesSql)
+		if err != nil {
+			return err
 		}
 
 		err = bh.Exec(newTenantCtx, createAutoTableSql)

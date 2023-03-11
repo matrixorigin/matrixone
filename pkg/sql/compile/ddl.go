@@ -260,15 +260,23 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	fmt.Printf("---------------wuxlinag----------------------------create table is :%s.%s\n", dbName, tblName)
-	if dbName != "mo_task" && tblName != catalog.MO_INDEXES {
-		err = colexec.InsertTableIndexMeta(c.e, c.ctx, dbSource, c.proc, tblName)
+	if checkIndexInitializable(dbName, tblName) {
+		err = colexec.InsertIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName)
 		if err != nil {
 			return err
 		}
 	}
 
 	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
+}
+
+func checkIndexInitializable(dbName string, tblName string) bool {
+	if dbName == "mo_task" {
+		return false
+	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_INDEXES {
+		return false
+	}
+	return true
 }
 
 func (s *Scope) CreateTempTable(c *Compile) error {
@@ -434,7 +442,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		// other situation is not supported now and check in plan
 	}
 
-	err = colexec.InsertSingleIndexMeta(c.e, c.ctx, d, c.proc, qry.Table, indexDef)
+	err = colexec.InsertOneIndexMetadata(c.e, c.ctx, d, c.proc, qry.Table, indexDef)
 	if err != nil {
 		return err
 	}
@@ -482,7 +490,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 	}
-	err = colexec.DeleteSingeIndexMeta(c.e, c.ctx, r, qry.GetIndexName(), c.proc)
+	err = colexec.DeleteOneIndexMetadata(c.e, c.ctx, r, qry.GetIndexName(), c.proc)
 	if err != nil {
 		return err
 	}
@@ -836,6 +844,12 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
+		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
+			err := colexec.DeleteIndexMetadata(c.e, c.ctx, rel, c.proc)
+			if err != nil {
+				return err
+			}
+		}
 		return colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
 	} else {
 		if err := dbSource.Delete(c.ctx, tblName); err != nil {
@@ -846,8 +860,8 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
-		if tblName == "t1" || tblName == "t2" || tblName == "t3" || tblName == "t4" {
-			err := colexec.DeleteTableIndexMeta(c.e, c.ctx, rel, c.proc)
+		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
+			err := colexec.DeleteIndexMetadata(c.e, c.ctx, rel, c.proc)
 			if err != nil {
 				return err
 			}

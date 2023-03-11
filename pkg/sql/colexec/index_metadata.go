@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package colexec
 
 import (
@@ -13,56 +27,43 @@ import (
 )
 
 const (
-	MO_INDEX_ID                         = "id"
-	MO_INDEX_TABLE_ID                   = "table_id"
-	MO_INDEX_NAME                       = "name"
-	MO_INDEX_TYPE                       = "type"
-	MO_INDEX_ALGORITHM                  = "algorithm"
-	MO_INDEX_IS_ALGORITHM_EXPLICIT      = "is_algorithm_explicit"
-	MO_INDEX_IS_VISIBLE                 = "is_visible"
-	MO_INDEX_IS_GENERATED               = "is_generated"
-	MO_INDEX_HIDDEN                     = "hidden"
-	MO_INDEX_ORDINAL_POSITION           = "ordinal_position"
-	MO_INDEX_COMMENT                    = "comment"
-	MO_INDEX_OPTIONS                    = "options"
-	MO_INDEX_SE_PRIVATE_DATA            = "se_private_data"
-	MO_INDEX_TABLESPACE_ID              = "tablespace_id"
-	MO_INDEX_ENGINE                     = "engine"
-	MO_INDEX_ENGINE_ATTRIBUTE           = "engine_attribute"
-	MO_INDEX_SECONDARY_ENGINE_ATTRIBUTE = "secondary_engine_attribute"
-	MO_INDEX_TABLE_NAME                 = "index_table_name"
+	// 'mo_indexes' table
+	MO_INDEX_ID               = "id"
+	MO_INDEX_TABLE_ID         = "table_id"
+	MO_INDEX_NAME             = "name"
+	MO_INDEX_TYPE             = "type"
+	MO_INDEX_IS_VISIBLE       = "is_visible"
+	MO_INDEX_HIDDEN           = "hidden"
+	MO_INDEX_COMMENT          = "comment"
+	MO_INDEX_OPTIONS          = "options"
+	MO_INDEX_COLUMN_NAME      = "column_name"
+	MO_INDEX_ORDINAL_POSITION = "ordinal_position"
+	MO_INDEX_TABLE_NAME       = "index_table_name"
 )
 
+// Column type mapping of table 'mo_indexes'
 var MO_INDEX_COLTYPE = map[string]types.T{
-	MO_INDEX_ID:         types.T_uint64,
-	MO_INDEX_TABLE_ID:   types.T_uint64,
-	MO_INDEX_NAME:       types.T_varchar,
-	MO_INDEX_TYPE:       types.T_varchar,
-	MO_INDEX_ALGORITHM:  types.T_varchar,
-	MO_INDEX_IS_VISIBLE: types.T_int8,
-	MO_INDEX_HIDDEN:     types.T_int8,
-	MO_INDEX_COMMENT:    types.T_varchar,
-	MO_INDEX_OPTIONS:    types.T_text,
-	MO_INDEX_TABLE_NAME: types.T_varchar,
+	MO_INDEX_ID:               types.T_uint64,
+	MO_INDEX_TABLE_ID:         types.T_uint64,
+	MO_INDEX_NAME:             types.T_varchar,
+	MO_INDEX_TYPE:             types.T_varchar,
+	MO_INDEX_IS_VISIBLE:       types.T_int8,
+	MO_INDEX_HIDDEN:           types.T_int8,
+	MO_INDEX_COMMENT:          types.T_varchar,
+	MO_INDEX_COLUMN_NAME:      types.T_varchar,
+	MO_INDEX_ORDINAL_POSITION: types.T_uint32,
+	MO_INDEX_OPTIONS:          types.T_text,
+	MO_INDEX_TABLE_NAME:       types.T_varchar,
 }
 
 const (
 	INDEX_TYPE_PRIMARY  = "PRIMARY"
 	INDEX_TYPE_UNIQUE   = "UNIQUE"
 	INDEX_TYPE_MULTIPLE = "MULTIPLE"
-	INDEX_TYPE_FULLTEXT = "FULLTEXT"
-	INDEX_TYPE_SPATIAL  = "SPATIAL"
 )
 
-const (
-	ALGORITHM_SE_SPECIFIC = "SE_SPECIFIC"
-	ALGORITHM_BTREE       = "BTREE"
-	ALGORITHM_RTREE       = "RTREE"
-	ALGORITHM_HASH        = "HASH"
-	ALGORITHM_FULLTEXT    = "FULLTEXT"
-)
-
-func InsertTableIndexMeta(eg engine.Engine, ctx context.Context, db engine.Database, proc *process.Process, tblName string) error {
+// InsertIndexMetadata :Synchronize the index metadata information of the table to the index metadata table
+func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Database, proc *process.Process, tblName string) error {
 	relation, err := db.Relation(ctx, tblName)
 	if err != nil {
 		return err
@@ -126,7 +127,8 @@ func InsertTableIndexMeta(eg engine.Engine, ctx context.Context, db engine.Datab
 	return nil
 }
 
-func InsertSingleIndexMeta(eg engine.Engine, ctx context.Context, db engine.Database, proc *process.Process, tblName string, idxdef *plan.IndexDef) error {
+// InsertOneIndexMetadata :Synchronize the single index metadata information into the index metadata table
+func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Database, proc *process.Process, tblName string, idxdef *plan.IndexDef) error {
 	relation, err := db.Relation(ctx, tblName)
 	if err != nil {
 		return err
@@ -166,7 +168,8 @@ func InsertSingleIndexMeta(eg engine.Engine, ctx context.Context, db engine.Data
 	return nil
 }
 
-func DeleteTableIndexMeta(eg engine.Engine, ctx context.Context, relation engine.Relation, proc *process.Process) error {
+// DeleteIndexMetadata :When dropping a table, delete all index metadata information of the table
+func DeleteIndexMetadata(eg engine.Engine, ctx context.Context, relation engine.Relation, proc *process.Process) error {
 	tableId := relation.GetTableID(ctx)
 	tableDefs, err := relation.TableDefs(ctx)
 	if err != nil {
@@ -185,7 +188,7 @@ func DeleteTableIndexMeta(eg engine.Engine, ctx context.Context, relation engine
 	}
 	hasIndex := false
 	for _, constraint := range ct.Cts {
-		if _, ok := constraint.(*engine.IndexDef); ok {
+		if indexdef, ok := constraint.(*engine.IndexDef); ok && len(indexdef.Indexes) != 0 {
 			hasIndex = true
 			break
 		}
@@ -203,7 +206,6 @@ func DeleteTableIndexMeta(eg engine.Engine, ctx context.Context, relation engine
 	if err != nil {
 		return err
 	}
-
 	relIndex, err := GetNewRelation(eg, catalog.MO_CATALOG, catalog.MO_INDEXES, txn, ctx)
 	if err != nil {
 		return err
@@ -212,12 +214,14 @@ func DeleteTableIndexMeta(eg engine.Engine, ctx context.Context, relation engine
 	if err != nil {
 		return err
 	}
-	err = relIndex.Delete(ctx, indexMetaBatch, catalog.Row_ID)
-	if err != nil {
-		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-			return err2
+	if indexMetaBatch.GetVector(0).Length() > 0 {
+		err = relIndex.Delete(ctx, indexMetaBatch, catalog.Row_ID)
+		if err != nil {
+			if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
+				return err2
+			}
+			return err
 		}
-		return err
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
 		return err
@@ -225,7 +229,8 @@ func DeleteTableIndexMeta(eg engine.Engine, ctx context.Context, relation engine
 	return nil
 }
 
-func DeleteSingeIndexMeta(eg engine.Engine, ctx context.Context, relation engine.Relation, indexName string, proc *process.Process) error {
+// When the drop index is executed, delete the metadata information of the corresponding index of the table
+func DeleteOneIndexMetadata(eg engine.Engine, ctx context.Context, relation engine.Relation, indexName string, proc *process.Process) error {
 	tableId := relation.GetTableID(ctx)
 
 	txn, err := NewTxn(eg, proc, ctx)
@@ -243,12 +248,14 @@ func DeleteSingeIndexMeta(eg engine.Engine, ctx context.Context, relation engine
 		return err
 	}
 
-	err = relIndex.Delete(ctx, indexMetaBatch, catalog.Row_ID)
-	if err != nil {
-		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-			return err2
+	if indexMetaBatch.GetVector(0).Length() > 0 {
+		err = relIndex.Delete(ctx, indexMetaBatch, catalog.Row_ID)
+		if err != nil {
+			if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
+				return err2
+			}
+			return err
 		}
-		return err
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
 		return err
@@ -258,21 +265,21 @@ func DeleteSingeIndexMeta(eg engine.Engine, ctx context.Context, relation engine
 
 func buildInsertIndexMetaBatch(tableId uint64, ct *engine.ConstraintDef, eg engine.Engine, proc *process.Process) (*batch.Batch, error) {
 	bat := &batch.Batch{
-		Attrs: make([]string, 10),
-		Vecs:  make([]*vector.Vector, 10),
+		Attrs: make([]string, 11),
+		Vecs:  make([]*vector.Vector, 11),
 		Cnt:   1,
 	}
-
 	bat.Attrs[0] = MO_INDEX_ID
 	bat.Attrs[1] = MO_INDEX_TABLE_ID
 	bat.Attrs[2] = MO_INDEX_NAME
 	bat.Attrs[3] = MO_INDEX_TYPE
-	bat.Attrs[4] = MO_INDEX_ALGORITHM
-	bat.Attrs[5] = MO_INDEX_IS_VISIBLE
-	bat.Attrs[6] = MO_INDEX_HIDDEN
-	bat.Attrs[7] = MO_INDEX_COMMENT
-	bat.Attrs[8] = MO_INDEX_OPTIONS
-	bat.Attrs[9] = MO_INDEX_TABLE_NAME
+	bat.Attrs[4] = MO_INDEX_IS_VISIBLE
+	bat.Attrs[5] = MO_INDEX_HIDDEN
+	bat.Attrs[6] = MO_INDEX_COMMENT
+	bat.Attrs[7] = MO_INDEX_COLUMN_NAME
+	bat.Attrs[8] = MO_INDEX_ORDINAL_POSITION
+	bat.Attrs[9] = MO_INDEX_OPTIONS
+	bat.Attrs[10] = MO_INDEX_TABLE_NAME
 
 	vec_id := vector.New(MO_INDEX_COLTYPE[MO_INDEX_ID].ToType())
 	bat.Vecs[0] = vec_id
@@ -286,34 +293,97 @@ func buildInsertIndexMetaBatch(tableId uint64, ct *engine.ConstraintDef, eg engi
 	vec_type := vector.New(MO_INDEX_COLTYPE[MO_INDEX_TYPE].ToType())
 	bat.Vecs[3] = vec_type
 
-	vec_algorithm := vector.New(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM].ToType())
-	bat.Vecs[4] = vec_algorithm
-
 	vec_visible := vector.New(MO_INDEX_COLTYPE[MO_INDEX_IS_VISIBLE].ToType())
-	bat.Vecs[5] = vec_visible
+	bat.Vecs[4] = vec_visible
 
 	vec_hidden := vector.New(MO_INDEX_COLTYPE[MO_INDEX_HIDDEN].ToType())
-	bat.Vecs[6] = vec_hidden
+	bat.Vecs[5] = vec_hidden
 
 	vec_comment := vector.New(MO_INDEX_COLTYPE[MO_INDEX_COMMENT].ToType())
-	bat.Vecs[7] = vec_comment
+	bat.Vecs[6] = vec_comment
+
+	vec_column_name := vector.New(MO_INDEX_COLTYPE[MO_INDEX_COLUMN_NAME].ToType())
+	bat.Vecs[7] = vec_column_name
+
+	vec_ordinal_position := vector.New(MO_INDEX_COLTYPE[MO_INDEX_ORDINAL_POSITION].ToType())
+	bat.Vecs[8] = vec_ordinal_position
 
 	vec_options := vector.New(MO_INDEX_COLTYPE[MO_INDEX_OPTIONS].ToType())
-	bat.Vecs[8] = vec_options
+	bat.Vecs[9] = vec_options
 
 	vec_index_table := vector.New(MO_INDEX_COLTYPE[MO_INDEX_TABLE_NAME].ToType())
-	bat.Vecs[9] = vec_index_table
+	bat.Vecs[10] = vec_index_table
 
-	//indexId := tableId
 	for _, constraint := range ct.Cts {
 		switch def := constraint.(type) {
 		case *engine.IndexDef:
 			for _, index := range def.Indexes {
-				//indexId++
 				indexId, err := eg.AllocateID(proc.Ctx)
 				if err != nil {
 					return nil, err
 				}
+
+				for i, part := range index.Parts {
+					err = vec_id.Append(indexId, false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vec_table_id.Append(tableId, false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vec_name.Append([]byte(index.IndexName), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					if index.Unique {
+						err = vec_type.Append([]byte(INDEX_TYPE_UNIQUE), false, proc.Mp())
+					} else {
+						err = vec_type.Append([]byte(INDEX_TYPE_MULTIPLE), false, proc.Mp())
+					}
+					if err != nil {
+						return nil, err
+					}
+					err = vec_visible.Append(int8(1), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vec_hidden.Append(int8(0), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vec_comment.Append([]byte(index.Comment), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vec_column_name.Append([]byte(part), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					vec_ordinal_position.Append(uint32(i+1), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vec_options.Append([]byte(""), true, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					if index.TableExist {
+						err = vec_index_table.Append([]byte(index.IndexTableName), false, proc.Mp())
+					} else {
+						err = vec_index_table.Append([]byte(""), true, proc.Mp())
+					}
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+		case *engine.PrimaryKeyDef:
+			indexId, err := eg.AllocateID(proc.Ctx)
+			if err != nil {
+				return nil, err
+			}
+			for i, colName := range def.Pkey.Names {
 				err = vec_id.Append(indexId, false, proc.Mp())
 				if err != nil {
 					return nil, err
@@ -322,19 +392,11 @@ func buildInsertIndexMetaBatch(tableId uint64, ct *engine.ConstraintDef, eg engi
 				if err != nil {
 					return nil, err
 				}
-				err = vec_name.Append([]byte(index.IndexName), false, proc.Mp())
+				err = vec_name.Append([]byte("PRIMARY"), false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-				if index.Unique {
-					err = vec_type.Append([]byte(INDEX_TYPE_UNIQUE), false, proc.Mp())
-				} else {
-					err = vec_type.Append([]byte(INDEX_TYPE_MULTIPLE), false, proc.Mp())
-				}
-				if err != nil {
-					return nil, err
-				}
-				err = vec_algorithm.Append([]byte(ALGORITHM_SE_SPECIFIC), false, proc.Mp())
+				err = vec_type.Append([]byte(INDEX_TYPE_PRIMARY), false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
@@ -346,7 +408,15 @@ func buildInsertIndexMetaBatch(tableId uint64, ct *engine.ConstraintDef, eg engi
 				if err != nil {
 					return nil, err
 				}
-				err = vec_comment.Append([]byte(index.Comment), false, proc.Mp())
+				err = vec_comment.Append([]byte(""), false, proc.Mp())
+				if err != nil {
+					return nil, err
+				}
+				err = vec_column_name.Append([]byte(colName), false, proc.Mp())
+				if err != nil {
+					return nil, err
+				}
+				vec_ordinal_position.Append(uint32(i+1), false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
@@ -354,60 +424,10 @@ func buildInsertIndexMetaBatch(tableId uint64, ct *engine.ConstraintDef, eg engi
 				if err != nil {
 					return nil, err
 				}
-				if index.TableExist {
-					err = vec_index_table.Append([]byte(index.IndexTableName), false, proc.Mp())
-				} else {
-					err = vec_index_table.Append([]byte(""), true, proc.Mp())
-				}
+				err = vec_index_table.Append([]byte(""), true, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-			}
-		case *engine.PrimaryKeyDef:
-			//indexId++
-			indexId, err := eg.AllocateID(proc.Ctx)
-			if err != nil {
-				return nil, err
-			}
-			err = vec_id.Append(indexId, false, proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-			err = vec_table_id.Append(tableId, false, proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-			err = vec_name.Append([]byte("PRIMARY"), false, proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-			err = vec_type.Append([]byte(INDEX_TYPE_PRIMARY), false, proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-			err = vec_algorithm.Append([]byte(ALGORITHM_SE_SPECIFIC), false, proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-			err = vec_visible.Append(int8(1), false, proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-			err = vec_hidden.Append(int8(0), false, proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-			err = vec_comment.Append([]byte(""), false, proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-			err = vec_options.Append([]byte(""), true, proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-			err = vec_index_table.Append([]byte(""), true, proc.Mp())
-			if err != nil {
-				return nil, err
 			}
 		}
 	}
@@ -421,7 +441,20 @@ func buildDeleteIndexBatch(tableId uint64, rel engine.Relation, ctx context.Cont
 	if err != nil {
 		panic(err)
 	}
-	rds, _ = rel.NewReader(ctx, 1, nil, ret)
+
+	switch {
+	case len(ret) == 0:
+		rds, _ = rel.NewReader(ctx, 1, nil, nil)
+	case len(ret) == 1 && len(ret[0]) == 0:
+		rds, _ = rel.NewReader(ctx, 1, nil, nil)
+	case len(ret[0]) == 0:
+		rds0, _ := rel.NewReader(ctx, 1, nil, nil)
+		rds1, _ := rel.NewReader(ctx, 1, nil, ret[1:])
+		rds = append(rds, rds0...)
+		rds = append(rds, rds1...)
+	default:
+		rds, _ = rel.NewReader(ctx, 1, nil, ret)
+	}
 
 	retbat := batch.NewWithSize(1)
 	vec_rowid := vector.New(types.T_Rowid.ToType())
@@ -464,11 +497,23 @@ func buildDeleteSingleIndexBatch(tableId uint64, indexName string, rel engine.Re
 	if err != nil {
 		panic(err)
 	}
-	rds, _ = rel.NewReader(ctx, 1, nil, ret)
+	switch {
+	case len(ret) == 0:
+		rds, _ = rel.NewReader(ctx, 1, nil, nil)
+	case len(ret) == 1 && len(ret[0]) == 0:
+		rds, _ = rel.NewReader(ctx, 1, nil, nil)
+	case len(ret[0]) == 0:
+		rds0, _ := rel.NewReader(ctx, 1, nil, nil)
+		rds1, _ := rel.NewReader(ctx, 1, nil, ret[1:])
+		rds = append(rds, rds0...)
+		rds = append(rds, rds1...)
+	default:
+		rds, _ = rel.NewReader(ctx, 1, nil, ret)
+	}
 
 	retbat := batch.NewWithSize(1)
-	//vec_rowid := vector.New(types.T_Rowid.ToType())
-	//retbat.Vecs[0] = vec_rowid
+	vec_rowid := vector.New(types.T_Rowid.ToType())
+	retbat.Vecs[0] = vec_rowid
 	for len(rds) > 0 {
 		bat, err := rds[0].Read(ctx, []string{catalog.Row_ID, MO_INDEX_TABLE_ID, MO_INDEX_NAME}, nil, proc.Mp())
 		if err != nil {
@@ -489,22 +534,15 @@ func buildDeleteSingleIndexBatch(tableId uint64, indexName string, rel engine.Re
 		for rowIdx = 0; rowIdx < int64(bat.Length()); rowIdx++ {
 			if tableIdCols[rowIdx] == tableId && indexNameCols[rowIdx] == indexName {
 				rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIdx]
-				vec_rowid := vector.New(types.T_Rowid.ToType())
-				if err = vec_rowid.Append(rowid, false, proc.Mp()); err != nil {
+				if err = retbat.Vecs[0].Append(rowid, false, proc.Mp()); err != nil {
 					panic(moerr.NewInternalError(ctx, err.Error()))
 				}
-				retbat.Vecs[0] = vec_rowid
-				//retbat.SetVector(0, vec)
-				retbat.SetZs(1, proc.Mp())
-				bat.Clean(proc.Mp())
-				return retbat, nil
 			}
 		}
 		bat.Clean(proc.Mp())
 		rds[0].Close()
 		rds = rds[1:]
 	}
-	//retbat.SetZs(vector.Length(retbat.Vecs[0]), proc.Mp())
-	//return retbat, nil
-	return nil, nil
+	retbat.SetZs(vector.Length(retbat.Vecs[0]), proc.Mp())
+	return retbat, nil
 }

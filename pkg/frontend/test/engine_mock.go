@@ -798,7 +798,7 @@ func (m *MockEngine) AllocateID(ctx context.Context) (uint64, error) {
 	return ret0, ret1
 }
 
-func (mr *MockEngineMockRecorder) AllocateID(ctx context.Context) *gomock.Call {
+func (mr *MockEngineMockRecorder) AllocateID(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllocateID", reflect.TypeOf((*MockEngine)(nil).AllocateID), ctx)
 }
