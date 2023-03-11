@@ -63,7 +63,7 @@ type Manager struct {
 	truncated types.TS
 	now       func() types.TS
 
-	committingTS        types.TS
+	committingTS        atomic.Value
 	previousSaveTS      types.TS
 	committedTS         atomic.Value
 	logtailCallback     atomic.Value
@@ -89,12 +89,11 @@ func NewManager(blockSize int, now func() types.TS) *Manager {
 	mgr.waitCommitQueue = sm.NewSafeQueue(10000, 100, mgr.onWaitTxnCommit)
 	mgr.committedTxn = make(chan *txnWithLogtails)
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
-	mgr.Start()
 
 	return mgr
 }
 func (mgr *Manager) OnAllocPrepareTS(ts types.TS) {
-	mgr.committingTS = ts
+	mgr.committingTS.Store(ts)
 }
 
 func (mgr *Manager) OnCommittedTS(ts types.TS) {
@@ -183,8 +182,8 @@ func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 }
 func (mgr *Manager) getSaveTS() types.TS {
 	now := mgr.now()
-	committingTS := mgr.committingTS
-	if committingTS.IsEmpty() {
+	icommittingTS := mgr.committingTS.Load()
+	if icommittingTS == nil {
 		mgr.previousSaveTS = now
 		return now
 	}
@@ -193,7 +192,7 @@ func (mgr *Manager) getSaveTS() types.TS {
 		return mgr.previousSaveTS
 	}
 	committedTS := icommittedTS.(types.TS)
-	if committedTS.Equal(committingTS) {
+	if committedTS.Equal(icommittingTS.(types.TS)) {
 		mgr.previousSaveTS = now
 		return now
 	}

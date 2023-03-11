@@ -156,6 +156,7 @@ func (db *DB) Close() error {
 	db.BGCheckpointRunner.Stop()
 	db.Scheduler.Stop()
 	db.TxnMgr.Stop()
+	db.LogtailMgr.Stop()
 	db.Wal.Close()
 	db.Opts.Catalog.Close()
 	db.DiskCleaner.Stop()
