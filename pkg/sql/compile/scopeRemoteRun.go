@@ -17,10 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"hash/crc32"
 	"runtime"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -669,6 +671,19 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
+	case *right.Argument:
+		rels, poses := getRelColList(t.Result)
+		in.RightJoin = &pipeline.RightJoin{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			RelList:    rels,
+			ColList:    poses,
+			Expr:       t.Cond,
+			LeftTypes:  convertToPlanTypes(t.Left_typs),
+			RightTypes: convertToPlanTypes(t.Right_typs),
+			LeftCond:   t.Conditions[0],
+			RightCond:  t.Conditions[1],
+		}
 	case *limit.Argument:
 		in.Limit = t.Limit
 	case *loopanti.Argument:
@@ -942,7 +957,17 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Result:     convertToResultPos(t.RelList, t.ColList),
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
-
+	case vm.Right:
+		t := opr.GetRightJoin()
+		v.Arg = &right.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     convertToResultPos(t.RelList, t.ColList),
+			Left_typs:  convertToTypes(t.LeftTypes),
+			Right_typs: convertToTypes(t.RightTypes),
+			Cond:       t.Expr,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
 	case vm.Limit:
 		v.Arg = &limit.Argument{Limit: opr.Limit}
 	case vm.LoopAnti:
