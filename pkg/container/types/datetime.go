@@ -210,24 +210,24 @@ func (dt Datetime) UnixTimestamp(loc *time.Location) int64 {
 func DatetimeFromUnix(loc *time.Location, ts int64) Datetime {
 	t := time.Unix(ts, 0).In(loc)
 	_, offset := t.Zone()
-	return Datetime((ts+int64(offset))*microSecsPerSec + unixEpochSecs)
+	return Datetime((ts+int64(offset))*microSecsPerSec + unixEpochMicroSecs)
 }
 
 func DatetimeFromUnixWithNsec(loc *time.Location, sec int64, nsec int64) Datetime {
 	t := time.Unix(sec, nsec).In(loc)
 	_, offset := t.Zone()
 	msec := math.Round(float64(nsec) / 1000)
-	return Datetime((sec+int64(offset))*microSecsPerSec + int64(msec) + unixEpochSecs)
+	return Datetime((sec+int64(offset))*microSecsPerSec + int64(msec) + unixEpochMicroSecs)
 }
 
 func Now(loc *time.Location) Datetime {
 	now := time.Now().In(loc)
 	_, offset := now.Zone()
-	return Datetime(now.UnixMicro() + int64(offset)*microSecsPerSec + unixEpochSecs)
+	return Datetime(now.UnixMicro() + int64(offset)*microSecsPerSec + unixEpochMicroSecs)
 }
 
 func UTC() Datetime {
-	return Datetime(time.Now().UnixMicro() + unixEpochSecs)
+	return Datetime(time.Now().UnixMicro() + unixEpochMicroSecs)
 }
 
 func (dt Datetime) ToDate() Date {
@@ -434,6 +434,10 @@ func (dt Datetime) DayOfWeek() Weekday {
 	return dt.ToDate().DayOfWeek()
 }
 
+func (dt Datetime) DayOfWeek2() Weekday {
+	return dt.ToDate().DayOfWeek2()
+}
+
 func (dt Datetime) Week(mode int) int {
 	return dt.ToDate().Week(mode)
 }
@@ -444,7 +448,7 @@ func (dt Datetime) YearWeek(mode int) (year int, week int) {
 }
 
 func (dt Datetime) ToTimestamp(loc *time.Location) Timestamp {
-	return Timestamp(dt.ConvertToGoTime(loc).UnixMicro() + unixEpochSecs)
+	return Timestamp(dt.ConvertToGoTime(loc).UnixMicro() + unixEpochMicroSecs)
 }
 
 func (dt Datetime) SecondMicrosecondStr() string {
@@ -519,5 +523,5 @@ func ValidDatetime(year int32, month, day uint8) bool {
 }
 
 func (dt Datetime) SecsSinceUnixEpoch() int64 {
-	return (int64(dt) - unixEpochSecs) / microSecsPerSec
+	return (int64(dt) - unixEpochMicroSecs) / microSecsPerSec
 }

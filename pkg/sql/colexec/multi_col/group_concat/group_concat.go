@@ -210,11 +210,11 @@ func (gc *GroupConcat) Grows(n int, m *mpool.MPool) error {
 
 // Eval method calculates and returns the final result of the aggregate function.
 func (gc *GroupConcat) Eval(m *mpool.MPool) (*vector.Vector, error) {
-	vec := vector.New(gc.OutputType())
+	vec := vector.NewVec(gc.OutputType())
 	nsp := nulls.NewWithSize(gc.groups)
-	vec.Nsp = nsp
+	vec.SetNulls(nsp)
 	for _, v := range gc.res {
-		if err := vec.Append([]byte(v), false, m); err != nil {
+		if err := vector.AppendBytes(vec, []byte(v), false, m); err != nil {
 			vec.Free(m)
 			return nil, err
 		}
@@ -399,59 +399,59 @@ func (gc *GroupConcat) WildAggReAlloc(m *mpool.MPool) error {
 }
 
 func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
-	if nulls.Any(vec.Nsp) {
-		return "", nil
-	}
-	switch vec.Typ.Oid {
+	//if nulls.Any(vec.GetNulls()) {
+	//	return "", nil
+	//}
+	switch vec.GetType().Oid {
 	case types.T_bool:
-		flag := vector.GetValueAt[bool](vec, int64(rowIndex))
+		flag := vector.GetFixedAt[bool](vec, rowIndex)
 		if flag {
 			return "1", nil
 		}
 		return "0", nil
 	case types.T_int8:
-		return fmt.Sprintf("%v", vector.GetValueAt[int8](vec, int64(rowIndex))), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[int8](vec, rowIndex)), nil
 	case types.T_int16:
-		return fmt.Sprintf("%v", vector.GetValueAt[int16](vec, int64(rowIndex))), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[int16](vec, rowIndex)), nil
 	case types.T_int32:
-		return fmt.Sprintf("%v", vector.GetValueAt[int32](vec, int64(rowIndex))), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[int32](vec, rowIndex)), nil
 	case types.T_int64:
-		return fmt.Sprintf("%v", vector.GetValueAt[int64](vec, int64(rowIndex))), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[int64](vec, rowIndex)), nil
 	case types.T_uint8:
-		return fmt.Sprintf("%v", vector.GetValueAt[uint8](vec, int64(rowIndex))), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint8](vec, rowIndex)), nil
 	case types.T_uint16:
-		return fmt.Sprintf("%v", vector.GetValueAt[uint16](vec, int64(rowIndex))), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint16](vec, rowIndex)), nil
 	case types.T_uint32:
-		return fmt.Sprintf("%v", vector.GetValueAt[uint32](vec, int64(rowIndex))), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint32](vec, rowIndex)), nil
 	case types.T_uint64:
-		return fmt.Sprintf("%v", vector.GetValueAt[uint64](vec, int64(rowIndex))), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint64](vec, rowIndex)), nil
 	case types.T_float32:
-		return fmt.Sprintf("%v", vector.GetValueAt[float32](vec, int64(rowIndex))), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[float32](vec, rowIndex)), nil
 	case types.T_float64:
-		return fmt.Sprintf("%v", vector.GetValueAt[float64](vec, int64(rowIndex))), nil
-	case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
-		return vec.GetString(int64(rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAt[float64](vec, rowIndex)), nil
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+		return vec.GetStringAt(rowIndex), nil
 	case types.T_decimal64:
-		val := vector.GetValueAt[types.Decimal64](vec, int64(rowIndex))
+		val := vector.GetFixedAt[types.Decimal64](vec, rowIndex)
 		return val.String(), nil
 	case types.T_decimal128:
-		val := vector.GetValueAt[types.Decimal128](vec, int64(rowIndex))
+		val := vector.GetFixedAt[types.Decimal128](vec, rowIndex)
 		return val.String(), nil
 	case types.T_json:
-		val := vec.GetBytes(int64(rowIndex))
+		val := vec.GetBytesAt(rowIndex)
 		byteJson := types.DecodeJson(val)
 		return byteJson.String(), nil
 	case types.T_uuid:
-		val := vector.GetValueAt[types.Uuid](vec, int64(rowIndex))
+		val := vector.GetFixedAt[types.Uuid](vec, rowIndex)
 		return val.ToString(), nil
 	case types.T_date:
-		val := vector.GetValueAt[types.Date](vec, int64(rowIndex))
+		val := vector.GetFixedAt[types.Date](vec, rowIndex)
 		return val.String(), nil
 	case types.T_time:
-		val := vector.GetValueAt[types.Time](vec, int64(rowIndex))
+		val := vector.GetFixedAt[types.Time](vec, rowIndex)
 		return val.String(), nil
 	case types.T_datetime:
-		val := vector.GetValueAt[types.Datetime](vec, int64(rowIndex))
+		val := vector.GetFixedAt[types.Datetime](vec, rowIndex)
 		return val.String(), nil
 	default:
 		return "", nil
@@ -460,7 +460,7 @@ func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 
 func hasNull(vecs []*vector.Vector, rowIdx int64) bool {
 	for i := 0; i < len(vecs); i++ {
-		if vecs[i].Nsp.Contains(uint64(rowIdx)) {
+		if vecs[i].IsConstNull() || vecs[i].GetNulls().Contains(uint64(rowIdx)) {
 			return true
 		}
 	}

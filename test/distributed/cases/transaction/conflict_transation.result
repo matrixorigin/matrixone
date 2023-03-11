@@ -71,12 +71,9 @@ create table ct_05(a int,b varchar(25) primary key);
 begin;
 load data infile '$resources/load_data/ct_file.csv' into table ct_05;
 commit;
+Duplicate entry 'apple' for key 'b'
 select * from ct_05;
 a    b
-1    apple
-3    apple
-2    bear
-4    pizze
 create table ct_06(a bigint,b varchar(25),c int, d varchar(25),primary key(a),unique index c(c),key b(b),key d(d));
 start transaction ;
 insert into ct_06 select 5678,'high',487,'comment test';

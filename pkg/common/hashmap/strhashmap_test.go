@@ -188,7 +188,7 @@ func newVectors(ts []types.Type, random bool, n int, m *mpool.MPool) []*vector.V
 	vecs := make([]*vector.Vector, len(ts))
 	for i := range vecs {
 		vecs[i] = newVector(n, ts[i], m, random, nil)
-		nulls.New(vecs[i].Nsp, n)
+		nulls.New(vecs[i].GetNulls(), n)
 	}
 	return vecs
 }
@@ -197,7 +197,7 @@ func newVectorsWithNull(ts []types.Type, random bool, n int, m *mpool.MPool) []*
 	vecs := make([]*vector.Vector, len(ts))
 	for i := range vecs {
 		vecs[i] = newVector(n, ts[i], m, random, nil)
-		nulls.New(vecs[i].Nsp, n)
+		nulls.New(vecs[i].GetNulls(), n)
 		nsp := vecs[i].GetNulls()
 		for j := 0; j < n; j++ {
 			if j%2 == 0 {
@@ -256,10 +256,10 @@ func newVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 }
 
 func newInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int8) *vector.Vector {
-	vec := vector.New(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], false, m); err != nil {
+			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -271,7 +271,7 @@ func newInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int8
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(int8(v), false, m); err != nil {
+		if err := vector.AppendFixed(vec, int8(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -280,10 +280,10 @@ func newInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int8
 }
 
 func newInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int16) *vector.Vector {
-	vec := vector.New(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], false, m); err != nil {
+			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -295,7 +295,7 @@ func newInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(int16(v), false, m); err != nil {
+		if err := vector.AppendFixed(vec, int16(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -304,10 +304,10 @@ func newInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int
 }
 
 func newInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int32) *vector.Vector {
-	vec := vector.New(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], false, m); err != nil {
+			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -319,7 +319,7 @@ func newInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(int32(v), false, m); err != nil {
+		if err := vector.AppendFixed(vec, int32(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -328,10 +328,10 @@ func newInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int
 }
 
 func newInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int64) *vector.Vector {
-	vec := vector.New(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], false, m); err != nil {
+			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -343,7 +343,7 @@ func newInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(int64(v), false, m); err != nil {
+		if err := vector.AppendFixed(vec, int64(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -352,10 +352,10 @@ func newInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int
 }
 
 func newUInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []uint32) *vector.Vector {
-	vec := vector.New(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], false, m); err != nil {
+			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -367,7 +367,7 @@ func newUInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []ui
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(uint32(v), false, m); err != nil {
+		if err := vector.AppendFixed(vec, uint32(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -376,10 +376,10 @@ func newUInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []ui
 }
 
 func newDecimal64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Decimal64) *vector.Vector {
-	vec := vector.New(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], false, m); err != nil {
+			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -392,7 +392,7 @@ func newDecimal64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs [
 			v = rand.Int()
 		}
 		d, _ := types.InitDecimal64(int64(v), 64, 0)
-		if err := vec.Append(d, false, m); err != nil {
+		if err := vector.AppendFixed(vec, d, false, m); err != nil {
 
 			vec.Free(m)
 			return nil
@@ -402,10 +402,10 @@ func newDecimal64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs [
 }
 
 func newDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Decimal128) *vector.Vector {
-	vec := vector.New(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], false, m); err != nil {
+			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -418,7 +418,7 @@ func newDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs 
 			v = rand.Int()
 		}
 		d, _ := types.InitDecimal128(int64(v), 64, 0)
-		if err := vec.Append(d, false, m); err != nil {
+		if err := vector.AppendFixed(vec, d, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -427,10 +427,10 @@ func newDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs 
 }
 
 func newStringVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
-	vec := vector.New(typ)
+	vec := vector.NewVec(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append([]byte(vs[i]), false, m); err != nil {
+			if err := vector.AppendBytes(vec, []byte(vs[i]), false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -442,7 +442,7 @@ func newStringVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []st
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append([]byte(strconv.Itoa(v)), false, m); err != nil {
+		if err := vector.AppendBytes(vec, []byte(strconv.Itoa(v)), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

@@ -23,62 +23,58 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_decimal128, Size: 16}
-	inputValues := vector.MustTCols[T](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func Oct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_decimal128, Size: 16}
+	ivals := vector.MustFixedCol[T](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Decimal128, 1)
-		col, err := oct.Oct(inputValues, resultValues)
+		var rvals [1]types.Decimal128
+		_, err := oct.Oct(ivals, rvals[:])
 		if err != nil {
 			return nil, err
 		}
-		vector.SetCol(resultVector, col)
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Decimal128](resultVector)
-		_, err = oct.Oct(inputValues, resultValues)
+		rvals := vector.MustFixedCol[types.Decimal128](rvec)
+		_, err = oct.Oct(ivals, rvals)
 		if err != nil {
 			return nil, err
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
 }
 
-func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_decimal128, Size: 16}
-	inputValues := vector.MustTCols[T](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func OctFloat[T constraints.Float](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_decimal128, Size: 16}
+	ivals := vector.MustFixedCol[T](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Decimal128, 1)
-		col, err := oct.OctFloat(inputValues, resultValues)
+		var rvals [1]types.Decimal128
+		_, err := oct.OctFloat(ivals, rvals[:])
 		if err != nil {
 			return nil, moerr.NewInternalError(proc.Ctx, "the input value is out of integer range")
 		}
-		vector.SetCol(resultVector, col)
-		return resultVector, nil
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Decimal128](resultVector)
-		_, err = oct.OctFloat(inputValues, resultValues)
+		rvals := vector.MustFixedCol[types.Decimal128](rvec)
+		_, err = oct.OctFloat(ivals, rvals)
 		if err != nil {
 			return nil, moerr.NewInternalError(proc.Ctx, "the input value is out of integer range")
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
 }

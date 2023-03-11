@@ -17,7 +17,6 @@ package txnbase
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -34,9 +33,10 @@ func (store *NoopTxnStore) Close() error                                        
 func (store *NoopTxnStore) Append(dbId, id uint64, data *containers.Batch) error { return nil }
 func (store *NoopTxnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
-	zm []dataio.Index,
+	pks []containers.Vector,
+	file string,
 	metaLocs []string,
-) error {
+	flag int32) error {
 	return nil
 }
 func (store *NoopTxnStore) PrepareRollback() error { return nil }

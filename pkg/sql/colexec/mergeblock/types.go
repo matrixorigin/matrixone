@@ -50,20 +50,20 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 func (arg *Argument) GetMetaLocBat(name string) {
 	bat := batch.New(true, []string{name})
 	bat.Cnt = 1
-	bat.Vecs[0] = vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	arg.container.mp[0] = bat
 	for i := range arg.Unique_tbls {
 		bat := batch.New(true, []string{name})
 		bat.Cnt = 1
-		bat.Vecs[0] = vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 		arg.container.mp[i+1] = bat
 	}
 }
 
 func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	arg.GetMetaLocBat(bat.Attrs[1])
-	tblIdx := vector.MustTCols[uint16](bat.GetVector(0))
-	metaLocs := vector.MustStrCols(bat.GetVector(1))
+	tblIdx := vector.MustFixedCol[uint16](bat.GetVector(0))
+	metaLocs := vector.MustStrCol(bat.GetVector(1))
 	for i := range tblIdx {
 		if tblIdx[i] == 0 {
 			val, err := strconv.ParseUint(strings.Split(metaLocs[i], ":")[2], 0, 64)
@@ -72,7 +72,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 			}
 			arg.AffectedRows += val
 		}
-		arg.container.mp[int(tblIdx[i])].Vecs[0].Append([]byte(metaLocs[i]), false, proc.GetMPool())
+		vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
 	}
 	for _, bat := range arg.container.mp {
 		bat.SetZs(bat.Vecs[0].Length(), proc.GetMPool())

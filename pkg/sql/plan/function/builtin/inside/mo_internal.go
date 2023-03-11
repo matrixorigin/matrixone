@@ -54,34 +54,38 @@ func InternalColumnCharacterSet(vectors []*vector.Vector, proc *process.Process)
 }
 
 // Mo General function for obtaining type information
-func generalInternalType(funName string, vectors []*vector.Vector, proc *process.Process, typefunc typeFunc) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_int64.ToType()
-	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func generalInternalType(funName string, ivecs []*vector.Vector, proc *process.Process, typefunc typeFunc) (*vector.Vector, error) {
+	ivec := ivecs[0]
+	rtyp := types.T_int64.ToType()
+	ivals := vector.MustStrCol(ivec)
+	if ivec.IsConst() {
+		if ivec.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivec.Length(), proc.Mp()), nil
 		} else {
 			var typ types.Type
-			bytes := []byte(inputValues[0])
+			bytes := []byte(ivals[0])
 			err := types.Decode(bytes, &typ)
 			if err != nil {
 				return nil, err
 			}
 			isVaild, val := typefunc(typ)
 			if isVaild {
-				return vector.NewConstFixed(resultType, inputVector.Length(), int64(val), proc.Mp()), nil
+				return vector.NewConstFixed(rtyp, int64(val), ivec.Length(), proc.Mp()), nil
 			} else {
-				return proc.AllocScalarNullVector(resultType), nil
+				return vector.NewConstNull(rtyp, ivec.Length(), proc.Mp()), nil
 			}
 		}
 	} else {
-		resVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), nil)
+		nulls.Set(rvec.GetNulls(), ivec.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[int64](resVector)
-		for i, typeValue := range inputValues {
+		rvals := vector.MustFixedCol[int64](rvec)
+		for i, typeValue := range ivals {
+			if rvec.GetNulls().Contains(uint64(i)) {
+				continue
+			}
 			var typ types.Type
 			bytes := []byte(typeValue)
 			err = types.Decode(bytes, &typ)
@@ -90,12 +94,12 @@ func generalInternalType(funName string, vectors []*vector.Vector, proc *process
 			}
 			isVaild, val := typefunc(typ)
 			if isVaild {
-				resultValues[i] = int64(val)
+				rvals[i] = int64(val)
 			} else {
-				nulls.Add(resVector.Nsp, uint64(i))
+				nulls.Add(rvec.GetNulls(), uint64(i))
 			}
 		}
-		return resVector, nil
+		return rvec, nil
 	}
 }
 
