@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -56,11 +57,10 @@ func (rel *txnRelation) Write(ctx context.Context, bat *batch.Batch) error {
 
 func (rel *txnRelation) AddBlksWithMetaLoc(
 	ctx context.Context,
-	pkVecs []containers.Vector,
-	file string,
+	zm []dataio.Index,
 	metaLocs []string,
-	flag int32) error {
-	return rel.handle.AddBlksWithMetaLoc(pkVecs, file, metaLocs, flag)
+) error {
+	return rel.handle.AddBlksWithMetaLoc(zm, metaLocs)
 }
 
 func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
