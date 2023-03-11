@@ -134,7 +134,7 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 	if ctr.bat == nil {
 		size := 0
 		for _, vec := range bat.Vecs {
-			switch vec.Typ.TypeSize() {
+			switch vec.GetType().TypeSize() {
 			case 1:
 				size += 1 + 1
 			case 2:

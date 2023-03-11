@@ -24,44 +24,47 @@ import (
 )
 
 func Bin[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return generalBin[T](vectors, proc, bin.Bin[T])
+	return generalBin(vectors, proc, bin.Bin[T])
 }
 
 func BinFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return generalBin[T](vectors, proc, bin.BinFloat[T])
+	return generalBin(vectors, proc, bin.BinFloat[T])
 }
 
 type binT interface {
 	constraints.Unsigned | constraints.Signed | constraints.Float
 }
 
-type binFun[T binT] func(*vector.Vector, *vector.Vector, *process.Process) error
+type binFun[T binT] func([]T, []string, *process.Process) error
 
-func generalBin[T binT](vectors []*vector.Vector, proc *process.Process, cb binFun[T]) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_varchar.ToType()
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func generalBin[T binT](ivecs []*vector.Vector, proc *process.Process, cb binFun[T]) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_varchar.ToType()
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := make([]types.Varlena, 0, 1)
-		vector.SetCol(resultVector, resultValues)
-		err := cb(inputVector, resultVector, proc)
+		var rs [1]string
+		err := cb(vector.MustFixedCol[T](inputVector), rs[:], proc)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "The input value is out of range")
 		}
-		return resultVector, nil
+		return vector.NewConstBytes(rtyp, []byte(rs[0]), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, 0, inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, 0, inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		err = cb(inputVector, resultVector, proc)
+		rs := make([]string, inputVector.Length())
+		err = cb(vector.MustFixedCol[T](inputVector), rs, proc)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "The input value is out of range")
 		}
-		return resultVector, nil
+		err = vector.AppendStringList(rvec, rs, nil, proc.Mp())
+		if err != nil {
+			return nil, moerr.NewInvalidInput(proc.Ctx, "The input value is out of range")
+		}
+		return rvec, nil
 	}
 
 }

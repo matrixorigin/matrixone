@@ -28,8 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -87,8 +87,14 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	cli client.TxnClient,
 	messageAcquirer func() morpc.Message) error {
-	// new a receiver to receive message and write back result.
-	receiver := newMessageReceiverOnServer(ctx, message,
+
+	msg, ok := message.(*pipeline.Message)
+	if !ok {
+		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
+		panic("cn server receive a message with unexpected type")
+	}
+
+	receiver := newMessageReceiverOnServer(ctx, msg,
 		cs, messageAcquirer, storeEngine, fileService, cli)
 
 	// rebuild pipeline to run and send query result back.
@@ -190,7 +196,7 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		}
 		// XXX some order check just for safety ?
 		if sequence != m.Sequence {
-			return moerr.NewInternalErrorNoCtx("Packages passed by morpc are out of order")
+			return moerr.NewInternalErrorNoCtx("Batch packages passed by morpc are out of order")
 		}
 		sequence++
 
@@ -577,6 +583,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			TableDef:     t.InsertCtx.TableDef,
 			ClusterTable: t.InsertCtx.ClusterTable,
 			ParentIdx:    t.InsertCtx.ParentIdx,
+			IdxIdx:       t.InsertCtx.IdxIdx,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
@@ -699,6 +706,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			ColList: colList,
 			Expr:    t.Cond,
 			Types:   convertToPlanTypes(t.Typs),
+		}
+	case *loopmark.Argument:
+		in.MarkJoin = &pipeline.MarkJoin{
+			Expr:   t.Cond,
+			Types:  convertToPlanTypes(t.Typs),
+			Result: t.Result,
 		}
 	case *offset.Argument:
 		in.Offset = t.Offset
@@ -1279,7 +1292,7 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	err := types.Decode(data, bat)
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
-		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)
+		bat.Vecs[i], err = bat.Vecs[i].Dup(mp)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				bat.Vecs[j].Free(mp)

@@ -41,7 +41,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.New(typ)
+		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
 
 	ap.ctr.buildEqVec = make([]*vector.Vector, len(ap.Conditions[1]))
@@ -155,7 +155,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp]
 			bat.Vecs[rp] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), count, false, proc.Mp())
+			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
 		}
 	}
 	rbat.Zs = bat.Zs
@@ -169,10 +169,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	ctr.markVals = make([]bool, bat.Length())
+	markVec, err := proc.AllocVectorOfRows(types.T_bool.ToType(), bat.Length(), nil)
+	if err != nil {
+		return err
+	}
+	ctr.markVals = vector.MustFixedCol[bool](markVec)
 	ctr.markNulls = nulls.NewWithSize(bat.Length())
 	ctr.cleanEvalVectors(proc.Mp())
-	if err := ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc, anal); err != nil {
+	if err = ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc, anal); err != nil {
 		rbat.Clean(proc.Mp())
 		return err
 	}
@@ -187,9 +191,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 		copy(ctr.inBuckets, hashmap.OneUInt8s)
 		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
-		var condState resultType
-		// var condNonEq resultType
-		// var condEq resultType
+		var condState otyp
+		// var condNonEq otyp
+		// var condEq otyp
 		var err error
 		for k := 0; k < n; k++ {
 			if ctr.inBuckets[k] == 0 {
@@ -243,7 +247,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Vecs[i] = bat.Vecs[pos]
 			bat.Vecs[pos] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewWithFixed(types.T_bool.ToType(), ctr.markVals, ctr.markNulls, proc.Mp())
+			markVec.SetNulls(ctr.markNulls)
+			rbat.Vecs[i] = markVec
 		}
 	}
 	rbat.Zs = bat.Zs
@@ -258,7 +263,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
+		if err != nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
@@ -282,7 +287,7 @@ func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Exp
 func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
+		if err != nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
@@ -300,7 +305,7 @@ func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, conds []*plan.Exp
 }
 
 // calculate the state of non-equal conditions for those tuples in JoinMap
-func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint64, k int, i int, proc *process.Process, bat *batch.Batch) (resultType, error) {
+func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint64, k int, i int, proc *process.Process, bat *batch.Batch) (otyp, error) {
 	if ap.Cond != nil {
 		condState := condFalse
 		sels := mSels[vals[k]-1]
@@ -309,10 +314,10 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint6
 			if err != nil {
 				return condUnkown, err
 			}
-			if vec.Nsp.Contains(0) {
+			if vec.GetNulls().Contains(0) {
 				condState = condUnkown
 			}
-			bs := vec.Col.([]bool)
+			bs := vector.MustFixedCol[bool](vec)
 			if bs[0] {
 				condState = condTrue
 				vec.Free(proc.Mp())
@@ -326,7 +331,7 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint6
 	}
 }
 
-func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.Process, cond *plan.Expr) (resultType, error) {
+func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.Process, cond *plan.Expr) (otyp, error) {
 	if cond == nil {
 		return condTrue, nil
 	}
@@ -335,13 +340,13 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 	if err != nil {
 		return condUnkown, err
 	}
-	bs := vec.Col.([]bool)
+	bs := vector.MustFixedCol[bool](vec)
 	for _, b := range bs {
 		if b {
 			return condTrue, nil
 		}
 	}
-	if nulls.Any(vec.Nsp) {
+	if nulls.Any(vec.GetNulls()) {
 		return condUnkown, nil
 	}
 	return condFalse, nil
@@ -369,7 +374,7 @@ func (ctr *container) evalNullSels(bat *batch.Batch) {
 }
 
 // mark probe tuple state
-func (ctr *container) handleResultType(idx int, r resultType) {
+func (ctr *container) handleResultType(idx int, r otyp) {
 	switch r {
 	case condTrue:
 		ctr.markVals[idx] = true
@@ -388,7 +393,7 @@ func DumpBatch(originBatch *batch.Batch, proc *process.Process, sels []int64) (*
 	}
 	bat := batch.NewWithSize(len(originBatch.Vecs))
 	for i, vec := range originBatch.Vecs {
-		bat.Vecs[i] = vector.New(vec.GetType())
+		bat.Vecs[i] = vector.NewVec(*vec.GetType())
 	}
 	if len(sels) == 0 {
 		return bat, nil

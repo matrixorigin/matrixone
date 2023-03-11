@@ -17,6 +17,7 @@ package operator
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -80,9 +81,9 @@ func TestIsNot(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := result.Col.([]bool)
+			col := vector.MustFixedCol[bool](result)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalar, result.IsScalar())
+			require.Equal(t, c.isScalar, result.IsConst())
 		})
 	}
 }

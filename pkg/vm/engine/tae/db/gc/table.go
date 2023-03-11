@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
+
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"sync"
 )
 
 // GCTable is a data structure in memory after consuming checkpoint
@@ -130,7 +130,7 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 			BlockID:   blkID,
 			PartID:    uint32(dbid),
 		}
-		name, _, _, _, _ := blockio.DecodeLocation(metaLoc)
+		name, _, _ := blockio.DecodeMetaLoc(metaLoc)
 		t.addBlock(id, name)
 	}
 	for i := 0; i < del.Length(); i++ {
@@ -146,7 +146,7 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 			BlockID:   rowIDToU64(blkID),
 			PartID:    uint32(dbid),
 		}
-		name, _, _, _, _ := blockio.DecodeLocation(metaLoc)
+		name, _, _ := blockio.DecodeMetaLoc(metaLoc)
 		t.deleteBlock(id, name)
 	}
 	_, _, _, del, delTxn = data.GetTblBatchs()
@@ -314,10 +314,10 @@ func (t *GCTable) replayData(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		pkgVec := vector.New(types[i])
+		pkgVec := vector.NewVec(types[i])
 		v := make([]byte, len(colData.Entries[0].Object.([]byte)))
 		copy(v, colData.Entries[0].Object.([]byte))
-		if err = pkgVec.Read(v); err != nil {
+		if err = pkgVec.UnmarshalBinary(v); err != nil {
 			return err
 		}
 		var vec containers.Vector
@@ -336,19 +336,14 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []
 	bats := t.collectData(files)
 	defer t.closeBatch(bats)
 	name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
-	writer, err := blockio.NewBlockWriter(fs.Service, name)
-	if err != nil {
-		return nil, err
-	}
+	writer := blockio.NewWriter(context.Background(), fs, name)
 	for i := range bats {
-		bat := batch.New(true, bats[i].Attrs)
-		bat.Vecs = containers.UnmarshalToMoVecs(bats[i].Vecs)
-		if _, err := writer.WriteBatchWithOutIndex(bat); err != nil {
+		if _, err := writer.WriteBlock(bats[i]); err != nil {
 			return nil, err
 		}
 	}
 
-	blocks, _, err := writer.Sync(context.Background())
+	blocks, err := writer.Sync()
 	//logutil.Infof("SaveTable %v-%v, table: %v, gc: %v", start.ToString(), end.ToString(), t.String(), files)
 	return blocks, err
 }
@@ -358,28 +353,25 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 	bats := t.collectData(files)
 	defer t.closeBatch(bats)
 	name := blockio.EncodeGCMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
-	writer, err := blockio.NewBlockWriter(fs.Service, name)
-	if err != nil {
-		return nil, err
-	}
+	writer := blockio.NewWriter(context.Background(), fs, name)
 	for i := range bats {
-		if _, err := writer.WriteBlockWithOutIndex(bats[i]); err != nil {
+		if _, err := writer.WriteBlock(bats[i]); err != nil {
 			return nil, err
 		}
 	}
 
-	blocks, _, err := writer.Sync(context.Background())
+	blocks, err := writer.Sync()
 	//logutil.Infof("SaveTable %v-%v, table: %v, gc: %v", start.ToString(), end.ToString(), t.String(), files)
 	return blocks, err
 }
 
 // ReadTable reads an s3 file and replays a GCTable in memory
 func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
-	reader, err := blockio.NewFileReader(fs.Service, name)
+	reader, err := objectio.NewObjectReader(name, fs.Service)
 	if err != nil {
 		return err
 	}
-	bs, err := reader.LoadAllBlocks(ctx, size, common.DefaultAllocator)
+	bs, err := reader.ReadAllMeta(ctx, size, common.DefaultAllocator)
 	if err != nil {
 		return err
 	}

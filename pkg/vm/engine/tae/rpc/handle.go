@@ -395,12 +395,16 @@ func (h *Handle) startLoadJobs(
 	req *db.WriteReq,
 ) (err error) {
 	var locations []string
+	var columnTypes []types.Type
+	var columnNames []string
 	var isNull []bool
 	var jobIds []string
 	var columnIdx int
 	if req.Type == db.EntryInsert {
 		//for loading primary keys of blocks
 		locations = append(locations, req.MetaLocs...)
+		columnTypes = append(columnTypes, req.Schema.GetSingleSortKey().Type)
+		columnNames = append(columnNames, req.Schema.GetSingleSortKey().Name)
 		columnIdx = req.Schema.GetSingleSortKeyIdx()
 		isNull = append(isNull, false)
 		req.Jobs = make([]*tasks.Job, len(req.MetaLocs))
@@ -412,7 +416,9 @@ func (h *Handle) startLoadJobs(
 	} else {
 		//for loading deleted rowid.
 		locations = append(locations, req.DeltaLocs...)
+		columnTypes = append(columnTypes, types.T_Rowid.ToType())
 		columnIdx = 0
+		columnNames = append(columnNames, catalog.Row_ID)
 		isNull = append(isNull, false)
 		req.Jobs = make([]*tasks.Job, len(req.DeltaLocs))
 		req.JobRes = make([]*tasks.JobResult, len(req.Jobs))
@@ -439,28 +445,29 @@ func (h *Handle) startLoadJobs(
 				}
 				//reader, err := blockio.NewReader(ctx,
 				//	h.eng.GetTAE(ctx).Fs, req.MetaLocs[i])
-				_, id, _, _, err := blockio.DecodeLocation(loc)
+				reader, err := blockio.NewReader(ctx,
+					h.eng.GetTAE(ctx).Fs, loc)
 				if err != nil {
 					jobR.Err = err
 					return
 				}
-				reader, err := blockio.NewObjectReader(
-					h.eng.GetTAE(ctx).Fs.Service, loc)
+				meta, err := reader.ReadMeta(nil)
 				if err != nil {
 					jobR.Err = err
 					return
 				}
-				bat, err := reader.LoadColumns(
-					ctx,
-					[]uint16{uint16(columnIdx)},
-					[]uint32{id},
-					nil,
+				bat, err := reader.LoadBlkColumnsByMetaAndIdx(
+					columnTypes,
+					columnNames,
+					isNull,
+					meta,
+					columnIdx,
 				)
 				if err != nil {
 					jobR.Err = err
 					return
 				}
-				jobR.Res = containers.NewVectorWithSharedMemory(bat[0].Vecs[0], isNull[0])
+				jobR.Res = bat.Vecs[0]
 				return
 			},
 		)
@@ -932,10 +939,10 @@ func vec2Str[T any](vec []T, v *vector.Vector) string {
 		if !first {
 			_ = w.WriteByte(',')
 		}
-		if v.Nsp.Contains(uint64(i)) {
-			_, _ = w.WriteString(common.TypeStringValue(v.Typ, types.Null{}))
+		if v.GetNulls().Contains(uint64(i)) {
+			_, _ = w.WriteString(common.TypeStringValue(*v.GetType(), types.Null{}))
 		} else {
-			_, _ = w.WriteString(common.TypeStringValue(v.Typ, vec[i]))
+			_, _ = w.WriteString(common.TypeStringValue(*v.GetType(), vec[i]))
 		}
 		first = false
 	}
@@ -943,52 +950,52 @@ func vec2Str[T any](vec []T, v *vector.Vector) string {
 }
 
 func moVec2String(v *vector.Vector, printN int) string {
-	switch v.Typ.Oid {
+	switch v.GetType().Oid {
 	case types.T_bool:
-		return vec2Str(vector.MustTCols[bool](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[bool](v)[:printN], v)
 	case types.T_int8:
-		return vec2Str(vector.MustTCols[int8](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[int8](v)[:printN], v)
 	case types.T_int16:
-		return vec2Str(vector.MustTCols[int16](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[int16](v)[:printN], v)
 	case types.T_int32:
-		return vec2Str(vector.MustTCols[int32](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[int32](v)[:printN], v)
 	case types.T_int64:
-		return vec2Str(vector.MustTCols[int64](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[int64](v)[:printN], v)
 	case types.T_uint8:
-		return vec2Str(vector.MustTCols[uint8](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[uint8](v)[:printN], v)
 	case types.T_uint16:
-		return vec2Str(vector.MustTCols[uint16](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[uint16](v)[:printN], v)
 	case types.T_uint32:
-		return vec2Str(vector.MustTCols[uint32](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[uint32](v)[:printN], v)
 	case types.T_uint64:
-		return vec2Str(vector.MustTCols[uint64](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[uint64](v)[:printN], v)
 	case types.T_float32:
-		return vec2Str(vector.MustTCols[float32](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[float32](v)[:printN], v)
 	case types.T_float64:
-		return vec2Str(vector.MustTCols[float64](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[float64](v)[:printN], v)
 	case types.T_date:
-		return vec2Str(vector.MustTCols[types.Date](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[types.Date](v)[:printN], v)
 	case types.T_datetime:
-		return vec2Str(vector.MustTCols[types.Datetime](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[types.Datetime](v)[:printN], v)
 	case types.T_time:
-		return vec2Str(vector.MustTCols[types.Time](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[types.Time](v)[:printN], v)
 	case types.T_timestamp:
-		return vec2Str(vector.MustTCols[types.Timestamp](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[types.Timestamp](v)[:printN], v)
 	case types.T_decimal64:
-		return vec2Str(vector.MustTCols[types.Decimal64](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[types.Decimal64](v)[:printN], v)
 	case types.T_decimal128:
-		return vec2Str(vector.MustTCols[types.Decimal128](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[types.Decimal128](v)[:printN], v)
 	case types.T_uuid:
-		return vec2Str(vector.MustTCols[types.Uuid](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[types.Uuid](v)[:printN], v)
 	case types.T_TS:
-		return vec2Str(vector.MustTCols[types.TS](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[types.TS](v)[:printN], v)
 	case types.T_Rowid:
-		return vec2Str(vector.MustTCols[types.Rowid](v)[:printN], v)
+		return vec2Str(vector.MustFixedCol[types.Rowid](v)[:printN], v)
 	}
-	if v.Typ.IsVarlen() {
-		return vec2Str(vector.MustBytesCols(v)[:printN], v)
+	if v.GetType().IsVarlen() {
+		return vec2Str(vector.MustBytesCol(v)[:printN], v)
 	}
-	return fmt.Sprintf("unkown type vec... %v", v.Typ)
+	return fmt.Sprintf("unkown type vec... %v", *v.GetType())
 }
 
 func debugMoBatch(moBat *batch.Batch) string {

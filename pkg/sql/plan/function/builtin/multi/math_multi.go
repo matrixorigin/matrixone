@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -31,37 +30,39 @@ type mathMultiT interface {
 
 type mathMultiFun[T mathMultiT] func([]T, []T, int64) []T
 
-func generalMathMulti[T mathMultiT](funName string, vecs []*vector.Vector, proc *process.Process, cb mathMultiFun[T]) (*vector.Vector, error) {
-	typ := vecs[0].Typ.Oid.ToType()
+func generalMathMulti[T mathMultiT](funName string, ivecs []*vector.Vector, proc *process.Process, cb mathMultiFun[T]) (*vector.Vector, error) {
+	rtyp := ivecs[0].GetType()
 	digits := int64(0)
-	if len(vecs) > 1 {
-		// if vecs[1].IsScalarNull() {
+	if len(ivecs) > 1 {
+		// if vecs[1].IsConstNull() {
 		// 	return proc.AllocScalarNullVector(typ), nil
 		// }
-		if !vecs[1].IsScalar() || vecs[1].Typ.Oid != types.T_int64 {
+		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
 			return nil, moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funName), "not const")
 		}
-		digits = vecs[1].Col.([]int64)[0]
+		digits = vector.MustFixedCol[int64](ivecs[1])[0]
 	}
-	vs := vector.MustTCols[T](vecs[0])
-	if vecs[0].IsScalarNull() {
-		return proc.AllocScalarNullVector(typ), nil
-	}
+	vs := vector.MustFixedCol[T](ivecs[0])
+	if ivecs[0].IsConst() {
+		if ivecs[0].IsConstNull() {
+			return vector.NewConstNull(*rtyp, ivecs[0].Length(), proc.Mp()), nil
+		}
 
-	if vecs[0].IsScalar() {
-		rs := make([]T, 1)
-		ret_rs := cb(vs, rs, digits)
-
-		vec := vector.NewConstFixed(typ, 1, ret_rs[0], proc.Mp())
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		return vec, nil
+		var rs [1]T
+		ret_rs := cb(vs, rs[:], digits)
+		return vector.NewConstFixed(*rtyp, ret_rs[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		rs := make([]T, len(vs))
-		ret_rs := cb(vs, rs, digits)
+		rvec, err := proc.AllocVectorOfRows(*rtyp, len(vs), ivecs[0].GetNulls())
+		if err != nil {
+			return nil, err
+		}
 
-		vec := vector.NewWithFixed(typ, ret_rs, nulls.NewWithSize(len(ret_rs)), proc.Mp())
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
+		rs := vector.MustFixedCol[T](rvec)
+		new_rs := cb(vs, rs, digits)
+		if &new_rs[0] == &vs[0] {
+			copy(rs, vs)
+		}
 
-		return vec, nil
+		return rvec, nil
 	}
 }

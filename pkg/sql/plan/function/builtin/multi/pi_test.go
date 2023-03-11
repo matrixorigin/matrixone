@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -28,8 +29,9 @@ func Test_Pi(t *testing.T) {
 	convey.Convey("Test Pi function succ", t, func() {
 		vec, err := Pi(nil, nil)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(vec.Nsp.Np, convey.ShouldBeNil)
-		data, ok := vec.Col.([]float64)
+		convey.So(vec.GetNulls().Np, convey.ShouldBeNil)
+		data := vector.MustFixedCol[float64](vec)
+		ok := (data != nil)
 		if !ok {
 			log.Fatal(moerr.NewInternalError(context.TODO(), "the Pi function return value type is not []float64"))
 		}
