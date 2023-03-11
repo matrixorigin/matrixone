@@ -123,8 +123,8 @@ func TestS3FS(t *testing.T) {
 		assert.Nil(t, err)
 		ctx := context.Background()
 		var counter, counter2 Counter
-		ctx = WithCounter(ctx, &counter)
-		ctx = WithCounter(ctx, &counter2)
+		ctx = WithCounter(ctx, "FSCounter", &counter)
+		ctx = WithCounter(ctx, "FSCounter", &counter2)
 		entries, err := fs.List(ctx, "")
 		assert.Nil(t, err)
 		assert.True(t, len(entries) > 0)
