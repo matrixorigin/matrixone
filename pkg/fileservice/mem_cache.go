@@ -18,15 +18,20 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"sync/atomic"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/clockpolicy"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/lrupolicy"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"sync/atomic"
 )
 
 type MemCache struct {
-	lru   *LRU
-	stats *CacheStats
-	ch    chan func()
+	policy memcachepolicy.Policy
+	stats  *CacheStats
+	ch     chan func()
 }
 
-func NewMemCache(capacity int64) *MemCache {
+func NewMemCache(opts ...Options) *MemCache {
 	ch := make(chan func(), 65536)
 	go func() {
 		for fn := range ch {
@@ -34,16 +39,43 @@ func NewMemCache(capacity int64) *MemCache {
 		}
 	}()
 
+	initOpts := defaultOptions()
+	for _, optFunc := range opts {
+		optFunc(&initOpts)
+	}
+
 	mc := &MemCache{
-		lru:   NewLRU(capacity),
-		stats: new(CacheStats),
-		ch:    ch,
+		policy: initOpts.policy,
+		stats:  new(CacheStats),
+		ch:     ch,
 	}
 
 	mcStatsCollector := NewMemCacheStatsCollector(mc, "MemCache")
 	metric.RegisterDevMetric(mcStatsCollector)
 
 	return mc
+}
+
+func WithLRU(capacity int64) Options {
+	return func(o *options) {
+		o.policy = lrupolicy.New(capacity)
+	}
+}
+
+func WithClock(capacity int64) Options {
+	return func(o *options) {
+		o.policy = clockpolicy.New(capacity)
+	}
+}
+
+type Options func(*options)
+
+type options struct {
+	policy memcachepolicy.Policy
+}
+
+func defaultOptions() options {
+	return options{}
 }
 
 var _ Cache = new(MemCache)
@@ -77,7 +109,7 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		obj, size, ok := m.lru.Get(key)
+		obj, size, ok := m.policy.Get(key)
 		updateCounters(ctx, func(c *Counter) {
 			atomic.AddInt64(&c.MemCacheRead, 1)
 		})
@@ -118,17 +150,17 @@ func (m *MemCache) Update(
 			obj := entry.Object // copy from loop variable
 			objSize := entry.ObjectSize
 			m.ch <- func() {
-				m.lru.Set(key, obj, objSize)
+				m.policy.Set(key, obj, objSize)
 			}
 		} else {
-			m.lru.Set(key, entry.Object, entry.ObjectSize)
+			m.policy.Set(key, entry.Object, entry.ObjectSize)
 		}
 	}
 	return nil
 }
 
 func (m *MemCache) Flush() {
-	m.lru.Flush()
+	m.policy.Flush()
 }
 
 func (m *MemCache) CacheStats() *CacheStats {
