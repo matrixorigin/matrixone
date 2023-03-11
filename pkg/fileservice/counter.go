@@ -14,7 +14,9 @@
 
 package fileservice
 
-import "context"
+import (
+	"context"
+)
 
 type Counter struct {
 	S3ListObjects   int64
@@ -24,6 +26,8 @@ type Counter struct {
 	S3DeleteObjects int64
 	S3DeleteObject  int64
 
+	CacheRead     int64
+	CacheHit      int64
 	MemCacheRead  int64
 	MemCacheHit   int64
 	DiskCacheRead int64
@@ -34,13 +38,26 @@ type ctxKeyCounters struct{}
 
 var CtxKeyCounters = ctxKeyCounters{}
 
-func updateCounters(ctx context.Context, fn func(*Counter)) {
+type Counters = map[*Counter]struct{}
+
+func updateCounters(ctx context.Context, fn func(*Counter), extraCounters ...*Counter) {
 	v := ctx.Value(CtxKeyCounters)
-	if v == nil {
-		return
+	var counters Counters
+	if v != nil {
+		counters = v.(Counters)
+		for counter := range counters {
+			fn(counter)
+		}
 	}
-	counters := v.([]*Counter)
-	for _, counter := range counters {
+	for _, counter := range extraCounters {
+		if counter == nil {
+			continue
+		}
+		if counters != nil {
+			if _, ok := counters[counter]; ok {
+				continue
+			}
+		}
 		fn(counter)
 	}
 }
@@ -49,11 +66,15 @@ func WithCounter(ctx context.Context, counter *Counter) context.Context {
 	// check existed
 	v := ctx.Value(CtxKeyCounters)
 	if v == nil {
-		return context.WithValue(ctx, CtxKeyCounters, []*Counter{counter})
+		return context.WithValue(ctx, CtxKeyCounters, Counters{
+			counter: struct{}{},
+		})
 	}
-	counters := v.([]*Counter)
-	newCounters := make([]*Counter, len(counters), len(counters)+1)
-	copy(newCounters, counters)
-	newCounters = append(newCounters, counter)
+	counters := v.(Counters)
+	newCounters := make(Counters, len(counters)+1)
+	for counter := range counters {
+		newCounters[counter] = struct{}{}
+	}
+	newCounters[counter] = struct{}{}
 	return context.WithValue(ctx, CtxKeyCounters, newCounters)
 }

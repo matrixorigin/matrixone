@@ -51,6 +51,7 @@ type S3FS struct {
 	bucket    string
 	keyPrefix string
 
+	counter     *Counter
 	memCache    *MemCache
 	diskCache   *DiskCache
 	asyncUpdate bool
@@ -141,7 +142,10 @@ func (s *S3FS) initCaches(
 		memCacheCapacity = 512 << 20
 	}
 	if memCacheCapacity > 0 {
-		s.memCache = NewMemCache(WithLRU(memCacheCapacity))
+		s.memCache = NewMemCache(
+			WithLRU(memCacheCapacity),
+			WithCacheCounter(s.counter),
+		)
 		logutil.Info("fileservice: mem cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", memCacheCapacity))
 	}
 
@@ -151,7 +155,11 @@ func (s *S3FS) initCaches(
 	}
 	if diskCacheCapacity > 0 && diskCachePath != "" {
 		var err error
-		s.diskCache, err = NewDiskCache(diskCachePath, diskCacheCapacity)
+		s.diskCache, err = NewDiskCache(
+			diskCachePath,
+			diskCacheCapacity,
+			s.counter,
+		)
 		if err != nil {
 			return err
 		}
@@ -762,14 +770,8 @@ func (s *S3FS) SetAsyncUpdate(b bool) {
 	s.asyncUpdate = b
 }
 
-func (s *S3FS) CacheStats() *CacheStats {
-	if s.memCache != nil {
-		return s.memCache.CacheStats()
-	}
-	if s.diskCache != nil {
-		return s.diskCache.CacheStats()
-	}
-	return nil
+func (s *S3FS) CacheCounter() *Counter {
+	return s.counter
 }
 
 func newS3FS(arguments []string) (*S3FS, error) {
@@ -973,6 +975,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		bucket:      bucket,
 		keyPrefix:   prefix,
 		asyncUpdate: true,
+		counter:     new(Counter),
 	}
 
 	return fs, nil
@@ -983,7 +986,7 @@ func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsV2Input,
 	FSProfileHandler.AddSample()
 	updateCounters(ctx, func(counter *Counter) {
 		atomic.AddInt64(&counter.S3ListObjects, 1)
-	})
+	}, s.counter)
 	return s.s3Client.ListObjectsV2(ctx, params, optFns...)
 }
 
@@ -991,7 +994,7 @@ func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, opt
 	FSProfileHandler.AddSample()
 	updateCounters(ctx, func(counter *Counter) {
 		atomic.AddInt64(&counter.S3HeadObject, 1)
-	})
+	}, s.counter)
 	return s.s3Client.HeadObject(ctx, params, optFns...)
 }
 
@@ -999,7 +1002,7 @@ func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFn
 	FSProfileHandler.AddSample()
 	updateCounters(ctx, func(counter *Counter) {
 		atomic.AddInt64(&counter.S3PutObject, 1)
-	})
+	}, s.counter)
 	return s.s3Client.PutObject(ctx, params, optFns...)
 }
 
@@ -1007,7 +1010,7 @@ func (s *S3FS) s3GetObject(ctx context.Context, params *s3.GetObjectInput, optFn
 	FSProfileHandler.AddSample()
 	updateCounters(ctx, func(counter *Counter) {
 		atomic.AddInt64(&counter.S3GetObject, 1)
-	})
+	}, s.counter)
 	return s.s3Client.GetObject(ctx, params, optFns...)
 }
 
@@ -1015,7 +1018,7 @@ func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInpu
 	FSProfileHandler.AddSample()
 	updateCounters(ctx, func(counter *Counter) {
 		atomic.AddInt64(&counter.S3DeleteObjects, 1)
-	})
+	}, s.counter)
 	return s.s3Client.DeleteObjects(ctx, params, optFns...)
 }
 
@@ -1023,6 +1026,6 @@ func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput,
 	FSProfileHandler.AddSample()
 	updateCounters(ctx, func(counter *Counter) {
 		atomic.AddInt64(&counter.S3DeleteObject, 1)
-	})
+	}, s.counter)
 	return s.s3Client.DeleteObject(ctx, params, optFns...)
 }

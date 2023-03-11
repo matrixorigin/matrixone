@@ -34,11 +34,15 @@ import (
 type DiskCache struct {
 	capacity   int64
 	path       string
-	stats      *CacheStats
 	fileExists sync.Map
+	counter    *Counter
 }
 
-func NewDiskCache(path string, capacity int64) (*DiskCache, error) {
+func NewDiskCache(
+	path string,
+	capacity int64,
+	counter *Counter,
+) (*DiskCache, error) {
 	err := os.MkdirAll(path, 0755)
 	if err != nil {
 		return nil, err
@@ -46,7 +50,7 @@ func NewDiskCache(path string, capacity int64) (*DiskCache, error) {
 	return &DiskCache{
 		capacity: capacity,
 		path:     path,
-		stats:    new(CacheStats),
+		counter:  counter,
 	}, nil
 }
 
@@ -61,12 +65,14 @@ func (d *DiskCache) Read(
 	_, span := trace.Start(ctx, "DiskCache.Read")
 	defer span.End()
 
-	numHit := 0
+	var numHit, numRead int64
 	defer func() {
-		if d.stats != nil {
-			atomic.AddInt64(&d.stats.NumRead, int64(len(vector.Entries)))
-			atomic.AddInt64(&d.stats.NumHit, int64(numHit))
-		}
+		updateCounters(ctx, func(c *Counter) {
+			atomic.AddInt64(&c.CacheRead, numRead)
+			atomic.AddInt64(&c.CacheHit, numHit)
+			atomic.AddInt64(&c.DiskCacheRead, numRead)
+			atomic.AddInt64(&c.DiskCacheHit, numHit)
+		}, d.counter)
 	}()
 
 	for i, entry := range vector.Entries {
@@ -78,9 +84,7 @@ func (d *DiskCache) Read(
 			continue
 		}
 
-		updateCounters(ctx, func(c *Counter) {
-			atomic.AddInt64(&c.DiskCacheRead, 1)
-		})
+		numRead++
 
 		linkPath := d.entryLinkPath(vector, entry)
 		file, err := os.Open(linkPath)
@@ -118,9 +122,6 @@ func (d *DiskCache) Read(
 		vector.Entries[i] = entry
 		numHit++
 		d.cacheHit()
-		updateCounters(ctx, func(c *Counter) {
-			atomic.AddInt64(&c.DiskCacheHit, 1)
-		})
 	}
 
 	return nil
@@ -197,10 +198,6 @@ func (d *DiskCache) Update(
 
 func (d *DiskCache) Flush() {
 	//TODO
-}
-
-func (d *DiskCache) CacheStats() *CacheStats {
-	return d.stats
 }
 
 func (d *DiskCache) entryLinkPath(vector *IOVector, entry IOEntry) string {
