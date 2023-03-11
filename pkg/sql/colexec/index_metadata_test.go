@@ -64,19 +64,19 @@ func TestDeleteIndexMetadata(t *testing.T) {
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.New(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.New(types.T_uint64.ToType())
-		err := bat.GetVector(0).Append(types.Rowid([16]byte{}), false, testutil.TestUtilMp)
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([16]byte{}), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
 
-		err = bat.GetVector(1).Append(uint64(272464), false, testutil.TestUtilMp)
+		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
 
-		bat.SetZs(vector.Length(bat.Vecs[1]), proc.Mp())
+		bat.SetZs(bat.GetVector(1).Length(), proc.Mp())
 		return bat, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
@@ -153,25 +153,23 @@ func TestDeleteOneIndexMetadata(t *testing.T) {
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.New(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.New(types.T_uint64.ToType())
-		bat.Vecs[2] = vector.New(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 
-		err := bat.GetVector(0).Append(types.Rowid([16]byte{}), false, testutil.TestUtilMp)
+		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([16]byte{}), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
-
-		err = bat.GetVector(1).Append(uint64(272464), false, testutil.TestUtilMp)
+		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
-
-		err = bat.GetVector(2).Append([]byte("empno"), false, testutil.TestUtilMp)
+		vector.AppendBytes(bat.GetVector(2), []byte("empno"), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
-		bat.SetZs(vector.Length(bat.Vecs[1]), proc.Mp())
+		bat.SetZs(bat.GetVector(1).Length(), proc.Mp())
 		return bat, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
@@ -252,25 +250,25 @@ func TestInsertIndexMetadata(t *testing.T) {
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
 		bat := batch.NewWithSize(3)
 		//bat.Zs = []int64{1}
-		bat.Vecs[0] = vector.New(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.New(types.T_uint64.ToType())
-		bat.Vecs[2] = vector.New(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 
-		err := bat.GetVector(0).Append(types.Rowid([16]byte{}), false, testutil.TestUtilMp)
+		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([16]byte{}), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
 
-		err = bat.GetVector(1).Append(uint64(272464), false, testutil.TestUtilMp)
+		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
 
-		err = bat.GetVector(2).Append([]byte("empno"), false, testutil.TestUtilMp)
+		err = vector.AppendBytes(bat.GetVector(2), []byte("empno"), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
-		bat.SetZs(vector.Length(bat.Vecs[1]), proc.Mp())
+		bat.SetZs(bat.GetVector(1).Length(), proc.Mp())
 		return bat, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
@@ -355,26 +353,25 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
 		bat := batch.NewWithSize(3)
-		//bat.Zs = []int64{1}
-		bat.Vecs[0] = vector.New(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.New(types.T_uint64.ToType())
-		bat.Vecs[2] = vector.New(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 
-		err := bat.GetVector(0).Append(types.Rowid([16]byte{}), false, testutil.TestUtilMp)
+		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([16]byte{}), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
 
-		err = bat.GetVector(1).Append(uint64(272464), false, testutil.TestUtilMp)
+		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
 
-		err = bat.GetVector(2).Append([]byte("empno"), false, testutil.TestUtilMp)
+		err = vector.AppendBytes(bat.GetVector(2), []byte("empno"), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
-		bat.SetZs(vector.Length(bat.Vecs[1]), proc.Mp())
+		bat.SetZs(bat.GetVector(1).Length(), proc.Mp())
 		return bat, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
@@ -384,9 +381,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	//---------------------------------------------------------------------------------------------------------------------------
 
 	mock_emp_Relation := mock_frontend.NewMockRelation(ctrl)
-	//mockRelation.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	mock_emp_Relation.EXPECT().TableDefs(gomock.Any()).Return(buildMockTableDefs(mock_emp_table), nil).AnyTimes()
-	//mockRelation.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 	mock_emp_Relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(272464)).AnyTimes()
 
 	mock_db1_database := mock_frontend.NewMockDatabase(ctrl)

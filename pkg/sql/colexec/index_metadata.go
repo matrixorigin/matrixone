@@ -281,37 +281,37 @@ func buildInsertIndexMetaBatch(tableId uint64, ct *engine.ConstraintDef, eg engi
 	bat.Attrs[9] = MO_INDEX_OPTIONS
 	bat.Attrs[10] = MO_INDEX_TABLE_NAME
 
-	vec_id := vector.New(MO_INDEX_COLTYPE[MO_INDEX_ID].ToType())
+	vec_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ID].ToType())
 	bat.Vecs[0] = vec_id
 
-	vec_table_id := vector.New(MO_INDEX_COLTYPE[MO_INDEX_TABLE_ID].ToType())
+	vec_table_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TABLE_ID].ToType())
 	bat.Vecs[1] = vec_table_id
 
-	vec_name := vector.New(MO_INDEX_COLTYPE[MO_INDEX_NAME].ToType())
+	vec_name := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_NAME].ToType())
 	bat.Vecs[2] = vec_name
 
-	vec_type := vector.New(MO_INDEX_COLTYPE[MO_INDEX_TYPE].ToType())
+	vec_type := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TYPE].ToType())
 	bat.Vecs[3] = vec_type
 
-	vec_visible := vector.New(MO_INDEX_COLTYPE[MO_INDEX_IS_VISIBLE].ToType())
+	vec_visible := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_IS_VISIBLE].ToType())
 	bat.Vecs[4] = vec_visible
 
-	vec_hidden := vector.New(MO_INDEX_COLTYPE[MO_INDEX_HIDDEN].ToType())
+	vec_hidden := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_HIDDEN].ToType())
 	bat.Vecs[5] = vec_hidden
 
-	vec_comment := vector.New(MO_INDEX_COLTYPE[MO_INDEX_COMMENT].ToType())
+	vec_comment := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_COMMENT].ToType())
 	bat.Vecs[6] = vec_comment
 
-	vec_column_name := vector.New(MO_INDEX_COLTYPE[MO_INDEX_COLUMN_NAME].ToType())
+	vec_column_name := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_COLUMN_NAME].ToType())
 	bat.Vecs[7] = vec_column_name
 
-	vec_ordinal_position := vector.New(MO_INDEX_COLTYPE[MO_INDEX_ORDINAL_POSITION].ToType())
+	vec_ordinal_position := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ORDINAL_POSITION].ToType())
 	bat.Vecs[8] = vec_ordinal_position
 
-	vec_options := vector.New(MO_INDEX_COLTYPE[MO_INDEX_OPTIONS].ToType())
+	vec_options := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_OPTIONS].ToType())
 	bat.Vecs[9] = vec_options
 
-	vec_index_table := vector.New(MO_INDEX_COLTYPE[MO_INDEX_TABLE_NAME].ToType())
+	vec_index_table := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TABLE_NAME].ToType())
 	bat.Vecs[10] = vec_index_table
 
 	for _, constraint := range ct.Cts {
@@ -324,54 +324,54 @@ func buildInsertIndexMetaBatch(tableId uint64, ct *engine.ConstraintDef, eg engi
 				}
 
 				for i, part := range index.Parts {
-					err = vec_id.Append(indexId, false, proc.Mp())
+					err = vector.AppendFixed(vec_id, indexId, false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
-					err = vec_table_id.Append(tableId, false, proc.Mp())
+					err = vector.AppendFixed(vec_table_id, tableId, false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
-					err = vec_name.Append([]byte(index.IndexName), false, proc.Mp())
+					err = vector.AppendBytes(vec_name, []byte(index.IndexName), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
 					if index.Unique {
-						err = vec_type.Append([]byte(INDEX_TYPE_UNIQUE), false, proc.Mp())
+						err = vector.AppendBytes(vec_type, []byte(INDEX_TYPE_UNIQUE), false, proc.Mp())
 					} else {
-						err = vec_type.Append([]byte(INDEX_TYPE_MULTIPLE), false, proc.Mp())
+						err = vector.AppendBytes(vec_type, []byte(INDEX_TYPE_MULTIPLE), false, proc.Mp())
 					}
 					if err != nil {
 						return nil, err
 					}
-					err = vec_visible.Append(int8(1), false, proc.Mp())
+					err = vector.AppendFixed(vec_visible, int8(1), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
-					err = vec_hidden.Append(int8(0), false, proc.Mp())
+					err = vector.AppendFixed(vec_hidden, int8(0), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
-					err = vec_comment.Append([]byte(index.Comment), false, proc.Mp())
+					err = vector.AppendBytes(vec_comment, []byte(index.Comment), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
-					err = vec_column_name.Append([]byte(part), false, proc.Mp())
+					err = vector.AppendBytes(vec_column_name, []byte(part), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
-					vec_ordinal_position.Append(uint32(i+1), false, proc.Mp())
+					err = vector.AppendFixed(vec_ordinal_position, uint32(i+1), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
-					err = vec_options.Append([]byte(""), true, proc.Mp())
+					err = vector.AppendBytes(vec_options, []byte(""), true, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
 					if index.TableExist {
-						err = vec_index_table.Append([]byte(index.IndexTableName), false, proc.Mp())
+						err = vector.AppendBytes(vec_index_table, []byte(index.IndexTableName), false, proc.Mp())
 					} else {
-						err = vec_index_table.Append([]byte(""), true, proc.Mp())
+						err = vector.AppendBytes(vec_index_table, []byte(""), true, proc.Mp())
 					}
 					if err != nil {
 						return nil, err
@@ -384,54 +384,54 @@ func buildInsertIndexMetaBatch(tableId uint64, ct *engine.ConstraintDef, eg engi
 				return nil, err
 			}
 			for i, colName := range def.Pkey.Names {
-				err = vec_id.Append(indexId, false, proc.Mp())
+				err = vector.AppendFixed(vec_id, indexId, false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-				err = vec_table_id.Append(tableId, false, proc.Mp())
+				err = vector.AppendFixed(vec_table_id, tableId, false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-				err = vec_name.Append([]byte("PRIMARY"), false, proc.Mp())
+				err = vector.AppendBytes(vec_name, []byte("PRIMARY"), false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-				err = vec_type.Append([]byte(INDEX_TYPE_PRIMARY), false, proc.Mp())
+				err = vector.AppendBytes(vec_type, []byte(INDEX_TYPE_PRIMARY), false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-				err = vec_visible.Append(int8(1), false, proc.Mp())
+				err = vector.AppendFixed(vec_visible, int8(1), false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-				err = vec_hidden.Append(int8(0), false, proc.Mp())
+				err = vector.AppendFixed(vec_hidden, int8(0), false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-				err = vec_comment.Append([]byte(""), false, proc.Mp())
+				err = vector.AppendBytes(vec_comment, []byte(""), false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-				err = vec_column_name.Append([]byte(colName), false, proc.Mp())
+				err = vector.AppendBytes(vec_column_name, []byte(colName), false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-				vec_ordinal_position.Append(uint32(i+1), false, proc.Mp())
+				err = vector.AppendFixed(vec_ordinal_position, uint32(i+1), false, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-				err = vec_options.Append([]byte(""), true, proc.Mp())
+				err = vector.AppendBytes(vec_options, []byte(""), true, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-				err = vec_index_table.Append([]byte(""), true, proc.Mp())
+				err = vector.AppendBytes(vec_index_table, []byte(""), true, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
 			}
 		}
 	}
-	bat.SetZs(vector.Length(bat.Vecs[0]), proc.Mp())
+	bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	return bat, nil
 }
 
@@ -457,7 +457,7 @@ func buildDeleteIndexBatch(tableId uint64, rel engine.Relation, ctx context.Cont
 	}
 
 	retbat := batch.NewWithSize(1)
-	vec_rowid := vector.New(types.T_Rowid.ToType())
+	vec_rowid := vector.NewVec(types.T_Rowid.ToType())
 	retbat.Vecs[0] = vec_rowid
 	for len(rds) > 0 {
 		bat, err := rds[0].Read(ctx, []string{catalog.Row_ID, MO_INDEX_TABLE_ID}, nil, proc.Mp())
@@ -474,11 +474,11 @@ func buildDeleteIndexBatch(tableId uint64, rel engine.Relation, ctx context.Cont
 			panic(moerr.NewInternalError(ctx, "drop all indexes of a table must return two columns batch of 'mo_indexes'"))
 		}
 		var rowIdx int64
-		tableIdCols := vector.MustTCols[uint64](bat.Vecs[1])
+		tableIdCols := vector.MustFixedCol[uint64](bat.Vecs[1])
 		for rowIdx = 0; rowIdx < int64(bat.Length()); rowIdx++ {
 			if tableIdCols[rowIdx] == tableId {
-				rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIdx]
-				if err = retbat.Vecs[0].Append(rowid, false, proc.Mp()); err != nil {
+				rowid := vector.MustFixedCol[types.Rowid](bat.GetVector(0))[rowIdx]
+				if err = vector.AppendFixed(retbat.GetVector(0), rowid, false, proc.Mp()); err != nil {
 					panic(moerr.NewInternalError(ctx, err.Error()))
 				}
 			}
@@ -487,7 +487,7 @@ func buildDeleteIndexBatch(tableId uint64, rel engine.Relation, ctx context.Cont
 		rds[0].Close()
 		rds = rds[1:]
 	}
-	retbat.SetZs(vector.Length(retbat.Vecs[0]), proc.Mp())
+	retbat.SetZs(retbat.GetVector(0).Length(), proc.Mp())
 	return retbat, nil
 }
 
@@ -512,7 +512,7 @@ func buildDeleteSingleIndexBatch(tableId uint64, indexName string, rel engine.Re
 	}
 
 	retbat := batch.NewWithSize(1)
-	vec_rowid := vector.New(types.T_Rowid.ToType())
+	vec_rowid := vector.NewVec(types.T_Rowid.ToType())
 	retbat.Vecs[0] = vec_rowid
 	for len(rds) > 0 {
 		bat, err := rds[0].Read(ctx, []string{catalog.Row_ID, MO_INDEX_TABLE_ID, MO_INDEX_NAME}, nil, proc.Mp())
@@ -529,12 +529,12 @@ func buildDeleteSingleIndexBatch(tableId uint64, indexName string, rel engine.Re
 			panic(moerr.NewInternalError(ctx, "drop a table index must return three columns batch of 'mo_indexes'"))
 		}
 		var rowIdx int64
-		tableIdCols := vector.MustTCols[uint64](bat.Vecs[1])
-		indexNameCols := vector.MustStrCols(bat.Vecs[2])
+		tableIdCols := vector.MustFixedCol[uint64](bat.Vecs[1])
+		indexNameCols := vector.MustStrCol(bat.Vecs[2])
 		for rowIdx = 0; rowIdx < int64(bat.Length()); rowIdx++ {
 			if tableIdCols[rowIdx] == tableId && indexNameCols[rowIdx] == indexName {
-				rowid := vector.MustTCols[types.Rowid](bat.GetVector(0))[rowIdx]
-				if err = retbat.Vecs[0].Append(rowid, false, proc.Mp()); err != nil {
+				rowid := vector.MustFixedCol[types.Rowid](bat.GetVector(0))[rowIdx]
+				if err = vector.AppendFixed(retbat.GetVector(0), rowid, false, proc.Mp()); err != nil {
 					panic(moerr.NewInternalError(ctx, err.Error()))
 				}
 			}
@@ -543,6 +543,6 @@ func buildDeleteSingleIndexBatch(tableId uint64, indexName string, rel engine.Re
 		rds[0].Close()
 		rds = rds[1:]
 	}
-	retbat.SetZs(vector.Length(retbat.Vecs[0]), proc.Mp())
+	retbat.SetZs(retbat.GetVector(0).Length(), proc.Mp())
 	return retbat, nil
 }

@@ -156,6 +156,7 @@ mysql
 use mo_catalog;
 show tables;
 Tables_in_mo_catalog
+mo_indexes
 mo_tables
 mo_user
 mo_role

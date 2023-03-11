@@ -5,7 +5,20 @@ create table t1(
                    loc varchar(50),
                    unique key(deptno)
 );
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't1');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't1';
 
 drop table if exists t2;
 create table t2(
@@ -19,7 +32,21 @@ create table t2(
                    deptno int unsigned,
                    primary key(empno)
 );
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't2');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't2';
+
 
 drop table if exists t3;
 create table t3(
@@ -33,7 +60,21 @@ create table t3(
                    deptno int unsigned,
                    unique key(empno, ename)
 );
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't3');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't3';
+
 
 drop table if exists t4;
 create table t4(
@@ -47,7 +88,21 @@ create table t4(
                    deptno int unsigned,
                    index(empno, ename, job)
 );
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't4');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't4';
+
 
 drop table if exists t5;
 create table t5(
@@ -61,7 +116,20 @@ create table t5(
                    deptno int unsigned,
                    primary key(empno, ename)
 );
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't5');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't5';
 
 drop table if exists t6;
 create table t6(
@@ -74,7 +142,20 @@ create table t6(
                    comm decimal(7,2),
                    deptno int unsigned
 );
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't6');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't6';
 
 
 drop table if exists t7;
@@ -90,7 +171,21 @@ create table t7(
                    unique index(col1,col2),
                    unique index(col3,col6)
 );
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't7');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't7';
+
 
 drop table if exists t8;
 create table t8(
@@ -104,7 +199,20 @@ create table t8(
                    deptno int unsigned,
                    unique key(empno, ename)
 );
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't8');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't8';
 
 
 drop table if exists t9;
@@ -113,9 +221,35 @@ insert into t9 values(1,"Abby", 24);
 insert into t9 values(2,"Bob", 25);
 insert into t9 values(3,"Carol", 23);
 insert into t9 values(4,"Dora", 29);
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't9');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't9';
 create unique index idx on t9(name);
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't9');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't9';
 select * from t9;
 drop table t9;
 
@@ -127,9 +261,35 @@ create table t10 (
                      col3 float,
                      col4 varchar(50)
 );
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't10');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't10';
 create unique index idx on t10(col2) comment 'create varchar index';
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't10');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't10';
 insert into t10 values(1,"Abby", 24,'zbcvdf');
 insert into t10 values(2,"Bob", 25,'zbcvdf');
 insert into t10 values(3,"Carol", 23,'zbcvdf');
@@ -139,22 +299,100 @@ drop table t10;
 
 drop table if exists t11;
 create table t11(a int, b int,c varchar(20));
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't11');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't11';
 create index x11 ON t11(a) comment 'xxxxxxx';
 create index x12 ON t11(b, c) comment 'yyyyyyyyy';
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't11');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't11';
 drop index x11 on t11;
 drop index x12 on t11;
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't11');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't11';
 drop table t11;
 
 drop table if exists t12;
 create table t12(a int, b int,c varchar(20), primary key(a));
 create index idx_1 on t12(a, b) comment 'xxxxxxx';
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't12');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't12';
 create index idx_1 on t12(a, b);
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't12');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't12';
 drop index idx_1 on t12;
-select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 't12');
+select
+    `idx`.`name`,
+    `idx`.`type`,
+    `idx`.`name`,
+    `idx`.`is_visible`,
+    `idx`.`hidden`,
+    `idx`.`comment`,
+    `tbl`.`relname`,
+    `idx`.`column_name`,
+    `idx`.`ordinal_position`,
+    `idx`.`options`
+from
+    `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
+where  `tbl`.`relname` = 't12';
 drop index idx_1 on t12;
 drop table t12;
