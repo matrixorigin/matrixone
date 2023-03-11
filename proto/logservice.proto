@@ -55,6 +55,8 @@ message DNStore {
 
   // Server address for logtail push model
   string LogtailServerAddress = 6;
+  // LockServiceAddress lock service address for lock table allocator
+  string LockServiceAddress = 7;
 }
 
 message LogStore {
@@ -151,6 +153,8 @@ message DNStoreHeartbeat {
 
   // Server address for logtail push model
   string LogtailServerAddress = 5;
+  // LockServiceAddress lock service address for lock table allocator
+  string LockServiceAddress = 6;
 };
 
 message RSMState {
@@ -415,6 +419,8 @@ message DNStoreInfo {
 
   // Server address for logtail push model
   string LogtailServerAddress = 5;
+  // LockServiceAddress lock service address for lock table allocator
+  string LockServiceAddress = 6;
 }
 
 // DNState contains all DN details known to the HAKeeper.

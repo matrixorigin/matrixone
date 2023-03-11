@@ -239,6 +239,7 @@ func newDNService(dn logpb.DNStore) metadata.DNService {
 		ServiceID:             dn.UUID,
 		TxnServiceAddress:     dn.ServiceAddress,
 		LogTailServiceAddress: dn.LogtailServerAddress,
+		LockServiceAddress:    dn.LockServiceAddress,
 	}
 	v.Shards = make([]metadata.DNShard, 0, len(dn.Shards))
 	for _, s := range dn.Shards {

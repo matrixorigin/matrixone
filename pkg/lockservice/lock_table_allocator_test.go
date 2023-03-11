@@ -15,17 +15,21 @@
 package lockservice
 
 import (
-	"context"
 	"fmt"
+	"os"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"golang.org/x/exp/rand"
 )
@@ -34,7 +38,7 @@ func TestGetWithNoBind(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(_ Client, a *lockTableAllocator) {
+		func(a *lockTableAllocator) {
 			assert.Equal(t,
 				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, Version: 1},
 				a.Get("s1", 1))
@@ -45,7 +49,7 @@ func TestGetWithBinded(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(_ Client, a *lockTableAllocator) {
+		func(a *lockTableAllocator) {
 			// register s1 first
 			a.Get("s1", 1)
 			assert.Equal(t,
@@ -58,7 +62,7 @@ func TestGetWithBindInvalid(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(_ Client, a *lockTableAllocator) {
+		func(a *lockTableAllocator) {
 			// register s1 first
 			a.Get("s1", 1)
 			a.disableTableBinds(a.getServiceBinds("s1"))
@@ -72,7 +76,7 @@ func TestGetWithBindAndServiceBothInvalid(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(_ Client, a *lockTableAllocator) {
+		func(a *lockTableAllocator) {
 			// invalid table 1 bind
 			a.Get("s1", 1)
 			a.disableTableBinds(a.getServiceBinds("s1"))
@@ -91,7 +95,7 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Millisecond,
-		func(_ Client, a *lockTableAllocator) {
+		func(a *lockTableAllocator) {
 			a.Get("s1", 1)
 			time.Sleep(time.Millisecond * 10)
 			binds := a.getServiceBinds("s1")
@@ -111,9 +115,15 @@ func TestKeepaliveBind(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		interval,
-		func(c Client, a *lockTableAllocator) {
+		func(a *lockTableAllocator) {
+			c, err := NewClient(morpc.Config{})
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, err)
+			}()
+
 			a.Get("s1", 1)
-			k := NewLockTableKeeper("s1", c, interval/5)
+			k := NewLockTableKeeper("s1", c, interval/5, interval/5, &sync.Map{})
 
 			binds := a.getServiceBinds("s1")
 			assert.NotNil(t, binds)
@@ -123,13 +133,13 @@ func TestKeepaliveBind(t *testing.T) {
 			assert.NotNil(t, binds)
 
 			assert.NoError(t, k.Close())
-			time.Sleep(interval * 2)
+			time.Sleep(interval * 10)
 			a.mu.Lock()
 			assert.Equal(t,
 				pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, Valid: false},
 				a.mu.lockTables[1])
 			a.mu.Unlock()
-			assert.False(t, a.Keepalive("s1"))
+			assert.False(t, a.KeepLockTableBind("s1"))
 		})
 }
 
@@ -137,7 +147,7 @@ func TestValid(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(_ Client, a *lockTableAllocator) {
+		func(a *lockTableAllocator) {
 			b := a.Get("s1", 1)
 			assert.True(t, a.Valid([]pb.LockTable{b}))
 		})
@@ -147,7 +157,7 @@ func TestValidWithServiceInvalid(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(_ Client, a *lockTableAllocator) {
+		func(a *lockTableAllocator) {
 			b := a.Get("s1", 1)
 			b.ServiceID = "s2"
 			assert.False(t, a.Valid([]pb.LockTable{b}))
@@ -158,7 +168,7 @@ func TestValidWithVersionChanged(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
-		func(_ Client, a *lockTableAllocator) {
+		func(a *lockTableAllocator) {
 			b := a.Get("s1", 1)
 			b.Version++
 			assert.False(t, a.Valid([]pb.LockTable{b}))
@@ -183,7 +193,7 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 			runtime.WithClock(clock.NewHLCClock(func() int64 {
 				return time.Now().UTC().UnixNano()
 			}, 0))))
-		a := NewLockTableAllocator(time.Hour)
+		a := NewLockTableAllocator(testSockets, time.Hour, morpc.Config{})
 		defer func() {
 			assert.NoError(b, a.Close())
 		}()
@@ -209,28 +219,30 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 func runLockTableAllocatorTest(
 	t *testing.T,
 	timeout time.Duration,
-	fn func(Client, *lockTableAllocator)) {
+	fn func(*lockTableAllocator)) {
+	require.NoError(t, os.RemoveAll(testSockets[7:]))
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	cluster := clusterservice.NewMOCluster(
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(
+			[]metadata.CNService{
+				{
+					ServiceID:          "s1",
+					LockServiceAddress: testSockets,
+				},
+			},
+			[]metadata.DNService{
+				{
+					LockServiceAddress: testSockets,
+				},
+			}))
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
-	runRPCTests(
-		t,
-		func(c Client, s Server) {
-			a := NewLockTableAllocator(timeout)
-			defer func() {
-				assert.NoError(t, a.Close())
-			}()
-			s.RegisterMethodHandler(
-				pb.Method_Keepalive,
-				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
-					r2.Keepalive.OK = a.Keepalive(r1.Keepalive.ServiceID)
-					return nil
-				})
-			s.RegisterMethodHandler(
-				pb.Method_GetBind,
-				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
-					r2.GetBind.LockTable = a.Get(r1.GetBind.ServiceID, r1.GetBind.Table)
-					return nil
-				})
-			fn(c, a.(*lockTableAllocator))
-		},
-	)
+	a := NewLockTableAllocator(testSockets, timeout, morpc.Config{})
+	defer func() {
+		assert.NoError(t, a.Close())
+	}()
+	fn(a.(*lockTableAllocator))
 }

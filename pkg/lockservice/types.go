@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
@@ -77,7 +78,7 @@ type LockService interface {
 	// returns if current operation was aborted by deadlock detection.
 	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) error
 	// Unlock release all locks associated with the transaction.
-	Unlock(txnID []byte) error
+	Unlock(ctx context.Context, txnID []byte) error
 	// Close close the lock service.
 	Close() error
 }
@@ -100,11 +101,10 @@ type lockTable interface {
 	// 2. ErrLockTableNotMatch, indicates that the LockTable binding relationship has changed.
 	// 3. Other known errors.
 	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions) error
-	// Unlock release a set of locks, it will keep retrying until the context times out when it encounters an
-	// error.
-	unlock(ctx context.Context, txn *activeTxn, ls *cowSlice) error
-	// getLock get a lock, it will keep retrying until the context times out when it encounters an error.
-	getLock(ctx context.Context, key []byte) (Lock, bool)
+	// Unlock release a set of locks
+	unlock(txn *activeTxn, ls *cowSlice)
+	// getLock get a lock
+	getLock(txnID, key []byte, fn func(Lock))
 	// getBind returns lock table binding
 	getBind() pb.LockTable
 	// close close the locktable
@@ -128,10 +128,10 @@ type LockTableAllocator interface {
 	// Get get the original LockTable data corresponding to a Table. If there is no
 	// corresponding binding, then the CN binding of the current request will be used.
 	Get(serviceID string, tableID uint64) pb.LockTable
-	// Keepalive once a cn is bound to a Table, a heartbeat needs to be sent periodically
-	// to keep the binding in place. If no heartbeat is sent for a long period of time
-	// to maintain the binding, the binding will become invalid.
-	Keepalive(serviceID string) bool
+	// KeepLockTableBind once a cn is bound to a Table, a heartbeat needs to be sent
+	// periodically to keep the binding in place. If no heartbeat is sent for a long
+	// period of time to maintain the binding, the binding will become invalid.
+	KeepLockTableBind(serviceID string) bool
 	// Valid check for changes in the binding relationship of a specific locktable.
 	Valid(binds []pb.LockTable) bool
 	// Close close the lock table allocator
@@ -151,6 +151,8 @@ type LockTableKeeper interface {
 type Client interface {
 	// Send send request to other lock service, and wait for a response synchronously.
 	Send(context.Context, *pb.Request) (*pb.Response, error)
+	// AsyncSend async send request to other lock service.
+	AsyncSend(context.Context, *pb.Request) (*morpc.Future, error)
 	// Close close the client
 	Close() error
 }

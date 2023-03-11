@@ -16,11 +16,10 @@ package lockservice
 
 import (
 	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
@@ -29,33 +28,28 @@ import (
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
-	logger            *log.MOLogger
-	binding           pb.LockTable
-	client            Client
-	stopper           *stopper.Stopper
-	retryC            chan []byte
-	heartbeatInterval time.Duration
+	logger             *log.MOLogger
+	serviceID          string
+	bind               pb.LockTable
+	client             Client
+	bindChangedHandler func(pb.LockTable)
 }
 
 func newRemoteLockTable(
+	serviceID string,
 	binding pb.LockTable,
-	heartbeatInterval time.Duration,
-	client Client) *remoteLockTable {
+	client Client,
+	bindChangedHandler func(pb.LockTable)) *remoteLockTable {
 	tag := "remote-lock-table"
 	logger := runtime.ProcessLevelRuntime().Logger().
 		Named(tag).
 		With(zap.String("binding", binding.DebugString()))
 	l := &remoteLockTable{
-		logger:            logger,
-		client:            client,
-		binding:           binding,
-		heartbeatInterval: heartbeatInterval,
-		stopper: stopper.NewStopper(tag,
-			stopper.WithLogger(logger.RawLogger())),
-		retryC: make(chan []byte, 1024),
-	}
-	if err := l.stopper.RunTask(l.backgroundTask); err != nil {
-		panic(err)
+		logger:             logger,
+		serviceID:          serviceID,
+		client:             client,
+		bind:               binding,
+		bindChangedHandler: bindChangedHandler,
 	}
 	return l
 }
@@ -65,191 +59,175 @@ func (l *remoteLockTable) lock(
 	txn *activeTxn,
 	rows [][]byte,
 	options LockOptions) error {
-	ctx, span := trace.Debug(ctx, "lockservice.remote.lock")
+	ctx, span := trace.Debug(ctx, "lockservice.lock.remote")
 	defer span.End()
 
 	req := acquireRequest()
 	defer releaseRequest(req)
 
-	req.LockTable = l.binding
+	req.LockTable = l.bind
 	req.Method = pb.Method_Lock
 	req.Lock.Options = options
 	req.Lock.TxnID = txn.txnID
+	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
+
+	// we use mutex lock here to avoid the deadlock detection
+	// mechanism reading an incorrect data.
+	txn.Lock()
+	defer txn.Unlock()
 
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
-		// TODO: handle bind changed
-		releaseResponse(resp)
+		defer releaseResponse(resp)
+		if err := l.maybeHandleBindChanged(resp); err != nil {
+			return err
+		}
+		txn.lockAdded(l.bind.Table, rows, true)
 		return nil
 	}
+	// encounter any error, we need try to check bind is valid.
+	// And use origin error to return, because once handlerError
+	// swallows the error, the transaction will not be abort.
+	_ = l.handleError(txn.txnID, err)
 	return err
 }
 
 func (l *remoteLockTable) unlock(
-	ctx context.Context,
 	txn *activeTxn,
-	ls *cowSlice) error {
-	// if error returned it will retry
-	return l.doUnlock(ctx, txn.txnID)
-}
-
-func (l *remoteLockTable) getBind() pb.LockTable {
-	// TODO: implement
-	return pb.LockTable{}
-}
-
-func (l *remoteLockTable) close() {
-	l.stopper.Stop()
-	close(l.retryC)
-}
-
-func (l *remoteLockTable) addToRetry(id []byte) {
-	l.retryC <- id
-}
-
-// backgroundTask once a remote local table has been created, a periodic heartbeat needs to
-// be enabled to maintain communication so that the remote lockservice does not think the
-// current lockservice instance is down and release all the locks held by the transactions
-// created on the current instance.
-func (l *remoteLockTable) backgroundTask(ctx context.Context) {
-	timer := time.NewTimer(l.heartbeatInterval)
-	defer timer.Stop()
-
+	ls *cowSlice) {
 	for {
-		select {
-		case <-ctx.Done():
+		err := l.doUnlock(txn)
+		if err == nil {
 			return
-		case <-timer.C:
-			ctx2, cancel := context.WithTimeout(ctx, l.heartbeatInterval)
-			if err := l.doHeartbeat(ctx2); err != nil {
-				l.logger.Error("failed to heartbeat",
-					zap.Error(err))
-			}
-			cancel()
-			timer.Reset(l.heartbeatInterval)
-		case txnID := <-l.retryC:
-			ctx2, cancel := context.WithTimeout(ctx, l.heartbeatInterval)
-			if err := l.doUnlock(ctx2, txnID); err != nil {
-				l.logger.Error("failed to retry unlock txn",
-					zap.ByteString("txn-id", txnID),
-					zap.Error(err))
-			}
-			cancel()
+		}
+
+		// unlock cannot fail and must ensure that all locks have been
+		// released.
+		//
+		// handleError returns nil meaning bind changed, then all locks
+		// will be released. If handleError returns any error, it means
+		// that the current bind is valid, retry unlock.
+		if err := l.handleError(txn.txnID, err); err == nil {
+			return
 		}
 	}
 }
 
-func (l *remoteLockTable) doHeartbeat(ctx context.Context) error {
-	req := acquireRequest()
-	defer releaseRequest(req)
+func (l *remoteLockTable) getLock(txnID, key []byte, fn func(Lock)) {
+	for {
+		lock, ok, err := l.doGetLock(txnID, key)
+		if err == nil {
+			if ok {
+				fn(lock)
+				w := lock.waiter
+				for {
+					w = w.close()
+					if w == nil {
+						break
+					}
+				}
+			}
+			return
+		}
 
-	req.Method = pb.Method_Heartbeat
-	req.LockTable = l.binding
-
-	resp, err := l.client.Send(ctx, req)
-	if err == nil {
-		// TODO: handle bind changed
-		releaseResponse(resp)
-		return nil
+		// why use loop is similar to unlock
+		if err = l.handleError(txnID, err); err == nil {
+			return
+		}
 	}
-	return err
 }
 
-func (l *remoteLockTable) doUnlock(ctx context.Context, id []byte) error {
+func (l *remoteLockTable) doUnlock(txn *activeTxn) error {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	defer cancel()
+
 	req := acquireRequest()
 	defer releaseRequest(req)
 
 	req.Method = pb.Method_Unlock
-	req.LockTable = l.binding
-	req.Unlock.TxnID = id
+	req.LockTable = l.bind
+	req.Unlock.TxnID = txn.txnID
 
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
-		// TODO: handle bind changed
-		releaseResponse(resp)
-		return nil
+		defer releaseResponse(resp)
+		return l.maybeHandleBindChanged(resp)
 	}
-
-	l.addToRetry(id)
 	return err
 }
 
-type lockTableServer struct {
-	logger        *log.MOLogger
-	txnHolder     activeTxnHolder
-	server        Server
-	lockTableFunc func(uint64) lockTable
+func (l *remoteLockTable) doGetLock(txnID, key []byte) (Lock, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	defer cancel()
+
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_GetTxnLock
+	req.LockTable = l.bind
+	req.GetTxnLock.Row = key
+	req.GetTxnLock.TxnID = txnID
+
+	resp, err := l.client.Send(ctx, req)
+	if err == nil {
+		defer releaseResponse(resp)
+		if err := l.maybeHandleBindChanged(resp); err != nil {
+			return Lock{}, false, err
+		}
+
+		lock := Lock{
+			txnID:  txnID,
+			value:  byte(resp.GetTxnLock.Value),
+			waiter: acquireWaiter(txnID),
+		}
+		for _, v := range resp.GetTxnLock.WaitingList {
+			w := acquireWaiter(v)
+			lock.waiter.add(w)
+		}
+		return lock, true, nil
+	}
+	return Lock{}, false, err
 }
 
-func newLockTableServer(
-	server Server,
-	txnHolder activeTxnHolder) *lockTableServer {
-	l := &lockTableServer{
-		logger: runtime.ProcessLevelRuntime().Logger(),
-		server: server,
-	}
-	l.initHandler()
-	return l
+func (l *remoteLockTable) getBind() pb.LockTable {
+	return l.bind
 }
 
-func (s *lockTableServer) initHandler() {
-	s.server.RegisterMethodHandler(pb.Method_Lock,
-		s.handleRemoteLock)
-	s.server.RegisterMethodHandler(pb.Method_Unlock,
-		s.handleRemoteUnlock)
-	s.server.RegisterMethodHandler(pb.Method_Heartbeat,
-		s.handleRemoteUnlock)
+func (l *remoteLockTable) close() {
+
 }
 
-func (s *lockTableServer) handleRemoteLock(
-	ctx context.Context,
-	req *pb.Request,
-	resp *pb.Response) error {
-	l, err := s.getLocalLockTable(req, resp)
-	if err != nil ||
-		l == nil {
-		return err
+func (l *remoteLockTable) handleError(txnID []byte, err error) error {
+	oldError := err
+	// ErrLockTableBindChanged error must already handled. Skip
+	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+		return nil
 	}
-	txn := s.txnHolder.getActiveTxn(req.Lock.TxnID, true, true)
-	return l.lock(ctx, txn, req.Lock.Rows, req.Lock.Options)
+
+	// any other errors, retry.
+	// Note. Since the cn where the remote lock table is located may
+	// be permanently gone, we need to go to the allocator to check if
+	// the bind is valid.
+	new, err := getLockTableBind(
+		l.client,
+		l.bind.Table,
+		l.serviceID)
+	if err != nil {
+		return oldError
+	}
+	if new.Changed(l.bind) {
+		l.bindChangedHandler(new)
+		return nil
+	}
+	return oldError
 }
 
-func (s *lockTableServer) handleRemoteUnlock(
-	ctx context.Context,
-	req *pb.Request,
-	resp *pb.Response) error {
-	l, err := s.getLocalLockTable(req, resp)
-	if err != nil ||
-		l == nil {
-		return err
+func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
+	if resp.NewBind == nil {
+		return nil
 	}
-	return nil
-}
-
-func (s *lockTableServer) handleRemoteHeartbeat(
-	ctx context.Context,
-	req *pb.Request,
-	resp *pb.Response) error {
-	l, err := s.getLocalLockTable(req, resp)
-	if err != nil ||
-		l == nil {
-		return err
-	}
-	return nil
-}
-
-func (s *lockTableServer) getLocalLockTable(
-	req *pb.Request,
-	resp *pb.Response) (lockTable, error) {
-	l := s.lockTableFunc(req.LockTable.Table)
-	if l == nil {
-		return nil, ErrLockTableNotFound
-	}
-	bind := l.getBind()
-	if bind.Changed(req.LockTable) {
-		resp.NewBind = &bind
-		return nil, nil
-	}
-	return l, nil
+	newBind := resp.NewBind
+	l.bindChangedHandler(*newBind)
+	return ErrLockTableBindChanged
 }

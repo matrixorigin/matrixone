@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,42 @@
 
 package lockservice
 
+import (
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+)
+
 // Config lock service config
 type Config struct {
+	ServiceID                 string
+	ServiceAddress            string
+	MaxFixedSliceSize         toml.ByteSize
+	KeepLockTableBindDuration toml.Duration
+	KeepRemoteLockDuration    toml.Duration
+	RemoteLockTimeout         toml.Duration
+	RPC                       morpc.Config
+}
+
+func (c *Config) adjust() {
+	if c.ServiceID == "" {
+		panic("missing service id")
+	}
+	if c.ServiceAddress == "" {
+		panic("missing service address")
+	}
+	if c.MaxFixedSliceSize == 0 {
+		c.MaxFixedSliceSize = toml.ByteSize(1024 * 1024)
+	}
+	if c.KeepLockTableBindDuration.Duration == 0 {
+		c.KeepLockTableBindDuration.Duration = time.Second
+	}
+	if c.KeepRemoteLockDuration.Duration == 0 {
+		c.KeepRemoteLockDuration.Duration = time.Second
+	}
+	if c.RemoteLockTimeout.Duration == 0 {
+		c.RemoteLockTimeout.Duration = c.KeepRemoteLockDuration.Duration * 10
+	}
+	c.RPC.Adjust()
 }

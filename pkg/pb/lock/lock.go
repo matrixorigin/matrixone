@@ -102,3 +102,11 @@ func (m Response) UnwrapError() error {
 	}
 	return err
 }
+
+// DebugString debug string
+func (m LockOptions) DebugString() string {
+	return fmt.Sprintf("%s-%s-%s",
+		m.Mode.String(),
+		m.Granularity.String(),
+		m.Policy.String())
+}

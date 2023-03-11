@@ -47,6 +47,11 @@ func (l *MOLogger) With(fields ...zap.Field) *MOLogger {
 	return newMOLogger(l.logger.With(fields...), l.ctx)
 }
 
+// WithOptions creates a child logger with zap options.
+func (l *MOLogger) WithOptions(opts ...zap.Option) *MOLogger {
+	return newMOLogger(l.logger.WithOptions(opts...), l.ctx)
+}
+
 // Named adds a new path segment to the logger's name. Segments are joined by
 // periods. By default, Loggers are unnamed.
 func (l *MOLogger) Named(name string) *MOLogger {

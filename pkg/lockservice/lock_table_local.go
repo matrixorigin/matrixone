@@ -22,11 +22,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 // a localLockTable instance manages the locks on a table
 type localLockTable struct {
-	tableID  uint64
+	bind     pb.LockTable
 	detector *detector
 
 	mu struct {
@@ -37,9 +38,12 @@ type localLockTable struct {
 }
 
 func newLocalLockTable(
-	tableID uint64,
+	bind pb.LockTable,
 	detector *detector) lockTable {
-	l := &localLockTable{tableID: tableID, detector: detector}
+	l := &localLockTable{
+		bind:     bind,
+		detector: detector,
+	}
 	l.mu.store = newBtreeBasedStorage()
 	return l
 }
@@ -49,6 +53,9 @@ func (l *localLockTable) lock(
 	txn *activeTxn,
 	rows [][]byte,
 	options LockOptions) error {
+	ctx, span := trace.Debug(ctx, "lockservice.lock.local")
+	defer span.End()
+
 	waiter := acquireWaiter(txn.txnID)
 	for {
 		added, err := l.doAcquireLock(txn, waiter, rows, options)
@@ -56,9 +63,10 @@ func (l *localLockTable) lock(
 			return err
 		}
 		if added {
+			// reset block waiter
+			txn.setBlocked(waiter.txnID, nil)
 			return nil
 		}
-
 		if err := waiter.wait(ctx); err != nil {
 			return err
 		}
@@ -67,48 +75,51 @@ func (l *localLockTable) lock(
 }
 
 func (l *localLockTable) unlock(
-	ctx context.Context,
 	txn *activeTxn,
-	ls *cowSlice) error {
+	ls *cowSlice) {
 	locks := ls.slice()
 	defer locks.unref()
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.mu.closed {
-		return moerr.NewInvalidStateNoCtx("local lock table closed")
+		return
 	}
 
 	locks.iter(func(key []byte) bool {
 		if lock, ok := l.mu.store.Get(key); ok {
 			if lock.isLockRow() || lock.isLockRangeEnd() {
+				lock.waiter.clearAllNotify()
 				lock.waiter.close()
 			}
 			l.mu.store.Delete(key)
 		}
 		return true
 	})
-	return nil
 }
 
-func (l *localLockTable) getLock(ctx context.Context, key []byte) (Lock, bool) {
+func (l *localLockTable) getLock(txnID, key []byte, fn func(Lock)) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	if l.mu.closed {
-		return Lock{}, false
+		return
 	}
-	return l.mu.store.Get(key)
+	lock, ok := l.mu.store.Get(key)
+	if ok {
+		fn(lock)
+	}
 }
 
 func (l *localLockTable) getBind() pb.LockTable {
-	// TODO: implement
-	return pb.LockTable{}
+	return l.bind
 }
 
 func (l *localLockTable) close() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.mu.closed = true
+
+	// TODO: release all locks, use abort error
 }
 
 func (l *localLockTable) doAcquireLock(
@@ -182,7 +193,7 @@ func (l *localLockTable) addRowLockLocked(
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	txn.lockAdded(l.tableID, [][]byte{row})
+	txn.lockAdded(l.bind.Table, [][]byte{row}, false)
 	l.mu.store.Add(row, lock)
 }
 
@@ -195,9 +206,8 @@ func (l *localLockTable) addRangeLockLocked(
 	startLock.waiter = waiter
 	endLock.waiter = waiter
 
-	// we must first add the lock to txn to ensure that the
-	// lock can be read when the deadlock is detected.
-	txn.lockAdded(l.tableID, [][]byte{start, end})
+	// similar to row lock
+	txn.lockAdded(l.bind.Table, [][]byte{start, end}, false)
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)
 }
@@ -205,7 +215,7 @@ func (l *localLockTable) addRangeLockLocked(
 func (l *localLockTable) handleLockConflict(txn *activeTxn, w *waiter, conflictWith Lock) {
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
-	txn.setBlocked(w)
+	txn.setBlocked(w.txnID, w)
 	conflictWith.waiter.add(w)
 	if err := l.detector.check(txn.txnID); err != nil {
 		panic("BUG: active dead lock check can not fail")

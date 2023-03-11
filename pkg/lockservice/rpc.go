@@ -17,11 +17,11 @@ package lockservice
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -39,6 +39,8 @@ var (
 			return &pb.Response{}
 		},
 	}
+
+	defaultRPCTimeout = time.Second * 10
 )
 
 type client struct {
@@ -54,8 +56,8 @@ func NewClient(cfg morpc.Config) (Client, error) {
 	}
 	c.cfg.Adjust()
 
-	client, err := c.cfg.NewClient("lockservice.client",
-		runtime.ProcessLevelRuntime().Logger().RawLogger(),
+	client, err := c.cfg.NewClient("",
+		getLogger().RawLogger(),
 		func() morpc.Message { return acquireResponse() })
 	if err != nil {
 		return nil, err
@@ -65,30 +67,7 @@ func NewClient(cfg morpc.Config) (Client, error) {
 }
 
 func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, error) {
-	ctx, span := trace.Debug(ctx, "lockservice.client.Send")
-	defer span.End()
-
-	var address string
-	switch request.Method {
-	case pb.Method_Lock, pb.Method_Unlock, pb.Method_Heartbeat:
-		c.cluster.GetCNService(
-			clusterservice.NewServiceIDSelector(
-				request.LockTable.ServiceID),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			})
-	default:
-		c.cluster.GetDNService(
-			clusterservice.NewSelector(),
-			func(d metadata.DNService) bool {
-				// address = d.
-				return false
-			})
-
-	}
-
-	f, err := c.client.Send(ctx, address, request)
+	f, err := c.AsyncSend(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -103,8 +82,43 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 		releaseResponse(resp)
 		return nil, err
 	}
-
 	return resp, nil
+}
+
+func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Future, error) {
+	ctx, span := trace.Debug(ctx, "lockservice.client.send")
+	defer span.End()
+
+	var address string
+	switch request.Method {
+	case pb.Method_Lock,
+		pb.Method_Unlock,
+		pb.Method_GetTxnLock,
+		pb.Method_KeepRemoteLock:
+		c.cluster.GetCNService(
+			clusterservice.NewServiceIDSelector(
+				request.LockTable.ServiceID),
+			func(s metadata.CNService) bool {
+				address = s.LockServiceAddress
+				return false
+			})
+	case pb.Method_GetWaitingList:
+		c.cluster.GetCNService(
+			clusterservice.NewServiceIDSelector(
+				request.GetWaitingList.ServiceID),
+			func(s metadata.CNService) bool {
+				address = s.LockServiceAddress
+				return false
+			})
+	default:
+		c.cluster.GetDNService(
+			clusterservice.NewSelector(),
+			func(d metadata.DNService) bool {
+				address = d.LockServiceAddress
+				return false
+			})
+	}
+	return c.client.Send(ctx, address, request)
 }
 
 func (c *client) Close() error {
@@ -120,8 +134,8 @@ func WithServerMessageFilter(filter func(*pb.Request) bool) ServerOption {
 }
 
 type server struct {
-	cfg      *morpc.Config
 	logger   *log.MOLogger
+	cfg      *morpc.Config
 	rpc      morpc.RPCServer
 	handlers map[pb.Method]RequestHandleFunc
 
@@ -136,7 +150,7 @@ func NewServer(
 	cfg morpc.Config,
 	opts ...ServerOption) (Server, error) {
 	s := &server{
-		logger:   runtime.ProcessLevelRuntime().Logger().Named("lockservice.server"),
+		logger:   getLogger().Named("server"),
 		cfg:      &cfg,
 		handlers: make(map[pb.Method]RequestHandleFunc),
 	}
@@ -145,9 +159,9 @@ func NewServer(
 		opt(s)
 	}
 
-	rpc, err := s.cfg.NewServer("lockservice.server",
+	rpc, err := s.cfg.NewServer("server",
 		address,
-		s.logger.RawLogger(),
+		getLogger().RawLogger(),
 		func() morpc.Message { return acquireRequest() },
 		releaseResponse)
 	if err != nil {

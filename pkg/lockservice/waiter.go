@@ -194,8 +194,9 @@ func (w *waiter) wait(ctx context.Context) error {
 func (w *waiter) notify(value error) bool {
 	for {
 		status := w.getStatus()
+		// already notified, no wait on w
 		if status == notified {
-			panic("already notified")
+			return false
 		}
 		if status == completed {
 			// wait already completed, wait timeout or wait a result.
@@ -208,6 +209,16 @@ func (w *waiter) notify(value error) bool {
 		if w.casStatus(status, notified) {
 			w.mustSendNotification(value)
 			return true
+		}
+	}
+}
+
+func (w *waiter) clearAllNotify() {
+	for {
+		select {
+		case <-w.c:
+		default:
+			return
 		}
 	}
 }

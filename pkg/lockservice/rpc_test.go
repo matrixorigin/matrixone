@@ -147,12 +147,22 @@ func runRPCTests(
 		nil,
 		0,
 		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices([]metadata.CNService{
-			{
-				ServiceID:          "s1",
-				LockServiceAddress: testSockets,
+		clusterservice.WithServices(
+			[]metadata.CNService{
+				{
+					ServiceID:          "s1",
+					LockServiceAddress: testSockets,
+				},
+				{
+					ServiceID:          "s2",
+					LockServiceAddress: testSockets,
+				},
 			},
-		}, nil))
+			[]metadata.DNService{
+				{
+					LockServiceAddress: testSockets,
+				},
+			}))
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
 	s, err := NewServer(testSockets, morpc.Config{}, opts...)

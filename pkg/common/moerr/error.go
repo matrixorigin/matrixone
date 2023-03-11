@@ -133,6 +133,8 @@ const (
 	ErrStreamClosed uint16 = 20503
 	// ErrNoAvailableBackend no available backend
 	ErrNoAvailableBackend uint16 = 20504
+	// ErrBackendCannotConnect can not connect to remote backend
+	ErrBackendCannotConnect uint16 = 20505
 
 	// Group 6: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
@@ -272,11 +274,12 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrQueryIdNotFound:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s is not found, or invalid tenant"},
 	ErrNoConfig:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
 	// Group 5: rpc timeout
-	ErrRPCTimeout:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
-	ErrClientClosed:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
-	ErrBackendClosed:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "backend closed"},
-	ErrStreamClosed:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "stream closed"},
-	ErrNoAvailableBackend: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
+	ErrRPCTimeout:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
+	ErrClientClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
+	ErrBackendClosed:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "backend closed"},
+	ErrStreamClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "stream closed"},
+	ErrNoAvailableBackend:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
+	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not connect to remote backend"},
 
 	// Group 6: txn
 	ErrTxnClosed:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
@@ -706,6 +709,10 @@ func NewStreamClosed(ctx context.Context) *Error {
 
 func NewNoAvailableBackend(ctx context.Context) *Error {
 	return newError(ctx, ErrNoAvailableBackend)
+}
+
+func NewBackendCannotConnect(ctx context.Context) *Error {
+	return newError(ctx, ErrBackendCannotConnect)
 }
 
 func NewTxnClosed(ctx context.Context, txnID []byte) *Error {

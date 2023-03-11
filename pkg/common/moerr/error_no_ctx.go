@@ -178,6 +178,10 @@ func NewNoAvailableBackendNoCtx() *Error {
 	return newError(Context(), ErrNoAvailableBackend)
 }
 
+func NewBackendCannotConnectNoCtx() *Error {
+	return newError(Context(), ErrBackendCannotConnect)
+}
+
 func NewTxnClosedNoCtx(txnID []byte) *Error {
 	id := "unknown"
 	if len(txnID) > 0 {

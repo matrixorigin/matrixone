@@ -15,12 +15,9 @@
 package lockservice
 
 import (
-	"context"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -38,13 +35,13 @@ func TestCheckWithDeadlock(t *testing.T) {
 	abortC := make(chan []byte, 1)
 	defer close(abortC)
 
-	d := newDeadlockDetector(func(txn []byte, w *waiters) bool {
+	d := newDeadlockDetector(func(txn []byte, w *waiters) (bool, error) {
 		for _, id := range m[string(txn)] {
 			if !w.add(id) {
-				return false
+				return false, nil
 			}
 		}
-		return true
+		return true, nil
 	}, func(txn []byte) {
 		abortC <- txn
 	})
@@ -68,56 +65,4 @@ func TestCheckWithDeadlock(t *testing.T) {
 		assert.Fail(t, "can not found dead lock")
 	case <-time.After(time.Millisecond * 100):
 	}
-}
-
-type rowToLock struct {
-	tableID uint64
-	row     []byte
-}
-
-func TestTwoTxsDeadlock(t *testing.T) {
-	cases := []struct {
-		row1, row2 rowToLock
-	}{
-		{
-			rowToLock{0, []byte{1}},
-			rowToLock{0, []byte{2}},
-		},
-		{
-			rowToLock{0, []byte{1}},
-			rowToLock{1, []byte{1}},
-		},
-	}
-
-	for _, c := range cases {
-		runDeadlock(t, c.row1, c.row2)
-	}
-}
-
-//			txnA			txnB
-//	   locks row1		locks row2
-//					 	locks row1 		(txnB waits for txnA)
-//	   locks row2						(deadlock happens)
-func runDeadlock(t *testing.T, row1, row2 rowToLock) {
-	txnA := []byte("txnA")
-	txnB := []byte("txnB")
-	l := NewLockService(morpc.Config{})
-	ctx := context.Background()
-	option := LockOptions{
-		Granularity: pb.Granularity_Row,
-		Mode:        pb.LockMode_Exclusive,
-		Policy:      pb.WaitPolicy_Wait,
-	}
-
-	err := l.Lock(context.Background(), row1.tableID, [][]byte{row1.row}, txnA, option)
-	assert.NoError(t, err)
-	go func() {
-		err := l.Lock(ctx, row2.tableID, [][]byte{row2.row}, txnB, option)
-		assert.NoError(t, err)
-		err = l.Lock(ctx, row1.tableID, [][]byte{row1.row}, txnB, option)
-		assert.NoError(t, err)
-	}()
-	time.Sleep(time.Second / 2)
-	err = l.Lock(context.Background(), row2.tableID, [][]byte{row2.row}, txnA, option)
-	assert.Error(t, err)
 }

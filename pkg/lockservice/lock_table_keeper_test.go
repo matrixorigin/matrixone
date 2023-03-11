@@ -16,10 +16,10 @@ package lockservice
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 )
@@ -28,22 +28,105 @@ func TestKeeper(t *testing.T) {
 	runRPCTests(
 		t,
 		func(c Client, s Server) {
-			n := 0
-			cc := make(chan struct{})
+			n1 := 0
+			n2 := 0
+			c1 := make(chan struct{})
+			c2 := make(chan struct{})
 			s.RegisterMethodHandler(
-				pb.Method_Keepalive,
-				func(ctx context.Context, r1 *lock.Request, r2 *lock.Response) error {
-					n++
-					if n == 10 {
-						close(cc)
+				pb.Method_KeepLockTableBind,
+				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
+					n1++
+					if n1 == 10 {
+						close(c1)
 					}
 					return nil
 				})
-			k := NewLockTableKeeper("s1", c, time.Millisecond*10)
+			s.RegisterMethodHandler(
+				pb.Method_KeepRemoteLock,
+				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
+					n2++
+					if n2 == 10 {
+						close(c2)
+					}
+					return nil
+				})
+			m := &sync.Map{}
+			m.Store(0,
+				newRemoteLockTable(
+					"s1",
+					pb.LockTable{ServiceID: "s2"},
+					c,
+					func(lt pb.LockTable) {}))
+			k := NewLockTableKeeper(
+				"s1",
+				c,
+				time.Millisecond*10,
+				time.Millisecond*10,
+				m)
 			defer func() {
 				assert.NoError(t, k.Close())
 			}()
-			<-cc
+			<-c1
+			<-c2
+		},
+	)
+}
+
+func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			s.RegisterMethodHandler(
+				pb.Method_KeepLockTableBind,
+				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
+					r2.KeepLockTableBind.OK = false
+					return nil
+				})
+
+			s.RegisterMethodHandler(
+				pb.Method_KeepRemoteLock,
+				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
+					return nil
+				})
+
+			m := &sync.Map{}
+			m.Store(1,
+				newLocalLockTable(
+					pb.LockTable{ServiceID: "s1"},
+					nil))
+			m.Store(2,
+				newLocalLockTable(
+					pb.LockTable{ServiceID: "s1"},
+					nil))
+			m.Store(3,
+				newRemoteLockTable(
+					"s1",
+					pb.LockTable{ServiceID: "s2"},
+					c,
+					func(lt pb.LockTable) {}))
+			k := NewLockTableKeeper(
+				"s1",
+				c,
+				time.Millisecond*10,
+				time.Millisecond*10,
+				m)
+			defer func() {
+				assert.NoError(t, k.Close())
+			}()
+
+			for {
+				v := 0
+				m.Range(func(key, value any) bool {
+					v++
+					return true
+				})
+				if v == 1 {
+					_, ok := m.Load(3)
+					assert.True(t, ok)
+					return
+				}
+				time.Sleep(time.Millisecond * 100)
+			}
 		},
 	)
 }

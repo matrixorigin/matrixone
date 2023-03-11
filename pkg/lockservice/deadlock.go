@@ -24,7 +24,7 @@ import (
 
 type detector struct {
 	c                 chan []byte
-	waitTxnsFetchFunc func([]byte, *waiters) bool
+	waitTxnsFetchFunc func([]byte, *waiters) (bool, error)
 	waitTxnAbortFunc  func([]byte)
 	ignoreTxns        sync.Map // txnID -> any
 	stopper           *stopper.Stopper
@@ -38,7 +38,8 @@ type detector struct {
 // for the given txn. Then the detector will recursively check all txns's waiting txns until deadlock
 // is found. When a deadlock is found, waitTxnAbortFunc is used to notify the external abort to drop a
 // txn.
-func newDeadlockDetector(waitTxnsFetchFunc func([]byte, *waiters) bool,
+func newDeadlockDetector(
+	waitTxnsFetchFunc func([]byte, *waiters) (bool, error),
 	waitTxnAbortFunc func([]byte)) *detector {
 	d := &detector{
 		c:                 make(chan []byte, 1024),
@@ -86,7 +87,8 @@ func (d *detector) doCheck(ctx context.Context) {
 		case txnID := <-d.c:
 			w.reset(txnID)
 			v := string(txnID)
-			if !d.checkDeadlock(w) {
+			hasDeadlock, err := d.checkDeadlock(w)
+			if hasDeadlock || err != nil {
 				d.ignoreTxns.Store(v, struct{}{})
 				d.waitTxnAbortFunc(txnID)
 			}
@@ -94,16 +96,20 @@ func (d *detector) doCheck(ctx context.Context) {
 	}
 }
 
-func (d *detector) checkDeadlock(w *waiters) bool {
+func (d *detector) checkDeadlock(w *waiters) (bool, error) {
 	for {
 		if w.completed() {
-			return true
+			return false, nil
 		}
 
 		// find deadlock
 		txnID := w.getCheckTargetTxn()
-		if !d.waitTxnsFetchFunc(txnID, w) {
-			return false
+		added, err := d.waitTxnsFetchFunc(txnID, w)
+		if err != nil {
+			return false, err
+		}
+		if !added {
+			return true, nil
 		}
 		w.next()
 	}
@@ -124,8 +130,10 @@ func (w *waiters) next() {
 }
 
 func (w *waiters) add(txnID []byte) bool {
-	if bytes.Equal(w.waitTxns[0], txnID) {
-		return false
+	for i := 0; i < w.pos; i++ {
+		if bytes.Equal(w.waitTxns[i], txnID) {
+			return false
+		}
 	}
 	v := unsafeByteSliceToString(txnID)
 	if _, ok := w.ignoreTxns.Load(v); ok {

@@ -110,28 +110,36 @@ const (
 	Method_Lock Method = 0
 	// Write transaction write
 	Method_Unlock Method = 1
-	// Heartbeat heartbeat
-	Method_Heartbeat Method = 2
+	// GetTxnLock get lock data on a special lock
+	Method_GetTxnLock Method = 2
+	// GetWaitingList get waiting txns on a special lock
+	Method_GetWaitingList Method = 3
+	// KeepRemoteLock keep remote lock on remote lock service
+	Method_KeepRemoteLock Method = 4
 	// GetBind get or create lock table bind from lock table allocator
-	Method_GetBind Method = 3
-	// Keepalive keepalive the lock table bind on lock table allocator
-	Method_Keepalive Method = 4
+	Method_GetBind Method = 5
+	// KeepLockTableBind keep the lock table bind on lock table allocator
+	Method_KeepLockTableBind Method = 6
 )
 
 var Method_name = map[int32]string{
 	0: "Lock",
 	1: "Unlock",
-	2: "Heartbeat",
-	3: "GetBind",
-	4: "Keepalive",
+	2: "GetTxnLock",
+	3: "GetWaitingList",
+	4: "KeepRemoteLock",
+	5: "GetBind",
+	6: "KeepLockTableBind",
 }
 
 var Method_value = map[string]int32{
-	"Lock":      0,
-	"Unlock":    1,
-	"Heartbeat": 2,
-	"GetBind":   3,
-	"Keepalive": 4,
+	"Lock":              0,
+	"Unlock":            1,
+	"GetTxnLock":        2,
+	"GetWaitingList":    3,
+	"KeepRemoteLock":    4,
+	"GetBind":           5,
+	"KeepLockTableBind": 6,
 }
 
 func (x Method) String() string {
@@ -288,20 +296,18 @@ type Request struct {
 	// RequestID request id
 	RequestID uint64 `protobuf:"varint,1,opt,name=RequestID,proto3" json:"RequestID,omitempty"`
 	// LockTable lock target table
-	LockTable LockTable `protobuf:"bytes,2,opt,name=LockTable,proto3" json:"LockTable"`
-	// Method request type
-	Method Method `protobuf:"varint,3,opt,name=Method,proto3,enum=lock.Method" json:"Method,omitempty"`
-	// Lock lock request
-	Lock LockRequest `protobuf:"bytes,4,opt,name=Lock,proto3" json:"Lock"`
-	// Unlock unlock request
-	Unlock UnlockRequest `protobuf:"bytes,5,opt,name=Unlock,proto3" json:"Unlock"`
-	// GetBindRequest get bind request
-	GetBind GetBindRequest `protobuf:"bytes,6,opt,name=GetBind,proto3" json:"GetBind"`
-	// KeepaliveRequest keepalive request
-	Keepalive            KeepaliveRequest `protobuf:"bytes,7,opt,name=Keepalive,proto3" json:"Keepalive"`
-	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
-	XXX_unrecognized     []byte           `json:"-"`
-	XXX_sizecache        int32            `json:"-"`
+	LockTable            LockTable                `protobuf:"bytes,2,opt,name=LockTable,proto3" json:"LockTable"`
+	Method               Method                   `protobuf:"varint,3,opt,name=Method,proto3,enum=lock.Method" json:"Method,omitempty"`
+	Lock                 LockRequest              `protobuf:"bytes,4,opt,name=Lock,proto3" json:"Lock"`
+	Unlock               UnlockRequest            `protobuf:"bytes,5,opt,name=Unlock,proto3" json:"Unlock"`
+	GetTxnLock           GetTxnLockRequest        `protobuf:"bytes,6,opt,name=GetTxnLock,proto3" json:"GetTxnLock"`
+	GetWaitingList       GetWaitingListRequest    `protobuf:"bytes,7,opt,name=GetWaitingList,proto3" json:"GetWaitingList"`
+	GetBind              GetBindRequest           `protobuf:"bytes,8,opt,name=GetBind,proto3" json:"GetBind"`
+	KeepLockTableBind    KeepLockTableBindRequest `protobuf:"bytes,9,opt,name=KeepLockTableBind,proto3" json:"KeepLockTableBind"`
+	KeepRemoteLock       KeepRemoteLockRequest    `protobuf:"bytes,10,opt,name=KeepRemoteLock,proto3" json:"KeepRemoteLock"`
+	XXX_NoUnkeyedLiteral struct{}                 `json:"-"`
+	XXX_unrecognized     []byte                   `json:"-"`
+	XXX_sizecache        int32                    `json:"-"`
 }
 
 func (m *Request) Reset()         { *m = Request{} }
@@ -372,6 +378,20 @@ func (m *Request) GetUnlock() UnlockRequest {
 	return UnlockRequest{}
 }
 
+func (m *Request) GetGetTxnLock() GetTxnLockRequest {
+	if m != nil {
+		return m.GetTxnLock
+	}
+	return GetTxnLockRequest{}
+}
+
+func (m *Request) GetGetWaitingList() GetWaitingListRequest {
+	if m != nil {
+		return m.GetWaitingList
+	}
+	return GetWaitingListRequest{}
+}
+
 func (m *Request) GetGetBind() GetBindRequest {
 	if m != nil {
 		return m.GetBind
@@ -379,11 +399,18 @@ func (m *Request) GetGetBind() GetBindRequest {
 	return GetBindRequest{}
 }
 
-func (m *Request) GetKeepalive() KeepaliveRequest {
+func (m *Request) GetKeepLockTableBind() KeepLockTableBindRequest {
 	if m != nil {
-		return m.Keepalive
+		return m.KeepLockTableBind
 	}
-	return KeepaliveRequest{}
+	return KeepLockTableBindRequest{}
+}
+
+func (m *Request) GetKeepRemoteLock() KeepRemoteLockRequest {
+	if m != nil {
+		return m.KeepRemoteLock
+	}
+	return KeepRemoteLockRequest{}
 }
 
 // Response response
@@ -392,20 +419,18 @@ type Response struct {
 	RequestID uint64 `protobuf:"varint,1,opt,name=RequestID,proto3" json:"RequestID,omitempty"`
 	// Error we use this field to send moerr from service to another cn. Set with
 	// moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
-	Error []byte `protobuf:"bytes,2,opt,name=Error,proto3" json:"Error,omitempty"`
-	// NewBind lock table and lockservice bind changed
-	NewBind *LockTable `protobuf:"bytes,3,opt,name=NewBind,proto3" json:"NewBind,omitempty"`
-	// LockResponse lock response
-	Lock *LockResponse `protobuf:"bytes,4,opt,name=Lock,proto3" json:"Lock,omitempty"`
-	// UnlockResponse unlock response
-	Unlock *UnlockResponse `protobuf:"bytes,5,opt,name=Unlock,proto3" json:"Unlock,omitempty"`
-	// GetBindResponse get bind request
-	GetBind GetBindResponse `protobuf:"bytes,6,opt,name=GetBind,proto3" json:"GetBind"`
-	// KeepaliveResponse keepalive request
-	Keepalive            KeepaliveResponse `protobuf:"bytes,7,opt,name=Keepalive,proto3" json:"Keepalive"`
-	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
-	XXX_unrecognized     []byte            `json:"-"`
-	XXX_sizecache        int32             `json:"-"`
+	Error                []byte                    `protobuf:"bytes,2,opt,name=Error,proto3" json:"Error,omitempty"`
+	NewBind              *LockTable                `protobuf:"bytes,3,opt,name=NewBind,proto3" json:"NewBind,omitempty"`
+	Lock                 LockResponse              `protobuf:"bytes,4,opt,name=Lock,proto3" json:"Lock"`
+	Unlock               UnlockResponse            `protobuf:"bytes,5,opt,name=Unlock,proto3" json:"Unlock"`
+	GetTxnLock           GetTxnLockResponse        `protobuf:"bytes,6,opt,name=GetTxnLock,proto3" json:"GetTxnLock"`
+	GetWaitingList       GetWaitingListResponse    `protobuf:"bytes,7,opt,name=GetWaitingList,proto3" json:"GetWaitingList"`
+	GetBind              GetBindResponse           `protobuf:"bytes,8,opt,name=GetBind,proto3" json:"GetBind"`
+	KeepLockTableBind    KeepLockTableBindResponse `protobuf:"bytes,9,opt,name=KeepLockTableBind,proto3" json:"KeepLockTableBind"`
+	KeepRemoteLock       KeepRemoteLockResponse    `protobuf:"bytes,10,opt,name=KeepRemoteLock,proto3" json:"KeepRemoteLock"`
+	XXX_NoUnkeyedLiteral struct{}                  `json:"-"`
+	XXX_unrecognized     []byte                    `json:"-"`
+	XXX_sizecache        int32                     `json:"-"`
 }
 
 func (m *Response) Reset()         { *m = Response{} }
@@ -462,18 +487,32 @@ func (m *Response) GetNewBind() *LockTable {
 	return nil
 }
 
-func (m *Response) GetLock() *LockResponse {
+func (m *Response) GetLock() LockResponse {
 	if m != nil {
 		return m.Lock
 	}
-	return nil
+	return LockResponse{}
 }
 
-func (m *Response) GetUnlock() *UnlockResponse {
+func (m *Response) GetUnlock() UnlockResponse {
 	if m != nil {
 		return m.Unlock
 	}
-	return nil
+	return UnlockResponse{}
+}
+
+func (m *Response) GetGetTxnLock() GetTxnLockResponse {
+	if m != nil {
+		return m.GetTxnLock
+	}
+	return GetTxnLockResponse{}
+}
+
+func (m *Response) GetGetWaitingList() GetWaitingListResponse {
+	if m != nil {
+		return m.GetWaitingList
+	}
+	return GetWaitingListResponse{}
 }
 
 func (m *Response) GetGetBind() GetBindResponse {
@@ -483,17 +522,25 @@ func (m *Response) GetGetBind() GetBindResponse {
 	return GetBindResponse{}
 }
 
-func (m *Response) GetKeepalive() KeepaliveResponse {
+func (m *Response) GetKeepLockTableBind() KeepLockTableBindResponse {
 	if m != nil {
-		return m.Keepalive
+		return m.KeepLockTableBind
 	}
-	return KeepaliveResponse{}
+	return KeepLockTableBindResponse{}
+}
+
+func (m *Response) GetKeepRemoteLock() KeepRemoteLockResponse {
+	if m != nil {
+		return m.KeepRemoteLock
+	}
+	return KeepRemoteLockResponse{}
 }
 
 // LockRequest lock request
 type LockRequest struct {
-	TxnID []byte   `protobuf:"bytes,1,opt,name=TxnID,proto3" json:"TxnID,omitempty"`
-	Rows  [][]byte `protobuf:"bytes,2,rep,name=Rows,proto3" json:"Rows,omitempty"`
+	TxnID     []byte   `protobuf:"bytes,1,opt,name=TxnID,proto3" json:"TxnID,omitempty"`
+	ServiceID string   `protobuf:"bytes,2,opt,name=ServiceID,proto3" json:"ServiceID,omitempty"`
+	Rows      [][]byte `protobuf:"bytes,3,rep,name=Rows,proto3" json:"Rows,omitempty"`
 	// LockOptions lock options
 	Options              LockOptions `protobuf:"bytes,4,opt,name=Options,proto3" json:"Options"`
 	XXX_NoUnkeyedLiteral struct{}    `json:"-"`
@@ -539,6 +586,13 @@ func (m *LockRequest) GetTxnID() []byte {
 		return m.TxnID
 	}
 	return nil
+}
+
+func (m *LockRequest) GetServiceID() string {
+	if m != nil {
+		return m.ServiceID
+	}
+	return ""
 }
 
 func (m *LockRequest) GetRows() [][]byte {
@@ -595,7 +649,224 @@ func (m *LockResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_LockResponse proto.InternalMessageInfo
 
-// UnlockRequest unlock request
+// GetTxnLockRequest get a waiting txn list on a special lock
+// request, used to dead lock detect
+type GetTxnLockRequest struct {
+	TxnID                []byte   `protobuf:"bytes,1,opt,name=TxnID,proto3" json:"TxnID,omitempty"`
+	Row                  []byte   `protobuf:"bytes,2,opt,name=Row,proto3" json:"Row,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *GetTxnLockRequest) Reset()         { *m = GetTxnLockRequest{} }
+func (m *GetTxnLockRequest) String() string { return proto.CompactTextString(m) }
+func (*GetTxnLockRequest) ProtoMessage()    {}
+func (*GetTxnLockRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_164ad2988c7acaf1, []int{6}
+}
+func (m *GetTxnLockRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *GetTxnLockRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_GetTxnLockRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *GetTxnLockRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GetTxnLockRequest.Merge(m, src)
+}
+func (m *GetTxnLockRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *GetTxnLockRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_GetTxnLockRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GetTxnLockRequest proto.InternalMessageInfo
+
+func (m *GetTxnLockRequest) GetTxnID() []byte {
+	if m != nil {
+		return m.TxnID
+	}
+	return nil
+}
+
+func (m *GetTxnLockRequest) GetRow() []byte {
+	if m != nil {
+		return m.Row
+	}
+	return nil
+}
+
+// GetTxnLockResponse get txn Lock response
+type GetTxnLockResponse struct {
+	Value                int32    `protobuf:"varint,1,opt,name=Value,proto3" json:"Value,omitempty"`
+	WaitingList          [][]byte `protobuf:"bytes,2,rep,name=WaitingList,proto3" json:"WaitingList,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *GetTxnLockResponse) Reset()         { *m = GetTxnLockResponse{} }
+func (m *GetTxnLockResponse) String() string { return proto.CompactTextString(m) }
+func (*GetTxnLockResponse) ProtoMessage()    {}
+func (*GetTxnLockResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_164ad2988c7acaf1, []int{7}
+}
+func (m *GetTxnLockResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *GetTxnLockResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_GetTxnLockResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *GetTxnLockResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GetTxnLockResponse.Merge(m, src)
+}
+func (m *GetTxnLockResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *GetTxnLockResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_GetTxnLockResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GetTxnLockResponse proto.InternalMessageInfo
+
+func (m *GetTxnLockResponse) GetValue() int32 {
+	if m != nil {
+		return m.Value
+	}
+	return 0
+}
+
+func (m *GetTxnLockResponse) GetWaitingList() [][]byte {
+	if m != nil {
+		return m.WaitingList
+	}
+	return nil
+}
+
+// GetWaitingListRequest get a waiting txn list on a specical txn request. CN -> CN
+type GetWaitingListRequest struct {
+	TxnID                []byte   `protobuf:"bytes,1,opt,name=TxnID,proto3" json:"TxnID,omitempty"`
+	ServiceID            string   `protobuf:"bytes,2,opt,name=ServiceID,proto3" json:"ServiceID,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *GetWaitingListRequest) Reset()         { *m = GetWaitingListRequest{} }
+func (m *GetWaitingListRequest) String() string { return proto.CompactTextString(m) }
+func (*GetWaitingListRequest) ProtoMessage()    {}
+func (*GetWaitingListRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_164ad2988c7acaf1, []int{8}
+}
+func (m *GetWaitingListRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *GetWaitingListRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_GetWaitingListRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *GetWaitingListRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GetWaitingListRequest.Merge(m, src)
+}
+func (m *GetWaitingListRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *GetWaitingListRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_GetWaitingListRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GetWaitingListRequest proto.InternalMessageInfo
+
+func (m *GetWaitingListRequest) GetTxnID() []byte {
+	if m != nil {
+		return m.TxnID
+	}
+	return nil
+}
+
+func (m *GetWaitingListRequest) GetServiceID() string {
+	if m != nil {
+		return m.ServiceID
+	}
+	return ""
+}
+
+// GetWaitingListResponse get a waiting txn list on a specical txn response. CN -> CN
+type GetWaitingListResponse struct {
+	WaitingList          [][]byte `protobuf:"bytes,2,rep,name=WaitingList,proto3" json:"WaitingList,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *GetWaitingListResponse) Reset()         { *m = GetWaitingListResponse{} }
+func (m *GetWaitingListResponse) String() string { return proto.CompactTextString(m) }
+func (*GetWaitingListResponse) ProtoMessage()    {}
+func (*GetWaitingListResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_164ad2988c7acaf1, []int{9}
+}
+func (m *GetWaitingListResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *GetWaitingListResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_GetWaitingListResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *GetWaitingListResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GetWaitingListResponse.Merge(m, src)
+}
+func (m *GetWaitingListResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *GetWaitingListResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_GetWaitingListResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GetWaitingListResponse proto.InternalMessageInfo
+
+func (m *GetWaitingListResponse) GetWaitingList() [][]byte {
+	if m != nil {
+		return m.WaitingList
+	}
+	return nil
+}
+
+// UnlockRequest unlock lock on remote lock service request. CN -> CN
 type UnlockRequest struct {
 	TxnID                []byte   `protobuf:"bytes,1,opt,name=TxnID,proto3" json:"TxnID,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
@@ -607,7 +878,7 @@ func (m *UnlockRequest) Reset()         { *m = UnlockRequest{} }
 func (m *UnlockRequest) String() string { return proto.CompactTextString(m) }
 func (*UnlockRequest) ProtoMessage()    {}
 func (*UnlockRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{6}
+	return fileDescriptor_164ad2988c7acaf1, []int{10}
 }
 func (m *UnlockRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -643,7 +914,7 @@ func (m *UnlockRequest) GetTxnID() []byte {
 	return nil
 }
 
-// UnlockResponse unlock response
+// UnlockResponse unlock lock on remote lock service response. CN -> CN
 type UnlockResponse struct {
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -654,7 +925,7 @@ func (m *UnlockResponse) Reset()         { *m = UnlockResponse{} }
 func (m *UnlockResponse) String() string { return proto.CompactTextString(m) }
 func (*UnlockResponse) ProtoMessage()    {}
 func (*UnlockResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{7}
+	return fileDescriptor_164ad2988c7acaf1, []int{11}
 }
 func (m *UnlockResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -683,7 +954,7 @@ func (m *UnlockResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_UnlockResponse proto.InternalMessageInfo
 
-// GetBindRequest get bind request from allocator request. Send from cn to dn
+// GetBindRequest get bind request from allocator request. CN -> DN
 type GetBindRequest struct {
 	ServiceID            string   `protobuf:"bytes,1,opt,name=ServiceID,proto3" json:"ServiceID,omitempty"`
 	Table                uint64   `protobuf:"varint,2,opt,name=Table,proto3" json:"Table,omitempty"`
@@ -696,7 +967,7 @@ func (m *GetBindRequest) Reset()         { *m = GetBindRequest{} }
 func (m *GetBindRequest) String() string { return proto.CompactTextString(m) }
 func (*GetBindRequest) ProtoMessage()    {}
 func (*GetBindRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{8}
+	return fileDescriptor_164ad2988c7acaf1, []int{12}
 }
 func (m *GetBindRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -739,7 +1010,7 @@ func (m *GetBindRequest) GetTable() uint64 {
 	return 0
 }
 
-// GetBindResponse get bind request from allocator response
+// GetBindResponse get bind request from allocator response. DN -> CN
 type GetBindResponse struct {
 	LockTable            LockTable `protobuf:"bytes,2,opt,name=LockTable,proto3" json:"LockTable"`
 	XXX_NoUnkeyedLiteral struct{}  `json:"-"`
@@ -751,7 +1022,7 @@ func (m *GetBindResponse) Reset()         { *m = GetBindResponse{} }
 func (m *GetBindResponse) String() string { return proto.CompactTextString(m) }
 func (*GetBindResponse) ProtoMessage()    {}
 func (*GetBindResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{9}
+	return fileDescriptor_164ad2988c7acaf1, []int{13}
 }
 func (m *GetBindResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -787,26 +1058,26 @@ func (m *GetBindResponse) GetLockTable() LockTable {
 	return LockTable{}
 }
 
-// KeepaliveRequest keep lock table bind request. Send from cn to dn
-type KeepaliveRequest struct {
+// KeepLockTableBindRequest keep lock table bind request. CN -> DN
+type KeepLockTableBindRequest struct {
 	ServiceID            string   `protobuf:"bytes,1,opt,name=ServiceID,proto3" json:"ServiceID,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *KeepaliveRequest) Reset()         { *m = KeepaliveRequest{} }
-func (m *KeepaliveRequest) String() string { return proto.CompactTextString(m) }
-func (*KeepaliveRequest) ProtoMessage()    {}
-func (*KeepaliveRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{10}
+func (m *KeepLockTableBindRequest) Reset()         { *m = KeepLockTableBindRequest{} }
+func (m *KeepLockTableBindRequest) String() string { return proto.CompactTextString(m) }
+func (*KeepLockTableBindRequest) ProtoMessage()    {}
+func (*KeepLockTableBindRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_164ad2988c7acaf1, []int{14}
 }
-func (m *KeepaliveRequest) XXX_Unmarshal(b []byte) error {
+func (m *KeepLockTableBindRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *KeepaliveRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *KeepLockTableBindRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_KeepaliveRequest.Marshal(b, m, deterministic)
+		return xxx_messageInfo_KeepLockTableBindRequest.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -816,45 +1087,45 @@ func (m *KeepaliveRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, er
 		return b[:n], nil
 	}
 }
-func (m *KeepaliveRequest) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_KeepaliveRequest.Merge(m, src)
+func (m *KeepLockTableBindRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_KeepLockTableBindRequest.Merge(m, src)
 }
-func (m *KeepaliveRequest) XXX_Size() int {
+func (m *KeepLockTableBindRequest) XXX_Size() int {
 	return m.Size()
 }
-func (m *KeepaliveRequest) XXX_DiscardUnknown() {
-	xxx_messageInfo_KeepaliveRequest.DiscardUnknown(m)
+func (m *KeepLockTableBindRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_KeepLockTableBindRequest.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_KeepaliveRequest proto.InternalMessageInfo
+var xxx_messageInfo_KeepLockTableBindRequest proto.InternalMessageInfo
 
-func (m *KeepaliveRequest) GetServiceID() string {
+func (m *KeepLockTableBindRequest) GetServiceID() string {
 	if m != nil {
 		return m.ServiceID
 	}
 	return ""
 }
 
-// KeepaliveResponse keep lock table bind response
-type KeepaliveResponse struct {
+// KeepLockTableBindResponse keep lock table bind response. DN -> CN
+type KeepLockTableBindResponse struct {
 	OK                   bool     `protobuf:"varint,1,opt,name=OK,proto3" json:"OK,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *KeepaliveResponse) Reset()         { *m = KeepaliveResponse{} }
-func (m *KeepaliveResponse) String() string { return proto.CompactTextString(m) }
-func (*KeepaliveResponse) ProtoMessage()    {}
-func (*KeepaliveResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_164ad2988c7acaf1, []int{11}
+func (m *KeepLockTableBindResponse) Reset()         { *m = KeepLockTableBindResponse{} }
+func (m *KeepLockTableBindResponse) String() string { return proto.CompactTextString(m) }
+func (*KeepLockTableBindResponse) ProtoMessage()    {}
+func (*KeepLockTableBindResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_164ad2988c7acaf1, []int{15}
 }
-func (m *KeepaliveResponse) XXX_Unmarshal(b []byte) error {
+func (m *KeepLockTableBindResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *KeepaliveResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *KeepLockTableBindResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_KeepaliveResponse.Marshal(b, m, deterministic)
+		return xxx_messageInfo_KeepLockTableBindResponse.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -864,19 +1135,115 @@ func (m *KeepaliveResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, e
 		return b[:n], nil
 	}
 }
-func (m *KeepaliveResponse) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_KeepaliveResponse.Merge(m, src)
+func (m *KeepLockTableBindResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_KeepLockTableBindResponse.Merge(m, src)
 }
-func (m *KeepaliveResponse) XXX_Size() int {
+func (m *KeepLockTableBindResponse) XXX_Size() int {
 	return m.Size()
 }
-func (m *KeepaliveResponse) XXX_DiscardUnknown() {
-	xxx_messageInfo_KeepaliveResponse.DiscardUnknown(m)
+func (m *KeepLockTableBindResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_KeepLockTableBindResponse.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_KeepaliveResponse proto.InternalMessageInfo
+var xxx_messageInfo_KeepLockTableBindResponse proto.InternalMessageInfo
 
-func (m *KeepaliveResponse) GetOK() bool {
+func (m *KeepLockTableBindResponse) GetOK() bool {
+	if m != nil {
+		return m.OK
+	}
+	return false
+}
+
+// KeepRemoteLockRequest keep lock on remote lockservice request. CN -> CN
+type KeepRemoteLockRequest struct {
+	ServiceID            string   `protobuf:"bytes,1,opt,name=ServiceID,proto3" json:"ServiceID,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *KeepRemoteLockRequest) Reset()         { *m = KeepRemoteLockRequest{} }
+func (m *KeepRemoteLockRequest) String() string { return proto.CompactTextString(m) }
+func (*KeepRemoteLockRequest) ProtoMessage()    {}
+func (*KeepRemoteLockRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_164ad2988c7acaf1, []int{16}
+}
+func (m *KeepRemoteLockRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *KeepRemoteLockRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_KeepRemoteLockRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *KeepRemoteLockRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_KeepRemoteLockRequest.Merge(m, src)
+}
+func (m *KeepRemoteLockRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *KeepRemoteLockRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_KeepRemoteLockRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_KeepRemoteLockRequest proto.InternalMessageInfo
+
+func (m *KeepRemoteLockRequest) GetServiceID() string {
+	if m != nil {
+		return m.ServiceID
+	}
+	return ""
+}
+
+// KeepRemoteLockResponse keep lock on remote lockservice response. DN -> CN
+type KeepRemoteLockResponse struct {
+	OK                   bool     `protobuf:"varint,1,opt,name=OK,proto3" json:"OK,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *KeepRemoteLockResponse) Reset()         { *m = KeepRemoteLockResponse{} }
+func (m *KeepRemoteLockResponse) String() string { return proto.CompactTextString(m) }
+func (*KeepRemoteLockResponse) ProtoMessage()    {}
+func (*KeepRemoteLockResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_164ad2988c7acaf1, []int{17}
+}
+func (m *KeepRemoteLockResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *KeepRemoteLockResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_KeepRemoteLockResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *KeepRemoteLockResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_KeepRemoteLockResponse.Merge(m, src)
+}
+func (m *KeepRemoteLockResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *KeepRemoteLockResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_KeepRemoteLockResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_KeepRemoteLockResponse proto.InternalMessageInfo
+
+func (m *KeepRemoteLockResponse) GetOK() bool {
 	if m != nil {
 		return m.OK
 	}
@@ -894,64 +1261,82 @@ func init() {
 	proto.RegisterType((*Response)(nil), "lock.Response")
 	proto.RegisterType((*LockRequest)(nil), "lock.LockRequest")
 	proto.RegisterType((*LockResponse)(nil), "lock.LockResponse")
+	proto.RegisterType((*GetTxnLockRequest)(nil), "lock.GetTxnLockRequest")
+	proto.RegisterType((*GetTxnLockResponse)(nil), "lock.GetTxnLockResponse")
+	proto.RegisterType((*GetWaitingListRequest)(nil), "lock.GetWaitingListRequest")
+	proto.RegisterType((*GetWaitingListResponse)(nil), "lock.GetWaitingListResponse")
 	proto.RegisterType((*UnlockRequest)(nil), "lock.UnlockRequest")
 	proto.RegisterType((*UnlockResponse)(nil), "lock.UnlockResponse")
 	proto.RegisterType((*GetBindRequest)(nil), "lock.GetBindRequest")
 	proto.RegisterType((*GetBindResponse)(nil), "lock.GetBindResponse")
-	proto.RegisterType((*KeepaliveRequest)(nil), "lock.KeepaliveRequest")
-	proto.RegisterType((*KeepaliveResponse)(nil), "lock.KeepaliveResponse")
+	proto.RegisterType((*KeepLockTableBindRequest)(nil), "lock.KeepLockTableBindRequest")
+	proto.RegisterType((*KeepLockTableBindResponse)(nil), "lock.KeepLockTableBindResponse")
+	proto.RegisterType((*KeepRemoteLockRequest)(nil), "lock.KeepRemoteLockRequest")
+	proto.RegisterType((*KeepRemoteLockResponse)(nil), "lock.KeepRemoteLockResponse")
 }
 
 func init() { proto.RegisterFile("lock.proto", fileDescriptor_164ad2988c7acaf1) }
 
 var fileDescriptor_164ad2988c7acaf1 = []byte{
-	// 732 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x55, 0x4d, 0x6f, 0xd3, 0x4c,
-	0x10, 0x8e, 0x1d, 0x27, 0x4e, 0x26, 0x69, 0xea, 0xee, 0x9b, 0x17, 0x2c, 0x84, 0x42, 0x31, 0x2d,
-	0x0a, 0x01, 0x1a, 0xda, 0xc2, 0x05, 0x0e, 0x48, 0x55, 0x3f, 0xa8, 0x4a, 0x29, 0xda, 0x42, 0x91,
-	0xb8, 0x39, 0xc9, 0x92, 0x2e, 0x75, 0xbd, 0xc6, 0x76, 0xfa, 0xf1, 0x2f, 0xf8, 0x2f, 0xfc, 0x89,
-	0x1e, 0x7b, 0xe0, 0x8c, 0xa0, 0xbf, 0x04, 0xed, 0x87, 0x13, 0xdb, 0xa9, 0x40, 0xe2, 0xb6, 0x33,
-	0xf3, 0x3c, 0x33, 0xb3, 0x8f, 0x67, 0xd6, 0x00, 0x1e, 0xeb, 0x1f, 0x2d, 0x05, 0x21, 0x8b, 0x19,
-	0x32, 0xf8, 0xf9, 0xd6, 0xe3, 0x21, 0x8d, 0x0f, 0x47, 0xbd, 0xa5, 0x3e, 0x3b, 0xee, 0x0e, 0xd9,
-	0x90, 0x75, 0x45, 0xb0, 0x37, 0xfa, 0x24, 0x2c, 0x61, 0x88, 0x93, 0x24, 0x39, 0x5f, 0x35, 0xa8,
-	0xbd, 0x66, 0xfd, 0xa3, 0xbd, 0x20, 0xa6, 0xcc, 0x8f, 0xd0, 0x2a, 0xd4, 0xb6, 0x42, 0xd7, 0x1f,
-	0x79, 0x6e, 0x48, 0xe3, 0x73, 0x5b, 0x9b, 0xd7, 0xda, 0x8d, 0x95, 0xb9, 0x25, 0x51, 0x26, 0x15,
-	0xc0, 0x69, 0x14, 0x72, 0xc0, 0xd8, 0x65, 0x03, 0x62, 0xeb, 0x02, 0xdd, 0x90, 0x68, 0x9e, 0x95,
-	0x7b, 0xb1, 0x88, 0xa1, 0x36, 0x94, 0x03, 0xe6, 0xd1, 0xfe, 0xb9, 0x5d, 0x14, 0x28, 0x4b, 0xa2,
-	0x3e, 0xb8, 0x34, 0x7e, 0x2b, 0xfc, 0x58, 0xc5, 0x1d, 0x06, 0x55, 0xce, 0x7d, 0xe7, 0xf6, 0x3c,
-	0x82, 0x9a, 0x50, 0x12, 0x07, 0xd1, 0x89, 0x81, 0xa5, 0x81, 0x6e, 0x43, 0x75, 0x9f, 0x84, 0x27,
-	0xb4, 0x4f, 0xb6, 0xd7, 0x45, 0xd5, 0x2a, 0x9e, 0x38, 0x90, 0x0d, 0xe6, 0x01, 0x09, 0x23, 0xca,
-	0x7c, 0x51, 0xcb, 0xc0, 0x89, 0xc9, 0xb3, 0x1d, 0xb8, 0x1e, 0x1d, 0xd8, 0xc6, 0xbc, 0xd6, 0xae,
-	0x60, 0x69, 0x38, 0xdf, 0x75, 0x30, 0x31, 0xf9, 0x32, 0x22, 0x51, 0xcc, 0x33, 0xab, 0xe3, 0xf6,
-	0xba, 0xaa, 0x39, 0x71, 0xa0, 0xd5, 0x54, 0x6b, 0xa2, 0x6e, 0x6d, 0x65, 0x76, 0x72, 0x5b, 0xe1,
-	0x5e, 0x33, 0x2e, 0x7e, 0xdc, 0x29, 0xe0, 0xd4, 0x15, 0x16, 0xa0, 0xbc, 0x4b, 0xe2, 0x43, 0x36,
-	0x50, 0x37, 0xaf, 0x4b, 0x86, 0xf4, 0x61, 0x15, 0x43, 0x0f, 0xc1, 0xe0, 0x14, 0xd1, 0x59, 0x2d,
-	0x51, 0x9c, 0x7b, 0x54, 0x75, 0x95, 0x57, 0x80, 0xd0, 0x32, 0x94, 0xdf, 0xfb, 0x1c, 0x61, 0x97,
-	0x04, 0xfc, 0x3f, 0x09, 0x97, 0xbe, 0x2c, 0x41, 0x01, 0xd1, 0x53, 0x30, 0xb7, 0x48, 0xbc, 0x46,
-	0xfd, 0x81, 0x5d, 0x16, 0x9c, 0xa6, 0xfa, 0xa8, 0xd2, 0x99, 0x25, 0x25, 0x50, 0xf4, 0x1c, 0xaa,
-	0x3b, 0x84, 0x04, 0xae, 0x47, 0x4f, 0x88, 0x6d, 0x0a, 0xde, 0x0d, 0xc9, 0x1b, 0xbb, 0xb3, 0xcc,
-	0x09, 0xdc, 0xf9, 0xa6, 0x43, 0x05, 0x93, 0x28, 0x60, 0x7e, 0x44, 0xfe, 0xa2, 0x6b, 0x13, 0x4a,
-	0x1b, 0x61, 0xc8, 0x42, 0xa1, 0x69, 0x1d, 0x4b, 0x03, 0x3d, 0x00, 0xf3, 0x0d, 0x39, 0x15, 0x2d,
-	0x17, 0xaf, 0xd5, 0x1a, 0x27, 0x71, 0x74, 0x3f, 0xa3, 0x1e, 0x4a, 0xab, 0x27, 0x1b, 0x50, 0xc2,
-	0x3d, 0xca, 0x09, 0xd7, 0xcc, 0x0a, 0xa7, 0xb0, 0x89, 0x66, 0xcf, 0xf2, 0x9a, 0xfd, 0x9f, 0xd3,
-	0x4c, 0xe2, 0xf3, 0xa2, 0xbd, 0x98, 0x16, 0xed, 0xe6, 0x94, 0x68, 0x19, 0x6a, 0x4a, 0xb5, 0xcf,
-	0x72, 0x1f, 0x93, 0x79, 0xe4, 0xf3, 0x7f, 0xe6, 0x2b, 0xcd, 0xea, 0x58, 0x1a, 0x08, 0x81, 0x81,
-	0xd9, 0x69, 0x64, 0xeb, 0xf3, 0xc5, 0x76, 0x1d, 0x8b, 0x33, 0x5a, 0x06, 0x53, 0x2d, 0xf1, 0xf4,
-	0x0c, 0xa9, 0x40, 0xd2, 0xa8, 0x32, 0x9d, 0x06, 0xd4, 0xd3, 0x1a, 0x39, 0x8b, 0x30, 0x93, 0x19,
-	0xa1, 0xeb, 0xab, 0x3b, 0x16, 0x34, 0xb2, 0x82, 0x39, 0xeb, 0xd0, 0xc8, 0xce, 0x51, 0x76, 0x43,
-	0xb5, 0xfc, 0x86, 0x8e, 0xb7, 0x5a, 0x4f, 0x6d, 0xb5, 0xb3, 0x09, 0xb3, 0x39, 0x65, 0xff, 0x69,
-	0xe1, 0x9c, 0x27, 0x60, 0xe5, 0xa7, 0xf3, 0xcf, 0xfd, 0x38, 0xf7, 0x60, 0x6e, 0xea, 0xd3, 0xa0,
-	0x06, 0xe8, 0x7b, 0x3b, 0x02, 0x5b, 0xc1, 0xfa, 0xde, 0x4e, 0xe7, 0x6e, 0xe6, 0x69, 0x44, 0x26,
-	0x14, 0x31, 0x3b, 0xb5, 0x0a, 0xa8, 0x0a, 0x25, 0xec, 0xfa, 0x43, 0x62, 0x69, 0x9d, 0x45, 0xa8,
-	0x24, 0xcf, 0x1e, 0x9a, 0x81, 0xea, 0xc6, 0x59, 0xdf, 0x1b, 0x45, 0xf4, 0x84, 0x58, 0x05, 0x04,
-	0x50, 0xde, 0x3f, 0x74, 0x43, 0x32, 0xb0, 0xb4, 0xce, 0x02, 0xc0, 0xe4, 0xdd, 0x43, 0x15, 0x30,
-	0xb8, 0x65, 0x15, 0x50, 0x1d, 0x2a, 0x9b, 0x6e, 0x14, 0x6f, 0xba, 0xd4, 0xb3, 0xb4, 0xce, 0x76,
-	0xf2, 0x6e, 0x70, 0x04, 0x4f, 0x2b, 0xb3, 0x48, 0xe9, 0x2d, 0x8d, 0x17, 0x78, 0x45, 0xdc, 0x30,
-	0xee, 0x11, 0x37, 0xb6, 0x74, 0x54, 0x1b, 0x0f, 0xab, 0x55, 0xe4, 0xb1, 0xf1, 0x85, 0x2c, 0x63,
-	0xed, 0xe5, 0xe5, 0xaf, 0x96, 0x76, 0x71, 0xd5, 0xd2, 0x2e, 0xaf, 0x5a, 0xda, 0xcf, 0xab, 0x96,
-	0xf6, 0x31, 0xfd, 0x9b, 0x38, 0x76, 0xe3, 0x90, 0x9e, 0xb1, 0x90, 0x0e, 0xa9, 0x9f, 0x18, 0x3e,
-	0xe9, 0x06, 0x47, 0xc3, 0x6e, 0xd0, 0xeb, 0xf2, 0x6a, 0xbd, 0xb2, 0xf8, 0x5b, 0xac, 0xfe, 0x0e,
-	0x00, 0x00, 0xff, 0xff, 0xdf, 0x28, 0x15, 0xac, 0x70, 0x06, 0x00, 0x00,
+	// 924 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x56, 0xed, 0x6e, 0xdb, 0x54,
+	0x18, 0xae, 0x13, 0xe7, 0xeb, 0x4d, 0x96, 0xb9, 0x2f, 0xed, 0x30, 0x50, 0x65, 0xc5, 0xda, 0xa4,
+	0xd0, 0x41, 0xa3, 0xb5, 0x4c, 0x42, 0x20, 0x40, 0xaa, 0xba, 0x56, 0x5d, 0x3b, 0x8a, 0x4e, 0xc7,
+	0x90, 0xf8, 0xe7, 0x24, 0x87, 0xd4, 0x6a, 0xea, 0x13, 0x6c, 0x67, 0xed, 0xb8, 0x02, 0x7e, 0x72,
+	0x27, 0x5c, 0x03, 0xff, 0xf6, 0x73, 0x57, 0x80, 0xa0, 0x57, 0x82, 0xce, 0x7b, 0xec, 0xe4, 0x1c,
+	0xc7, 0xa1, 0x68, 0xff, 0xce, 0xfb, 0xf1, 0xbc, 0x1f, 0xf6, 0xe3, 0xc7, 0x07, 0x60, 0x2c, 0x06,
+	0x17, 0xdb, 0x93, 0x48, 0x24, 0x02, 0x6d, 0x79, 0xfe, 0xf0, 0xb3, 0x51, 0x90, 0x9c, 0x4f, 0xfb,
+	0xdb, 0x03, 0x71, 0xd9, 0x1b, 0x89, 0x91, 0xe8, 0x51, 0xb0, 0x3f, 0xfd, 0x99, 0x2c, 0x32, 0xe8,
+	0xa4, 0x40, 0xde, 0xef, 0x16, 0x34, 0x4f, 0xc4, 0xe0, 0xe2, 0x74, 0x92, 0x04, 0x22, 0x8c, 0x71,
+	0x17, 0x9a, 0x87, 0x91, 0x1f, 0x4e, 0xc7, 0x7e, 0x14, 0x24, 0xaf, 0x5d, 0x6b, 0xd3, 0xea, 0xb6,
+	0x77, 0x56, 0xb7, 0xa9, 0x8d, 0x16, 0x60, 0x7a, 0x16, 0x7a, 0x60, 0x3f, 0x17, 0x43, 0xee, 0x96,
+	0x28, 0xbb, 0xad, 0xb2, 0x65, 0x55, 0xe9, 0x65, 0x14, 0xc3, 0x2e, 0x54, 0x27, 0x62, 0x1c, 0x0c,
+	0x5e, 0xbb, 0x65, 0xca, 0x72, 0x54, 0xd6, 0x8f, 0x7e, 0x90, 0x7c, 0x4f, 0x7e, 0x96, 0xc6, 0x3d,
+	0x01, 0x0d, 0x89, 0x7d, 0xe1, 0xf7, 0xc7, 0x1c, 0xd7, 0xa0, 0x42, 0x07, 0x9a, 0xc4, 0x66, 0xca,
+	0xc0, 0x0d, 0x68, 0x9c, 0xf1, 0xe8, 0x55, 0x30, 0xe0, 0x47, 0xfb, 0xd4, 0xb5, 0xc1, 0xe6, 0x0e,
+	0x74, 0xa1, 0xf6, 0x92, 0x47, 0x71, 0x20, 0x42, 0xea, 0x65, 0xb3, 0xcc, 0x94, 0xd5, 0x5e, 0xfa,
+	0xe3, 0x60, 0xe8, 0xda, 0x9b, 0x56, 0xb7, 0xce, 0x94, 0xe1, 0xfd, 0x69, 0x43, 0x8d, 0xf1, 0x5f,
+	0xa6, 0x3c, 0x4e, 0x64, 0xe5, 0xf4, 0x78, 0xb4, 0x9f, 0xf6, 0x9c, 0x3b, 0x70, 0x57, 0x1b, 0x8d,
+	0xfa, 0x36, 0x77, 0xee, 0xce, 0xb7, 0x25, 0xf7, 0x9e, 0xfd, 0xe6, 0xaf, 0xfb, 0x2b, 0x4c, 0x5b,
+	0xe1, 0x01, 0x54, 0x9f, 0xf3, 0xe4, 0x5c, 0x0c, 0xd3, 0xcd, 0x5b, 0x0a, 0xa1, 0x7c, 0x2c, 0x8d,
+	0xe1, 0x23, 0xb0, 0x25, 0x84, 0x26, 0x6b, 0x66, 0x4f, 0x5c, 0x7a, 0xd2, 0xee, 0x69, 0x5d, 0x4a,
+	0xc2, 0xc7, 0x50, 0xfd, 0x21, 0x94, 0x19, 0x6e, 0x85, 0xd2, 0xdf, 0x53, 0xe9, 0xca, 0x67, 0x02,
+	0xd2, 0x44, 0xfc, 0x1a, 0xe0, 0x90, 0x27, 0x2f, 0xae, 0x43, 0xea, 0x52, 0x25, 0xd8, 0xfb, 0xe9,
+	0x7b, 0x9d, 0xf9, 0x4d, 0xa8, 0x06, 0xc0, 0x23, 0x68, 0x1f, 0xf2, 0x44, 0xbe, 0xad, 0x20, 0x1c,
+	0x9d, 0x04, 0x71, 0xe2, 0xd6, 0xa8, 0xc4, 0x47, 0xb3, 0x12, 0x5a, 0xcc, 0x2c, 0x93, 0x03, 0xe2,
+	0xe7, 0x50, 0x3b, 0xe4, 0xc9, 0x5e, 0x10, 0x0e, 0xdd, 0x3a, 0xd5, 0x58, 0x9b, 0xd5, 0x90, 0x4e,
+	0x13, 0x9c, 0xa5, 0x22, 0x83, 0xd5, 0x63, 0xce, 0x27, 0xf3, 0xe7, 0x2c, 0xf1, 0x0d, 0xc2, 0x77,
+	0x14, 0x7e, 0x21, 0x6c, 0x56, 0x5a, 0x84, 0xcb, 0xa5, 0xa4, 0x93, 0xf1, 0x4b, 0x91, 0x70, 0x7a,
+	0x2e, 0xa0, 0x2f, 0x65, 0xc6, 0x72, 0x4b, 0x99, 0x41, 0xef, 0x0f, 0x1b, 0xea, 0x8c, 0xc7, 0x13,
+	0x11, 0xc6, 0xfc, 0x16, 0x12, 0xad, 0x41, 0xe5, 0x69, 0x14, 0x89, 0x88, 0x08, 0xd4, 0x62, 0xca,
+	0xc0, 0x4f, 0xa0, 0xf6, 0x1d, 0xbf, 0xa2, 0xad, 0xca, 0x85, 0xc4, 0x62, 0x59, 0x1c, 0x3f, 0x35,
+	0xa8, 0x82, 0x3a, 0x55, 0xd4, 0x00, 0x06, 0x57, 0x76, 0x72, 0x5c, 0x59, 0x33, 0xb9, 0x62, 0x20,
+	0x32, 0xb2, 0x7c, 0x53, 0x40, 0x16, 0x77, 0x91, 0x2c, 0x06, 0x56, 0x67, 0xcb, 0xb3, 0x25, 0x6c,
+	0xd9, 0x28, 0x66, 0x8b, 0x51, 0x27, 0x4f, 0x97, 0x27, 0x79, 0xba, 0xac, 0xe7, 0xe8, 0x62, 0xa0,
+	0x67, 0x7c, 0x39, 0x5b, 0xce, 0x97, 0xfb, 0x4b, 0xf9, 0x62, 0x94, 0x2a, 0x20, 0xcc, 0xb3, 0x25,
+	0x84, 0xd9, 0x28, 0x26, 0x8c, 0xb9, 0x57, 0x8e, 0x31, 0xbf, 0xa5, 0xca, 0x9b, 0x29, 0x8f, 0x54,
+	0xba, 0xeb, 0x30, 0x25, 0x4c, 0x8b, 0x29, 0xe3, 0x16, 0xa5, 0x43, 0xb0, 0x99, 0xb8, 0x8a, 0xdd,
+	0xf2, 0x66, 0xb9, 0xdb, 0x62, 0x74, 0xc6, 0xc7, 0x50, 0x4b, 0xc5, 0x7c, 0x51, 0x4b, 0xd2, 0x40,
+	0xf6, 0xac, 0x52, 0xd3, 0x6b, 0x43, 0x4b, 0x1f, 0xd8, 0xfb, 0x0a, 0x56, 0x17, 0x34, 0x61, 0xc9,
+	0x7c, 0x0e, 0x94, 0x99, 0xb8, 0x4a, 0xa9, 0x2c, 0x8f, 0xde, 0x09, 0xe0, 0x22, 0x47, 0x52, 0xe5,
+	0x9d, 0x2a, 0x1d, 0xaf, 0x30, 0x65, 0xe0, 0x26, 0x34, 0x75, 0x92, 0x94, 0x68, 0x0d, 0xdd, 0xe5,
+	0x1d, 0xc3, 0x7a, 0xa1, 0xb6, 0xbc, 0xcb, 0xe3, 0xf2, 0xbe, 0x84, 0x7b, 0xc5, 0xd4, 0xfb, 0x1f,
+	0x83, 0x3c, 0x84, 0x3b, 0x86, 0xbc, 0x16, 0x0f, 0xe0, 0x39, 0xd0, 0x36, 0xbf, 0x2c, 0x6f, 0x9f,
+	0xbe, 0x05, 0x4d, 0x8f, 0xcc, 0x21, 0xad, 0xfc, 0x3b, 0x9d, 0xfd, 0xf1, 0x4a, 0xda, 0x1f, 0xcf,
+	0x3b, 0x80, 0xbb, 0x39, 0xc2, 0xbf, 0xd3, 0xcf, 0xc8, 0xfb, 0x02, 0xdc, 0x65, 0x3a, 0xf9, 0xdf,
+	0x73, 0x79, 0x8f, 0xe0, 0x83, 0xa5, 0x5f, 0x0c, 0xb6, 0xa1, 0x74, 0x7a, 0x4c, 0x98, 0x3a, 0x2b,
+	0x9d, 0x1e, 0x7b, 0x4f, 0x60, 0xbd, 0x50, 0x3d, 0x6f, 0xe9, 0xd1, 0x85, 0x7b, 0xc5, 0xdf, 0x50,
+	0xbe, 0xc1, 0xd6, 0xc7, 0xc6, 0x3d, 0x05, 0x6b, 0x44, 0x43, 0x67, 0x05, 0x1b, 0x50, 0x61, 0x7e,
+	0x38, 0xe2, 0x8e, 0xb5, 0xf5, 0x10, 0xea, 0xd9, 0x1d, 0x04, 0xef, 0x40, 0xe3, 0xe9, 0xf5, 0x60,
+	0x3c, 0x8d, 0x83, 0x57, 0xdc, 0x59, 0x41, 0x80, 0xea, 0xd9, 0xb9, 0x1f, 0xf1, 0xa1, 0x63, 0x6d,
+	0x3d, 0x00, 0x98, 0x5f, 0x42, 0xb0, 0x0e, 0xb6, 0xb4, 0x9c, 0x15, 0x6c, 0x41, 0xfd, 0xc0, 0x8f,
+	0x93, 0x03, 0x3f, 0x18, 0x3b, 0xd6, 0xd6, 0xaf, 0xd9, 0x4f, 0x5c, 0x66, 0xc8, 0xb2, 0xaa, 0x8a,
+	0x7a, 0xd7, 0x8e, 0x85, 0x6d, 0x5d, 0x31, 0x9d, 0x12, 0x62, 0x5e, 0x01, 0x9d, 0xb2, 0xf4, 0x99,
+	0xdb, 0x39, 0x36, 0x36, 0x67, 0xea, 0xe6, 0x54, 0x70, 0xbd, 0x40, 0xb3, 0x9c, 0xea, 0xde, 0xb7,
+	0x6f, 0xff, 0xe9, 0x58, 0x6f, 0x6e, 0x3a, 0xd6, 0xdb, 0x9b, 0x8e, 0xf5, 0xf7, 0x4d, 0xc7, 0xfa,
+	0x49, 0xbf, 0xe4, 0x5d, 0xfa, 0x49, 0x14, 0x5c, 0x8b, 0x28, 0x18, 0x05, 0x61, 0x66, 0x84, 0xbc,
+	0x37, 0xb9, 0x18, 0xf5, 0x26, 0xfd, 0x9e, 0x1c, 0xaf, 0x5f, 0xa5, 0xbb, 0xde, 0xee, 0xbf, 0x01,
+	0x00, 0x00, 0xff, 0xff, 0x9e, 0x1d, 0x3a, 0x57, 0x2e, 0x0a, 0x00, 0x00,
 }
 
 func (m *LockOptions) Marshal() (dAtA []byte, err error) {
@@ -1075,7 +1460,37 @@ func (m *Request) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	{
-		size, err := m.Keepalive.MarshalToSizedBuffer(dAtA[:i])
+		size, err := m.KeepRemoteLock.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x52
+	{
+		size, err := m.KeepLockTableBind.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x4a
+	{
+		size, err := m.GetBind.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x42
+	{
+		size, err := m.GetWaitingList.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
@@ -1085,7 +1500,7 @@ func (m *Request) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i--
 	dAtA[i] = 0x3a
 	{
-		size, err := m.GetBind.MarshalToSizedBuffer(dAtA[:i])
+		size, err := m.GetTxnLock.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
@@ -1162,7 +1577,7 @@ func (m *Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	{
-		size, err := m.Keepalive.MarshalToSizedBuffer(dAtA[:i])
+		size, err := m.KeepRemoteLock.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
@@ -1170,7 +1585,17 @@ func (m *Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i = encodeVarintLock(dAtA, i, uint64(size))
 	}
 	i--
-	dAtA[i] = 0x3a
+	dAtA[i] = 0x52
+	{
+		size, err := m.KeepLockTableBind.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x4a
 	{
 		size, err := m.GetBind.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
@@ -1180,31 +1605,47 @@ func (m *Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i = encodeVarintLock(dAtA, i, uint64(size))
 	}
 	i--
+	dAtA[i] = 0x42
+	{
+		size, err := m.GetWaitingList.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x3a
+	{
+		size, err := m.GetTxnLock.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
+	}
+	i--
 	dAtA[i] = 0x32
-	if m.Unlock != nil {
-		{
-			size, err := m.Unlock.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintLock(dAtA, i, uint64(size))
+	{
+		size, err := m.Unlock.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
-		i--
-		dAtA[i] = 0x2a
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
 	}
-	if m.Lock != nil {
-		{
-			size, err := m.Lock.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintLock(dAtA, i, uint64(size))
+	i--
+	dAtA[i] = 0x2a
+	{
+		size, err := m.Lock.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
-		i--
-		dAtA[i] = 0x22
+		i -= size
+		i = encodeVarintLock(dAtA, i, uint64(size))
 	}
+	i--
+	dAtA[i] = 0x22
 	if m.NewBind != nil {
 		{
 			size, err := m.NewBind.MarshalToSizedBuffer(dAtA[:i])
@@ -1272,8 +1713,15 @@ func (m *LockRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			copy(dAtA[i:], m.Rows[iNdEx])
 			i = encodeVarintLock(dAtA, i, uint64(len(m.Rows[iNdEx])))
 			i--
-			dAtA[i] = 0x12
+			dAtA[i] = 0x1a
 		}
+	}
+	if len(m.ServiceID) > 0 {
+		i -= len(m.ServiceID)
+		copy(dAtA[i:], m.ServiceID)
+		i = encodeVarintLock(dAtA, i, uint64(len(m.ServiceID)))
+		i--
+		dAtA[i] = 0x12
 	}
 	if len(m.TxnID) > 0 {
 		i -= len(m.TxnID)
@@ -1308,6 +1756,165 @@ func (m *LockResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *GetTxnLockRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GetTxnLockRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GetTxnLockRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Row) > 0 {
+		i -= len(m.Row)
+		copy(dAtA[i:], m.Row)
+		i = encodeVarintLock(dAtA, i, uint64(len(m.Row)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.TxnID) > 0 {
+		i -= len(m.TxnID)
+		copy(dAtA[i:], m.TxnID)
+		i = encodeVarintLock(dAtA, i, uint64(len(m.TxnID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *GetTxnLockResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GetTxnLockResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GetTxnLockResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.WaitingList) > 0 {
+		for iNdEx := len(m.WaitingList) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.WaitingList[iNdEx])
+			copy(dAtA[i:], m.WaitingList[iNdEx])
+			i = encodeVarintLock(dAtA, i, uint64(len(m.WaitingList[iNdEx])))
+			i--
+			dAtA[i] = 0x12
+		}
+	}
+	if m.Value != 0 {
+		i = encodeVarintLock(dAtA, i, uint64(m.Value))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *GetWaitingListRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GetWaitingListRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GetWaitingListRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.ServiceID) > 0 {
+		i -= len(m.ServiceID)
+		copy(dAtA[i:], m.ServiceID)
+		i = encodeVarintLock(dAtA, i, uint64(len(m.ServiceID)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.TxnID) > 0 {
+		i -= len(m.TxnID)
+		copy(dAtA[i:], m.TxnID)
+		i = encodeVarintLock(dAtA, i, uint64(len(m.TxnID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *GetWaitingListResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GetWaitingListResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GetWaitingListResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.WaitingList) > 0 {
+		for iNdEx := len(m.WaitingList) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.WaitingList[iNdEx])
+			copy(dAtA[i:], m.WaitingList[iNdEx])
+			i = encodeVarintLock(dAtA, i, uint64(len(m.WaitingList[iNdEx])))
+			i--
+			dAtA[i] = 0x12
+		}
 	}
 	return len(dAtA) - i, nil
 }
@@ -1449,7 +2056,7 @@ func (m *GetBindResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *KeepaliveRequest) Marshal() (dAtA []byte, err error) {
+func (m *KeepLockTableBindRequest) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -1459,12 +2066,12 @@ func (m *KeepaliveRequest) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *KeepaliveRequest) MarshalTo(dAtA []byte) (int, error) {
+func (m *KeepLockTableBindRequest) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *KeepaliveRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *KeepLockTableBindRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -1483,7 +2090,7 @@ func (m *KeepaliveRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *KeepaliveResponse) Marshal() (dAtA []byte, err error) {
+func (m *KeepLockTableBindResponse) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -1493,12 +2100,83 @@ func (m *KeepaliveResponse) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *KeepaliveResponse) MarshalTo(dAtA []byte) (int, error) {
+func (m *KeepLockTableBindResponse) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *KeepaliveResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *KeepLockTableBindResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.OK {
+		i--
+		if m.OK {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *KeepRemoteLockRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *KeepRemoteLockRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *KeepRemoteLockRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.ServiceID) > 0 {
+		i -= len(m.ServiceID)
+		copy(dAtA[i:], m.ServiceID)
+		i = encodeVarintLock(dAtA, i, uint64(len(m.ServiceID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *KeepRemoteLockResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *KeepRemoteLockResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *KeepRemoteLockResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -1595,9 +2273,15 @@ func (m *Request) Size() (n int) {
 	n += 1 + l + sovLock(uint64(l))
 	l = m.Unlock.Size()
 	n += 1 + l + sovLock(uint64(l))
+	l = m.GetTxnLock.Size()
+	n += 1 + l + sovLock(uint64(l))
+	l = m.GetWaitingList.Size()
+	n += 1 + l + sovLock(uint64(l))
 	l = m.GetBind.Size()
 	n += 1 + l + sovLock(uint64(l))
-	l = m.Keepalive.Size()
+	l = m.KeepLockTableBind.Size()
+	n += 1 + l + sovLock(uint64(l))
+	l = m.KeepRemoteLock.Size()
 	n += 1 + l + sovLock(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -1622,17 +2306,19 @@ func (m *Response) Size() (n int) {
 		l = m.NewBind.Size()
 		n += 1 + l + sovLock(uint64(l))
 	}
-	if m.Lock != nil {
-		l = m.Lock.Size()
-		n += 1 + l + sovLock(uint64(l))
-	}
-	if m.Unlock != nil {
-		l = m.Unlock.Size()
-		n += 1 + l + sovLock(uint64(l))
-	}
+	l = m.Lock.Size()
+	n += 1 + l + sovLock(uint64(l))
+	l = m.Unlock.Size()
+	n += 1 + l + sovLock(uint64(l))
+	l = m.GetTxnLock.Size()
+	n += 1 + l + sovLock(uint64(l))
+	l = m.GetWaitingList.Size()
+	n += 1 + l + sovLock(uint64(l))
 	l = m.GetBind.Size()
 	n += 1 + l + sovLock(uint64(l))
-	l = m.Keepalive.Size()
+	l = m.KeepLockTableBind.Size()
+	n += 1 + l + sovLock(uint64(l))
+	l = m.KeepRemoteLock.Size()
 	n += 1 + l + sovLock(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -1647,6 +2333,10 @@ func (m *LockRequest) Size() (n int) {
 	var l int
 	_ = l
 	l = len(m.TxnID)
+	if l > 0 {
+		n += 1 + l + sovLock(uint64(l))
+	}
+	l = len(m.ServiceID)
 	if l > 0 {
 		n += 1 + l + sovLock(uint64(l))
 	}
@@ -1670,6 +2360,85 @@ func (m *LockResponse) Size() (n int) {
 	}
 	var l int
 	_ = l
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *GetTxnLockRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.TxnID)
+	if l > 0 {
+		n += 1 + l + sovLock(uint64(l))
+	}
+	l = len(m.Row)
+	if l > 0 {
+		n += 1 + l + sovLock(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *GetTxnLockResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Value != 0 {
+		n += 1 + sovLock(uint64(m.Value))
+	}
+	if len(m.WaitingList) > 0 {
+		for _, b := range m.WaitingList {
+			l = len(b)
+			n += 1 + l + sovLock(uint64(l))
+		}
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *GetWaitingListRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.TxnID)
+	if l > 0 {
+		n += 1 + l + sovLock(uint64(l))
+	}
+	l = len(m.ServiceID)
+	if l > 0 {
+		n += 1 + l + sovLock(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *GetWaitingListResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.WaitingList) > 0 {
+		for _, b := range m.WaitingList {
+			l = len(b)
+			n += 1 + l + sovLock(uint64(l))
+		}
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -1737,7 +2506,7 @@ func (m *GetBindResponse) Size() (n int) {
 	return n
 }
 
-func (m *KeepaliveRequest) Size() (n int) {
+func (m *KeepLockTableBindRequest) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -1753,7 +2522,38 @@ func (m *KeepaliveRequest) Size() (n int) {
 	return n
 }
 
-func (m *KeepaliveResponse) Size() (n int) {
+func (m *KeepLockTableBindResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.OK {
+		n += 2
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *KeepRemoteLockRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.ServiceID)
+	if l > 0 {
+		n += 1 + l + sovLock(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *KeepRemoteLockResponse) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -2191,6 +2991,72 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 6:
 			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field GetTxnLock", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.GetTxnLock.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field GetWaitingList", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.GetWaitingList.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 8:
+			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field GetBind", wireType)
 			}
 			var msglen int
@@ -2222,9 +3088,9 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 7:
+		case 9:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Keepalive", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field KeepLockTableBind", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -2251,7 +3117,40 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if err := m.Keepalive.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.KeepLockTableBind.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 10:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field KeepRemoteLock", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.KeepRemoteLock.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -2424,9 +3323,6 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.Lock == nil {
-				m.Lock = &LockResponse{}
-			}
 			if err := m.Lock.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
@@ -2460,14 +3356,77 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.Unlock == nil {
-				m.Unlock = &UnlockResponse{}
-			}
 			if err := m.Unlock.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
 		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field GetTxnLock", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.GetTxnLock.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field GetWaitingList", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.GetWaitingList.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 8:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field GetBind", wireType)
 			}
@@ -2500,9 +3459,9 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 7:
+		case 9:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Keepalive", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field KeepLockTableBind", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -2529,7 +3488,40 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if err := m.Keepalive.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.KeepLockTableBind.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 10:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field KeepRemoteLock", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.KeepRemoteLock.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -2619,6 +3611,38 @@ func (m *LockRequest) Unmarshal(dAtA []byte) error {
 			}
 			iNdEx = postIndex
 		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ServiceID", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ServiceID = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Rows", wireType)
 			}
@@ -2734,6 +3758,427 @@ func (m *LockResponse) Unmarshal(dAtA []byte) error {
 			return fmt.Errorf("proto: LockResponse: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLock(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLock
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *GetTxnLockRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLock
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GetTxnLockRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GetTxnLockRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TxnID", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.TxnID = append(m.TxnID[:0], dAtA[iNdEx:postIndex]...)
+			if m.TxnID == nil {
+				m.TxnID = []byte{}
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Row", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Row = append(m.Row[:0], dAtA[iNdEx:postIndex]...)
+			if m.Row == nil {
+				m.Row = []byte{}
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLock(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLock
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *GetTxnLockResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLock
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GetTxnLockResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GetTxnLockResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Value", wireType)
+			}
+			m.Value = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Value |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field WaitingList", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.WaitingList = append(m.WaitingList, make([]byte, postIndex-iNdEx))
+			copy(m.WaitingList[len(m.WaitingList)-1], dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLock(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLock
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *GetWaitingListRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLock
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GetWaitingListRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GetWaitingListRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TxnID", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.TxnID = append(m.TxnID[:0], dAtA[iNdEx:postIndex]...)
+			if m.TxnID == nil {
+				m.TxnID = []byte{}
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ServiceID", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ServiceID = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLock(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLock
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *GetWaitingListResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLock
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GetWaitingListResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GetWaitingListResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field WaitingList", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.WaitingList = append(m.WaitingList, make([]byte, postIndex-iNdEx))
+			copy(m.WaitingList[len(m.WaitingList)-1], dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipLock(dAtA[iNdEx:])
@@ -3078,7 +4523,7 @@ func (m *GetBindResponse) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *KeepaliveRequest) Unmarshal(dAtA []byte) error {
+func (m *KeepLockTableBindRequest) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -3101,10 +4546,10 @@ func (m *KeepaliveRequest) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: KeepaliveRequest: wiretype end group for non-group")
+			return fmt.Errorf("proto: KeepLockTableBindRequest: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: KeepaliveRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: KeepLockTableBindRequest: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
@@ -3161,7 +4606,7 @@ func (m *KeepaliveRequest) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *KeepaliveResponse) Unmarshal(dAtA []byte) error {
+func (m *KeepLockTableBindResponse) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -3184,10 +4629,164 @@ func (m *KeepaliveResponse) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: KeepaliveResponse: wiretype end group for non-group")
+			return fmt.Errorf("proto: KeepLockTableBindResponse: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: KeepaliveResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: KeepLockTableBindResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OK", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.OK = bool(v != 0)
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLock(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLock
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *KeepRemoteLockRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLock
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: KeepRemoteLockRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: KeepRemoteLockRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ServiceID", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLock
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthLock
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthLock
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ServiceID = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLock(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLock
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *KeepRemoteLockResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLock
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: KeepRemoteLockResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: KeepRemoteLockResponse: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:

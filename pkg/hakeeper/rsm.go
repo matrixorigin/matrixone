@@ -552,6 +552,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			ServiceAddress:       info.ServiceAddress,
 			Shards:               info.Shards,
 			LogtailServerAddress: info.LogtailServerAddress,
+			LockServiceAddress:   info.LockServiceAddress,
 		}
 		cd.DNStores = append(cd.DNStores, n)
 	}

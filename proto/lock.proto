@@ -62,59 +62,60 @@ message LockTable {
 // Method lock table operations
 enum Method {
   // Lock lock
-  Lock      = 0;
+  Lock              = 0;
   // Write transaction write
-  Unlock    = 1;
-  // Heartbeat heartbeat
-  Heartbeat = 2;
+  Unlock            = 1;
+  // GetTxnLock get lock data on a special lock
+  GetTxnLock        = 2;
+  // GetWaitingList get waiting txns on a special lock
+  GetWaitingList    = 3;
+  // KeepRemoteLock keep remote lock on remote lock service 
+  KeepRemoteLock    = 4;
   // GetBind get or create lock table bind from lock table allocator
-  GetBind   = 3;
-  // Keepalive keepalive the lock table bind on lock table allocator
-  Keepalive = 4;
+  GetBind           = 5;
+  // KeepLockTableBind keep the lock table bind on lock table allocator
+  KeepLockTableBind = 6;
 }
 
 // Request is used to send a request for a LockTable related operation to another 
 // service.
 message Request {
   // RequestID request id
-  uint64        RequestID    = 1;
+  uint64                   RequestID           = 1;
   // LockTable lock target table
-  LockTable     LockTable    = 2 [(gogoproto.nullable) = false];
-  // Method request type
-  Method        Method       = 3;
-  // Lock lock request
-  LockRequest   Lock         = 4 [(gogoproto.nullable) = false];
-  // Unlock unlock request
-  UnlockRequest Unlock       = 5 [(gogoproto.nullable) = false];
-  // GetBindRequest get bind request
-  GetBindRequest GetBind     = 6 [(gogoproto.nullable) = false];
-  // KeepaliveRequest keepalive request
-  KeepaliveRequest Keepalive = 7 [(gogoproto.nullable) = false];
+  LockTable                LockTable           = 2  [(gogoproto.nullable) = false];
+  Method                   Method              = 3;
+  LockRequest              Lock                = 4  [(gogoproto.nullable) = false];
+  UnlockRequest            Unlock              = 5  [(gogoproto.nullable) = false];
+  GetTxnLockRequest        GetTxnLock          = 6  [(gogoproto.nullable) = false];
+  GetWaitingListRequest    GetWaitingList      = 7  [(gogoproto.nullable) = false];
+  GetBindRequest           GetBind             = 8  [(gogoproto.nullable) = false];
+  KeepLockTableBindRequest KeepLockTableBind   = 9  [(gogoproto.nullable) = false];
+  KeepRemoteLockRequest    KeepRemoteLock      = 10 [(gogoproto.nullable) = false];
 }
 
 // Response response
 message Response {
     // RequestID corresponding request id
-    uint64            RequestID   = 1;
+    uint64                    RequestID         = 1;
     // Error we use this field to send moerr from service to another cn. Set with 
     // moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
-    bytes             Error       = 2;
-    // NewBind lock table and lockservice bind changed
-    LockTable         NewBind     = 3;
-    // LockResponse lock response
-    LockResponse      Lock        = 4;
-    // UnlockResponse unlock response 
-    UnlockResponse    Unlock      = 5;
-    // GetBindResponse get bind request
-    GetBindResponse   GetBind     = 6 [(gogoproto.nullable) = false];
-    // KeepaliveResponse keepalive request
-    KeepaliveResponse Keepalive   = 7 [(gogoproto.nullable) = false];
+    bytes                     Error             = 2;
+    LockTable                 NewBind           = 3;
+    LockResponse              Lock              = 4  [(gogoproto.nullable) = false];
+    UnlockResponse            Unlock            = 5  [(gogoproto.nullable) = false];
+    GetTxnLockResponse        GetTxnLock        = 6  [(gogoproto.nullable) = false];
+    GetWaitingListResponse    GetWaitingList    = 7  [(gogoproto.nullable) = false];
+    GetBindResponse           GetBind           = 8  [(gogoproto.nullable) = false];
+    KeepLockTableBindResponse KeepLockTableBind = 9  [(gogoproto.nullable) = false];
+    KeepRemoteLockResponse    KeepRemoteLock    = 10 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
 message LockRequest {
   bytes           TxnID     = 1;
-  repeated  bytes Rows      = 2;
+  string          ServiceID = 2;
+  repeated  bytes Rows      = 3;
   // LockOptions lock options
   LockOptions     Options   = 4 [(gogoproto.nullable) = false];
 }
@@ -124,33 +125,70 @@ message LockResponse {
 
 }
 
-// UnlockRequest unlock request
+// GetTxnLockRequest get a waiting txn list on a special lock 
+// request, used to dead lock detect
+message GetTxnLockRequest {
+  bytes     TxnID     = 1;
+  bytes     Row       = 2;
+}
+
+// GetTxnLockResponse get txn Lock response
+message GetTxnLockResponse {
+  int32          Value       = 1;
+  repeated bytes WaitingList = 2;
+}
+
+// GetWaitingListRequest get a waiting txn list on a specical txn request. CN -> CN
+message GetWaitingListRequest {
+  bytes     TxnID     = 1;
+  string    ServiceID = 2;
+}
+
+// GetWaitingListResponse get a waiting txn list on a specical txn response. CN -> CN
+message GetWaitingListResponse {
+  repeated bytes WaitingList = 2;
+}
+
+
+// UnlockRequest unlock lock on remote lock service request. CN -> CN
 message UnlockRequest {
   bytes TxnID     = 1;
 }
 
-// UnlockResponse unlock response
+// UnlockResponse unlock lock on remote lock service response. CN -> CN
 message UnlockResponse {
 
 }
 
-// GetBindRequest get bind request from allocator request. Send from cn to dn
+// GetBindRequest get bind request from allocator request. CN -> DN
 message GetBindRequest {
   string ServiceID = 1;
   uint64 Table     = 2;
 }
 
-// GetBindResponse get bind request from allocator response
+// GetBindResponse get bind request from allocator response. DN -> CN
 message GetBindResponse {
   LockTable LockTable = 2 [(gogoproto.nullable) = false];
 }
 
-// KeepaliveRequest keep lock table bind request. Send from cn to dn
-message KeepaliveRequest {
+// KeepLockTableBindRequest keep lock table bind request. CN -> DN
+message KeepLockTableBindRequest {
   string ServiceID = 1;
 }
 
-// KeepaliveResponse keep lock table bind response
-message KeepaliveResponse {
+// KeepLockTableBindResponse keep lock table bind response. DN -> CN
+message KeepLockTableBindResponse {
   bool OK = 1;
 }
+
+// KeepRemoteLockRequest keep lock on remote lockservice request. CN -> CN
+message KeepRemoteLockRequest {
+  string ServiceID       = 1;
+}
+
+// KeepRemoteLockResponse keep lock on remote lockservice response. DN -> CN
+message KeepRemoteLockResponse {
+  bool OK = 1;
+}
+
+
