@@ -14,9 +14,14 @@
 
 package fileservice
 
-import "context"
+import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"sync"
+)
 
 type Counter struct {
+	sync.Mutex
 	S3ListObjects   int64
 	S3HeadObject    int64
 	S3PutObject     int64
@@ -45,9 +50,12 @@ func updateCounters(ctx context.Context, fn func(*Counter)) {
 	}
 }
 
-func WithCounter(ctx context.Context, counter *Counter) context.Context {
+func WithCounter(ctx context.Context, familyName string, counter *Counter) context.Context {
 	// check existed
 	v := ctx.Value(CtxKeyCounters)
+
+	metric.RegisterDevMetric(familyName, counter) //TODO: Need suggestions here.
+
 	if v == nil {
 		return context.WithValue(ctx, CtxKeyCounters, []*Counter{counter})
 	}
@@ -56,4 +64,24 @@ func WithCounter(ctx context.Context, counter *Counter) context.Context {
 	copy(newCounters, counters)
 	newCounters = append(newCounters, counter)
 	return context.WithValue(ctx, CtxKeyCounters, newCounters)
+}
+
+func (c *Counter) Collect() map[string]int64 {
+	stats := make(map[string]int64)
+
+	c.Lock()
+	stats["S3ListObjects"] = c.S3ListObjects
+	stats["S3HeadObject"] = c.S3HeadObject
+	stats["S3PutObject"] = c.S3PutObject
+	stats["S3GetObject"] = c.S3GetObject
+	stats["S3DeleteObjects"] = c.S3DeleteObjects
+	stats["S3DeleteObject"] = c.S3DeleteObject
+
+	stats["MemCacheRead"] = c.MemCacheRead
+	stats["MemCacheHit"] = c.MemCacheHit
+	stats["DiskCacheRead"] = c.DiskCacheRead
+	stats["DiskCacheHit"] = c.DiskCacheHit
+
+	c.Unlock()
+	return stats
 }
