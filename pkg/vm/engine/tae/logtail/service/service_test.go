@@ -50,7 +50,7 @@ func TestService(t *testing.T) {
 
 	/* ---- construct logtail server ---- */
 	logtailServer, err := NewLogtailServer(
-		address, options.NewDefaultLogtailServerCfg(), logtailer, rt,
+		address, options.NewDefaultLogtailServerCfg(), logtailer, rt, rt.Clock().Now,
 		WithServerCollectInterval(500*time.Millisecond),
 		WithServerSendTimeout(5*time.Second),
 		WithServerEnableChecksum(true),

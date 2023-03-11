@@ -65,7 +65,7 @@ func NewTAEStorage(
 	taeHandler := rpc.NewTAEHandle(dataDir, opt)
 	tae := taeHandler.GetTxnEngine().GetTAE(context.Background())
 	logtailer := logtail.NewLogtailer(tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
-	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt)
+	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt, tae.TxnMgr.Now)
 	if err != nil {
 		return nil, err
 	}

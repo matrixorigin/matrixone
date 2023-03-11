@@ -193,6 +193,10 @@ func NewTsAlloctor(clock clock.Clock) *TsAlloctor {
 	return &TsAlloctor{clock: clock}
 }
 
+func (alloc *TsAlloctor) Now() (timestamp.Timestamp, timestamp.Timestamp) {
+	return alloc.clock.Now()
+}
+
 func (alloc *TsAlloctor) Alloc() TS {
 	now, _ := alloc.clock.Now()
 	var ts TS

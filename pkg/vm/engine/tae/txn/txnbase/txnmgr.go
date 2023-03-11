@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -99,6 +100,12 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, fqueue)
 
 	return mgr
+}
+
+func (mgr *TxnManager) Now() (timestamp.Timestamp, timestamp.Timestamp) {
+	mgr.Lock()
+	defer mgr.Unlock()
+	return mgr.TsAlloc.Now()
 }
 
 func (mgr *TxnManager) Init(prevTs types.TS) error {
