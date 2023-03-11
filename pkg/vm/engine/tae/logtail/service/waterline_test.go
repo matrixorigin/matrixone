@@ -27,7 +27,7 @@ func TestWaterliner(t *testing.T) {
 	current := mockTimestamp(100, 100)
 	clock := mockPermanentClock(current)
 
-	w := NewWaterliner(clock)
+	w := NewWaterliner(clock.Now)
 
 	/* ---- advance on uninitialized instance ---- */
 	require.Panics(t, func() {
