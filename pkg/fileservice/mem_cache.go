@@ -16,12 +16,9 @@ package fileservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"sync/atomic"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/clockpolicy"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/lrupolicy"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync/atomic"
 )
 
@@ -44,16 +41,11 @@ func NewMemCache(opts ...Options) *MemCache {
 		optFunc(&initOpts)
 	}
 
-	mc := &MemCache{
+	return &MemCache{
 		policy: initOpts.policy,
 		stats:  new(CacheStats),
 		ch:     ch,
 	}
-
-	mcStatsCollector := NewMemCacheStatsCollector(mc, "MemCache")
-	metric.RegisterDevMetric(mcStatsCollector)
-
-	return mc
 }
 
 func WithLRU(capacity int64) Options {
