@@ -52,8 +52,7 @@ type statusServer struct {
 var registry *prom.Registry
 var moExporter metric.MetricExporter
 var moCollector MetricCollector
-var moDevMetricExporter metric.MetricExporter
-var moDevMetricCollector MetricCollector
+var moLogExporter *MetricLogExporter
 
 var statusSvr *statusServer
 var multiTable = false // need set before newMetricFSCollector and initTables
@@ -84,8 +83,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	}
 	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
 
-	moDevMetricCollector = newMetricLogCollector(WithFlushInterval(initOpts.exportInterval))
-	moDevMetricExporter = newMetricExporter(metric.DefaultDevMetricRegistry, moDevMetricCollector, nodeUUID, role)
+	moLogExporter = newMetricLogExporter(&metric.DefaultStatsRegistry, nodeUUID, role)
 
 	// register metrics and create tables
 	registerAllMetrics()
@@ -99,8 +97,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	moCollector.Start(serviceCtx)
 	moExporter.Start(serviceCtx)
 
-	moDevMetricCollector.Start(serviceCtx)
-	moDevMetricExporter.Start(serviceCtx)
+	moLogExporter.Start(serviceCtx)
 
 	metric.SetMetricExporter(moExporter)
 
@@ -142,17 +139,11 @@ func StopMetricSync() {
 		moExporter = nil
 	}
 
-	if moDevMetricCollector != nil {
-		if ch, effect := moDevMetricCollector.Stop(true); effect {
+	if moLogExporter != nil {
+		if ch, effect := moLogExporter.Stop(true); effect {
 			<-ch
 		}
-		moDevMetricCollector = nil
-	}
-	if moDevMetricExporter != nil {
-		if ch, effect := moDevMetricExporter.Stop(true); effect {
-			<-ch
-		}
-		moDevMetricExporter = nil
+		moLogExporter = nil
 	}
 
 	if statusSvr != nil {
