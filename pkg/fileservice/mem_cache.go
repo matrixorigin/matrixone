@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/clockpolicy"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/lrupolicy"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync/atomic"
 )
 
@@ -78,8 +79,8 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
-	//_, span := trace.Start(ctx, "MemCache.Read")
-	//defer span.End()
+	_, span := trace.Start(ctx, "MemCache.Read")
+	defer span.End()
 
 	numHit := 0
 	defer func() {
