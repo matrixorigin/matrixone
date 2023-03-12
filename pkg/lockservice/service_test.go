@@ -434,15 +434,15 @@ func runLockServiceTestsWithLevel(
 		assert.NoError(t, allocator.Close())
 	}()
 
-	var services []*service
+	services := make([]*service, 0, len(serviceIDs))
 	defer func() {
 		for _, s := range services {
 			assert.NoError(t, s.Close())
 		}
 	}()
 
-	var cns []metadata.CNService
-	var configs []Config
+	cns := make([]metadata.CNService, 0, len(serviceIDs))
+	configs := make([]Config, 0, len(serviceIDs))
 	for _, v := range serviceIDs {
 		address := fmt.Sprintf("unix:///tmp/service-%s.sock", v)
 		assert.NoError(t, os.RemoveAll(address[7:]))
