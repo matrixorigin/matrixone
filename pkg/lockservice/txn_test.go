@@ -59,6 +59,7 @@ func TestClose(t *testing.T) {
 	assert.NoError(t, tables[2].lock(ctx, txn, [][]byte{[]byte("k2")}, LockOptions{}))
 
 	txn.close(
+		txn.txnID,
 		func(table uint64) (lockTable, error) {
 			return tables[table], nil
 		})

@@ -61,9 +61,9 @@ message LockTable {
 
 // Method lock table operations
 enum Method {
-  // Lock lock
+  // Lock lock rows on remote lock table
   Lock              = 0;
-  // Write transaction write
+  // Write unlock rows from remote lock table
   Unlock            = 1;
   // GetTxnLock get lock data on a special lock
   GetTxnLock        = 2;
@@ -98,17 +98,18 @@ message Request {
 message Response {
     // RequestID corresponding request id
     uint64                    RequestID         = 1;
+    Method                    Method            = 2;
     // Error we use this field to send moerr from service to another cn. Set with 
     // moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
-    bytes                     Error             = 2;
-    LockTable                 NewBind           = 3;
-    LockResponse              Lock              = 4  [(gogoproto.nullable) = false];
-    UnlockResponse            Unlock            = 5  [(gogoproto.nullable) = false];
-    GetTxnLockResponse        GetTxnLock        = 6  [(gogoproto.nullable) = false];
-    GetWaitingListResponse    GetWaitingList    = 7  [(gogoproto.nullable) = false];
-    GetBindResponse           GetBind           = 8  [(gogoproto.nullable) = false];
-    KeepLockTableBindResponse KeepLockTableBind = 9  [(gogoproto.nullable) = false];
-    KeepRemoteLockResponse    KeepRemoteLock    = 10 [(gogoproto.nullable) = false];
+    bytes                     Error             = 3;
+    LockTable                 NewBind           = 4;
+    LockResponse              Lock              = 5  [(gogoproto.nullable) = false];
+    UnlockResponse            Unlock            = 6  [(gogoproto.nullable) = false];
+    GetTxnLockResponse        GetTxnLock        = 7  [(gogoproto.nullable) = false];
+    GetWaitingListResponse    GetWaitingList    = 8  [(gogoproto.nullable) = false];
+    GetBindResponse           GetBind           = 9  [(gogoproto.nullable) = false];
+    KeepLockTableBindResponse KeepLockTableBind = 10 [(gogoproto.nullable) = false];
+    KeepRemoteLockResponse    KeepRemoteLock    = 11 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request

@@ -45,7 +45,8 @@ func newDeadlockDetector(
 		c:                 make(chan []byte, 1024),
 		waitTxnsFetchFunc: waitTxnsFetchFunc,
 		waitTxnAbortFunc:  waitTxnAbortFunc,
-		stopper:           stopper.NewStopper("deadlock-detector"),
+		stopper: stopper.NewStopper("deadlock-detector",
+			stopper.WithLogger(getLogger().RawLogger())),
 	}
 	err := d.stopper.RunTask(d.doCheck)
 	if err != nil {
@@ -79,6 +80,8 @@ func (d *detector) check(txnID []byte) error {
 }
 
 func (d *detector) doCheck(ctx context.Context) {
+	defer getLogger().InfoAction("dead lock checker")()
+
 	w := &waiters{ignoreTxns: &d.ignoreTxns}
 	for {
 		select {
@@ -97,6 +100,9 @@ func (d *detector) doCheck(ctx context.Context) {
 }
 
 func (d *detector) checkDeadlock(w *waiters) (bool, error) {
+	waitingTxnID := w.getCheckTargetTxn()
+	defer getLogger().DebugAction("check dead lock by txn added",
+		bytesField("waitting-txn", waitingTxnID))()
 	for {
 		if w.completed() {
 			return false, nil
@@ -106,9 +112,11 @@ func (d *detector) checkDeadlock(w *waiters) (bool, error) {
 		txnID := w.getCheckTargetTxn()
 		added, err := d.waitTxnsFetchFunc(txnID, w)
 		if err != nil {
+			logCheckDeadLockFailed(waitingTxnID, txnID, err)
 			return false, err
 		}
 		if !added {
+			logDeadLockFound(txnID, w)
 			return true, nil
 		}
 		w.next()
@@ -132,6 +140,7 @@ func (w *waiters) next() {
 func (w *waiters) add(txnID []byte) bool {
 	for i := 0; i < w.pos; i++ {
 		if bytes.Equal(w.waitTxns[i], txnID) {
+			w.waitTxns = append(w.waitTxns, txnID)
 			return false
 		}
 	}

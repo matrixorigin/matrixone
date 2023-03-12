@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"runtime"
 	"sync"
@@ -90,6 +91,13 @@ type waiter struct {
 	beforeSwapStatusAdjustFunc func()
 }
 
+// String implement Stringer
+func (w *waiter) String() string {
+	return fmt.Sprintf("%s-%p",
+		hex.EncodeToString(w.txnID),
+		w)
+}
+
 func (w *waiter) setFinalizer() {
 	// close the channel if gc
 	runtime.SetFinalizer(w, func(w *waiter) {
@@ -111,14 +119,15 @@ func (w *waiter) unref() {
 	}
 }
 
-func (w *waiter) add(waiter ...*waiter) {
-	if len(waiter) == 0 {
+func (w *waiter) add(waiters ...*waiter) {
+	if len(waiters) == 0 {
 		return
 	}
-	w.waiters.put(waiter...)
-	for i := range waiter {
-		waiter[i].ref()
+	w.waiters.put(waiters...)
+	for i := range waiters {
+		waiters[i].ref()
 	}
+	logWaitersAdded(w, waiters...)
 }
 
 func (w *waiter) getStatus() waiterStatus {
@@ -127,15 +136,21 @@ func (w *waiter) getStatus() waiterStatus {
 
 func (w *waiter) setStatus(status waiterStatus) {
 	w.status.Store(int32(status))
+	logWaiterStatusChanged(w, status)
 }
 
 func (w *waiter) casStatus(old, new waiterStatus) bool {
-	return w.status.CompareAndSwap(int32(old), int32(new))
+	if w.status.CompareAndSwap(int32(old), int32(new)) {
+		logWaiterStatusChanged(w, new)
+		return true
+	}
+	return false
 }
 
 func (w *waiter) mustRecvNotification() error {
 	select {
 	case err := <-w.c:
+		logWaiterGetNotify(w, err)
 		return err
 	default:
 	}
@@ -145,6 +160,7 @@ func (w *waiter) mustRecvNotification() error {
 func (w *waiter) mustSendNotification(value error) {
 	select {
 	case w.c <- value:
+		logWaiterNotified(w, value)
 		return
 	default:
 	}
@@ -225,19 +241,19 @@ func (w *waiter) clearAllNotify() {
 
 // close returns the next waiter to hold the lock, and others waiters will move
 // into the next waiter.
-func (w *waiter) close() *waiter {
-	nextWaiter := w.fetchNextWaiter()
+func (w *waiter) close(err error) *waiter {
+	nextWaiter := w.fetchNextWaiter(err)
 	w.unref()
 	return nextWaiter
 }
 
-func (w *waiter) fetchNextWaiter() *waiter {
+func (w *waiter) fetchNextWaiter(err error) *waiter {
 	if w.waiters.len() == 0 {
 		return nil
 	}
 	next := w.awakeNextWaiter()
 	for {
-		if next.notify(nil) {
+		if next.notify(err) {
 			next.unref()
 			return next
 		}

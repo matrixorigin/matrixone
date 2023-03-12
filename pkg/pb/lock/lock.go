@@ -15,7 +15,9 @@
 package lock
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,7 +35,29 @@ func (m *Request) GetID() uint64 {
 
 // DebugString returns the debug string
 func (m *Request) DebugString() string {
-	return ""
+	var buffer bytes.Buffer
+	buffer.WriteString(fmt.Sprintf("%d: ", m.RequestID))
+	buffer.WriteString(m.Method.String())
+	buffer.WriteString("/")
+	buffer.WriteString(m.LockTable.DebugString())
+	buffer.WriteString("/")
+	switch m.Method {
+	case Method_Lock:
+		buffer.WriteString(m.Lock.DebugString())
+	case Method_Unlock:
+		buffer.WriteString(m.Unlock.DebugString())
+	case Method_GetBind:
+		buffer.WriteString(m.GetBind.DebugString())
+	case Method_GetTxnLock:
+		buffer.WriteString(m.GetTxnLock.DebugString())
+	case Method_GetWaitingList:
+		buffer.WriteString(m.GetWaitingList.DebugString())
+	case Method_KeepLockTableBind:
+		buffer.WriteString(m.KeepLockTableBind.DebugString())
+	case Method_KeepRemoteLock:
+		buffer.WriteString(m.KeepRemoteLock.DebugString())
+	}
+	return buffer.String()
 }
 
 // SetID implement morpc Messgae
@@ -48,7 +72,27 @@ func (m *Response) GetID() uint64 {
 
 // DebugString returns the debug string
 func (m *Response) DebugString() string {
-	return ""
+	var buffer bytes.Buffer
+	buffer.WriteString(fmt.Sprintf("%d: ", m.RequestID))
+	buffer.WriteString(m.Method.String())
+	buffer.WriteString("/")
+	switch m.Method {
+	case Method_Lock:
+		buffer.WriteString(m.Lock.DebugString())
+	case Method_Unlock:
+		buffer.WriteString(m.Unlock.DebugString())
+	case Method_GetBind:
+		buffer.WriteString(m.GetBind.DebugString())
+	case Method_GetTxnLock:
+		buffer.WriteString(m.GetTxnLock.DebugString())
+	case Method_GetWaitingList:
+		buffer.WriteString(m.GetWaitingList.DebugString())
+	case Method_KeepLockTableBind:
+		buffer.WriteString(m.KeepLockTableBind.DebugString())
+	case Method_KeepRemoteLock:
+		buffer.WriteString(m.KeepRemoteLock.DebugString())
+	}
+	return buffer.String()
 }
 
 // Changed returns true if LockTable bind changed
@@ -59,7 +103,7 @@ func (m LockTable) Changed(v LockTable) bool {
 
 // DebugString returns the debug string
 func (m LockTable) DebugString() string {
-	return fmt.Sprintf("%d/%s/%d", m.Table, m.ServiceID, m.Version)
+	return fmt.Sprintf("%d-%s-%d", m.Table, m.ServiceID, m.Version)
 }
 
 // WithGranularity set rows granularity, the default granularity is Row.
@@ -109,4 +153,85 @@ func (m LockOptions) DebugString() string {
 		m.Mode.String(),
 		m.Granularity.String(),
 		m.Policy.String())
+}
+
+func (m *LockRequest) DebugString() string {
+	return fmt.Sprintf("%s-%s-%s-%s",
+		hex.EncodeToString(m.TxnID),
+		m.ServiceID,
+		bytesArrayString(m.Rows),
+		m.Options.DebugString())
+}
+
+func (m *LockResponse) DebugString() string {
+	return ""
+}
+
+func (m *UnlockRequest) DebugString() string {
+	return hex.EncodeToString(m.TxnID)
+}
+
+func (m *UnlockResponse) DebugString() string {
+	return ""
+}
+
+func (m *GetBindRequest) DebugString() string {
+	return fmt.Sprintf("%s-%d", m.ServiceID, m.Table)
+}
+
+func (m *GetBindResponse) DebugString() string {
+	return m.LockTable.DebugString()
+}
+
+func (m *GetTxnLockRequest) DebugString() string {
+	return fmt.Sprintf("%s-%s",
+		hex.EncodeToString(m.TxnID),
+		hex.EncodeToString(m.Row))
+}
+
+func (m *GetTxnLockResponse) DebugString() string {
+	return fmt.Sprintf("%d-%s", m.Value, bytesArrayString(m.WaitingList))
+}
+
+func (m *GetWaitingListRequest) DebugString() string {
+	return fmt.Sprintf("%s-%s",
+		hex.EncodeToString(m.TxnID),
+		m.ServiceID)
+}
+
+func (m *GetWaitingListResponse) DebugString() string {
+	return bytesArrayString(m.WaitingList)
+}
+
+func (m *KeepLockTableBindRequest) DebugString() string {
+	return m.ServiceID
+}
+
+func (m *KeepLockTableBindResponse) DebugString() string {
+	if m.OK {
+		return "true"
+	}
+	return "false"
+}
+
+func (m *KeepRemoteLockRequest) DebugString() string {
+	return m.ServiceID
+}
+
+func (m *KeepRemoteLockResponse) DebugString() string {
+	if m.OK {
+		return "true"
+	}
+	return "false"
+}
+
+func bytesArrayString(values [][]byte) string {
+	var buffer bytes.Buffer
+	for idx, v := range values {
+		buffer.WriteString(hex.EncodeToString(v))
+		if idx != len(values)-1 {
+			buffer.WriteString(",")
+		}
+	}
+	return buffer.String()
 }

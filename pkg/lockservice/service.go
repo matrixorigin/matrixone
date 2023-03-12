@@ -65,11 +65,9 @@ func (s *service) Lock(
 	rows [][]byte,
 	txnID []byte,
 	options LockOptions) error {
+	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock")
 	defer span.End()
-
-	logStartLock(tableID, rows, txnID, options)
-	defer logEndLock(tableID, rows, txnID, options)
 
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
 	l, err := s.getLockTable(tableID)
@@ -84,11 +82,16 @@ func (s *service) Lock(
 }
 
 func (s *service) Unlock(ctx context.Context, txnID []byte) error {
+	// FIXME(fagongzi): too many mem alloc in trace
+	_, span := trace.Debug(ctx, "lockservice.unlock")
+	defer span.End()
+
 	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
 	if txn == nil {
 		return nil
 	}
-	txn.close(s.getLockTable)
+	defer logUnlockTxn(txn)()
+	txn.close(txnID, s.getLockTable)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
@@ -188,10 +191,14 @@ func (s *service) handleBindChanged(newBind pb.LockTable) {
 	if !ok {
 		panic("missing lock table")
 	}
+	logRemoteBindChanged(old.(lockTable).getBind(), newBind)
 	old.(lockTable).close()
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
+	defer logLockTableCreated(bind,
+		bind.ServiceID != s.cfg.ServiceID)
+
 	if bind.ServiceID == s.cfg.ServiceID {
 		return newLocalLockTable(
 			bind,

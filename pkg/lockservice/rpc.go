@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -86,6 +85,7 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 }
 
 func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Future, error) {
+	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.client.send")
 	defer span.End()
 
@@ -134,7 +134,6 @@ func WithServerMessageFilter(filter func(*pb.Request) bool) ServerOption {
 }
 
 type server struct {
-	logger   *log.MOLogger
 	cfg      *morpc.Config
 	rpc      morpc.RPCServer
 	handlers map[pb.Method]RequestHandleFunc
@@ -150,7 +149,6 @@ func NewServer(
 	cfg morpc.Config,
 	opts ...ServerOption) (Server, error) {
 	s := &server{
-		logger:   getLogger().Named("server"),
 		cfg:      &cfg,
 		handlers: make(map[pb.Method]RequestHandleFunc),
 	}
@@ -189,51 +187,54 @@ func (s *server) onMessage(
 	request morpc.Message,
 	sequence uint64,
 	cs morpc.ClientSession) error {
-	ctx, span := trace.Debug(ctx, "lockservice.server.onMessage")
+	ctx, span := trace.Debug(ctx, "lockservice.server.handle")
 	defer span.End()
-	m, ok := request.(*pb.Request)
-	if !ok {
-		s.logger.Fatal("received invalid message", zap.Any("message", request))
-	}
-	defer releaseRequest(m)
 
-	if s.logger.Enabled(zap.DebugLevel) {
-		s.logger.Debug("handle request",
-			zap.String("request", m.DebugString()))
+	req, ok := request.(*pb.Request)
+	if !ok {
+		getLogger().Fatal("received invalid message",
+			zap.Any("message", request))
+	}
+	defer releaseRequest(req)
+
+	if getLogger().Enabled(zap.DebugLevel) {
+		getLogger().Debug("received a request",
+			zap.String("request", req.DebugString()))
 	}
 
 	if s.options.filter != nil &&
-		!s.options.filter(m) {
-		if s.logger.Enabled(zap.DebugLevel) {
-			s.logger.Debug("skip request by filter",
-				zap.String("request", m.DebugString()))
+		!s.options.filter(req) {
+		if getLogger().Enabled(zap.DebugLevel) {
+			getLogger().Debug("skip request by filter",
+				zap.String("request", req.DebugString()))
 		}
 		return nil
 	}
 
-	handler, ok := s.handlers[m.Method]
+	handler, ok := s.handlers[req.Method]
 	if !ok {
-		s.logger.Fatal("missing request handler",
-			zap.String("method", m.Method.String()))
+		getLogger().Fatal("missing request handler",
+			zap.String("method", req.Method.String()))
 	}
 
 	select {
 	case <-ctx.Done():
-		if s.logger.Enabled(zap.DebugLevel) {
-			s.logger.Debug("skip request by timeout",
-				zap.String("request", m.DebugString()))
+		if getLogger().Enabled(zap.DebugLevel) {
+			getLogger().Debug("skip request by timeout",
+				zap.String("request", req.DebugString()))
 		}
 		return nil
 	default:
 	}
 
 	resp := acquireResponse()
-	resp.RequestID = m.RequestID
-	if err := handler(ctx, m, resp); err != nil {
+	resp.RequestID = req.RequestID
+	resp.Method = req.Method
+	if err := handler(ctx, req, resp); err != nil {
 		resp.WrapError(err)
 	}
-	if s.logger.Enabled(zap.DebugLevel) {
-		s.logger.Debug("handle request completed",
+	if getLogger().Enabled(zap.DebugLevel) {
+		getLogger().Debug("handle request completed",
 			zap.String("response", resp.DebugString()))
 	}
 	return cs.Write(ctx, resp)

@@ -60,7 +60,7 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 		func(_ *lockTableAllocator, s []*service) {
 			l := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(),
-				time.Second*10000)
+				time.Second*10)
 			defer cancel()
 
 			mustAddTestLock(

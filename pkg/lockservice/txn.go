@@ -76,6 +76,7 @@ func (txn *activeTxn) lockAdded(
 		txn.Lock()
 		defer txn.Unlock()
 	}
+	defer logTxnLockAdded(txn, locks)
 	v, ok := txn.holdLocks[table]
 	if ok {
 		v.append(locks)
@@ -85,10 +86,15 @@ func (txn *activeTxn) lockAdded(
 }
 
 func (txn *activeTxn) close(
+	txnID []byte,
 	lockTableFunc func(uint64) (lockTable, error)) error {
 	txn.Lock()
 	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, txnID) {
+		return nil
+	}
 
+	logTxnReadyToClose(txn)
 	// TODO(fagongzi): parallel unlock
 	for table, cs := range txn.holdLocks {
 		l, err := lockTableFunc(table)
@@ -101,7 +107,14 @@ func (txn *activeTxn) close(
 			panic(err)
 		}
 
+		logTxnUnlockTable(
+			txn,
+			table)
 		l.unlock(txn, cs)
+		logTxnUnlockTableCompleted(
+			txn,
+			table,
+			cs)
 		cs.close()
 		delete(txn.holdLocks, table)
 	}

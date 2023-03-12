@@ -14,7 +14,11 @@
 
 package lockservice
 
-import pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+import (
+	"fmt"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+)
 
 const (
 	flagLockRow byte = 1 << iota
@@ -80,4 +84,18 @@ func (l Lock) getLockMode() pb.LockMode {
 		return pb.LockMode_Exclusive
 	}
 	return pb.LockMode_Shared
+}
+
+// String implement Stringer
+func (l Lock) String() string {
+	g := "row"
+	if !l.isLockRow() {
+		g = "range"
+	}
+
+	// hold txn: mode-[row|range]
+	return fmt.Sprintf("%s: %s-%s",
+		l.waiter.String(),
+		l.getLockMode().String(),
+		g)
 }

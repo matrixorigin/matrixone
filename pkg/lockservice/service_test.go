@@ -316,7 +316,7 @@ func TestMultipleRangeLocks(t *testing.T) {
 
 func BenchmarkWithoutConflict(b *testing.B) {
 	runBenchmark(b, "1-table", 1)
-	runBenchmark(b, "unlimited-table", 32)
+	// runBenchmark(b, "unlimited-table", 32)
 }
 
 var tableID atomic.Uint64

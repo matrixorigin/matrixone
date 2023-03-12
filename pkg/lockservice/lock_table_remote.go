@@ -58,16 +58,19 @@ func (l *remoteLockTable) lock(
 	ctx context.Context,
 	txn *activeTxn,
 	rows [][]byte,
-	options LockOptions) error {
+	opts LockOptions) error {
+	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock.remote")
 	defer span.End()
+
+	logRemoteLock(txn, rows, opts, l.bind)
 
 	req := acquireRequest()
 	defer releaseRequest(req)
 
 	req.LockTable = l.bind
 	req.Method = pb.Method_Lock
-	req.Lock.Options = options
+	req.Lock.Options = opts
 	req.Lock.TxnID = txn.txnID
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
@@ -81,11 +84,16 @@ func (l *remoteLockTable) lock(
 	if err == nil {
 		defer releaseResponse(resp)
 		if err := l.maybeHandleBindChanged(resp); err != nil {
+			logRemoteLockFailed(txn, rows, opts, l.bind, err)
 			return err
 		}
+
 		txn.lockAdded(l.bind.Table, rows, true)
+		logRemoteLockAdded(txn, rows, opts, l.bind)
 		return nil
 	}
+
+	logRemoteLockFailed(txn, rows, opts, l.bind, err)
 	// encounter any error, we need try to check bind is valid.
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
@@ -96,12 +104,19 @@ func (l *remoteLockTable) lock(
 func (l *remoteLockTable) unlock(
 	txn *activeTxn,
 	ls *cowSlice) {
+	logUnlockTableOnRemote(
+		txn,
+		l.bind)
 	for {
 		err := l.doUnlock(txn)
 		if err == nil {
 			return
 		}
 
+		logUnlockTableOnRemoteFailed(
+			txn,
+			l.bind,
+			err)
 		// unlock cannot fail and must ensure that all locks have been
 		// released.
 		//
@@ -122,7 +137,7 @@ func (l *remoteLockTable) getLock(txnID, key []byte, fn func(Lock)) {
 				fn(lock)
 				w := lock.waiter
 				for {
-					w = w.close()
+					w = w.close(nil)
 					if w == nil {
 						break
 					}
@@ -195,7 +210,7 @@ func (l *remoteLockTable) getBind() pb.LockTable {
 }
 
 func (l *remoteLockTable) close() {
-
+	logLockTableClosed(l.bind, true)
 }
 
 func (l *remoteLockTable) handleError(txnID []byte, err error) error {
@@ -214,6 +229,7 @@ func (l *remoteLockTable) handleError(txnID []byte, err error) error {
 		l.bind.Table,
 		l.serviceID)
 	if err != nil {
+		logGetRemoteBindFailed(l.bind.Table, err)
 		return oldError
 	}
 	if new.Changed(l.bind) {
