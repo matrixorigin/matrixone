@@ -34,10 +34,10 @@ func (r *StatsRegistry) RegisterStats(statsFName string, stats *CollectableStats
 
 // Gather returns the snapshot of all the CollectableStats registered to StatsRegistry
 func (r *StatsRegistry) Gather() (statsFamilies []*StatsFamily) {
-	for statsFName, stats := range r.registry {
+	for statsFName, collectable := range r.registry {
 		statsFamily := &StatsFamily{
 			name:  statsFName,
-			stats: (*stats).Collect(),
+			stats: (*collectable).Collect(),
 		}
 		statsFamilies = append(statsFamilies, statsFamily)
 	}

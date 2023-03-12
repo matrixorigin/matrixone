@@ -16,8 +16,6 @@ type StatsLogExporter struct {
 	registry  *metric.StatsRegistry
 	cancel    context.CancelFunc
 	stopWg    sync.WaitGroup
-	sync.Mutex
-	now func() int64
 }
 
 func newStatsLogExporter(node, role string) *StatsLogExporter {
@@ -25,18 +23,7 @@ func newStatsLogExporter(node, role string) *StatsLogExporter {
 		registry: &metric.DefaultStatsRegistry,
 		nodeUUID: node,
 		role:     role,
-		now:      func() int64 { return time.Now().UnixMicro() },
 	}
-}
-
-func (e *StatsLogExporter) Stop(_ bool) (<-chan struct{}, bool) {
-	if atomic.SwapInt32(&e.isRunning, 0) == 0 {
-		return nil, false
-	}
-	e.cancel()
-	stopCh := make(chan struct{})
-	go func() { e.stopWg.Wait(); close(stopCh) }()
-	return stopCh, true
 }
 
 func (e *StatsLogExporter) Start(inputCtx context.Context) bool {
@@ -53,7 +40,7 @@ func (e *StatsLogExporter) Start(inputCtx context.Context) bool {
 		for {
 			select {
 			case <-ticker.C:
-				e.gatherAndWrite()
+				e.gatherAndLog()
 			case <-ctx.Done():
 				return
 			}
@@ -62,7 +49,17 @@ func (e *StatsLogExporter) Start(inputCtx context.Context) bool {
 	return true
 }
 
-func (e *StatsLogExporter) gatherAndWrite() {
+func (e *StatsLogExporter) Stop(_ bool) (<-chan struct{}, bool) {
+	if atomic.SwapInt32(&e.isRunning, 0) == 0 {
+		return nil, false
+	}
+	e.cancel()
+	stopCh := make(chan struct{})
+	go func() { e.stopWg.Wait(); close(stopCh) }()
+	return stopCh, true
+}
+
+func (e *StatsLogExporter) gatherAndLog() {
 	metrics := e.registry.Gather()
 	logutil.Info(metrics)
 }
