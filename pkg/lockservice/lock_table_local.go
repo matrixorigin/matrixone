@@ -138,6 +138,7 @@ func (l *localLockTable) close() {
 	l.mu.store.Iter(func(key []byte, lock Lock) bool {
 		w := lock.waiter
 		for {
+			w.clearAllNotify()
 			if w = w.close(ErrLockTableNotFound); w == nil {
 				break
 			}

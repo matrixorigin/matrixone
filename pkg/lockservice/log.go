@@ -225,7 +225,7 @@ func logLockTableCreated(bind pb.LockTable, remote bool) {
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("lock table created",
 			zap.Bool("remote", remote),
-			zap.String("old", bind.DebugString()))
+			zap.String("bind", bind.DebugString()))
 	}
 }
 
@@ -233,7 +233,7 @@ func logLockTableClosed(bind pb.LockTable, remote bool) {
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("lock table closed",
 			zap.Bool("remote", remote),
-			zap.String("old", bind.DebugString()))
+			zap.String("bind", bind.DebugString()))
 	}
 }
 
@@ -256,7 +256,8 @@ func logCheckDeadLockFailed(
 	if logger.Enabled(zap.ErrorLevel) {
 		logger.Error("failed to check dead lock",
 			bytesField("waiting-txn-id", waitingTxnID),
-			bytesField("txn-id", txnID))
+			bytesField("txn-id", txnID),
+			zap.Error(err))
 	}
 }
 
