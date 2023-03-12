@@ -1,14 +1,27 @@
 package metric
 
-type DevCounter interface {
-	Collect() map[string]int64
+type Snapshot map[string]int64
+
+type Collectable interface {
+	Collect() Snapshot
 }
 
-var DefaultDevMetricRegistry = make(map[string]*DevCounter)
+type StatsRegistry struct {
+	registry map[string]*Collectable
+}
 
-func RegisterDevMetric(familyName string, family *DevCounter) {
-	if _, exists := DefaultDevMetricRegistry[familyName]; exists {
+var DefaultStatsRegistry = StatsRegistry{}
+
+func (r *StatsRegistry) RegisterDevMetric(statsFamilyName string, stats *Collectable) {
+	if _, exists := r.registry[statsFamilyName]; exists {
 		panic("Family Name is already registered ")
 	}
-	DefaultDevMetricRegistry[familyName] = family
+	r.registry[statsFamilyName] = stats
+}
+
+func (r *StatsRegistry) Gather() (snapshot map[string]Snapshot) {
+	for statsFamilyName, stats := range r.registry {
+		snapshot[statsFamilyName] = (*stats).Collect()
+	}
+	return
 }
