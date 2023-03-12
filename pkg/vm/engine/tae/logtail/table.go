@@ -143,11 +143,11 @@ func timeBasedTruncateFactory(ts types.TS) func(b BlockT) bool {
 	}
 }
 
-func NewTxnTable(blockSize int, clock *types.TsAlloctor) *TxnTable {
+func NewTxnTable(blockSize int, now func() types.TS) *TxnTable {
 	factory := func(row RowT) BlockT {
 		ts := row.GetPrepareTS()
 		if ts == txnif.UncommitTS {
-			ts = clock.Alloc()
+			ts = now()
 		}
 		return &txnBlock{
 			bornTS: ts,
