@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -30,15 +29,16 @@ type Manager struct {
 	txnbase.NoopCommitListener
 	table     *TxnTable
 	truncated types.TS
+	now       func() types.TS
 }
 
-func NewManager(blockSize int, clock clock.Clock) *Manager {
-	tsAlloc := types.NewTsAlloctor(clock)
+func NewManager(blockSize int, now func() types.TS) *Manager {
 	return &Manager{
 		table: NewTxnTable(
 			blockSize,
-			tsAlloc,
+			now,
 		),
+		now: now,
 	}
 }
 

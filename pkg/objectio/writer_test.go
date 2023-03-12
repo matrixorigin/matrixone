@@ -17,12 +17,11 @@ package objectio
 import (
 	"context"
 	"fmt"
-	"time"
-
 	"os"
 	"path"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -113,30 +112,31 @@ func TestNewObjectWriter(t *testing.T) {
 	pool, err := mpool.NewMPool("objectio_test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	nb0 := pool.CurrNB()
-	bs, err := objectReader.ReadMeta(context.Background(), extents, pool)
+	bs, err := objectReader.ReadMeta(context.Background(), extents, pool, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(bs))
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err := objectReader.Read(context.Background(), blocks[0].GetExtent(), idxs, pool)
+	vec, err := objectReader.Read(context.Background(), blocks[0].GetExtent(), idxs, []uint32{blocks[0].GetExtent().id}, pool, nil, newDecompressToObject)
 	assert.Nil(t, err)
 	vector1 := newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
 	vector2 := newVector(types.Type{Oid: types.T_int32}, vec.Entries[1].Object.([]byte))
 	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
 	vector3 := newVector(types.Type{Oid: types.T_int64}, vec.Entries[2].Object.([]byte))
-	assert.Equal(t, int64(3), vector.MustFixedCol[int64](vector3)[3])
-	indexes, err := objectReader.ReadIndex(context.Background(), blocks[0].GetExtent(), idxs, ZoneMapType, pool)
+	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
+	blk, err := blocks[0].GetColumn(idxs[0])
 	assert.Nil(t, err)
-	assert.Equal(t, 3, len(indexes))
-	assert.Equal(t, uint8(0x1), indexes[0].(*ZoneMap).buf[31])
-	assert.Equal(t, uint8(0xa), indexes[0].(*ZoneMap).buf[63])
-	indexes, err = objectReader.ReadIndex(context.Background(), blocks[0].GetExtent(), idxs, BloomFilterType, pool)
+	index, err := blk.GetIndex(context.Background(), ZoneMapType, nil, pool)
 	assert.Nil(t, err)
-	assert.Equal(t, 3, len(indexes))
-	assert.Equal(t, "test index 0", string(indexes[0].(*BloomFilter).buf))
+	buf := index.(*ZoneMap).data.([]byte)
+	assert.Equal(t, uint8(0x1), buf[31])
+	assert.Equal(t, uint8(0xa), buf[63])
+	index, err = blk.GetIndex(context.Background(), BloomFilterType, newDecompressToObject, pool)
+	assert.Nil(t, err)
+	assert.Equal(t, "test index 0", string(index.(*BloomFilter).data.([]byte)))
 	assert.True(t, nb0 == pool.CurrNB())
 
 	fs := NewObjectFS(service, dir)
@@ -145,7 +145,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, 1, len(dirs))
 	objectReader, err = NewObjectReader(name, service)
 	assert.Nil(t, err)
-	bs, err = objectReader.ReadAllMeta(context.Background(), dirs[0].Size, pool)
+	bs, err = objectReader.ReadAllMeta(context.Background(), dirs[0].Size, pool, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(bs))
 	assert.Nil(t, err)
@@ -154,23 +154,24 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err = objectReader.Read(context.Background(), bs[0].GetExtent(), idxs, pool)
+	vec, err = objectReader.Read(context.Background(), bs[0].GetExtent(), idxs, []uint32{bs[0].GetExtent().id}, pool, nil, newDecompressToObject)
 	assert.Nil(t, err)
 	vector1 = newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Object.([]byte))
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
 	vector2 = newVector(types.Type{Oid: types.T_int32}, vec.Entries[1].Object.([]byte))
 	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
 	vector3 = newVector(types.Type{Oid: types.T_int64}, vec.Entries[2].Object.([]byte))
-	assert.Equal(t, int64(3), vector.MustFixedCol[int64](vector3)[3])
-	indexes, err = objectReader.ReadIndex(context.Background(), bs[0].GetExtent(), idxs, ZoneMapType, pool)
+	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
+	blk, err = blocks[0].GetColumn(idxs[0])
 	assert.Nil(t, err)
-	assert.Equal(t, 3, len(indexes))
-	assert.Equal(t, uint8(0x1), indexes[0].(*ZoneMap).buf[31])
-	assert.Equal(t, uint8(0xa), indexes[0].(*ZoneMap).buf[63])
-	indexes, err = objectReader.ReadIndex(context.Background(), bs[0].GetExtent(), idxs, BloomFilterType, pool)
+	index, err = blk.GetIndex(context.Background(), ZoneMapType, nil, pool)
 	assert.Nil(t, err)
-	assert.Equal(t, 3, len(indexes))
-	assert.Equal(t, "test index 0", string(indexes[0].(*BloomFilter).buf))
+	buf = index.(*ZoneMap).data.([]byte)
+	assert.Equal(t, uint8(0x1), buf[31])
+	assert.Equal(t, uint8(0xa), buf[63])
+	index, err = blk.GetIndex(context.Background(), BloomFilterType, newDecompressToObject, pool)
+	assert.Nil(t, err)
+	assert.Equal(t, "test index 0", string(index.(*BloomFilter).data.([]byte)))
 	assert.True(t, nb0 == pool.CurrNB())
 
 }
