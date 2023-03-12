@@ -50,11 +50,11 @@ func updateCounters(ctx context.Context, fn func(*Counter)) {
 	}
 }
 
-func WithCounter(ctx context.Context, familyName string, counter *Counter) context.Context {
+func WithCounter(ctx context.Context, statsFName string, counter *Counter) context.Context {
 	// check existed
 	v := ctx.Value(CtxKeyCounters)
 
-	metric.DefaultStatsRegistry.RegisterStats(familyName, counter) //TODO: Need suggestions here.
+	metric.DefaultStatsRegistry.RegisterStats(statsFName, counter) //TODO: Need suggestions here.
 
 	if v == nil {
 		return context.WithValue(ctx, CtxKeyCounters, []*Counter{counter})
