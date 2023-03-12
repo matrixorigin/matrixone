@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 )
 
 func getQueryResultDir() string {
@@ -297,32 +298,22 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 			}
 			return err
 		}
-		reader, err := objectio.NewObjectReader(path, f)
-		if err != nil {
-			return err
-		}
-		bs, err := reader.ReadAllMeta(requestCtx, e.Size, ses.mp)
+		reader, err := blockio.NewFileReader(f, path)
 		if err != nil {
 			return err
 		}
 		idxs := []uint16{catalog.PLAN_IDX, catalog.AST_IDX}
-		iov, err := reader.Read(requestCtx, bs[0].GetExtent(), idxs, ses.mp)
+		bats, err := reader.LoadAllColumns(requestCtx, idxs, e.Size, ses.GetMemPool())
 		if err != nil {
 			return err
 		}
-		bat := batch.NewWithSize(len(idxs))
-		for i, e := range iov.Entries {
-			bat.Vecs[i] = vector.NewVec(catalog.MetaColTypes[idxs[i]])
-			if err = bat.Vecs[i].UnmarshalBinaryWithMpool(e.Object.([]byte), ses.mp); err != nil {
-				return err
-			}
-		}
-		p := vector.MustStrCol(bat.Vecs[0])[0]
+		bat := bats[0]
+		p := bat.Vecs[0].GetStringAt(0)
 		pn := &plan.Plan{}
 		if err = pn.Unmarshal([]byte(p)); err != nil {
 			return err
 		}
-		a := vector.MustStrCol(bat.Vecs[1])[0]
+		a := bat.Vecs[1].GetStringAt(0)
 		var ast tree.Statement
 		if ast, err = simpleAstUnmarshal([]byte(a)); err != nil {
 			return err
@@ -486,7 +477,7 @@ type resultFileInfo struct {
 func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) error {
 	var err error
 	var columnDefs *plan.ResultColDef
-	var reader objectio.Reader
+	var reader *blockio.BlockReader
 	var blocks []objectio.BlockObject
 	var files []resultFileInfo
 
@@ -577,19 +568,11 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				break
 			}
 			tmpBatch.Clean(ses.GetMemPool())
-			tmpBatch = batch.NewWithSize(len(columnDefs.ResultCols))
-			ioVector, err := reader.Read(ctx, block.GetExtent(), indexes, ses.GetMemPool())
+			bats, err := reader.LoadColumns(ctx, indexes, []uint32{block.GetExtent().Id()}, ses.GetMemPool())
 			if err != nil {
 				return err
 			}
-			//read every column
-			for colIndex, entry := range ioVector.Entries {
-				tmpBatch.Vecs[colIndex] = vector.NewVec(typs[colIndex])
-				err = tmpBatch.Vecs[colIndex].UnmarshalBinaryWithMpool(entry.Object.([]byte), ses.GetMemPool())
-				if err != nil {
-					return err
-				}
-			}
+			tmpBatch = bats[0]
 			tmpBatch.InitZsOne(tmpBatch.Vecs[0].Length())
 
 			//step2.1: converts it into the csv string
@@ -645,27 +628,20 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 		return nil, err
 	}
 	// read meta's meta
-	reader, err := objectio.NewObjectReader(metaFile, ses.GetParameterUnit().FileService)
-	if err != nil {
-		return nil, err
-	}
-	bs, err := reader.ReadAllMeta(ctx, e.Size, ses.GetMemPool())
+	reader, err := blockio.NewFileReader(ses.GetParameterUnit().FileService, metaFile)
 	if err != nil {
 		return nil, err
 	}
 	idxs := make([]uint16, 1)
 	idxs[0] = catalog.COLUMNS_IDX
 	// read meta's data
-	iov, err := reader.Read(ctx, bs[0].GetExtent(), idxs, ses.GetMemPool())
+	bats, err := reader.LoadAllColumns(ctx, idxs, e.Size, ses.GetMemPool())
 	if err != nil {
 		return nil, err
 	}
-	vec := vector.NewVec(catalog.MetaColTypes[catalog.COLUMNS_IDX])
+	vec := bats[0].Vecs[0]
 	defer vec.Free(ses.GetMemPool())
-	if err = vec.UnmarshalBinaryWithMpool(iov.Entries[0].Object.([]byte), ses.GetMemPool()); err != nil {
-		return nil, err
-	}
-	def := vector.MustStrCol(vec)[0]
+	def := vec.GetStringAt(0)
 	r := &plan.ResultColDef{}
 	if err = r.Unmarshal([]byte(def)); err != nil {
 		return nil, err
@@ -703,14 +679,14 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 }
 
 // openResultFile reads all blocks of the result file
-func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (objectio.Reader, []objectio.BlockObject, error) {
+func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (*blockio.BlockReader, []objectio.BlockObject, error) {
 	// read result's blocks
 	filePath := getPathOfQueryResultFile(fileName)
-	reader, err := objectio.NewObjectReader(filePath, ses.GetParameterUnit().FileService)
+	reader, err := blockio.NewFileReader(ses.GetParameterUnit().FileService, filePath)
 	if err != nil {
 		return nil, nil, err
 	}
-	bs, err := reader.ReadAllMeta(ctx, fileSize, ses.GetMemPool())
+	bs, err := reader.LoadAllBlocks(ctx, fileSize, ses.GetMemPool())
 	if err != nil {
 		return nil, nil, err
 	}
