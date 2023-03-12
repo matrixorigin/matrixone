@@ -185,12 +185,14 @@ func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
-	old, ok := s.tables.Swap(
-		newBind.Table,
-		s.createLockTableByBind(newBind))
-	if !ok {
+	// TODO(fagongzi): replace with swap if upgrade to go1.20
+	old, loaded := s.tables.LoadAndDelete(newBind.Table)
+	if !loaded {
 		panic("missing lock table")
 	}
+	s.tables.Store(
+		newBind.Table,
+		s.createLockTableByBind(newBind))
 	logRemoteBindChanged(old.(lockTable).getBind(), newBind)
 	old.(lockTable).close()
 }
