@@ -141,7 +141,12 @@ func (n *node) GetColumnDataByIds([]int, []*bytes.Buffer) (*model.BlockView, err
 	panic("not implemented yet ")
 }
 
-func (n *node) GetColumnDataById(int, *bytes.Buffer) (*model.ColumnView, error) {
-	//TODO::
-	panic("not implemented yet ")
+func (n *node) GetColumnDataById(idx int, buf *bytes.Buffer) (view *model.ColumnView, err error) {
+	view = model.NewColumnView(n.table.store.txn.GetStartTS(), idx)
+	vec, err := n.LoadPersistedColumnData(idx, buf)
+	if err != nil {
+		return
+	}
+	view.SetData(vec)
+	return
 }

@@ -60,7 +60,7 @@ func TestF32Div(t *testing.T) {
 		t.Fatalf("decimal64 div failed")
 	}
 
-	res := vector.MustTCols[float32](cv)
+	res := vector.MustFixedCol[float32](cv)
 	for i := 0; i < 10; i++ {
 		require.Equal(t, res[i], as[i]/bs[i])
 	}
@@ -84,7 +84,7 @@ func TestF64Div(t *testing.T) {
 		t.Fatalf("decimal64 div failed")
 	}
 
-	res := vector.MustTCols[float64](cv)
+	res := vector.MustFixedCol[float64](cv)
 	for i := 0; i < 10; i++ {
 		require.Equal(t, res[i], as[i]/bs[i])
 	}
@@ -150,7 +150,7 @@ func TestDec128Div(t *testing.T) {
 		t.Fatalf("decimal128 div failed")
 	}
 
-	res := vector.MustTCols[types.Decimal128](cv)
+	res := vector.MustFixedCol[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
 		d, _ := types.Decimal128_FromInt64(as[i]/bs[i], 64, 0)
 		if !res[i].Eq(d) {

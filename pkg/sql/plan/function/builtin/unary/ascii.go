@@ -36,91 +36,85 @@ var (
 	}
 )
 
-func AsciiInt[T types.Ints](vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
-	vec := vecs[0]
-	resultType := types.T_uint8.ToType()
+func AsciiInt[T types.Ints](ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
+	vec := ivecs[0]
+	rtyp := types.T_uint8.ToType()
 	defer func() {
 		if err != nil && ret != nil {
 			ret.Free(proc.Mp())
 		}
 	}()
-	if vec.IsScalarNull() {
-		ret = proc.AllocScalarNullVector(resultType)
+	if vec.IsConstNull() {
+		ret = vector.NewConstNull(rtyp, vec.Length(), proc.Mp())
 		return
 	}
-	start := intStartMap[vec.Typ.Oid]
-	if vec.IsScalar() {
-		ret = proc.AllocScalarVector(resultType)
-		rs := vector.MustTCols[uint8](ret)
-		v := vector.MustTCols[T](vec)[0]
-		rs[0] = ascii.IntSingle(int64(v), start)
+	start := intStartMap[vec.GetType().Oid]
+	if vec.IsConst() {
+		v := vector.MustFixedCol[T](vec)[0]
+		ret = vector.NewConstFixed(rtyp, ascii.IntSingle(int64(v), start), vec.Length(), proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.Nsp)
+	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())
 	if err != nil {
 		return
 	}
-	rs := vector.MustTCols[uint8](ret)
-	vs := vector.MustTCols[T](vec)
-	ascii.IntBatch(vs, start, rs, ret.Nsp)
+	rs := vector.MustFixedCol[uint8](ret)
+	vs := vector.MustFixedCol[T](vec)
+	ascii.IntBatch(vs, start, rs, ret.GetNulls())
 	return
 }
 
-func AsciiUint[T types.UInts](vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
-	vec := vecs[0]
-	resultType := types.T_uint8.ToType()
+func AsciiUint[T types.UInts](ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
+	vec := ivecs[0]
+	rtyp := types.T_uint8.ToType()
 	defer func() {
 		if err != nil && ret != nil {
 			ret.Free(proc.Mp())
 		}
 	}()
-	if vec.IsScalarNull() {
-		ret = proc.AllocScalarNullVector(resultType)
+	if vec.IsConstNull() {
+		ret = vector.NewConstNull(rtyp, vec.Length(), proc.Mp())
 		return
 	}
-	start := uintStartMap[vec.Typ.Oid]
-	if vec.IsScalar() {
-		ret = proc.AllocScalarVector(resultType)
-		rs := vector.MustTCols[uint8](ret)
-		v := vector.MustTCols[T](vec)[0]
-		rs[0] = ascii.UintSingle(uint64(v), start)
+	start := uintStartMap[vec.GetType().Oid]
+	if vec.IsConst() {
+		v := vector.MustFixedCol[T](vec)[0]
+		ret = vector.NewConstFixed(rtyp, ascii.UintSingle(uint64(v), start), vec.Length(), proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.Nsp)
+	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())
 	if err != nil {
 		return
 	}
-	rs := vector.MustTCols[uint8](ret)
-	vs := vector.MustTCols[T](vec)
-	ascii.UintBatch(vs, start, rs, ret.Nsp)
+	rs := vector.MustFixedCol[uint8](ret)
+	vs := vector.MustFixedCol[T](vec)
+	ascii.UintBatch(vs, start, rs, ret.GetNulls())
 	return
 }
 
-func AsciiString(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
-	vec := vecs[0]
-	resultType := types.T_uint8.ToType()
+func AsciiString(ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vector, err error) {
+	vec := ivecs[0]
+	rtyp := types.T_uint8.ToType()
 	defer func() {
 		if err != nil && ret != nil {
 			ret.Free(proc.Mp())
 		}
 	}()
-	if vec.IsScalarNull() {
-		ret = proc.AllocScalarNullVector(resultType)
+	if vec.IsConstNull() {
+		ret = vector.NewConstNull(rtyp, vec.Length(), proc.Mp())
 		return
 	}
-	if vec.IsScalar() {
-		ret = proc.AllocScalarVector(resultType)
-		rs := vector.MustTCols[uint8](ret)
-		v := vector.MustBytesCols(vec)[0]
-		rs[0] = ascii.StringSingle(v)
+	if vec.IsConst() {
+		v := vector.MustBytesCol(vec)[0]
+		ret = vector.NewConstFixed(rtyp, ascii.StringSingle(v), vec.Length(), proc.Mp())
 		return
 	}
-	ret, err = proc.AllocVectorOfRows(resultType, int64(vec.Length()), vec.Nsp)
+	ret, err = proc.AllocVectorOfRows(rtyp, vec.Length(), vec.GetNulls())
 	if err != nil {
 		return
 	}
-	rs := vector.MustTCols[uint8](ret)
-	vs := vector.MustBytesCols(vec)
-	ascii.StringBatch(vs, rs, ret.Nsp)
+	rs := vector.MustFixedCol[uint8](ret)
+	vs := vector.MustBytesCol(vec)
+	ascii.StringBatch(vs, rs, ret.GetNulls())
 	return
 }

@@ -767,7 +767,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, sql string, args []tree.Exp
 
 	if !strings.Contains(sql, "select") {
 		sql = "select " + sql
-		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql)
+		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -776,7 +776,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, sql string, args []tree.Exp
 			return nil, err
 		}
 	} else {
-		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql)
+		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -1009,7 +1009,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
 			if exprC, ok := args[1].Expr.(*plan.Expr_C); ok {
 				sval := exprC.C.Value.(*plan.Const_Sval)
-				tp, _ := binary.JudgmentToDateReturnType(sval.Sval)
+				tp, _ := binary.ExtractToDateReturnType(sval.Sval)
 				args = append(args, makePlan2DateConstNullExpr(tp))
 			} else {
 				return nil, moerr.NewInvalidArg(ctx, "to_date format", "not constant")
@@ -1109,20 +1109,20 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 	case "in", "not_in":
 		//if all the expr in the in list can safely cast to left type, we call it safe
-		var safe bool
+		safe := true
 		if rightList, ok := args[1].Expr.(*plan.Expr_List); ok {
 			typLeft := makeTypeByPlan2Expr(args[0])
+			// for now ,decimal type can not fold constant
+			if typLeft.Oid == types.T_decimal64 || typLeft.Oid == types.T_decimal128 {
+				safe = false
+			}
 			lenList := len(rightList.List.List)
 
-			for i := 0; i < lenList; i++ {
+			for i := 0; i < lenList && safe; i++ {
 				if constExpr, ok := rightList.List.List[i].Expr.(*plan.Expr_C); ok {
 					safe = checkNoNeedCast(makeTypeByPlan2Expr(rightList.List.List[i]), typLeft, constExpr)
-					if !safe {
-						break
-					}
 				} else {
 					safe = false
-					break
 				}
 			}
 

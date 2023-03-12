@@ -30,5 +30,5 @@ func TestConcat(t *testing.T) {
 	proc := testutil.NewProc()
 	outputVector, err := Concat(inputVectors, proc)
 	require.NoError(t, err)
-	require.Equal(t, "hello world", outputVector.GetString(0))
+	require.Equal(t, "hello world", outputVector.GetStringAt(0))
 }

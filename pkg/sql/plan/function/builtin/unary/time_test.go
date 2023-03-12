@@ -211,7 +211,7 @@ func TestTime(t *testing.T) {
 				result, err = DateStringToTime(vec, c.proc)
 			}
 			require.NoError(t, err)
-			require.Equal(t, c.want, result.Col.([]types.Time))
+			require.Equal(t, c.want, vector.MustFixedCol[types.Time](result))
 		})
 	}
 
@@ -226,28 +226,28 @@ func makeVectorForTimeTest(str string, scale int32, isConst bool, typ types.Type
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.NewConstFixed(types.T_int64.ToType(), 1, data, testutil.TestUtilMp)
+			vec[0] = vector.NewConstFixed(types.T_int64.ToType(), data, 1, testutil.TestUtilMp)
 		case types.T_decimal128:
 			data, err := types.ParseStringToDecimal128(str, 34, scale, false)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.NewConstFixed(types.T_decimal128.ToType(), 1, data, testutil.TestUtilMp)
+			vec[0] = vector.NewConstFixed(types.T_int128.ToType(), data, 1, testutil.TestUtilMp)
 		case types.T_date:
 			data, err := types.ParseDateCast(str)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, data, testutil.TestUtilMp)
+			vec[0] = vector.NewConstFixed(types.T_date.ToType(), data, 1, testutil.TestUtilMp)
 		case types.T_datetime:
 			data, err := types.ParseDatetime(str, scale)
 			if err != nil {
 				return nil, moerr.ErrInvalidInput
 			}
-			vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, data, testutil.TestUtilMp)
-			vec[0].Typ.Scale = scale
+			vec[0] = vector.NewConstFixed(types.T_date.ToType(), data, 1, testutil.TestUtilMp)
+			vec[0].GetType().Scale = scale
 		case types.T_char, types.T_varchar:
-			vec[0] = vector.NewConstString(types.Type{Oid: types.T_varchar, Size: 26}, 1, str, testutil.TestUtilMp)
+			vec[0] = vector.NewConstBytes(types.Type{Oid: types.T_varchar, Size: 26}, []byte(str), 1, testutil.TestUtilMp)
 		}
 	} else {
 		input := make([]string, 0)
@@ -268,13 +268,14 @@ func makeVectorForTimeTest(str string, scale int32, isConst bool, typ types.Type
 				return nil, moerr.ErrInvalidInput
 			}
 			input = append(input, tmp)
-			vec[0] = vector.NewWithFixed(typ, input, nil, testutil.TestUtilMp)
+			vec[0] = vector.NewVec(typ)
+			vector.AppendFixedList(vec[0], input, nil, testutil.TestUtilMp)
 
 		case types.T_date:
 			vec[0] = testutil.MakeDateVector(input, nil)
 		case types.T_datetime:
 			vec[0] = testutil.MakeDateTimeVector(input, nil)
-			vec[0].Typ.Scale = scale
+			vec[0].GetType().Scale = scale
 		case types.T_char:
 			vec[0] = testutil.MakeCharVector(input, nil)
 		case types.T_varchar:

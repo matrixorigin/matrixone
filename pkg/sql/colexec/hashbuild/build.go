@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -47,7 +46,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.New(typ)
+		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
 
 	return nil
@@ -73,7 +72,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 		default:
 			if ctr.bat != nil {
 				if ap.NeedHashMap {
-					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, ctr.nullSels, nil, ctr.mp, ctr.hasNull, ctr.idx)
+					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, ctr.nullSels, nil, ctr.mp, ctr.hasNull)
 				}
 				proc.SetInputBatch(ctr.bat)
 				ctr.mp = nil
@@ -118,9 +117,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 
-	if ctr.idx != nil {
-		return ctr.indexBuild()
-	}
+	//if ctr.idx != nil {
+	//	return ctr.indexBuild()
+	//}
 
 	inBuckets := make([]uint8, hashmap.UnitLimit)
 
@@ -168,13 +167,14 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
+/*
 func (ctr *container) indexBuild() error {
 	// e.g. original data = ["a", "b", "a", "c", "b", "c", "a", "a"]
 	//      => dictionary = ["a"->1, "b"->2, "c"->3]
 	//      => poses = [1, 2, 1, 3, 2, 3, 1, 1]
 	// sels = [[0, 2, 6, 7], [1, 4], [3, 5]]
 	ctr.sels = make([][]int32, index.MaxLowCardinality)
-	poses := vector.MustTCols[uint16](ctr.idx.GetPoses())
+	poses := vector.MustFixedCol[uint16](ctr.idx.GetPoses())
 	for k, v := range poses {
 		if v == 0 {
 			continue
@@ -187,11 +187,12 @@ func (ctr *container) indexBuild() error {
 	}
 	return nil
 }
+*/
 
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
+		if err != nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
@@ -207,7 +208,6 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 		if ctr.evecs[i].needFree && vec != nil {
 			analyze.Alloc(int64(vec.Size()))
 		}
-
 	}
 	return nil
 }

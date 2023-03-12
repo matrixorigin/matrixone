@@ -115,7 +115,12 @@ func (un *TxnMVCCNode) IsVisible(ts types.TS) (visible bool) {
 	return false
 
 }
-func (un *TxnMVCCNode) GetPrepare() types.TS { return un.Prepare }
+func (un *TxnMVCCNode) GetPrepare() types.TS {
+	if un.Txn != nil {
+		return un.Txn.GetPrepareTS()
+	}
+	return un.Prepare
+}
 
 func (un *TxnMVCCNode) PreparedIn(minTS, maxTS types.TS) (in, before bool) {
 	// -------+----------+----------------+--------------->

@@ -29,9 +29,10 @@ func TestLength(t *testing.T) {
 	makeTempVector := func(src string, t types.T, srcIsScalar bool) []*vector.Vector {
 		vectors := make([]*vector.Vector, 1)
 		if srcIsScalar {
-			vectors[0] = vector.NewConstString(t.ToType(), 1, src, testutil.TestUtilMp)
+			vectors[0] = vector.NewConstBytes(t.ToType(), []byte(src), 1, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.NewWithStrings(t.ToType(), []string{src}, nil, testutil.TestUtilMp)
+			vectors[0] = vector.NewVec(t.ToType())
+			vector.AppendStringList(vectors[0], []string{src}, nil, testutil.TestUtilMp)
 		}
 		return vectors
 	}
@@ -81,25 +82,25 @@ func TestLength(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, lengthRes.Col)
-			require.Equal(t, c.wantScalar, lengthRes.IsScalar())
+			require.Equal(t, c.wantBytes, vector.MustFixedCol[int64](lengthRes))
+			require.Equal(t, c.wantScalar, lengthRes.IsConst())
 
 		})
 	}
 }
 
 func TestBlobLength(t *testing.T) {
-	makeBlobVector := func(src []byte, srcIsScalar bool, procs *process.Process) *vector.Vector {
-		inputType := types.New(types.T_blob, 0, 0)
+	makeBlobVector := func(src []byte, srcIsScalar bool, proc *process.Process) *vector.Vector {
+		inputType := types.T_blob.ToType()
 		var inputVector *vector.Vector
 		if srcIsScalar {
-			inputVector = vector.NewConst(inputType, 1)
+			inputVector = vector.NewConstBytes(inputType, src, 1, proc.Mp())
 		} else {
-			inputVector = vector.New(inputType)
-		}
-		err := inputVector.Append(src, false, procs.Mp())
-		if err != nil {
-			t.Fatal(err)
+			inputVector = vector.NewVec(inputType)
+			err := vector.AppendBytes(inputVector, src, false, proc.Mp())
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 		return inputVector
 	}
@@ -134,8 +135,8 @@ func TestBlobLength(t *testing.T) {
 		convey.Convey(c.name, t, func() {
 			res, err := Length([]*vector.Vector{makeBlobVector(c.ctx, c.isScalar, procs)}, procs)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(res.Col, convey.ShouldResemble, c.want)
-			convey.So(res.IsScalar(), convey.ShouldEqual, c.isScalar)
+			convey.So(vector.MustFixedCol[int64](res), convey.ShouldResemble, c.want)
+			convey.So(res.IsConst(), convey.ShouldEqual, c.isScalar)
 		})
 	}
 

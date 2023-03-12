@@ -15,6 +15,7 @@
 package handle
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -47,7 +48,7 @@ type Relation interface {
 
 	BatchDedup(col containers.Vector) error
 	Append(data *containers.Batch) error
-	AddBlksWithMetaLoc(pkVecs []containers.Vector, file string, metaLcos []string, flag int32) error
+	AddBlksWithMetaLoc(zm []dataio.Index, metaLcos []string) error
 
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)

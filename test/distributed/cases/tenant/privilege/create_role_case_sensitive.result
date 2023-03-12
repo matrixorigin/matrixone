@@ -12,5 +12,5 @@ drop role if exists `rrw`,`JOzSxk`,'88桢38鞨804譓905岏','291溥苧828孷9烙
 drop role if exists `AiaqE`;
 create role `AiaqE`;
 drop role `AiaqE`,`AiaqE`,`AiaqE`;
-internal error: there is no role AiaqE
+internal error: there is no role aiaqe
 drop role `AiaqE`;
