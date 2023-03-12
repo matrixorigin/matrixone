@@ -54,7 +54,7 @@ func WithCounter(ctx context.Context, familyName string, counter *Counter) conte
 	// check existed
 	v := ctx.Value(CtxKeyCounters)
 
-	metric.DefaultStatsRegistry.RegisterDevMetric(familyName, counter) //TODO: Need suggestions here.
+	metric.DefaultStatsRegistry.RegisterStats(familyName, counter) //TODO: Need suggestions here.
 
 	if v == nil {
 		return context.WithValue(ctx, CtxKeyCounters, []*Counter{counter})
@@ -66,7 +66,7 @@ func WithCounter(ctx context.Context, familyName string, counter *Counter) conte
 	return context.WithValue(ctx, CtxKeyCounters, newCounters)
 }
 
-func (c *Counter) Collect() map[string]int64 {
+func (c *Counter) Collect() metric.Stats {
 	stats := make(map[string]int64)
 
 	c.Lock()

@@ -52,7 +52,7 @@ type statusServer struct {
 var registry *prom.Registry
 var moExporter metric.MetricExporter
 var moCollector MetricCollector
-var moLogExporter *MetricLogExporter
+var statsLogExporter *StatsLogExporter
 
 var statusSvr *statusServer
 var multiTable = false // need set before newMetricFSCollector and initTables
@@ -83,7 +83,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	}
 	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
 
-	moLogExporter = newMetricLogExporter(&metric.DefaultStatsRegistry, nodeUUID, role)
+	statsLogExporter = newStatsLogExporter(nodeUUID, role)
 
 	// register metrics and create tables
 	registerAllMetrics()
@@ -97,7 +97,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	moCollector.Start(serviceCtx)
 	moExporter.Start(serviceCtx)
 
-	moLogExporter.Start(serviceCtx)
+	statsLogExporter.Start(serviceCtx)
 
 	metric.SetMetricExporter(moExporter)
 
@@ -139,11 +139,11 @@ func StopMetricSync() {
 		moExporter = nil
 	}
 
-	if moLogExporter != nil {
-		if ch, effect := moLogExporter.Stop(true); effect {
+	if statsLogExporter != nil {
+		if ch, effect := statsLogExporter.Stop(true); effect {
 			<-ch
 		}
-		moLogExporter = nil
+		statsLogExporter = nil
 	}
 
 	if statusSvr != nil {
