@@ -17,7 +17,6 @@ package hashmap
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -71,7 +70,6 @@ type JoinMap struct {
 	expr    *plan.Expr
 	mp      *StrHashMap
 	hasNull bool
-	idx     *index.LowCardinalityIndex
 
 	nullSels []int32
 }

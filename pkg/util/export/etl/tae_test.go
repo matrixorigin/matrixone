@@ -120,7 +120,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 		for _, vec := range bat.Vecs {
 			rows, err := GetVectorArrayLen(context.TODO(), vec)
 			require.Nil(t, err)
-			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.Typ.String())
+			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.GetType().String())
 		}
 		rows := bat.Vecs[0].Length()
 		ctn := strings.Builder{}
@@ -353,7 +353,7 @@ func TestTaeReadFile(t *testing.T) {
 		for _, vec := range bat.Vecs {
 			rows, err := GetVectorArrayLen(context.TODO(), vec)
 			require.Nil(t, err)
-			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.Typ.String())
+			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.GetType().String())
 		}
 		rows := bat.Vecs[0].Length()
 		ctn := strings.Builder{}
@@ -430,7 +430,7 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 				require.Nil(t, err)
 				t.Logf("calculate length: %d", rows)
 				break
-				//t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.Typ.String())
+				//t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.GetType().String())
 			}
 			rows := bat.Vecs[0].Length()
 			ctn := strings.Builder{}

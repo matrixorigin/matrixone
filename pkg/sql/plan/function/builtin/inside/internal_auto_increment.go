@@ -16,6 +16,7 @@ package inside
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,13 +28,13 @@ import (
 
 // InternalAutoIncrement is the internal system function Implementation of 'internal_auto_increment',
 // 'internal_auto_increment' is used to obtain the current auto_increment column value of the table under the specified database
-func InternalAutoIncrement(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultType := types.T_uint64.ToType()
+func InternalAutoIncrement(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtyp := types.T_uint64.ToType()
 	isAllConst := true
-	for i := range vectors {
-		if vectors[i].IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		} else if !vectors[i].IsScalar() {
+	for i := range ivecs {
+		if ivecs[i].IsConstNull() {
+			return vector.NewConstNull(rtyp, 1, proc.Mp()), nil
+		} else if !ivecs[i].IsConst() {
 			isAllConst = false
 			break
 		}
@@ -51,13 +52,13 @@ func InternalAutoIncrement(vectors []*vector.Vector, proc *process.Process) (*ve
 	}
 	defer eng.Rollback(proc.Ctx, txnOperator)
 	if isAllConst {
-		resVector := proc.AllocScalarVector(resultType)
-		dbName := vectors[0].GetString(0)
+		var rvec *vector.Vector
+		dbName := ivecs[0].GetStringAt(0)
 		database, err := eng.Database(proc.Ctx, dbName, txnOperator)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
 		}
-		tableName := vectors[1].GetString(0)
+		tableName := ivecs[1].GetStringAt(0)
 		relation, err := database.Relation(proc.Ctx, tableName)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)
@@ -74,39 +75,27 @@ func InternalAutoIncrement(vectors []*vector.Vector, proc *process.Process) (*ve
 			if err != nil {
 				return nil, err // or return 0, nil
 			}
-			resVector.Append(autoIncrement, false, proc.Mp())
+			rvec = vector.NewConstFixed(rtyp, autoIncrement, 1, proc.Mp())
 		} else {
-			resVector.Append(uint64(0), true, proc.Mp())
+			rvec = vector.NewConstFixed(rtyp, uint64(0), 1, proc.Mp())
 		}
-		return resVector, nil
+		return rvec, nil
 	} else {
-		rowCount := vector.Length(vectors[0])
-		resVector, err := proc.AllocVectorOfRows(resultType, int64(rowCount), vectors[1].Nsp)
+		rowCount := ivecs[0].Length()
+		rvec, err := proc.AllocVectorOfRows(rtyp, rowCount, ivecs[1].GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resValues := vector.MustTCols[uint64](resVector)
+		resValues := vector.MustFixedCol[uint64](rvec)
 
-		dbs := vector.MustStrCols(vectors[0])
-		tables := vector.MustStrCols(vectors[1])
 		for i := 0; i < rowCount; i++ {
-			var dbName string
-			if vectors[0].IsScalar() {
-				dbName = vectors[0].GetString(0)
-			} else {
-				dbName = dbs[i]
-			}
+			dbName := ivecs[0].GetStringAt(i)
 			database, err := eng.Database(proc.Ctx, dbName, txnOperator)
 			if err != nil {
 				return nil, moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
 			}
 
-			var tableName string
-			if vectors[1].IsScalar() {
-				tableName = vectors[1].GetString(0)
-			} else {
-				tableName = tables[i]
-			}
+			tableName := ivecs[1].GetStringAt(i)
 			relation, err := database.Relation(proc.Ctx, tableName)
 			if err != nil {
 				return nil, moerr.NewInvalidInput(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)
@@ -125,9 +114,9 @@ func InternalAutoIncrement(vectors []*vector.Vector, proc *process.Process) (*ve
 				}
 				resValues[i] = autoIncrement
 			} else {
-				nulls.Add(resVector.Nsp, uint64(i))
+				nulls.Add(rvec.GetNulls(), uint64(i))
 			}
 		}
-		return resVector, nil
+		return rvec, nil
 	}
 }

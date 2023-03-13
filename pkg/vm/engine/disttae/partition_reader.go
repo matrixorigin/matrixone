@@ -16,8 +16,9 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -71,7 +72,7 @@ func (blockBatch *BlockBatch) hasRows() bool {
 }
 
 func (blockBatch *BlockBatch) setBat(bat *batch.Batch) {
-	blockBatch.metas = vector.MustStrCols(bat.Vecs[0])
+	blockBatch.metas = vector.MustStrCol(bat.Vecs[0])
 	blockBatch.idx = 0
 	blockBatch.length = len(blockBatch.metas)
 }
@@ -135,6 +136,12 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				return nil, err
 			}
 			rbat := bats[0]
+			for i, vec := range rbat.Vecs {
+				rbat.Vecs[i], err = vec.Dup(p.procMPool)
+				if err != nil {
+					return nil, err
+				}
+			}
 			rbat.SetAttributes(colNames)
 			rbat.Cnt = 1
 			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
@@ -145,7 +152,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			b := batch.NewWithSize(len(colNames))
 			b.SetAttributes(colNames)
 			for i, name := range colNames {
-				b.Vecs[i] = vector.New(p.typsMap[name])
+				b.Vecs[i] = vector.NewVec(p.typsMap[name])
 			}
 			if _, err := b.Append(ctx, mp, bat); err != nil {
 				return nil, err
@@ -159,7 +166,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	b := batch.NewWithSize(len(colNames))
 	b.SetAttributes(colNames)
 	for i, name := range colNames {
-		b.Vecs[i] = vector.New(p.typsMap[name])
+		b.Vecs[i] = vector.NewVec(p.typsMap[name])
 	}
 	rows := 0
 
@@ -194,7 +201,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
-				if err := b.Vecs[i].Append(entry.RowID, false, mp); err != nil {
+				if err := vector.AppendFixed(b.Vecs[i], entry.RowID, false, mp); err != nil {
 					return nil, err
 				}
 			} else {

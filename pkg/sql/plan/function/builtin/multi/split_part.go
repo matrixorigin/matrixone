@@ -33,44 +33,43 @@ var fnMap = []func(s1, s2 []string, s3 []uint32, nsps []*nulls.Nulls, rs []strin
 	split_part.SplitPart7,
 }
 
-func SplitPart(vectors []*vector.Vector, proc *process.Process) (vec *vector.Vector, err error) {
+func SplitPart(ivecs []*vector.Vector, proc *process.Process) (vec *vector.Vector, err error) {
 	defer func() {
 		if err != nil && vec != nil {
 			vec.Free(proc.Mp())
 		}
 	}()
-	v1, v2, v3 := vectors[0], vectors[1], vectors[2]
-	resultType := types.T_varchar.ToType()
-	maxLen := findMaxLen(vectors)
-	if v1.IsScalarNull() || v2.IsScalarNull() || v3.IsScalarNull() {
-		vec = proc.AllocConstNullVector(resultType, maxLen)
+	v1, v2, v3 := ivecs[0], ivecs[1], ivecs[2]
+	rtyp := types.T_varchar.ToType()
+	maxLen := findMaxLen(ivecs)
+	if v1.IsConstNull() || v2.IsConstNull() || v3.IsConstNull() {
+		vec = vector.NewConstNull(rtyp, v1.Length(), proc.Mp())
 		return
 	}
 	if !validCount(v3) {
 		err = moerr.NewInvalidInput(proc.Ctx, "split_part: field contains non-positive integer")
 		return
 	}
-	s1, s2, s3 := vector.MustStrCols(v1), vector.MustStrCols(v2), vector.MustTCols[uint32](v3)
-	if v1.IsScalar() && v2.IsScalar() && v3.IsScalar() {
-		vec = proc.AllocScalarVector(resultType)
+	s1, s2, s3 := vector.MustStrCol(v1), vector.MustStrCol(v2), vector.MustFixedCol[uint32](v3)
+	if v1.IsConst() && v2.IsConst() && v3.IsConst() {
 		ret, isNull := split_part.SplitSingle(s1[0], s2[0], s3[0])
 		if isNull {
-			vec.Nsp.Set(0)
+			vec = vector.NewConstNull(rtyp, v1.Length(), proc.Mp())
 			return
 		}
-		err = vec.Append([]byte(ret), false, proc.Mp())
+		vec = vector.NewConstBytes(rtyp, []byte(ret), v1.Length(), proc.Mp())
 		return
 	}
-	vec, err = proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+	vec, err = proc.AllocVectorOfRows(rtyp, maxLen, nil)
 	if err != nil {
 		return
 	}
-	fnIdx := determineFn(vectors)
+	fnIdx := determineFn(ivecs)
 
 	rs := make([]string, maxLen)
-	fnMap[fnIdx](s1, s2, s3, []*nulls.Nulls{v1.Nsp, v2.Nsp, v3.Nsp}, rs, vec.Nsp)
+	fnMap[fnIdx](s1, s2, s3, []*nulls.Nulls{v1.GetNulls(), v2.GetNulls(), v3.GetNulls()}, rs, vec.GetNulls())
 	for i, r := range rs {
-		if vec.Nsp.Contains(uint64(i)) {
+		if vec.GetNulls().Contains(uint64(i)) {
 			continue
 		}
 		err = vector.SetStringAt(vec, i, r, proc.Mp())
@@ -95,7 +94,7 @@ func determineFn(vecs []*vector.Vector) int {
 	ret := 0
 	vecCnt := 3
 	for i, vec := range vecs {
-		if !vec.IsScalar() {
+		if !vec.IsConst() {
 			ret |= 1 << (vecCnt - i - 1)
 		}
 	}
@@ -103,9 +102,9 @@ func determineFn(vecs []*vector.Vector) int {
 }
 
 func validCount(v *vector.Vector) bool {
-	s := vector.MustTCols[uint32](v)
+	s := vector.MustFixedCol[uint32](v)
 	for i, x := range s {
-		if v.Nsp.Contains(uint64(i)) {
+		if v.GetNulls().Contains(uint64(i)) {
 			continue
 		}
 		if x == 0 {

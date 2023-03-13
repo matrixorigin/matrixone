@@ -23,35 +23,27 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-func UnaryTilde[T constraints.Integer](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	srcVector := vectors[0]
-	srcValues := vector.MustTCols[T](srcVector)
-	returnType := types.Type{
-		Oid:  types.T_uint64,
-		Size: types.T_uint64.ToType().Size,
-	}
+func UnaryTilde[T constraints.Integer](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	srcVector := ivecs[0]
+	srcValues := vector.MustFixedCol[T](srcVector)
+	rtyp := types.T_uint64.ToType()
 
-	if srcVector.IsScalar() {
-		if srcVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(returnType), nil
+	if srcVector.IsConst() {
+		if srcVector.IsConstNull() {
+			return vector.NewConstNull(*srcVector.GetType(), srcVector.Length(), proc.Mp()), nil
 		}
-		resVector := proc.AllocScalarVector(returnType)
-		resValues := make([]uint64, 1)
-		nulls.Set(resVector.Nsp, srcVector.Nsp)
-		resValues[0] = funcBitInversion(srcValues[0])
-		vector.SetCol(resVector, resValues)
-		return resVector, nil
+		return vector.NewConstFixed(rtyp, funcBitInversion(srcValues[0]), srcVector.Length(), proc.Mp()), nil
 	} else {
-		resVector, err := proc.AllocVectorOfRows(returnType, int64(len(srcValues)), srcVector.Nsp)
+		resVector, err := proc.AllocVectorOfRows(rtyp, len(srcValues), srcVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resValues := vector.MustTCols[uint64](resVector)
+		resValues := vector.MustFixedCol[uint64](resVector)
 
 		var i uint64
-		if nulls.Any(resVector.Nsp) {
+		if nulls.Any(resVector.GetNulls()) {
 			for i = 0; i < uint64(len(resValues)); i++ {
-				if !nulls.Contains(resVector.Nsp, i) {
+				if !nulls.Contains(resVector.GetNulls(), i) {
 					resValues[i] = funcBitInversion(srcValues[i])
 				} else {
 					resValues[i] = 0
@@ -75,72 +67,67 @@ func funcBitInversion[T constraints.Integer](x T) uint64 {
 	}
 }
 
-func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	srcVector := vectors[0]
-	srcValues := vector.MustTCols[T](srcVector)
+func UnaryMinus[T constraints.Signed | constraints.Float](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	srcVector := ivecs[0]
+	srcValues := vector.MustFixedCol[T](srcVector)
 
-	if srcVector.IsScalar() {
-		if srcVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(srcVector.Typ), nil
+	if srcVector.IsConst() {
+		if srcVector.IsConstNull() {
+			return vector.NewConstNull(*srcVector.GetType(), srcVector.Length(), proc.Mp()), nil
 		}
-		resVector := proc.AllocScalarVector(srcVector.Typ)
-		resValues := make([]T, 1)
-		nulls.Set(resVector.Nsp, srcVector.Nsp)
-		vector.SetCol(resVector, neg.NumericNeg(srcValues, resValues))
-		return resVector, nil
+		var resValues [1]T
+		neg.NumericNeg(srcValues, resValues[:])
+		return vector.NewConstFixed(*srcVector.GetType(), resValues[0], srcVector.Length(), proc.Mp()), nil
 	} else {
-		resVector, err := proc.AllocVectorOfRows(srcVector.Typ, int64(len(srcValues)), srcVector.Nsp)
+		resVector, err := proc.AllocVectorOfRows(*srcVector.GetType(), len(srcValues), srcVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resValues := vector.MustTCols[T](resVector)
+		resValues := vector.MustFixedCol[T](resVector)
 		neg.NumericNeg(srcValues, resValues)
 		return resVector, nil
 	}
 }
 
-func UnaryMinusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	srcVector := vectors[0]
-	srcValues := vector.MustTCols[types.Decimal64](srcVector)
+func UnaryMinusDecimal64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	srcVector := ivecs[0]
+	srcValues := vector.MustFixedCol[types.Decimal64](srcVector)
 
-	if srcVector.IsScalar() {
-		if srcVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(srcVector.Typ), nil
+	if srcVector.IsConst() {
+		if srcVector.IsConstNull() {
+			return vector.NewConstNull(*srcVector.GetType(), srcVector.Length(), proc.Mp()), nil
 		}
-		resVector := proc.AllocScalarVector(srcVector.Typ)
-		resValues := make([]types.Decimal64, 1)
-		nulls.Set(resVector.Nsp, srcVector.Nsp)
-		vector.SetCol(resVector, neg.Decimal64Neg(srcValues, resValues))
-		return resVector, nil
+		var resValues [1]types.Decimal64
+		neg.Decimal64Neg(srcValues, resValues[:])
+		return vector.NewConstFixed(*srcVector.GetType(), resValues[0], srcVector.Length(), proc.Mp()), nil
 	} else {
-		resVector, err := proc.AllocVectorOfRows(srcVector.Typ, int64(len(srcValues)), srcVector.Nsp)
+		resVector, err := proc.AllocVectorOfRows(*srcVector.GetType(), len(srcValues), srcVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resValues := vector.MustTCols[types.Decimal64](resVector)
+		resValues := vector.MustFixedCol[types.Decimal64](resVector)
 		neg.Decimal64Neg(srcValues, resValues)
 		return resVector, nil
 	}
 }
 
-func UnaryMinusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	srcVector := vectors[0]
-	srcValues := vector.MustTCols[types.Decimal128](srcVector)
+func UnaryMinusDecimal128(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	srcVector := ivecs[0]
+	srcValues := vector.MustFixedCol[types.Decimal128](srcVector)
 
-	if srcVector.IsScalar() {
-		if srcVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(srcVector.Typ), nil
+	if srcVector.IsConst() {
+		if srcVector.IsConstNull() {
+			return vector.NewConstNull(*srcVector.GetType(), srcVector.Length(), proc.Mp()), nil
 		}
-		resVector := proc.AllocScalarVector(srcVector.Typ)
-		resValues := make([]types.Decimal128, 1)
-		vector.SetCol(resVector, neg.Decimal128Neg(srcValues, resValues))
-		return resVector, nil
+		var resValues [1]types.Decimal128
+		neg.Decimal128Neg(srcValues, resValues[:])
+		return vector.NewConstFixed(*srcVector.GetType(), resValues[0], srcVector.Length(), proc.Mp()), nil
 	} else {
-		resVector, err := proc.AllocVectorOfRows(srcVector.Typ, int64(len(srcValues)), srcVector.Nsp)
+		resVector, err := proc.AllocVectorOfRows(*srcVector.GetType(), len(srcValues), srcVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resValues := vector.MustTCols[types.Decimal128](resVector)
+		resValues := vector.MustFixedCol[types.Decimal128](resVector)
 		// XXX should pass in nulls
 		neg.Decimal128Neg(srcValues, resValues)
 		return resVector, nil

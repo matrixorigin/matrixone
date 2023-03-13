@@ -21,51 +21,54 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Concat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultType := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
+func Concat(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtyp := types.Type{Oid: types.T_varchar, Size: 24, Width: types.MaxVarcharLen}
 	isAllConst := true
 
-	for i := range vectors {
-		if vectors[i].IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+	for i := range ivecs {
+		if ivecs[i].IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		if !vectors[i].IsScalar() {
+		if !ivecs[i].IsConst() {
 			isAllConst = false
 		}
 	}
 	if isAllConst {
-		return concatWithAllConst(vectors, proc)
+		return concatWithAllConst(ivecs, proc)
 	}
-	return concatWithSomeCols(vectors, proc)
+	return concatWithSomeCols(ivecs, proc)
 }
 
-func concatWithAllConst(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	length := vector.Length(vectors[0])
+func concatWithAllConst(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	//length := vectors[0].Length()
 	vct := types.T_varchar.ToType()
 	res := ""
-	for i := range vectors {
-		res += vectors[i].GetString(0)
+	for i := range ivecs {
+		res += ivecs[i].GetStringAt(0)
 	}
-	return vector.NewConstString(vct, length, res, proc.Mp()), nil
+	return vector.NewConstBytes(vct, []byte(res), ivecs[0].Length(), proc.Mp()), nil
 }
 
-func concatWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	length := vector.Length(vectors[0])
-	vct := types.T_varchar.ToType()
-	nsp := new(nulls.Nulls)
+func concatWithSomeCols(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	length := ivecs[0].Length()
+	rtyp := types.T_varchar.ToType()
+	rvec := vector.NewVec(rtyp)
+	for i := range ivecs {
+		nulls.Or(ivecs[i].GetNulls(), rvec.GetNulls(), rvec.GetNulls())
+	}
 	val := make([]string, length)
 	for i := 0; i < length; i++ {
-		for j := range vectors {
-			if nulls.Contains(vectors[j].Nsp, uint64(i)) {
-				nulls.Add(nsp, uint64(i))
-				break
-			}
-			if vectors[j].IsScalar() {
-				val[i] += vectors[j].GetString(int64(0))
+		if nulls.Contains(rvec.GetNulls(), uint64(i)) {
+			continue
+		}
+		for j := range ivecs {
+			if ivecs[j].IsConst() {
+				val[i] += ivecs[j].GetStringAt(0)
 			} else {
-				val[i] += vectors[j].GetString(int64(i))
+				val[i] += ivecs[j].GetStringAt(i)
 			}
 		}
 	}
-	return vector.NewWithStrings(vct, val, nsp, proc.Mp()), nil
+	vector.AppendStringList(rvec, val, nil, proc.Mp())
+	return rvec, nil
 }

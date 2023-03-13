@@ -211,8 +211,8 @@ func (p *PartitionState) HandleRowsInsert(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	rowIDVector := vector.MustTCols[types.Rowid](mustVectorFromProto(input.Vecs[0]))
-	timeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[1]))
+	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
+	timeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
@@ -267,8 +267,8 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
 
-	rowIDVector := vector.MustTCols[types.Rowid](mustVectorFromProto(input.Vecs[0]))
-	timeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[1]))
+	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
+	timeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
@@ -304,14 +304,14 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataInsert")
 	defer task.End()
 
-	createTimeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[1]))
-	blockIDVector := vector.MustTCols[uint64](mustVectorFromProto(input.Vecs[2]))
-	entryStateVector := vector.MustTCols[bool](mustVectorFromProto(input.Vecs[3]))
-	sortedStateVector := vector.MustTCols[bool](mustVectorFromProto(input.Vecs[4]))
-	metaLocationVector := vector.MustStrCols(mustVectorFromProto(input.Vecs[5]))
-	deltaLocationVector := vector.MustStrCols(mustVectorFromProto(input.Vecs[6]))
-	commitTimeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[7]))
-	segmentIDVector := vector.MustTCols[uint64](mustVectorFromProto(input.Vecs[8]))
+	createTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
+	blockIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[2]))
+	entryStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[3]))
+	sortedStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[4]))
+	metaLocationVector := vector.MustStrCol(mustVectorFromProto(input.Vecs[5]))
+	deltaLocationVector := vector.MustStrCol(mustVectorFromProto(input.Vecs[6]))
+	commitTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
+	segmentIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[8]))
 
 	for i, blockID := range blockIDVector {
 		trace.WithRegion(ctx, "handle a row", func() {
@@ -379,8 +379,8 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataDelete")
 	defer task.End()
 
-	rowIDVector := vector.MustTCols[types.Rowid](mustVectorFromProto(input.Vecs[0]))
-	deleteTimeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[1]))
+	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
+	deleteTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 
 	for i, rowID := range rowIDVector {
 		blockID := types.DecodeUint64(rowID[:8])

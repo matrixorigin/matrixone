@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
 	"io"
 	"strconv"
 	"testing"
@@ -56,7 +57,7 @@ func TestCacheWithRCExample(t *testing.T) {
 				ToObject: func(_ io.Reader, data []byte) (any, int64, error) {
 					i, err := strconv.Atoi(string(data))
 					assert.Nil(t, err)
-					return NewRC(i), 8, nil
+					return memcachepolicy.NewRCValue(i), 8, nil
 				},
 			},
 		},
@@ -64,7 +65,7 @@ func TestCacheWithRCExample(t *testing.T) {
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 
-	value := vec.Entries[0].Object.(*RC[int])
+	value := vec.Entries[0].Object.(*memcachepolicy.RCValue[int])
 	assert.Equal(t, 42, value.Value)
 
 	value.IncRef()       // pin, cache will not evict this item
@@ -109,7 +110,7 @@ func TestCacheWithReleasableExample(t *testing.T) {
 					// allocs from pool
 					copied, put := pool.Get()
 					copied = copied[:copy(copied, data)]
-					return NewReleasable(copied, func() {
+					return memcachepolicy.NewReleasableValue(copied, func() {
 						// return to pool when evict
 						put()
 					}), int64(len(copied)), nil
@@ -120,7 +121,7 @@ func TestCacheWithReleasableExample(t *testing.T) {
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 
-	value := vec.Entries[0].Object.(ReleasableValue[[]byte])
+	value := vec.Entries[0].Object.(memcachepolicy.ReleasableValue[[]byte])
 	assert.Equal(t, []byte("42"), value.Value)
 
 }

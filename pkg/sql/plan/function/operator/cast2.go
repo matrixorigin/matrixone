@@ -336,77 +336,76 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	from := parameters[0]
 	switch fromType.Oid {
 	case types.T_any: // scalar null
-		err = scalarNullToOthers(proc.Ctx, toType, result, length)
+		err = scalarNullToOthers(proc.Ctx, *toType, result, length)
 	case types.T_bool:
 		s := vector.GenerateFunctionFixedTypeParameter[bool](from)
-		err = boolToOthers(proc.Ctx, s, toType, result, length)
+		err = boolToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_int8:
 		s := vector.GenerateFunctionFixedTypeParameter[int8](from)
-		err = int8ToOthers(proc.Ctx, s, toType, result, length)
+		err = int8ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_int16:
 		s := vector.GenerateFunctionFixedTypeParameter[int16](from)
-		err = int16ToOthers(proc.Ctx, s, toType, result, length)
+		err = int16ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_int32:
 		s := vector.GenerateFunctionFixedTypeParameter[int32](from)
-		err = int32ToOthers(proc.Ctx, s, toType, result, length)
+		err = int32ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_int64:
 		s := vector.GenerateFunctionFixedTypeParameter[int64](from)
-		err = int64ToOthers(proc.Ctx, s, toType, result, length)
+		err = int64ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_uint8:
 		s := vector.GenerateFunctionFixedTypeParameter[uint8](from)
-		err = uint8ToOthers(proc.Ctx, s, toType, result, length)
+		err = uint8ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_uint16:
 		s := vector.GenerateFunctionFixedTypeParameter[uint16](from)
-		err = uint16ToOthers(proc.Ctx, s, toType, result, length)
+		err = uint16ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_uint32:
 		s := vector.GenerateFunctionFixedTypeParameter[uint32](from)
-		err = uint32ToOthers(proc.Ctx, s, toType, result, length)
+		err = uint32ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_uint64:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
-		err = uint64ToOthers(proc.Ctx, s, toType, result, length)
+		err = uint64ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_float32:
 		s := vector.GenerateFunctionFixedTypeParameter[float32](from)
-		err = float32ToOthers(proc.Ctx, s, toType, result, length)
+		err = float32ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_float64:
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
-		err = float64ToOthers(proc.Ctx, s, toType, result, length)
+		err = float64ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_decimal64:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
-		err = decimal64ToOthers(proc.Ctx, s, toType, result, length)
+		err = decimal64ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_decimal128:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
-		err = decimal128ToOthers(proc.Ctx, s, toType, result, length)
+		err = decimal128ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_date:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
-		err = dateToOthers(proc, s, toType, result, length)
+		err = dateToOthers(proc, s, *toType, result, length)
 	case types.T_datetime:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Datetime](from)
-		err = datetimeToOthers(proc, s, toType, result, length)
+		err = datetimeToOthers(proc, s, *toType, result, length)
 	case types.T_time:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Time](from)
-		err = timeToOthers(proc.Ctx, s, toType, result, length)
+		err = timeToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_timestamp:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
-		err = timestampToOthers(proc, s, toType, result, length)
-	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		err = timestampToOthers(proc, s, *toType, result, length)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = strTypeToOthers(proc, s, toType, result, length)
+		err = strTypeToOthers(proc, s, *toType, result, length)
 	case types.T_uuid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Uuid](from)
-		err = uuidToOthers(proc.Ctx, s, toType, result, length)
+		err = uuidToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_TS:
 		s := vector.GenerateFunctionFixedTypeParameter[types.TS](from)
-		err = tsToOthers(proc.Ctx, s, toType, result, length)
+		err = tsToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_Rowid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](from)
-		err = rowidToOthers(proc.Ctx, s, toType, result, length)
+		err = rowidToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = jsonToOthers(proc.Ctx, s, toType, result, length)
+		err = jsonToOthers(proc.Ctx, s, *toType, result, length)
 	default:
 		// XXX we set the function here to adapt to the BVT cases.
-		err = formatCastError(proc.Ctx, from, toType, "")
+		err = formatCastError(proc.Ctx, from, *toType, "")
 	}
 	return err
 }
@@ -1141,7 +1140,7 @@ func datetimeToOthers(proc *process.Process,
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		v := source.GetSourceVector()
-		v.Typ = toType
+		v.SetType(toType)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_time:
@@ -1179,7 +1178,7 @@ func timestampToOthers(proc *process.Process,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		v := source.GetSourceVector()
-		v.Typ = toType
+		v.SetType(toType)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_char, types.T_varchar, types.T_blob,
@@ -1227,7 +1226,7 @@ func timeToOthers(ctx context.Context,
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		v := source.GetSourceVector()
-		v.Typ = toType
+		v.SetType(toType)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_char, types.T_varchar, types.T_blob,
@@ -1263,7 +1262,7 @@ func decimal64ToOthers(ctx context.Context,
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		v := source.GetSourceVector()
-		v.Typ = toType
+		v.SetType(toType)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_decimal128:
@@ -1302,7 +1301,7 @@ func decimal128ToOthers(ctx context.Context,
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		v := source.GetSourceVector()
-		v.Typ = toType
+		v.SetType(toType)
 		rs.SetFromParameter(source)
 		return nil
 	case types.T_float32:
@@ -1594,7 +1593,7 @@ func boolToStr(
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -1606,7 +1605,7 @@ func boolToStr(
 						result = append(result, 0)
 					}
 				}
-				if err := to.AppendStr([]byte("1"), false); err != nil {
+				if err := to.AppendBytes(result, false); err != nil {
 					return err
 				}
 			} else {
@@ -1617,7 +1616,7 @@ func boolToStr(
 						result = append(result, 0)
 					}
 				}
-				if err := to.AppendStr(result, false); err != nil {
+				if err := to.AppendBytes(result, false); err != nil {
 					return err
 				}
 			}
@@ -1823,7 +1822,7 @@ func signedToStr[T constraints.Integer](
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -1834,7 +1833,7 @@ func signedToStr[T constraints.Integer](
 					result = append(result, 0)
 				}
 			}
-			if err := to.AppendStr(result, false); err != nil {
+			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
 		}
@@ -1850,7 +1849,7 @@ func unsignedToStr[T constraints.Unsigned](
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -1861,7 +1860,7 @@ func unsignedToStr[T constraints.Unsigned](
 					result = append(result, 0)
 				}
 			}
-			if err := to.AppendStr(result, false); err != nil {
+			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
 		}
@@ -1878,7 +1877,7 @@ func floatToStr[T constraints.Float](
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -1889,7 +1888,7 @@ func floatToStr[T constraints.Float](
 					result = append(result, 0)
 				}
 			}
-			if err := to.AppendStr(result, false); err != nil {
+			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
 		}
@@ -2320,7 +2319,7 @@ func dateToStr(
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -2331,7 +2330,7 @@ func dateToStr(
 					result = append(result, 0)
 				}
 			}
-			if err := to.AppendStr(result, false); err != nil {
+			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
 		}
@@ -2348,7 +2347,7 @@ func datetimeToStr(
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -2359,7 +2358,7 @@ func datetimeToStr(
 					result = append(result, 0)
 				}
 			}
-			if err := to.AppendStr(result, false); err != nil {
+			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
 		}
@@ -2377,7 +2376,7 @@ func timestampToStr(
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -2388,7 +2387,7 @@ func timestampToStr(
 					result = append(result, 0)
 				}
 			}
-			if err := to.AppendStr(result, false); err != nil {
+			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
 		}
@@ -2405,7 +2404,7 @@ func timeToStr(
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -2416,7 +2415,7 @@ func timeToStr(
 					result = append(result, 0)
 				}
 			}
-			if err := to.AppendStr(result, false); err != nil {
+			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
 		}
@@ -2787,7 +2786,7 @@ func decimal64ToDecimal128(
 	totype := to.GetType()
 	{
 		v := to.GetResultVector()
-		v.Typ.Scale = from.GetType().Scale
+		v.GetType().Scale = from.GetType().Scale
 	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -2848,7 +2847,7 @@ func decimal64ToStr(
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -2859,7 +2858,7 @@ func decimal64ToStr(
 					result = append(result, 0)
 				}
 			}
-			if err := to.AppendStr(result, false); err != nil {
+			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
 		}
@@ -2876,7 +2875,7 @@ func decimal128ToStr(
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -2887,7 +2886,7 @@ func decimal128ToStr(
 					result = append(result, 0)
 				}
 			}
-			if err := to.AppendStr(result, false); err != nil {
+			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
 		}
@@ -3171,7 +3170,7 @@ func strToJson(
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -3184,7 +3183,7 @@ func strToJson(
 			if err != nil {
 				return err
 			}
-			if err = to.AppendStr(val, false); err != nil {
+			if err = to.AppendBytes(val, false); err != nil {
 				return err
 			}
 		}
@@ -3312,7 +3311,7 @@ func strToStr(
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if null {
-				if err := to.AppendStr(nil, true); err != nil {
+				if err := to.AppendBytes(nil, true); err != nil {
 					return err
 				}
 				continue
@@ -3329,7 +3328,7 @@ func strToStr(
 					v = append(v, 0)
 				}
 			}
-			if err := to.AppendStr(v, false); err != nil {
+			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
 		}
@@ -3337,7 +3336,7 @@ func strToStr(
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if null {
-				if err := to.AppendStr(nil, true); err != nil {
+				if err := to.AppendBytes(nil, true); err != nil {
 					return err
 				}
 				continue
@@ -3348,7 +3347,7 @@ func strToStr(
 					v = append(v, 0)
 				}
 			}
-			if err := to.AppendStr(v, false); err != nil {
+			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
 		}
@@ -3364,7 +3363,7 @@ func uuidToStr(
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -3375,7 +3374,7 @@ func uuidToStr(
 					result = append(result, 0)
 				}
 			}
-			if err := to.AppendStr([]byte(result), false); err != nil {
+			if err := to.AppendBytes([]byte(result), false); err != nil {
 				return err
 			}
 		}
@@ -3390,7 +3389,7 @@ func jsonToStr(
 	for i = 0; i < uint64(length); i++ {
 		v, null := from.GetStrValue(i)
 		if null {
-			if err := to.AppendStr(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
@@ -3399,7 +3398,7 @@ func jsonToStr(
 			if err != nil {
 				return err
 			}
-			if err = to.AppendStr(val, false); err != nil {
+			if err = to.AppendBytes(val, false); err != nil {
 				return err
 			}
 		}
@@ -3525,7 +3524,7 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 			for _, x := range nxs {
 				if x < 0 {
 					// XXX for adapt to bvt, but i don't know why we hide the wrong value here.
-					return moerr.NewOutOfRange(ctx, "uint64", "")
+					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		}
@@ -3619,7 +3618,7 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int64:
 			for _, x := range nxs {
 				if x > math.MaxInt64 {
-					return moerr.NewOutOfRangeNoCtx("int64", "")
+					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
@@ -3759,7 +3758,7 @@ func appendNulls[T types.FixedSizeT](result vector.FunctionResultWrapper, length
 	if r, ok := result.(*vector.FunctionResult[types.Varlena]); ok {
 		var i uint64
 		for i = 0; i < uint64(length); i++ {
-			if err := r.AppendStr(nil, true); err != nil {
+			if err := r.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		}
@@ -3782,4 +3781,93 @@ func appendNulls[T types.FixedSizeT](result vector.FunctionResultWrapper, length
 func convertByteSliceToString(v []byte) string {
 	// s := *(*string)(unsafe.Pointer(&v))
 	return string(v)
+}
+
+// shorten the string to the one with no more than 101 characters.
+func shortenValueString(valueStr string) string {
+	utf8Str := []rune(valueStr)
+	l := len(utf8Str)
+	if l > 100 {
+		return string(utf8Str[:100]) + "..."
+	}
+	return valueStr
+}
+
+func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, extraInfo string) error {
+	var errStr string
+	if vec.IsConst() {
+		if vec.IsConstNull() {
+			errStr = fmt.Sprintf("Can't cast 'NULL' as %v type.", typ)
+		} else {
+			valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec), "["), "]")
+			shortenValueStr := shortenValueString(valueStr)
+			errStr = fmt.Sprintf("Can't cast '%s' from %v type to %v type.", shortenValueStr, vec.GetType(), typ)
+		}
+	} else {
+		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.GetType(), typ)
+	}
+	return moerr.NewInternalError(ctx, errStr+" "+extraInfo)
+}
+
+// ----------------------------------------------------------------------------------------------------------------------
+// IsInteger return true if the types.T is integer type
+func IsInteger(t types.T) bool {
+	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 ||
+		t == types.T_uint8 || t == types.T_uint16 || t == types.T_uint32 || t == types.T_uint64 {
+		return true
+	}
+	return false
+}
+
+// isSignedInteger: return true if the types.T is Signed integer type
+func IsSignedInteger(t types.T) bool {
+	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 {
+		return true
+	}
+	return false
+}
+
+// isUnsignedInteger: return true if the types.T is UnSigned integer type
+func IsUnsignedInteger(t types.T) bool {
+	if t == types.T_uint8 || t == types.T_uint16 || t == types.T_uint32 || t == types.T_uint64 {
+		return true
+	}
+	return false
+}
+
+// IsFloat: return true if the types.T is floating Point Types
+func IsFloat(t types.T) bool {
+	if t == types.T_float32 || t == types.T_float64 {
+		return true
+	}
+	return false
+}
+
+// IsNumeric: return true if the types.T is numbric type
+func IsNumeric(t types.T) bool {
+	if IsInteger(t) || IsFloat(t) {
+		return true
+	}
+	return false
+}
+
+// isString: return true if the types.T is string type
+func IsString(t types.T) bool {
+	if t == types.T_char || t == types.T_varchar || t == types.T_binary || t == types.T_varbinary || t == types.T_blob || t == types.T_text {
+		return true
+	}
+	return false
+}
+
+// IsDecimal: return true if the types.T is decimal64 or decimal128
+func IsDecimal(t types.T) bool {
+	if t == types.T_decimal64 || t == types.T_decimal128 {
+		return true
+	}
+	return false
+}
+
+// IsBinary: return true if the types.T is binary or varbinary.
+func IsBinary(t types.T) bool {
+	return t == types.T_binary || t == types.T_varbinary
 }

@@ -58,7 +58,6 @@ func TestBitLength(t *testing.T) {
 		{
 			name:     "Null",
 			proc:     procs,
-			expected: []int64{0},
 			isScalar: true,
 		},
 	}
@@ -70,9 +69,9 @@ func TestBitLength(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := result.Col.([]int64)
+			col := vector.MustFixedCol[int64](result)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalar, result.IsScalar())
+			require.Equal(t, c.isScalar, result.IsConst())
 		})
 	}
 }
@@ -81,7 +80,7 @@ func makeBitLenTestVectors(data []string, nsp []uint64, isScalar bool) []*vector
 	vec := make([]*vector.Vector, 1)
 	if data != nil {
 		if isScalar {
-			vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, data[0], testutil.TestUtilMp)
+			vec[0] = vector.NewConstBytes(types.T_varchar.ToType(), []byte(data[0]), 1, testutil.TestUtilMp)
 		} else {
 			vec[0] = testutil.MakeCharVector(data, nsp)
 		}
