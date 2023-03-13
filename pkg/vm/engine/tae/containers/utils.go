@@ -18,19 +18,17 @@ import (
 	"bytes"
 	"strconv"
 
+	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
-
-	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 func ApplyUpdates(vec Vector, mask *roaring.Bitmap, vals map[uint32]any) {
@@ -81,8 +79,7 @@ func UnmarshalToMoVec(vec Vector) *movec.Vector {
 
 	mov, _ := movec.FromDNVector(vec.GetType(), bs.Header, bs.Storage)
 	if vec.HasNull() {
-		mov.GetNulls().Np = bitmap.New(vec.Length())
-		mov.GetNulls().Np.AddMany(vec.NullMask().ToArray())
+		nulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
 	}
 	//mov.SetOriginal(true)
 
@@ -124,8 +121,7 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	}
 
 	if vec.HasNull() {
-		mov.GetNulls().Np = bitmap.New(vec.Length())
-		mov.GetNulls().Np.AddMany(vec.NullMask().ToArray())
+		nulls.Add(mov.GetNulls(), vec.NullMask().ToArray()...)
 		//mov.GetNulls().Np = vec.NullMask()
 	}
 
@@ -717,8 +713,7 @@ func CopyToProtoBatch(bat *Batch) (*api.Batch, error) {
 func CopyToProtoVector(vec Vector) (*api.Vector, error) {
 	vecNsp := new(nulls.Nulls)
 	if vec.HasNull() {
-		vecNsp.Np = bitmap.New(vec.Length())
-		vecNsp.Np.AddMany(vec.NullMask().ToArray())
+		nulls.Add(vecNsp, vec.NullMask().ToArray()...)
 	}
 	nsp, err := vecNsp.Show()
 	if err != nil {

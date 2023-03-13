@@ -312,7 +312,6 @@ func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64, tbl *
 		state.Checkpoints = state.Checkpoints[:0]
 
 		doneMutate()
-
 	}
 
 	return nil

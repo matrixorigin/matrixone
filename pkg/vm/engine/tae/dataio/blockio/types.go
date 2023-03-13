@@ -61,8 +61,25 @@ func DecodeGCMetadataFileName(name string) (start, end types.TS, ext string) {
 	return
 }
 
-// EncodeMetaLocWithObject Generate a metaloc from an object file
-func EncodeMetaLocWithObject(
+func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
+	objectSize := uint32(0)
+	for _, block := range blocks {
+		meta := block.GetMeta()
+		header := meta.GetHeader()
+		count := header.GetColumnCount()
+		for i := 0; i < int(count); i++ {
+			col, err := block.GetColumn(uint16(i))
+			if err != nil {
+				return 0, err
+			}
+			objectSize += col.GetMeta().GetLocation().Length()
+		}
+	}
+	return objectSize, nil
+}
+
+// EncodeLocation Generate a metaloc from an object file
+func EncodeLocation(
 	extent objectio.Extent,
 	rows uint32,
 	blocks []objectio.BlockObject) (string, error) {
@@ -85,47 +102,32 @@ func EncodeMetaLocWithObject(
 	return metaLoc, nil
 }
 
-func DecodeMetaLoc(metaLoc string) (string, objectio.Extent, uint32) {
+func DecodeLocation(metaLoc string) (name string, id uint32, extent objectio.Extent, rows uint32, err error) {
 	info := strings.Split(metaLoc, ":")
-	name := info[0]
+	name = info[0]
 	location := strings.Split(info[1], "_")
 	offset, err := strconv.ParseUint(location[0], 10, 32)
 	if err != nil {
-		panic(any(err))
+		return
 	}
 	size, err := strconv.ParseUint(location[1], 10, 32)
 	if err != nil {
-		panic(any(err))
+		return
 	}
 	osize, err := strconv.ParseUint(location[2], 10, 32)
 	if err != nil {
-		panic(any(err))
+		return
 	}
-	id, err := strconv.ParseUint(location[3], 10, 32)
+	num, err := strconv.ParseUint(location[3], 10, 32)
 	if err != nil {
-		panic(any(err))
+		return
 	}
-	rows, err := strconv.ParseUint(info[2], 10, 32)
+	id = uint32(num)
+	r, err := strconv.ParseUint(info[2], 10, 32)
 	if err != nil {
-		panic(any(err))
+		return
 	}
-	extent := objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
-	return name, extent, uint32(rows)
-}
-
-func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
-	objectSize := uint32(0)
-	for _, block := range blocks {
-		meta := block.GetMeta()
-		header := meta.GetHeader()
-		count := header.GetColumnCount()
-		for i := 0; i < int(count); i++ {
-			col, err := block.GetColumn(uint16(i))
-			if err != nil {
-				return 0, err
-			}
-			objectSize += col.GetMeta().GetLocation().Length()
-		}
-	}
-	return objectSize, nil
+	rows = uint32(r)
+	extent = objectio.NewExtent(uint32(id), uint32(offset), uint32(size), uint32(osize))
+	return
 }
