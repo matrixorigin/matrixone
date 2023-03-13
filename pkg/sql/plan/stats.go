@@ -246,7 +246,7 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName, sortKeyName string,
 		return estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
 	} else {
 		//check strict filter, otherwise can not estimate outcnt by min/max val
-		ret, col, constExpr := CheckStrictFilter(expr)
+		ret, col, constExpr, _ := CheckStrictFilter(expr)
 		if ret {
 			switch s.DataTypeMap[col.Name] {
 			case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
@@ -286,7 +286,11 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			//get the smaller one of two children, and tune it down a little bit
 			out1 := EstimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, s)
 			out2 := EstimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, s)
-			outcnt = math.Min(out1, out2) * 0.8
+			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) {
+				outcnt = (out1 + out2) - tableCnt
+			} else {
+				outcnt = math.Min(out1, out2) * 0.8
+			}
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
 			out1 := EstimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, s)
@@ -313,8 +317,11 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64, t types.Type, maybeUnique bool) float64 {
 	ndv1 := calcNdvUsingMinMax(minVal, maxVal, t)
 	ndv2 := calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt)
-	if ndv1 <= 0 || ndv1 > tableCnt {
+	if ndv1 <= 0 {
 		return ndv2
+	}
+	if ndv1 > tableCnt {
+		ndv1 = tableCnt
 	}
 	if maybeUnique {
 		return ndv1
@@ -473,6 +480,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 		//isCrossJoin := (len(node.OnList) == 0)
 		isCrossJoin := false
 		selectivity := math.Pow(rightStats.Selectivity, math.Pow(leftStats.Selectivity, 0.5))
+		selectivity_out := math.Min(math.Pow(leftStats.Selectivity, math.Pow(rightStats.Selectivity, 0.5)), selectivity)
 
 		switch node.JoinType {
 		case plan.Node_INNER:
@@ -484,7 +492,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity,
+				Selectivity: selectivity_out,
 			}
 
 		case plan.Node_LEFT:
@@ -497,7 +505,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity,
+				Selectivity: selectivity_out,
 			}
 
 		case plan.Node_RIGHT:
@@ -510,7 +518,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity,
+				Selectivity: selectivity_out,
 			}
 
 		case plan.Node_OUTER:
@@ -523,7 +531,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity,
+				Selectivity: selectivity_out,
 			}
 
 		case plan.Node_SEMI, plan.Node_ANTI:
@@ -531,7 +539,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      leftStats.Outcnt * selectivity,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity,
+				Selectivity: selectivity_out,
 			}
 
 		case plan.Node_SINGLE, plan.Node_MARK:
@@ -539,7 +547,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool) {
 				Outcnt:      leftStats.Outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity,
+				Selectivity: selectivity_out,
 			}
 		}
 

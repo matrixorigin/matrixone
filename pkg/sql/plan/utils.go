@@ -443,18 +443,37 @@ func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
 	return newFilters
 }
 
+func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
+	b1, col1, _, funcName1 := CheckStrictFilter(expr1)
+	b2, col2, _, funcName2 := CheckStrictFilter(expr2)
+	if !b1 || !b2 {
+		return false
+	}
+	if col1.ColPos != col2.ColPos || col1.RelPos != col2.RelPos {
+		return false
+	}
+	if funcName1 == ">" || funcName1 == ">=" {
+		return funcName2 == "<" || funcName2 == "<="
+	}
+	if funcName1 == "<" || funcName1 == "<=" {
+		return funcName2 == ">" || funcName2 == ">="
+	}
+	return false
+}
+
 // strict filter means col compared to const. for example col1>1
 // func(col1)=1 is not strict
-func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const) {
+func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, funcName string) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		switch exprImpl.F.Func.ObjName {
+		funcName = exprImpl.F.Func.ObjName
+		switch funcName {
 		case "=", ">", "<", ">=", "<=":
 			switch child0 := exprImpl.F.Args[0].Expr.(type) {
 			case *plan.Expr_Col:
 				col = child0.Col
 			default:
-				return false, nil, nil
+				return false, nil, nil, funcName
 			}
 			switch child1 := exprImpl.F.Args[1].Expr.(type) {
 			case *plan.Expr_C:
@@ -462,13 +481,13 @@ func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const) 
 				b = true
 				return
 			default:
-				return false, nil, nil
+				return false, nil, nil, funcName
 			}
 		default:
-			return false, nil, nil
+			return false, nil, nil, funcName
 		}
 	default:
-		return false, nil, nil
+		return false, nil, nil, funcName
 	}
 }
 
