@@ -107,10 +107,11 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	}()
 	c.proc.Ctx = perfcounter.WithCounter(c.proc.Ctx, &c.s3Counter)
 	c.u = u
+	c.ctx = c.proc.Ctx
 	c.fill = fill
 	c.info = plan2.GetExecTypeFromPlan(pn)
 	// build scope for a single sql
-	s, err := c.compileScope(ctx, pn)
+	s, err := c.compileScope(c.proc.Ctx, pn)
 	if err != nil {
 		return err
 	}

@@ -270,13 +270,13 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
 
 	c := &Compile{
-		ctx:  receiver.ctx,
 		proc: proc,
 		e:    cnInfo.storeEngine,
 		anal: &anaylze{},
 		addr: colexec.CnAddr,
 	}
 	c.proc.Ctx = perfcounter.WithCounter(c.proc.Ctx, &c.s3Counter)
+	c.ctx = c.proc.Ctx
 
 	c.fill = func(_ any, b *batch.Batch) error {
 		return receiver.sendBatch(b)
