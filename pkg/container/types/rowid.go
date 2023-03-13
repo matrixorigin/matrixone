@@ -14,7 +14,25 @@
 
 package types
 
-import "bytes"
+import (
+	"bytes"
+	"fmt"
+
+	"github.com/google/uuid"
+)
+
+/*
+
+[SegUUID-16bytes] [ObjectOffset-2bytes] [BlockOffset-2bytes] [RowOffset-4bytes]
+--------------------------------------- s3 file name
+------------------------------------------------------------ block id
+------------------------------------------------------------------------------ rowid
+
+*/
+
+const ObjectBytesSize = 18
+
+type ObjectBytes = [ObjectBytesSize]byte
 
 func (r Rowid) Less(than Rowid) bool {
 	return bytes.Compare(r[:], than[:]) < 0
@@ -22,4 +40,26 @@ func (r Rowid) Less(than Rowid) bool {
 
 func (r Rowid) Equal(to Rowid) bool {
 	return bytes.Equal(r[:], to[:])
+}
+
+func (r Rowid) GetBlockid() Blockid {
+	return *(*Blockid)(r[:BlockidSize])
+	// return (Blockid)(r[:BlockidSize])
+}
+
+func (r Rowid) GetObject() ObjectBytes {
+	return *(*ObjectBytes)(r[:ObjectBytesSize])
+}
+
+func (r Rowid) GetObjectString() string {
+	uuid := *(*uuid.UUID)(r[:16])
+	s := DecodeUint16(r[16:18])
+	return fmt.Sprintf("%s-%d", uuid.String(), s)
+}
+
+func RandomRowid() Rowid {
+	var r Rowid
+	u := uuid.New()
+	copy(r[:], u[:])
+	return r
 }

@@ -20,7 +20,6 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1125,7 +1124,7 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	{
 		vec := vector.NewVec(types.T_Rowid.ToType())
 		for i := 0; i < bat.Length(); i++ {
-			val := types.Rowid(uuid.New())
+			val := types.RandomRowid()
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
 				return nil, err
 			}
