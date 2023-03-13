@@ -31,45 +31,120 @@ const (
 	XOR logicType = 2
 )
 
-func Logic(vectors []*vector.Vector, proc *process.Process, cfn logicFn, op logicType) (*vector.Vector, error) {
-	left, right := vectors[0], vectors[1]
-	if left.IsScalarNull() || right.IsScalarNull() {
-		if op == AND {
-			return HandleAndNullCol(vectors, proc)
-		}
-
-		if op == OR {
-			return HandleOrNullCol(vectors, proc)
-		}
-
-		if op == XOR {
-			if left.IsScalarNull() {
-				return proc.AllocConstNullVector(boolType, vector.Length(right)), nil
+func Logic(ivecs []*vector.Vector, proc *process.Process, cfn logicFn, op logicType) (*vector.Vector, error) {
+	left, right := ivecs[0], ivecs[1]
+	if left.IsConstNull() {
+		switch op {
+		case AND:
+			if right.IsConstNull() {
+				return vector.NewConstNull(boolType, right.Length(), proc.Mp()), nil
+			} else if right.IsConst() {
+				if vector.MustFixedCol[bool](right)[0] {
+					return vector.NewConstNull(boolType, right.Length(), proc.Mp()), nil
+				} else {
+					return vector.NewConstFixed(boolType, false, right.Length(), proc.Mp()), nil
+				}
 			} else {
-				return proc.AllocConstNullVector(boolType, vector.Length(left)), nil
+				length := right.Length()
+				rvec := allocateBoolVector(length, proc)
+				value := vector.MustFixedCol[bool](right)
+				for i := 0; i < int(length); i++ {
+					if value[i] || right.GetNulls().Contains(uint64(i)) {
+						nulls.Add(rvec.GetNulls(), uint64(i))
+					}
+				}
+				return rvec, nil
 			}
-		}
-	}
 
-	if left.IsScalar() && right.IsScalar() {
-		vec := proc.AllocScalarVector(boolType)
+		case OR:
+			if right.IsConstNull() {
+				return vector.NewConstNull(boolType, right.Length(), proc.Mp()), nil
+			} else if right.IsConst() {
+				if vector.MustFixedCol[bool](right)[0] {
+					return vector.NewConstFixed(boolType, true, right.Length(), proc.Mp()), nil
+				} else {
+					return vector.NewConstNull(boolType, right.Length(), proc.Mp()), nil
+				}
+			} else {
+				length := right.Length()
+				rvec := allocateBoolVector(length, proc)
+				value := vector.MustFixedCol[bool](right)
+				rvals := vector.MustFixedCol[bool](rvec)
+				for i := 0; i < int(length); i++ {
+					if value[i] && !right.GetNulls().Contains(uint64(i)) {
+						rvals[i] = true
+					} else {
+						nulls.Add(rvec.GetNulls(), uint64(i))
+					}
+				}
+				return rvec, nil
+			}
+
+		default:
+			return vector.NewConstNull(boolType, right.Length(), proc.Mp()), nil
+		}
+	} else if right.IsConstNull() {
+		switch op {
+		case AND:
+			if left.IsConst() {
+				if vector.MustFixedCol[bool](left)[0] {
+					return vector.NewConstNull(boolType, left.Length(), proc.Mp()), nil
+				} else {
+					return vector.NewConstFixed(boolType, false, left.Length(), proc.Mp()), nil
+				}
+			} else {
+				length := left.Length()
+				rvec := allocateBoolVector(length, proc)
+				value := vector.MustFixedCol[bool](left)
+				for i := 0; i < int(length); i++ {
+					if value[i] || left.GetNulls().Contains(uint64(i)) {
+						nulls.Add(rvec.GetNulls(), uint64(i))
+					}
+				}
+				return rvec, nil
+			}
+
+		case OR:
+			if left.IsConst() {
+				if vector.MustFixedCol[bool](left)[0] {
+					return vector.NewConstFixed(boolType, true, left.Length(), proc.Mp()), nil
+				} else {
+					return vector.NewConstNull(boolType, left.Length(), proc.Mp()), nil
+				}
+			} else {
+				length := left.Length()
+				rvec := allocateBoolVector(length, proc)
+				value := vector.MustFixedCol[bool](left)
+				rvals := vector.MustFixedCol[bool](rvec)
+				for i := 0; i < int(length); i++ {
+					if value[i] && !left.GetNulls().Contains(uint64(i)) {
+						rvals[i] = true
+					} else {
+						nulls.Add(rvec.GetNulls(), uint64(i))
+					}
+				}
+				return rvec, nil
+			}
+
+		default:
+			return vector.NewConstNull(boolType, left.Length(), proc.Mp()), nil
+		}
+	} else if left.IsConst() && right.IsConst() {
+		vec := vector.NewConstFixed(boolType, false, ivecs[0].Length(), proc.Mp())
 		if err := cfn(left, right, vec); err != nil {
 			return nil, err
 		}
 		return vec, nil
-	}
+	} else {
+		length := left.Length()
+		rvec := allocateBoolVector(length, proc)
+		nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
 
-	length := vector.Length(left)
-	if left.IsScalar() {
-		length = vector.Length(right)
+		if err := cfn(left, right, rvec); err != nil {
+			return nil, err
+		}
+		return rvec, nil
 	}
-	resultVector := allocateBoolVector(length, proc)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-
-	if err := cfn(left, right, resultVector); err != nil {
-		return nil, err
-	}
-	return resultVector, nil
 }
 
 func LogicAnd(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -84,21 +159,17 @@ func LogicXor(args []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	return Logic(args, proc, logical.Xor, XOR)
 }
 
-func LogicNot(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	v1 := vs[0]
-	if v1.IsScalarNull() {
-		return proc.AllocScalarNullVector(boolType), nil
+func LogicNot(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1 := ivecs[0]
+	if v1.IsConstNull() {
+		return vector.NewConstNull(boolType, v1.Length(), proc.Mp()), nil
 	}
-	if v1.IsScalar() {
-		vec := proc.AllocScalarVector(boolType)
-		if err := logical.Not(v1, vec); err != nil {
-			return nil, err
-		}
-		return vec, nil
+	if v1.IsConst() {
+		return vector.NewConstFixed(boolType, !vector.GetFixedAt[bool](v1, 0), v1.Length(), proc.Mp()), nil
 	}
-	length := vector.Length(v1)
+	length := v1.Length()
 	vec := allocateBoolVector(length, proc)
-	nulls.Or(v1.Nsp, nil, vec.Nsp)
+	nulls.Or(v1.GetNulls(), nil, vec.GetNulls())
 	if err := logical.Not(v1, vec); err != nil {
 		return nil, err
 	}

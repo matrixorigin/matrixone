@@ -56,14 +56,14 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		sz := len(os)
 		if nullsLast { // move null rows to the tail
 			var cursor int
-			for cursor < sz && !nulls.Contains(vec.Nsp, uint64(os[cursor])) {
+			for cursor < sz && !nulls.Contains(vec.GetNulls(), uint64(os[cursor])) {
 				cursor++
 			}
 			if cursor == sz {
 				return
 			}
 			for i := cursor; i < sz; i++ {
-				if !nulls.Contains(vec.Nsp, uint64(os[i])) {
+				if !nulls.Contains(vec.GetNulls(), uint64(os[i])) {
 					os[cursor], os[i] = os[i], os[cursor]
 					cursor++
 				}
@@ -71,14 +71,14 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 			os = os[:cursor]
 		} else { // move null rows to the head
 			var cursor int
-			for cursor < sz && nulls.Contains(vec.Nsp, uint64(os[cursor])) {
+			for cursor < sz && nulls.Contains(vec.GetNulls(), uint64(os[cursor])) {
 				cursor++
 			}
 			if cursor == sz {
 				return
 			}
 			for i := cursor; i < sz; i++ {
-				if nulls.Contains(vec.Nsp, uint64(os[i])) {
+				if nulls.Contains(vec.GetNulls(), uint64(os[i])) {
 					os[cursor], os[i] = os[i], os[cursor]
 					cursor++
 				}
@@ -87,128 +87,128 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		}
 	}
 	// sort only non-null rows
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_bool:
-		col := vector.GetFixedVectorValues[bool](vec)
+		col := vector.MustFixedCol[bool](vec)
 		if !desc {
 			genericSort(col, os, boolLess[bool])
 		} else {
 			genericSort(col, os, boolGreater[bool])
 		}
 	case types.T_int8:
-		col := vector.GetFixedVectorValues[int8](vec)
+		col := vector.MustFixedCol[int8](vec)
 		if !desc {
 			genericSort(col, os, genericLess[int8])
 		} else {
 			genericSort(col, os, genericGreater[int8])
 		}
 	case types.T_int16:
-		col := vector.GetFixedVectorValues[int16](vec)
+		col := vector.MustFixedCol[int16](vec)
 		if !desc {
 			genericSort(col, os, genericLess[int16])
 		} else {
 			genericSort(col, os, genericGreater[int16])
 		}
 	case types.T_int32:
-		col := vector.GetFixedVectorValues[int32](vec)
+		col := vector.MustFixedCol[int32](vec)
 		if !desc {
 			genericSort(col, os, genericLess[int32])
 		} else {
 			genericSort(col, os, genericGreater[int32])
 		}
 	case types.T_int64:
-		col := vector.GetFixedVectorValues[int64](vec)
+		col := vector.MustFixedCol[int64](vec)
 		if !desc {
 			genericSort(col, os, genericLess[int64])
 		} else {
 			genericSort(col, os, genericGreater[int64])
 		}
 	case types.T_uint8:
-		col := vector.GetFixedVectorValues[uint8](vec)
+		col := vector.MustFixedCol[uint8](vec)
 		if !desc {
 			genericSort(col, os, genericLess[uint8])
 		} else {
 			genericSort(col, os, genericGreater[uint8])
 		}
 	case types.T_uint16:
-		col := vector.GetFixedVectorValues[uint16](vec)
+		col := vector.MustFixedCol[uint16](vec)
 		if !desc {
 			genericSort(col, os, genericLess[uint16])
 		} else {
 			genericSort(col, os, genericGreater[uint16])
 		}
 	case types.T_uint32:
-		col := vector.GetFixedVectorValues[uint32](vec)
+		col := vector.MustFixedCol[uint32](vec)
 		if !desc {
 			genericSort(col, os, genericLess[uint32])
 		} else {
 			genericSort(col, os, genericGreater[uint32])
 		}
 	case types.T_uint64:
-		col := vector.GetFixedVectorValues[uint64](vec)
+		col := vector.MustFixedCol[uint64](vec)
 		if !desc {
 			genericSort(col, os, genericLess[uint64])
 		} else {
 			genericSort(col, os, genericGreater[uint64])
 		}
 	case types.T_float32:
-		col := vector.GetFixedVectorValues[float32](vec)
+		col := vector.MustFixedCol[float32](vec)
 		if !desc {
 			genericSort(col, os, genericLess[float32])
 		} else {
 			genericSort(col, os, genericGreater[float32])
 		}
 	case types.T_float64:
-		col := vector.GetFixedVectorValues[float64](vec)
+		col := vector.MustFixedCol[float64](vec)
 		if !desc {
 			genericSort(col, os, genericLess[float64])
 		} else {
 			genericSort(col, os, genericGreater[float64])
 		}
 	case types.T_date:
-		col := vector.GetFixedVectorValues[types.Date](vec)
+		col := vector.MustFixedCol[types.Date](vec)
 		if !desc {
 			genericSort(col, os, genericLess[types.Date])
 		} else {
 			genericSort(col, os, genericGreater[types.Date])
 		}
 	case types.T_datetime:
-		col := vector.GetFixedVectorValues[types.Datetime](vec)
+		col := vector.MustFixedCol[types.Datetime](vec)
 		if !desc {
 			genericSort(col, os, genericLess[types.Datetime])
 		} else {
 			genericSort(col, os, genericGreater[types.Datetime])
 		}
 	case types.T_time:
-		col := vector.GetFixedVectorValues[types.Time](vec)
+		col := vector.MustFixedCol[types.Time](vec)
 		if !desc {
 			genericSort(col, os, genericLess[types.Time])
 		} else {
 			genericSort(col, os, genericGreater[types.Time])
 		}
 	case types.T_timestamp:
-		col := vector.GetFixedVectorValues[types.Timestamp](vec)
+		col := vector.MustFixedCol[types.Timestamp](vec)
 		if !desc {
 			genericSort(col, os, genericLess[types.Timestamp])
 		} else {
 			genericSort(col, os, genericGreater[types.Timestamp])
 		}
 	case types.T_decimal64:
-		col := vector.GetFixedVectorValues[types.Decimal64](vec)
+		col := vector.MustFixedCol[types.Decimal64](vec)
 		if !desc {
 			genericSort(col, os, decimal64Less)
 		} else {
 			genericSort(col, os, decimal64Greater)
 		}
 	case types.T_decimal128:
-		col := vector.GetFixedVectorValues[types.Decimal128](vec)
+		col := vector.MustFixedCol[types.Decimal128](vec)
 		if !desc {
 			genericSort(col, os, decimal128Less)
 		} else {
 			genericSort(col, os, decimal128Greater)
 		}
 	case types.T_uuid:
-		col := vector.GetFixedVectorValues[types.Uuid](vec)
+		col := vector.MustFixedCol[types.Uuid](vec)
 		if !desc {
 			genericSort(col, os, uuidLess)
 		} else {
@@ -216,7 +216,7 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		if strCol == nil {
-			strCol = vector.GetStrVectorValues(vec)
+			strCol = vector.MustStrCol(vec)
 		}
 		if !desc {
 			genericSort(strCol, os, genericLess[string])

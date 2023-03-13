@@ -24,40 +24,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func SubStrIndex(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
-		return proc.AllocScalarNullVector(vecs[0].Typ), nil
+func SubStrIndex(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if ivecs[0].IsConstNull() || ivecs[1].IsConstNull() || ivecs[2].IsConstNull() {
+		return vector.NewConstNull(*ivecs[0].GetType(), ivecs[0].Length(), proc.Mp()), nil
 	}
 	//get the first arg str
-	sourceCols := vector.MustStrCols(vecs[0])
+	sourceCols := vector.MustStrCol(ivecs[0])
 	//get the second arg delim
-	delimCols := vector.MustStrCols(vecs[1])
+	delimCols := vector.MustStrCol(ivecs[1])
 	//get the third arg count
-	countCols := getCount(vecs[2])
+	countCols := getCount(ivecs[2])
 
 	//calcute rows
-	rowCount := vector.Length(vecs[0])
+	rowCount := ivecs[0].Length()
 
-	var resultVec *vector.Vector = nil
-	resultValues := make([]string, rowCount)
-	resultNsp := nulls.NewWithSize(rowCount)
+	rvals := make([]string, rowCount)
+
+	constVectors := []bool{ivecs[0].IsConst(), ivecs[1].IsConst(), ivecs[2].IsConst()}
+	//get result values
+	substrindex.SubStrIndex(sourceCols, delimCols, countCols, rowCount, constVectors, rvals)
+	rvec := vector.NewVec(types.T_varchar.ToType())
+	vector.AppendStringList(rvec, rvals, nil, proc.Mp())
 
 	// set null row
-	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
-	nulls.Or(vecs[2].Nsp, resultNsp, resultNsp)
+	nulls.Or(ivecs[0].GetNulls(), ivecs[1].GetNulls(), rvec.GetNulls())
+	nulls.Or(ivecs[2].GetNulls(), rvec.GetNulls(), rvec.GetNulls())
 
-	constVectors := []bool{vecs[0].IsScalar(), vecs[1].IsScalar(), vecs[2].IsScalar()}
-	//get result values
-	substrindex.SubStrIndex(sourceCols, delimCols, countCols, rowCount, constVectors, resultValues)
-	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNsp, proc.Mp())
-
-	return resultVec, nil
+	return rvec, nil
 }
 
 func getCount(vec *vector.Vector) []int64 {
 	switch vec.GetType().Oid {
 	case types.T_float64:
-		vs := vector.MustTCols[float64](vec)
+		vs := vector.MustFixedCol[float64](vec)
 		res := make([]int64, 0, len(vs))
 		for _, v := range vs {
 			if v > float64(math.MaxInt64) {
@@ -70,7 +69,7 @@ func getCount(vec *vector.Vector) []int64 {
 		}
 		return res
 	case types.T_uint64:
-		vs := vector.MustTCols[uint64](vec)
+		vs := vector.MustFixedCol[uint64](vec)
 		res := make([]int64, 0, len(vs))
 		for _, v := range vs {
 			if v > uint64(math.MaxInt64) {

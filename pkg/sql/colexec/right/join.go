@@ -38,7 +38,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.bat = batch.NewWithSize(len(ap.Right_typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Right_typs {
-		ap.ctr.bat.Vecs[i] = vector.New(typ)
+		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
 	return nil
 }
@@ -162,21 +162,21 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(ap.Left_typs[rp.Pos])
+			rbat.Vecs[i] = vector.NewVec(ap.Left_typs[rp.Pos])
 		} else {
-			rbat.Vecs[i] = vector.New(ap.Right_typs[rp.Pos])
+			rbat.Vecs[i] = vector.NewVec(ap.Right_typs[rp.Pos])
 		}
 	}
 
 	for i := 0; i < count; i++ {
 		for j, rp := range ap.Result {
 			if rp.Rel == 0 {
-				if err := vector.UnionNull(rbat.Vecs[j], rbat.Vecs[j], proc.Mp()); err != nil {
+				if err := rbat.Vecs[j].UnionNull(proc.Mp()); err != nil {
 					rbat.Clean(proc.Mp())
 					return false, err
 				}
 			} else {
-				if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], int64(unmatch[i]), proc.Mp()); err != nil {
+				if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(unmatch[i]), proc.Mp()); err != nil {
 					rbat.Clean(proc.Mp())
 					return false, err
 				}
@@ -198,9 +198,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.NewVec(*bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 
@@ -230,7 +230,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					if err != nil {
 						return err
 					}
-					bs := vec.Col.([]bool)
+					bs := vector.MustFixedCol[bool](vec)
 					if !bs[0] {
 						vec.Free(proc.Mp())
 						continue
@@ -239,12 +239,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
+						if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
 							rbat.Clean(proc.Mp())
 							return err
 						}
 					} else {
-						if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
+						if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
 							rbat.Clean(proc.Mp())
 							return err
 						}
@@ -264,7 +264,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
+		if err != nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}

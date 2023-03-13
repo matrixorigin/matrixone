@@ -85,7 +85,7 @@ func TestInternalCharSize(t *testing.T) {
 			expect: types.TypeSize(types.T_varchar) * 50,
 		}
 
-		bytes, err := types.Encode(cases.typ)
+		bytes, _ := types.Encode(cases.typ)
 		srcVector := testutil.MakeScalarVarchar(string(bytes), 1)
 		expectVector := testutil.MakeScalarInt64(int64(cases.expect), 1)
 
@@ -162,7 +162,7 @@ func TestInternalCharLength(t *testing.T) {
 			expect: 50,
 		}
 
-		bytes, err := types.Encode(cases.typ)
+		bytes, _ := types.Encode(cases.typ)
 		srcVector := testutil.MakeScalarVarchar(string(bytes), 1)
 		expectVector := testutil.MakeScalarInt64(int64(cases.expect), 1)
 
@@ -239,7 +239,7 @@ func TestInternalNumericPrecision(t *testing.T) {
 			expect: 12,
 		}
 
-		bytes, err := types.Encode(cases.typ)
+		bytes, _ := types.Encode(cases.typ)
 		srcVector := testutil.MakeScalarVarchar(string(bytes), 1)
 		expectVector := testutil.MakeScalarInt64(int64(cases.expect), 1)
 
@@ -316,7 +316,7 @@ func TestInternalNumericScale(t *testing.T) {
 			expect: 5,
 		}
 
-		bytes, err := types.Encode(cases.typ)
+		bytes, _ := types.Encode(cases.typ)
 		srcVector := testutil.MakeScalarVarchar(string(bytes), 1)
 		expectVector := testutil.MakeScalarInt64(int64(cases.expect), 1)
 
@@ -393,7 +393,7 @@ func TestInternalDatetimePrecision(t *testing.T) {
 			expect: 3,
 		}
 
-		bytes, err := types.Encode(cases.typ)
+		bytes, _ := types.Encode(cases.typ)
 
 		srcVector := testutil.MakeScalarVarchar(string(bytes), 1)
 		expectVector := testutil.MakeScalarInt64(cases.expect, 1)

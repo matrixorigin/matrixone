@@ -1,16 +1,16 @@
 select CAST(1-2 AS UNSIGNED);
-Data truncation: data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, value '-1'
 select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
-Data truncation: data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, value '-1'
 select CAST('10 ' as unsigned integer);
 cast(10  as integer unsigned)
 10
 select CAST('10x' as unsigned integer);
 invalid argument cast to uint64, bad value 10x
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
-Data truncation: data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, value '-5'
 select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
-Data truncation: data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, value '-5'
 select cast(5 as unsigned) -6.0;
 cast(5 as unsigned) -6.0
 -1.0
@@ -84,7 +84,7 @@ select cast(18446744073709551615 as unsigned);
 cast(18446744073709551615 as unsigned)
 18446744073709551615
 select cast(18446744073709551615 as signed);
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 select cast('18446744073709551615' as unsigned);
 cast('18446744073709551615' as unsigned)
 18446744073709551615

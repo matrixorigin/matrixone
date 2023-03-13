@@ -15,6 +15,7 @@
 package binary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/power"
@@ -23,45 +24,38 @@ import (
 
 func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	resultType := types.T_float64.ToType()
-	leftValues, rightValues := vector.MustTCols[float64](left), vector.MustTCols[float64](right)
+	rtyp := types.T_float64.ToType()
+	leftValues, rightValues := vector.MustFixedCol[float64](left), vector.MustFixedCol[float64](right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
-		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]float64, 1)
-		vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))
-		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
+	case left.IsConstNull() || right.IsConstNull():
+		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
+	case left.IsConst() && right.IsConst():
+		var rvals [1]float64
+		power.Power(leftValues, rightValues, rvals[:])
+		return vector.NewConstFixed(rtyp, rvals[0], left.Length(), proc.Mp()), nil
+	case left.IsConst() && !right.IsConst():
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(rightValues), right.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[float64](resultVector)
-		power.PowerScalarLeftConst(leftValues[0], rightValues, resultValues)
-		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
-		if right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
+		rvals := vector.MustFixedCol[float64](rvec)
+		power.PowerScalarLeftConst(leftValues[0], rightValues, rvals)
+		return rvec, nil
+	case !left.IsConst() && right.IsConst():
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(leftValues), left.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[float64](resultVector)
-		power.PowerScalarRightConst(rightValues[0], leftValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[float64](rvec)
+		power.PowerScalarRightConst(rightValues[0], leftValues, rvals)
+		return rvec, nil
 	}
-	resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, len(rightValues), nil)
 	if err != nil {
 		return nil, err
 	}
-	resultValues := vector.MustTCols[float64](resultVector)
-	power.Power(leftValues, rightValues, resultValues)
-	return resultVector, nil
+	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
+	rvals := vector.MustFixedCol[float64](rvec)
+	power.Power(leftValues, rightValues, rvals)
+	return rvec, nil
 }
