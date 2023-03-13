@@ -441,100 +441,109 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				indexs = append(indexs, name)
 			}
 		case *tree.ForeignKey:
-			refer := def.Refer
-			fkDef := &plan.ForeignKeyDef{
-				Name:        def.Name,
-				Cols:        make([]uint64, len(def.KeyParts)),
-				OnDelete:    getRefAction(refer.OnDelete),
-				OnUpdate:    getRefAction(refer.OnUpdate),
-				ForeignCols: make([]uint64, len(refer.KeyParts)),
+			fkData, err := getForeignKeyData(ctx, createTable.TableDef, def)
+			if err != nil {
+				return err
 			}
+			createTable.FkDbs = append(createTable.FkDbs, fkData.DbName)
+			createTable.FkTables = append(createTable.FkTables, fkData.TableName)
+			createTable.FkCols = append(createTable.FkCols, fkData.Cols)
+			createTable.TableDef.Fkeys = append(createTable.TableDef.Fkeys, fkData.Def)
 
-			// get fk columns of create table
-			fkCols := &plan.FkColName{
-				Cols: make([]string, len(def.KeyParts)),
-			}
-			fkColTyp := make(map[int]*plan.Type)
-			fkColName := make(map[int]string)
-			for i, keyPart := range def.KeyParts {
-				getCol := false
-				colName := keyPart.ColName.Parts[0]
-				for _, col := range createTable.TableDef.Cols {
-					if col.Name == colName {
-						// need to reset to ColId after created.
-						fkDef.Cols[i] = 0
-						fkCols.Cols[i] = colName
-						fkColTyp[i] = col.Typ
-						fkColName[i] = colName
-						getCol = true
-						break
-					}
-				}
-				if !getCol {
-					return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in the creating table '%v'", colName, createTable.TableDef.Name)
-				}
-			}
-			createTable.FkCols = append(createTable.FkCols, fkCols)
+			// refer := def.Refer
+			// fkDef := &plan.ForeignKeyDef{
+			// 	Name:        def.Name,
+			// 	Cols:        make([]uint64, len(def.KeyParts)),
+			// 	OnDelete:    getRefAction(refer.OnDelete),
+			// 	OnUpdate:    getRefAction(refer.OnUpdate),
+			// 	ForeignCols: make([]uint64, len(refer.KeyParts)),
+			// }
 
-			// get foreign table & their columns
-			fkTableName := string(refer.TableName.ObjectName)
-			fkDbName := string(refer.TableName.SchemaName)
-			if fkDbName == "" {
-				fkDbName = ctx.DefaultDatabase()
-			}
-			createTable.FkDbs = append(createTable.FkDbs, fkDbName)
-			createTable.FkTables = append(createTable.FkTables, fkTableName)
+			// // get fk columns of create table
+			// fkCols := &plan.FkColName{
+			// 	Cols: make([]string, len(def.KeyParts)),
+			// }
+			// fkColTyp := make(map[int]*plan.Type)
+			// fkColName := make(map[int]string)
+			// for i, keyPart := range def.KeyParts {
+			// 	getCol := false
+			// 	colName := keyPart.ColName.Parts[0]
+			// 	for _, col := range createTable.TableDef.Cols {
+			// 		if col.Name == colName {
+			// 			// need to reset to ColId after created.
+			// 			fkDef.Cols[i] = 0
+			// 			fkCols.Cols[i] = colName
+			// 			fkColTyp[i] = col.Typ
+			// 			fkColName[i] = colName
+			// 			getCol = true
+			// 			break
+			// 		}
+			// 	}
+			// 	if !getCol {
+			// 		return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in the creating table '%v'", colName, createTable.TableDef.Name)
+			// 	}
+			// }
+			// createTable.FkCols = append(createTable.FkCols, fkCols)
 
-			_, tableRef := ctx.Resolve(fkDbName, fkTableName)
-			if tableRef == nil {
-				return moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), fkTableName)
-			}
+			// // get foreign table & their columns
+			// fkTableName := string(refer.TableName.ObjectName)
+			// fkDbName := string(refer.TableName.SchemaName)
+			// if fkDbName == "" {
+			// 	fkDbName = ctx.DefaultDatabase()
+			// }
+			// createTable.FkDbs = append(createTable.FkDbs, fkDbName)
+			// createTable.FkTables = append(createTable.FkTables, fkTableName)
 
-			fkDef.ForeignTbl = tableRef.TblId
-			columnIdPos := make(map[uint64]int)
-			columnNamePos := make(map[string]int)
-			uniqueColumn := make(map[string]uint64)
-			for i, col := range tableRef.Cols {
-				columnIdPos[col.ColId] = i
-				columnNamePos[col.Name] = i
-				if col.Primary {
-					uniqueColumn[col.Name] = col.ColId
-				}
-			}
-			if tableRef.Pkey != nil {
-				for _, colName := range tableRef.Pkey.Names {
-					uniqueColumn[colName] = tableRef.Cols[columnNamePos[colName]].ColId
-				}
-			}
+			// _, tableRef := ctx.Resolve(fkDbName, fkTableName)
+			// if tableRef == nil {
+			// 	return moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), fkTableName)
+			// }
 
-			// now tableRef.Indices is empty, you can not test it
-			for _, index := range tableRef.Indexes {
-				if index.Unique {
-					if len(index.Parts) == 1 {
-						uniqueColName := index.Parts[0]
-						colId := tableRef.Cols[columnNamePos[uniqueColName]].ColId
-						uniqueColumn[uniqueColName] = colId
-					}
-				}
-			}
+			// fkDef.ForeignTbl = tableRef.TblId
+			// columnIdPos := make(map[uint64]int)
+			// columnNamePos := make(map[string]int)
+			// uniqueColumn := make(map[string]uint64)
+			// for i, col := range tableRef.Cols {
+			// 	columnIdPos[col.ColId] = i
+			// 	columnNamePos[col.Name] = i
+			// 	if col.Primary {
+			// 		uniqueColumn[col.Name] = col.ColId
+			// 	}
+			// }
+			// if tableRef.Pkey != nil {
+			// 	for _, colName := range tableRef.Pkey.Names {
+			// 		uniqueColumn[colName] = tableRef.Cols[columnNamePos[colName]].ColId
+			// 	}
+			// }
 
-			for i, keyPart := range refer.KeyParts {
-				colName := keyPart.ColName.Parts[0]
-				if _, exists := columnNamePos[colName]; exists {
-					if colId, ok := uniqueColumn[colName]; ok {
-						// check column type
-						if tableRef.Cols[columnIdPos[colId]].Typ.Id != fkColTyp[i].Id {
-							return moerr.NewInternalError(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkColName[i])
-						}
-						fkDef.ForeignCols[i] = colId
-					} else {
-						return moerr.NewInternalError(ctx.GetContext(), "reference column '%v' is not unique constraint(Unique index or Primary Key)", colName)
-					}
-				} else {
-					return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkTableName)
-				}
-			}
-			createTable.TableDef.Fkeys = append(createTable.TableDef.Fkeys, fkDef)
+			// // now tableRef.Indices is empty, you can not test it
+			// for _, index := range tableRef.Indexes {
+			// 	if index.Unique {
+			// 		if len(index.Parts) == 1 {
+			// 			uniqueColName := index.Parts[0]
+			// 			colId := tableRef.Cols[columnNamePos[uniqueColName]].ColId
+			// 			uniqueColumn[uniqueColName] = colId
+			// 		}
+			// 	}
+			// }
+
+			// for i, keyPart := range refer.KeyParts {
+			// 	colName := keyPart.ColName.Parts[0]
+			// 	if _, exists := columnNamePos[colName]; exists {
+			// 		if colId, ok := uniqueColumn[colName]; ok {
+			// 			// check column type
+			// 			if tableRef.Cols[columnIdPos[colId]].Typ.Id != fkColTyp[i].Id {
+			// 				return moerr.NewInternalError(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkColName[i])
+			// 			}
+			// 			fkDef.ForeignCols[i] = colId
+			// 		} else {
+			// 			return moerr.NewInternalError(ctx.GetContext(), "reference column '%v' is not unique constraint(Unique index or Primary Key)", colName)
+			// 		}
+			// 	} else {
+			// 		return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkTableName)
+			// 	}
+			// }
+			// createTable.TableDef.Fkeys = append(createTable.TableDef.Fkeys, fkDef)
 
 		case *tree.CheckIndex, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
@@ -1325,11 +1334,22 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			case tree.AlterTableDropForeignKey:
 				typ = plan.AlterTableDrop_FOREIGN_KEY
 			}
+			name := string(opt.Name)
+			name_not_found := true
+			for _, fk := range tableDef.Fkeys {
+				if fk.Name == name {
+					name_not_found = false
+					break
+				}
+			}
+			if name_not_found {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP '%s'; check that column/key exists", name)
+			}
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_Drop{
 					Drop: &plan.AlterTableDrop{
 						Typ:  typ,
-						Name: string(opt.Name),
+						Name: name,
 					},
 				},
 			}
@@ -1347,6 +1367,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 							DbName:    fkData.DbName,
 							TableName: fkData.TableName,
 							Cols:      fkData.Cols.Cols,
+							Fkey:      fkData.Def,
 						},
 					},
 				}
