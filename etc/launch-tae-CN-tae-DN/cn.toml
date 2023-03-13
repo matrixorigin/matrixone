@@ -39,3 +39,7 @@ turn-on-push-model = false
 
 [cn.Engine]
 type = "distributed-tae"
+
+[cn.rpc]
+send-queue-size = 2
+busy-queue-size = 1
