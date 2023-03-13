@@ -301,12 +301,13 @@ func (s *store) getReplica(id uint64) *replica {
 }
 
 func (s *store) initTxnSender() error {
-	sender, err := rpc.NewSenderWithConfig(
+	s.cfg.RPC.BackendOptions = append(s.cfg.RPC.BackendOptions,
+		morpc.WithBackendFilter(func(m morpc.Message, backendAddr string) bool {
+			return s.options.backendFilter == nil || s.options.backendFilter(m.(*txn.TxnRequest), backendAddr)
+		}))
+	sender, err := rpc.NewSender(
 		s.cfg.RPC,
 		s.rt,
-		rpc.WithSenderBackendOptions(morpc.WithBackendFilter(func(m morpc.Message, backendAddr string) bool {
-			return s.options.backendFilter == nil || s.options.backendFilter(m.(*txn.TxnRequest), backendAddr)
-		})),
 		rpc.WithSenderLocalDispatch(s.dispatchLocalRequest))
 	if err != nil {
 		return err

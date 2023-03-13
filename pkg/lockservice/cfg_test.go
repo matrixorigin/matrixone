@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,20 +14,16 @@
 
 package lockservice
 
-// WithGranularity set rows granularity, the default granularity is Row.
-func (opts LockOptions) WithGranularity(granularity Granularity) LockOptions {
-	opts.granularity = granularity
-	return opts
-}
+import (
+	"testing"
 
-// WithMode set lock mode, the default mode is Exclusive.
-func (opts LockOptions) WithMode(mode LockMode) LockOptions {
-	opts.mode = mode
-	return opts
-}
+	"github.com/stretchr/testify/assert"
+)
 
-// WithWaitPolicy set wait policy, the default policy is Wait.
-func (opts LockOptions) WithWaitPolicy(policy WaitPolicy) LockOptions {
-	opts.policy = policy
-	return opts
+func TestAdjustConfig(t *testing.T) {
+	c := Config{ServiceID: "s1", ServiceAddress: "address"}
+	c.adjust()
+	assert.NotEmpty(t, c.KeepLockTableBindDuration)
+	assert.NotEmpty(t, c.KeepRemoteLockDuration)
+	assert.NotEmpty(t, c.MaxFixedSliceSize)
 }

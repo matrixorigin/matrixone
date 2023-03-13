@@ -38,7 +38,8 @@ import (
 )
 
 var (
-	defaultListenAddress = "127.0.0.1:6002"
+	defaultListenAddress     = "127.0.0.1:6002"
+	defaultLockListenAddress = "127.0.0.1:6003"
 )
 
 type Service interface {
@@ -75,8 +76,15 @@ type Config struct {
 	// ServiceAddress service address for communication, if this address is not set, use
 	// ListenAddress as the communication address.
 	ServiceAddress string `toml:"service-address"`
-	// SQLAddress service address for receiving external sql clientß
+	// SQLAddress service address for receiving external sql client
 	SQLAddress string `toml:"sql-address"`
+
+	// LockListenAddress lock service listen address for receiving lock requests
+	LockListenAddress string `toml:"lock-listen-address"`
+	// LockServiceAddress service address for communication, if this address is not set, use
+	// ListenAddress as the communication address.
+	LockServiceAddress string `toml:"lock-service-address"`
+
 	// FileService file service configuration
 
 	Engine struct {
@@ -200,6 +208,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
+	}
+	if c.LockListenAddress == "" {
+		c.LockListenAddress = defaultLockListenAddress
+	}
+	if c.LockServiceAddress == "" {
+		c.LockServiceAddress = c.LockListenAddress
 	}
 	return nil
 }

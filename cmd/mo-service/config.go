@@ -152,7 +152,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func (c *Config) createFileService(defaultName string) (*fileservice.FileServices, error) {
+func (c *Config) createFileService(defaultName string, perfCounter *perfcounter.Counter) (*fileservice.FileServices, error) {
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 
@@ -161,7 +161,6 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 		perfCounter perfcounter.Counter
 	}
 	perfCounterInfos := make([]*perServiceCounter, 0, len(c.FileServices))
-	globalCounter := new(perfcounter.Counter)
 
 	for _, config := range c.FileServices {
 
@@ -175,7 +174,7 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 			config,
 			[]*perfcounter.Counter{
 				&counter.perfCounter,
-				globalCounter,
+				perfCounter,
 			},
 		)
 		if err != nil {
@@ -215,7 +214,6 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 			for _, counter := range perfCounterInfos {
 				printCounter(counter.fsName, &counter.perfCounter)
 			}
-			printCounter("global", globalCounter)
 		}
 	}()
 
