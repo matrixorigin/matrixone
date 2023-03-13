@@ -508,10 +508,11 @@ message AnalyzeInfo {
     int64 wait_time_consumed = 7;
     int64 diskIO = 8;
     int64 s3IO_byte = 9;
-    int64 s3IO_count = 10;
-    int64 networkIO = 11;
-	int64 scanTime = 12;
-	int64 insertTime = 13;
+    int64 s3IO_input_count = 10;
+    int64 s3IO_output_count = 11;
+    int64 networkIO = 12;
+	int64 scanTime = 13;
+	int64 insertTime = 14;
 }
 
 message Node {

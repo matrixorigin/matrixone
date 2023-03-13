@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -275,6 +276,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		anal: &anaylze{},
 		addr: colexec.CnAddr,
 	}
+	c.proc.Ctx = perfcounter.WithCounter(c.proc.Ctx, &c.s3Counter)
 
 	c.fill = func(_ any, b *batch.Batch) error {
 		return receiver.sendBatch(b)
