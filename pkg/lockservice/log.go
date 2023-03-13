@@ -444,13 +444,11 @@ func logWaiterContactPool(
 }
 
 func logWaiterClose(
-	w *waiter,
-	next *waiter) {
+	w *waiter) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("waiter close",
-			zap.Stringer("waiter", w),
-			zap.Stringer("next-waiter", next))
+			zap.Stringer("waiter", w))
 	}
 }
 
@@ -459,7 +457,7 @@ func logWaiterFetchNextWaiter(
 	next *waiter) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("fetch next waiter",
+		logger.Debug("notify next waiter",
 			zap.Stringer("waiter", w),
 			zap.Stringer("next-waiter", next))
 	}

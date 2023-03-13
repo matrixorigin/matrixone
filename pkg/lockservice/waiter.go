@@ -249,7 +249,7 @@ func (w *waiter) clearAllNotify(reason string) {
 // into the next waiter.
 func (w *waiter) close(err error) *waiter {
 	nextWaiter := w.fetchNextWaiter(err)
-	logWaiterClose(w, nextWaiter)
+	logWaiterClose(w)
 	w.unref()
 	return nextWaiter
 }
