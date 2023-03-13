@@ -430,7 +430,9 @@ func (s *MergeTaskBuilder) onBlock(entry *catalog.BlockEntry) (err error) {
 		return
 	}
 
+	entry.RUnlock()
 	rows := entry.GetBlockData().Rows()
+	entry.RLock()
 	s.tableRowCnt += rows
 	s.blkBuilder.push(&mItem{row: rows, entry: entry})
 	return nil

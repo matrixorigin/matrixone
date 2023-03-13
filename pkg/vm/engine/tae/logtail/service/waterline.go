@@ -18,7 +18,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
 // Waterliner maintains waterline for all subscribed tables.
@@ -26,15 +25,14 @@ type Waterliner struct {
 	sync.Mutex
 
 	initialized bool
-	clock       clock.Clock
-
-	waterline timestamp.Timestamp
+	clock       func() (timestamp.Timestamp, timestamp.Timestamp)
+	waterline   timestamp.Timestamp
 }
 
-func NewWaterliner(clock clock.Clock) *Waterliner {
+func NewWaterliner(nowFn func() (timestamp.Timestamp, timestamp.Timestamp)) *Waterliner {
 	return &Waterliner{
 		initialized: false,
-		clock:       clock,
+		clock:       nowFn,
 	}
 }
 
@@ -46,7 +44,7 @@ func (w *Waterliner) Waterline() timestamp.Timestamp {
 	defer w.Unlock()
 
 	if !w.initialized {
-		now, _ := w.clock.Now()
+		now, _ := w.clock()
 		w.waterline = now
 		w.initialized = true
 	}
