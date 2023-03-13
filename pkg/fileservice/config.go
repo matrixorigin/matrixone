@@ -47,24 +47,24 @@ type Config struct {
 type NewFileServicesFunc = func(defaultName string) (*FileServices, error)
 
 // NewFileService create file service from config
-func NewFileService(cfg Config, perfCounter *perfcounter.Counter) (FileService, error) {
+func NewFileService(cfg Config, perfCounters []*perfcounter.Counter) (FileService, error) {
 	switch strings.ToUpper(cfg.Backend) {
 	case memFileServiceBackend:
-		return newMemFileService(cfg, perfCounter)
+		return newMemFileService(cfg, perfCounters)
 	case diskFileServiceBackend:
-		return newDiskFileService(cfg, perfCounter)
+		return newDiskFileService(cfg, perfCounters)
 	case diskETLFileServiceBackend:
-		return newDiskETLFileService(cfg, perfCounter)
+		return newDiskETLFileService(cfg, perfCounters)
 	case minioFileServiceBackend:
-		return newMinioFileService(cfg, perfCounter)
+		return newMinioFileService(cfg, perfCounters)
 	case s3FileServiceBackend:
-		return newS3FileService(cfg, perfCounter)
+		return newS3FileService(cfg, perfCounters)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("file service backend %s not implemented", cfg.Backend)
 	}
 }
 
-func newMemFileService(cfg Config, _ *perfcounter.Counter) (FileService, error) {
+func newMemFileService(cfg Config, _ []*perfcounter.Counter) (FileService, error) {
 	fs, err := NewMemoryFS(cfg.Name)
 	if err != nil {
 		return nil, err
@@ -72,12 +72,12 @@ func newMemFileService(cfg Config, _ *perfcounter.Counter) (FileService, error) 
 	return fs, nil
 }
 
-func newDiskFileService(cfg Config, perfCounter *perfcounter.Counter) (FileService, error) {
+func newDiskFileService(cfg Config, perfCounters []*perfcounter.Counter) (FileService, error) {
 	fs, err := NewLocalFS(
 		cfg.Name,
 		cfg.DataDir,
 		int64(cfg.Cache.MemoryCapacity),
-		perfCounter,
+		perfCounters,
 	)
 	if err != nil {
 		return nil, err
@@ -85,7 +85,7 @@ func newDiskFileService(cfg Config, perfCounter *perfcounter.Counter) (FileServi
 	return fs, nil
 }
 
-func newDiskETLFileService(cfg Config, _ *perfcounter.Counter) (FileService, error) {
+func newDiskETLFileService(cfg Config, _ []*perfcounter.Counter) (FileService, error) {
 	fs, err := NewLocalETLFS(
 		cfg.Name,
 		cfg.DataDir,
@@ -96,7 +96,7 @@ func newDiskETLFileService(cfg Config, _ *perfcounter.Counter) (FileService, err
 	return fs, nil
 }
 
-func newMinioFileService(cfg Config, perfCounter *perfcounter.Counter) (FileService, error) {
+func newMinioFileService(cfg Config, perfCounters []*perfcounter.Counter) (FileService, error) {
 	fs, err := NewS3FSOnMinio(
 		cfg.S3.SharedConfigProfile,
 		cfg.Name,
@@ -106,7 +106,7 @@ func newMinioFileService(cfg Config, perfCounter *perfcounter.Counter) (FileServ
 		int64(cfg.Cache.MemoryCapacity),
 		int64(cfg.Cache.DiskCapacity),
 		cfg.Cache.DiskPath,
-		perfCounter,
+		perfCounters,
 	)
 	if err != nil {
 		return nil, err
@@ -114,7 +114,7 @@ func newMinioFileService(cfg Config, perfCounter *perfcounter.Counter) (FileServ
 	return fs, nil
 }
 
-func newS3FileService(cfg Config, perfCounter *perfcounter.Counter) (FileService, error) {
+func newS3FileService(cfg Config, perfCounters []*perfcounter.Counter) (FileService, error) {
 	fs, err := NewS3FS(
 		cfg.S3.SharedConfigProfile,
 		cfg.Name,
@@ -124,7 +124,7 @@ func newS3FileService(cfg Config, perfCounter *perfcounter.Counter) (FileService
 		int64(cfg.Cache.MemoryCapacity),
 		int64(cfg.Cache.DiskCapacity),
 		cfg.Cache.DiskPath,
-		perfCounter,
+		perfCounters,
 	)
 	if err != nil {
 		return nil, err

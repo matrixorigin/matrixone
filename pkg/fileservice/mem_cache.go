@@ -61,9 +61,9 @@ func WithClock(capacity int64) Options {
 	}
 }
 
-func WithPerfCounter(counter *perfcounter.Counter) Options {
+func WithPerfCounters(counters []*perfcounter.Counter) Options {
 	return func(o *options) {
-		o.counters = append(o.counters, counter)
+		o.counters = append(o.counters, counters...)
 	}
 }
 

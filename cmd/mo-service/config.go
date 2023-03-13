@@ -156,11 +156,12 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 
-	type perfCounterInfo struct {
+	type perServiceCounter struct {
 		fsName      string
 		perfCounter perfcounter.Counter
 	}
-	perfCounterInfos := make([]*perfCounterInfo, 0, len(c.FileServices))
+	perfCounterInfos := make([]*perServiceCounter, 0, len(c.FileServices))
+	globalCounter := new(perfcounter.Counter)
 
 	for _, config := range c.FileServices {
 
@@ -169,42 +170,52 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 			config.Name = defines.SharedFileServiceName
 		}
 
-		info := new(perfCounterInfo)
-		service, err := fileservice.NewFileService(config, &info.perfCounter)
+		counter := new(perServiceCounter)
+		service, err := fileservice.NewFileService(
+			config,
+			[]*perfcounter.Counter{
+				&counter.perfCounter,
+				globalCounter,
+			},
+		)
 		if err != nil {
 			return nil, err
 		}
-		info.fsName = service.Name()
+		counter.fsName = service.Name()
 		services = append(services, service)
-		perfCounterInfos = append(perfCounterInfos, info)
+		perfCounterInfos = append(perfCounterInfos, counter)
 
 	}
 
 	// cache stats
 	//TODO add metrics exporter
 	go func() {
+
+		printCounter := func(name string, counter *perfcounter.Counter) {
+			reads := counter.Cache.Read.Load()
+			hits := counter.Cache.Hit.Load()
+			memReads := counter.Cache.MemRead.Load()
+			memHits := counter.Cache.MemHit.Load()
+			diskReads := counter.Cache.DiskRead.Load()
+			diskHits := counter.Cache.DiskHit.Load()
+			logutil.Info("cache stats of "+name,
+				zap.Any("reads", reads),
+				zap.Any("hits", hits),
+				zap.Any("hit rate", float64(hits)/float64(reads)),
+				zap.Any("mem reads", memReads),
+				zap.Any("mem hits", memHits),
+				zap.Any("mem hit rate", float64(memHits)/float64(memReads)),
+				zap.Any("disk reads", diskReads),
+				zap.Any("disk hits", diskHits),
+				zap.Any("disk hit rate", float64(diskHits)/float64(diskReads)),
+			)
+		}
+
 		for range time.NewTicker(time.Second * 10).C {
-			for _, info := range perfCounterInfos {
-
-				reads := info.perfCounter.Cache.Read.Load()
-				hits := info.perfCounter.Cache.Hit.Load()
-				memReads := info.perfCounter.Cache.MemRead.Load()
-				memHits := info.perfCounter.Cache.MemHit.Load()
-				diskReads := info.perfCounter.Cache.DiskRead.Load()
-				diskHits := info.perfCounter.Cache.DiskHit.Load()
-
-				logutil.Info("cache stats of "+info.fsName,
-					zap.Any("reads", reads),
-					zap.Any("hits", hits),
-					zap.Any("hit rate", float64(hits)/float64(reads)),
-					zap.Any("mem reads", memReads),
-					zap.Any("mem hits", memHits),
-					zap.Any("mem hit rate", float64(memHits)/float64(memReads)),
-					zap.Any("disk reads", diskReads),
-					zap.Any("disk hits", diskHits),
-					zap.Any("disk hit rate", float64(diskHits)/float64(diskReads)),
-				)
+			for _, counter := range perfCounterInfos {
+				printCounter(counter.fsName, &counter.perfCounter)
 			}
+			printCounter("global", globalCounter)
 		}
 	}()
 

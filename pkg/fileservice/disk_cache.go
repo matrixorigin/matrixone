@@ -31,25 +31,25 @@ import (
 //TODO full data. If we know the size and it's small, we can get the whole object in one request and save it to a file named full_data
 
 type DiskCache struct {
-	capacity    int64
-	path        string
-	fileExists  sync.Map
-	perfCounter *perfcounter.Counter
+	capacity     int64
+	path         string
+	fileExists   sync.Map
+	perfCounters []*perfcounter.Counter
 }
 
 func NewDiskCache(
 	path string,
 	capacity int64,
-	perfCounter *perfcounter.Counter,
+	perfCounters []*perfcounter.Counter,
 ) (*DiskCache, error) {
 	err := os.MkdirAll(path, 0755)
 	if err != nil {
 		return nil, err
 	}
 	return &DiskCache{
-		capacity:    capacity,
-		path:        path,
-		perfCounter: perfCounter,
+		capacity:     capacity,
+		path:         path,
+		perfCounters: perfCounters,
 	}, nil
 }
 
@@ -69,7 +69,7 @@ func (d *DiskCache) Read(
 			c.Cache.Hit.Add(numHit)
 			c.Cache.DiskRead.Add(numRead)
 			c.Cache.DiskHit.Add(numHit)
-		}, d.perfCounter)
+		}, d.perfCounters...)
 	}()
 
 	for i, entry := range vector.Entries {
