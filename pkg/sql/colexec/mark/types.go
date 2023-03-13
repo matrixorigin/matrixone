@@ -31,10 +31,10 @@ const (
 	End
 )
 
-type resultType int
+type otyp int
 
 const (
-	condFalse resultType = iota
+	condFalse otyp = iota
 	condTrue
 	condUnkown
 )

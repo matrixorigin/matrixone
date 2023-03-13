@@ -90,9 +90,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.NewVec(*bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 	count := bat.Length()
@@ -100,12 +100,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		for j := 0; j < len(ctr.bat.Zs); j++ {
 			for k, rp := range ap.Result {
 				if rp.Rel == 0 {
-					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+					if err := rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 						rbat.Clean(proc.Mp())
 						return err
 					}
 				} else {
-					if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
+					if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
 						rbat.Clean(proc.Mp())
 						return err
 					}

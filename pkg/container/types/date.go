@@ -49,7 +49,7 @@ func (d Weekday) String() string {
 	return "%Weekday(" + strconv.FormatUint(uint64(d), 10) + ")"
 }
 
-var unixEpochSecs = int64(DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0))
+var unixEpochMicroSecs = int64(DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0))
 var unixEpochDays = int32(DateFromCalendar(1970, 1, 1))
 
 var (
@@ -530,10 +530,16 @@ func daysSinceEpoch(year int32) int32 {
 	return d
 }
 
-// DayOfWeek return the day of the week of the date
+// DayOfWeek return the day of the week counting from Sunday
 func (d Date) DayOfWeek() Weekday {
 	// January 1, year 1 in Gregorian calendar, was a Monday.
 	return Weekday((d + 1) % 7)
+}
+
+// DayOfWeek2 return the day of the week counting from Monday
+func (d Date) DayOfWeek2() Weekday {
+	// January 1, year 1 in Gregorian calendar, was a Monday.
+	return Weekday(d % 7)
 }
 
 // DayOfYear return day of year (001..366)
@@ -586,11 +592,11 @@ func (d Date) WeekOfYear2() uint8 {
 	return uint8((yday-1)/7 + 1)
 }
 
-type weekBehaviour uint
+type WeekBehaviour uint
 
 const (
 	// WeekMondayFirst: set Monday as first day of week; otherwise Sunday is first day of week
-	WeekMondayFirst weekBehaviour = 1
+	WeekMondayFirst WeekBehaviour = 1
 
 	// WeekYear: If set, Week is in range 1-53, otherwise Week is in range 0-53.
 	//	Week 0 is returned for the the last week of the previous year (for
@@ -608,12 +614,12 @@ const (
 	WeekFirstWeekday = 4
 )
 
-func (v weekBehaviour) bitAnd(flag weekBehaviour) bool {
+func (v WeekBehaviour) bitAnd(flag WeekBehaviour) bool {
 	return (v & flag) != 0
 }
 
-func weekMode(mode int) weekBehaviour {
-	weekFormat := weekBehaviour(mode & 7)
+func weekMode(mode int) WeekBehaviour {
+	weekFormat := WeekBehaviour(mode & 7)
 	if (weekFormat & WeekMondayFirst) == 0 {
 		weekFormat ^= WeekFirstWeekday
 	}
@@ -637,7 +643,7 @@ func (d Date) YearWeek(mode int) (year int, week int) {
 }
 
 // calcWeek calculates week and year for the date.
-func calcWeek(d Date, wb weekBehaviour) (year int, week int) {
+func calcWeek(d Date, wb WeekBehaviour) (year int, week int) {
 	var days int
 	ty, tm, td := int(d.Year()), int(d.Month()), int(d.Day())
 	daynr := calcDaynr(ty, tm, td)
@@ -731,7 +737,7 @@ func (d Date) ToTime() Time {
 func (d Date) ToTimestamp(loc *time.Location) Timestamp {
 	year, mon, day, _ := d.Calendar(true)
 	t := time.Date(int(year), time.Month(mon), int(day), 0, 0, 0, 0, loc)
-	return Timestamp(t.UnixMicro() + unixEpochSecs)
+	return Timestamp(t.UnixMicro() + unixEpochMicroSecs)
 }
 
 func (d Date) Month() uint8 {
@@ -756,5 +762,5 @@ func (d Date) DaysSinceUnixEpoch() int32 {
 }
 
 func GetUnixEpochSecs() int64 {
-	return unixEpochSecs
+	return unixEpochMicroSecs
 }

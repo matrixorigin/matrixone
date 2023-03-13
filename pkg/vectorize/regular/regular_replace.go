@@ -106,7 +106,7 @@ func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, oc
 	}
 }
 
-func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_type []string, exprN, patN, rplN *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, maxLen int) error {
+func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_type []string, exprN, patN, rplN *nulls.Nulls, ovec *vector.Vector, proc *process.Process, maxLen int) error {
 	rs := make([]string, maxLen)
 	var rpl string
 	var posValue int64
@@ -118,7 +118,7 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 		}
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			rpl, posValue, occValue = determineValuesWithThree(rpls, pos, occ, i)
@@ -128,11 +128,11 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 			}
 			rs[i] = res
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		vector.AppendStringList(ovec, rs, nil, proc.Mp())
 	} else if len(expr) == 1 {
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			rpl, posValue, occValue = determineValuesWithThree(rpls, pos, occ, i)
@@ -142,7 +142,7 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 			}
 			rs[i] = res
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		vector.AppendStringList(ovec, rs, nil, proc.Mp())
 	} else if len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
 		if err != nil {
@@ -150,7 +150,7 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 		}
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			rpl, posValue, occValue = determineValuesWithThree(rpls, pos, occ, i)
@@ -160,11 +160,11 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 			}
 			rs[i] = res
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		vector.AppendStringList(ovec, rs, nil, proc.Mp())
 	} else {
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			rpl, posValue, occValue = determineValuesWithThree(rpls, pos, occ, i)
@@ -174,49 +174,49 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 			}
 			rs[i] = res
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		vector.AppendStringList(ovec, rs, nil, proc.Mp())
 	}
 	return nil
 }
 
-func ReplaceWithArrays(expr, subs, rpls []string, exprN, subsN, rplN *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, maxLen int) error {
+func ReplaceWithArrays(expr, subs, rpls []string, exprN, subsN, rplN *nulls.Nulls, ovec *vector.Vector, proc *process.Process, maxLen int) error {
 	rs := make([]string, maxLen)
 	if len(expr) == 1 && len(subs) == 1 {
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, subs, rpls, exprN, subsN, rplN, i) {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			appendRs(expr, subs, rpls, rs, 0, 0, i)
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		vector.AppendStringList(ovec, rs, nil, proc.Mp())
 	} else if len(expr) == 1 {
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, subs, rpls, exprN, subsN, rplN, i) {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			appendRs(expr, subs, rpls, rs, 0, i, i)
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		vector.AppendStringList(ovec, rs, nil, proc.Mp())
 	} else if len(subs) == 1 {
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, subs, rpls, exprN, subsN, rplN, i) {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			appendRs(expr, subs, rpls, rs, i, 0, i)
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		vector.AppendStringList(ovec, rs, nil, proc.Mp())
 	} else {
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, subs, rpls, exprN, subsN, rplN, i) {
-				nulls.Add(resultVector.Nsp, uint64(i))
+				nulls.Add(ovec.GetNulls(), uint64(i))
 				continue
 			}
 			appendRs(expr, subs, rpls, rs, i, i, i)
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
+		vector.AppendStringList(ovec, rs, nil, proc.Mp())
 	}
 	return nil
 }

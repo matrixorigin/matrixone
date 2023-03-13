@@ -17,6 +17,9 @@ package preinsert
 import (
 	"context"
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 var (
@@ -92,7 +93,7 @@ func TestPreInsertNormal(t *testing.T) {
 		// check vector
 		require.Equal(t, len(batch1.Vecs), len(result.Vecs))
 		for i, vec := range result.Vecs {
-			require.Equal(t, len(batch1.Zs), vector.Length(vec), fmt.Sprintf("column number: %d", i))
+			require.Equal(t, len(batch1.Zs), vec.Length(), fmt.Sprintf("column number: %d", i))
 		}
 	}
 }

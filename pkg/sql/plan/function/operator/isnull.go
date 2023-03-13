@@ -24,18 +24,21 @@ import (
 func IsNull(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	input := vectors[0]
 	retType := types.T_bool.ToType()
-	if input.IsScalar() {
-		if input.IsScalarNull() {
-			return vector.NewConstFixed(retType, input.Length(), true, proc.Mp()), nil
+	if input.IsConst() {
+		if input.IsConstNull() {
+			return vector.NewConstFixed(retType, true, input.Length(), proc.Mp()), nil
 		} else {
-			return vector.NewConstFixed(retType, input.Length(), false, proc.Mp()), nil
+			return vector.NewConstFixed(retType, false, input.Length(), proc.Mp()), nil
 		}
 	} else {
 		vlen := input.Length()
-		vec := vector.PreAllocType(retType, vlen, vlen, proc.Mp())
-		vals := vector.MustTCols[bool](vec)
+		vec, err := proc.AllocVectorOfRows(retType, vlen, nil)
+		if err != nil {
+			return nil, err
+		}
+		vals := vector.MustFixedCol[bool](vec)
 		for i := range vals {
-			if nulls.Contains(input.Nsp, uint64(i)) {
+			if nulls.Contains(input.GetNulls(), uint64(i)) {
 				vals[i] = true
 			} else {
 				vals[i] = false
