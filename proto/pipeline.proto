@@ -76,6 +76,8 @@ message Insert{
   plan.TableDef table_def         = 6;
   map<string, int32> parent_idx   = 7;
   plan.ClusterTable ClusterTable  = 8;
+	repeated int32 idx_idx 				  = 9;
+
 }
 
 message PreInsert {

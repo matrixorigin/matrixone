@@ -117,7 +117,7 @@ insert into t1 values (-9223372036854775809,'xefrsdfgds');
 Data truncation: data out of range: data type int64, value '-9223372036854775809'
 insert into t1 values (9223372036854775807,'xefrsdfgds');
 insert into t1 values (9223372036854775808,'xefrsdfgds');
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 insert into t1(b) values ('eeeee');
 Data truncation: data out of range: data type bigint, value 9223372036854775808
 drop table t1;
@@ -310,7 +310,7 @@ insert into t4 values (-9223372036854775809,'xefrsdfgds');
 Data truncation: data out of range: data type int64, value '-9223372036854775809'
 insert into t4 values (9223372036854775807,'xefrsdfgds');
 insert into t4 values (9223372036854775808,'xefrsdfgds');
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 insert into t4(b) values ('eeeee');
 Data truncation: data out of range: data type bigint, value 9223372036854775808
 drop table t4;

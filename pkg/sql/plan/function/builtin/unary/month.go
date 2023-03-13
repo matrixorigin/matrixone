@@ -15,76 +15,80 @@
 package unary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/month"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func DateToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_uint8.ToType()
-	inputValues := vector.MustTCols[types.Date](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func DateToMonth(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint8.ToType()
+	ivals := vector.MustFixedCol[types.Date](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultValues := make([]uint8, 1)
-		month.DateToMonth(inputValues, resultValues)
-		return vector.NewConstFixed(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
+		var rvals [1]uint8
+		month.DateToMonth(ivals, rvals[:])
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint8](resultVector)
-		month.DateToMonth(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[uint8](rvec)
+		month.DateToMonth(ivals, rvals)
+		return rvec, nil
 	}
 }
 
-func DatetimeToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint8, Size: 1}
-	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func DatetimeToMonth(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_uint8, Size: 1}
+	ivals := vector.MustFixedCol[types.Datetime](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, month.DatetimeToMonth(inputValues, resultValues))
-		return resultVector, nil
+		var rvals [1]uint8
+		month.DatetimeToMonth(ivals, rvals[:])
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint8](resultVector)
-		month.DatetimeToMonth(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[uint8](rvec)
+		month.DatetimeToMonth(ivals, rvals)
+		return rvec, nil
 	}
 }
 
-func DateStringToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint8, Size: 1}
-	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func DateStringToMonth(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_uint8, Size: 1}
+	ivals := vector.MustStrCol(inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, month.DateStringToMonth(inputValues, resultVector.Nsp, resultValues))
-		return resultVector, nil
+		var rvals [1]uint8
+		nsp := &nulls.Nulls{}
+		month.DateStringToMonth(ivals, nsp, rvals[:])
+		if nsp.Contains(0) {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+		} else {
+			return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+		}
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint8](resultVector)
-		month.DateStringToMonth(inputValues, resultVector.Nsp, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[uint8](rvec)
+		month.DateStringToMonth(ivals, rvec.GetNulls(), rvals)
+		return rvec, nil
 	}
 }

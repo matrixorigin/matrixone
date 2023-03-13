@@ -5,7 +5,7 @@ select floor(1.1e5);
 floor(1.1e5)
 110000.0
 select floor(cast(-2 as unsigned)), floor(18446744073709551614), floor(-2);
-Data truncation: data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, value '-2'
 SELECT floor(ceil(12345678901234567890));
 floor(ceil(12345678901234567890))
 12345678901234567890

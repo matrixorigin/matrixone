@@ -101,6 +101,12 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	return mgr
 }
 
+func (mgr *TxnManager) Now() types.TS {
+	mgr.Lock()
+	defer mgr.Unlock()
+	return mgr.TsAlloc.Alloc()
+}
+
 func (mgr *TxnManager) Init(prevTs types.TS) error {
 	mgr.TsAlloc.SetStart(prevTs)
 	logutil.Info("[INIT]", TxnMgrField(mgr))

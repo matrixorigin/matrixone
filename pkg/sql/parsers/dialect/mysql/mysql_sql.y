@@ -36,6 +36,10 @@ import (
     statement tree.Statement
     statements []tree.Statement
 
+    alterTable tree.AlterTable
+    alterTableOptions tree.AlterTableOptions
+    alterTableOption tree.AlterTableOption
+
     tableDef tree.TableDef
     tableDefs tree.TableDefs
     tableName *tree.TableName
@@ -382,7 +386,7 @@ import (
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
@@ -417,7 +421,7 @@ import (
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
 %type <str> insert_column
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_opt accounts_list
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 
 %type <functionName> func_name
@@ -445,6 +449,8 @@ import (
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
+%type <alterTableOptions> alter_options
+%type <alterTableOption> alter_table_drop
 
 %type <tableOption> table_option
 %type <from> from_clause from_opt
@@ -775,17 +781,16 @@ mo_dump_stmt:
 
 
 load_data_stmt:
-    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name accounts_opt tail_param_opt parallel_opt
+    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt parallel_opt
     {
         $$ = &tree.Load{
             Local: $3,
             Param: $4,
             DuplicateHandling: $5,
             Table: $8,
-            Accounts: $9,
         }
-        $$.(*tree.Load).Param.Tail = $10
-        $$.(*tree.Load).Param.Parallel = $11
+        $$.(*tree.Load).Param.Tail = $9
+        $$.(*tree.Load).Param.Parallel = $10
     }
 
 load_extension_stmt:
@@ -2195,6 +2200,7 @@ alter_stmt:
 |   alter_account_stmt
 |   alter_database_config_stmt
 |   alter_view_stmt
+|   alter_table_stmt
 // |    alter_ddl_stmt
 
 alter_view_stmt:
@@ -2207,6 +2213,73 @@ alter_view_stmt:
             IfExists: $3,
         }
     }
+
+alter_table_stmt:
+    ALTER TABLE table_name alter_options
+    {
+        $$ = &tree.AlterTable{
+            Table: *$3,
+            Options: $4,
+        }
+    }
+
+alter_options:
+ADD table_elem
+    {
+        opt := &tree.AlterOptionAdd{
+            Def:  $2,
+        }
+        $$ = []tree.AlterTableOption{tree.AlterTableOption(opt)}
+    }
+|   DROP alter_table_drop
+    {
+        $$ = []tree.AlterTableOption{tree.AlterTableOption($2)}
+    }
+| table_option_list
+    {
+        opts := make([]tree.AlterTableOption, len($1))
+        for i, opt := range $1 {
+            opts[i] = tree.AlterTableOption(opt)
+        }
+        $$ =  opts
+    }
+
+alter_table_drop:
+    INDEX ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropIndex,
+            Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   KEY ident
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropKey,
+            Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   COLUMN ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropColumn,
+            Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   FOREIGN KEY ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropForeignKey,
+            Name: tree.Identifier($3.Compare()),
+        }
+    }
+|   PRIMARY KEY 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropPrimaryKey,
+        }
+    }
+    
 
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
@@ -3057,31 +3130,11 @@ insert_stmt:
         $$ = ins
     }
 
-accounts_opt:
-    {
-        $$ = nil
-    }
-|   ACCOUNTS '(' accounts_list ')'
-    {
-        $$ = $3
-    }
-
-accounts_list:
-    account_name
-    {
-        $$ = tree.IdentifierList{tree.Identifier($1)}
-    }
-|   accounts_list ',' account_name
-    {
-        $$ = append($1, tree.Identifier($3))
-    }
-
 insert_data:
-    accounts_opt VALUES values_list
+    VALUES values_list
     {
-        vc := tree.NewValuesClause($3)
+        vc := tree.NewValuesClause($2)
         $$ = &tree.Insert{
-            Accounts: $1,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -3091,54 +3144,43 @@ insert_data:
             Rows: $1,
         }
     }
-|   ACCOUNTS '(' accounts_list ')' select_stmt
-   {
-        $$ = &tree.Insert{
-            Accounts: $3,
-	    Rows: $5,
-        }
-    }
-|   '(' insert_column_list ')' accounts_opt VALUES values_list
-    {
-        vc := tree.NewValuesClause($6)
-        $$ = &tree.Insert{
-            Columns: $2,
-            Accounts: $4,
-            Rows: tree.NewSelect(vc, nil, nil),
-        }
-    }
-|   '(' ')' accounts_opt VALUES values_list
+|   '(' insert_column_list ')' VALUES values_list
     {
         vc := tree.NewValuesClause($5)
         $$ = &tree.Insert{
-            Accounts: $3,
+            Columns: $2,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
-|   '(' insert_column_list ')' accounts_opt select_stmt
+|   '(' ')' VALUES values_list
+    {
+        vc := tree.NewValuesClause($4)
+        $$ = &tree.Insert{
+            Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   '(' insert_column_list ')' select_stmt
     {
         $$ = &tree.Insert{
             Columns: $2,
-            Accounts: $4,
-            Rows: $5,
+            Rows: $4,
         }
     }
-|   accounts_opt SET set_value_list
+|   SET set_value_list
     {
-        if $3 == nil {
+        if $2 == nil {
             yylex.Error("the set list of insert can not be empty")
             return 1
         }
         var identList tree.IdentifierList
         var valueList tree.Exprs
-        for _, a := range $3 {
+        for _, a := range $2 {
             identList = append(identList, a.Column)
             valueList = append(valueList, a.Expr)
         }
         vc := tree.NewValuesClause([]tree.Exprs{valueList})
         $$ = &tree.Insert{
             Columns: identList,
-            Accounts: $1,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -7527,6 +7569,10 @@ decimal_type:
             yylex.Error("Display width for double out of range (max = 255)")
             return 1
         }
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for double out of range (max = 30)")
+            return 1
+        }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
             yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
                 return 1
@@ -7548,6 +7594,10 @@ decimal_type:
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for float out of range (max = 255)")
+            return 1
+        }
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for float out of range (max = 30)")
             return 1
         }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
@@ -8483,6 +8533,7 @@ non_reserved_keyword:
 |   NODE
 |   UUID
 |   PARALLEL
+|	PROCESSLIST
 
 func_not_keyword:
     DATE_ADD

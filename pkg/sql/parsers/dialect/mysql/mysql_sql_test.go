@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select A from t1",
-		output: "select a from t1",
+		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
+		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
 	}
 )
 
@@ -78,6 +78,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
+		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
+	}, {
+		input:  "SHOW CREATE TABLE information_schema.PROCESSLIST;",
+		output: "show create table information_schema.processlist",
+	}, {
 		input:  "create table t1 (a int comment '\"123123\\'')",
 		output: "create table t1 (a int comment \"123123'')",
 	}, {
@@ -1820,32 +1826,32 @@ var (
 			input: `create cluster table a (a int)`,
 		},
 		{
-			input: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			input: `insert into a values (1, 2), (1, 2)`,
 		},
 		{
-			input: `insert into a accounts(acc1, acc2) select a, b from a`,
+			input: `insert into a select a, b from a`,
 		},
 		{
-			input: `insert into a (a, b) accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			input: `insert into a (a, b) values (1, 2), (1, 2)`,
 		},
 		{
-			input:  `insert into a () accounts(acc1, acc2) values (1, 2), (1, 2)`,
-			output: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			input:  `insert into a () values (1, 2), (1, 2)`,
+			output: `insert into a values (1, 2), (1, 2)`,
 		},
 		{
-			input: `insert into a (a, b) accounts(acc1, acc2) select a, b from a`,
+			input: `insert into a (a, b) select a, b from a`,
 		},
 		{
-			input:  `insert into a accounts(acc1, acc2) set a = b, b = b + 1`,
-			output: `insert into a (a, b) accounts(acc1, acc2) values (b, b + 1)`,
+			input:  `insert into a set a = b, b = b + 1`,
+			output: `insert into a (a, b) values (b, b + 1)`,
 		},
 		{
-			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A accounts (a1, a2) FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a accounts(a1, a2) fields terminated by , (, , c, d, e, f)",
+			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		},
 		{
-			input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
+			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
+			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
 		},
 		{
 			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
@@ -1975,6 +1981,28 @@ var (
 		{
 			input:  "UNLOCK TABLES",
 			output: "UnLock Tables",
+		},
+		{
+			input: "alter table tbl1 drop column col1",
+		},
+		{
+			input: "alter table tbl1 drop index idx_name",
+		},
+		{
+			input: "alter table tbl1 drop key idx_name",
+		},
+		{
+			input: "alter table tbl1 drop primary key",
+		},
+		{
+			input: "alter table tbl1 drop foreign key fk_name",
+		},
+		{
+			input: "alter table tbl1 add foreign key sdf (a, b) references b(a asc, b desc)",
+		},
+		{
+			input:  "alter table tbl1 checksum = 0, COMMENT = 'asdf'",
+			output: "alter table tbl1 checksum = 0, comment = asdf",
 		},
 	}
 )

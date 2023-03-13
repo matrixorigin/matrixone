@@ -121,9 +121,9 @@ func getTableAutoIncrValue(dbName string, colName string, eg engine.Engine, txn 
 			return 0, moerr.NewInternalError(proc.Ctx, "the mo_increment_columns col num is not four")
 		}
 
-		vs2 := vector.MustTCols[uint64](bat.Vecs[2])
+		vs2 := vector.MustFixedCol[uint64](bat.Vecs[2])
 		for i := 0; i < bat.Length(); i++ {
-			str := bat.Vecs[1].GetString(int64(i))
+			str := bat.Vecs[1].GetStringAt(i)
 			if str == colName {
 				bat.Clean(proc.Mp())
 				return vs2[i], nil
@@ -137,28 +137,26 @@ func getTableAutoIncrValue(dbName string, colName string, eg engine.Engine, txn 
 // If the table contains auto_increment column, return true and get auto_increment column definition of the table.
 // If there is no auto_increment column, return false
 func getTableAutoIncrCol(engineDefs []engine.TableDef, tableName string) (bool, *plan.ColDef) {
-	if engineDefs != nil {
-		for _, def := range engineDefs {
-			if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement {
-				autoIncrCol := &plan.ColDef{
-					ColId: attr.Attr.ID,
-					Name:  attr.Attr.Name,
-					Typ: &plan.Type{
-						Id:          int32(attr.Attr.Type.Oid),
-						Width:       attr.Attr.Type.Width,
-						Scale:       attr.Attr.Type.Scale,
-						AutoIncr:    attr.Attr.AutoIncrement,
-						Table:       tableName,
-						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-					},
-					Primary:   attr.Attr.Primary,
-					Default:   attr.Attr.Default,
-					OnUpdate:  attr.Attr.OnUpdate,
-					Comment:   attr.Attr.Comment,
-					ClusterBy: attr.Attr.ClusterBy,
-				}
-				return true, autoIncrCol
+	for _, def := range engineDefs {
+		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement {
+			autoIncrCol := &plan.ColDef{
+				ColId: attr.Attr.ID,
+				Name:  attr.Attr.Name,
+				Typ: &plan.Type{
+					Id:          int32(attr.Attr.Type.Oid),
+					Width:       attr.Attr.Type.Width,
+					Scale:       attr.Attr.Type.Scale,
+					AutoIncr:    attr.Attr.AutoIncrement,
+					Table:       tableName,
+					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+				},
+				Primary:   attr.Attr.Primary,
+				Default:   attr.Attr.Default,
+				OnUpdate:  attr.Attr.OnUpdate,
+				Comment:   attr.Attr.Comment,
+				ClusterBy: attr.Attr.ClusterBy,
 			}
+			return true, autoIncrCol
 		}
 	}
 	return false, nil

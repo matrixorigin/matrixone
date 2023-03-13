@@ -17,10 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"hash/crc32"
 	"runtime"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,8 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -87,8 +89,14 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	cli client.TxnClient,
 	messageAcquirer func() morpc.Message) error {
-	// new a receiver to receive message and write back result.
-	receiver := newMessageReceiverOnServer(ctx, message,
+
+	msg, ok := message.(*pipeline.Message)
+	if !ok {
+		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
+		panic("cn server receive a message with unexpected type")
+	}
+
+	receiver := newMessageReceiverOnServer(ctx, msg,
 		cs, messageAcquirer, storeEngine, fileService, cli)
 
 	// rebuild pipeline to run and send query result back.
@@ -190,7 +198,7 @@ func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAn
 		}
 		// XXX some order check just for safety ?
 		if sequence != m.Sequence {
-			return moerr.NewInternalErrorNoCtx("Packages passed by morpc are out of order")
+			return moerr.NewInternalErrorNoCtx("Batch packages passed by morpc are out of order")
 		}
 		sequence++
 
@@ -577,6 +585,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			TableDef:     t.InsertCtx.TableDef,
 			ClusterTable: t.InsertCtx.ClusterTable,
 			ParentIdx:    t.InsertCtx.ParentIdx,
+			IdxIdx:       t.InsertCtx.IdxIdx,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
@@ -662,6 +671,19 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
+	case *right.Argument:
+		rels, poses := getRelColList(t.Result)
+		in.RightJoin = &pipeline.RightJoin{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			RelList:    rels,
+			ColList:    poses,
+			Expr:       t.Cond,
+			LeftTypes:  convertToPlanTypes(t.Left_typs),
+			RightTypes: convertToPlanTypes(t.Right_typs),
+			LeftCond:   t.Conditions[0],
+			RightCond:  t.Conditions[1],
+		}
 	case *limit.Argument:
 		in.Limit = t.Limit
 	case *loopanti.Argument:
@@ -699,6 +721,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			ColList: colList,
 			Expr:    t.Cond,
 			Types:   convertToPlanTypes(t.Typs),
+		}
+	case *loopmark.Argument:
+		in.MarkJoin = &pipeline.MarkJoin{
+			Expr:   t.Cond,
+			Types:  convertToPlanTypes(t.Typs),
+			Result: t.Result,
 		}
 	case *offset.Argument:
 		in.Offset = t.Offset
@@ -929,7 +957,17 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Result:     convertToResultPos(t.RelList, t.ColList),
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
-
+	case vm.Right:
+		t := opr.GetRightJoin()
+		v.Arg = &right.Argument{
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     convertToResultPos(t.RelList, t.ColList),
+			Left_typs:  convertToTypes(t.LeftTypes),
+			Right_typs: convertToTypes(t.RightTypes),
+			Cond:       t.Expr,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+		}
 	case vm.Limit:
 		v.Arg = &limit.Argument{Limit: opr.Limit}
 	case vm.LoopAnti:
@@ -1279,7 +1317,7 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	err := types.Decode(data, bat)
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
-		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)
+		bat.Vecs[i], err = bat.Vecs[i].Dup(mp)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				bat.Vecs[j].Free(mp)
