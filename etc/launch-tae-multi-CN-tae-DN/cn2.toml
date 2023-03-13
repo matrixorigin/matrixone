@@ -45,3 +45,7 @@ type = "distributed-tae"
 [cn.frontend]
 port = 16002
 unix-socket = "/tmp/mysql2.sock"
+
+[cn.rpc]
+send-queue-size = 2
+busy-queue-size = 1
