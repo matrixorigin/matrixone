@@ -39,6 +39,8 @@ type Counter struct {
 		DiskHit  atomic.Int64
 	}
 
+	FileServices map[string]*Counter
+
 	DistTAE struct {
 		MPool mpool.MPoolStats
 
