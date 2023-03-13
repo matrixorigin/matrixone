@@ -388,3 +388,9 @@ b    INT(32)    NO    PRI    null
 c    INT(32)    NO    PRI    null
 drop table t3;
 drop database test;
+drop database if exists test;
+create database test;
+use test;
+SHOW CREATE TABLE information_schema.columns;
+null
+drop database test;
