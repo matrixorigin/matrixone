@@ -45,6 +45,7 @@ type StatsInfoMap struct {
 	DataTypeMap map[string]types.T
 	BlockNumber int //detect if block number changes , update stats info map
 	TableCnt    float64
+	tableName   string
 }
 
 func NewStatsInfoMap() *StatsInfoMap {
@@ -62,7 +63,7 @@ func (sc *StatsInfoMap) NeedUpdate(currentBlockNum int) bool {
 	if sc.BlockNumber == 0 || sc.BlockNumber != currentBlockNum {
 		return true
 	}
-	return true
+	return false
 }
 
 func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
@@ -111,10 +112,10 @@ func GetHighNDVColumns(s *StatsInfoMap, b *Binding) []int32 {
 }
 
 func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) {
-
 	logutil.Infof("need to update statsCache for table %v", tableDef.Name)
 	s.BlockNumber = blockNumTotal
 	s.TableCnt = tableCnt
+	s.tableName = tableDef.Name
 	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
 	//set info in statsInfoMap
 	for i := range columns {
