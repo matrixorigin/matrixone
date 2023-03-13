@@ -242,3 +242,31 @@ show columns from t3;
 drop table t3;
 
 drop database test;
+
+-- show grants for role
+create role newrole;
+grant all on table *.* to newrole;
+grant create table, drop table on database *.* to newrole;
+create user newuser identified by 'passwd';
+grant newrole to newuser;
+show grants for 'newuser'@'localhost';
+drop user newuser;
+drop role newrole;
+
+-- show index test
+-- @bvt:issue#8392
+drop table if exists index01;
+create table index01(s varchar(20), id int);
+create index index1 on index01(s);
+show index from index01;
+drop table index01;
+
+drop table if exists index02;
+create table index02(id int PRIMARY KEY,name VARCHAR(255),age int);
+insert into index02 values(1,"Abby", 24);
+insert into index02 values(2,"Bob", 25);
+create unique index idx on index02(name);
+select * from index02;
+show index from index02;
+drop table index02;
+-- @bvt:issue
