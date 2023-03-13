@@ -119,6 +119,9 @@ type remoteBackend struct {
 	stopper     *stopper.Stopper
 	readStopper *stopper.Stopper
 	closeOnce   sync.Once
+	ctx         context.Context
+	cancel      context.CancelFunc
+	cancelOnce  sync.Once
 
 	options struct {
 		hasPayloadResponse bool
@@ -175,7 +178,7 @@ func NewRemoteBackend(
 		opt(rb)
 	}
 	rb.adjust()
-
+	rb.ctx, rb.cancel = context.WithCancel(context.Background())
 	rb.pool.futures = &sync.Pool{
 		New: func() interface{} {
 			return newFuture(rb.releaseFuture)
@@ -315,6 +318,9 @@ func (rb *remoteBackend) doSend(f *Future) error {
 }
 
 func (rb *remoteBackend) Close() {
+	rb.cancelOnce.Do(func() {
+		rb.cancel()
+	})
 	rb.stateMu.Lock()
 	if rb.stateMu.state == stateStopped {
 		rb.stateMu.Unlock()
@@ -504,7 +510,8 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 	}
 }
 
-func (rb *remoteBackend) fetch(ctx context.Context,
+func (rb *remoteBackend) fetch(
+	ctx context.Context,
 	messages []*Future,
 	maxFetchCount int) ([]*Future, bool) {
 	n := len(messages)
@@ -651,16 +658,24 @@ func (rb *remoteBackend) releaseFuture(f *Future) {
 	rb.pool.futures.Put(f)
 }
 
-func (rb *remoteBackend) resetConn() error {
-	rb.stateMu.Lock()
-	defer rb.stateMu.Unlock()
+func (rb *remoteBackend) running() bool {
+	rb.stateMu.RLock()
+	defer rb.stateMu.RUnlock()
+	return rb.runningLocked()
+}
 
+func (rb *remoteBackend) resetConn() error {
 	start := time.Now()
 	wait := time.Second
 	sleep := time.Millisecond * 200
 	for {
-		if !rb.runningLocked() {
+		if !rb.running() {
 			return moerr.NewBackendClosedNoCtx()
+		}
+		select {
+		case <-rb.ctx.Done():
+			return moerr.NewBackendClosedNoCtx()
+		default:
 		}
 
 		rb.logger.Info("start connect to remote")
@@ -668,7 +683,7 @@ func (rb *remoteBackend) resetConn() error {
 		err := rb.conn.Connect(rb.remote, rb.options.connectTimeout)
 		if err == nil {
 			rb.logger.Info("connect to remote succeed")
-			rb.activeReadLoop(true)
+			rb.activeReadLoop(false)
 			return nil
 		}
 		rb.logger.Error("init remote connection failed, retry later",
@@ -679,13 +694,32 @@ func (rb *remoteBackend) resetConn() error {
 			time.Sleep(sleep)
 			duration += sleep
 			if time.Since(start) > rb.options.connectTimeout {
+				return moerr.NewBackendCannotConnectNoCtx()
+			}
+			select {
+			case <-rb.ctx.Done():
 				return moerr.NewBackendClosedNoCtx()
+			default:
 			}
 			if duration >= wait {
 				break
 			}
 		}
 		wait += wait / 2
+
+		// reconnect failed, notify all future failed
+		rb.notifyAllWaitWritesFailed(moerr.NewBackendCannotConnectNoCtx())
+	}
+}
+
+func (rb *remoteBackend) notifyAllWaitWritesFailed(err error) {
+	for {
+		select {
+		case f := <-rb.writeC:
+			f.messageSended(err)
+		default:
+			return
+		}
 	}
 }
 

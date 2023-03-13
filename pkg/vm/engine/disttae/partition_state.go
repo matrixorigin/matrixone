@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/tidwall/btree"
 )
 
@@ -225,6 +226,7 @@ func (p *PartitionState) HandleRowsInsert(
 		)
 	}
 
+	var numInserted int64
 	for i, rowID := range rowIDVector {
 		trace.WithRegion(ctx, "handle a row", func() {
 
@@ -238,6 +240,7 @@ func (p *PartitionState) HandleRowsInsert(
 			if !ok {
 				entry = pivot
 				entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
+				numInserted++
 			}
 
 			entry.Batch = batch
@@ -261,6 +264,12 @@ func (p *PartitionState) HandleRowsInsert(
 	}
 
 	partitionStateProfileHandler.AddSample()
+	perfcounter.Update(ctx, func(c *perfcounter.Counter) {
+		c.DistTAE.Logtail.Entries.Add(1)
+		c.DistTAE.Logtail.InsertEntries.Add(1)
+		c.DistTAE.Logtail.InsertRows.Add(numInserted)
+		c.DistTAE.Logtail.ActiveRows.Add(numInserted)
+	})
 }
 
 func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch) {
@@ -298,6 +307,10 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	}
 
 	partitionStateProfileHandler.AddSample()
+	perfcounter.Update(ctx, func(c *perfcounter.Counter) {
+		c.DistTAE.Logtail.Entries.Add(1)
+		c.DistTAE.Logtail.DeleteEntries.Add(1)
+	})
 }
 
 func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Batch) {
@@ -313,6 +326,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 	commitTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
 	segmentIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[8]))
 
+	var numInserted, numDeleted int64
 	for i, blockID := range blockIDVector {
 		trace.WithRegion(ctx, "handle a row", func() {
 
@@ -324,6 +338,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			entry, ok := p.Blocks.Get(pivot)
 			if !ok {
 				entry = pivot
+				numInserted++
 			}
 
 			if location := metaLocationVector[i]; location != "" {
@@ -358,6 +373,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					}
 					// delete row entry
 					p.Rows.Delete(entry)
+					numDeleted++
 					// delete primary index entry
 					if len(entry.PrimaryIndexBytes) > 0 {
 						p.PrimaryIndex.Delete(&PrimaryIndexEntry{
@@ -373,6 +389,12 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 	}
 
 	partitionStateProfileHandler.AddSample()
+	perfcounter.Update(ctx, func(c *perfcounter.Counter) {
+		c.DistTAE.Logtail.Entries.Add(1)
+		c.DistTAE.Logtail.MetadataInsertEntries.Add(1)
+		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
+		c.DistTAE.Logtail.InsertBlocks.Add(numInserted)
+	})
 }
 
 func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Batch) {
@@ -403,4 +425,8 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	}
 
 	partitionStateProfileHandler.AddSample()
+	perfcounter.Update(ctx, func(c *perfcounter.Counter) {
+		c.DistTAE.Logtail.Entries.Add(1)
+		c.DistTAE.Logtail.MetadataDeleteEntries.Add(1)
+	})
 }
