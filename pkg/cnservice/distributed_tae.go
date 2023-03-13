@@ -54,7 +54,7 @@ func (s *service) initDistributedTAE(
 	if err != nil {
 		return err
 	}
-	colexec.Srv = colexec.NewService(hakeeper)
+	colexec.Srv = colexec.NewServer(hakeeper)
 	// engine
 	pu.StorageEngine = disttae.New(
 		ctx,
