@@ -29,7 +29,7 @@ import (
 var Srv *Server
 var CnAddr string
 
-func InitServer(client logservice.CNHAKeeperClient) *Server {
+func NewService(client logservice.CNHAKeeperClient) *Server {
 	if Srv != nil {
 		return Srv
 	}
