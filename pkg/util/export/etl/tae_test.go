@@ -63,7 +63,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	}
 	var services = make([]fileservice.FileService, 0, 1)
 	for _, config := range configs {
-		service, err := fileservice.NewFileService(config)
+		service, err := fileservice.NewFileService(config, nil)
 		require.Nil(t, err)
 		services = append(services, service)
 	}
@@ -171,7 +171,7 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 	}
 	var services = make([]fileservice.FileService, 0, 1)
 	for _, config := range configs {
-		service, err := fileservice.NewFileService(config)
+		service, err := fileservice.NewFileService(config, nil)
 		require.Nil(t, err)
 		services = append(services, service)
 	}
@@ -313,7 +313,7 @@ func TestTaeReadFile(t *testing.T) {
 	}
 	var services = make([]fileservice.FileService, 0, 1)
 	for _, config := range configs {
-		service, err := fileservice.NewFileService(config)
+		service, err := fileservice.NewFileService(config, nil)
 		require.Nil(t, err)
 		services = append(services, service)
 	}
@@ -385,7 +385,7 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 	}
 	var services = make([]fileservice.FileService, 0, 1)
 	for _, config := range configs {
-		service, err := fileservice.NewFileService(config)
+		service, err := fileservice.NewFileService(config, nil)
 		require.Nil(t, err)
 		services = append(services, service)
 	}

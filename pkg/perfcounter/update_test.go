@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,37 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package perfcounter
 
 import (
 	"context"
-
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"testing"
 )
 
-//TODO in-memory bytes cache
-
-type CacheKey struct {
-	Path   string
-	Offset int64
-	Size   int64
-}
-
-type CacheConfig struct {
-	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
-	DiskPath       string        `toml:"disk-path"`
-	DiskCapacity   toml.ByteSize `toml:"disk-capacity"`
-}
-
-type Cache interface {
-	Read(
-		ctx context.Context,
-		vector *IOVector,
-	) error
-	Update(
-		ctx context.Context,
-		vector *IOVector,
-		async bool,
-	) error
-	Flush()
+func BenchmarkUpdate(b *testing.B) {
+	counter := new(Counter)
+	ctx := WithCounter(context.Background(), counter)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		Update(ctx, func(c *Counter) {
+		})
+	}
 }

@@ -16,17 +16,17 @@ package fileservice
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/clockpolicy"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/lrupolicy"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"sync/atomic"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 type MemCache struct {
-	policy memcachepolicy.Policy
-	stats  *CacheStats
-	ch     chan func()
+	policy   memcachepolicy.Policy
+	ch       chan func()
+	counters []*perfcounter.Counter
 }
 
 func NewMemCache(opts ...Options) *MemCache {
@@ -43,9 +43,9 @@ func NewMemCache(opts ...Options) *MemCache {
 	}
 
 	return &MemCache{
-		policy: initOpts.policy,
-		stats:  new(CacheStats),
-		ch:     ch,
+		policy:   initOpts.policy,
+		ch:       ch,
+		counters: initOpts.counters,
 	}
 }
 
@@ -61,10 +61,17 @@ func WithClock(capacity int64) Options {
 	}
 }
 
+func WithPerfCounters(counters []*perfcounter.Counter) Options {
+	return func(o *options) {
+		o.counters = append(o.counters, counters...)
+	}
+}
+
 type Options func(*options)
 
 type options struct {
-	policy memcachepolicy.Policy
+	policy   memcachepolicy.Policy
+	counters []*perfcounter.Counter
 }
 
 func defaultOptions() options {
@@ -79,15 +86,15 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
-	_, span := trace.Start(ctx, "MemCache.Read")
-	defer span.End()
 
-	numHit := 0
+	var numHit, numRead int64
 	defer func() {
-		if m.stats != nil {
-			atomic.AddInt64(&m.stats.NumRead, int64(len(vector.Entries)))
-			atomic.AddInt64(&m.stats.NumHit, int64(numHit))
-		}
+		perfcounter.Update(ctx, func(c *perfcounter.Counter) {
+			c.Cache.Read.Add(numRead)
+			c.Cache.Hit.Add(numHit)
+			c.Cache.MemRead.Add(numRead)
+			c.Cache.MemHit.Add(numHit)
+		}, m.counters...)
 	}()
 
 	for i, entry := range vector.Entries {
@@ -103,18 +110,13 @@ func (m *MemCache) Read(
 			Size:   entry.Size,
 		}
 		obj, size, ok := m.policy.Get(key)
-		updateCounters(ctx, func(c *Counter) {
-			atomic.AddInt64(&c.MemCacheRead, 1)
-		})
+		numRead++
 		if ok {
 			vector.Entries[i].Object = obj
 			vector.Entries[i].ObjectSize = size
 			vector.Entries[i].done = true
 			numHit++
 			m.cacheHit()
-			updateCounters(ctx, func(c *Counter) {
-				atomic.AddInt64(&c.MemCacheHit, 1)
-			})
 		}
 	}
 
@@ -154,8 +156,4 @@ func (m *MemCache) Update(
 
 func (m *MemCache) Flush() {
 	m.policy.Flush()
-}
-
-func (m *MemCache) CacheStats() *CacheStats {
-	return m.stats
 }
