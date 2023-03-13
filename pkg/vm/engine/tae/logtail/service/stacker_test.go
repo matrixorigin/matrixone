@@ -25,7 +25,7 @@ func TestTableStacker(t *testing.T) {
 	require.Equal(t, 0, len(s.ListTable()))
 
 	table := mockTable(1, 2, 3)
-	id := TableID(table.String())
+	id := MarshalTableID(&table)
 
 	/* ---- 1. register table ---- */
 	s.Register(id, table)
@@ -50,7 +50,7 @@ func TestTableStacker(t *testing.T) {
 
 func TestTableInfo(t *testing.T) {
 	table := mockTable(1, 2, 3)
-	id := TableID(table.String())
+	id := MarshalTableID(&table)
 
 	info := newTableInfo(id, table)
 
