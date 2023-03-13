@@ -229,6 +229,7 @@ func TestCloseIdleBackends(t *testing.T) {
 		if v == 2 {
 			break
 		}
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	b, err = c.getBackend("b1", false)
@@ -247,6 +248,7 @@ func TestCloseIdleBackends(t *testing.T) {
 		assert.NoError(t, err)
 		for {
 			assert.NoError(t, st.Send(ctx, newTestMessage(1)))
+			time.Sleep(time.Millisecond * 10)
 		}
 	}()
 
@@ -271,6 +273,7 @@ func TestCloseIdleBackends(t *testing.T) {
 				return
 			}
 		}
+		time.Sleep(time.Millisecond * 10)
 	}
 }
 
