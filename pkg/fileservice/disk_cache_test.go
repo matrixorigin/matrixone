@@ -28,7 +28,7 @@ func TestDiskCache(t *testing.T) {
 	ctx := context.Background()
 
 	// new
-	cache, err := NewDiskCache(dir, 1024)
+	cache, err := NewDiskCache(dir, 1024, nil)
 	assert.Nil(t, err)
 
 	// update
@@ -106,12 +106,12 @@ func TestDiskCache(t *testing.T) {
 	testRead(cache)
 
 	// new cache instance and read
-	cache, err = NewDiskCache(dir, 1024)
+	cache, err = NewDiskCache(dir, 1024, nil)
 	assert.Nil(t, err)
 	testRead(cache)
 
 	// new cache instance and update
-	cache, err = NewDiskCache(dir, 1024)
+	cache, err = NewDiskCache(dir, 1024, nil)
 	assert.Nil(t, err)
 	testUpdate(cache)
 

@@ -34,7 +34,7 @@ func TmpNewFileservice(dir string) fileservice.FileService {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c)
+	service, err := fileservice.NewFileService(c, nil)
 	if err != nil {
 		err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("NewFileService failed: %s", err.Error()))
 		panic(any(err))
