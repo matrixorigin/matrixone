@@ -77,7 +77,7 @@ func TestDec64(t *testing.T) {
 		t.Fatalf("decimal64 add failed")
 	}
 
-	res := vector.MustTCols[types.Decimal64](cv)
+	res := vector.MustFixedCol[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
 		d := types.Decimal64(as[i] + bs[i])
 		if res[i] != d {
@@ -104,7 +104,7 @@ func TestDec128(t *testing.T) {
 		t.Fatalf("decimal128 add failed")
 	}
 
-	res := vector.MustTCols[types.Decimal128](cv)
+	res := vector.MustFixedCol[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
 		d := types.Decimal128{B0_63: uint64(as[i] + bs[i]), B64_127: 0}
 		if res[i] != d {
@@ -131,7 +131,7 @@ func TestDec64OfOppNumber(t *testing.T) {
 		t.Fatalf("decimal64 add failed")
 	}
 
-	res := vector.MustTCols[types.Decimal64](cv)
+	res := vector.MustFixedCol[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
 		d := types.Decimal64(as[i] + bs[i])
 		if res[i] != d {
@@ -158,7 +158,7 @@ func TestDec128OfOppNumber(t *testing.T) {
 		t.Fatalf("decimal128 add failed")
 	}
 
-	res := vector.MustTCols[types.Decimal128](cv)
+	res := vector.MustFixedCol[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
 		d := types.Decimal128{B0_63: uint64(as[i] + bs[i]), B64_127: 0}
 		if res[i] != d {

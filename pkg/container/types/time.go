@@ -226,13 +226,13 @@ func ParseInt64ToTime(input int64, scale int32) (Time, error) {
 	return ParseTime(s, scale)
 }
 
-func ParseDecimal64lToTime(input Decimal64, scale1, scale2 int32) (Time, error) {
+func ParseDecimal64ToTime(input Decimal64, scale1, scale2 int32) (Time, error) {
 	input, _ = input.Scale(scale2 - scale1)
 	s := input.Format(scale2)
 	return ParseTime(s, scale2)
 }
 
-func ParseDecimal128lToTime(input Decimal128, scale1, scale2 int32) (Time, error) {
+func ParseDecimal128ToTime(input Decimal128, scale1, scale2 int32) (Time, error) {
 	input, _ = input.Scale(scale2 - scale1)
 	s := input.Format(scale2)
 	return ParseTime(s, scale2)

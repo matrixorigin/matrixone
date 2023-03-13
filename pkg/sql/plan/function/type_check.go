@@ -454,6 +454,11 @@ func initTypeCheckRelated() {
 			}
 		}
 	}
+	{ // uuid
+		for _, t := range strings {
+			castTable[types.T_uuid][t] = true
+		}
+	}
 
 	// init preferredTypeConvert
 	preferredConversion := map[types.T][]types.T{

@@ -176,8 +176,9 @@ func TestOctInt64(t *testing.T) {
 func TestOctScalar(t *testing.T) {
 	procs := testutil.NewProc()
 	vecs := []*vector.Vector{testutil.MakeInt64Vector([]int64{-9223372036854775808}, nil)}
-	vecs[0].MakeScalar(1)
-	e1, _, _ := types.Parse128("1000000000000000000000")
+	vecs[0].SetClass(vector.CONSTANT)
+	vecs[0].SetLength(1)
+	e1, _ := types.ParseDecimal128("1000000000000000000000", 64, 0)
 	expected := []types.Decimal128{e1}
 
 	t.Run("oct scalar test", func(t *testing.T) {
@@ -190,8 +191,8 @@ func TestOctScalar(t *testing.T) {
 }
 
 func checkOctResult(t *testing.T, result *vector.Vector, expected []types.Decimal128, isScalar bool) {
-	col := result.Col.([]types.Decimal128)
+	col := vector.MustFixedCol[types.Decimal128](result)
 
 	require.Equal(t, expected, col)
-	require.Equal(t, isScalar, result.IsScalar())
+	require.Equal(t, isScalar, result.IsConst())
 }

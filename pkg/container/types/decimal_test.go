@@ -20,10 +20,10 @@ import (
 	"testing"
 )
 
-func Test1(t *testing.T) {
-	x, y, z := Parse128("99999999999999999999999999999999999999")
-	if z == nil {
-		fmt.Println(x, y)
+func TestParse128(t *testing.T) {
+	_, _, z := Parse128("99999999999999999999999999999999999999")
+	if z != nil {
+		panic("wrong")
 	}
 }
 func TestDecimalFloat(t *testing.T) {

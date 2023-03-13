@@ -29,27 +29,27 @@ import (
 )
 
 func Decimal64VecSub(xs, ys, rs *vector.Vector) (err error) {
-	xt := vector.MustTCols[types.Decimal64](xs)
-	yt := vector.MustTCols[types.Decimal64](ys)
-	rt := vector.MustTCols[types.Decimal64](rs)
-	if xs.Typ.Scale > ys.Typ.Scale {
-		rs.Typ.Scale = xs.Typ.Scale
+	xt := vector.MustFixedCol[types.Decimal64](xs)
+	yt := vector.MustFixedCol[types.Decimal64](ys)
+	rt := vector.MustFixedCol[types.Decimal64](rs)
+	if xs.GetType().Scale > ys.GetType().Scale {
+		rs.GetType().Scale = xs.GetType().Scale
 	} else {
-		rs.Typ.Scale = ys.Typ.Scale
+		rs.GetType().Scale = ys.GetType().Scale
 	}
 	n := len(rt)
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		for i := 0; i < n; i++ {
-			rt[i], _, err = xt[0].Sub(yt[i], xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], _, err = xt[0].Sub(yt[i], xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
 		}
 		return
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		for i := 0; i < n; i++ {
-			rt[i], _, err = xt[i].Sub(yt[0], xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], _, err = xt[i].Sub(yt[0], xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
@@ -57,7 +57,7 @@ func Decimal64VecSub(xs, ys, rs *vector.Vector) (err error) {
 		return
 	}
 	for i := 0; i < n; i++ {
-		rt[i], _, err = xt[i].Sub(yt[i], xs.Typ.Scale, ys.Typ.Scale)
+		rt[i], _, err = xt[i].Sub(yt[i], xs.GetType().Scale, ys.GetType().Scale)
 		if err != nil {
 			return
 		}
@@ -66,27 +66,27 @@ func Decimal64VecSub(xs, ys, rs *vector.Vector) (err error) {
 }
 
 func Decimal128VecSub(xs, ys, rs *vector.Vector) (err error) {
-	xt := vector.MustTCols[types.Decimal128](xs)
-	yt := vector.MustTCols[types.Decimal128](ys)
-	rt := vector.MustTCols[types.Decimal128](rs)
-	if xs.Typ.Scale > ys.Typ.Scale {
-		rs.Typ.Scale = xs.Typ.Scale
+	xt := vector.MustFixedCol[types.Decimal128](xs)
+	yt := vector.MustFixedCol[types.Decimal128](ys)
+	rt := vector.MustFixedCol[types.Decimal128](rs)
+	if xs.GetType().Scale > ys.GetType().Scale {
+		rs.GetType().Scale = xs.GetType().Scale
 	} else {
-		rs.Typ.Scale = ys.Typ.Scale
+		rs.GetType().Scale = ys.GetType().Scale
 	}
 	n := len(rt)
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		for i := 0; i < n; i++ {
-			rt[i], _, err = xt[0].Sub(yt[i], xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], _, err = xt[0].Sub(yt[i], xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
 		}
 		return
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		for i := 0; i < n; i++ {
-			rt[i], _, err = xt[i].Sub(yt[0], xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], _, err = xt[i].Sub(yt[0], xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
@@ -94,7 +94,7 @@ func Decimal128VecSub(xs, ys, rs *vector.Vector) (err error) {
 		return
 	}
 	for i := 0; i < n; i++ {
-		rt[i], _, err = xt[i].Sub(yt[i], xs.Typ.Scale, ys.Typ.Scale)
+		rt[i], _, err = xt[i].Sub(yt[i], xs.GetType().Scale, ys.GetType().Scale)
 		if err != nil {
 			return
 		}
@@ -103,9 +103,9 @@ func Decimal128VecSub(xs, ys, rs *vector.Vector) (err error) {
 }
 
 func DatetimeSub(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Datetime](xs)
-	yt := vector.MustTCols[types.Datetime](ys)
-	rt := vector.MustTCols[int64](rs)
+	xt := vector.MustFixedCol[types.Datetime](xs)
+	yt := vector.MustFixedCol[types.Datetime](ys)
+	rt := vector.MustFixedCol[int64](rs)
 
 	if len(xt) == 1 && len(yt) == 1 {
 		res := xt[0].DatetimeMinusWithSecond(yt[0])

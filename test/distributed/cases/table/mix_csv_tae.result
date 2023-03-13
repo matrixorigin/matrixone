@@ -35,10 +35,10 @@ cnt
 143
 select count(1) as cnt from statement_info group by __mo_filepath order by cnt;
 cnt
+52
 72
 76
-81
-118
+91
 select count(statement_id) as cnt from statement_info where __mo_filepath like "%/tae/%";
 cnt
 143

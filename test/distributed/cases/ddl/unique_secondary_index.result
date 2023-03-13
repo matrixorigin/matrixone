@@ -233,33 +233,23 @@ code_id    code_type    code_no    code_rule_no    org_no
 1009    39    8744    0000243    yy10
 truncate table t_code_rule;
 load data infile  '$resources/load_data/unique_index_duplicate.csv' into table t_code_rule;
+Duplicate entry '30' for key '__mo_index_idx_col'
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 code_id    code_type    code_no    code_rule_no    org_no
-1000    30    18723    0000234    yy01
-1001    31    9999    0000235    yy02
-1002    32    8783    0000236    yy03
-1003    30    6783    0000237    yy04
-1004    34    8394    0000238    yy05
-1005    null    1111    0000239    yy06
-1006    36    5983    0000240    yy07
-1007    37    9844    0000241    yy08
-1008    38    2378    0000242    yy09
-1009    39    8744    0000243    yy10
 create table index_temp( col1 bigint(20) NOT NULL ,col2 varchar(50) NOT NULL,col3 varchar(50) NOT NULL,col4 varchar(50) NOT NULL,col5 varchar(255) NOT NULL,col6 varchar(50) NOT NULL,col7 varchar(50) NOT NULL,col8 varchar(50) NOT NULL,col9 int(11) ,col10 varchar(50) DEFAULT NULL,col11 varchar(255),col12 datetime NOT NULL,col13 varchar(50) DEFAULT NULL,col14 datetime DEFAULT NULL,col15 varchar(50) DEFAULT NULL,col16 varchar(20)  NOT NULL DEFAULT 'N');
 load data infile  '$resources/load_data/unique_index_file.csv' into table index_temp;
 insert into t_code_rule select * from index_temp;
-Duplicate entry '1000' for key 'code_id'
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 code_id    code_type    code_no    code_rule_no    org_no
 1000    30    18723    0000234    yy01
 1001    31    9999    0000235    yy02
 1002    32    8783    0000236    yy03
-1003    30    6783    0000237    yy04
+1003    33    6783    0000237    yy04
 1004    34    8394    0000238    yy05
-1005    null    1111    0000239    yy06
+1005    21    1111    0000239    yy06
 1006    36    5983    0000240    yy07
 1007    37    9844    0000241    yy08
-1008    38    2378    0000242    yy09
+1008    null    2378    0000242    yy09
 1009    39    8744    0000243    yy10
 truncate table index_temp;
 load data infile  '$resources/load_data/unique_index_duplicate.csv' into table index_temp;

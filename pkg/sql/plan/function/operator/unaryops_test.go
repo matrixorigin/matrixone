@@ -46,7 +46,7 @@ func TestUnaryMinusDecimal64(t *testing.T) {
 	testProc := testutil.NewProc()
 	output, err := UnaryMinusDecimal64([]*vector.Vector{input}, testProc)
 	require.NoError(t, err)
-	outputCol := vector.MustTCols[types.Decimal64](output)
+	outputCol := vector.MustFixedCol[types.Decimal64](output)
 	expectedCol := []types.Decimal64{types.Decimal64(123).Minus(), types.Decimal64(234).Minus(), types.Decimal64(345).Minus(), types.Decimal64(0)}
 	for i, c := range outputCol {
 		require.True(t, c.Compare(expectedCol[i]) == 0)
@@ -58,7 +58,7 @@ func TestUnaryMinusDecimal128(t *testing.T) {
 	testProc := testutil.NewProc()
 	output, err := UnaryMinusDecimal128([]*vector.Vector{input}, testProc)
 	require.NoError(t, err)
-	outputCol := vector.MustTCols[types.Decimal128](output)
+	outputCol := vector.MustFixedCol[types.Decimal128](output)
 	expectedCol := []types.Decimal128{types.Decimal128{B0_63: 123, B64_127: 0}.Minus(), types.Decimal128{B0_63: 234, B64_127: 0}.Minus(), types.Decimal128{B0_63: 345, B64_127: 0}.Minus(), {B0_63: 0, B64_127: 0}}
 	for i, c := range outputCol {
 		require.True(t, c.Compare(expectedCol[i]) == 0)

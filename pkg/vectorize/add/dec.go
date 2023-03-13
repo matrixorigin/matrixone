@@ -20,7 +20,6 @@ package add
 #cgo CFLAGS: -I../../../cgo
 #cgo LDFLAGS: -L../../../cgo -lmo -lm
 */
-import "C"
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,28 +27,28 @@ import (
 )
 
 func Decimal64VecAdd(xs, ys, rs *vector.Vector) (err error) {
-	xt := vector.MustTCols[types.Decimal64](xs)
-	yt := vector.MustTCols[types.Decimal64](ys)
-	rt := vector.MustTCols[types.Decimal64](rs)
-	if xs.Typ.Scale > ys.Typ.Scale {
-		rs.Typ.Scale = xs.Typ.Scale
+	xt := vector.MustFixedCol[types.Decimal64](xs)
+	yt := vector.MustFixedCol[types.Decimal64](ys)
+	rt := vector.MustFixedCol[types.Decimal64](rs)
+	if xs.GetType().Scale > ys.GetType().Scale {
+		rs.GetType().Scale = xs.GetType().Scale
 	} else {
-		rs.Typ.Scale = ys.Typ.Scale
+		rs.GetType().Scale = ys.GetType().Scale
 	}
 	n := len(rt)
 	err = nil
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		for i := 0; i < n; i++ {
-			rt[i], _, err = xt[0].Add(yt[i], xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], _, err = xt[0].Add(yt[i], xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
 		}
 		return
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		for i := 0; i < n; i++ {
-			rt[i], _, err = xt[i].Add(yt[0], xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], _, err = xt[i].Add(yt[0], xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
@@ -57,35 +56,35 @@ func Decimal64VecAdd(xs, ys, rs *vector.Vector) (err error) {
 		return
 	}
 	for i := 0; i < n; i++ {
-		rt[i], _, err = xt[i].Add(yt[i], xs.Typ.Scale, ys.Typ.Scale)
+		rt[i], _, err = xt[i].Add(yt[i], xs.GetType().Scale, ys.GetType().Scale)
 
 	}
 	return
 }
 
 func Decimal128VecAdd(xs, ys, rs *vector.Vector) (err error) {
-	xt := vector.MustTCols[types.Decimal128](xs)
-	yt := vector.MustTCols[types.Decimal128](ys)
-	rt := vector.MustTCols[types.Decimal128](rs)
-	if xs.Typ.Scale > ys.Typ.Scale {
-		rs.Typ.Scale = xs.Typ.Scale
+	xt := vector.MustFixedCol[types.Decimal128](xs)
+	yt := vector.MustFixedCol[types.Decimal128](ys)
+	rt := vector.MustFixedCol[types.Decimal128](rs)
+	if xs.GetType().Scale > ys.GetType().Scale {
+		rs.GetType().Scale = xs.GetType().Scale
 	} else {
-		rs.Typ.Scale = ys.Typ.Scale
+		rs.GetType().Scale = ys.GetType().Scale
 	}
 	n := len(rt)
 	err = nil
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		for i := 0; i < n; i++ {
-			rt[i], _, err = xt[0].Add(yt[i], xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], _, err = xt[0].Add(yt[i], xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
 		}
 		return
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		for i := 0; i < n; i++ {
-			rt[i], _, err = xt[i].Add(yt[0], xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], _, err = xt[i].Add(yt[0], xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
@@ -93,7 +92,7 @@ func Decimal128VecAdd(xs, ys, rs *vector.Vector) (err error) {
 		return
 	}
 	for i := 0; i < n; i++ {
-		rt[i], _, err = xt[i].Add(yt[i], xs.Typ.Scale, ys.Typ.Scale)
+		rt[i], _, err = xt[i].Add(yt[i], xs.GetType().Scale, ys.GetType().Scale)
 		if err != nil {
 			return
 		}

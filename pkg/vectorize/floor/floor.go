@@ -294,9 +294,13 @@ func floorFloat64(xs, rs []float64, digits int64) []float64 {
 	return rs
 }
 
-func floorDecimal128(scale int32, xs, rs []types.Decimal128, _ int64) []types.Decimal128 {
+func floorDecimal128(scale int32, xs, rs []types.Decimal128, digits int64) []types.Decimal128 {
+	digit := int32(digits)
+	if digit > scale {
+		digit = scale
+	}
 	for i := range xs {
-		strs := strings.Split(xs[i].Format(scale), ".")
+		strs := strings.Split(xs[i].Format(scale-digit), ".")
 		x, _, _ := types.Parse128(strs[0])
 		if strs[0][0] != '-' || len(strs) == 1 {
 			rs[i] = x

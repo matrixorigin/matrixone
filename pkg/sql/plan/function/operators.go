@@ -41,7 +41,7 @@ func initOperators() {
 var operators = map[int]Functions{
 	BINARY: {
 		Id:     BINARY,
-		Flag:   plan.Function_PRODUCE_NO_NULL,
+		Flag:   plan.Function_STRICT,
 		Layout: CAST_EXPRESSION,
 		Overloads: []Function{
 			{
@@ -3223,9 +3223,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint8},
 				ReturnTyp: types.T_uint8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint8)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3233,9 +3231,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint16},
 				ReturnTyp: types.T_uint16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint16)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3243,9 +3239,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint32},
 				ReturnTyp: types.T_uint32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3253,9 +3247,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_uint64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]uint64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3263,9 +3255,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int8},
 				ReturnTyp: types.T_int8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int8)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3273,9 +3263,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int16},
 				ReturnTyp: types.T_int16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int16)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3283,9 +3271,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int32},
 				ReturnTyp: types.T_int32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3293,9 +3279,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]int64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3303,9 +3287,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_float32},
 				ReturnTyp: types.T_float32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]float32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3313,9 +3295,7 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]float64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3325,9 +3305,7 @@ var operators = map[int]Functions{
 					return types.New(types.T_decimal64, 18, parameters[0].Scale)
 				},
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]types.Decimal64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 			{
@@ -3337,9 +3315,7 @@ var operators = map[int]Functions{
 					return types.New(types.T_decimal128, 38, parameters[0].Scale)
 				},
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					data := vs[0].Col.([]types.Decimal128)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
-					return vec, nil
+					return vs[0].Dup(proc.Mp())
 				},
 			},
 		},

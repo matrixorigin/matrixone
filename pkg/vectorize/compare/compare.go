@@ -39,20 +39,20 @@ const (
 
 func GetScalarFlag(xs, ys, rs *vector.Vector) int {
 	flag := 0
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		flag |= LEFT_IS_SCALAR
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		flag |= RIGHT_IS_SCALAR
 	}
 	return flag
 }
 
 func NumericEqual[T constraints.Integer | constraints.Float | bool](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Numeric_VecEq(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(int32(xs.Typ.Oid)))
+		(*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(int32(xs.GetType().Oid)))
 	if rc != 0 {
 		return moerr.NewInvalidArgNoCtx("numeric equal", "")
 	}
@@ -60,10 +60,10 @@ func NumericEqual[T constraints.Integer | constraints.Float | bool](xs, ys, rs *
 }
 
 func NumericNotEqual[T constraints.Integer | constraints.Float | bool](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Numeric_VecNe(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(int32(xs.Typ.Oid)))
+		(*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(int32(xs.GetType().Oid)))
 	if rc != 0 {
 		return moerr.NewInvalidArgNoCtx("numeric not equal", "")
 	}
@@ -71,10 +71,10 @@ func NumericNotEqual[T constraints.Integer | constraints.Float | bool](xs, ys, r
 }
 
 func NumericGreatThan[T constraints.Integer | constraints.Float | bool](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Numeric_VecGt(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(int32(xs.Typ.Oid)))
+		(*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(int32(xs.GetType().Oid)))
 	if rc != 0 {
 		return moerr.NewInvalidArgNoCtx("numeric greater than", "")
 	}
@@ -82,10 +82,10 @@ func NumericGreatThan[T constraints.Integer | constraints.Float | bool](xs, ys, 
 }
 
 func NumericGreatEqual[T constraints.Integer | constraints.Float | bool](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Numeric_VecGe(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(int32(xs.Typ.Oid)))
+		(*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(int32(xs.GetType().Oid)))
 	if rc != 0 {
 		return moerr.NewInvalidArgNoCtx("numeric greater equal", "")
 	}
@@ -93,10 +93,10 @@ func NumericGreatEqual[T constraints.Integer | constraints.Float | bool](xs, ys,
 }
 
 func NumericLessThan[T constraints.Integer | constraints.Float | bool](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Numeric_VecLt(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(int32(xs.Typ.Oid)))
+		(*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(int32(xs.GetType().Oid)))
 	if rc != 0 {
 		return moerr.NewInvalidArgNoCtx("numeric less than", "")
 	}
@@ -104,10 +104,10 @@ func NumericLessThan[T constraints.Integer | constraints.Float | bool](xs, ys, r
 }
 
 func NumericLessEqual[T constraints.Integer | constraints.Float | bool](xs, ys, rs *vector.Vector) error {
-	xt, yt, rt := vector.MustTCols[T](xs), vector.MustTCols[T](ys), vector.MustTCols[bool](rs)
+	xt, yt, rt := vector.MustFixedCol[T](xs), vector.MustFixedCol[T](ys), vector.MustFixedCol[bool](rs)
 	flag := GetScalarFlag(xs, ys, rs)
 	rc := C.Numeric_VecLe(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
-		(*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(int32(xs.Typ.Oid)))
+		(*C.uint64_t)(nulls.Ptr(rs.GetNulls())), C.int32_t(flag), C.int32_t(int32(xs.GetType().Oid)))
 	if rc != 0 {
 		return moerr.NewInvalidArgNoCtx("numeric less equal", "")
 	}
@@ -115,12 +115,12 @@ func NumericLessEqual[T constraints.Integer | constraints.Float | bool](xs, ys, 
 }
 
 func Decimal64VecEq(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal64](xs)
-	yt := vector.MustTCols[types.Decimal64](ys)
-	rt := vector.MustTCols[bool](rs)
+	xt := vector.MustFixedCol[types.Decimal64](xs)
+	yt := vector.MustFixedCol[types.Decimal64](ys)
+	rt := vector.MustFixedCol[bool](rs)
 	n := len(rt)
-	m := ys.Typ.Scale - xs.Typ.Scale
-	if xs.IsScalar() {
+	m := ys.GetType().Scale - xs.GetType().Scale
+	if xs.IsConst() {
 		if m >= 0 {
 			x, _ := xt[0].Scale(m)
 			for i := 0; i < n; i++ {
@@ -134,7 +134,7 @@ func Decimal64VecEq(xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		if m >= 0 {
 			for i := 0; i < n; i++ {
 				x, _ := xt[i].Scale(m)
@@ -162,12 +162,12 @@ func Decimal64VecEq(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal128VecEq(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal128](xs)
-	yt := vector.MustTCols[types.Decimal128](ys)
-	rt := vector.MustTCols[bool](rs)
+	xt := vector.MustFixedCol[types.Decimal128](xs)
+	yt := vector.MustFixedCol[types.Decimal128](ys)
+	rt := vector.MustFixedCol[bool](rs)
 	n := len(rt)
-	m := ys.Typ.Scale - xs.Typ.Scale
-	if xs.IsScalar() {
+	m := ys.GetType().Scale - xs.GetType().Scale
+	if xs.IsConst() {
 		if m >= 0 {
 			x, _ := xt[0].Scale(m)
 			for i := 0; i < n; i++ {
@@ -181,7 +181,7 @@ func Decimal128VecEq(xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		if m >= 0 {
 			for i := 0; i < n; i++ {
 				x, _ := xt[i].Scale(m)
@@ -209,12 +209,12 @@ func Decimal128VecEq(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal64VecNe(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal64](xs)
-	yt := vector.MustTCols[types.Decimal64](ys)
-	rt := vector.MustTCols[bool](rs)
+	xt := vector.MustFixedCol[types.Decimal64](xs)
+	yt := vector.MustFixedCol[types.Decimal64](ys)
+	rt := vector.MustFixedCol[bool](rs)
 	n := len(rt)
-	m := ys.Typ.Scale - xs.Typ.Scale
-	if xs.IsScalar() {
+	m := ys.GetType().Scale - xs.GetType().Scale
+	if xs.IsConst() {
 		if m >= 0 {
 			x, _ := xt[0].Scale(m)
 			for i := 0; i < n; i++ {
@@ -228,7 +228,7 @@ func Decimal64VecNe(xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		if m >= 0 {
 			for i := 0; i < n; i++ {
 				x, _ := xt[i].Scale(m)
@@ -256,12 +256,12 @@ func Decimal64VecNe(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal128VecNe(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal128](xs)
-	yt := vector.MustTCols[types.Decimal128](ys)
-	rt := vector.MustTCols[bool](rs)
+	xt := vector.MustFixedCol[types.Decimal128](xs)
+	yt := vector.MustFixedCol[types.Decimal128](ys)
+	rt := vector.MustFixedCol[bool](rs)
 	n := len(rt)
-	m := ys.Typ.Scale - xs.Typ.Scale
-	if xs.IsScalar() {
+	m := ys.GetType().Scale - xs.GetType().Scale
+	if xs.IsConst() {
 		if m >= 0 {
 			x, _ := xt[0].Scale(m)
 			for i := 0; i < n; i++ {
@@ -275,7 +275,7 @@ func Decimal128VecNe(xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		if m >= 0 {
 			for i := 0; i < n; i++ {
 				x, _ := xt[i].Scale(m)
@@ -303,12 +303,12 @@ func Decimal128VecNe(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal64VecGt(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal64](xs)
-	yt := vector.MustTCols[types.Decimal64](ys)
-	rt := vector.MustTCols[bool](rs)
+	xt := vector.MustFixedCol[types.Decimal64](xs)
+	yt := vector.MustFixedCol[types.Decimal64](ys)
+	rt := vector.MustFixedCol[bool](rs)
 	n := len(rt)
-	m := ys.Typ.Scale - xs.Typ.Scale
-	if xs.IsScalar() {
+	m := ys.GetType().Scale - xs.GetType().Scale
+	if xs.IsConst() {
 		if m >= 0 {
 			x, _ := xt[0].Scale(m)
 			for i := 0; i < n; i++ {
@@ -322,7 +322,7 @@ func Decimal64VecGt(xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		if m >= 0 {
 			for i := 0; i < n; i++ {
 				x, _ := xt[i].Scale(m)
@@ -350,12 +350,12 @@ func Decimal64VecGt(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal128VecGt(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal128](xs)
-	yt := vector.MustTCols[types.Decimal128](ys)
-	rt := vector.MustTCols[bool](rs)
+	xt := vector.MustFixedCol[types.Decimal128](xs)
+	yt := vector.MustFixedCol[types.Decimal128](ys)
+	rt := vector.MustFixedCol[bool](rs)
 	n := len(rt)
-	m := ys.Typ.Scale - xs.Typ.Scale
-	if xs.IsScalar() {
+	m := ys.GetType().Scale - xs.GetType().Scale
+	if xs.IsConst() {
 		if m >= 0 {
 			x, _ := xt[0].Scale(m)
 			for i := 0; i < n; i++ {
@@ -369,7 +369,7 @@ func Decimal128VecGt(xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		if m >= 0 {
 			for i := 0; i < n; i++ {
 				x, _ := xt[i].Scale(m)
@@ -397,12 +397,12 @@ func Decimal128VecGt(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal64VecGe(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal64](xs)
-	yt := vector.MustTCols[types.Decimal64](ys)
-	rt := vector.MustTCols[bool](rs)
+	xt := vector.MustFixedCol[types.Decimal64](xs)
+	yt := vector.MustFixedCol[types.Decimal64](ys)
+	rt := vector.MustFixedCol[bool](rs)
 	n := len(rt)
-	m := ys.Typ.Scale - xs.Typ.Scale
-	if xs.IsScalar() {
+	m := ys.GetType().Scale - xs.GetType().Scale
+	if xs.IsConst() {
 		if m >= 0 {
 			x, _ := xt[0].Scale(m)
 			for i := 0; i < n; i++ {
@@ -416,7 +416,7 @@ func Decimal64VecGe(xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		if m >= 0 {
 			for i := 0; i < n; i++ {
 				x, _ := xt[i].Scale(m)
@@ -444,12 +444,12 @@ func Decimal64VecGe(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal128VecGe(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal128](xs)
-	yt := vector.MustTCols[types.Decimal128](ys)
-	rt := vector.MustTCols[bool](rs)
+	xt := vector.MustFixedCol[types.Decimal128](xs)
+	yt := vector.MustFixedCol[types.Decimal128](ys)
+	rt := vector.MustFixedCol[bool](rs)
 	n := len(rt)
-	m := ys.Typ.Scale - xs.Typ.Scale
-	if xs.IsScalar() {
+	m := ys.GetType().Scale - xs.GetType().Scale
+	if xs.IsConst() {
 		if m >= 0 {
 			x, _ := xt[0].Scale(m)
 			for i := 0; i < n; i++ {
@@ -463,7 +463,7 @@ func Decimal128VecGe(xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		if m >= 0 {
 			for i := 0; i < n; i++ {
 				x, _ := xt[i].Scale(m)
@@ -491,12 +491,12 @@ func Decimal128VecGe(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal64VecLt(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal64](xs)
-	yt := vector.MustTCols[types.Decimal64](ys)
-	rt := vector.MustTCols[bool](rs)
+	xt := vector.MustFixedCol[types.Decimal64](xs)
+	yt := vector.MustFixedCol[types.Decimal64](ys)
+	rt := vector.MustFixedCol[bool](rs)
 	n := len(rt)
-	m := ys.Typ.Scale - xs.Typ.Scale
-	if xs.IsScalar() {
+	m := ys.GetType().Scale - xs.GetType().Scale
+	if xs.IsConst() {
 		if m >= 0 {
 			x, _ := xt[0].Scale(m)
 			for i := 0; i < n; i++ {
@@ -510,7 +510,7 @@ func Decimal64VecLt(xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		if m >= 0 {
 			for i := 0; i < n; i++ {
 				x, _ := xt[i].Scale(m)
@@ -538,12 +538,12 @@ func Decimal64VecLt(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal128VecLt(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal128](xs)
-	yt := vector.MustTCols[types.Decimal128](ys)
-	rt := vector.MustTCols[bool](rs)
+	xt := vector.MustFixedCol[types.Decimal128](xs)
+	yt := vector.MustFixedCol[types.Decimal128](ys)
+	rt := vector.MustFixedCol[bool](rs)
 	n := len(rt)
-	m := ys.Typ.Scale - xs.Typ.Scale
-	if xs.IsScalar() {
+	m := ys.GetType().Scale - xs.GetType().Scale
+	if xs.IsConst() {
 		if m >= 0 {
 			x, _ := xt[0].Scale(m)
 			for i := 0; i < n; i++ {
@@ -557,7 +557,7 @@ func Decimal128VecLt(xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		if m >= 0 {
 			for i := 0; i < n; i++ {
 				x, _ := xt[i].Scale(m)
@@ -585,12 +585,12 @@ func Decimal128VecLt(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal64VecLe(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal64](xs)
-	yt := vector.MustTCols[types.Decimal64](ys)
-	rt := vector.MustTCols[bool](rs)
+	xt := vector.MustFixedCol[types.Decimal64](xs)
+	yt := vector.MustFixedCol[types.Decimal64](ys)
+	rt := vector.MustFixedCol[bool](rs)
 	n := len(rt)
-	m := ys.Typ.Scale - xs.Typ.Scale
-	if xs.IsScalar() {
+	m := ys.GetType().Scale - xs.GetType().Scale
+	if xs.IsConst() {
 		if m >= 0 {
 			x, _ := xt[0].Scale(m)
 			for i := 0; i < n; i++ {
@@ -604,7 +604,7 @@ func Decimal64VecLe(xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		if m >= 0 {
 			for i := 0; i < n; i++ {
 				x, _ := xt[i].Scale(m)
@@ -632,12 +632,12 @@ func Decimal64VecLe(xs, ys, rs *vector.Vector) error {
 }
 
 func Decimal128VecLe(xs, ys, rs *vector.Vector) error {
-	xt := vector.MustTCols[types.Decimal128](xs)
-	yt := vector.MustTCols[types.Decimal128](ys)
-	rt := vector.MustTCols[bool](rs)
+	xt := vector.MustFixedCol[types.Decimal128](xs)
+	yt := vector.MustFixedCol[types.Decimal128](ys)
+	rt := vector.MustFixedCol[bool](rs)
 	n := len(rt)
-	m := ys.Typ.Scale - xs.Typ.Scale
-	if xs.IsScalar() {
+	m := ys.GetType().Scale - xs.GetType().Scale
+	if xs.IsConst() {
 		if m >= 0 {
 			x, _ := xt[0].Scale(m)
 			for i := 0; i < n; i++ {
@@ -651,7 +651,7 @@ func Decimal128VecLe(xs, ys, rs *vector.Vector) error {
 		}
 		return nil
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		if m >= 0 {
 			for i := 0; i < n; i++ {
 				x, _ := xt[i].Scale(m)

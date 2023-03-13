@@ -133,9 +133,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 		return false, fmt.Sprintf("expected %d rows but get %d rows", fc.fnLength, v.Length())
 	}
 	// check type (it's stupid, haha
-	if v.Typ.Oid != fc.expected.typ.Oid {
+	if v.GetType().Oid != fc.expected.typ.Oid {
 		return false, fmt.Sprintf("expected result type %s but get type %s", fc.expected.typ,
-			v.Typ)
+			v.GetType())
 	}
 	// generate the expected nsp
 	var expectedNsp *nulls.Nulls = nil
@@ -151,7 +151,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 	col := fc.expected.wanted
 	vExpected := newVectorByType(fc.proc.Mp(), fc.expected.typ, col, expectedNsp)
 	var i uint64
-	switch v.Typ.Oid {
+	switch v.GetType().Oid {
 	case types.T_bool:
 		r := vector.GenerateFunctionFixedTypeParameter[bool](v)
 		s := vector.GenerateFunctionFixedTypeParameter[bool](vExpected)
@@ -550,7 +550,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			}
 		}
 	default:
-		panic(fmt.Sprintf("unsupported result type %s for function ut framework", v.Typ))
+		panic(fmt.Sprintf("unsupported result type %s for function ut framework", v.GetType()))
 	}
 	return true, ""
 }
@@ -576,77 +576,78 @@ func (fc *FunctionTestCase) BenchMarkRun() error {
 	return nil
 }
 
-func newVectorByType(
-	mp *mpool.MPool,
-	typ types.Type, val any, nsp *nulls.Nulls) *vector.Vector {
+func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls) *vector.Vector {
+	vec := vector.NewVec(typ)
 	switch typ.Oid {
 	case types.T_bool:
 		values := val.([]bool)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_int8:
 		values := val.([]int8)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_int16:
 		values := val.([]int16)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_int32:
 		values := val.([]int32)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_int64:
 		values := val.([]int64)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_uint8:
 		values := val.([]uint8)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_uint16:
 		values := val.([]uint16)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_uint32:
 		values := val.([]uint32)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_uint64:
 		values := val.([]uint64)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_float32:
 		values := val.([]float32)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_float64:
 		values := val.([]float64)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_decimal64:
 		values := val.([]types.Decimal64)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_decimal128:
 		values := val.([]types.Decimal128)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_date:
 		values := val.([]types.Date)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_datetime:
 		values := val.([]types.Datetime)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_time:
 		values := val.([]types.Time)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_timestamp:
 		values := val.([]types.Timestamp)
-		return vector.NewWithFixed(typ, values, nsp, mp)
-	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		vector.AppendFixedList(vec, values, nil, mp)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		values := val.([]string)
-		return vector.NewWithStrings(typ, values, nsp, mp)
+		vector.AppendStringList(vec, values, nil, mp)
 	case types.T_uuid:
 		values := val.([]types.Uuid)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_TS:
 		values := val.([]types.TS)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_Rowid:
 		values := val.([]types.Rowid)
-		return vector.NewWithFixed(typ, values, nsp, mp)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_json:
 		values := val.([]string)
-		return vector.NewWithStrings(typ, values, nsp, mp)
+		vector.AppendStringList(vec, values, nil, mp)
+	default:
+		panic(fmt.Sprintf("function test framework do not support typ %s", typ))
 	}
-	panic(fmt.Sprintf("function test framework do not support typ %s", typ))
+	vec.SetNulls(nsp)
+	return vec
 }

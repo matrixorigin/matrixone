@@ -24,13 +24,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -40,7 +43,7 @@ type WriteS3Container struct {
 	nameToNullablity map[string]bool
 	pk               map[string]bool
 
-	writer  dataio.Writer
+	writer  objectio.Writer
 	lengths []uint64
 
 	metaLocBat *batch.Batch
@@ -152,8 +155,9 @@ func (container *WriteS3Container) resetMetaLocBat() {
 	// vecs[1] store relative block metadata
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
 	metaLocBat := batch.New(true, attrs)
-	metaLocBat.Vecs[0] = vector.New(types.Type{Oid: types.T(types.T_uint16)})
-	metaLocBat.Vecs[1] = vector.New(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+	metaLocBat.Vecs[0] = vector.NewVec(types.T_uint16.ToType())
+	metaLocBat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+
 	container.metaLocBat = metaLocBat
 }
 
@@ -200,14 +204,14 @@ func (container *WriteS3Container) Put(bat *batch.Batch, idx int) int {
 
 func GetFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T) {
 	for i := range bats {
-		cols = append(cols, vector.GetFixedVectorValues[T](bats[i].Vecs[idx]))
+		cols = append(cols, vector.ExpandFixedCol[T](bats[i].Vecs[idx]))
 	}
 	return
 }
 
 func GetStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
 	for i := range bats {
-		cols = append(cols, vector.GetStrVectorValues(bats[i].Vecs[idx]))
+		cols = append(cols, vector.ExpandStrCol(bats[i].Vecs[idx]))
 	}
 	return
 }
@@ -242,10 +246,10 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 		var merge MergeInterface
 		var nulls []*nulls.Nulls
 		for i := 0; i < len(bats); i++ {
-			nulls = append(nulls, bats[i].Vecs[container.sortIndex[0]].Nsp)
+			nulls = append(nulls, bats[i].Vecs[container.sortIndex[0]].GetNulls())
 		}
 		pos := container.sortIndex[0]
-		switch bats[0].Vecs[sortIdx].Typ.Oid {
+		switch bats[0].Vecs[sortIdx].GetType().Oid {
 		case types.T_bool:
 			merge = NewMerge(len(bats), sort.NewBoolLess(), GetFixedCols[bool](bats, pos), nulls)
 		case types.T_int8:
@@ -295,7 +299,7 @@ func (container *WriteS3Container) MergeBlock(idx int, length int, proc *process
 		for size > 0 {
 			batchIndex, rowIndex, size = merge.GetNextPos()
 			for i := range container.buffers[idx].Vecs {
-				vector.UnionOne(container.buffers[idx].Vecs[i], bats[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
+				container.buffers[idx].Vecs[i].UnionOne(bats[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
 			}
 			lens++
 			if lens == int(options.DefaultBlockMaxRows) {
@@ -351,7 +355,7 @@ func getNewBatch(bat *batch.Batch) *batch.Batch {
 	copy(attrs, bat.Attrs)
 	newBat := batch.New(true, attrs)
 	for i := range bat.Vecs {
-		newBat.Vecs[i] = vector.New(bat.Vecs[i].GetType())
+		newBat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 	}
 	return newBat
 }
@@ -366,7 +370,7 @@ func GenerateWriter(container *WriteS3Container, proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	container.writer, err = blockio.NewBlockWriter(s3, segId)
+	container.writer, err = objectio.NewObjectWriter(segId, s3)
 	if err != nil {
 		return err
 	}
@@ -378,7 +382,7 @@ func GenerateWriter(container *WriteS3Container, proc *process.Process) error {
 func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpool.MPool) error {
 	// Not-Null Check
 	for i := 0; i < len(sortIndex); i++ {
-		if nulls.Any(bat.Vecs[i].Nsp) {
+		if nulls.Any(bat.Vecs[i].GetNulls()) {
 			// return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.InsertCtx.TableDef.Cols[i].GetName()))
 			return moerr.NewConstraintViolation(proc.Ctx, "Primary key can not be null")
 		}
@@ -390,8 +394,8 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 		sels[i] = int64(i)
 	}
 	ovec := bat.GetVector(int32(sortIndex[0]))
-	if ovec.Typ.IsString() {
-		strCol = vector.GetStrVectorValues(ovec)
+	if ovec.GetType().IsString() {
+		strCol = vector.MustStrCol(ovec)
 	} else {
 		strCol = nil
 	}
@@ -404,8 +408,8 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 	for i, j := 1, len(sortIndex); i < j; i++ {
 		ps = partition.Partition(sels, ds, ps, ovec)
 		vec := bat.Vecs[sortIndex[i]]
-		if vec.Typ.IsString() {
-			strCol = vector.GetStrVectorValues(vec)
+		if vec.GetType().IsString() {
+			strCol = vector.MustStrCol(vec)
 		} else {
 			strCol = nil
 		}
@@ -421,27 +425,10 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex []int, m *mpoo
 	return bat.Shuffle(sels, m)
 }
 
-func getPrimaryKeyIdx(pk map[string]bool, Attrs []string) (bool, uint16) {
-	found := false
-	var idx uint16
-	for i := range Attrs {
-		if pk[Attrs[i]] {
-			idx = uint16(i)
-			found = true
-			break
-		}
-	}
-	return found, idx
-}
-
 // WriteBlock WriteBlock writes one batch to a buffer and generate related indexes for this batch
 // For more information, please refer to the comment about func Write in Writer interface
 func WriteBlock(container *WriteS3Container, bat *batch.Batch) error {
-	isPK, pkIdx := getPrimaryKeyIdx(container.pk, bat.Attrs)
-	if isPK {
-		container.writer.SetPrimaryKey(pkIdx)
-	}
-	_, err := container.writer.WriteBatch(bat)
+	fd, err := container.writer.Write(bat)
 
 	if err != nil {
 		return err
@@ -449,19 +436,70 @@ func WriteBlock(container *WriteS3Container, bat *batch.Batch) error {
 	// atomic.AddUint64(&n.Affected, uint64(bat.Vecs[0].Length()))
 
 	container.lengths = append(container.lengths, uint64(bat.Vecs[0].Length()))
+	if err := GenerateIndex(container, fd, container.writer, bat); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+// GenerateIndex generates relative indexes for the batch writed directly to s3 from cn
+// For more information, please refer to the comment about func WriteIndex in Writer interface
+func GenerateIndex(container *WriteS3Container, fd objectio.BlockObject, objectWriter objectio.Writer, bat *batch.Batch) error {
+	for i, mvec := range bat.Vecs {
+		err := getIndexDataFromVec(fd, objectWriter, uint16(i), mvec, container.nameToNullablity[bat.Attrs[i]], container.pk[bat.Attrs[i]])
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func getIndexDataFromVec(block objectio.BlockObject, writer objectio.Writer,
+	idx uint16,
+	vec *vector.Vector, nullAbliaty bool, isPk bool) error {
+	var err error
+	columnData := containers.NewVectorWithSharedMemory(vec, nullAbliaty)
+	zmPos := 0
+	zoneMapWriter := indexwrapper.NewZMWriter()
+	if err = zoneMapWriter.Init(writer, block, common.Plain, idx, uint16(zmPos)); err != nil {
+		return err
+	}
+	err = zoneMapWriter.AddValues(columnData)
+	if err != nil {
+		return err
+	}
+	_, err = zoneMapWriter.Finalize()
+	if err != nil {
+		return err
+	}
+	if !isPk {
+		return nil
+	}
+	bfPos := 1
+	bfWriter := indexwrapper.NewBFWriter()
+	if err = bfWriter.Init(writer, block, common.Plain, idx, uint16(bfPos)); err != nil {
+		return err
+	}
+	if err = bfWriter.AddValues(columnData); err != nil {
+		return err
+	}
+	_, err = bfWriter.Finalize()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 // WriteEndBlocks WriteEndBlocks write batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
 func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int) error {
-	blocks, _, err := container.writer.Sync(proc.Ctx)
+	blocks, err := container.writer.WriteEnd(proc.Ctx)
 	if err != nil {
 		return err
 	}
 	for j := range blocks {
-		metaLoc, err := blockio.EncodeLocation(
+		metaLoc, err := blockio.EncodeMetaLocWithObject(
 			blocks[j].GetExtent(),
 			uint32(container.lengths[j]),
 			blocks,
@@ -469,15 +507,15 @@ func WriteEndBlocks(container *WriteS3Container, proc *process.Process, idx int)
 		if err != nil {
 			return err
 		}
-		container.metaLocBat.Vecs[0].Append(uint16(idx), false, proc.GetMPool())
-		container.metaLocBat.Vecs[1].Append([]byte(metaLoc), false, proc.GetMPool())
+		vector.AppendFixed(container.metaLocBat.Vecs[0], uint16(idx), false, proc.GetMPool())
+		vector.AppendBytes(container.metaLocBat.Vecs[1], []byte(metaLoc), false, proc.GetMPool())
 	}
 	// for i := range container.unique_writer {
 	// 	if blocks, err = container.unique_writer[i].WriteEnd(proc.Ctx); err != nil {
 	// 		return err
 	// 	}
 	// 	for j := range blocks {
-	// 		metaLoc, err := blockio.EncodeLocation(
+	// 		metaLoc, err := blockio.EncodeMetaLocWithObject(
 	// 			blocks[0].GetExtent(),
 	// 			uint32(container.unique_lengths[i][j]),
 	// 			blocks,

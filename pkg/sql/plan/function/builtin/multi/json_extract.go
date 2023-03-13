@@ -38,7 +38,7 @@ func computeString(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, err
 func JsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	jsonVec := parameters[0]
 	var fn computeFn
-	switch jsonVec.Typ.Oid {
+	switch jsonVec.GetType().Oid {
 	case types.T_json:
 		fn = computeJson
 	default:
@@ -54,7 +54,7 @@ func JsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	for i := uint64(0); i < uint64(length); i++ {
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
-			err := rs.AppendStr(nil, true)
+			err := rs.AppendBytes(nil, true)
 			if err != nil {
 				return err
 			}
@@ -74,7 +74,7 @@ func JsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			paths[j] = &p
 		}
 		if skip {
-			err := rs.AppendStr(nil, true)
+			err := rs.AppendBytes(nil, true)
 			if err != nil {
 				return err
 			}
@@ -85,14 +85,14 @@ func JsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return err
 		}
 		if out.IsNull() {
-			err := rs.AppendStr(nil, true)
+			err := rs.AppendBytes(nil, true)
 			if err != nil {
 				return err
 			}
 			continue
 		}
 		dt, _ := out.Marshal()
-		err = rs.AppendStr(dt, false)
+		err = rs.AppendBytes(dt, false)
 		if err != nil {
 			return err
 		}

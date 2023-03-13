@@ -44,6 +44,8 @@ type InsertCtx struct {
 
 	ParentIdx    map[string]int32
 	ClusterTable *plan.ClusterTable
+
+	IdxIdx []int32
 }
 
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.

@@ -14,11 +14,12 @@
 package unary
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestJsonQuote(t *testing.T) {
@@ -31,4 +32,5 @@ func TestJsonQuote(t *testing.T) {
 	require.NoError(t, err)
 	vec = testutil.MakeVarcharVector([]string{"hello", "world", "matrix"}, []uint64{0, 0, 1})
 	_, err = JsonQuote([]*vector.Vector{vec}, proc)
+	require.NoError(t, err)
 }

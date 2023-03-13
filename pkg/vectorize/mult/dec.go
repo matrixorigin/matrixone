@@ -27,11 +27,11 @@ import (
 )
 
 func Decimal64VecMult(xs, ys, rs *vector.Vector) (err error) {
-	xt := vector.MustTCols[types.Decimal64](xs)
-	yt := vector.MustTCols[types.Decimal64](ys)
-	rt := vector.MustTCols[types.Decimal128](rs)
+	xt := vector.MustFixedCol[types.Decimal64](xs)
+	yt := vector.MustFixedCol[types.Decimal64](ys)
+	rt := vector.MustFixedCol[types.Decimal128](rs)
 	n := len(rt)
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		x := types.Decimal128{B0_63: uint64(xt[0]), B64_127: 0}
 		if xt[0]>>63 != 0 {
 			x.B64_127 = ^x.B64_127
@@ -41,14 +41,14 @@ func Decimal64VecMult(xs, ys, rs *vector.Vector) (err error) {
 			if yt[i]>>63 != 0 {
 				y.B64_127 = ^y.B64_127
 			}
-			rt[i], rs.Typ.Scale, err = x.Mul(y, xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], rs.GetType().Scale, err = x.Mul(y, xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
 		}
 		return
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		y := types.Decimal128{B0_63: uint64(yt[0]), B64_127: 0}
 		if yt[0]>>63 != 0 {
 			y.B64_127 = ^y.B64_127
@@ -58,7 +58,7 @@ func Decimal64VecMult(xs, ys, rs *vector.Vector) (err error) {
 			if xt[i]>>63 != 0 {
 				x.B64_127 = ^x.B64_127
 			}
-			rt[i], rs.Typ.Scale, err = x.Mul(y, xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], rs.GetType().Scale, err = x.Mul(y, xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
@@ -75,7 +75,7 @@ func Decimal64VecMult(xs, ys, rs *vector.Vector) (err error) {
 			if yt[i]>>63 != 0 {
 				y.B64_127 = ^y.B64_127
 			}
-			rt[i], rs.Typ.Scale, err = x.Mul(y, xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], rs.GetType().Scale, err = x.Mul(y, xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
@@ -85,22 +85,22 @@ func Decimal64VecMult(xs, ys, rs *vector.Vector) (err error) {
 }
 
 func Decimal128VecMult(xs, ys, rs *vector.Vector) (err error) {
-	xt := vector.MustTCols[types.Decimal128](xs)
-	yt := vector.MustTCols[types.Decimal128](ys)
-	rt := vector.MustTCols[types.Decimal128](rs)
+	xt := vector.MustFixedCol[types.Decimal128](xs)
+	yt := vector.MustFixedCol[types.Decimal128](ys)
+	rt := vector.MustFixedCol[types.Decimal128](rs)
 	n := len(rt)
-	if xs.IsScalar() {
+	if xs.IsConst() {
 		for i := 0; i < n; i++ {
-			rt[i], rs.Typ.Scale, err = xt[0].Mul(yt[i], xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], rs.GetType().Scale, err = xt[0].Mul(yt[i], xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
 		}
 		return
 	}
-	if ys.IsScalar() {
+	if ys.IsConst() {
 		for i := 0; i < n; i++ {
-			rt[i], rs.Typ.Scale, err = xt[i].Mul(yt[0], xs.Typ.Scale, ys.Typ.Scale)
+			rt[i], rs.GetType().Scale, err = xt[i].Mul(yt[0], xs.GetType().Scale, ys.GetType().Scale)
 			if err != nil {
 				return
 			}
@@ -108,7 +108,7 @@ func Decimal128VecMult(xs, ys, rs *vector.Vector) (err error) {
 		return
 	}
 	for i := 0; i < n; i++ {
-		rt[i], rs.Typ.Scale, err = xt[i].Mul(yt[i], xs.Typ.Scale, ys.Typ.Scale)
+		rt[i], rs.GetType().Scale, err = xt[i].Mul(yt[i], xs.GetType().Scale, ys.GetType().Scale)
 		if err != nil {
 			return
 		}

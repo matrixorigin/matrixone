@@ -15,33 +15,32 @@
 package unary
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"time"
 )
 
-func CurrentDate(_ []*vector.Vector, proc *process.Process) (resultVec *vector.Vector, err error) {
+func CurrentDate(_ []*vector.Vector, proc *process.Process) (rvec *vector.Vector, err error) {
 	defer func() {
-		if err != nil && resultVec != nil {
-			resultVec.Free(proc.Mp())
+		if err != nil && rvec != nil {
+			rvec.Free(proc.Mp())
 		}
 	}()
-	resultType := types.T_date.ToType()
-	resultVec = proc.AllocScalarVector(resultType)
+	rtyp := types.T_date.ToType()
 	loc := proc.SessionInfo.TimeZone
 	if loc == nil {
 		logutil.Warn("missing timezone in session info")
 		loc = time.Local
 	}
-	resultSlice := vector.MustTCols[types.Date](resultVec)
 	ts := types.UnixNanoToTimestamp(proc.UnixTime)
 	dateTimes := make([]types.Datetime, 1)
 	dateTimes, err = types.TimestampToDatetime(loc, []types.Timestamp{ts}, dateTimes)
 	if err != nil {
 		return
 	}
-	resultSlice[0] = dateTimes[0].ToDate()
+	rvec = vector.NewConstFixed(rtyp, dateTimes[0].ToDate(), 1, proc.Mp())
 	return
 }

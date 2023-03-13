@@ -152,7 +152,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 		c.btc = batch.NewWithSize(len(btc.Vecs))
 		for i := range btc.Vecs {
-			c.btc.Vecs[i] = vector.New(btc.Vecs[i].Typ)
+			c.btc.Vecs[i] = vector.NewVec(*btc.Vecs[i].GetType())
 		}
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)

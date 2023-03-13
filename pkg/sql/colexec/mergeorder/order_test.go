@@ -18,12 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -98,8 +98,8 @@ func TestOrder(t *testing.T) {
 					index := tc.arg.Fs[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos
 					bat := tc.proc.Reg.InputBatch
 					vec := bat.Vecs[index]
-					if vec.Typ.Oid == types.T_int8 {
-						i8c := vector.MustTCols[int8](vec)
+					if vec.GetType().Oid == types.T_int8 {
+						i8c := vector.MustFixedCol[int8](vec)
 						if desc {
 							for j := range i8c {
 								if j > 0 {
@@ -113,8 +113,8 @@ func TestOrder(t *testing.T) {
 								}
 							}
 						}
-					} else if vec.Typ.Oid == types.T_int64 {
-						i64c := vector.MustTCols[int64](vec)
+					} else if vec.GetType().Oid == types.T_int64 {
+						i64c := vector.MustFixedCol[int64](vec)
 						if desc {
 							for j := range i64c {
 								if j > 0 {

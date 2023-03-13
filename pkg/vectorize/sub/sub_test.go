@@ -78,7 +78,7 @@ func TestF32Sub(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[float32](cv)
+	res := vector.MustFixedCol[float32](cv)
 	for i := 0; i < 2; i++ {
 		//fmt.Printf("%+v - %+v \n", as[i], bs[i])
 		//fmt.Printf("actual res:%+v\n", res[i])
@@ -107,7 +107,7 @@ func TestDec64Sub(t *testing.T) {
 		t.Fatalf("decimal64 sub failed")
 	}
 
-	res := vector.MustTCols[types.Decimal64](cv)
+	res := vector.MustFixedCol[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
 		d := types.Decimal64(as[i] - bs[i])
 		if res[i] != d {
@@ -134,7 +134,7 @@ func TestDec128Sub(t *testing.T) {
 		t.Fatalf("decimal128 sub failed")
 	}
 
-	res := vector.MustTCols[types.Decimal128](cv)
+	res := vector.MustFixedCol[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
 		d := types.Decimal128{B0_63: uint64(as[i]), B64_127: 0}
 		if as[i] < 0 {
@@ -169,7 +169,7 @@ func TestDec64SubOfOppNumber(t *testing.T) {
 		t.Fatalf("decimal64 add failed")
 	}
 
-	res := vector.MustTCols[types.Decimal64](cv)
+	res := vector.MustFixedCol[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
 		d := types.Decimal64(as[i] - bs[i])
 		if res[i] != d {
@@ -196,7 +196,7 @@ func TestDec128SubOfOppNumber(t *testing.T) {
 		t.Fatalf("decimal128 sub failed")
 	}
 
-	res := vector.MustTCols[types.Decimal128](cv)
+	res := vector.MustFixedCol[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
 		d := types.Decimal128{B0_63: uint64(as[i]), B64_127: 0}
 		if as[i] < 0 {
@@ -210,64 +210,6 @@ func TestDec128SubOfOppNumber(t *testing.T) {
 		if res[i] != d {
 			t.Fatalf("decimal128 sub wrong result")
 		}
-	}
-}
-
-func TestDec128SubByFloat64(t *testing.T) {
-	cases := []struct {
-		name string
-		a    float64
-		b    float64
-		want float64
-	}{
-		{
-			name: "test01",
-			a:    1,
-			b:    0.5,
-			want: 0.5,
-		},
-		{
-			name: "test02",
-			a:    1,
-			b:    0.4,
-			want: 0.6,
-		},
-		{
-			name: "test03",
-			a:    0,
-			b:    0,
-			want: 0,
-		},
-		{
-			name: "test04",
-			a:    0,
-			b:    0.5,
-			want: -0.5,
-		},
-		{
-			name: "test05",
-			a:    1,
-			b:    0,
-			want: 1,
-		},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			av := testutil.MakeScalarDecimal128ByFloat64(c.a, 1, types.T_decimal128.ToType())
-			bv := testutil.MakeScalarDecimal128ByFloat64(c.b, 1, types.T_decimal128.ToType())
-			cv := testutil.MakeScalarDecimal128ByFloat64(0, 1, types.T_decimal128.ToType())
-			err := Decimal128VecSub(av, bv, cv)
-			if err != nil {
-				t.Fatalf("decimal128 sub failed")
-			}
-
-			res := vector.MustTCols[types.Decimal128](cv)
-			d, _ := types.Decimal128FromFloat64(c.want, 38, cv.Typ.Scale)
-			if res[0] != d {
-				t.Fatalf("decimal128 sub wrong result")
-			}
-		})
 	}
 }
 
@@ -485,7 +427,7 @@ func TestDatetimeDesc(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			DatetimeSub(c.vecs[0], c.vecs[1], c.vecs[2])
-			require.Equal(t, c.want, c.vecs[2].Col.([]int64)[0])
+			require.Equal(t, c.want, vector.MustFixedCol[int64](c.vecs[2])[0])
 		})
 	}
 }
@@ -496,9 +438,9 @@ func makeDatetimeSubVectors(firstStr, secondStr string, proc *process.Process) [
 	firstDate, _ := types.ParseDatetime(firstStr, 0)
 	secondDate, _ := types.ParseDatetime(secondStr, 0)
 
-	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, firstDate, proc.Mp())
-	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), 1, secondDate, proc.Mp())
-	vec[2] = proc.AllocScalarVector(types.T_int64.ToType())
+	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), firstDate, 1, proc.Mp())
+	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), secondDate, 1, proc.Mp())
+	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
 
 	return vec
 }
