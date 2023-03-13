@@ -59,7 +59,7 @@ func logLocalLock(
 	w *waiter) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("lock on local",
+		logger.Debug("try to lock on local",
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			bytesArrayField("rows", rows),
@@ -103,8 +103,6 @@ func logLocalLockFailed(
 func logLocalLockWaitOn(
 	txn *activeTxn,
 	tableID uint64,
-	rows [][]byte,
-	options LockOptions,
 	waiter *waiter,
 	waitOn Lock) {
 	logger := getWithSkipLogger()
@@ -112,8 +110,6 @@ func logLocalLockWaitOn(
 		logger.Debug("lock wait on local",
 			txnField(txn),
 			zap.Uint64("table", tableID),
-			bytesArrayField("rows", rows),
-			zap.String("opts", options.DebugString()),
 			zap.Stringer("waiter", waiter),
 			zap.Stringer("wait-on", waitOn))
 	}
@@ -125,7 +121,6 @@ func logLocalLockWaitOnResult(
 	rows [][]byte,
 	opts LockOptions,
 	waiter *waiter,
-	waitOn Lock,
 	err error) {
 	logger := getWithSkipLogger()
 	level := zap.DebugLevel
@@ -141,7 +136,6 @@ func logLocalLockWaitOnResult(
 			bytesArrayField("rows", rows),
 			zap.String("opts", opts.DebugString()),
 			zap.Stringer("waiter", waiter),
-			zap.Stringer("wait-on", waitOn),
 			zap.Any("result", err))
 	}
 }
@@ -377,8 +371,8 @@ func logWaitersAdded(
 	if logger.Enabled(zap.DebugLevel) {
 
 		logger.Debug("new waiters added",
-			zap.Stringer("to", w),
-			waiterArrayField("waiters", added...))
+			zap.Stringer("holder", w),
+			waiterArrayField("new-waiters", added...))
 	}
 }
 
@@ -398,20 +392,87 @@ func logWaiterNotified(
 	err error) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("waiter notified added",
+		logger.Debug("waiter add notify",
 			zap.Stringer("waiter", w),
 			zap.Any("notify", err))
 	}
 }
 
+func logWaiterNotifySkipped(
+	w *waiter,
+	reason string) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("waiter notify skipped",
+			zap.String("reason", reason),
+			zap.Stringer("waiter", w))
+	}
+}
+
 func logWaiterStatusChanged(
+	w *waiter,
+	from, to waiterStatus) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("waiter status changed",
+			zap.Stringer("waiter", w),
+			zap.Int("from-state", int(from)),
+			zap.Int("to-state", int(to)))
+	}
+}
+
+func logWaiterStatusUpdate(
 	w *waiter,
 	state waiterStatus) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("waiter status changed to",
+		logger.Debug("waiter status set to new state",
 			zap.Stringer("waiter", w),
 			zap.Int("state", int(state)))
+	}
+}
+
+func logWaiterContactPool(
+	w *waiter,
+	action string) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("waiter contact to pool",
+			zap.String("action", action),
+			zap.Stringer("waiter", w))
+	}
+}
+
+func logWaiterClose(
+	w *waiter,
+	next *waiter) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("waiter close",
+			zap.Stringer("waiter", w),
+			zap.Stringer("next-waiter", next))
+	}
+}
+
+func logWaiterFetchNextWaiter(
+	w *waiter,
+	next *waiter) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("fetch next waiter",
+			zap.Stringer("waiter", w),
+			zap.Stringer("next-waiter", next))
+	}
+}
+
+func logWaiterClearNotify(
+	w *waiter,
+	reason string) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("waiter clear notify",
+			zap.String("reason", reason),
+			zap.Stringer("waiter", w))
 	}
 }
 

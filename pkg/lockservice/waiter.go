@@ -33,6 +33,7 @@ var (
 
 func acquireWaiter(txnID []byte) *waiter {
 	w := waiterPool.Get().(*waiter)
+	logWaiterContactPool(w, "get")
 	w.txnID = txnID
 	if w.ref() != 1 {
 		panic("BUG: invalid ref count")
@@ -93,6 +94,9 @@ type waiter struct {
 
 // String implement Stringer
 func (w *waiter) String() string {
+	if w == nil {
+		return "nil"
+	}
 	return fmt.Sprintf("%s-%p",
 		hex.EncodeToString(w.txnID),
 		w)
@@ -123,10 +127,10 @@ func (w *waiter) add(waiters ...*waiter) {
 	if len(waiters) == 0 {
 		return
 	}
-	w.waiters.put(waiters...)
 	for i := range waiters {
 		waiters[i].ref()
 	}
+	w.waiters.put(waiters...)
 	logWaitersAdded(w, waiters...)
 }
 
@@ -136,35 +140,35 @@ func (w *waiter) getStatus() waiterStatus {
 
 func (w *waiter) setStatus(status waiterStatus) {
 	w.status.Store(int32(status))
-	logWaiterStatusChanged(w, status)
+	logWaiterStatusUpdate(w, status)
 }
 
 func (w *waiter) casStatus(old, new waiterStatus) bool {
 	if w.status.CompareAndSwap(int32(old), int32(new)) {
-		logWaiterStatusChanged(w, new)
+		logWaiterStatusChanged(w, old, new)
 		return true
 	}
 	return false
 }
 
-func (w *waiter) mustRecvNotification() error {
+func (w *waiter) mustRecvNotification(ctx context.Context) error {
 	select {
 	case err := <-w.c:
 		logWaiterGetNotify(w, err)
 		return err
-	default:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	panic("BUG: must recv result from channel")
 }
 
 func (w *waiter) mustSendNotification(value error) {
+	logWaiterNotified(w, value)
 	select {
 	case w.c <- value:
-		logWaiterNotified(w, value)
 		return
 	default:
 	}
-	panic("BUG: must send value to channel")
+	panic("BUG: must send value to channel, " + w.String())
 }
 
 func (w *waiter) resetWait() {
@@ -176,11 +180,8 @@ func (w *waiter) resetWait() {
 
 func (w *waiter) wait(ctx context.Context) error {
 	status := w.getStatus()
-	if status == notified {
-		w.setStatus(completed)
-		return w.mustRecvNotification()
-	}
-	if status != waiting {
+	if status != waiting &&
+		status != notified {
 		panic(fmt.Sprintf("BUG: waiter's status cannot be %d", status))
 	}
 
@@ -188,6 +189,7 @@ func (w *waiter) wait(ctx context.Context) error {
 
 	select {
 	case err := <-w.c:
+		logWaiterGetNotify(w, err)
 		w.setStatus(completed)
 		return err
 	case <-ctx.Done():
@@ -203,7 +205,7 @@ func (w *waiter) wait(ctx context.Context) error {
 	// notify and timeout are concurrently issued, we use real result to replace
 	// timeout error
 	w.setStatus(completed)
-	return w.mustRecvNotification()
+	return w.mustRecvNotification(ctx)
 }
 
 // notify return false means this waiter is completed, cannot be used to notify
@@ -212,10 +214,12 @@ func (w *waiter) notify(value error) bool {
 		status := w.getStatus()
 		// already notified, no wait on w
 		if status == notified {
+			logWaiterNotifySkipped(w, "already notified")
 			return false
 		}
 		if status == completed {
 			// wait already completed, wait timeout or wait a result.
+			logWaiterNotifySkipped(w, "already completed")
 			return false
 		}
 
@@ -226,14 +230,16 @@ func (w *waiter) notify(value error) bool {
 			w.mustSendNotification(value)
 			return true
 		}
+		logWaiterNotifySkipped(w, "concurrently issued")
 	}
 }
 
-func (w *waiter) clearAllNotify() {
+func (w *waiter) clearAllNotify(reason string) {
 	for {
 		select {
 		case <-w.c:
 		default:
+			logWaiterClearNotify(w, reason)
 			return
 		}
 	}
@@ -243,15 +249,18 @@ func (w *waiter) clearAllNotify() {
 // into the next waiter.
 func (w *waiter) close(err error) *waiter {
 	nextWaiter := w.fetchNextWaiter(err)
+	logWaiterClose(w, nextWaiter)
 	w.unref()
 	return nextWaiter
 }
 
 func (w *waiter) fetchNextWaiter(err error) *waiter {
 	if w.waiters.len() == 0 {
+		logWaiterFetchNextWaiter(w, nil)
 		return nil
 	}
 	next := w.awakeNextWaiter()
+	logWaiterFetchNextWaiter(w, next)
 	for {
 		if next.notify(err) {
 			next.unref()
@@ -275,6 +284,9 @@ func (w *waiter) reset() {
 	if w.waiters.len() > 0 || len(w.c) > 0 {
 		panic("BUG: waiter should be empty.")
 	}
+
+	logWaiterContactPool(w, "put")
+	w.txnID = nil
 	w.setStatus(waiting)
 	w.waiters.reset()
 	waiterPool.Put(w)
