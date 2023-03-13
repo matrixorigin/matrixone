@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -202,6 +203,8 @@ type Session struct {
 	limitResultSize float64 // MB
 
 	curResultSize float64 // MB
+
+	sentRows atomic.Int64
 
 	createdTime time.Time
 
