@@ -113,6 +113,31 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 	})
 }
 
+func TestHandleServerWriteWithClosedClientSession(t *testing.T) {
+	wc := make(chan struct{}, 1)
+	defer close(wc)
+
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+		defer cancel()
+
+		c := newTestClient(t)
+		rs.RegisterRequestHandler(func(_ context.Context, request Message, _ uint64, cs ClientSession) error {
+			assert.NoError(t, cs.Close())
+			return cs.Write(ctx, request)
+		})
+
+		req := newTestMessage(1)
+		f, err := c.Send(ctx, testAddr, req)
+		assert.NoError(t, err)
+
+		defer f.Close()
+		resp, err := f.Get()
+		assert.Error(t, ctx.Err(), err)
+		assert.Nil(t, resp)
+	})
+}
+
 func TestStreamServer(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
