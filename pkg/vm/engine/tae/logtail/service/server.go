@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -120,7 +119,8 @@ type LogtailServer struct {
 
 	rt     runtime.Runtime
 	logger *log.MOLogger
-	clock  clock.Clock
+
+	nowFn func() (timestamp.Timestamp, timestamp.Timestamp)
 
 	cfg *options.LogtailServerCfg
 
@@ -147,14 +147,14 @@ func NewLogtailServer(
 	s := &LogtailServer{
 		rt:         rt,
 		logger:     rt.Logger(),
-		clock:      rt.Clock(),
 		cfg:        cfg,
 		ssmgr:      NewSessionManager(),
-		waterline:  NewWaterliner(rt.Clock()),
+		waterline:  NewWaterliner(logtail.Now),
 		subscribed: NewTableStacker(),
 		errChan:    make(chan sessionError),
 		subChan:    make(chan subscription, 10),
 		logtail:    logtail,
+		nowFn:      logtail.Now,
 	}
 
 	for _, opt := range opts {
@@ -433,7 +433,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				}()
 
 				from := s.waterline.Waterline()
-				to, _ := s.clock.Now()
+				to, _ := s.nowFn()
 
 				// fetch additional logtail for tables
 				var tails []logtail.TableLogtail

@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -29,13 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,78 +43,34 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, objectio.IndexData, error) {
-	var bloomFilter, zoneMap objectio.IndexData
-
-	// get min/max from  vector
-	if vec.Length() > 0 {
-		cvec := containers.NewVectorWithSharedMemory(vec, true)
-
-		// create zone map
-		zm := index.NewZoneMap(vec.Typ)
-		ctx := new(index.KeysCtx)
-		ctx.Keys = cvec
-		ctx.Count = vec.Length()
-		defer ctx.Keys.Close()
-		err := zm.BatchUpdate(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		buf, err := zm.Marshal()
-		if err != nil {
-			return nil, nil, err
-		}
-		zoneMap, err = objectio.NewZoneMap(idx, buf)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// create bloomfilter
-		sf, err := index.NewBinaryFuseFilter(cvec)
-		if err != nil {
-			return nil, nil, err
-		}
-		bf, err := sf.Marshal()
-		if err != nil {
-			return nil, nil, err
-		}
-		alg := uint8(0)
-		bloomFilter = objectio.NewBloomFilter(idx, alg, bf)
-	}
-
-	return bloomFilter, zoneMap, nil
-}
-
 func fetchZonemapAndRowsFromBlockInfo(
 	ctx context.Context,
 	idxs []uint16,
 	blockInfo catalog.BlockInfo,
 	fs fileservice.FileService,
 	m *mpool.MPool) ([][64]byte, uint32, error) {
-	name, extent, rows := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
+	_, _, extent, rows, err := blockio.DecodeLocation(blockInfo.MetaLoc)
+	if err != nil {
+		return nil, 0, err
+	}
 	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
-	reader, err := objectio.NewObjectReader(name, fs)
+	reader, err := blockio.NewObjectReader(fs, blockInfo.MetaLoc)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	obs, err := reader.ReadMeta(ctx, []objectio.Extent{extent}, m)
+	obs, err := reader.LoadZoneMaps(ctx, idxs, []uint32{extent.Id()}, m)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	for i, idx := range idxs {
-		column, err := obs[0].GetColumn(idx)
+	for i := range idxs {
+		bytes := obs[0][i].GetBuf()
 		if err != nil {
 			return nil, 0, err
 		}
-		data, err := column.GetIndex(ctx, objectio.ZoneMapType, m)
-		if err != nil {
-			return nil, 0, err
-		}
-		bytes := data.(*objectio.ZoneMap).GetData()
 		copy(zonemapList[i][:], bytes[:])
 	}
 
@@ -151,15 +104,6 @@ func getZonemapDataFromMeta(ctx context.Context, columns []int, meta BlockMeta, 
 	return datas, dataTypes, nil
 }
 
-// getNewBlockName Each time a unique name is generated in one CN
-func getNewBlockName(accountId uint32) (string, error) {
-	uuid, err := types.BuildUuid()
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%d_%s.blk", accountId, uuid.ToString()), nil
-}
-
 func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {
 	args := []*plan.Expr{constExpr}
 	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
@@ -183,7 +127,7 @@ func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *p
 	if err != nil {
 		return false, 0
 	}
-	list := vector.MustTCols[int64](ret)
+	list := vector.MustFixedCol[int64](ret)
 	return true, uint64(list[0])
 }
 
@@ -693,115 +637,106 @@ func getListByItems[T DNStore](list []T, items []int64) []int {
 // 	return dnList
 // }
 
-func checkIfDataInBlock(data any, meta BlockMeta, colIdx int, typ types.Type) (bool, error) {
-	zm := index.NewZoneMap(typ)
-	err := zm.Unmarshal(meta.Zonemap[colIdx][:])
-	if err != nil {
-		return false, err
-	}
-	return zm.Contains(data), nil
-}
-
 func findRowByPkValue(vec *vector.Vector, v any) int {
-	switch vec.Typ.Oid {
+	switch vec.GetType().Oid {
 	case types.T_int8:
-		rows := vector.MustTCols[int8](vec)
+		rows := vector.MustFixedCol[int8](vec)
 		val := v.(int8)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_int16:
-		rows := vector.MustTCols[int16](vec)
+		rows := vector.MustFixedCol[int16](vec)
 		val := v.(int16)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_int32:
-		rows := vector.MustTCols[int32](vec)
+		rows := vector.MustFixedCol[int32](vec)
 		val := v.(int32)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_int64:
-		rows := vector.MustTCols[int64](vec)
+		rows := vector.MustFixedCol[int64](vec)
 		val := v.(int64)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_uint8:
-		rows := vector.MustTCols[uint8](vec)
+		rows := vector.MustFixedCol[uint8](vec)
 		val := v.(uint8)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_uint16:
-		rows := vector.MustTCols[uint16](vec)
+		rows := vector.MustFixedCol[uint16](vec)
 		val := v.(uint16)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_uint32:
-		rows := vector.MustTCols[uint32](vec)
+		rows := vector.MustFixedCol[uint32](vec)
 		val := v.(uint32)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_uint64:
-		rows := vector.MustTCols[uint64](vec)
+		rows := vector.MustFixedCol[uint64](vec)
 		val := v.(uint64)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_float32:
-		rows := vector.MustTCols[float32](vec)
+		rows := vector.MustFixedCol[float32](vec)
 		val := v.(float32)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_float64:
-		rows := vector.MustTCols[float64](vec)
+		rows := vector.MustFixedCol[float64](vec)
 		val := v.(float64)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_date:
-		rows := vector.MustTCols[types.Date](vec)
+		rows := vector.MustFixedCol[types.Date](vec)
 		val := v.(types.Date)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_time:
-		rows := vector.MustTCols[types.Time](vec)
+		rows := vector.MustFixedCol[types.Time](vec)
 		val := v.(types.Time)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_datetime:
-		rows := vector.MustTCols[types.Datetime](vec)
+		rows := vector.MustFixedCol[types.Datetime](vec)
 		val := v.(types.Datetime)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_timestamp:
-		rows := vector.MustTCols[types.Timestamp](vec)
+		rows := vector.MustFixedCol[types.Timestamp](vec)
 		val := v.(types.Timestamp)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx] >= val
 		})
 	case types.T_uuid:
-		rows := vector.MustTCols[types.Uuid](vec)
+		rows := vector.MustFixedCol[types.Uuid](vec)
 		val := v.(types.Uuid)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx].Ge(val)
 		})
 	case types.T_decimal64:
-		rows := vector.MustTCols[types.Decimal64](vec)
+		rows := vector.MustFixedCol[types.Decimal64](vec)
 		val := v.(types.Decimal64)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx].Ge(val)
 		})
 	case types.T_decimal128:
-		rows := vector.MustTCols[types.Decimal128](vec)
+		rows := vector.MustFixedCol[types.Decimal128](vec)
 		val := v.(types.Decimal128)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			return rows[idx].Ge(val)
@@ -813,7 +748,7 @@ func findRowByPkValue(vec *vector.Vector, v any) int {
 		// return sort.SearchStrings(rows, val)
 		val := v.([]byte)
 		area := vec.GetArea()
-		varlenas := vector.MustTCols[types.Varlena](vec)
+		varlenas := vector.MustFixedCol[types.Varlena](vec)
 		return sort.Search(vec.Length(), func(idx int) bool {
 			colVal := varlenas[idx].GetByteSlice(area)
 			return bytes.Compare(colVal, val) >= 0

@@ -16,12 +16,13 @@ package binary
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestShowVisibleBin(t *testing.T) {
@@ -36,14 +37,14 @@ func TestShowVisibleBin(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	require.Equal(t, 1, out.Length())
-	require.Equal(t, []byte(tp.String()), vector.MustBytesCols(out)[0])
+	require.Equal(t, []byte(tp.String()), vector.MustBytesCol(out)[0])
 	toCode = typWithLen
 	c2 := makeVec(buf, uint8(toCode))
 	out, err = ShowVisibleBin(c2, testutil.NewProc())
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	require.Equal(t, 1, out.Length())
-	require.Equal(t, fmt.Sprintf("%s(%d)", tp.String(), tp.Width), vector.MustStrCols(out)[0])
+	require.Equal(t, fmt.Sprintf("%s(%d)", tp.String(), tp.Width), vector.MustStrCol(out)[0])
 
 	update := new(plan.OnUpdate)
 	update.OriginString = "update"
@@ -57,7 +58,7 @@ func TestShowVisibleBin(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	require.Equal(t, 1, out.Length())
-	require.Equal(t, update.OriginString, vector.MustStrCols(out)[0])
+	require.Equal(t, update.OriginString, vector.MustStrCol(out)[0])
 
 	def := new(plan.Default)
 	def.OriginString = "default"
@@ -71,13 +72,11 @@ func TestShowVisibleBin(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	require.Equal(t, 1, out.Length())
-	require.Equal(t, def.OriginString, vector.MustStrCols(out)[0])
+	require.Equal(t, def.OriginString, vector.MustStrCol(out)[0])
 
 }
 func makeVec(buf []byte, toCode uint8) []*vector.Vector {
-	vec := vector.New(types.T_varchar.ToType())
-	_ = vec.Append(buf, len(buf) == 0, testutil.TestUtilMp)
-	vec2 := vector.NewConst(types.T_uint8.ToType(), 1)
-	_ = vec2.Append(toCode, false, testutil.TestUtilMp)
+	vec := vector.NewConstBytes(types.T_varchar.ToType(), buf, 1, testutil.TestUtilMp)
+	vec2 := vector.NewConstFixed(types.T_uint8.ToType(), toCode, 1, testutil.TestUtilMp)
 	return []*vector.Vector{vec, vec2}
 }

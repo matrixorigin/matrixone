@@ -401,7 +401,7 @@ func (ss *Session) SendResponse(
 	}
 
 	select {
-	case <-time.After(ss.poisionTime):
+	case <-time.After(time.Second):
 		ss.logger.Error("poision morpc client session detected, close it")
 		ss.responses.Release(response)
 		if err := ss.stream.Close(); err != nil {

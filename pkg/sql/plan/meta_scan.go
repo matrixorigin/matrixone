@@ -130,7 +130,7 @@ func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindCon
 	if err != nil {
 		return 0, err
 	}
-	uuid := vector.MustTCols[types.Uuid](vec)[0]
+	uuid := vector.MustFixedCol[types.Uuid](vec)[0]
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
 		Stats:    &plan.Stats{},

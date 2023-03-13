@@ -16,6 +16,8 @@ package util
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"testing"
 
 	"github.com/stretchr/testify/require"
 )
@@ -87,10 +88,10 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 		if len(test.parts) >= 2 {
 			vec, _ := multi.Serial(test.vecs, proc)
 			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc)
-			require.Equal(t, vec.Col, b.Vecs[0].Col)
+			require.Equal(t, vec.UnsafeGetRawData(), b.Vecs[0].UnsafeGetRawData())
 		} else {
 			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc)
-			require.Equal(t, test.vecs[0].Col, b.Vecs[0].Col)
+			require.Equal(t, test.vecs[0].UnsafeGetRawData(), b.Vecs[0].UnsafeGetRawData())
 		}
 	}
 }
@@ -125,7 +126,7 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		nulls.Add(test.vecs[1].Nsp, 1)
+		nulls.Add(test.vecs[1].GetNulls(), 1)
 		//if JudgeIsCompositeIndexColumn(test.f) {
 		if len(test.parts) >= 2 {
 			//b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)

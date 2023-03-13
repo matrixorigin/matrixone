@@ -29,7 +29,7 @@ func TestConcat_ws(t *testing.T) {
 	inputVectors := []*vector.Vector{vector0, vector1, vector2}
 	proc := testutil.NewProc()
 	outputVector, err := Concat_ws(inputVectors, proc)
-	rs := vector.GetStrVectorValues(outputVector)
+	rs := vector.MustStrCol(outputVector)
 	require.NoError(t, err)
 	require.Equal(t, []string{"hello---hello", "", "guten---guten", "guten---guten"}, rs)
 }

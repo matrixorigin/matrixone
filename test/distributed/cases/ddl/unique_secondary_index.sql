@@ -135,10 +135,12 @@ show create table t_code_rule;
 load data infile  '$resources/load_data/unique_index_file.csv' into table t_code_rule ;
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 truncate table t_code_rule;
+--Pls refer to issue:#8348
 load data infile  '$resources/load_data/unique_index_duplicate.csv' into table t_code_rule;
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 create table index_temp( col1 bigint(20) NOT NULL ,col2 varchar(50) NOT NULL,col3 varchar(50) NOT NULL,col4 varchar(50) NOT NULL,col5 varchar(255) NOT NULL,col6 varchar(50) NOT NULL,col7 varchar(50) NOT NULL,col8 varchar(50) NOT NULL,col9 int(11) ,col10 varchar(50) DEFAULT NULL,col11 varchar(255),col12 datetime NOT NULL,col13 varchar(50) DEFAULT NULL,col14 datetime DEFAULT NULL,col15 varchar(50) DEFAULT NULL,col16 varchar(20)  NOT NULL DEFAULT 'N');
 load data infile  '$resources/load_data/unique_index_file.csv' into table index_temp;
+--Pls refer to issue: $8348
 insert into t_code_rule select * from index_temp;
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 truncate table index_temp;

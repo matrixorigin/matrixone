@@ -22,19 +22,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func RegularLike(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vectors[0]
-	secondVector := vectors[1]
-	firstValues := vector.MustStrCols(firstVector)
-	secondValues := vector.MustStrCols(secondVector)
-	resultType := types.T_bool.ToType()
+func RegularLike(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	firstVector := ivecs[0]
+	secondVector := ivecs[1]
+	firstValues := vector.MustStrCol(firstVector)
+	secondValues := vector.MustStrCol(secondVector)
+	rtyp := types.T_bool.ToType()
 
 	var thirdNsp *nulls.Nulls
 	thirdNsp = nil
 	//maxLen
-	maxLen := vector.Length(vectors[0])
-	for i := range vectors {
-		val := vector.Length(vectors[i])
+	maxLen := ivecs[0].Length()
+	for i := range ivecs {
+		val := ivecs[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
@@ -44,29 +44,28 @@ func RegularLike(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	var match_type []string
 
 	//different parameter length conditions
-	switch len(vectors) {
+	switch len(ivecs) {
 	case 2:
 		match_type = []string{"c"}
 	case 3:
-		match_type = vector.MustStrCols(vectors[2])
-		if vectors[2].IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+		match_type = vector.MustStrCol(ivecs[2])
+		if ivecs[2].IsConstNull() {
+			return vector.NewConstNull(rtyp, maxLen, proc.Mp()), nil
 		}
-		thirdNsp = vectors[2].Nsp
+		thirdNsp = ivecs[2].GetNulls()
+	}
+	if firstVector.IsConstNull() || secondVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, maxLen, proc.Mp()), nil
 	}
 
-	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
-		return proc.AllocScalarNullVector(resultType), nil
-	}
-
-	resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, maxLen, nil)
 	if err != nil {
 		return nil, err
 	}
-	resultValues := vector.MustTCols[bool](resultVector)
-	err = regular.RegularLikeWithArrays(firstValues, secondValues, match_type, firstVector.Nsp, secondVector.Nsp, thirdNsp, resultVector.Nsp, resultValues, maxLen)
+	rvals := vector.MustFixedCol[bool](rvec)
+	err = regular.RegularLikeWithArrays(firstValues, secondValues, match_type, firstVector.GetNulls(), secondVector.GetNulls(), thirdNsp, rvec.GetNulls(), rvals, maxLen)
 	if err != nil {
 		return nil, err
 	}
-	return resultVector, nil
+	return rvec, nil
 }

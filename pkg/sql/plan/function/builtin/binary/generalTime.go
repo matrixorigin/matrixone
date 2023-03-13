@@ -48,15 +48,8 @@ func FromDate(year int, month int, day int, hour int, minute int, second int, mi
 }
 
 // Reset GeneralTime to initialization state
-func (t GeneralTime) ResetTime() {
-	t.year = 0
-	t.month = 0
-	t.day = 0
-	t.hour = 0
-	t.minute = 0
-	t.second = 0
-	t.microsecond = 0
-	return
+func (t *GeneralTime) ResetTime() {
+	*t = GeneralTime{}
 }
 
 // String implements fmt.Stringer.

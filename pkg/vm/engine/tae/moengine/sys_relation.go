@@ -16,13 +16,12 @@ package moengine
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
@@ -63,10 +62,8 @@ func (s *sysRelation) Write(_ context.Context, _ *batch.Batch) error {
 
 func (s *sysRelation) AddBlksWithMetaLoc(
 	_ context.Context,
-	_ []containers.Vector,
-	_ string,
+	_ []dataio.Index,
 	_ []string,
-	_ int32,
 ) error {
 	return ErrReadOnly
 }

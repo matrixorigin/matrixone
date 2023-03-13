@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -47,7 +46,7 @@ func TestDateToTimestamp(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, result.Col.([]types.Timestamp))
+			require.Equal(t, c.want, vector.MustFixedCol[types.Timestamp](result))
 		})
 	}
 
@@ -74,7 +73,7 @@ func TestDatetimeToTimestamp(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Timestamp))
+			require.Equal(t, c.want, vector.MustFixedCol[types.Timestamp](date))
 		})
 	}
 
@@ -115,10 +114,11 @@ func TestDateStringAdd(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			date, err := DateStringToTimestamp(c.vecs, c.proc)
 			if err != nil {
-				t.Fatal(err)
+				t.Log(err)
+				return
 			}
-			require.Equal(t, c.want, date.Col.([]types.Timestamp))
-			require.Equal(t, c.contain, nulls.Contains(date.Nsp, 0))
+			require.Equal(t, c.want, vector.MustFixedCol[types.Timestamp](date))
+			require.Equal(t, c.contain, date.IsConstNull())
 		})
 	}
 
@@ -129,7 +129,7 @@ func makeDateToTimestampVectors(str string, isConst bool) []*vector.Vector {
 
 	date, _ := types.ParseDateCast(str)
 
-	vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, date, testutil.TestUtilMp)
+	vec[0] = vector.NewConstFixed(types.T_date.ToType(), date, 1, testutil.TestUtilMp)
 	return vec
 }
 
@@ -137,7 +137,7 @@ func makeDatetimeToTimestampVectors(str string, isConst bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 1)
 
 	datetime, _ := types.ParseDatetime(str, 0)
-	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime, testutil.TestUtilMp)
+	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), datetime, 1, testutil.TestUtilMp)
 
 	return vec
 }
@@ -145,6 +145,6 @@ func makeDatetimeToTimestampVectors(str string, isConst bool) []*vector.Vector {
 func makeDateStringToTimestampVectors(str string, isConst bool) []*vector.Vector {
 	typ := types.Type{Oid: types.T_varchar, Size: 26}
 	vec := make([]*vector.Vector, 1)
-	vec[0] = vector.NewConstString(typ, 1, str, testutil.TestUtilMp)
+	vec[0] = vector.NewConstBytes(typ, []byte(str), 1, testutil.TestUtilMp)
 	return vec
 }

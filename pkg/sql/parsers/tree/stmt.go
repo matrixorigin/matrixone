@@ -39,7 +39,7 @@ const (
 	// QueryTypeDDL (Data Definition Language): CreateDatabase, DropDatabase, DropTable,
 	// Create/Drop/Alter/Rename Database/Table/View/Index/Function, TruncateTable,
 	QueryTypeDDL = "DDL"
-	// QueryTypeDML (Data Manipulation Language): Insert, Update, Delete, Load, Import
+	// QueryTypeDML (Data Manipulation Language): Insert, Update, Delete, Load
 	QueryTypeDML = "DML"
 	// QueryTypeDCL (Data Control Language)
 	// statement: Grant, Revoke
