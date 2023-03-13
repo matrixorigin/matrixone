@@ -132,6 +132,9 @@ func (v *Vector) CleanOnlyData() {
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
+	if v.nsp != nil && v.nsp.Np != nil {
+		v.nsp.Np.Clear()
+	}
 }
 
 //func (v *Vector) GetRawData() []byte {
