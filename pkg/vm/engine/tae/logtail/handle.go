@@ -230,7 +230,7 @@ func (b *CatalogLogtailRespBuilder) Close() {
 	}
 }
 
-// VisitBlk = catalog.Processor.OnDatabase
+// VisitDB = catalog.Processor.OnDatabase
 func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 	entry.RLock()
 	if shouldIgnoreDBInLogtail(entry.ID) {
