@@ -750,26 +750,7 @@ statement_id_opt:
 }
 
 mo_dump_stmt:
-    MODUMP DATABASE ident INTO STRING max_file_size_opt
-    {
-	$$ = &tree.MoDump{
-	    DumpDatabase: true,
-	    Database: tree.Identifier($3.Compare()),
-	    OutFile: $5,
-	    MaxFileSize: int64($6),
-	}
-    }
-|   MODUMP DATABASE ident TABLES table_name_list INTO STRING max_file_size_opt
-    {
-	$$ = &tree.MoDump{
-	    DumpDatabase: true,
-	    Database: tree.Identifier($3.Compare()),
-	    Tables: $5,
-	    OutFile: $7,
-	    MaxFileSize: int64($8),
-	}
-    }
-|   MODUMP QUERY_RESULT STRING INTO STRING export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
+   MODUMP QUERY_RESULT STRING INTO STRING export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
     {
         ep := &tree.ExportParam{
 		Outfile:    true,
@@ -782,7 +763,6 @@ mo_dump_stmt:
 		ForceQuote: $10,
 	}
         $$ = &tree.MoDump{
-            DumpDatabase: false,
             ExportParams: ep,
         }
     }
