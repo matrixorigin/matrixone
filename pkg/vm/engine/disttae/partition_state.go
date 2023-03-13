@@ -23,7 +23,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -43,6 +42,7 @@ type PartitionState struct {
 	Rows         *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
 	Blocks       *btree.BTreeG[BlockEntry]
 	PrimaryIndex *btree.BTreeG[*PrimaryIndexEntry]
+	Checkpoints  []string
 }
 
 // RowEntry represents a version of a row
@@ -135,10 +135,13 @@ func NewPartitionState() *PartitionState {
 }
 
 func (p *PartitionState) Copy() *PartitionState {
+	checkpoints := make([]string, len(p.Checkpoints))
+	copy(checkpoints, p.Checkpoints)
 	return &PartitionState{
 		Rows:         p.Rows.Copy(),
 		Blocks:       p.Blocks.Copy(),
 		PrimaryIndex: p.PrimaryIndex.Copy(),
+		Checkpoints:  checkpoints,
 	}
 }
 
@@ -177,14 +180,14 @@ func (p *PartitionState) HandleLogtailEntry(
 	ctx context.Context,
 	entry *api.Entry,
 	primaryKeyIndex int,
-	pool *mpool.MPool,
+	packer *types.Packer,
 ) {
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if isMetaTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, entry.Bat)
 		} else {
-			p.HandleRowsInsert(ctx, entry.Bat, primaryKeyIndex, pool)
+			p.HandleRowsInsert(ctx, entry.Bat, primaryKeyIndex, packer)
 		}
 	case api.Entry_Delete:
 		if isMetaTable(entry.TableName) {
@@ -203,13 +206,13 @@ func (p *PartitionState) HandleRowsInsert(
 	ctx context.Context,
 	input *api.Batch,
 	primaryKeyIndex int,
-	pool *mpool.MPool,
+	packer *types.Packer,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	rowIDVector := vector.MustTCols[types.Rowid](mustVectorFromProto(input.Vecs[0]))
-	timeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[1]))
+	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
+	timeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
@@ -218,7 +221,7 @@ func (p *PartitionState) HandleRowsInsert(
 	if primaryKeyIndex >= 0 {
 		primaryKeyBytesSet = encodePrimaryKeyVector(
 			batch.Vecs[2+primaryKeyIndex],
-			pool,
+			packer,
 		)
 	}
 
@@ -264,8 +267,8 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
 
-	rowIDVector := vector.MustTCols[types.Rowid](mustVectorFromProto(input.Vecs[0]))
-	timeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[1]))
+	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
+	timeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
@@ -301,14 +304,14 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataInsert")
 	defer task.End()
 
-	createTimeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[1]))
-	blockIDVector := vector.MustTCols[uint64](mustVectorFromProto(input.Vecs[2]))
-	entryStateVector := vector.MustTCols[bool](mustVectorFromProto(input.Vecs[3]))
-	sortedStateVector := vector.MustTCols[bool](mustVectorFromProto(input.Vecs[4]))
-	metaLocationVector := vector.MustStrCols(mustVectorFromProto(input.Vecs[5]))
-	deltaLocationVector := vector.MustStrCols(mustVectorFromProto(input.Vecs[6]))
-	commitTimeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[7]))
-	segmentIDVector := vector.MustTCols[uint64](mustVectorFromProto(input.Vecs[8]))
+	createTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
+	blockIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[2]))
+	entryStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[3]))
+	sortedStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[4]))
+	metaLocationVector := vector.MustStrCol(mustVectorFromProto(input.Vecs[5]))
+	deltaLocationVector := vector.MustStrCol(mustVectorFromProto(input.Vecs[6]))
+	commitTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
+	segmentIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[8]))
 
 	for i, blockID := range blockIDVector {
 		trace.WithRegion(ctx, "handle a row", func() {
@@ -376,8 +379,8 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataDelete")
 	defer task.End()
 
-	rowIDVector := vector.MustTCols[types.Rowid](mustVectorFromProto(input.Vecs[0]))
-	deleteTimeVector := vector.MustTCols[types.TS](mustVectorFromProto(input.Vecs[1]))
+	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
+	deleteTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 
 	for i, rowID := range rowIDVector {
 		blockID := types.DecodeUint64(rowID[:8])

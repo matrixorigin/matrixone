@@ -11,9 +11,9 @@ CREATE CLUSTER TABLE a (`id` varchar(128) NOT NULL,
     PRIMARY KEY (`id`),
     UNIQUE INDEX `uniq_acc` (`account_name`));
 
-insert into a accounts(acc1) values (0,"abc","acc1");
-insert into a accounts(acc1) values (1,"bcd","acc2");
-
+insert into a values (0,"abc","acc1",1);
+insert into a values (1,"bcd","acc2",1);
+update a set account_id=(select account_id from mo_account where account_name="acc1") where account_id=1;
 -- check it in the non-sys account
 -- @session:id=2&user=acc1:r1&password=111
 use mo_catalog;

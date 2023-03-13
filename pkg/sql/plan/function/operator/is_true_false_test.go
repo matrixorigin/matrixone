@@ -28,8 +28,8 @@ func TestIsTrueFalse(t *testing.T) {
 	procs := testutil.NewProc()
 
 	testVecs := [][]*vector.Vector{
-		{testutil.MakeScalarNull(types.T_any, 0)},
-		{testutil.MakeScalarBool(false, 0)},
+		{testutil.MakeScalarNull(types.T_any, 1)},
+		{testutil.MakeScalarBool(false, 1)},
 		{testutil.MakeBooleanlVector([]bool{false, false, true, true}, []uint64{1, 3})},
 	}
 

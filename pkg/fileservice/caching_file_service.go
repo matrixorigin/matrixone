@@ -23,12 +23,4 @@ type CachingFileService interface {
 
 	// SetAsyncUpdate sets cache update operation to async mode
 	SetAsyncUpdate(bool)
-
-	// CacheStats returns cache statistics
-	CacheStats() *CacheStats
-}
-
-type CacheStats struct {
-	NumRead int64
-	NumHit  int64
 }

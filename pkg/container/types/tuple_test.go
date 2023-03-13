@@ -15,10 +15,11 @@
 package types
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 	"math/rand"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/stretchr/testify/require"
 )
@@ -399,7 +400,7 @@ func randStringType() []byte {
 	return b
 }
 
-func encodeBufToPacker(tuple Tuple, p *packer) {
+func encodeBufToPacker(tuple Tuple, p *Packer) {
 	for _, e := range tuple {
 		switch e := e.(type) {
 		case bool:

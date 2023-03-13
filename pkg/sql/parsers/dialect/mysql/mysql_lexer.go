@@ -25,8 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func Parse(ctx context.Context, sql string) ([]tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql)
+func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower)
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}
@@ -36,8 +36,8 @@ func Parse(ctx context.Context, sql string) ([]tree.Statement, error) {
 	return lexer.stmts, nil
 }
 
-func ParseOne(ctx context.Context, sql string) (tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql)
+func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower)
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}
@@ -51,12 +51,14 @@ type Lexer struct {
 	scanner    *Scanner
 	stmts      []tree.Statement
 	paramIndex int
+	lower      int64
 }
 
-func NewLexer(dialectType dialect.DialectType, sql string) *Lexer {
+func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
 	return &Lexer{
 		scanner:    NewScanner(dialectType, sql),
 		paramIndex: 0,
+		lower:      lower,
 	}
 }
 
