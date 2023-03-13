@@ -59,11 +59,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
 }
 
-// AlterTable
-func (s *Scope) AlterTable(c *Compile) error {
-	return moerr.NewNYI(c.ctx, "alter table will be supported in future")
-}
-
 // Drop the old view, and create the new view.
 func (s *Scope) AlterView(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterView()

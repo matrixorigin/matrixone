@@ -58,7 +58,6 @@ const (
 	InsertValues
 	TruncateTable
 	AlterView
-	AlterTable
 	MergeInsert
 )
 
