@@ -298,7 +298,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
-		collector := export.NewMOCollector(ctx)
+		collector := export.NewMOCollector(ctx, export.WithOBCollectorConfig(&SV.OBCollectorConfig))
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
 			if err = motrace.InitWithConfig(ctx,
 				&SV,
