@@ -115,6 +115,10 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	var err error
 	w.RLock()
 	defer w.RUnlock()
+	if len(w.blocks) == 0 {
+		w.buffer = nil
+		return nil, moerr.NewInternalErrorNoCtx("object io: no block needs to be written")
+	}
 	var buf bytes.Buffer
 	metaLen := 0
 	start := 0
