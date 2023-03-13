@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 	"go.uber.org/zap"
 )
@@ -156,7 +157,11 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 
-	var cachingFS []fileservice.CachingFileService
+	type perfCounterInfo struct {
+		fsName      string
+		perfCounter *perfcounter.Counter
+	}
+	perfCounterInfos := make([]perfCounterInfo, 0, len(c.FileServices))
 
 	for _, config := range c.FileServices {
 
@@ -165,32 +170,33 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 			config.Name = defines.SharedFileServiceName
 		}
 
-		service, err := fileservice.NewFileService(config)
+		perfCounter := new(perfcounter.Counter)
+		service, err := fileservice.NewFileService(config, perfCounter)
 		if err != nil {
 			return nil, err
 		}
 		services = append(services, service)
-
-		if fs, ok := service.(fileservice.CachingFileService); ok {
-			cachingFS = append(cachingFS, fs)
-		}
+		perfCounterInfos = append(perfCounterInfos, perfCounterInfo{
+			fsName:      service.Name(),
+			perfCounter: perfCounter,
+		})
 
 	}
 
 	// cache stats
+	//TODO add metrics exporter
 	go func() {
 		for range time.NewTicker(time.Second * 10).C {
-			for _, fs := range cachingFS {
-				counter := fs.CacheCounter()
+			for _, info := range perfCounterInfos {
 
-				reads := atomic.LoadInt64(&counter.CacheRead)
-				hits := atomic.LoadInt64(&counter.CacheHit)
-				memReads := atomic.LoadInt64(&counter.MemCacheRead)
-				memHits := atomic.LoadInt64(&counter.MemCacheHit)
-				diskReads := atomic.LoadInt64(&counter.DiskCacheRead)
-				diskHits := atomic.LoadInt64(&counter.DiskCacheHit)
+				reads := atomic.LoadInt64(&info.perfCounter.CacheRead)
+				hits := atomic.LoadInt64(&info.perfCounter.CacheHit)
+				memReads := atomic.LoadInt64(&info.perfCounter.MemCacheRead)
+				memHits := atomic.LoadInt64(&info.perfCounter.MemCacheHit)
+				diskReads := atomic.LoadInt64(&info.perfCounter.DiskCacheRead)
+				diskHits := atomic.LoadInt64(&info.perfCounter.DiskCacheHit)
 
-				logutil.Info("cache stats of "+fs.Name(),
+				logutil.Info("cache stats of "+info.fsName,
 					zap.Any("reads", reads),
 					zap.Any("hits", hits),
 					zap.Any("hit rate", float64(hits)/float64(reads)),

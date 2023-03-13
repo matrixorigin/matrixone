@@ -21,13 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/clockpolicy"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/lrupolicy"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type MemCache struct {
 	policy   memcachepolicy.Policy
 	ch       chan func()
-	counters []*Counter
+	counters []*perfcounter.Counter
 }
 
 func NewMemCache(opts ...Options) *MemCache {
@@ -62,7 +63,7 @@ func WithClock(capacity int64) Options {
 	}
 }
 
-func WithCacheCounter(counter *Counter) Options {
+func WithPerfCounter(counter *perfcounter.Counter) Options {
 	return func(o *options) {
 		o.counters = append(o.counters, counter)
 	}
@@ -72,7 +73,7 @@ type Options func(*options)
 
 type options struct {
 	policy   memcachepolicy.Policy
-	counters []*Counter
+	counters []*perfcounter.Counter
 }
 
 func defaultOptions() options {
@@ -92,7 +93,7 @@ func (m *MemCache) Read(
 
 	var numHit, numRead int64
 	defer func() {
-		updateCounters(ctx, func(c *Counter) {
+		perfcounter.Update(ctx, func(c *perfcounter.Counter) {
 			atomic.AddInt64(&c.CacheRead, numRead)
 			atomic.AddInt64(&c.CacheHit, numHit)
 			atomic.AddInt64(&c.MemCacheRead, numRead)

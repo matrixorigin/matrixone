@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package perfcounter
 
-// CachingFileService is an extension to the FileService
-type CachingFileService interface {
-	FileService
+type Counter struct {
+	S3ListObjects   int64
+	S3HeadObject    int64
+	S3PutObject     int64
+	S3GetObject     int64
+	S3DeleteObjects int64
+	S3DeleteObject  int64
 
-	// FlushCache flushes cache
-	FlushCache()
-
-	// SetAsyncUpdate sets cache update operation to async mode
-	SetAsyncUpdate(bool)
+	CacheRead     int64
+	CacheHit      int64
+	MemCacheRead  int64
+	MemCacheHit   int64
+	DiskCacheRead int64
+	DiskCacheHit  int64
 }

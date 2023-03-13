@@ -29,6 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"go.uber.org/zap"
 )
 
@@ -40,9 +41,10 @@ type LocalFS struct {
 	sync.RWMutex
 	dirFiles map[string]*os.File
 
-	counter     *Counter
 	memCache    *MemCache
 	asyncUpdate bool
+
+	perfCounter *perfcounter.Counter
 }
 
 var _ FileService = new(LocalFS)
@@ -55,6 +57,7 @@ func NewLocalFS(
 	name string,
 	rootPath string,
 	memCacheCapacity int64,
+	perfCounter *perfcounter.Counter,
 ) (*LocalFS, error) {
 
 	// ensure dir
@@ -106,12 +109,12 @@ func NewLocalFS(
 		rootPath:    rootPath,
 		dirFiles:    make(map[string]*os.File),
 		asyncUpdate: true,
-		counter:     new(Counter),
+		perfCounter: perfCounter,
 	}
 	if memCacheCapacity > 0 {
 		fs.memCache = NewMemCache(
 			WithLRU(memCacheCapacity),
-			WithCacheCounter(fs.counter),
+			WithPerfCounter(perfCounter),
 		)
 		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
 	}
@@ -732,10 +735,6 @@ func (l *LocalFS) FlushCache() {
 
 func (l *LocalFS) SetAsyncUpdate(b bool) {
 	l.asyncUpdate = b
-}
-
-func (l *LocalFS) CacheCounter() *Counter {
-	return l.counter
 }
 
 func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {

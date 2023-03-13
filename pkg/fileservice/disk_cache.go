@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -32,25 +33,25 @@ import (
 //TODO full data. If we know the size and it's small, we can get the whole object in one request and save it to a file named full_data
 
 type DiskCache struct {
-	capacity   int64
-	path       string
-	fileExists sync.Map
-	counter    *Counter
+	capacity    int64
+	path        string
+	fileExists  sync.Map
+	perfCounter *perfcounter.Counter
 }
 
 func NewDiskCache(
 	path string,
 	capacity int64,
-	counter *Counter,
+	perfCounter *perfcounter.Counter,
 ) (*DiskCache, error) {
 	err := os.MkdirAll(path, 0755)
 	if err != nil {
 		return nil, err
 	}
 	return &DiskCache{
-		capacity: capacity,
-		path:     path,
-		counter:  counter,
+		capacity:    capacity,
+		path:        path,
+		perfCounter: perfCounter,
 	}, nil
 }
 
@@ -67,12 +68,12 @@ func (d *DiskCache) Read(
 
 	var numHit, numRead int64
 	defer func() {
-		updateCounters(ctx, func(c *Counter) {
+		perfcounter.Update(ctx, func(c *perfcounter.Counter) {
 			atomic.AddInt64(&c.CacheRead, numRead)
 			atomic.AddInt64(&c.CacheHit, numHit)
 			atomic.AddInt64(&c.DiskCacheRead, numRead)
 			atomic.AddInt64(&c.DiskCacheHit, numHit)
-		}, d.counter)
+		}, d.perfCounter)
 	}()
 
 	for i, entry := range vector.Entries {

@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 
@@ -51,10 +52,11 @@ type S3FS struct {
 	bucket    string
 	keyPrefix string
 
-	counter     *Counter
 	memCache    *MemCache
 	diskCache   *DiskCache
 	asyncUpdate bool
+
+	perfCounter *perfcounter.Counter
 }
 
 // key mapping scheme:
@@ -71,6 +73,7 @@ func NewS3FS(
 	memCacheCapacity int64,
 	diskCacheCapacity int64,
 	diskCachePath string,
+	perfCounter *perfcounter.Counter,
 ) (*S3FS, error) {
 
 	fs, err := newS3FS([]string{
@@ -83,6 +86,8 @@ func NewS3FS(
 	if err != nil {
 		return nil, err
 	}
+
+	fs.perfCounter = perfCounter
 
 	if err := fs.initCaches(
 		memCacheCapacity,
@@ -106,6 +111,7 @@ func NewS3FSOnMinio(
 	memCacheCapacity int64,
 	diskCacheCapacity int64,
 	diskCachePath string,
+	perfCounter *perfcounter.Counter,
 ) (*S3FS, error) {
 
 	fs, err := newS3FS([]string{
@@ -119,6 +125,8 @@ func NewS3FSOnMinio(
 	if err != nil {
 		return nil, err
 	}
+
+	fs.perfCounter = perfCounter
 
 	if err := fs.initCaches(
 		memCacheCapacity,
@@ -144,7 +152,7 @@ func (s *S3FS) initCaches(
 	if memCacheCapacity > 0 {
 		s.memCache = NewMemCache(
 			WithLRU(memCacheCapacity),
-			WithCacheCounter(s.counter),
+			WithPerfCounter(s.perfCounter),
 		)
 		logutil.Info("fileservice: mem cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", memCacheCapacity))
 	}
@@ -158,7 +166,7 @@ func (s *S3FS) initCaches(
 		s.diskCache, err = NewDiskCache(
 			diskCachePath,
 			diskCacheCapacity,
-			s.counter,
+			s.perfCounter,
 		)
 		if err != nil {
 			return err
@@ -770,10 +778,6 @@ func (s *S3FS) SetAsyncUpdate(b bool) {
 	s.asyncUpdate = b
 }
 
-func (s *S3FS) CacheCounter() *Counter {
-	return s.counter
-}
-
 func newS3FS(arguments []string) (*S3FS, error) {
 	if len(arguments) == 0 {
 		return nil, moerr.NewInvalidInputNoCtx("invalid S3 arguments")
@@ -975,7 +979,6 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		bucket:      bucket,
 		keyPrefix:   prefix,
 		asyncUpdate: true,
-		counter:     new(Counter),
 	}
 
 	return fs, nil
@@ -984,48 +987,48 @@ func newS3FS(arguments []string) (*S3FS, error) {
 
 func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	FSProfileHandler.AddSample()
-	updateCounters(ctx, func(counter *Counter) {
+	perfcounter.Update(ctx, func(counter *perfcounter.Counter) {
 		atomic.AddInt64(&counter.S3ListObjects, 1)
-	}, s.counter)
+	}, s.perfCounter)
 	return s.s3Client.ListObjectsV2(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	FSProfileHandler.AddSample()
-	updateCounters(ctx, func(counter *Counter) {
+	perfcounter.Update(ctx, func(counter *perfcounter.Counter) {
 		atomic.AddInt64(&counter.S3HeadObject, 1)
-	}, s.counter)
+	}, s.perfCounter)
 	return s.s3Client.HeadObject(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	FSProfileHandler.AddSample()
-	updateCounters(ctx, func(counter *Counter) {
+	perfcounter.Update(ctx, func(counter *perfcounter.Counter) {
 		atomic.AddInt64(&counter.S3PutObject, 1)
-	}, s.counter)
+	}, s.perfCounter)
 	return s.s3Client.PutObject(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	FSProfileHandler.AddSample()
-	updateCounters(ctx, func(counter *Counter) {
+	perfcounter.Update(ctx, func(counter *perfcounter.Counter) {
 		atomic.AddInt64(&counter.S3GetObject, 1)
-	}, s.counter)
+	}, s.perfCounter)
 	return s.s3Client.GetObject(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	FSProfileHandler.AddSample()
-	updateCounters(ctx, func(counter *Counter) {
+	perfcounter.Update(ctx, func(counter *perfcounter.Counter) {
 		atomic.AddInt64(&counter.S3DeleteObjects, 1)
-	}, s.counter)
+	}, s.perfCounter)
 	return s.s3Client.DeleteObjects(ctx, params, optFns...)
 }
 
 func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	FSProfileHandler.AddSample()
-	updateCounters(ctx, func(counter *Counter) {
+	perfcounter.Update(ctx, func(counter *perfcounter.Counter) {
 		atomic.AddInt64(&counter.S3DeleteObject, 1)
-	}, s.counter)
+	}, s.perfCounter)
 	return s.s3Client.DeleteObject(ctx, params, optFns...)
 }

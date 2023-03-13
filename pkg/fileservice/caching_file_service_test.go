@@ -21,6 +21,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,8 +33,8 @@ func testCachingFileService(
 	fs := newFS()
 	fs.SetAsyncUpdate(false)
 	ctx := context.Background()
-	var counter Counter
-	ctx = WithCounter(ctx, &counter)
+	var counter perfcounter.Counter
+	ctx = perfcounter.WithCounter(ctx, &counter)
 
 	buf := new(bytes.Buffer)
 	err := gob.NewEncoder(buf).Encode(map[int]int{
@@ -94,11 +95,6 @@ func testCachingFileService(
 	// counter
 	assert.Equal(t, counter.CacheRead, int64(2))
 	assert.Equal(t, counter.CacheHit, int64(1))
-	{
-		counter := fs.CacheCounter()
-		assert.Equal(t, counter.CacheRead, int64(2))
-		assert.Equal(t, counter.CacheHit, int64(1))
-	}
 
 	// flush
 	fs.FlushCache()

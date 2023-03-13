@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,55 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package perfcounter
 
-import (
-	"context"
-)
+import "context"
 
-type Counter struct {
-	S3ListObjects   int64
-	S3HeadObject    int64
-	S3PutObject     int64
-	S3GetObject     int64
-	S3DeleteObjects int64
-	S3DeleteObject  int64
-
-	CacheRead     int64
-	CacheHit      int64
-	MemCacheRead  int64
-	MemCacheHit   int64
-	DiskCacheRead int64
-	DiskCacheHit  int64
-}
+type Counters = map[*Counter]struct{}
 
 type ctxKeyCounters struct{}
 
 var CtxKeyCounters = ctxKeyCounters{}
-
-type Counters = map[*Counter]struct{}
-
-func updateCounters(ctx context.Context, fn func(*Counter), extraCounters ...*Counter) {
-	v := ctx.Value(CtxKeyCounters)
-	var counters Counters
-	if v != nil {
-		counters = v.(Counters)
-		for counter := range counters {
-			fn(counter)
-		}
-	}
-	for _, counter := range extraCounters {
-		if counter == nil {
-			continue
-		}
-		if counters != nil {
-			if _, ok := counters[counter]; ok {
-				continue
-			}
-		}
-		fn(counter)
-	}
-}
 
 func WithCounter(ctx context.Context, counter *Counter) context.Context {
 	// check existed
