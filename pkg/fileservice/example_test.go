@@ -30,6 +30,7 @@ func TestCacheWithRCExample(t *testing.T) {
 		"rc",
 		dir,
 		32<<20,
+		nil,
 	)
 	assert.Nil(t, err)
 
@@ -79,6 +80,7 @@ func TestCacheWithReleasableExample(t *testing.T) {
 		"rc",
 		dir,
 		32<<20,
+		nil,
 	)
 	assert.Nil(t, err)
 
