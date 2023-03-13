@@ -811,6 +811,19 @@ var (
 				configuration  json,
 				primary key(configuration_id)
 			);`,
+		`create table mo_pubs(
+    		pub_name varchar(64) primary key,
+    		database_name varchar(5000),
+    		database_id bigint unsigned,
+    		all_table bool,
+    		all_account bool,
+    		table_list text,
+    		account_list text,
+    		created_time timestamp,
+    		owner int unsigned,
+    		creator int unsigned,
+    		comment text
+    		);`,
 	}
 
 	//drop tables for the tenant
@@ -2416,6 +2429,74 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 	return err
 }
 
+func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePublication) error {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	var (
+		err          error
+		sql          string
+		erArray      []ExecResult
+		datId        uint64
+		datType      string
+		all_table    bool = true
+		all_account  bool
+		table_list   string
+		account_list string
+	)
+	all_account = len(cp.Accounts) == 0
+	if !all_account {
+		accts := make([]string, 0, len(cp.Accounts))
+		for _, acct := range cp.Accounts {
+			accts = append(accts, string(acct))
+		}
+		account_list = strings.Join(accts, ",")
+	}
+	bh.Exec(ctx, "begin;")
+	bh.ClearExecResultSet()
+	sql = fmt.Sprintf(`select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`, cp.Database)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(ctx, "database '%s' does not exist", cp.Database)
+		goto handleFailed
+	}
+	datId, err = erArray[0].GetUint64(ctx, 0, 0)
+	if err != nil {
+		goto handleFailed
+	}
+	datType, err = erArray[0].GetString(ctx, 0, 1)
+	if err != nil {
+		goto handleFailed
+	}
+	if datType != "" { //TODO: check the dat_type
+		err = moerr.NewInternalError(ctx, "database '%s' is not a user database", cp.Database)
+	}
+	sql = fmt.Sprintf(`insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`, cp.Name, cp.Database, datId, all_table, all_account, table_list, account_list, ses.GetTenantInfo().GetDefaultRoleID(), ses.GetTenantInfo().GetUserID(), cp.Comment)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
 // doDropAccount accomplishes the DropAccount statement
 func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) error {
 	bh := ses.GetBackgroundExec(ctx)
@@ -4001,6 +4082,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindNone
 	case *tree.LockTableStmt, *tree.UnLockTableStmt:
 		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.CreatePublication:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
 		kind = privilegeKindNone
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))

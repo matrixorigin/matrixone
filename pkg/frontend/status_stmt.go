@@ -269,6 +269,15 @@ func (de *UpdateExecutor) Setup(ctx context.Context, ses *Session) error {
 	return nil
 }
 
+type CreatePublicationExecutor struct {
+	*statusStmtExecutor
+	cp *tree.CreatePublication
+}
+
+func (cpe *CreatePublicationExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return doCreatePublication(ctx, ses, cpe.cp)
+}
+
 type CreateAccountExecutor struct {
 	*statusStmtExecutor
 	ca *tree.CreateAccount
