@@ -141,7 +141,7 @@ func (s *S3FS) initCaches(
 		memCacheCapacity = 512 << 20
 	}
 	if memCacheCapacity > 0 {
-		s.memCache = NewMemCache(memCacheCapacity)
+		s.memCache = NewMemCache(WithLRU(memCacheCapacity))
 		logutil.Info("fileservice: mem cache initialized", zap.Any("fs-name", s.name), zap.Any("capacity", memCacheCapacity))
 	}
 

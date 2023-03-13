@@ -167,7 +167,7 @@ col2 int,
 col3 int
 );
 
--- echo duplicate
+-- echo duplicate,pls refer to issue :#8348
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6;
 select * from t6;
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6 FIELDS ESCAPED BY '\\';

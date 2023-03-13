@@ -42,6 +42,8 @@ type Logtailer interface {
 	TableLogtail(
 		ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
 	) (logtail.TableLogtail, error)
+
+	Now() (timestamp.Timestamp, timestamp.Timestamp)
 }
 
 var _ Logtailer = (*LogtailerImpl)(nil)
@@ -61,6 +63,12 @@ func NewLogtailer(
 		mgr:       mgr,
 		c:         c,
 	}
+}
+
+func (l *LogtailerImpl) Now() (timestamp.Timestamp, timestamp.Timestamp) {
+	ts := l.mgr.now()
+
+	return ts.ToTimestamp(), timestamp.Timestamp{}
 }
 
 // TableLogtail returns logtail for the specified table.
