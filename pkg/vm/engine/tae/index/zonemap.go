@@ -63,6 +63,7 @@ func is32BytesMax(bs []byte) bool {
 type ZoneMap struct {
 	typ      types.Type
 	min, max any
+	buf      []byte
 	inited   bool
 	// only in a deserialized zonemap, this field is possibile to be True.
 	// isInf is true means we can't find a 32-byte upper bound for original maximum when serializing,
@@ -234,6 +235,10 @@ func (zm *ZoneMap) GetMin() any {
 	return zm.min
 }
 
+func (zm *ZoneMap) GetBuf() []byte {
+	return zm.buf
+}
+
 // func (zm *ZoneMap) Print() string {
 // 	// default int32
 // 	s := "<ZM>\n["
@@ -293,6 +298,7 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		zm.inited = false
 		return nil
 	}
+	zm.buf = buf
 	zm.inited = true
 	switch zm.typ.Oid {
 	case types.T_bool:

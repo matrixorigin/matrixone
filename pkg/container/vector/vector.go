@@ -132,6 +132,9 @@ func (v *Vector) CleanOnlyData() {
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
+	if v.nsp != nil && v.nsp.Np != nil {
+		v.nsp.Np.Clear()
+	}
 }
 
 //func (v *Vector) GetRawData() []byte {
@@ -526,6 +529,7 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 		length: v.length,
 	}
 
+	dataLen := v.typ.TypeSize()
 	if v.IsConst() {
 		if err := extend(w, 1, mp); err != nil {
 			return nil, err
@@ -534,8 +538,9 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 		if err := extend(w, v.length, mp); err != nil {
 			return nil, err
 		}
+		dataLen *= v.length
 	}
-	copy(w.data, v.data)
+	copy(w.data, v.data[:dataLen])
 
 	if len(v.area) > 0 {
 		if w.area, err = mp.Alloc(len(v.area)); err != nil {

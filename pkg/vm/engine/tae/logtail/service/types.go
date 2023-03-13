@@ -1,10 +1,10 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,26 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package service
 
-type Releasable interface {
-	Release()
+import "github.com/matrixorigin/matrixone/pkg/pb/api"
+
+// TableID comes from api.TableID
+type TableID string
+
+func MarshalTableID(table *api.TableID) TableID {
+	return TableID(table.String())
 }
-
-type ReleasableValue[T any] struct {
-	Value       T
-	releaseFunc func()
-}
-
-func (r ReleasableValue[T]) Release() {
-	r.releaseFunc()
-}
-
-func NewReleasable[T any](v T, releaseFunc func()) ReleasableValue[T] {
-	return ReleasableValue[T]{
-		Value:       v,
-		releaseFunc: releaseFunc,
-	}
-}
-
-var _ Releasable = NewReleasable(42, func() {})

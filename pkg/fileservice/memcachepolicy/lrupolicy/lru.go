@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package lrupolicy
 
 import (
 	"container/list"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
 	"sync"
 )
 
@@ -33,7 +34,7 @@ type lruItem struct {
 	Size  int64
 }
 
-func NewLRU(capacity int64) *LRU {
+func New(capacity int64) *LRU {
 	return &LRU{
 		capacity: capacity,
 		evicts:   list.New(),
@@ -98,7 +99,7 @@ func (l *LRU) evict() {
 			}
 
 			// Releasable
-			if v, ok := item.Value.(Releasable); ok {
+			if v, ok := item.Value.(memcachepolicy.Releasable); ok {
 				v.Release()
 			}
 
@@ -128,4 +129,8 @@ func (l *LRU) Flush() {
 	l.size = 0
 	l.evicts = list.New()
 	l.kv = make(map[any]*list.Element)
+}
+
+func (l *LRU) Size() int64 {
+	return l.size
 }

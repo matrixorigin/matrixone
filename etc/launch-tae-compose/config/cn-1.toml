@@ -7,6 +7,8 @@ max-size = 512
 
 [cn.rpc]
 max-message-size = "100mb"
+send-queue-size = 2
+busy-queue-size = 1
 
 [[fileservice]]
 backend = "DISK"

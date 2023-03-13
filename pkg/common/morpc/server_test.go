@@ -97,7 +97,9 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 		c := newTestClient(t)
 		rs.RegisterRequestHandler(func(_ context.Context, request Message, _ uint64, cs ClientSession) error {
 			assert.NoError(t, c.Close())
-			return cs.Write(ctx, request)
+			err := cs.Write(ctx, request)
+			assert.Error(t, err)
+			return err
 		})
 
 		req := newTestMessage(1)

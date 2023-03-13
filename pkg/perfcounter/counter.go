@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,23 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package perfcounter
 
-import (
-	"testing"
+import "sync/atomic"
 
-	"github.com/stretchr/testify/assert"
-)
+type Counter struct {
+	S3 struct {
+		List        atomic.Int64
+		Head        atomic.Int64
+		Put         atomic.Int64
+		Get         atomic.Int64
+		Delete      atomic.Int64
+		DeleteMulti atomic.Int64
+	}
 
-func TestReleasable(t *testing.T) {
-	l := NewLRU(1)
-	n := 0
-
-	r := NewReleasable(1, func() {
-		n++
-	})
-	l.Set(1, r, 1)
-
-	l.Set(2, 42, 1)
-	assert.Equal(t, 1, n)
+	Cache struct {
+		Read     atomic.Int64
+		Hit      atomic.Int64
+		MemRead  atomic.Int64
+		MemHit   atomic.Int64
+		DiskRead atomic.Int64
+		DiskHit  atomic.Int64
+	}
 }
