@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -116,8 +117,7 @@ func (w *ObjectWriter) WriteEnd(ctx context.Context, items ...WriteOptions) ([]B
 	w.RLock()
 	defer w.RUnlock()
 	if len(w.blocks) == 0 {
-		w.buffer = nil
-		return nil, moerr.NewInternalErrorNoCtx("object io: no block needs to be written")
+		logutil.Warn("object io: no block needs to be written")
 	}
 	var buf bytes.Buffer
 	metaLen := 0
