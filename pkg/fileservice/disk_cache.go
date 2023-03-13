@@ -25,7 +25,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 //TODO LRU
@@ -63,8 +62,6 @@ func (d *DiskCache) Read(
 ) (
 	err error,
 ) {
-	_, span := trace.Start(ctx, "DiskCache.Read")
-	defer span.End()
 
 	var numHit, numRead int64
 	defer func() {

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/clockpolicy"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/lrupolicy"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type MemCache struct {
@@ -88,8 +87,6 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
-	_, span := trace.Start(ctx, "MemCache.Read")
-	defer span.End()
 
 	var numHit, numRead int64
 	defer func() {
