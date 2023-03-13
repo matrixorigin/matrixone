@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -30,7 +29,7 @@ import (
 var Srv *Server
 var CnAddr string
 
-func NewServer(client logservice.CNHAKeeperClient) *Server {
+func InitServer(client logservice.CNHAKeeperClient) *Server {
 	if Srv != nil {
 		return Srv
 	}
@@ -50,7 +49,7 @@ func (srv *Server) GetConnector(id uint64) *process.WaitRegister {
 	return srv.mp[id]
 }
 
-func (srv *Server) RegistConnector(reg *process.WaitRegister) uint64 {
+func (srv *Server) RegisterConnector(reg *process.WaitRegister) uint64 {
 	srv.Lock()
 	defer srv.Unlock()
 	srv.mp[srv.id] = reg
@@ -72,10 +71,6 @@ func (srv *Server) PutNotifyChIntoUuidMap(u uuid.UUID, ch chan process.WrapCs) e
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	srv.uuidCsChanMap.mp[u] = ch
-	return nil
-}
-
-func (srv *Server) HandleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
 	return nil
 }
 
