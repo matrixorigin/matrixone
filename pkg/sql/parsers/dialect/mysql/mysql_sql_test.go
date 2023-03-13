@@ -2004,6 +2004,66 @@ var (
 			input:  "alter table tbl1 checksum = 0, COMMENT = 'asdf'",
 			output: "alter table tbl1 checksum = 0, comment = asdf",
 		},
+		{
+			input: "create publication pub1 database db1",
+		},
+		{
+			input: "create publication pub1 database db1 account acc0",
+		},
+		{
+			input: "create publication pub1 database db1 account acc0, acc1",
+		},
+		{
+			input: "create publication pub1 database db1 account acc0, acc1, acc2 comment 'test'",
+		},
+		{
+			input: "create publication pub1 database db1 comment 'test'",
+		},
+		{
+			input: "create database db1 from acc0 publication pub1",
+		},
+		{
+			input: "drop publication pub1",
+		},
+		{
+			input: "drop publication if exists pub1",
+		},
+		{
+			input: "alter publication pub1 account all",
+		},
+		{
+			input: "alter publication pub1 account acc0",
+		},
+		{
+			input: "alter publication pub1 account acc0, acc1",
+		},
+		{
+			input: "alter publication pub1 account add acc0",
+		},
+		{
+			input: "alter publication pub1 account add acc0, acc1",
+		},
+		{
+			input: "alter publication pub1 account drop acc0",
+		},
+		{
+			input: "alter publication if exists pub1 account drop acc0, acc1",
+		},
+		{
+			input: "alter publication pub1 account drop acc1 comment 'test'",
+		},
+		{
+			input: "alter publication if exists pub1 account acc1 comment 'test'",
+		},
+		{
+			input: "show create publication pub1",
+		},
+		{
+			input: "show publications",
+		},
+		{
+			input: "show subscriptions",
+		},
 	}
 )
 
