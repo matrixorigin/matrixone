@@ -202,3 +202,18 @@ func (node *DropAccount) Format(ctx *FmtCtx) {
 
 func (node *DropAccount) GetStatementType() string { return "Drop Account" }
 func (node *DropAccount) GetQueryType() string     { return QueryTypeDCL }
+
+type DropPublication struct {
+	statementImpl
+	Name     Identifier
+	IfExists bool
+}
+
+func (node *DropPublication) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop publication")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
+	ctx.WriteByte(' ')
+	node.Name.Format(ctx)
+}

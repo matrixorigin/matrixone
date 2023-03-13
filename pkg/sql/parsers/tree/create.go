@@ -88,11 +88,25 @@ func NewCreateOptionEncryption(e string) *CreateOptionEncryption {
 	}
 }
 
+type SubscriptionOption struct {
+	statementImpl
+	From        Identifier
+	Publication Identifier
+}
+
+func (node *SubscriptionOption) Format(ctx *FmtCtx) {
+	ctx.WriteString(" from ")
+	node.From.Format(ctx)
+	ctx.WriteString(" publication ")
+	node.Publication.Format(ctx)
+}
+
 type CreateDatabase struct {
 	statementImpl
-	IfNotExists   bool
-	Name          Identifier
-	CreateOptions []CreateOption
+	IfNotExists        bool
+	Name               Identifier
+	CreateOptions      []CreateOption
+	SubscriptionOption *SubscriptionOption
 }
 
 func (node *CreateDatabase) Format(ctx *FmtCtx) {
@@ -101,6 +115,11 @@ func (node *CreateDatabase) Format(ctx *FmtCtx) {
 		ctx.WriteString("if not exists ")
 	}
 	node.Name.Format(ctx)
+
+	if node.SubscriptionOption != nil {
+		node.SubscriptionOption.Format(ctx)
+	}
+
 	if node.CreateOptions != nil {
 		for _, opt := range node.CreateOptions {
 			ctx.WriteByte(' ')
@@ -2479,3 +2498,38 @@ func (node *AccountCommentOrAttribute) Format(ctx *FmtCtx) {
 		ctx.WriteString(fmt.Sprintf("'%s'", node.Str))
 	}
 }
+
+type CreatePublication struct {
+	statementImpl
+	IfNotExists bool
+	Name        Identifier
+	Database    Identifier
+	Accounts    []Identifier
+	Comment     string
+}
+
+func (node *CreatePublication) Format(ctx *FmtCtx) {
+	ctx.WriteString("create publication ")
+	if node.IfNotExists {
+		ctx.WriteString(" if not exists")
+	}
+	node.Name.Format(ctx)
+	ctx.WriteString(" database ")
+	node.Database.Format(ctx)
+	if len(node.Accounts) > 0 {
+		ctx.WriteString(" account ")
+		prefix := ""
+		for _, a := range node.Accounts {
+			ctx.WriteString(prefix)
+			a.Format(ctx)
+			prefix = ", "
+		}
+	}
+	if len(node.Comment) > 0 {
+		ctx.WriteString(" comment ")
+		ctx.WriteString(fmt.Sprintf("'%s'", node.Comment))
+	}
+}
+
+func (node *CreatePublication) GetStatementType() string { return "Create Publication" }
+func (node *CreatePublication) GetQueryType() string     { return QueryTypeDCL }
