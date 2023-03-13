@@ -108,7 +108,7 @@ func (c *LogtailClient) Unsubscribe(
 // 1. response for error: *LogtailResponse.GetError() != nil
 // 2. response for subscription: *LogtailResponse.GetSubscribeResponse() != nil
 // 3. response for unsubscription: *LogtailResponse.GetUnsubscribeResponse() != nil
-// 3. response for additional logtail: *LogtailResponse.GetUpdateResponse() != nil
+// 3. response for incremental logtail: *LogtailResponse.GetUpdateResponse() != nil
 func (c *LogtailClient) Receive() (*LogtailResponse, error) {
 	recvFunc := func() (*LogtailResponseSegment, error) {
 		message, ok := <-c.recvChan

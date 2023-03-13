@@ -59,7 +59,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		DataDir: dir,
 	}
 	//create dir;
-	fs, err := fileservice.NewFileService(c)
+	fs, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 	opts.Fs = fs
 	handle := mockTAEHandle(t, opts)

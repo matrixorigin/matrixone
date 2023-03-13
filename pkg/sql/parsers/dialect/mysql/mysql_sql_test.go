@@ -1826,32 +1826,32 @@ var (
 			input: `create cluster table a (a int)`,
 		},
 		{
-			input: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			input: `insert into a values (1, 2), (1, 2)`,
 		},
 		{
-			input: `insert into a accounts(acc1, acc2) select a, b from a`,
+			input: `insert into a select a, b from a`,
 		},
 		{
-			input: `insert into a (a, b) accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			input: `insert into a (a, b) values (1, 2), (1, 2)`,
 		},
 		{
-			input:  `insert into a () accounts(acc1, acc2) values (1, 2), (1, 2)`,
-			output: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			input:  `insert into a () values (1, 2), (1, 2)`,
+			output: `insert into a values (1, 2), (1, 2)`,
 		},
 		{
-			input: `insert into a (a, b) accounts(acc1, acc2) select a, b from a`,
+			input: `insert into a (a, b) select a, b from a`,
 		},
 		{
-			input:  `insert into a accounts(acc1, acc2) set a = b, b = b + 1`,
-			output: `insert into a (a, b) accounts(acc1, acc2) values (b, b + 1)`,
+			input:  `insert into a set a = b, b = b + 1`,
+			output: `insert into a (a, b) values (b, b + 1)`,
 		},
 		{
-			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A accounts (a1, a2) FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a accounts(a1, a2) fields terminated by , (, , c, d, e, f)",
+			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		},
 		{
-			input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
+			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
+			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
 		},
 		{
 			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
@@ -2003,6 +2003,66 @@ var (
 		{
 			input:  "alter table tbl1 checksum = 0, COMMENT = 'asdf'",
 			output: "alter table tbl1 checksum = 0, comment = asdf",
+		},
+		{
+			input: "create publication pub1 database db1",
+		},
+		{
+			input: "create publication pub1 database db1 account acc0",
+		},
+		{
+			input: "create publication pub1 database db1 account acc0, acc1",
+		},
+		{
+			input: "create publication pub1 database db1 account acc0, acc1, acc2 comment 'test'",
+		},
+		{
+			input: "create publication pub1 database db1 comment 'test'",
+		},
+		{
+			input: "create database db1 from acc0 publication pub1",
+		},
+		{
+			input: "drop publication pub1",
+		},
+		{
+			input: "drop publication if exists pub1",
+		},
+		{
+			input: "alter publication pub1 account all",
+		},
+		{
+			input: "alter publication pub1 account acc0",
+		},
+		{
+			input: "alter publication pub1 account acc0, acc1",
+		},
+		{
+			input: "alter publication pub1 account add acc0",
+		},
+		{
+			input: "alter publication pub1 account add acc0, acc1",
+		},
+		{
+			input: "alter publication pub1 account drop acc0",
+		},
+		{
+			input: "alter publication if exists pub1 account drop acc0, acc1",
+		},
+		{
+			input: "alter publication pub1 account drop acc1 comment 'test'",
+		},
+		{
+			input: "alter publication if exists pub1 account acc1 comment 'test'",
+		},
+		{
+			input: "show create publication pub1",
+		},
+		{
+			input: "show publications",
+		},
+		{
+			input: "show subscriptions",
 		},
 	}
 )
