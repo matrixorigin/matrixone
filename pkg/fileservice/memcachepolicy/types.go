@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,20 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package week
+package memcachepolicy
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
-
-func DateToWeek(xs []types.Date, rs []uint8) []uint8 {
-	for i, x := range xs {
-		_, rs[i] = x.WeekOfYear()
-	}
-	return rs
-}
-
-func DatetimeToWeek(xs []types.Datetime, rs []uint8) []uint8 {
-	for i, x := range xs {
-		_, rs[i] = x.WeekOfYear()
-	}
-	return rs
+type Policy interface {
+	Set(key any, value any, size int64)
+	Get(key any) (value any, size int64, ok bool)
+	Flush()
+	Size() int64
 }

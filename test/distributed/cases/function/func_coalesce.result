@@ -28,13 +28,13 @@ drop table t2;
 CREATE TABLE t0(c0 BIGINT UNSIGNED);
 INSERT INTO t0(c0) VALUES(NULL);
 SELECT * FROM t0 WHERE CAST(COALESCE(t0.c0, -1) AS UNSIGNED);
-Data truncation: data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, value '-1'
 SELECT * FROM t0 WHERE CAST(IFNULL(t0.c0, -1) AS UNSIGNED);
-Data truncation: data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, value '-1'
 SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;
-Data truncation: data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, value '-1'
 SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) FROM t0;
-Data truncation: data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, value '-1'
 DROP TABLE t0;
 CREATE TABLE t1 (a char(10), b INT);
 INSERT INTO t1 VALUES ('', 0);
@@ -68,11 +68,11 @@ x
 DROP TABLE t1;
 create table t1 (a bigint unsigned);
 insert into t1 select (if(1, 9223372036854775808, 1));
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 insert into t1 select (case when 1 then 9223372036854775808 else 1 end);
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 insert into t1 select (coalesce(9223372036854775808, 1));
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 select * from t1;
 a
 drop table t1;

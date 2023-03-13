@@ -15,33 +15,33 @@
 package unary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/rtrim"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_varchar.ToType()
-	for _, v := range vectors {
-		if v.GetType().Oid == types.T_blob {
-			resultType = types.T_blob.ToType()
-			break
-		}
+func Rtrim(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_varchar.ToType()
+	if inputVector.GetType().Oid == types.T_blob {
+		rtyp = types.T_blob.ToType()
 	}
-	inputValues := vector.MustStrCols(inputVector)
 
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultValues := make([]string, 1)
-		rtrim.Rtrim(inputValues, resultValues)
-		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
+	ivals := vector.MustStrCol(inputVector)
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	} else if inputVector.IsConst() {
+		var rvals [1]string
+		rtrim.Rtrim(ivals, rvals[:])
+		return vector.NewConstBytes(rtyp, []byte(rvals[0]), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultValues := make([]string, len(inputValues))
-		rtrim.Rtrim(inputValues, resultValues)
-		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
+		rvals := make([]string, len(ivals))
+		rtrim.Rtrim(ivals, rvals)
+		rvec := vector.NewVec(rtyp)
+		vector.AppendStringList(rvec, rvals, nil, proc.Mp())
+		nulls.Set(rvec.GetNulls(), inputVector.GetNulls())
+		return rvec, nil
 	}
 }

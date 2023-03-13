@@ -65,20 +65,20 @@ func TestInternalAutoIncrement(t *testing.T) {
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
 		bat := batch.NewWithSize(4)
 		bat.Zs = []int64{1}
-		bat.Vecs[0] = vector.New(types.T_Rowid.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 		//err := bat.Vecs[0].Append(int64(1), false, testutil.TestUtilMp)
-		bat.Vecs[1] = vector.New(types.T_varchar.ToType())
-		err := bat.Vecs[1].Append([]byte("10_a"), false, testutil.TestUtilMp)
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		err := vector.AppendBytes(bat.Vecs[1], []byte("10_a"), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
-		bat.Vecs[2] = vector.New(types.T_uint64.ToType())
-		err = bat.Vecs[2].Append(uint64(28), false, testutil.TestUtilMp)
+		bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
+		err = vector.AppendFixed(bat.Vecs[2], uint64(28), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}
-		bat.Vecs[3] = vector.New(types.T_int64.ToType())
-		err = bat.Vecs[3].Append(int64(1), false, testutil.TestUtilMp)
+		bat.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixed(bat.Vecs[3], int64(1), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
 		}

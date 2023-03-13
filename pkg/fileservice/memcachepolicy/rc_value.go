@@ -12,35 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package memcachepolicy
 
 import "sync/atomic"
 
-// RC represents a reference counted value that will not evict in LRU if refs is greater than 0
-type RC[T any] struct {
+// RCValue represents a reference counted value that will not evict in LRU if refs is greater than 0
+type RCValue[T any] struct {
 	refs  int64
 	Value T
 }
 
-// NewRC creates an RC value with 0 reference
-func NewRC[T any](value T) *RC[T] {
-	return &RC[T]{
+// NewRCValue creates an RC value with 0 reference
+func NewRCValue[T any](value T) *RCValue[T] {
+	return &RCValue[T]{
 		Value: value,
 		refs:  0,
 	}
 }
 
 // IncRef increases reference count
-func (r *RC[T]) IncRef() {
+func (r *RCValue[T]) IncRef() {
 	atomic.AddInt64(&r.refs, 1)
 }
 
 // DecRef decreases reference count
-func (r *RC[T]) DecRef() {
+func (r *RCValue[T]) DecRef() {
 	atomic.AddInt64(&r.refs, -1)
 }
 
 // RefCount returns reference count
-func (r *RC[T]) RefCount() int64 {
+func (r *RCValue[T]) RefCount() int64 {
 	return atomic.LoadInt64(&r.refs)
 }

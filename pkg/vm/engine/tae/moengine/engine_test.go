@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -149,7 +148,7 @@ func TestEngine(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
-			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
+			assert.Equal(t, 80, bat.Vecs[0].Length())
 		}
 	}
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -258,7 +257,7 @@ func TestEngineAllType(t *testing.T) {
 		bat, err := reader.Read(ctx, schema.Attrs(), nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
-			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
+			assert.Equal(t, 80, bat.Vecs[0].Length())
 			vec := containers.NewVectorWithSharedMemory(bat.Vecs[12], false)
 			assert.Equal(t, vec.Get(0), basebat.Vecs[12].Get(20))
 		}
@@ -331,7 +330,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
-			assert.Equal(t, 100, vector.Length(bat.Vecs[0]))
+			assert.Equal(t, 100, bat.Vecs[0].Length())
 			delete = bat
 		}
 	}
@@ -363,7 +362,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
 		if bat != nil {
-			assert.Equal(t, 0, vector.Length(bat.Vecs[0]))
+			assert.Equal(t, 0, bat.Vecs[0].Length())
 		}
 	}
 

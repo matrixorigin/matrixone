@@ -134,11 +134,11 @@ oct(instr(str2, str1))
 22
 SELECT empty(instr(str2,str1)) FROM instr_01;
 empty(instr(str2, str1))
-0
-0
-0
-0
-0
+false
+false
+false
+false
+false
 null
 null
 null
@@ -260,12 +260,12 @@ oct(instr(str2, str1))
 1
 SELECT empty(instr(str2,str1)) FROM instr_02;
 empty(instr(str2, str1))
-0
-0
-0
-0
+false
+false
+false
+false
 null
-0
+false
 SELECT LENGTH(INSTR(str2,str1)) FROM instr_02;
 length(instr(str2, str1))
 1

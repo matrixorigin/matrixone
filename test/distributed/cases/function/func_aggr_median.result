@@ -128,7 +128,7 @@ Data truncation: data out of range: data type int8, value '-129'
 INSERT INTO median_01 VALUES(7, -123, 89555, 5554584122);
 Data truncation: data out of range: data type uint16, value '89555'
 INSERT INTO median_01 VALUES(8, -62, 33, 9223372036854775808);
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 INSERT INTO median_01 VALUES(2147483648, -62, 33, 9223372036854775808);
 Data truncation: data out of range: data type int32, value '2147483648'
 SELECT median(d2) from median_01;
@@ -164,8 +164,7 @@ SELECT SIN(median(d1)), COS(median(d2)), TAN(median(d2)) FROM median_01;
 sin(median(d1))    cos(median(d2))    tan(median(d2))
 -0.4871745124605095    0.8881213562994406    -0.5175070078184374
 SELECT TAN(median(d2)), cot(median(d2) * 2), ACOS(median(d1)) FROM median_01;
-tan(median(d2))    cot(median(d2) * 2)    acos(median(d1))
--0.5175070078184374    -0.707416987399939    null
+invalid argument acos, bad value 22.5
 SELECT ATAN(median(d2)), SINH(median(id)) FROM median_01;
 atan(median(d2))    sinh(median(id))
 1.5705319164361722    10.017874927409903
@@ -214,8 +213,7 @@ SELECT median(d1) from median_02 WHERE id = (SELECT id from median_02 where d2 =
 median(d1)
 645545.125
 SELECT ACOS(median(d2)) from median_02;
-acos(median(d2))
-null
+invalid argument acos, bad value 65534.5554584122
 SELECT CEIL(median(d2)), FLOOR(median(d2)) from median_02;
 ceil(median(d2))    floor(median(d2))
 65535.0    65534.0

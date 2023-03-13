@@ -1826,32 +1826,32 @@ var (
 			input: `create cluster table a (a int)`,
 		},
 		{
-			input: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			input: `insert into a values (1, 2), (1, 2)`,
 		},
 		{
-			input: `insert into a accounts(acc1, acc2) select a, b from a`,
+			input: `insert into a select a, b from a`,
 		},
 		{
-			input: `insert into a (a, b) accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			input: `insert into a (a, b) values (1, 2), (1, 2)`,
 		},
 		{
-			input:  `insert into a () accounts(acc1, acc2) values (1, 2), (1, 2)`,
-			output: `insert into a accounts(acc1, acc2) values (1, 2), (1, 2)`,
+			input:  `insert into a () values (1, 2), (1, 2)`,
+			output: `insert into a values (1, 2), (1, 2)`,
 		},
 		{
-			input: `insert into a (a, b) accounts(acc1, acc2) select a, b from a`,
+			input: `insert into a (a, b) select a, b from a`,
 		},
 		{
-			input:  `insert into a accounts(acc1, acc2) set a = b, b = b + 1`,
-			output: `insert into a (a, b) accounts(acc1, acc2) values (b, b + 1)`,
+			input:  `insert into a set a = b, b = b + 1`,
+			output: `insert into a (a, b) values (b, b + 1)`,
 		},
 		{
-			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A accounts (a1, a2) FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a accounts(a1, a2) fields terminated by , (, , c, d, e, f)",
+			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		},
 		{
-			input:  "load data infile 'data.txt' into table db.a accounts(a1, a2) fields terminated by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a accounts(a1, a2) fields terminated by \t escaped by \t",
+			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
+			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
 		},
 		{
 			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,

@@ -25,48 +25,32 @@ import (
 func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left := vectors[0]
 	right := vectors[1]
-	leftValues := vector.MustTCols[types.Date](vectors[0])
-	rightValues := vector.MustTCols[types.Date](vectors[1])
+	leftValues := vector.MustFixedCol[types.Date](vectors[0])
+	rightValues := vector.MustFixedCol[types.Date](vectors[1])
 
-	resultType := types.T_int64.ToType()
-	switch {
-	case left.IsScalar() && right.IsScalar():
-		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := vector.MustTCols[int64](resultVector)
-		datediff.DateDiff(leftValues, rightValues, resultValues)
-		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
+	rtyp := types.T_int64.ToType()
+	if left.IsConstNull() || right.IsConstNull() {
+		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
+	} else if left.IsConst() && right.IsConst() {
+		var rvals [1]int64
+		datediff.DateDiff(leftValues, rightValues, rvals[:])
+		return vector.NewConstFixed(rtyp, rvals[0], left.Length(), proc.Mp()), nil
+	} else {
+		rvec, err := proc.AllocVectorOfRows(rtyp, left.Length(), nil)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[int64](resultVector)
-		datediff.DateDiffLeftConst(leftValues[0], rightValues, resultValues)
-		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
-		if right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+		nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
+		if left.IsConst() && !right.IsConst() {
+			rvals := vector.MustFixedCol[int64](rvec)
+			datediff.DateDiffLeftConst(leftValues[0], rightValues, rvals)
+		} else if !left.IsConst() && right.IsConst() {
+			rvals := vector.MustFixedCol[int64](rvec)
+			datediff.DateDiffRightConst(leftValues, rightValues[0], rvals)
+		} else {
+			rvals := vector.MustFixedCol[int64](rvec)
+			datediff.DateDiff(leftValues, rightValues, rvals)
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
-		if err != nil {
-			return nil, err
-		}
-		resultValues := vector.MustTCols[int64](resultVector)
-		datediff.DateDiffRightConst(leftValues, rightValues[0], resultValues)
-		return resultVector, nil
+		return rvec, nil
 	}
-	resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), nil)
-	if err != nil {
-		return nil, err
-	}
-	resultValues := vector.MustTCols[int64](resultVector)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	datediff.DateDiff(leftValues, rightValues, resultValues)
-	return resultVector, nil
 }

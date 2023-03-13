@@ -54,7 +54,7 @@ func Reorder(bat *Batch, attrs []string) {
 
 func SetLength(bat *Batch, n int) {
 	for _, vec := range bat.Vecs {
-		vector.SetLength(vec, n)
+		vec.SetLength(n)
 	}
 	bat.Zs = bat.Zs[:n]
 }
@@ -155,7 +155,7 @@ func (bat *Batch) Shrink(sels []int64) {
 			continue
 		}
 		mp[vec]++
-		vector.Shrink(vec, sels)
+		vec.Shrink(sels)
 	}
 	vs := bat.Zs
 	for i, sel := range sels {
@@ -172,7 +172,7 @@ func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 				continue
 			}
 			mp[vec]++
-			if err := vector.Shuffle(vec, sels, m); err != nil {
+			if err := vec.Shuffle(sels, m); err != nil {
 				return err
 			}
 		}
@@ -291,12 +291,12 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 	// fault.AddFaultPoint("panic_in_batch_append", ":::", "PANIC", 0, "")
 	fault.TriggerFault("panic_in_batch_append")
 
-	flags := make([]uint8, vector.Length(b.Vecs[0]))
+	flags := make([]uint8, b.Vecs[0].Length())
 	for i := range flags {
 		flags[i]++
 	}
 	for i := range bat.Vecs {
-		if err := vector.UnionBatch(bat.Vecs[i], b.Vecs[i], 0, vector.Length(b.Vecs[i]), flags[:vector.Length(b.Vecs[i])], mh); err != nil {
+		if err := vector.UnionBatch(bat.Vecs[i], b.Vecs[i], 0, b.Vecs[i].Length(), flags[:b.Vecs[i].Length()], mh); err != nil {
 			return bat, err
 		}
 	}

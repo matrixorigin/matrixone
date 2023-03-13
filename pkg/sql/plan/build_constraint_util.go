@@ -395,9 +395,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	syntaxHasColumnNames := false
 	colToIdx := make(map[string]int)
 	oldColPosMap := make(map[string]int)
+	tableDef.Name2ColIndex = make(map[string]int32)
 	for i, col := range tableDef.Cols {
 		colToIdx[col.Name] = i
 		oldColPosMap[col.Name] = i
+		tableDef.Name2ColIndex[col.Name] = int32(i)
 	}
 	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
@@ -663,7 +665,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 					if condIdx == 0 {
 						condExpr = eqExpr
 					} else {
-						condExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, condExpr})
+						condExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, eqExpr})
 						if err != nil {
 							return err
 						}
@@ -999,7 +1001,7 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 	}
 
 	// rewrite index, to get rows of unique table to delete
-	if info.typ != "insert" {
+	if info.typ != "insert" || (info.typ == "insert" && len(info.onDuplicateIdx) > 0) {
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
 				if indexdef.Unique {
@@ -1020,6 +1022,13 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 					rightTag := builder.qry.Nodes[rightId].BindingTags[0]
 					baseTag := builder.qry.Nodes[baseNodeId].BindingTags[0]
 					rightTableDef := builder.qry.Nodes[rightId].TableDef
+
+					if info.typ == "insert" {
+						hiddenCol := builder.compCtx.GetHideKeyDef(idxRef.SchemaName, idxRef.ObjName)
+						rightTableDef.Cols = append(rightTableDef.Cols, hiddenCol)
+						rightTableDef.Name2ColIndex[catalog.Row_ID] = int32(len(rightTableDef.Cols)) - 1
+					}
+
 					rightRowIdPos := int32(len(rightTableDef.Cols)) - 1
 					rightIdxPos := int32(0)
 
@@ -1461,10 +1470,6 @@ func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dml
 
 		info.parentIdx = append(info.parentIdx, parentIdx)
 	}
-
-	// check for OnDuplicateUpdate
-
-	// todo check for replace
 
 	return nil
 }
