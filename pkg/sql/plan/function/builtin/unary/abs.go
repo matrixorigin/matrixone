@@ -22,96 +22,92 @@ import (
 )
 
 // abs function's evaluation for arguments: [uint64]
-func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint64, Size: 8}
-	inputValues := vector.MustTCols[uint64](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func AbsUInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_uint64.ToType()
+	ivals := vector.MustFixedCol[uint64](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]uint64, 1)
-		vector.SetCol(resultVector, abs.AbsUint64(inputValues, resultValues))
-		return resultVector, nil
+		var rvals [1]uint64
+		abs.AbsUint64(ivals, rvals[:])
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.GetFixedVectorValues[uint64](resultVector)
-		abs.AbsUint64(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[uint64](rvec)
+		abs.AbsUint64(ivals, rvals)
+		return rvec, nil
 	}
 }
 
 // abs function's evaluation for arguments: [int64]
-func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	inputValues := vector.MustTCols[int64](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func AbsInt64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_int64.ToType()
+	ivals := vector.MustFixedCol[int64](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]int64, 1)
-		vector.SetCol(resultVector, abs.AbsInt64(inputValues, resultValues))
-		return resultVector, nil
+		var rvals [1]int64
+		abs.AbsInt64(ivals, rvals[:])
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[int64](resultVector)
-		abs.AbsInt64(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[int64](rvec)
+		abs.AbsInt64(ivals, rvals)
+		return rvec, nil
 	}
 }
 
 // abs function's evaluation for arguments: [float64]
-func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_float64, Size: 8}
-	inputValues := vector.MustTCols[float64](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func AbsFloat64(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_float64.ToType()
+	ivals := vector.MustFixedCol[float64](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]float64, 1)
-		vector.SetCol(resultVector, abs.AbsFloat64(inputValues, resultValues))
-		return resultVector, nil
+		var rvals [1]float64
+		abs.AbsFloat64(ivals, rvals[:])
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[float64](resultVector)
-		abs.AbsFloat64(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[float64](rvec)
+		abs.AbsFloat64(ivals, rvals)
+		return rvec, nil
 	}
 }
 
-func AbsDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_decimal128, Size: 16, Scale: inputVector.Typ.Scale}
-	inputValues := vector.MustTCols[types.Decimal128](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func AbsDecimal128(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := *inputVector.GetType()
+	ivals := vector.MustFixedCol[types.Decimal128](inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Decimal128, 1)
-		vector.SetCol(resultVector, abs.AbsDecimal128(inputValues, resultValues))
-		return resultVector, nil
+		var rvals [1]types.Decimal128
+		abs.AbsDecimal128(ivals, rvals[:])
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Decimal128](resultVector)
-		abs.AbsDecimal128(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[types.Decimal128](rvec)
+		abs.AbsDecimal128(ivals, rvals)
+		return rvec, nil
 	}
 }

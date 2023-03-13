@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -59,7 +60,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		return nil, err
 	}
 	for i, vec := range batch.Vecs {
-		if vec.Typ.Oid == types.T_Rowid || vec.Typ.Oid == types.T_TS {
+		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
 			continue
 		}
 		columnData := containers.NewVectorWithSharedMemory(vec, true)

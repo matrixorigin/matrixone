@@ -15,6 +15,7 @@
 package testutil
 
 import (
+	"bytes"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -22,57 +23,57 @@ import (
 )
 
 func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
-	if expected.IsScalar() {
-		if !got.IsScalar() {
+	if expected.IsConst() {
+		if !got.IsConst() {
 			return false
 		}
-		if expected.IsScalarNull() {
-			return got.IsScalarNull()
+		if expected.IsConstNull() {
+			return got.IsConstNull()
 		} else {
 			if expected.GetType().IsVarlen() {
-				v1 := vector.GetStrVectorValues(expected)
-				v2 := vector.GetStrVectorValues(got)
+				v1 := vector.MustStrCol(expected)
+				v2 := vector.MustStrCol(got)
 				return reflect.DeepEqual(v1[0], v2[0])
 			} else {
-				return reflect.DeepEqual(expected.Col, got.Col)
+				return bytes.Equal(expected.UnsafeGetRawData(), got.UnsafeGetRawData())
 			}
 		}
 	} else {
-		if got.IsScalar() {
+		if got.IsConst() {
 			return false
 		}
 		// expected length and got length
-		expectedLength := vector.Length(expected)
-		gotLength := vector.Length(got)
+		expectedLength := expected.Length()
+		gotLength := got.Length()
 		if expectedLength != gotLength {
 			return false
 		}
-		if nulls.Any(expected.Nsp) {
+		if nulls.Any(expected.GetNulls()) {
 			k := uint64(0)
-			if !nulls.Any(got.Nsp) {
+			if !nulls.Any(got.GetNulls()) {
 				return false
 			}
 			for k = 0; k < uint64(expectedLength); k++ {
-				c1 := nulls.Contains(expected.Nsp, k)
-				c2 := nulls.Contains(got.Nsp, k)
+				c1 := nulls.Contains(expected.GetNulls(), k)
+				c2 := nulls.Contains(got.GetNulls(), k)
 				if c1 != c2 {
 					return false
 				}
 			}
-		} else if nulls.Any(got.Nsp) {
+		} else if nulls.Any(got.GetNulls()) {
 			return false
 		}
 
 		if expected.GetType().IsVarlen() {
-			v1 := vector.GetStrVectorValues(expected)
-			v2 := vector.GetStrVectorValues(got)
+			v1 := vector.MustStrCol(expected)
+			v2 := vector.MustStrCol(got)
 			for i, v := range v1 {
-				if nulls.Contains(expected.Nsp, uint64(i)) {
-					if !nulls.Contains(got.Nsp, uint64(i)) {
+				if nulls.Contains(expected.GetNulls(), uint64(i)) {
+					if !nulls.Contains(got.GetNulls(), uint64(i)) {
 						return false
 					}
 				} else {
-					if nulls.Contains(got.Nsp, uint64(i)) {
+					if nulls.Contains(got.GetNulls(), uint64(i)) {
 						return false
 					}
 					vv := v2[i]
@@ -83,7 +84,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 			}
 			return true
 		} else {
-			return reflect.DeepEqual(expected.Col, got.Col)
+			return bytes.Equal(expected.UnsafeGetRawData(), got.UnsafeGetRawData())
 		}
 	}
 }

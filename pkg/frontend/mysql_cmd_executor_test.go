@@ -385,28 +385,28 @@ func Test_mce_selfhandle(t *testing.T) {
 		st1, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@max_allowed_packet", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv1 := st1.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		err = mce.handleSelectVariables(sv1)
+		err = mce.handleSelectVariables(sv1, 0, 1)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
 		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@version_comment", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		err = mce.handleSelectVariables(sv2)
+		err = mce.handleSelectVariables(sv2, 0, 1)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
 		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@global.version_comment", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv3 := st3.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		err = mce.handleSelectVariables(sv3)
+		err = mce.handleSelectVariables(sv3, 0, 1)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
 		st4, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @version_comment", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv4 := st4.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		err = mce.handleSelectVariables(sv4)
+		err = mce.handleSelectVariables(sv4, 0, 1)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.mrs = &MysqlResultSet{}
@@ -523,8 +523,8 @@ func Test_getDataFromPipeline(t *testing.T) {
 		batchCase2 := func() *batch.Batch {
 			bat := genBatch()
 			for i := 0; i < len(bat.Attrs); i++ {
-				for j := 0; j < vector.Length(bat.Vecs[0]); j++ {
-					nulls.Add(bat.Vecs[i].Nsp, uint64(j))
+				for j := 0; j < bat.Vecs[0].Length(); j++ {
+					nulls.Add(bat.Vecs[i].GetNulls(), uint64(j))
 				}
 			}
 			return bat
@@ -595,7 +595,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 			for i := 0; i < len(bat.Attrs); i++ {
 				for j := 0; j < 1; j++ {
-					nulls.Add(bat.Vecs[i].Nsp, uint64(j))
+					nulls.Add(bat.Vecs[i].GetNulls(), uint64(j))
 				}
 			}
 			return bat
@@ -604,7 +604,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		err = getDataFromPipeline(ses, batchCase2)
 		convey.So(err, convey.ShouldBeNil)
 
-		batchCase2.Vecs = append(batchCase2.Vecs, &vector.Vector{Typ: types.Type{Oid: 88}})
+		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.Type{Oid: 88}))
 		err = getDataFromPipeline(ses, batchCase2)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -674,7 +674,9 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
-		vec := vector.PreAllocType(tt[i], batchSize, batchSize, testutil.TestUtilMp)
+		vec := vector.NewVec(tt[i])
+		vec.PreExtend(batchSize, testutil.TestUtilMp)
+		vec.SetLength(batchSize)
 		batchData.Vecs[i] = vec
 	}
 
@@ -729,12 +731,12 @@ func Test_handleSelectVariables(t *testing.T) {
 		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@tx_isolation", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		convey.So(mce.handleSelectVariables(sv2), convey.ShouldBeNil)
+		convey.So(mce.handleSelectVariables(sv2, 0, 1), convey.ShouldBeNil)
 
 		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@XXX", 1)
 		convey.So(err, convey.ShouldBeNil)
 		sv3 := st3.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		convey.So(mce.handleSelectVariables(sv3), convey.ShouldNotBeNil)
+		convey.So(mce.handleSelectVariables(sv3, 0, 1), convey.ShouldNotBeNil)
 
 	})
 }
@@ -774,7 +776,7 @@ func Test_handleShowVariables(t *testing.T) {
 		proto.SetSession(ses)
 
 		sv := &tree.ShowVariables{Global: true}
-		convey.So(mce.handleShowVariables(sv, nil), convey.ShouldBeNil)
+		convey.So(mce.handleShowVariables(sv, nil, 0, 1), convey.ShouldBeNil)
 	})
 }
 
@@ -1037,8 +1039,8 @@ func TestDump2File(t *testing.T) {
 			cnt += 1
 			if cnt == 1 {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.New(types.T_int64.ToType())
-				err := bat.Vecs[0].Append(int64(1), false, testutil.TestUtilMp)
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				err := vector.AppendFixed(bat.Vecs[0], int64(1), false, testutil.TestUtilMp)
 				convey.So(err, convey.ShouldBeNil)
 			}
 			return nil, nil

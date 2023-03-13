@@ -107,7 +107,7 @@ func NewLocalFS(
 		asyncUpdate: true,
 	}
 	if memCacheCapacity > 0 {
-		fs.memCache = NewMemCache(memCacheCapacity)
+		fs.memCache = NewMemCache(WithLRU(memCacheCapacity))
 		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
 	}
 

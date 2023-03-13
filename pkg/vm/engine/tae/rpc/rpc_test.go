@@ -25,19 +25,18 @@ import (
 	"time"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
@@ -213,8 +212,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	addS3BlkEntry1, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName1, metaLocMoBat1)
 	assert.NoError(t, err)
-	loc1 := vector.GetStrVectorValues(metaLocMoBat1.GetVector(0))[0]
-	loc2 := vector.GetStrVectorValues(metaLocMoBat1.GetVector(0))[1]
+	loc1 := vector.MustStrCol(metaLocMoBat1.GetVector(0))[0]
+	loc2 := vector.MustStrCol(metaLocMoBat1.GetVector(0))[1]
 	assert.Equal(t, metaLoc1, loc1)
 	assert.Equal(t, metaLoc2, loc2)
 	entries = append(entries, addS3BlkEntry1)
@@ -264,7 +263,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 			handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			rows += vector.Length(bat.Vecs[0])
+			rows += bat.Vecs[0].Length()
 		}
 	}
 	assert.Equal(t, taeBat.Length(), rows)
@@ -379,7 +378,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 			handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			rows += vector.Length(bat.Vecs[0])
+			rows += bat.Vecs[0].Length()
 		}
 	}
 	assert.Equal(t, len(taeBats)*taeBats[0].Length()-5*len(taeBats), rows)
@@ -562,7 +561,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			len := vector.Length(bat.Vecs[0])
+			len := bat.Vecs[0].Length()
 			assert.Equal(t, 100, len)
 		}
 	}
@@ -613,7 +612,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			len := vector.Length(bat.Vecs[0])
+			len := bat.Vecs[0].Length()
 			assert.Equal(t, 80, len)
 		}
 	}
@@ -817,7 +816,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			len := vector.Length(bat.Vecs[0])
+			len := bat.Vecs[0].Length()
 			assert.Equal(t, 100, len)
 		}
 	}
@@ -900,7 +899,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			len := vector.Length(bat.Vecs[0])
+			len := bat.Vecs[0].Length()
 			assert.Equal(t, 80, len)
 		}
 	}
@@ -1124,7 +1123,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			len := vector.Length(bat.Vecs[0])
+			len := bat.Vecs[0].Length()
 			assert.Equal(t, 100, len)
 		}
 	}
@@ -1208,7 +1207,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			len := vector.Length(bat.Vecs[0])
+			len := bat.Vecs[0].Length()
 			assert.Equal(t, 80, len)
 		}
 	}
@@ -1438,7 +1437,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 			bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 			assert.Nil(t, err)
 			if bat != nil {
-				len := vector.Length(bat.Vecs[0])
+				len := bat.Vecs[0].Length()
 				assert.Equal(t, 100, len)
 			}
 		}
@@ -1519,7 +1518,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 			bat, err := reader.Read(ctx, []string{schema.ColDefs[1].Name}, nil, handle.m)
 			assert.Nil(t, err)
 			if bat != nil {
-				len := vector.Length(bat.Vecs[0])
+				len := bat.Vecs[0].Length()
 				assert.Equal(t, 80, len)
 			}
 		}

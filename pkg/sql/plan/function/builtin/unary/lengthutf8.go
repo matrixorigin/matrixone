@@ -21,25 +21,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func LengthUTF8(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint64, Size: 8}
-	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func LengthUTF8(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.Type{Oid: types.T_uint64, Size: 8}
+	ivals := vector.MustStrCol(inputVector)
+	if inputVector.IsConst() {
+		if inputVector.IsConstNull() {
+			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := vector.MustTCols[uint64](resultVector)
-		lengthutf8.StrLengthUTF8(inputValues, resultValues)
-		return resultVector, nil
+		var rvals [1]uint64
+		lengthutf8.StrLengthUTF8(ivals, rvals[:])
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint64](resultVector)
-		lengthutf8.StrLengthUTF8(inputValues, resultValues)
-		return resultVector, nil
+		rvals := vector.MustFixedCol[uint64](rvec)
+		lengthutf8.StrLengthUTF8(ivals, rvals)
+		return rvec, nil
 	}
 }

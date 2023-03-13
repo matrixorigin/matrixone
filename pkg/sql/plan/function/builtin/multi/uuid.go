@@ -24,19 +24,23 @@ import (
 
 const UUID_LENGTH uint32 = 36
 
-func UUID(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if len(inputVecs) != 1 {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "uuid function num args", len(inputVecs))
+func UUID(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if len(ivecs) != 1 {
+		return nil, moerr.NewInvalidArg(proc.Ctx, "uuid function num args", len(ivecs))
 	}
-	rows := inputVecs[0].Length()
-	results := make([]string, rows)
+	rows := ivecs[0].Length()
+	rvec, err := proc.AllocVectorOfRows(types.T_uuid.ToType(), rows, nil)
+	if err != nil {
+		return nil, err
+	}
+	rvals := vector.MustFixedCol[types.Uuid](rvec)
 	for i := 0; i < rows; i++ {
-		id, err := uuid.NewUUID()
+		val, err := uuid.NewUUID()
 		if err != nil {
+			rvec.Free(proc.Mp())
 			return nil, moerr.NewInternalError(proc.Ctx, "newuuid failed")
 		}
-		results[i] = id.String()
+		rvals[i] = types.Uuid(val)
 	}
-	resultVector := vector.NewWithStrings(types.T_varchar.ToType(), results, nil, proc.Mp())
-	return resultVector, nil
+	return rvec, nil
 }
