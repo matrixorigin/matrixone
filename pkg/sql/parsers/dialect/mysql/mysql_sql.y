@@ -206,6 +206,8 @@ import (
     tableLocks []tree.TableLock
     tableLockType tree.TableLockType
     cstr *tree.CStr
+    subscriptionOption *tree.SubscriptionOption
+    accountsSetOption *tree.AccountsSetOption
 }
 
 %token LEX_ERROR
@@ -283,6 +285,10 @@ import (
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
+
+// publication
+%token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS
+
 
 // MO table option
 %token <str> PROPERTIES
@@ -407,6 +413,10 @@ import (
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
+%type <statement>  create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
+%type <str> comment_opt
+%type <subscriptionOption> subcription_opt
+%type <accountsSetOption> alter_publication_accounts_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -421,7 +431,7 @@ import (
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
 %type <str> insert_column
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list accounts_without_parenthesis_opt
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 
 %type <functionName> func_name
@@ -2201,6 +2211,7 @@ alter_stmt:
 |   alter_database_config_stmt
 |   alter_view_stmt
 |   alter_table_stmt
+|   alter_publication_stmt
 // |    alter_ddl_stmt
 
 alter_view_stmt:
@@ -2478,6 +2489,8 @@ show_stmt:
 |   show_column_num_stmt
 |   show_table_values_stmt
 |   show_accounts_stmt
+|   show_publications_stmt
+|   show_subscriptions_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2754,6 +2767,19 @@ show_accounts_stmt:
         $$ = &tree.ShowAccounts{Like: $3}
     }
 
+show_publications_stmt:
+    SHOW PUBLICATIONS like_opt
+    {
+	$$ = &tree.ShowPublications{Like: $3}
+    }
+
+
+show_subscriptions_stmt:
+    SHOW SUBSCRIPTIONS like_opt
+    {
+	$$ = &tree.ShowSubscriptions{Like: $3}
+    }
+
 like_opt:
     {
         $$ = nil
@@ -2813,6 +2839,10 @@ show_create_stmt:
     {
         $$ = &tree.ShowCreateDatabase{IfNotExists: $4, Name: $5}
     }
+|   SHOW CREATE PUBLICATION db_name
+    {
+	$$ = &tree.ShowCreatePublications{Name: $4}
+    }
 
 table_name_unresolved:
     ident
@@ -2867,6 +2897,7 @@ drop_ddl_stmt:
 |   drop_user_stmt
 |   drop_account_stmt
 |   drop_function_stmt
+|   drop_publication_stmt
 
 drop_account_stmt:
     DROP ACCOUNT exists_opt account_name
@@ -3128,6 +3159,25 @@ insert_stmt:
         ins.PartitionNames = $3
         ins.OnDuplicateUpdate = $5
         $$ = ins
+    }
+
+accounts_without_parenthesis_opt:
+    {
+	$$ = nil
+    }
+|   ACCOUNT accounts_list
+    {
+	$$ = $2
+    }
+
+accounts_list:
+    account_name
+    {
+        $$ = tree.IdentifierList{tree.Identifier($1)}
+    }
+|   accounts_list ',' account_name
+    {
+        $$ = append($1, tree.Identifier($3))
     }
 
 insert_data:
@@ -4276,6 +4326,7 @@ create_stmt:
 |   create_role_stmt
 |   create_user_stmt
 |   create_account_stmt
+|   create_publication_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -4496,6 +4547,77 @@ create_user_stmt:
             MiscOpt: $6,
             CommentOrAttribute: $7,
         }
+    }
+
+create_publication_stmt:
+    CREATE PUBLICATION not_exists_opt ident DATABASE ident accounts_without_parenthesis_opt comment_opt
+    {
+	$$ = &tree.CreatePublication{
+	    IfNotExists: $3,
+	    Name: tree.Identifier($4.Compare()),
+	    Database: tree.Identifier($6.Compare()),
+	    Accounts: $7,
+	    Comment: $8,
+	}
+    }
+
+comment_opt:
+    {
+    	$$ = ""
+    }
+    | COMMENT_KEYWORD STRING
+    {
+    	$$ = $2
+    }
+
+alter_publication_stmt:
+ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
+    {
+	$$ = &tree.AlterPublication{
+	    IfExists: $3,
+	    Name: tree.Identifier($4.Compare()),
+	    AccountsSet: $5,
+	    Comment: $6,
+	}
+    }
+
+alter_publication_accounts_opt:
+    {
+	$$ = nil
+    }
+    | ACCOUNT ALL
+    {
+	$$ = &tree.AccountsSetOption{
+	    All: true,
+	}
+    }
+    | ACCOUNT accounts_list
+    {
+    	$$ = &tree.AccountsSetOption{
+	    SetAccounts: $2,
+	}
+    }
+    | ACCOUNT ADD accounts_list
+    {
+    	$$ = &tree.AccountsSetOption{
+	    AddAccounts: $3,
+	}
+    }
+    | ACCOUNT DROP accounts_list
+    {
+    	$$ = &tree.AccountsSetOption{
+	    DropAccounts: $3,
+	}
+    }
+
+
+drop_publication_stmt:
+DROP PUBLICATION exists_opt ident
+    {
+	$$ = &tree.DropPublication{
+	    IfExists: $3,
+	    Name: tree.Identifier($4.Compare()),
+	}
     }
 
 account_role_name:
@@ -4889,15 +5011,26 @@ using_opt:
     }
 
 create_database_stmt:
-    CREATE database_or_schema not_exists_opt ident create_option_list_opt
+    CREATE database_or_schema not_exists_opt ident subcription_opt create_option_list_opt
     {
         $$ = &tree.CreateDatabase{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
-            CreateOptions: $5,
+            SubscriptionOption: $5,
+            CreateOptions: $6,
         }
     }
 // CREATE comment_opt database_or_schema comment_opt not_exists_opt ident
+
+subcription_opt:
+    {
+	$$ = nil
+    }
+|   FROM account_name PUBLICATION ident
+    {
+   	$$ = &tree.SubscriptionOption{From: tree.Identifier($2), Publication: tree.Identifier($4.Compare())}
+    }
+
 
 database_or_schema:
     DATABASE
@@ -8534,6 +8667,9 @@ non_reserved_keyword:
 |   UUID
 |   PARALLEL
 |	PROCESSLIST
+|   PUBLICATION
+|   SUBSCRIPTIONS
+|   PUBLICATIONS
 
 func_not_keyword:
     DATE_ADD
