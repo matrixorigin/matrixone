@@ -14,22 +14,11 @@
 
 package service
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-)
+import "github.com/matrixorigin/matrixone/pkg/pb/api"
 
-func mockTable(dbID, tbID, ptID uint64) api.TableID {
-	return api.TableID{
-		DbId:        dbID,
-		TbId:        tbID,
-		PartitionId: ptID,
-	}
-}
+// TableID comes from api.TableID
+type TableID string
 
-func mockTimestamp(physical int64, logical uint32) timestamp.Timestamp {
-	return timestamp.Timestamp{
-		PhysicalTime: physical,
-		LogicalTime:  logical,
-	}
+func MarshalTableID(table *api.TableID) TableID {
+	return TableID(table.String())
 }

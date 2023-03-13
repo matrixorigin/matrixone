@@ -39,12 +39,10 @@ import (
 const (
 	LogtailServiceRPCName = "logtail-push-rpc"
 
-	// minimal duration to detect slow morpc stream
-	minStreamPoisionTime = 5 * time.Millisecond
+	// FIXME: make this configurable
+	// duration to detect slow morpc stream
+	RpcStreamPoisionTime = 1 * time.Second
 )
-
-// TableID is type for api.TableID
-type TableID string
 
 type ServerOption func(*LogtailServer)
 
@@ -259,7 +257,7 @@ func (s *LogtailServer) onSubscription(
 ) error {
 	logger := s.logger
 
-	tableID := TableID(req.Table.String())
+	tableID := MarshalTableID(req.Table)
 	session := s.ssmgr.GetSession(
 		s.rootCtx, logger, s.cfg.ResponseSendTimeout, s.pool.responses, s, stream, s.streamPoisionTime(),
 	)
@@ -293,7 +291,7 @@ func (s *LogtailServer) onSubscription(
 func (s *LogtailServer) onUnsubscription(
 	sendCtx context.Context, stream morpcStream, req *logtail.UnsubscribeRequest,
 ) error {
-	tableID := TableID(req.Table.String())
+	tableID := MarshalTableID(req.Table)
 	session := s.ssmgr.GetSession(
 		s.rootCtx, s.logger, s.cfg.ResponseSendTimeout, s.pool.responses, s, stream, s.streamPoisionTime(),
 	)
@@ -312,11 +310,7 @@ func (s *LogtailServer) onUnsubscription(
 
 // streamPoisionTime returns poision duration for stream.
 func (s *LogtailServer) streamPoisionTime() time.Duration {
-	duration := s.cfg.LogtailCollectInterval * 2
-	if duration < minStreamPoisionTime {
-		duration = minStreamPoisionTime
-	}
-	return duration
+	return RpcStreamPoisionTime
 }
 
 // NotifySessionError notifies session manager with session error.
@@ -356,7 +350,7 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 	}
 }
 
-// logtailSender sends total or additional logtail.
+// logtailSender sends total or incremental logtail.
 func (s *LogtailServer) logtailSender(ctx context.Context) {
 	logger := s.logger
 
@@ -376,7 +370,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				return
 			}
 
-			logger.Debug("handle subscription asynchronously", zap.Any("table", sub.req.Table))
+			logger.Info("handle subscription asynchronously", zap.Any("table", sub.req.Table))
 
 			subscriptionFunc := func(sub subscription) {
 				sendCtx, cancel := context.WithTimeout(ctx, sub.timeout)
@@ -428,21 +422,21 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 			publishmentFunc := func() {
 				defer func() {
 					if risk >= s.cfg.MaxLogtailFetchFailure {
-						panic("fail to fetch additional logtail many times")
+						panic("fail to fetch incremental logtail many times")
 					}
 				}()
 
 				from := s.waterline.Waterline()
 				to, _ := s.nowFn()
 
-				// fetch additional logtail for tables
+				// fetch incremental logtail for tables
 				var tails []logtail.TableLogtail
 				var err error
 				gotrace.WithRegion(ctx, "publishment-pull-logtail", func() {
 					tails, err = s.logtail.RangeLogtail(ctx, from, to)
 				})
 				if err != nil {
-					logger.Error("fail to fetch additional logtail", zap.Error(err))
+					logger.Error("fail to fetch incremental logtail", zap.Error(err))
 					risk += 1
 					return
 				}
@@ -457,13 +451,13 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 					if tail.CkpLocation == "" && len(tail.Commands) == 0 {
 						continue
 					}
-					wraps = append(wraps, wrapLogtail{id: TableID(tail.GetTable().String()), tail: tail})
+					wraps = append(wraps, wrapLogtail{id: MarshalTableID(tail.GetTable()), tail: tail})
 				}
 
-				// publish additional logtail for all subscribed tables
+				// publish incremental logtail for all subscribed tables
 				for _, session := range s.ssmgr.ListSession() {
 					if err := session.Publish(ctx, from, to, wraps...); err != nil {
-						logger.Error("fail to publish additional logtail", zap.Error(err), zap.Uint64("stream-id", session.stream.streamID))
+						logger.Error("fail to publish incremental logtail", zap.Error(err), zap.Uint64("stream-id", session.stream.streamID))
 						continue
 					}
 				}
@@ -479,6 +473,8 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 // Close closes api server.
 func (s *LogtailServer) Close() error {
+	s.logger.Info("close logtail service")
+
 	s.cancelFunc()
 	s.stopper.Stop()
 	return s.rpc.Close()
@@ -486,15 +482,15 @@ func (s *LogtailServer) Close() error {
 
 // Start starts logtail publishment service.
 func (s *LogtailServer) Start() error {
-	logger := s.logger
+	s.logger.Info("start logtail service")
 
 	if err := s.stopper.RunNamedTask("session error handler", s.sessionErrorHandler); err != nil {
-		logger.Error("fail to start session error handler", zap.Error(err))
+		s.logger.Error("fail to start session error handler", zap.Error(err))
 		return err
 	}
 
 	if err := s.stopper.RunNamedTask("logtail sender", s.logtailSender); err != nil {
-		logger.Error("fail to start logtail sender", zap.Error(err))
+		s.logger.Error("fail to start logtail sender", zap.Error(err))
 		return err
 	}
 

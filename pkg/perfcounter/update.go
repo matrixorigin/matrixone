@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package perfcounter
 
-// CachingFileService is an extension to the FileService
-type CachingFileService interface {
-	FileService
+import "context"
 
-	// FlushCache flushes cache
-	FlushCache()
-
-	// SetAsyncUpdate sets cache update operation to async mode
-	SetAsyncUpdate(bool)
+func Update(ctx context.Context, fn func(*Counter), extraCounters ...*Counter) {
+	v := ctx.Value(CtxKeyCounters)
+	var counters Counters
+	if v != nil {
+		counters = v.(Counters)
+		for counter := range counters {
+			fn(counter)
+		}
+	}
+	for _, counter := range extraCounters {
+		if counter == nil {
+			continue
+		}
+		if counters != nil {
+			if _, ok := counters[counter]; ok {
+				continue
+			}
+		}
+		fn(counter)
+	}
 }

@@ -1,10 +1,10 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,24 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package service
+package perfcounter
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-)
+import "sync/atomic"
 
-func mockTable(dbID, tbID, ptID uint64) api.TableID {
-	return api.TableID{
-		DbId:        dbID,
-		TbId:        tbID,
-		PartitionId: ptID,
+type Counter struct {
+	S3 struct {
+		List        atomic.Int64
+		Head        atomic.Int64
+		Put         atomic.Int64
+		Get         atomic.Int64
+		Delete      atomic.Int64
+		DeleteMulti atomic.Int64
 	}
-}
 
-func mockTimestamp(physical int64, logical uint32) timestamp.Timestamp {
-	return timestamp.Timestamp{
-		PhysicalTime: physical,
-		LogicalTime:  logical,
+	Cache struct {
+		Read     atomic.Int64
+		Hit      atomic.Int64
+		MemRead  atomic.Int64
+		MemHit   atomic.Int64
+		DiskRead atomic.Int64
+		DiskHit  atomic.Int64
 	}
 }
