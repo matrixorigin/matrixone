@@ -286,7 +286,7 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			//get the smaller one of two children, and tune it down a little bit
 			out1 := EstimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, s)
 			out2 := EstimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, s)
-			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) {
+			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (out1+out2) > tableCnt {
 				outcnt = (out1 + out2) - tableCnt
 			} else {
 				outcnt = math.Min(out1, out2) * 0.8
