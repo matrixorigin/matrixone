@@ -63,7 +63,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c)
+	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 	writer, _ := NewBlockWriter(service, name)
 	idxs := make([]uint16, 3)

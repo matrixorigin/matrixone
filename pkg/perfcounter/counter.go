@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package perfcounter
 
-// CachingFileService is an extension to the FileService
-type CachingFileService interface {
-	FileService
+import "sync/atomic"
 
-	// FlushCache flushes cache
-	FlushCache()
+type Counter struct {
+	S3 struct {
+		List        atomic.Int64
+		Head        atomic.Int64
+		Put         atomic.Int64
+		Get         atomic.Int64
+		Delete      atomic.Int64
+		DeleteMulti atomic.Int64
+	}
 
-	// SetAsyncUpdate sets cache update operation to async mode
-	SetAsyncUpdate(bool)
+	Cache struct {
+		Read     atomic.Int64
+		Hit      atomic.Int64
+		MemRead  atomic.Int64
+		MemHit   atomic.Int64
+		DiskRead atomic.Int64
+		DiskHit  atomic.Int64
+	}
 }
