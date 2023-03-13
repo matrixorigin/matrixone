@@ -22,7 +22,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
@@ -66,10 +65,10 @@ func (d *DiskCache) Read(
 	var numHit, numRead int64
 	defer func() {
 		perfcounter.Update(ctx, func(c *perfcounter.Counter) {
-			atomic.AddInt64(&c.CacheRead, numRead)
-			atomic.AddInt64(&c.CacheHit, numHit)
-			atomic.AddInt64(&c.DiskCacheRead, numRead)
-			atomic.AddInt64(&c.DiskCacheHit, numHit)
+			c.Cache.Read.Add(numRead)
+			c.Cache.Hit.Add(numHit)
+			c.Cache.DiskRead.Add(numRead)
+			c.Cache.DiskHit.Add(numHit)
 		}, d.perfCounter)
 	}()
 

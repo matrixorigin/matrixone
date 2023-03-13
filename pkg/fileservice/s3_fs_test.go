@@ -131,8 +131,8 @@ func TestS3FS(t *testing.T) {
 		entries, err := fs.List(ctx, "")
 		assert.Nil(t, err)
 		assert.True(t, len(entries) > 0)
-		assert.Equal(t, int64(1), counter.S3ListObjects)
-		assert.Equal(t, int64(1), counter2.S3ListObjects)
+		assert.Equal(t, int64(1), counter.S3.List.Load())
+		assert.Equal(t, int64(1), counter2.S3.List.Load())
 	})
 
 	t.Run("mem caching file service", func(t *testing.T) {

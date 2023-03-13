@@ -14,18 +14,24 @@
 
 package perfcounter
 
-type Counter struct {
-	S3ListObjects   int64
-	S3HeadObject    int64
-	S3PutObject     int64
-	S3GetObject     int64
-	S3DeleteObjects int64
-	S3DeleteObject  int64
+import "sync/atomic"
 
-	CacheRead     int64
-	CacheHit      int64
-	MemCacheRead  int64
-	MemCacheHit   int64
-	DiskCacheRead int64
-	DiskCacheHit  int64
+type Counter struct {
+	S3 struct {
+		List        atomic.Int64
+		Head        atomic.Int64
+		Put         atomic.Int64
+		Get         atomic.Int64
+		Delete      atomic.Int64
+		DeleteMulti atomic.Int64
+	}
+
+	Cache struct {
+		Read     atomic.Int64
+		Hit      atomic.Int64
+		MemRead  atomic.Int64
+		MemHit   atomic.Int64
+		DiskRead atomic.Int64
+		DiskHit  atomic.Int64
+	}
 }

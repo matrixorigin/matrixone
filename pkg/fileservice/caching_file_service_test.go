@@ -93,8 +93,8 @@ func testCachingFileService(
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
 
 	// counter
-	assert.Equal(t, counter.CacheRead, int64(2))
-	assert.Equal(t, counter.CacheHit, int64(1))
+	assert.Equal(t, counter.Cache.Read.Load(), int64(2))
+	assert.Equal(t, counter.Cache.Hit.Load(), int64(1))
 
 	// flush
 	fs.FlushCache()

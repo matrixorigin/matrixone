@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"context"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/clockpolicy"
@@ -91,10 +90,10 @@ func (m *MemCache) Read(
 	var numHit, numRead int64
 	defer func() {
 		perfcounter.Update(ctx, func(c *perfcounter.Counter) {
-			atomic.AddInt64(&c.CacheRead, numRead)
-			atomic.AddInt64(&c.CacheHit, numHit)
-			atomic.AddInt64(&c.MemCacheRead, numRead)
-			atomic.AddInt64(&c.MemCacheHit, numHit)
+			c.Cache.Read.Add(numRead)
+			c.Cache.Hit.Add(numHit)
+			c.Cache.MemRead.Add(numRead)
+			c.Cache.MemHit.Add(numHit)
 		}, m.counters...)
 	}()
 

@@ -23,7 +23,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -159,9 +158,9 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 
 	type perfCounterInfo struct {
 		fsName      string
-		perfCounter *perfcounter.Counter
+		perfCounter perfcounter.Counter
 	}
-	perfCounterInfos := make([]perfCounterInfo, 0, len(c.FileServices))
+	perfCounterInfos := make([]*perfCounterInfo, 0, len(c.FileServices))
 
 	for _, config := range c.FileServices {
 
@@ -170,16 +169,14 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 			config.Name = defines.SharedFileServiceName
 		}
 
-		perfCounter := new(perfcounter.Counter)
-		service, err := fileservice.NewFileService(config, perfCounter)
+		info := new(perfCounterInfo)
+		service, err := fileservice.NewFileService(config, &info.perfCounter)
 		if err != nil {
 			return nil, err
 		}
+		info.fsName = service.Name()
 		services = append(services, service)
-		perfCounterInfos = append(perfCounterInfos, perfCounterInfo{
-			fsName:      service.Name(),
-			perfCounter: perfCounter,
-		})
+		perfCounterInfos = append(perfCounterInfos, info)
 
 	}
 
@@ -189,12 +186,12 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 		for range time.NewTicker(time.Second * 10).C {
 			for _, info := range perfCounterInfos {
 
-				reads := atomic.LoadInt64(&info.perfCounter.CacheRead)
-				hits := atomic.LoadInt64(&info.perfCounter.CacheHit)
-				memReads := atomic.LoadInt64(&info.perfCounter.MemCacheRead)
-				memHits := atomic.LoadInt64(&info.perfCounter.MemCacheHit)
-				diskReads := atomic.LoadInt64(&info.perfCounter.DiskCacheRead)
-				diskHits := atomic.LoadInt64(&info.perfCounter.DiskCacheHit)
+				reads := info.perfCounter.Cache.Read.Load()
+				hits := info.perfCounter.Cache.Hit.Load()
+				memReads := info.perfCounter.Cache.MemRead.Load()
+				memHits := info.perfCounter.Cache.MemHit.Load()
+				diskReads := info.perfCounter.Cache.DiskRead.Load()
+				diskHits := info.perfCounter.Cache.DiskHit.Load()
 
 				logutil.Info("cache stats of "+info.fsName,
 					zap.Any("reads", reads),
