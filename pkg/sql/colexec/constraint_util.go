@@ -155,7 +155,7 @@ func FilterAndUpdateByRowId(
 	return affectedRows, nil
 }
 
-func WriteUniqueTable(s3Container *S3Writer, proc *process.Process, updateBatch *batch.Batch,
+func WriteUniqueTable(s3Writer *S3Writer, proc *process.Process, updateBatch *batch.Batch,
 	tableDef *plan.TableDef, updateNameToPos map[string]int, pkPos int, rels []engine.Relation) error {
 	if tableDef.Indexes == nil {
 		return nil
@@ -209,7 +209,7 @@ func WriteUniqueTable(s3Container *S3Writer, proc *process.Process, updateBatch 
 			ukBatch.SetVector(1, vec)
 		}
 
-		if s3Container == nil {
+		if s3Writer == nil {
 			rel := rels[uIdx]
 			err := rel.Write(proc.Ctx, ukBatch)
 			if err != nil {
@@ -218,7 +218,7 @@ func WriteUniqueTable(s3Container *S3Writer, proc *process.Process, updateBatch 
 			uIdx++
 		} else {
 			uIdx++
-			err := s3Container.WriteS3Batch(ukBatch, proc, uIdx)
+			err := s3Writer.WriteS3Batch(ukBatch, proc, uIdx)
 			if err != nil {
 				return err
 			}

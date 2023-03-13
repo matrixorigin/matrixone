@@ -617,7 +617,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		for i := range t.LocalRegs {
 			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
 			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
-				id := colexec.Srv.RegisterConnector(t.LocalRegs[i])
+				id := colexec.Srv.RegistConnector(t.LocalRegs[i])
 				if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
 					return ctxId, nil, err
 				}
@@ -801,7 +801,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *connector.Argument:
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
 		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
-			id := colexec.Srv.RegisterConnector(t.Reg)
+			id := colexec.Srv.RegistConnector(t.Reg)
 			if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
 				return ctxId, nil, err
 			}

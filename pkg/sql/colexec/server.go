@@ -49,7 +49,7 @@ func (srv *Server) GetConnector(id uint64) *process.WaitRegister {
 	return srv.mp[id]
 }
 
-func (srv *Server) RegisterConnector(reg *process.WaitRegister) uint64 {
+func (srv *Server) RegistConnector(reg *process.WaitRegister) uint64 {
 	srv.Lock()
 	defer srv.Unlock()
 	srv.mp[srv.id] = reg
