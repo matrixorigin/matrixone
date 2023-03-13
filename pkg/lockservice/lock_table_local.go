@@ -19,23 +19,31 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 // a localLockTable instance manages the locks on a table
 type localLockTable struct {
-	tableID  uint64
+	bind     pb.LockTable
 	detector *detector
 
 	mu struct {
 		sync.RWMutex
-		store LockStorage
+		closed bool
+		store  LockStorage
 	}
 }
 
 func newLocalLockTable(
-	tableID uint64,
+	bind pb.LockTable,
 	detector *detector) lockTable {
-	l := &localLockTable{tableID: tableID, detector: detector}
+	l := &localLockTable{
+		bind:     bind,
+		detector: detector,
+	}
 	l.mu.store = newBtreeBasedStorage()
 	return l
 }
@@ -44,60 +52,124 @@ func (l *localLockTable) lock(
 	ctx context.Context,
 	txn *activeTxn,
 	rows [][]byte,
-	options LockOptions) error {
-	waiter := acquireWaiter(txn.txnID)
+	opts LockOptions) error {
+	// FIXME(fagongzi): too many mem alloc in trace
+	ctx, span := trace.Debug(ctx, "lockservice.lock.local")
+	defer span.End()
+
+	table := l.bind.Table
+	w := acquireWaiter(txn.txnID)
 	for {
-		if added := l.doAcquireLock(txn, waiter, rows, options); added {
+		logLocalLock(txn, table, rows, opts, w)
+		added, err := l.doAcquireLock(
+			txn,
+			w,
+			rows,
+			opts)
+		if err != nil {
+			logLocalLockFailed(txn, table, rows, opts, err)
+			return err
+		}
+		if added {
+			txn.setBlocked(w.txnID, nil)
+			logLocalLockAdded(txn, l.bind.Table, rows, opts)
 			return nil
 		}
 
-		if err := waiter.wait(ctx); err != nil {
+		err = w.wait(ctx)
+		logLocalLockWaitOnResult(txn, table, rows, opts, w, err)
+		if err != nil {
 			return err
 		}
-		waiter.resetWait()
+		w.resetWait()
 	}
 }
 
-func (l *localLockTable) unlock(ctx context.Context, ls *cowSlice) error {
+func (l *localLockTable) unlock(
+	txn *activeTxn,
+	ls *cowSlice) {
+	logUnlockTableOnLocal(
+		txn,
+		l.bind)
+
 	locks := ls.slice()
 	defer locks.unref()
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.mu.closed {
+		return
+	}
+
 	locks.iter(func(key []byte) bool {
 		if lock, ok := l.mu.store.Get(key); ok {
 			if lock.isLockRow() || lock.isLockRangeEnd() {
-				lock.waiter.close()
+				lock.waiter.clearAllNotify("unlock")
+				lock.waiter.close(nil)
 			}
 			l.mu.store.Delete(key)
 		}
 		return true
 	})
-	return nil
 }
 
-func (l *localLockTable) getLock(ctx context.Context, key []byte) (Lock, bool) {
+func (l *localLockTable) getLock(txnID, key []byte, fn func(Lock)) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	return l.mu.store.Get(key)
+	if l.mu.closed {
+		return
+	}
+	lock, ok := l.mu.store.Get(key)
+	if ok {
+		fn(lock)
+	}
+}
+
+func (l *localLockTable) getBind() pb.LockTable {
+	return l.bind
+}
+
+func (l *localLockTable) close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.mu.closed = true
+
+	l.mu.store.Iter(func(key []byte, lock Lock) bool {
+		w := lock.waiter
+		for {
+			w.clearAllNotify("close local")
+			if w = w.close(ErrLockTableNotFound); w == nil {
+				break
+			}
+		}
+		return true
+	})
+	l.mu.store.Clear()
+	logLockTableClosed(l.bind, false)
 }
 
 func (l *localLockTable) doAcquireLock(
 	txn *activeTxn,
 	waiter *waiter,
 	rows [][]byte,
-	opts LockOptions) bool {
+	opts LockOptions) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	switch opts.granularity {
-	case Row:
-		return l.acquireRowLockLocked(txn, waiter, rows[0], opts.mode)
-	case Range:
+	if l.mu.closed {
+		return false, moerr.NewInvalidStateNoCtx("local lock table closed")
+	}
+
+	switch opts.Granularity {
+	case pb.Granularity_Row:
+		added := l.acquireRowLockLocked(txn, waiter, rows[0], opts.Mode)
+		return added, nil
+	case pb.Granularity_Range:
 		if len(rows) != 2 {
 			panic("invalid range lock")
 		}
-		return l.acquireRangeLockLocked(txn, waiter, rows[0], rows[1], opts.mode)
+		added := l.acquireRangeLockLocked(txn, waiter, rows[0], rows[1], opts.Mode)
+		return added, nil
 	default:
 		panic(fmt.Sprintf("not support lock granularity %d", opts))
 	}
@@ -107,7 +179,7 @@ func (l *localLockTable) acquireRowLockLocked(
 	txn *activeTxn,
 	w *waiter,
 	row []byte,
-	mode LockMode) bool {
+	mode pb.LockMode) bool {
 	key, lock, ok := l.mu.store.Seek(row)
 	if ok &&
 		(bytes.Equal(key, row) ||
@@ -123,7 +195,7 @@ func (l *localLockTable) acquireRangeLockLocked(
 	txn *activeTxn,
 	w *waiter,
 	start, end []byte,
-	mode LockMode) bool {
+	mode pb.LockMode) bool {
 	if bytes.Compare(start, end) >= 0 {
 		panic(fmt.Sprintf("lock error: start[%v] is greater than end[%v]",
 			start, end))
@@ -143,13 +215,13 @@ func (l *localLockTable) addRowLockLocked(
 	txn *activeTxn,
 	row []byte,
 	waiter *waiter,
-	mode LockMode) {
+	mode pb.LockMode) {
 	lock := newRowLock(txn.txnID, mode)
 	lock.waiter = waiter
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	txn.lockAdded(l.tableID, [][]byte{row})
+	txn.lockAdded(l.bind.Table, [][]byte{row}, false)
 	l.mu.store.Add(row, lock)
 }
 
@@ -157,24 +229,27 @@ func (l *localLockTable) addRangeLockLocked(
 	txn *activeTxn,
 	start, end []byte,
 	waiter *waiter,
-	mode LockMode) {
+	mode pb.LockMode) {
 	startLock, endLock := newRangeLock(txn.txnID, mode)
 	startLock.waiter = waiter
 	endLock.waiter = waiter
 
-	// we must first add the lock to txn to ensure that the
-	// lock can be read when the deadlock is detected.
-	txn.lockAdded(l.tableID, [][]byte{start, end})
+	// similar to row lock
+	txn.lockAdded(l.bind.Table, [][]byte{start, end}, false)
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)
 }
 
-func (l *localLockTable) handleLockConflict(txn *activeTxn, w *waiter, conflictWith Lock) {
+func (l *localLockTable) handleLockConflict(
+	txn *activeTxn,
+	w *waiter,
+	conflictWith Lock) {
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
-	txn.setBlocked(w)
+	txn.setBlocked(w.txnID, w)
 	conflictWith.waiter.add(w)
 	if err := l.detector.check(txn.txnID); err != nil {
 		panic("BUG: active dead lock check can not fail")
 	}
+	logLocalLockWaitOn(txn, l.bind.Table, w, conflictWith)
 }

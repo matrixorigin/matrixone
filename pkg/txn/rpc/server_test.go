@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
@@ -36,8 +37,8 @@ func TestHandleMessageWithSender(t *testing.T) {
 			return nil
 		})
 
-		cli, err := NewSender(newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()),
-			WithSenderEnableCompress(true))
+		cli, err := NewSender(Config{EnableCompress: true},
+			newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()))
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, cli.Close())
@@ -58,7 +59,7 @@ func TestHandleMessageEnableCompressWithSender(t *testing.T) {
 			return nil
 		})
 
-		cli, err := NewSender(newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()))
+		cli, err := NewSender(Config{}, newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()))
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, cli.Close())
@@ -81,8 +82,8 @@ func TestHandleLargeMessageWithSender(t *testing.T) {
 			return nil
 		})
 
-		cli, err := NewSender(newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()),
-			WithSenderMaxMessageSize(size+1024))
+		cli, err := NewSender(Config{MaxMessageSize: toml.ByteSize(size + 1024)},
+			newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()))
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, cli.Close())

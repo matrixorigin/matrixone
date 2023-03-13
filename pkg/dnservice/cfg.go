@@ -32,6 +32,8 @@ var (
 	defaultServiceAddress        = "127.0.0.1:22000"
 	defaultLogtailListenAddress  = "0.0.0.0:22001"
 	defaultLogtailServiceAddress = "127.0.0.1:22001"
+	defaultLockListenAddress     = "0.0.0.0:22002"
+	defaultLockServiceAddress    = "127.0.0.1:22002"
 	defaultZombieTimeout         = time.Hour
 	defaultDiscoveryTimeout      = time.Second * 30
 	defaultHeatbeatInterval      = time.Second
@@ -66,6 +68,11 @@ type Config struct {
 	// ServiceAddress service address for communication, if this address is not set, use
 	// ListenAddress as the communication address.
 	ServiceAddress string `toml:"service-address"`
+	// LockListenAddress listening address for receiving external lock table allocator requests.
+	LockListenAddress string `toml:"lock-listen-address"`
+	// LockServiceAddress service address for communication, if this address is not set, use
+	// LockListenAddress as the communication address.
+	LockServiceAddress string `toml:"lock-service-address"`
 
 	// HAKeeper configuration
 	HAKeeper struct {
@@ -142,10 +149,15 @@ func (c *Config) Validate() error {
 	c.Txn.Storage.dataDir = filepath.Join(c.DataDir, storageDir)
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
-		c.ServiceAddress = defaultServiceAddress
 	}
 	if c.ServiceAddress == "" {
-		c.ServiceAddress = c.ListenAddress
+		c.ServiceAddress = defaultServiceAddress
+	}
+	if c.LockListenAddress == "" {
+		c.LockListenAddress = defaultLockListenAddress
+	}
+	if c.LockServiceAddress == "" {
+		c.LockServiceAddress = defaultLockServiceAddress
 	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = StorageTAE
@@ -188,10 +200,9 @@ func (c *Config) Validate() error {
 	}
 	if c.LogtailServer.ListenAddress == "" {
 		c.LogtailServer.ListenAddress = defaultLogtailListenAddress
-		c.LogtailServer.ServiceAddress = defaultLogtailServiceAddress
 	}
 	if c.LogtailServer.ServiceAddress == "" {
-		c.LogtailServer.ServiceAddress = c.LogtailServer.ListenAddress
+		c.LogtailServer.ServiceAddress = defaultLogtailServiceAddress
 	}
 	if c.LogtailServer.RpcMaxMessageSize <= 0 {
 		c.LogtailServer.RpcMaxMessageSize = toml.ByteSize(defaultRpcMaxMsgSize)
