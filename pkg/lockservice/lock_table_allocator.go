@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -30,6 +31,8 @@ type lockTableAllocator struct {
 	logger  *log.MOLogger
 	stoper  *stopper.Stopper
 	timeout time.Duration
+	address string
+	server  Server
 
 	mu struct {
 		sync.RWMutex
@@ -39,15 +42,19 @@ type lockTableAllocator struct {
 }
 
 // NewLockTableAllocator create a memory based lock table allocator.
-func NewLockTableAllocator(timeout time.Duration) LockTableAllocator {
+func NewLockTableAllocator(
+	address string,
+	timeout time.Duration,
+	cfg morpc.Config) LockTableAllocator {
 	if timeout == 0 {
 		panic("invalid lock table bind timeout")
 	}
 
 	logger := runtime.ProcessLevelRuntime().Logger()
-	tag := "lock-table-allocator"
+	tag := "lockservice.allocator"
 	la := &lockTableAllocator{
-		logger: logger.Named(tag),
+		address: address,
+		logger:  logger.Named(tag),
 		stoper: stopper.NewStopper(tag,
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 		timeout: timeout,
@@ -57,6 +64,8 @@ func NewLockTableAllocator(timeout time.Duration) LockTableAllocator {
 	if err := la.stoper.RunTask(la.checkInvalidBinds); err != nil {
 		panic(err)
 	}
+
+	la.initServer(cfg)
 	return la
 }
 
@@ -71,7 +80,7 @@ func (l *lockTableAllocator) Get(
 	return l.registerBind(binds, tableID)
 }
 
-func (l *lockTableAllocator) Keepalive(serviceID string) bool {
+func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
 	b := l.getServiceBinds(serviceID)
 	if b == nil {
 		return false
@@ -102,8 +111,10 @@ func (l *lockTableAllocator) Valid(binds []pb.LockTable) bool {
 
 func (l *lockTableAllocator) Close() error {
 	l.stoper.Stop()
-	l.logger.Debug("lock service allocator closed")
-	return nil
+	err := l.server.Close()
+	l.logger.Debug("lock service allocator closed",
+		zap.Error(err))
+	return err
 }
 
 func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
@@ -153,7 +164,7 @@ func (l *lockTableAllocator) registerService(
 	if ok {
 		return b
 	}
-	b = newServiceBinds(serviceID, l.logger.With(zap.String("lock-service", serviceID)))
+	b = newServiceBinds(serviceID, l.logger.With(zap.String("lockservice", serviceID)))
 	l.mu.services[serviceID] = b
 
 	if l.logger.Enabled(zap.DebugLevel) {
@@ -289,7 +300,8 @@ func (b *serviceBinds) timeout(
 	timeout time.Duration) bool {
 	b.RLock()
 	defer b.RUnlock()
-	return now.Sub(b.lastKeepaliveTime) >= timeout
+	v := now.Sub(b.lastKeepaliveTime)
+	return v >= timeout
 }
 
 func (b *serviceBinds) disable() {
@@ -297,4 +309,45 @@ func (b *serviceBinds) disable() {
 	defer b.Unlock()
 	b.disabled = true
 	b.logger.Debug("lock service binds disabled")
+}
+
+func (l *lockTableAllocator) initServer(cfg morpc.Config) {
+	s, err := NewServer(l.address, cfg)
+	if err != nil {
+		panic(err)
+	}
+	l.server = s
+	l.initHandler()
+
+	if err := l.server.Start(); err != nil {
+		panic(err)
+	}
+}
+
+func (l *lockTableAllocator) initHandler() {
+	l.server.RegisterMethodHandler(
+		pb.Method_GetBind,
+		l.handleGetBind)
+
+	l.server.RegisterMethodHandler(
+		pb.Method_KeepLockTableBind,
+		l.handleKeepLockTableBind,
+	)
+}
+
+func (l *lockTableAllocator) handleGetBind(
+	ctx context.Context,
+	req *pb.Request,
+	resp *pb.Response) error {
+	resp.GetBind.LockTable = l.Get(req.GetBind.ServiceID,
+		req.GetBind.Table)
+	return nil
+}
+
+func (l *lockTableAllocator) handleKeepLockTableBind(
+	ctx context.Context,
+	req *pb.Request,
+	resp *pb.Response) error {
+	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
+	return nil
 }

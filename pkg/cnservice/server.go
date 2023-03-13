@@ -399,7 +399,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 	}
 
 	s.initTxnSenderOnce.Do(func() {
-		sender, err = rpc.NewSenderWithConfig(
+		sender, err = rpc.NewSender(
 			s.cfg.RPC,
 			runtime.ProcessLevelRuntime(),
 			rpc.WithSenderLocalDispatch(handleTemp),
