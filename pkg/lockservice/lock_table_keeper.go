@@ -19,134 +19,179 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"go.uber.org/zap"
 )
 
 type lockTableKeeper struct {
-	logger   *log.MOLogger
-	sender   KeepaliveSender
-	stopper  *stopper.Stopper
-	interval time.Duration
-	changedC chan pb.LockTable
-	mu       struct {
-		sync.Mutex
-		lockTables map[uint64]pb.LockTable
-		changed    bool
-	}
+	serviceID                 string
+	client                    Client
+	stopper                   *stopper.Stopper
+	keepLockTableBindInterval time.Duration
+	keepRemoteLockInterval    time.Duration
+	tables                    *sync.Map
 }
 
 // NewLockTableKeeper create a locktable keeper, an internal timer is started
 // to send a keepalive request to the lockTableAllocator every interval, so this
 // interval needs to be much smaller than the real lockTableAllocator's timeout.
 func NewLockTableKeeper(
-	sender KeepaliveSender,
-	interval time.Duration) LockTableKeeper {
-	logger := runtime.ProcessLevelRuntime().Logger()
-	tag := "lock-table-keeper"
+	serviceID string,
+	client Client,
+	keepLockTableBindInterval time.Duration,
+	keepRemoteLockInterval time.Duration,
+	tables *sync.Map) LockTableKeeper {
 	s := &lockTableKeeper{
-		logger:   logger.Named(tag),
-		sender:   sender,
-		changedC: make(chan pb.LockTable, 1024),
-		stopper: stopper.NewStopper(tag,
-			stopper.WithLogger(logger.RawLogger().Named(tag))),
+		serviceID:                 serviceID,
+		client:                    client,
+		tables:                    tables,
+		keepLockTableBindInterval: keepLockTableBindInterval,
+		keepRemoteLockInterval:    keepRemoteLockInterval,
+		stopper: stopper.NewStopper("lock-table-keeper",
+			stopper.WithLogger(getLogger().RawLogger())),
 	}
-	s.mu.lockTables = make(map[uint64]pb.LockTable)
-	if err := s.stopper.RunTask(s.send); err != nil {
+	if err := s.stopper.RunTask(s.keepLockTableBind); err != nil {
+		panic(err)
+	}
+	if err := s.stopper.RunTask(s.keepRemoteLock); err != nil {
 		panic(err)
 	}
 	return s
 }
 
-func (k *lockTableKeeper) Add(value pb.LockTable) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if _, ok := k.mu.lockTables[value.Table]; ok {
-		if k.logger.Enabled(zap.DebugLevel) {
-			k.logger.Debug("lock table already added",
-				zap.String("lock-table", value.DebugString()))
-		}
-		return
-	}
-	k.mu.lockTables[value.Table] = value
-	k.mu.changed = true
-	if k.logger.Enabled(zap.DebugLevel) {
-		k.logger.Debug("lock table added",
-			zap.String("lock-table", value.DebugString()))
-	}
-}
-
 func (k *lockTableKeeper) Close() error {
 	k.stopper.Stop()
-	close(k.changedC)
-	return k.sender.Close()
+	return nil
 }
 
-func (k *lockTableKeeper) Changed() chan pb.LockTable {
-	return k.changedC
-}
+func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
+	defer getLogger().InfoAction("keep lock table bind task")()
 
-func (k *lockTableKeeper) send(ctx context.Context) {
-	timer := time.NewTimer(k.interval)
+	timer := time.NewTimer(k.keepLockTableBindInterval)
 	defer timer.Stop()
 
-	var values []pb.LockTable
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			values = k.doSend(ctx, values)
-			timer.Reset(k.interval)
+			k.doKeepLockTableBind(ctx)
+			timer.Reset(k.keepLockTableBindInterval)
 		}
 	}
 }
 
-func (k *lockTableKeeper) doSend(ctx context.Context, values []pb.LockTable) []pb.LockTable {
-	values = k.getLockTables(values)
-	if len(values) > 0 {
-		ctx, cancel := context.WithTimeout(ctx, k.interval)
-		defer cancel()
-		changed, err := k.sender.Keep(ctx, values)
-		if err != nil {
-			k.logger.Error("failed to send keepalive request", zap.Error(err))
-			return values
-		}
-		if len(changed) > 0 {
-			k.lockTablesChanged(changed)
+func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
+	defer getLogger().InfoAction("keep remote locks task")()
+
+	timer := time.NewTimer(k.keepRemoteLockInterval)
+	defer timer.Stop()
+
+	services := make(map[string]pb.LockTable)
+	var futures []*morpc.Future
+	var binds []pb.LockTable
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			futures, binds = k.doKeepRemoteLock(
+				ctx,
+				futures,
+				services,
+				binds)
+			timer.Reset(k.keepRemoteLockInterval)
 		}
 	}
-	return values
 }
 
-func (k *lockTableKeeper) getLockTables(values []pb.LockTable) []pb.LockTable {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if !k.mu.changed {
-		return values
+func (k *lockTableKeeper) doKeepRemoteLock(
+	ctx context.Context,
+	futures []*morpc.Future,
+	services map[string]pb.LockTable,
+	binds []pb.LockTable) ([]*morpc.Future, []pb.LockTable) {
+	for k := range services {
+		delete(services, k)
 	}
-	values = values[:0]
-	for _, v := range k.mu.lockTables {
-		values = append(values, v)
+	binds = binds[:0]
+	futures = futures[:0]
+
+	k.tables.Range(func(key, value any) bool {
+		lb := value.(lockTable)
+		bind := lb.getBind()
+		if bind.ServiceID != k.serviceID {
+			services[bind.ServiceID] = bind
+		}
+		return true
+	})
+	if len(services) == 0 {
+		return futures[:0], binds[:0]
 	}
-	k.mu.changed = false
-	return values
+
+	ctx, cancel := context.WithTimeout(ctx, defaultRPCTimeout)
+	defer cancel()
+	for _, bind := range services {
+		req := acquireRequest()
+		defer releaseRequest(req)
+
+		req.Method = pb.Method_KeepRemoteLock
+		req.LockTable = bind
+		req.KeepRemoteLock.ServiceID = k.serviceID
+
+		f, err := k.client.AsyncSend(ctx, req)
+		if err == nil {
+			futures = append(futures, f)
+			binds = append(binds, bind)
+			continue
+		}
+		logKeepRemoteLocksFailed(bind, err)
+	}
+
+	for idx, f := range futures {
+		v, err := f.Get()
+		if err == nil {
+			releaseResponse(v.(*pb.Response))
+		} else {
+			logKeepRemoteLocksFailed(binds[idx], err)
+		}
+		f.Close()
+		futures[idx] = nil // gc
+	}
+	return futures[:0], binds[:0]
 }
 
-func (k *lockTableKeeper) lockTablesChanged(changed []pb.LockTable) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	for _, v := range changed {
-		o := k.mu.lockTables[v.Table]
-		delete(k.mu.lockTables, v.Table)
-		if k.logger.Enabled(zap.DebugLevel) {
-			k.logger.Debug("lock table changed",
-				zap.String("old", v.DebugString()),
-				zap.String("new", o.DebugString()))
-		}
+func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_KeepLockTableBind
+	req.KeepLockTableBind.ServiceID = k.serviceID
+
+	ctx, cancel := context.WithTimeout(ctx, k.keepLockTableBindInterval)
+	defer cancel()
+	resp, err := k.client.Send(ctx, req)
+	if err != nil {
+		logKeepBindFailed(err)
+		return
 	}
-	k.mu.changed = true
+	defer releaseResponse(resp)
+
+	if resp.KeepLockTableBind.OK {
+		return
+	}
+
+	// Keep bind receiving an explicit failure means that all the bings of the local
+	// locktable are invalid. We just need to remove it from the map, and the next
+	// time we access it, we will automatically get the latest bind from allocate.
+	logLocalBindsInvalid()
+	k.tables.Range(func(key, value any) bool {
+		lb := value.(lockTable)
+		bind := lb.getBind()
+		if bind.ServiceID == k.serviceID {
+			k.tables.Delete(key)
+			lb.close()
+		}
+		return true
+	})
 }

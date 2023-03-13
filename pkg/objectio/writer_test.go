@@ -71,7 +71,7 @@ func TestNewObjectWriter(t *testing.T) {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c)
+	service, err := fileservice.NewFileService(c, nil)
 	assert.Nil(t, err)
 
 	objectWriter, err := NewObjectWriter(name, service)

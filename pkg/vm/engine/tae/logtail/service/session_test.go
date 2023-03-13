@@ -163,9 +163,9 @@ func TestSession(t *testing.T) {
 
 	// constructs tables
 	tableA := mockTable(1, 2, 3)
-	idA := TableID(tableA.String())
+	idA := MarshalTableID(&tableA)
 	tableB := mockTable(1, 4, 3)
-	idB := TableID(tableB.String())
+	idB := MarshalTableID(&tableB)
 
 	ss := NewSession(ctx, logger, sendTimeout, pooler, notifier, stream, poisionTime)
 	defer ss.PostClean()
@@ -375,7 +375,7 @@ func (m *notifySessionError) NotifySessionError(ss *Session, err error) {
 
 func mockWrapLogtail(table api.TableID) wrapLogtail {
 	return wrapLogtail{
-		id: TableID(table.String()),
+		id: MarshalTableID(&table),
 		tail: logtail.TableLogtail{
 			Table: &table,
 		},

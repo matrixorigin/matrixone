@@ -23,6 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
+// Config config
+type Config = morpc.Config
+
 // TxnSender is used to send transaction requests to the DN nodes.
 type TxnSender interface {
 	// Send send request to the specified DN node, and wait for response synchronously.
