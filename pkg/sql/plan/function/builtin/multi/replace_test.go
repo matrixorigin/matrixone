@@ -137,12 +137,12 @@ func TestReplace(t *testing.T) {
 	proc := testutil.NewProcess()
 	for i, tc := range testCases {
 		t.Run(tc.info, func(t *testing.T) {
-			resultVector, rerr := Replace(tc.vs, proc)
+			rvec, rerr := Replace(tc.vs, proc)
 			if tc.err {
 				require.Errorf(t, rerr, fmt.Sprintf("case '%d' expected error, but no error happens", i))
 			} else {
 				require.NoError(t, rerr)
-				require.True(t, testutil.CompareVectors(tc.expect, resultVector), "got vector is different with expected")
+				require.True(t, testutil.CompareVectors(tc.expect, rvec), "got vector is different with expected")
 			}
 		})
 	}

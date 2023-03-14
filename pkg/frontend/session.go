@@ -32,10 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -50,6 +48,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1320,7 +1320,10 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
 	sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
 	sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
-	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
+	sqlForCheckTenant, err := getSqlForCheckTenant(sysTenantCtx, tenant.GetTenant())
+	if err != nil {
+		return nil, err
+	}
 	pu := ses.GetParameterUnit()
 	mp := ses.GetMemPool()
 	logDebugf(sessionProfile, "check tenant %s exists", tenant)
@@ -1356,7 +1359,10 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	logDebugf(sessionProfile, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
-	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
+	sqlForPasswordOfUser, err := getSqlForPasswordOfUser(tenantCtx, tenant.GetUser())
+	if err != nil {
+		return nil, err
+	}
 	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser, ses.GetAutoIncrCaches())
 	if err != nil {
 		return nil, err
@@ -1399,7 +1405,10 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	if tenant.HasDefaultRole() {
 		logDebugf(sessionProfile, "check default role of user %s.", tenant)
 		//step4 : check role exists or not
-		sqlForCheckRoleExists := getSqlForRoleIdOfRole(tenant.GetDefaultRole())
+		sqlForCheckRoleExists, err := getSqlForRoleIdOfRole(tenantCtx, tenant.GetDefaultRole())
+		if err != nil {
+			return nil, err
+		}
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists, ses.GetAutoIncrCaches())
 		if err != nil {
 			return nil, err
@@ -1411,7 +1420,10 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 		logDebugf(sessionProfile, "check granted role of user %s.", tenant)
 		//step4.2 : check the role has been granted to the user or not
-		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
+		sqlForRoleOfUser, err := getSqlForRoleOfUser(tenantCtx, userID, tenant.GetDefaultRole())
+		if err != nil {
+			return nil, err
+		}
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser, ses.GetAutoIncrCaches())
 		if err != nil {
 			return nil, err
@@ -1959,6 +1971,10 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (strin
 		goto handleFailed
 	}
 
+	err = inputNameIsInvalid(ctx, name)
+	if err != nil {
+		goto handleFailed
+	}
 	sql = fmt.Sprintf(`select args, body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
@@ -2233,7 +2249,10 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) ([]uint3
 	}
 
 	for name := range dedup {
-		sql = getSqlForCheckTenant(name)
+		sql, err = getSqlForCheckTenant(ctx, name)
+		if err != nil {
+			goto handleFailed
+		}
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -2382,16 +2401,12 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
+			return nil, "", moerr.NewResultFileNotFound(proc.Ctx, path)
 		}
 		return nil, "", err
 	}
 	// read meta's meta
-	reader, err := objectio.NewObjectReader(path, proc.FileService)
-	if err != nil {
-		return nil, "", err
-	}
-	bs, err := reader.ReadAllMeta(proc.Ctx, e.Size, proc.Mp())
+	reader, err := blockio.NewFileReader(proc.FileService, path)
 	if err != nil {
 		return nil, "", err
 	}
@@ -2399,26 +2414,20 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	idxs[0] = catalog.COLUMNS_IDX
 	idxs[1] = catalog.RESULT_PATH_IDX
 	// read meta's data
-	iov, err := reader.Read(proc.Ctx, bs[0].GetExtent(), idxs, proc.Mp())
+	bats, err := reader.LoadAllColumns(proc.Ctx, idxs, e.Size, common.DefaultAllocator)
 	if err != nil {
 		return nil, "", err
 	}
 	// cols
-	vec := vector.New(catalog.MetaColTypes[catalog.COLUMNS_IDX])
-	if err = vec.Read(iov.Entries[0].Object.([]byte)); err != nil {
-		return nil, "", err
-	}
-	def := vector.MustStrCols(vec)[0]
+	vec := bats[0].Vecs[0]
+	def := vec.GetStringAt(0)
 	r := &plan.ResultColDef{}
 	if err = r.Unmarshal([]byte(def)); err != nil {
 		return nil, "", err
 	}
 	// paths
-	vec = vector.New(catalog.MetaColTypes[catalog.RESULT_PATH_IDX])
-	if err = vec.Read(iov.Entries[1].Object.([]byte)); err != nil {
-		return nil, "", err
-	}
-	str := vector.MustStrCols(vec)[0]
+	vec = bats[0].Vecs[1]
+	str := vec.GetStringAt(0)
 	return r.ResultCols, str, nil
 }
 
@@ -2437,12 +2446,12 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 
 	ses := handle.(*Session)
 	oq := newFakeOutputQueue(ses.GetMysqlResultSet())
-	n := vector.Length(dataSet.Vecs[0])
+	n := dataSet.Vecs[0].Length()
 	for j := 0; j < n; j++ { //row index
 		if dataSet.Zs[j] <= 0 {
 			continue
 		}
-		_, err := extractRowFromEveryVector(ses, dataSet, int64(j), oq)
+		_, err := extractRowFromEveryVector(ses, dataSet, j, oq)
 		if err != nil {
 			return err
 		}
@@ -2524,7 +2533,11 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 	//logutil.Debugf("-->bh:%s", sql)
-	statements, err := mysql.Parse(ctx, sql)
+	v, err := bh.ses.GetGlobalVar("lower_case_table_names")
+	if err != nil {
+		return err
+	}
+	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
 	}

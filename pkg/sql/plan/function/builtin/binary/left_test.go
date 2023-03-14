@@ -15,11 +15,12 @@
 package binary
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
-	"testing"
 )
 
 func TestLeft(t *testing.T) {
@@ -248,9 +249,9 @@ func TestLeft2(t *testing.T) {
 		lenVec := testutil.MakeScalarNull(types.T_int64, 10)
 		wantvec := testutil.MakeScalarNull(types.T_char, 10)
 		proc := testutil.NewProc()
-		ovec, err := Left([]*vector.Vector{ivec, lenVec}, proc)
+		rvec, err := Left([]*vector.Vector{ivec, lenVec}, proc)
 		convey.So(err, convey.ShouldBeNil)
-		ret := testutil.CompareVectors(wantvec, ovec)
+		ret := testutil.CompareVectors(wantvec, rvec)
 		convey.So(ret, convey.ShouldBeTrue)
 	})
 
@@ -259,9 +260,9 @@ func TestLeft2(t *testing.T) {
 		lenVec := testutil.MakeScalarInt64(3, 5)
 		wantvec := testutil.MakeScalarVarchar("abc", 5)
 		proc := testutil.NewProc()
-		ovec, err := Left([]*vector.Vector{ivec, lenVec}, proc)
+		rvec, err := Left([]*vector.Vector{ivec, lenVec}, proc)
 		convey.So(err, convey.ShouldBeNil)
-		ret := testutil.CompareVectors(wantvec, ovec)
+		ret := testutil.CompareVectors(wantvec, rvec)
 		convey.So(ret, convey.ShouldBeTrue)
 	})
 }

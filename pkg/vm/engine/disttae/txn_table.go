@@ -76,7 +76,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 			rows = rows + int64(entry.bat.Length())
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-				vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					deletes[v] = struct{}{}
 				}
@@ -204,7 +204,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range tbl.dnList {
-
 		blocks := tbl.meta.blocks[i]
 		blks := make([]BlockMeta, 0, len(blocks))
 		deletes := make(map[uint64][]int)
@@ -235,7 +234,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 
 			for _, entry := range writes {
 				if entry.typ == DELETE {
-					vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
 						id, offset := catalog.DecodeRowid(v)
 						deletes[id] = append(deletes[id], int(offset))
@@ -416,10 +415,10 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 
 	// Write S3 Block
 	if bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
-		fileName := strings.Split(bat.Vecs[0].GetString(0), ":")[0]
+		fileName := strings.Split(bat.Vecs[0].GetStringAt(0), ":")[0]
 		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
-			ibat.SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
+			ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
 		}
 		if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
 			return err
@@ -430,7 +429,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if tbl.insertExpr == nil {
 		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
-			ibat.SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
+			ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
 		}
 		if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
 			return err
@@ -534,7 +533,9 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
 		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
 		if ok {
-			encodedPrimaryKey = encodePrimaryKey(v, tbl.db.txn.engine.mp)
+			packer, put := tbl.db.txn.engine.packerPool.Get()
+			defer put()
+			encodedPrimaryKey = encodePrimaryKey(v, packer)
 			index = memorytable.Tuple{
 				index_PrimaryKey,
 				memorytable.ToOrdered(v),
@@ -661,7 +662,7 @@ func (tbl *txnTable) newReader(
 			inserts = append(inserts, entry.bat)
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-				vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					deletes[v] = 0
 				}

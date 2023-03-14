@@ -8,9 +8,9 @@ select +9999999999999999999,-9999999999999999999;
 9999999999999999999	-9999999999999999999
 9999999999999999999	-9999999999999999999
 select cast(9223372036854775808 as unsigned)+1;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 select 9223372036854775808+1;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 select -(0-3),round(-(0-3)), round(9999999999999999999);
 -(0 - 3)	round(-(0 - 3))	round(9999999999999999999)
 3	3	9999999999999999999
@@ -72,9 +72,9 @@ a	big
 1	18446744073709551613
 1	18446744073709551614
 select min(big),max(big),max(big)-1 from t1;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 select min(big),max(big),max(big)-1 from t1 group by a;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 drop table t1;
 create table t1 (id bigint primary key, a int);
 insert into t1 values (1,1);
@@ -133,7 +133,7 @@ bigint_col
 17666000000000000000
 drop table t1;
 select cast(10000002383263201056 as unsigned) mod 50 as result;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '10000002383263201056'
 select cast(19999999999999999999 as signed);
 Data truncation: data out of range: data type int64, value '19999999999999999999'
 select cast(-19999999999999999999 as signed);
@@ -222,7 +222,7 @@ count(*)
 3
 drop table t;
 SELECT (184467440737095 BETWEEN 0 AND 18446744073709551500);
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '18446744073709551500'
 SELECT 184467440737095 >= 0;
 184467440737095 >= 0
 true
@@ -242,13 +242,13 @@ SELECT ( 9223372036854775808 BETWEEN 9223372036854775808 AND 9223372036854775808
 ( 9223372036854775808 BETWEEN 9223372036854775808 AND 9223372036854775808 )
 true
 SELECT ( 9223372036854775807 BETWEEN 9223372036854775808 AND 1 );
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 SELECT ( -1 BETWEEN 9223372036854775808 AND 1 );
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 SELECT ( 0 BETWEEN 9223372036854775808 AND 1 );
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 SELECT ( 1 BETWEEN 9223372036854775808 AND 1 );
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -450,7 +450,7 @@ a
 -9223372036854775808
 9223372036854775807
 insert into t1 values(9223372036854775808);
-Data truncation: data out of range: data type int64,
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 insert into t1 values(-9223372036854775809);
 Data truncation: data out of range: data type int64, value '-9223372036854775809'
 create table t2(a decimal(19, 0));
@@ -472,7 +472,7 @@ insert into t2 values(9223372036854775807);
 insert into t1 select * from t2;
 insert into t2 values(9223372036854775808);
 insert into t1 select * from t2;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 drop table t1;
 drop table t2;
 create table t1(a bigint unsigned);
@@ -483,7 +483,7 @@ a
 insert into t1 values(18446744073709551616);
 Data truncation: data out of range: data type uint64, value '18446744073709551616'
 insert into t1 values(-1);
-Data truncation: data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, value '-1'
 create table t2(a decimal(20, 0));
 insert into t2 values(0), (18446744073709551615);
 insert into t1 select * from t2;

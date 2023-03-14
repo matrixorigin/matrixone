@@ -50,7 +50,8 @@ func Test_EndsWith(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.([]uint8)
+		data := vector.MustFixedCol[uint8](vec)
+		ok := (data != nil)
 		if !ok {
 			log.Fatal(moerr.NewInternalError(proc.Ctx, "the Endswith function return value type is not []uint8"))
 		}
@@ -64,13 +65,13 @@ func Test_EndsWith(t *testing.T) {
 		for i := 0; i < len(compVec); i++ {
 			if j < len(compNsp) {
 				if compNsp[j] == int64(i) {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeTrue)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeTrue)
 					j++
 				} else {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 				}
 			} else {
-				convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+				convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 			}
 		}
 	})
@@ -83,9 +84,9 @@ func TestEndswith(t *testing.T) {
 		wantvec := testutil.MakeScalarUint8(1, 5)
 
 		proc := testutil.NewProc()
-		ovec, err := Endswith([]*vector.Vector{firVec, secVec}, proc)
+		rvec, err := Endswith([]*vector.Vector{firVec, secVec}, proc)
 		convey.So(err, convey.ShouldBeNil)
-		ret := testutil.CompareVectors(wantvec, ovec)
+		ret := testutil.CompareVectors(wantvec, rvec)
 		convey.So(ret, convey.ShouldBeTrue)
 	})
 }

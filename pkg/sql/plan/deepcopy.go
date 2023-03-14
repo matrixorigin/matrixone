@@ -60,10 +60,18 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		OnDuplicateIdx: make([]int32, len(ctx.OnDuplicateIdx)),
 		TableDef:       DeepCopyTableDef(ctx.TableDef),
 
+		IdxIdx: make([]int32, len(ctx.IdxIdx)),
+		IdxRef: make([]*plan.ObjectRef, len(ctx.IdxRef)),
+
 		ClusterTable: DeepCopyClusterTable(ctx.ClusterTable),
 	}
 
 	copy(newCtx.OnDuplicateIdx, ctx.OnDuplicateIdx)
+	copy(newCtx.IdxIdx, ctx.IdxIdx)
+
+	for i, ref := range ctx.IdxRef {
+		newCtx.IdxRef[i] = DeepCopyObjectRef(ref)
+	}
 
 	if ctx.ParentIdx != nil {
 		newCtx.ParentIdx = make(map[string]int32)
@@ -464,10 +472,15 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		CompositePkey: nil,
 		OriginCols:    make([]*plan.ColDef, len(table.OriginCols)),
 		Indexes:       make([]*IndexDef, len(table.Indexes)),
+		Fkeys:         make([]*plan.ForeignKeyDef, len(table.Fkeys)),
 	}
 
 	for idx, col := range table.Cols {
 		newTable.Cols[idx] = DeepCopyColDef(col)
+	}
+
+	for idx, fkey := range table.Fkeys {
+		newTable.Fkeys[idx] = DeepCopyFkey(fkey)
 	}
 
 	for idx, col := range table.OriginCols {
@@ -668,21 +681,62 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 		}
 
 	case *plan.DataDefinition_CreateTable:
+		CreateTable := &plan.CreateTable{
+			IfNotExists: df.CreateTable.IfNotExists,
+			Temporary:   df.CreateTable.Temporary,
+			Database:    df.CreateTable.Database,
+			TableDef:    DeepCopyTableDef(df.CreateTable.TableDef),
+			FkDbs:       make([]string, len(df.CreateTable.FkDbs)),
+			FkTables:    make([]string, len(df.CreateTable.FkTables)),
+			FkCols:      make([]*plan.FkColName, len(df.CreateTable.FkCols)),
+		}
+		copy(CreateTable.FkDbs, df.CreateTable.FkDbs)
+		copy(CreateTable.FkTables, df.CreateTable.FkTables)
+		for i, val := range df.CreateTable.FkCols {
+			cols := &plan.FkColName{Cols: make([]string, len(val.Cols))}
+			copy(cols.Cols, val.Cols)
+			CreateTable.FkCols[i] = cols
+		}
 		newDf.Definition = &plan.DataDefinition_CreateTable{
-			CreateTable: &plan.CreateTable{
-				IfNotExists: df.CreateTable.IfNotExists,
-				Temporary:   df.CreateTable.Temporary,
-				Database:    df.CreateTable.Database,
-				TableDef:    DeepCopyTableDef(df.CreateTable.TableDef),
-			},
+			CreateTable: CreateTable,
 		}
 
 	case *plan.DataDefinition_AlterTable:
+		AlterTable := &plan.AlterTable{
+			Database:       df.AlterTable.Database,
+			TableDef:       DeepCopyTableDef(df.AlterTable.TableDef),
+			IsClusterTable: df.AlterTable.IsClusterTable,
+			Actions:        make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
+		}
+		for i, action := range df.AlterTable.Actions {
+			switch act := action.Action.(type) {
+			case *plan.AlterTable_Action_Drop:
+				AlterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_Drop{
+						Drop: &plan.AlterTableDrop{
+							Typ:  act.Drop.Typ,
+							Name: act.Drop.Name,
+						},
+					},
+				}
+			case *plan.AlterTable_Action_AddFk:
+				AddFk := &plan.AlterTable_Action_AddFk{
+					AddFk: &plan.AlterTableAddFk{
+						DbName:    act.AddFk.DbName,
+						TableName: act.AddFk.TableName,
+						Cols:      make([]string, len(act.AddFk.Cols)),
+						Fkey:      DeepCopyFkey(act.AddFk.Fkey),
+					},
+				}
+				copy(AddFk.AddFk.Cols, act.AddFk.Cols)
+				AlterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: AddFk,
+				}
+			}
+		}
+
 		newDf.Definition = &plan.DataDefinition_AlterTable{
-			AlterTable: &plan.AlterTable{
-				Table:    df.AlterTable.Table,
-				TableDef: DeepCopyTableDef(df.AlterTable.TableDef),
-			},
+			AlterTable: AlterTable,
 		}
 
 	case *plan.DataDefinition_DropTable:
@@ -767,6 +821,20 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	}
 
 	return newDf
+}
+
+func DeepCopyFkey(fkey *ForeignKeyDef) *ForeignKeyDef {
+	def := &ForeignKeyDef{
+		Name:        fkey.Name,
+		Cols:        make([]uint64, len(fkey.Cols)),
+		ForeignTbl:  fkey.ForeignTbl,
+		ForeignCols: make([]uint64, len(fkey.ForeignCols)),
+		OnDelete:    fkey.OnDelete,
+		OnUpdate:    fkey.OnUpdate,
+	}
+	copy(def.Cols, fkey.Cols)
+	copy(def.ForeignCols, fkey.ForeignCols)
+	return def
 }
 
 func DeepCopyExpr(expr *Expr) *Expr {

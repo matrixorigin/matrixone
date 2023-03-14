@@ -169,3 +169,124 @@ func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
 
 func (node *AlterDataBaseConfig) GetStatementType() string { return "Alter DataBase config" }
 func (node *AlterDataBaseConfig) GetQueryType() string     { return QueryTypeDDL }
+
+// AlterTable
+// see https://dev.mysql.com/doc/refman/8.0/en/alter-table.html
+type AlterTable struct {
+	statementImpl
+	Table   TableName
+	Options AlterTableOptions
+}
+
+func (node *AlterTable) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter table ")
+	node.Table.Format(ctx)
+
+	prefix := " "
+	for _, t := range node.Options {
+		ctx.WriteString(prefix)
+		t.Format(ctx)
+		prefix = ", "
+	}
+}
+
+type AlterTableOptions = []AlterTableOption
+
+type AlterTableOption interface {
+	NodeFormatter
+}
+
+type alterOptionImpl struct {
+	AlterTableOption
+}
+
+type AlterOptionAdd struct {
+	alterOptionImpl
+	Def TableDef
+}
+
+func (node *AlterOptionAdd) Format(ctx *FmtCtx) {
+	ctx.WriteString("add ")
+	node.Def.Format(ctx)
+}
+
+type AlterTableDropType int
+
+const (
+	AlterTableDropColumn AlterTableDropType = iota
+	AlterTableDropIndex
+	AlterTableDropKey
+	AlterTableDropPrimaryKey
+	AlterTableDropForeignKey
+)
+
+type AlterOptionDrop struct {
+	alterOptionImpl
+	Typ  AlterTableDropType
+	Name Identifier
+}
+
+func (node *AlterOptionDrop) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop ")
+	switch node.Typ {
+	case AlterTableDropColumn:
+		ctx.WriteString("column ")
+		node.Name.Format(ctx)
+	case AlterTableDropIndex:
+		ctx.WriteString("index ")
+		node.Name.Format(ctx)
+	case AlterTableDropKey:
+		ctx.WriteString("key ")
+		node.Name.Format(ctx)
+	case AlterTableDropPrimaryKey:
+		ctx.WriteString("primary key")
+	case AlterTableDropForeignKey:
+		ctx.WriteString("foreign key ")
+		node.Name.Format(ctx)
+	}
+}
+
+type AccountsSetOption struct {
+	All          bool
+	SetAccounts  IdentifierList
+	AddAccounts  IdentifierList
+	DropAccounts IdentifierList
+}
+
+type AlterPublication struct {
+	statementImpl
+	IfExists    bool
+	Name        Identifier
+	AccountsSet *AccountsSetOption
+	Comment     string
+}
+
+func (node *AlterPublication) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter publication ")
+	if node.IfExists {
+		ctx.WriteString("if exists ")
+	}
+	node.Name.Format(ctx)
+	ctx.WriteString(" account ")
+	if node.AccountsSet != nil {
+		if node.AccountsSet.All {
+			ctx.WriteString("all")
+		} else {
+			if len(node.AccountsSet.SetAccounts) > 0 {
+				node.AccountsSet.SetAccounts.Format(ctx)
+			}
+			if len(node.AccountsSet.AddAccounts) > 0 {
+				ctx.WriteString("add ")
+				node.AccountsSet.AddAccounts.Format(ctx)
+			}
+			if len(node.AccountsSet.DropAccounts) > 0 {
+				ctx.WriteString("drop ")
+				node.AccountsSet.DropAccounts.Format(ctx)
+			}
+		}
+	}
+	if node.Comment != "" {
+		ctx.WriteString(" comment ")
+		ctx.WriteString(fmt.Sprintf("'%s'", node.Comment))
+	}
+}

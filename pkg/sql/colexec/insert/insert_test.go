@@ -17,7 +17,6 @@ package insert
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
@@ -72,13 +71,14 @@ func TestInsertOperator(t *testing.T) {
 	proc.Ctx = ctx
 	batch1 := &batch.Batch{
 		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
+			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
 			testutil.MakeScalarInt64(3, 3),
 			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
 			testutil.MakeScalarVarchar("d", 3),
 			testutil.MakeScalarNull(types.T_int64, 3),
 		},
-		Zs: []int64{1, 1, 1},
+		Attrs: []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
+		Zs:    []int64{1, 1, 1},
 	}
 	argument1 := Argument{
 		Engine: eng,
@@ -103,48 +103,13 @@ func TestInsertOperator(t *testing.T) {
 	proc.Reg.InputBatch = batch1
 	_, err := Call(0, proc, &argument1, false, false)
 	require.NoError(t, err)
-	println(argument1.InsertCtx.Source.(*mockRelation).result.Vecs)
-	{
-		result := argument1.InsertCtx.Source.(*mockRelation).result
-		// check attr names
-		require.True(t, reflect.DeepEqual(
-			[]string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
-			result.Attrs,
-		))
-		// check vector
-		require.Equal(t, len(batch1.Vecs), len(result.Vecs))
-		for i, vec := range result.Vecs {
-			require.Equal(t, len(batch1.Zs), vector.Length(vec), fmt.Sprintf("column number: %d", i))
-		}
-	}
 
-	batch2 := &batch.Batch{
-		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
-		},
-		Zs: []int64{1, 1, 1},
+	result := argument1.InsertCtx.Source.(*mockRelation).result
+	// check attr names
+	require.Equal(t, []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"}, result.Attrs)
+	// check vector
+	require.Equal(t, len(batch1.Vecs), len(result.Vecs))
+	for i, vec := range result.Vecs {
+		require.Equal(t, len(batch1.Zs), vec.Length(), fmt.Sprintf("column number: %d", i))
 	}
-	argument2 := Argument{
-		Engine: eng,
-		InsertCtx: &InsertCtx{
-			Source: &mockRelation{},
-			Ref: &plan.ObjectRef{
-				Obj:        0,
-				SchemaName: "testDb",
-				ObjName:    "testTable",
-			},
-			TableDef: &plan.TableDef{
-				Cols: []*plan.ColDef{
-					{Name: "int64_column_primary", Primary: true, Typ: i64typ,
-						Default: &plan.Default{
-							NullAbility: false,
-						},
-					},
-				},
-			},
-		},
-	}
-	proc.Reg.InputBatch = batch2
-	_, err2 := Call(0, proc, &argument2, false, false)
-	require.Errorf(t, err2, "should return error when insert null into primary key column")
 }

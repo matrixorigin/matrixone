@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -64,7 +63,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	}
 	var services = make([]fileservice.FileService, 0, 1)
 	for _, config := range configs {
-		service, err := fileservice.NewFileService(config)
+		service, err := fileservice.NewFileService(config, nil)
 		require.Nil(t, err)
 		services = append(services, service)
 	}
@@ -111,8 +110,8 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 
 	// read index
 	for _, bbs := range r.bs {
-		_, err = r.objectReader.ReadIndex(context.Background(), bbs.GetExtent(),
-			r.idxs, objectio.ZoneMapType, mp)
+		_, err = r.blockReader.LoadZoneMaps(context.Background(),
+			r.idxs, []uint32{bbs.GetExtent().Id()}, mp)
 		require.Nil(t, err)
 	}
 
@@ -121,7 +120,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 		for _, vec := range bat.Vecs {
 			rows, err := GetVectorArrayLen(context.TODO(), vec)
 			require.Nil(t, err)
-			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.Typ.String())
+			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.GetType().String())
 		}
 		rows := bat.Vecs[0].Length()
 		ctn := strings.Builder{}
@@ -172,7 +171,7 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 	}
 	var services = make([]fileservice.FileService, 0, 1)
 	for _, config := range configs {
-		service, err := fileservice.NewFileService(config)
+		service, err := fileservice.NewFileService(config, nil)
 		require.Nil(t, err)
 		services = append(services, service)
 	}
@@ -314,7 +313,7 @@ func TestTaeReadFile(t *testing.T) {
 	}
 	var services = make([]fileservice.FileService, 0, 1)
 	for _, config := range configs {
-		service, err := fileservice.NewFileService(config)
+		service, err := fileservice.NewFileService(config, nil)
 		require.Nil(t, err)
 		services = append(services, service)
 	}
@@ -344,8 +343,8 @@ func TestTaeReadFile(t *testing.T) {
 
 	// read index
 	for _, bbs := range r.bs {
-		_, err = r.objectReader.ReadIndex(context.Background(), bbs.GetExtent(),
-			r.idxs, objectio.ZoneMapType, mp)
+		_, err = r.blockReader.LoadZoneMaps(context.Background(),
+			r.idxs, []uint32{bbs.GetExtent().Id()}, mp)
 		require.Nil(t, err)
 	}
 
@@ -354,7 +353,7 @@ func TestTaeReadFile(t *testing.T) {
 		for _, vec := range bat.Vecs {
 			rows, err := GetVectorArrayLen(context.TODO(), vec)
 			require.Nil(t, err)
-			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.Typ.String())
+			t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.GetType().String())
 		}
 		rows := bat.Vecs[0].Length()
 		ctn := strings.Builder{}
@@ -386,7 +385,7 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 	}
 	var services = make([]fileservice.FileService, 0, 1)
 	for _, config := range configs {
-		service, err := fileservice.NewFileService(config)
+		service, err := fileservice.NewFileService(config, nil)
 		require.Nil(t, err)
 		services = append(services, service)
 	}
@@ -420,8 +419,8 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 
 		// read index
 		for _, bbs := range r.bs {
-			_, err = r.objectReader.ReadIndex(context.Background(), bbs.GetExtent(),
-				r.idxs, objectio.ZoneMapType, mp)
+			_, err = r.blockReader.LoadZoneMaps(context.Background(),
+				r.idxs, []uint32{bbs.GetExtent().Id()}, mp)
 			require.Nil(t, err)
 		}
 
@@ -431,7 +430,7 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 				require.Nil(t, err)
 				t.Logf("calculate length: %d", rows)
 				break
-				//t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.Typ.String())
+				//t.Logf("calculate length: %d, vec.Length: %d, type: %s", rows, vec.Length(), vec.GetType().String())
 			}
 			rows := bat.Vecs[0].Length()
 			ctn := strings.Builder{}

@@ -24,115 +24,107 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func RegMatch(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return generalRegMatch(vectors, proc, true)
+func RegMatch(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return generalRegMatch(ivecs, proc, true)
 }
 
-func NotRegMatch(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return generalRegMatch(vectors, proc, false)
+func NotRegMatch(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return generalRegMatch(ivecs, proc, false)
 }
 
-func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool) (*vector.Vector, error) {
-	left, right := vectors[0], vectors[1]
-	resultType := types.T_bool.ToType()
-	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
+func generalRegMatch(ivecs []*vector.Vector, proc *process.Process, isReg bool) (*vector.Vector, error) {
+	left, right := ivecs[0], ivecs[1]
+	rtyp := types.T_bool.ToType()
+	leftValues, rightValues := vector.MustStrCol(left), vector.MustStrCol(right)
 	switch {
-	case left.IsScalar() && right.IsScalar():
-		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := vector.MustTCols[bool](resultVector)
-		err := RegMatchWithAllConst(leftValues, rightValues, resultValues, isReg)
+	case left.IsConstNull() || right.IsConstNull():
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	case left.IsConst() && right.IsConst():
+		var rvals [1]bool
+		err := regMatchWithAllConst(leftValues, rightValues, rvals[:], isReg)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "The Regular Expression have invalid parameter")
 		}
-		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
+		return vector.NewConstFixed(rtyp, rvals[0], ivecs[0].Length(), proc.Mp()), nil
+	case left.IsConst() && !right.IsConst():
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(rightValues), right.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[bool](resultVector)
-		err = RegMatchWithLeftConst(leftValues, rightValues, resultValues, isReg)
+		rvals := vector.MustFixedCol[bool](rvec)
+		err = regMatchWithLeftConst(leftValues, rightValues, rvals, isReg)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "The Regular Expression have invalid parameter")
 		}
-		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
-		if right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
+		return rvec, nil
+	case !left.IsConst() && right.IsConst():
+		rvec, err := proc.AllocVectorOfRows(rtyp, len(leftValues), left.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[bool](resultVector)
-		err = RegMatchWithRightConst(leftValues, rightValues, resultValues, isReg)
+		rvals := vector.MustFixedCol[bool](rvec)
+		err = regMatchWithRightConst(leftValues, rightValues, rvals, isReg)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "The Regular Expression have invalid parameter")
 		}
-		return resultVector, nil
+		return rvec, nil
 	}
-	resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, len(leftValues), nil)
 	if err != nil {
 		return nil, err
 	}
-	resultValues := vector.MustTCols[bool](resultVector)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	err = RegMatchWithALL(leftValues, rightValues, resultValues, isReg)
+	rvals := vector.MustFixedCol[bool](rvec)
+	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
+	err = regMatchWithAll(leftValues, rightValues, rvals, isReg)
 	if err != nil {
 		return nil, moerr.NewInvalidInput(proc.Ctx, "The Regular Expression have invalid parameter")
 	}
-	return resultVector, nil
+	return rvec, nil
 }
 
-func RegMatchWithAllConst(lv, rv []string, rs []bool, isReg bool) error {
+func regMatchWithAllConst(lv, rv []string, rs []bool, isReg bool) error {
 	res, err := regexp.MatchString(rv[0], lv[0])
 	if err != nil {
 		return err
 	}
 
-	rs[0] = BoolResult(res, isReg)
+	rs[0] = boolResult(res, isReg)
 	return nil
 }
 
-func RegMatchWithLeftConst(lv, rv []string, rs []bool, isReg bool) error {
+func regMatchWithLeftConst(lv, rv []string, rs []bool, isReg bool) error {
 	for i := range rv {
 		res, err := regexp.MatchString(rv[i], lv[0])
 		if err != nil {
 			return err
 		}
-		rs[i] = BoolResult(res, isReg)
+		rs[i] = boolResult(res, isReg)
 	}
 	return nil
 }
 
-func RegMatchWithRightConst(lv, rv []string, rs []bool, isReg bool) error {
+func regMatchWithRightConst(lv, rv []string, rs []bool, isReg bool) error {
 	for i := range lv {
 		res, err := regexp.MatchString(rv[0], lv[i])
 		if err != nil {
 			return err
 		}
-		rs[i] = BoolResult(res, isReg)
+		rs[i] = boolResult(res, isReg)
 	}
 	return nil
 }
 
-func RegMatchWithALL(lv, rv []string, rs []bool, isReg bool) error {
+func regMatchWithAll(lv, rv []string, rs []bool, isReg bool) error {
 	for i := range lv {
 		res, err := regexp.MatchString(rv[i], lv[i])
 		if err != nil {
 			return err
 		}
-		rs[i] = BoolResult(res, isReg)
+		rs[i] = boolResult(res, isReg)
 	}
 	return nil
 }
 
-func BoolResult(isMatch bool, isReg bool) bool {
+func boolResult(isMatch bool, isReg bool) bool {
 	return (isMatch && isReg) || !(isMatch || isReg)
 }

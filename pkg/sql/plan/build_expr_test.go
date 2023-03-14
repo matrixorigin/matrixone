@@ -386,7 +386,7 @@ func TestExpr_B(t *testing.T) {
 }
 
 func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		return nil, err
 	}

@@ -144,11 +144,7 @@ func (c *CNClient) acquireMessage() morpc.Message {
 
 func (c *CNClient) releaseMessage(m *pipeline.Message) {
 	if c.requestPool != nil {
-		m.Sid = 0
-		m.Err = nil
-		m.Data = nil
-		m.ProcInfoData = nil
-		m.Analyse = nil
+		m.Reset()
 		c.requestPool.Put(m)
 	}
 }

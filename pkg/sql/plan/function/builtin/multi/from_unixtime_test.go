@@ -71,8 +71,8 @@ func TestFromUnixTimeInt64(t *testing.T) {
 		process := newTmpProcess()
 		res, err := FromUnixTimeInt64([]*vector.Vector{int64Vector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		cols1 := vector.MustTCols[types.Datetime](wantVector)
-		cols2 := vector.MustTCols[types.Datetime](res)
+		cols1 := vector.MustFixedCol[types.Datetime](wantVector)
+		cols2 := vector.MustFixedCol[types.Datetime](res)
 		require.Equal(t, cols1, cols2)
 	})
 }
@@ -121,8 +121,8 @@ func TestFromUnixTimeUint64(t *testing.T) {
 		process := newTmpProcess()
 		res, err := FromUnixTimeUint64([]*vector.Vector{uint64Vector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		cols1 := vector.MustTCols[types.Datetime](wantVector)
-		cols2 := vector.MustTCols[types.Datetime](res)
+		cols1 := vector.MustFixedCol[types.Datetime](wantVector)
+		cols2 := vector.MustFixedCol[types.Datetime](res)
 		require.Equal(t, cols1, cols2)
 	})
 }
@@ -171,8 +171,8 @@ func TestFromUnixTimeFloat64(t *testing.T) {
 		process := newTmpProcess()
 		res, err := FromUnixTimeFloat64([]*vector.Vector{float64Vector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		cols1 := vector.MustTCols[types.Datetime](wantVector)
-		cols2 := vector.MustTCols[types.Datetime](res)
+		cols1 := vector.MustFixedCol[types.Datetime](wantVector)
+		cols2 := vector.MustFixedCol[types.Datetime](res)
 		require.Equal(t, cols1, cols2)
 	})
 }
@@ -232,8 +232,8 @@ func TestFromUnixTimeInt64Format(t *testing.T) {
 		process := newTmpProcess()
 		res, err := FromUnixTimeInt64Format([]*vector.Vector{int64Vector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		cols1 := vector.MustStrCols(wantVector)
-		cols2 := vector.MustStrCols(res)
+		cols1 := vector.MustStrCol(wantVector)
+		cols2 := vector.MustStrCol(res)
 		require.Equal(t, cols1, cols2)
 	})
 }
@@ -293,8 +293,8 @@ func TestFromUnixTimeUint64Format(t *testing.T) {
 		process := newTmpProcess()
 		res, err := FromUnixTimeUint64Format([]*vector.Vector{uint64Vector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		cols1 := vector.MustStrCols(wantVector)
-		cols2 := vector.MustStrCols(res)
+		cols1 := vector.MustStrCol(wantVector)
+		cols2 := vector.MustStrCol(res)
 		require.Equal(t, cols1, cols2)
 	})
 }
@@ -349,8 +349,8 @@ func TestFromUnixTimeFloat64Format(t *testing.T) {
 		process := newTmpProcess()
 		res, err := FromUnixTimeFloat64Format([]*vector.Vector{float64Vector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		cols1 := vector.MustStrCols(wantVector)
-		cols2 := vector.MustStrCols(res)
+		cols1 := vector.MustStrCol(wantVector)
+		cols2 := vector.MustStrCol(res)
 		require.Equal(t, cols1, cols2)
 	})
 }
@@ -386,7 +386,7 @@ func TestFromUnixTimeFloat64Null(t *testing.T) {
 		process := testutil.NewProc()
 		res, err := FromUnixTimeFloat64([]*vector.Vector{numVector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.Nsp.Np.ToArray())
+		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.GetNulls().Np.ToArray())
 	})
 }
 
@@ -421,7 +421,7 @@ func TestFromUnixTimeInt64Null(t *testing.T) {
 		process := testutil.NewProc()
 		res, err := FromUnixTimeInt64([]*vector.Vector{float64Vector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.Nsp.Np.ToArray())
+		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.GetNulls().Np.ToArray())
 	})
 }
 
@@ -457,7 +457,7 @@ func TestFromUnixTimeInt64FormatNull(t *testing.T) {
 		process := testutil.NewProc()
 		res, err := FromUnixTimeInt64Format([]*vector.Vector{numVector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.Nsp.Np.ToArray())
+		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.GetNulls().Np.ToArray())
 	})
 }
 
@@ -493,7 +493,7 @@ func TestFromUnixTimeFloat64FormatNull(t *testing.T) {
 		process := testutil.NewProc()
 		res, err := FromUnixTimeFloat64Format([]*vector.Vector{numVector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.Nsp.Np.ToArray())
+		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.GetNulls().Np.ToArray())
 	})
 }
 

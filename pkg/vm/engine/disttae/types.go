@@ -61,15 +61,15 @@ type IDGenerator interface {
 
 type Engine struct {
 	sync.RWMutex
-	mp      *mpool.MPool
-	fs      fileservice.FileService
-	cli     client.TxnClient
-	idGen   IDGenerator
-	txns    map[string]*Transaction
-	catalog *cache.CatalogCache
-
+	mp         *mpool.MPool
+	fs         fileservice.FileService
+	cli        client.TxnClient
+	idGen      IDGenerator
+	txns       map[string]*Transaction
+	catalog    *cache.CatalogCache
 	dnMap      map[string]int
 	partitions map[[2]uint64]Partitions
+	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
 	usePushModel       bool
@@ -85,10 +85,6 @@ type Partition struct {
 	lock  chan struct{}
 	state atomic.Pointer[PartitionState]
 	ts    timestamp.Timestamp // last updated timestamp
-
-	// lazy consume for ckpt.
-	sync.Mutex
-	ckptList []string
 }
 
 // Transaction represents a transaction
@@ -115,8 +111,6 @@ type Transaction struct {
 	// writes cache stores any writes done by txn
 	// every statement is an element
 	writes [][]Entry
-	// txn workspace size
-	workspaceSize uint64
 
 	workspace *memorytable.Table[RowID, *workspaceRow, *workspaceRow]
 	dnStores  []DNStore
