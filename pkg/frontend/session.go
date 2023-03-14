@@ -2401,7 +2401,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, "", moerr.NewQueryIdNotFound(proc.Ctx, uuid)
+			return nil, "", moerr.NewResultFileNotFound(proc.Ctx, path)
 		}
 		return nil, "", err
 	}
