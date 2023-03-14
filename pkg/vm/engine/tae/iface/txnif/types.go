@@ -15,9 +15,10 @@
 package txnif
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"io"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -56,7 +57,8 @@ type TxnReader interface {
 
 	GetPrepareTS() types.TS
 	GetParticipants() []uint64
-	GetInfo() []byte
+	GetSnapshotTS() types.TS
+	HasSnapshotLag() bool
 	IsVisible(o TxnReader) bool
 	GetTxnState(waitIfcommitting bool) TxnState
 	GetError() error
@@ -122,6 +124,7 @@ type TxnAsyncer interface {
 
 type TxnTest interface {
 	MockIncWriteCnt() int
+	MockStartTS(types.TS)
 	SetPrepareCommitFn(func(AsyncTxn) error)
 	SetPrepareRollbackFn(func(AsyncTxn) error)
 	SetApplyCommitFn(func(AsyncTxn) error)

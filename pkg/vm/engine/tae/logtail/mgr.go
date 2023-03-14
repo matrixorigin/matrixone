@@ -57,11 +57,16 @@ func MockCallback(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) {
 	logutil.Infof(s)
 }
 
+// Logtail manager holds sorted txn handles. Its main jobs:
+//
+// - Insert new txn handle
+// - Efficiently iterate over arbitrary range of txn handles on a snapshot
+// - Truncate unneceessary txn handles according to GC timestamp
 type Manager struct {
 	txnbase.NoopCommitListener
 	table     *TxnTable
 	truncated types.TS
-	now       func() types.TS
+	now       func() types.TS // now is from TxnManager
 
 	committingTS        atomic.Value
 	previousSaveTS      types.TS
@@ -200,6 +205,8 @@ func (mgr *Manager) getSaveTS() types.TS {
 	return committedTS
 }
 
+// OnEndPrePrepare is a listener for TxnManager. When a txn completes PrePrepare,
+// add it to the logtail manager
 func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
 	mgr.table.AddTxn(txn)
 }
@@ -208,6 +215,7 @@ func (mgr *Manager) OnEndPreApplyCommit(txn txnif.AsyncTxn) {
 	mgr.collectLogtailQueue.Enqueue(txn)
 }
 
+// GetReader get a snapshot of all txn prepared between from and to.
 func (mgr *Manager) GetReader(from, to types.TS) *Reader {
 	return &Reader{
 		from:  from,

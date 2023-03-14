@@ -43,8 +43,7 @@ import (
 )
 
 const (
-	WALDir     = "wal"
-	CATALOGDir = "catalog"
+	WALDir = "wal"
 )
 
 func Open(dirname string, opts *options.Options) (db *DB, err error) {

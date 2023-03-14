@@ -19,18 +19,12 @@ import (
 	"context"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-)
-
-var (
-	// ErrDeadlockDetectorClosed deadlock detector is closed
-	ErrDeadlockDetectorClosed = moerr.NewInvalidStateNoCtx("deadlock detector is closed")
 )
 
 type detector struct {
 	c                 chan []byte
-	waitTxnsFetchFunc func([]byte, *waiters) bool
+	waitTxnsFetchFunc func([]byte, *waiters) (bool, error)
 	waitTxnAbortFunc  func([]byte)
 	ignoreTxns        sync.Map // txnID -> any
 	stopper           *stopper.Stopper
@@ -44,13 +38,15 @@ type detector struct {
 // for the given txn. Then the detector will recursively check all txns's waiting txns until deadlock
 // is found. When a deadlock is found, waitTxnAbortFunc is used to notify the external abort to drop a
 // txn.
-func newDeadlockDetector(waitTxnsFetchFunc func([]byte, *waiters) bool,
+func newDeadlockDetector(
+	waitTxnsFetchFunc func([]byte, *waiters) (bool, error),
 	waitTxnAbortFunc func([]byte)) *detector {
 	d := &detector{
 		c:                 make(chan []byte, 1024),
 		waitTxnsFetchFunc: waitTxnsFetchFunc,
 		waitTxnAbortFunc:  waitTxnAbortFunc,
-		stopper:           stopper.NewStopper("deadlock-detector"),
+		stopper: stopper.NewStopper("deadlock-detector",
+			stopper.WithLogger(getLogger().RawLogger())),
 	}
 	err := d.stopper.RunTask(d.doCheck)
 	if err != nil {
@@ -84,6 +80,8 @@ func (d *detector) check(txnID []byte) error {
 }
 
 func (d *detector) doCheck(ctx context.Context) {
+	defer getLogger().InfoAction("dead lock checker")()
+
 	w := &waiters{ignoreTxns: &d.ignoreTxns}
 	for {
 		select {
@@ -92,7 +90,8 @@ func (d *detector) doCheck(ctx context.Context) {
 		case txnID := <-d.c:
 			w.reset(txnID)
 			v := string(txnID)
-			if !d.checkDeadlock(w) {
+			hasDeadlock, err := d.checkDeadlock(w)
+			if hasDeadlock || err != nil {
 				d.ignoreTxns.Store(v, struct{}{})
 				d.waitTxnAbortFunc(txnID)
 			}
@@ -100,16 +99,25 @@ func (d *detector) doCheck(ctx context.Context) {
 	}
 }
 
-func (d *detector) checkDeadlock(w *waiters) bool {
+func (d *detector) checkDeadlock(w *waiters) (bool, error) {
+	waitingTxnID := w.getCheckTargetTxn()
+	defer getLogger().DebugAction("check dead lock by txn added",
+		bytesField("waitting-txn", waitingTxnID))()
 	for {
 		if w.completed() {
-			return true
+			return false, nil
 		}
 
 		// find deadlock
 		txnID := w.getCheckTargetTxn()
-		if !d.waitTxnsFetchFunc(txnID, w) {
-			return false
+		added, err := d.waitTxnsFetchFunc(txnID, w)
+		if err != nil {
+			logCheckDeadLockFailed(waitingTxnID, txnID, err)
+			return false, err
+		}
+		if !added {
+			logDeadLockFound(txnID, w)
+			return true, nil
 		}
 		w.next()
 	}
@@ -130,8 +138,11 @@ func (w *waiters) next() {
 }
 
 func (w *waiters) add(txnID []byte) bool {
-	if bytes.Equal(w.waitTxns[0], txnID) {
-		return false
+	for i := 0; i < w.pos; i++ {
+		if bytes.Equal(w.waitTxns[i], txnID) {
+			w.waitTxns = append(w.waitTxns, txnID)
+			return false
+		}
 	}
 	v := unsafeByteSliceToString(txnID)
 	if _, ok := w.ignoreTxns.Load(v); ok {

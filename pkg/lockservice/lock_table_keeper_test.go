@@ -15,75 +15,118 @@
 package lockservice
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestKeeper(t *testing.T) {
-	interval := time.Millisecond * 100
-	c := make(chan pb.LockTable, 2)
-	n := 0
-	runKeeperTest(
+	runRPCTests(
 		t,
-		interval,
-		c,
-		func(lt pb.LockTable) bool {
-			n++
-			return n <= 2
-		},
-		func(k *lockTableKeeper) {
-			k.Add(pb.LockTable{})
-			for {
-				select {
-				case <-time.After(time.Second * 10):
-					assert.Fail(t, "missing keep")
-				default:
-					if len(c) == 2 {
-						return
+		func(c Client, s Server) {
+			n1 := 0
+			n2 := 0
+			c1 := make(chan struct{})
+			c2 := make(chan struct{})
+			s.RegisterMethodHandler(
+				pb.Method_KeepLockTableBind,
+				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
+					n1++
+					if n1 == 10 {
+						close(c1)
 					}
-					time.Sleep(interval)
-				}
-			}
-		})
-}
-
-func TestGetLockTables(t *testing.T) {
-	runKeeperTest(
-		t,
-		time.Minute,
-		nil,
-		func(lt pb.LockTable) bool {
-			return false
+					return nil
+				})
+			s.RegisterMethodHandler(
+				pb.Method_KeepRemoteLock,
+				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
+					n2++
+					if n2 == 10 {
+						close(c2)
+					}
+					return nil
+				})
+			m := &sync.Map{}
+			m.Store(0,
+				newRemoteLockTable(
+					"s1",
+					pb.LockTable{ServiceID: "s2"},
+					c,
+					func(lt pb.LockTable) {}))
+			k := NewLockTableKeeper(
+				"s1",
+				c,
+				time.Millisecond*10,
+				time.Millisecond*10,
+				m)
+			defer func() {
+				assert.NoError(t, k.Close())
+			}()
+			<-c1
+			<-c2
 		},
-		func(k *lockTableKeeper) {
-			var values []pb.LockTable
-			values = k.getLockTables(values)
-			assert.Empty(t, values)
-
-			k.Add(pb.LockTable{})
-			values = k.getLockTables(values)
-			assert.Equal(t, 1, len(values))
-
-			k.Add(pb.LockTable{Table: 1})
-			values = k.getLockTables(values)
-			assert.Equal(t, 2, len(values))
-		})
+	)
 }
 
-func runKeeperTest(
-	t *testing.T,
-	interval time.Duration,
-	c chan pb.LockTable,
-	filter func(pb.LockTable) bool,
-	fn func(*lockTableKeeper)) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	k := NewLockTableKeeper(newChannelBasedSender(c, filter), interval)
-	defer func() {
-		assert.NoError(t, k.Close())
-	}()
-	fn(k.(*lockTableKeeper))
+func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			s.RegisterMethodHandler(
+				pb.Method_KeepLockTableBind,
+				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
+					r2.KeepLockTableBind.OK = false
+					return nil
+				})
+
+			s.RegisterMethodHandler(
+				pb.Method_KeepRemoteLock,
+				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
+					return nil
+				})
+
+			m := &sync.Map{}
+			m.Store(1,
+				newLocalLockTable(
+					pb.LockTable{ServiceID: "s1"},
+					nil))
+			m.Store(2,
+				newLocalLockTable(
+					pb.LockTable{ServiceID: "s1"},
+					nil))
+			m.Store(3,
+				newRemoteLockTable(
+					"s1",
+					pb.LockTable{ServiceID: "s2"},
+					c,
+					func(lt pb.LockTable) {}))
+			k := NewLockTableKeeper(
+				"s1",
+				c,
+				time.Millisecond*10,
+				time.Millisecond*10,
+				m)
+			defer func() {
+				assert.NoError(t, k.Close())
+			}()
+
+			for {
+				v := 0
+				m.Range(func(key, value any) bool {
+					v++
+					return true
+				})
+				if v == 1 {
+					_, ok := m.Load(3)
+					assert.True(t, ok)
+					return
+				}
+				time.Sleep(time.Millisecond * 100)
+			}
+		},
+	)
 }

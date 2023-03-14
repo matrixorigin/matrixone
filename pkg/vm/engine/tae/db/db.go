@@ -15,17 +15,16 @@
 package db
 
 import (
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"io"
-	"runtime"
 	"sync/atomic"
+
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -131,19 +130,6 @@ func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
 	if err != nil {
 		panic(err)
 	}
-}
-
-func (db *DB) PrintStats() {
-	pc, _, _, _ := runtime.Caller(1)
-	caller := runtime.FuncForPC(pc).Name()
-	stats := db.CollectStats()
-	logutil.Infof("[PrintStats][Caller=%s]:%s", caller, stats.ToString(""))
-}
-
-func (db *DB) CollectStats() *Stats {
-	stats := NewStats(db)
-	stats.Collect()
-	return stats
 }
 
 func (db *DB) Close() error {
