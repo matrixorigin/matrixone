@@ -362,6 +362,19 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			return nil, err
 		}
 
+		rs = c.newMergeScope(ss)
+		if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.OnDuplicateKey,
+				Arg: onDuplicateKeyArg,
+			})
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.PreInsert,
+			Arg: preArg,
+		})
+		ss = []*Scope{rs}
+
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
@@ -384,16 +397,6 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			rs = c.newMergeScope(ss)
 			rs.Magic = Insert
 			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-				rs.Instructions = append(rs.Instructions, vm.Instruction{
-					Op:  vm.OnDuplicateKey,
-					Arg: onDuplicateKeyArg,
-				})
-			}
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op:  vm.PreInsert,
-				Arg: preArg,
-			})
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Insert,
 				Arg: arg,
@@ -1303,16 +1306,11 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, preArg *preinsert.Ar
 		}
 		ss2 = append(ss2, s)
 	}
-	preInsertInstr := &vm.Instruction{
-		Op:  vm.PreInsert,
-		Arg: preArg,
-	}
 	insert := &vm.Instruction{
 		Op:  vm.Insert,
 		Arg: arg,
 	}
 	for i := range ss2 {
-		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(preInsertInstr, nil))
 		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil))
 	}
 	return c.newMergeScope(ss2)
