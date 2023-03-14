@@ -90,13 +90,16 @@ func TestStatsLogWriter(t *testing.T) {
 	// 4. Wait for log to print in console.
 	time.Sleep(6 * time.Second)
 
-	// 5. Read from the console. Should print
-	// 2023/03/14 11:39:30.579403 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 2, "hits": 1}
-	// 2023/03/14 11:39:32.579816 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}
-	// 2023/03/14 11:39:34.583647 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}
-
+	// 5. Stop the LogWriter
 	if ch, effect := c.Stop(true); effect {
 		<-ch
 	}
 	println("StatsLogWriter has stopped gracefully.")
+
+	// 6. Read from the console. Should print
+	// 2023/03/14 11:39:30.579403 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 2, "hits": 1}
+	// 2023/03/14 11:39:32.579816 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}
+	// 2023/03/14 11:39:34.583647 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}
+	// StatsLogWriter has stopped gracefully.
+
 }
