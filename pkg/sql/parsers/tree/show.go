@@ -307,6 +307,27 @@ func (node *ShowGrants) Format(ctx *FmtCtx) {
 func (node *ShowGrants) GetStatementType() string { return "Show Grants" }
 func (node *ShowGrants) GetQueryType() string     { return QueryTypeOth }
 
+// SHOW SEQUENCES statement.
+type ShowSequences struct {
+	showImpl
+	DBName string
+	Where  *Where
+}
+
+func (node *ShowSequences) Format(ctx *FmtCtx) {
+	ctx.WriteString("show sequences")
+	if node.DBName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DBName)
+	}
+	if node.Where != nil {
+		ctx.WriteByte(' ')
+		node.Where.Format(ctx)
+	}
+}
+func (node *ShowSequences) GetStatementType() string { return "Show Sequences" }
+func (node *ShowSequences) GetQueryType() string     { return QueryTypeOth }
+
 // SHOW TABLES statement.
 type ShowTables struct {
 	showImpl

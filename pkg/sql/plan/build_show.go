@@ -375,6 +375,32 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowSequences(stmt *tree.ShowSequences, ctx CompilerContext) (*Plan, error) {
+	dbName := stmt.DBName
+
+	if stmt.DBName == "" {
+		dbName = ctx.DefaultDatabase()
+	} else if !ctx.DatabaseExists(dbName) {
+		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	}
+
+	if dbName == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
+	}
+
+	ddlType := plan.DataDefinition_SHOW_SEQUENCES
+
+	var sql string
+	sql = fmt.Sprintf("SELECT relname as `Sequences_in_%s`, seqtype as 'Data Type' FROM %s.mo_tables WHERE relkind = '%s' and reldatabase = '%s'",
+		dbName, MO_CATALOG_DB_NAME, catalog.SystemSequenceRel, dbName)
+
+	if stmt.Where != nil {
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	}
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
@@ -412,6 +438,9 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'",
 			dbName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%")
 	}
+
+	// Do not show sequences.
+	sql += fmt.Sprintf(" and relkind != '%s'", catalog.SystemSequenceRel)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)

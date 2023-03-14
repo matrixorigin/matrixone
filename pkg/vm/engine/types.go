@@ -127,6 +127,10 @@ type ViewDef struct {
 	View string
 }
 
+type SeqTypDef struct {
+	SeqType string
+}
+
 type IndexDef struct {
 	Indexes []*plan.IndexDef
 }
@@ -155,6 +159,7 @@ func (*IndexTableDef) tableDef() {}
 func (*PropertiesDef) tableDef() {}
 func (*ClusterByDef) tableDef()  {}
 func (*ConstraintDef) tableDef() {}
+func (*SeqTypDef) tableDef()     {}
 
 type ConstraintDef struct {
 	Cts []Constraint

@@ -103,6 +103,11 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 					View: cmds[i].Viewdef,
 				})
 			}
+			if len(cmds[i].SeqType) > 0 {
+				cmds[i].Defs = append(cmds[i].Defs, &engine.SeqTypDef{
+					SeqType: cmds[i].SeqType,
+				})
+			}
 			if len(cmds[i].Constraint) > 0 {
 				c := new(engine.ConstraintDef)
 				if err = c.UnmarshalBinary(cmds[i].Constraint); err != nil {
@@ -186,6 +191,7 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].Comment = string(row[MO_TABLES_REL_COMMENT_IDX].([]byte))
 		cmds[i].Partition = string(row[MO_TABLES_PARTITIONED_IDX].([]byte))
 		cmds[i].Viewdef = string(row[MO_TABLES_VIEWDEF_IDX].([]byte))
+		cmds[i].SeqType = string(row[MO_TABLES_SEQTYPE_IDX].([]byte))
 		cmds[i].Constraint = row[MO_TABLES_CONSTRAINT_IDX].([]byte)
 		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
 	}

@@ -337,7 +337,7 @@ import (
 %token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
+%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS
 %token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES
 
 // SET tokens
@@ -397,7 +397,7 @@ import (
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_sequence_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt
-%type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
+%type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
@@ -1474,6 +1474,10 @@ priv_type:
     {
         $$ = tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES
     }
+|    SHOW SEQUENCES
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_SHOW_SEQUENCES
+    }
 |    CREATE TABLE
     {
         $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLE
@@ -2493,6 +2497,7 @@ show_stmt:
 |   show_columns_stmt
 |   show_databases_stmt
 |   show_tables_stmt
+|   show_sequences_stmt
 |   show_process_stmt
 |   show_errors_stmt
 |   show_warnings_stmt
@@ -2722,6 +2727,15 @@ show_process_stmt:
     SHOW full_opt PROCESSLIST
     {
         $$ = &tree.ShowProcessList{Full: $2}
+    }
+
+show_sequences_stmt:
+    SHOW SEQUENCES database_name_opt where_expression_opt
+    {
+        $$ = &tree.ShowSequences{
+           DBName: $3, 
+           Where: $4,
+        }
     }
 
 show_tables_stmt:
@@ -8860,6 +8874,7 @@ non_reserved_keyword:
 |   TIMESTAMP %prec LOWER_THAN_STRING
 |   DATE %prec LOWER_THAN_STRING
 |   TABLES
+|   SEQUENCES
 |   EXTERNAL
 |   URL
 |   PASSWORD %prec LOWER_THAN_EQ

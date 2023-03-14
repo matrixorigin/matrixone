@@ -195,6 +195,23 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 
 	cs.TableDef.Cols = cols
 
+	// Got type.
+	var seqtyp string
+	switch types.T(typ.GetId()) {
+	case types.T_int16:
+		seqtyp = "smallint"
+	case types.T_int32:
+		seqtyp = "int"
+	case types.T_int64:
+		seqtyp = "bigint"
+	case types.T_uint16:
+		seqtyp = "smallint unsigned"
+	case types.T_uint32:
+		seqtyp = "int unsigned"
+	case types.T_uint64:
+		seqtyp = "bigint unsigned"
+	}
+
 	properties := []*plan.Property{
 		{
 			Key:   catalog.SystemRelAttr_Kind,
@@ -203,6 +220,10 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 		{
 			Key:   catalog.SystemRelAttr_CreateSQL,
 			Value: ctx.GetRootSql(),
+		},
+		{
+			Key:   catalog.SystemRelAttr_SeqType,
+			Value: seqtyp,
 		},
 	}
 

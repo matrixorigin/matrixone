@@ -801,6 +801,7 @@ message DataDefinition {
 		CREATE_SEQUENCE		= 29;
 		ALTER_SEQUENCE		= 30;
 		DROP_SEQUENCE		= 31;
+		SHOW_SEQUENCES      = 32;
 
 	}
 	//DataDefinition type

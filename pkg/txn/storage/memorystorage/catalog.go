@@ -112,6 +112,7 @@ type RelationRow struct {
 	PartitionDef []byte
 	ViewDef      []byte
 	Constraint   []byte
+	seqtype      []byte
 }
 
 func (r *RelationRow) Key() ID {
@@ -192,6 +193,8 @@ func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name stri
 		ret.Value = []byte(r.ViewDef)
 	case catalog.SystemRelAttr_Constraint:
 		ret.Value = r.Constraint
+	case catalog.SystemRelAttr_SeqType:
+		ret.Value = []byte(r.Properties[catalog.SystemRelAttr_SeqType])
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}

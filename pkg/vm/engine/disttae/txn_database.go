@@ -234,6 +234,8 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 						tbl.relKind = property.Value
 					case catalog.SystemRelAttr_CreateSQL:
 						tbl.createSql = property.Value // I don't trust this information.
+					case catalog.SystemRelAttr_SeqType:
+						tbl.seqtype = property.Value
 					default:
 					}
 				}

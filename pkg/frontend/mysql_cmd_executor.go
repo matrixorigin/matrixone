@@ -2105,7 +2105,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 		*tree.Update, *tree.Delete, *tree.Insert,
-		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
+		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
@@ -2212,6 +2212,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 				base,
 			},
 			st: st,
+		})
+	case *tree.ShowSequences:
+		ret = (&ShowSequencesExecutor{
+			resultSetStmtExecutor: &resultSetStmtExecutor{
+				base,
+			},
+			ss: st,
 		})
 	case *tree.ShowDatabases:
 		ret = (&ShowDatabasesExecutor{
@@ -3378,7 +3385,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		switch statement := cw.GetAst().(type) {
 		//produce result set
 		case *tree.Select,
-			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
+			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
 			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionStatus:
@@ -4063,6 +4070,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		*tree.ShowTableStatus,
 		*tree.ShowGrants,
 		*tree.ShowTables,
+		*tree.ShowSequences,
 		*tree.ShowProcessList,
 		*tree.ShowErrors,
 		*tree.ShowWarnings,

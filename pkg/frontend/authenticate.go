@@ -452,6 +452,7 @@ const (
 	PrivilegeTypeUserOwnership
 	PrivilegeTypeRoleOwnership
 	PrivilegeTypeShowTables
+	PrivilegeTypeShowSequences
 	PrivilegeTypeCreateObject //includes: table, view, stream, sequence, function, dblink,etc
 	PrivilegeTypeCreateTable
 	PrivilegeTypeCreateSequence
@@ -568,6 +569,8 @@ func (pt PrivilegeType) String() string {
 		return "role ownership"
 	case PrivilegeTypeShowTables:
 		return "show tables"
+	case PrivilegeTypeShowSequences:
+		return "show sequences"
 	case PrivilegeTypeCreateObject:
 		return "create object"
 	case PrivilegeTypeCreateTable:
@@ -663,6 +666,8 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 	case PrivilegeTypeRoleOwnership:
 		return PrivilegeScopeRole
 	case PrivilegeTypeShowTables:
+		return PrivilegeScopeDatabase
+	case PrivilegeTypeShowSequences:
 		return PrivilegeScopeDatabase
 	case PrivilegeTypeCreateObject, PrivilegeTypeCreateTable, PrivilegeTypeCreateView, PrivilegeTypeCreateSequence:
 		return PrivilegeScopeDatabase
@@ -1673,6 +1678,7 @@ var (
 		PrivilegeTypeUserOwnership:     {PrivilegeTypeUserOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeRoleOwnership:     {PrivilegeTypeRoleOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeShowTables:        {PrivilegeTypeShowTables, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
+		PrivilegeTypeShowSequences:     {PrivilegeTypeShowSequences, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeCreateObject:      {PrivilegeTypeCreateObject, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeCreateTable:       {PrivilegeTypeCreateTable, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeCreateSequence:    {PrivilegeTypeCreateSequence, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
@@ -1720,6 +1726,7 @@ var (
 		PrivilegeTypeCreateTable,
 		PrivilegeTypeDropTable,
 		PrivilegeTypeAlterTable,
+		PrivilegeTypeShowSequences,
 		PrivilegeTypeCreateSequence,
 		PrivilegeTypeDropSequence,
 		PrivilegeTypeAlterSequence,
@@ -1757,6 +1764,7 @@ var (
 		PrivilegeTypeCreateTable,
 		PrivilegeTypeDropTable,
 		PrivilegeTypeAlterTable,
+		PrivilegeTypeShowSequences,
 		PrivilegeTypeCreateSequence,
 		PrivilegeTypeDropSequence,
 		PrivilegeTypeAlterSequence,
@@ -3880,6 +3888,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		dbName = string(st.Name)
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+	case *tree.ShowSequences:
+		typs = append(typs, PrivilegeTypeShowSequences, PrivilegeTypeAccountAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase:
@@ -5217,6 +5227,8 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		}
 	case tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES:
 		privType = PrivilegeTypeShowTables
+	case tree.PRIVILEGE_TYPE_STATIC_SHOW_SEQUENCES:
+		privType = PrivilegeTypeShowSequences
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLE:
 		privType = PrivilegeTypeCreateTable
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_SEQUENCE:
