@@ -119,7 +119,7 @@ const (
 	ErrDragonboatShardNotFound      uint16 = 20437
 	ErrDragonboatOtherSystemError   uint16 = 20438
 	ErrDropNonExistsDB              uint16 = 20439
-	ErrQueryIdNotFound              uint16 = 20440
+	ErrResultFileNotFound           uint16 = 20440
 	ErrFunctionAlreadyExists        uint16 = 20441
 	ErrDropNonExistsFunction        uint16 = 20442
 	ErrNoConfig                     uint16 = 20443
@@ -275,7 +275,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDragonboatShardNotFound:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDragonboatOtherSystemError:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDropNonExistsDB:              {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
-	ErrQueryIdNotFound:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s is not found, or invalid tenant"},
+	ErrResultFileNotFound:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "result file %s not found"},
 	ErrNoConfig:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
 	// Group 5: rpc timeout
 	ErrRPCTimeout:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -594,8 +594,8 @@ func NewFileNotFound(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrFileNotFound, f)
 }
 
-func NewQueryIdNotFound(ctx context.Context, f string) *Error {
-	return newError(ctx, ErrQueryIdNotFound, f)
+func NewResultFileNotFound(ctx context.Context, f string) *Error {
+	return newError(ctx, ErrResultFileNotFound, f)
 }
 
 func NewNoConfig(ctx context.Context, f string) *Error {
