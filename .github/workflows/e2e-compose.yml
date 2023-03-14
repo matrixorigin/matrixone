@@ -58,7 +58,7 @@ jobs:
           ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources 2>&1
 
       - name: export log
-        if: ${{ always() }}
+        if: ${{ failure() }}
         run: |
           mkdir  -p ${{ github.workspace }}/docker-compose-log
           docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/docker-compose-log/cn-0.log
@@ -137,7 +137,7 @@ jobs:
           ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources 2>&1
 
       - name: export log
-        if: ${{ always() }}
+        if: ${{ failure() }}
         run: |
           mkdir  -p ${{ github.workspace }}/docker-compose-log
           docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/docker-compose-log/cn-0.log
