@@ -2976,6 +2976,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
+		sql = removeComments(sql)
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {

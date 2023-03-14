@@ -632,3 +632,19 @@ func isInvalidConfigInput(config string) bool {
 	_, err := types.ParseStringToByteJson(config)
 	return err != nil
 }
+
+func removeComments(sql string) string {
+	var sb strings.Builder
+	for i := 0; i < len(sql); i++ {
+		if i < len(sql)-1 && sql[i] == '/' && sql[i+1] == '*' {
+			i += 2
+			for i < len(sql)-1 && !(sql[i] == '*' && sql[i+1] == '/') {
+				i++
+			}
+			i++
+		} else {
+			sb.WriteByte(sql[i])
+		}
+	}
+	return sb.String()
+}
