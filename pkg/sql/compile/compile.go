@@ -352,13 +352,6 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			return nil, err
 		}
 
-		for _, scope := range ss {
-			scope.Instructions = append(scope.Instructions, vm.Instruction{
-				Op:  vm.PreInsert,
-				Arg: preArg,
-			})
-		}
-
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
@@ -368,6 +361,13 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
+			for _, scope := range ss {
+				scope.Instructions = append(scope.Instructions, vm.Instruction{
+					Op:  vm.PreInsert,
+					Arg: preArg,
+				})
+			}
+
 			rs = c.newInsertMergeScope(arg, preArg, ss)
 			rs.Magic = MergeInsert
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -391,6 +391,10 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 					Arg: onDuplicateKeyArg,
 				})
 			}
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.PreInsert,
+				Arg: preArg,
+			})
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Insert,
 				Arg: arg,
