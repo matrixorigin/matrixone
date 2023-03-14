@@ -199,8 +199,7 @@ func (mgr *Manager) getSaveTS() types.TS {
 		mgr.previousSaveTS = now
 		return now
 	}
-	mgr.previousSaveTS = committedTS
-	return committedTS
+	return mgr.previousSaveTS
 }
 
 // OnEndPrePrepare is a listener for TxnManager. When a txn completes PrePrepare,
