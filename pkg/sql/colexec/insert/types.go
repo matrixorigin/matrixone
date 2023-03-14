@@ -21,18 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	INSERT = iota
-	DELETE
-)
-
 type Argument struct {
-	// Ts is not used
-	Ts        uint64
 	Affected  uint64
 	Engine    engine.Engine
 	IsRemote  bool // mark if this insert is cn2s3 directly
-	Container *colexec.WriteS3Container
+	s3Writer  *colexec.S3Writer
 	InsertCtx *InsertCtx
 }
 
