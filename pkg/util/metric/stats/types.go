@@ -5,3 +5,7 @@ import "go.uber.org/zap"
 type LogExporter interface {
 	Export() []zap.Field
 }
+
+type Family struct {
+	logExporter *LogExporter
+}

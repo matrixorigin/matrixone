@@ -18,23 +18,11 @@ import (
 	"go.uber.org/zap"
 )
 
-type Family struct {
-	logExporter *LogExporter
-}
-
 // Registry holds mapping between FamilyName and Family
 type Registry map[string]*Family
 
-var DefaultRegistry = Registry{}
-
-func Register(familyName string, opts ...Options) {
-	DefaultRegistry.Register(familyName, opts...)
-}
-
-// Register registers stats family to registry
-// statsFName is a unique family name for the stats
-// stats is the pointer to the LogExporter object
 func (r *Registry) Register(familyName string, opts ...Options) {
+
 	if _, exists := (*r)[familyName]; exists {
 		panic("Duplicate Family Name")
 	}
@@ -47,6 +35,14 @@ func (r *Registry) Register(familyName string, opts ...Options) {
 	(*r)[familyName] = &Family{
 		logExporter: initOpts.logExporter,
 	}
+}
+
+// ExportLog returns the snapshot of all the Family in the registry
+func (r *Registry) ExportLog() (families map[string][]zap.Field) {
+	for familyName, family := range *r {
+		families[familyName] = (*family.logExporter).Export()
+	}
+	return
 }
 
 func WithLogExporter(logExporter *LogExporter) Options {
@@ -65,10 +61,12 @@ func defaultOptions() options {
 	return options{}
 }
 
-// ExportLog returns the snapshot of all the Family in the registry
-func (r *Registry) ExportLog() (families map[string][]zap.Field) {
-	for familyName, family := range *r {
-		families[familyName] = (*family.logExporter).Export()
-	}
-	return
+var DefaultRegistry = Registry{}
+
+// Register registers stats family to default stats registry
+// familyName is a unique family name for the stats
+// opts can contain logExporter  etc. for the stats.
+// Usage: stats.Register("FamilyName", stats.WithLogExporter(&customStatsLogExporter))
+func Register(familyName string, opts ...Options) {
+	DefaultRegistry.Register(familyName, opts...)
 }
