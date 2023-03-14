@@ -106,9 +106,9 @@ func (WaitPolicy) EnumDescriptor() ([]byte, []int) {
 type Method int32
 
 const (
-	// Lock lock
+	// Lock lock rows on remote lock table
 	Method_Lock Method = 0
-	// Write transaction write
+	// Write unlock rows from remote lock table
 	Method_Unlock Method = 1
 	// GetTxnLock get lock data on a special lock
 	Method_GetTxnLock Method = 2

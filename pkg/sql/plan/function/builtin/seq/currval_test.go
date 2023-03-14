@@ -174,7 +174,7 @@ func TestCurrvalMulti(t *testing.T) {
 				return
 			}
 			require.Nil(t, err)
-			ress := vector.MustStrCols(r)
+			ress := vector.MustStrCol(r)
 			require.Equal(t, "1000", ress[0])
 			require.Equal(t, "876", ress[1])
 		})

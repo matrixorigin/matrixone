@@ -45,8 +45,9 @@ func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		return nil, err
 	}
 	// nextval is the implementation of nextval function.
-	tblnames := vector.MustStrCols(vecs[0])
+	tblnames := vector.MustStrCol(vecs[0])
 	restrings := make([]string, len(tblnames))
+	isNulls := make([]bool, len(tblnames))
 
 	res, err := proc.AllocVectorOfRows(types.T_varchar.ToType(), 0, nil)
 	if err != nil {
@@ -57,8 +58,8 @@ func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	}
 
 	for i := 0; i < vecs[0].Length(); i++ {
-		if nulls.Contains(vecs[0].Nsp, uint64(i)) {
-			nulls.Add(res.Nsp, uint64(i))
+		if nulls.Contains(vecs[0].GetNulls(), uint64(i)) {
+			isNulls[i] = true
 			continue
 		}
 		s, err := nextval(tblnames[i], proc, e, txn)
@@ -71,7 +72,7 @@ func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		restrings[i] = s
 	}
 
-	vector.AppendString(res, restrings, proc.Mp())
+	vector.AppendStringList(res, restrings, isNulls, proc.Mp())
 
 	for i := len(restrings) - 1; i >= 0; i-- {
 		if restrings[i] != "" {
@@ -163,7 +164,7 @@ func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.
 		}
 		bat.Attrs = attrs
 
-		switch bat.Vecs[0].Typ.Oid {
+		switch bat.Vecs[0].GetType().Oid {
 		case types.T_int16:
 			// Get values store in sequence table.
 			lastSeqNum, minv, maxv, _, incrv, cycle, isCalled := getValues[int16](bat.Vecs)
@@ -284,7 +285,7 @@ func advanceSeq[T constraints.Integer](lastsn, minv, maxv, incrv T,
 func setSeq[T constraints.Integer](proc *process.Process, setv T, bat *batch.Batch, rel engine.Relation) (string, error) {
 	// Made the bat to update batch.
 	bat.Vecs[0].CleanOnlyData()
-	err := bat.Vecs[0].Append(setv, false, proc.Mp())
+	err := vector.AppendAny(bat.Vecs[0], setv, false, proc.Mp())
 	if err != nil {
 		return "", err
 	}
@@ -302,7 +303,7 @@ func setIsCalled[T constraints.Integer](proc *process.Process, bat *batch.Batch,
 	// Here made the bat to update batch.
 	// Set is called to true.
 	bat.Vecs[6].CleanOnlyData()
-	err := bat.Vecs[6].Append(true, false, proc.Mp())
+	err := vector.AppendAny(bat.Vecs[6], true, false, proc.Mp())
 	if err != nil {
 		return "", err
 	}

@@ -34,9 +34,9 @@ var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "sta
 var setEdge = true
 
 func getValues[T constraints.Integer](vecs []*vector.Vector) (T, T, T, T, int64, bool, bool) {
-	return vector.MustTCols[T](vecs[0])[0], vector.MustTCols[T](vecs[1])[0], vector.MustTCols[T](vecs[2])[0],
-		vector.MustTCols[T](vecs[3])[0], vector.MustTCols[int64](vecs[4])[0], vector.MustTCols[bool](vecs[5])[0],
-		vector.MustTCols[bool](vecs[6])[0]
+	return vector.MustFixedCol[T](vecs[0])[0], vector.MustFixedCol[T](vecs[1])[0], vector.MustFixedCol[T](vecs[2])[0],
+		vector.MustFixedCol[T](vecs[3])[0], vector.MustFixedCol[int64](vecs[4])[0], vector.MustFixedCol[bool](vecs[5])[0],
+		vector.MustFixedCol[bool](vecs[6])[0]
 }
 
 func simpleUpdate(proc *process.Process,
@@ -58,14 +58,6 @@ func simpleUpdate(proc *process.Process,
 	delBatch, updateBatch, err = makeDeleteAndUpdateBatch(proc, bat)
 	updateBatch.Cnt = 0
 	updateBatch.Ro = true
-
-	//Change length to 1.
-	for i := range delBatch.Vecs {
-		vector.SetLength(delBatch.Vecs[i], 1)
-	}
-	for i := range updateBatch.Vecs {
-		vector.SetLength(updateBatch.Vecs[i], 1)
-	}
 
 	if err != nil {
 		return err
@@ -92,11 +84,7 @@ func simpleUpdate(proc *process.Process,
 
 func makeDeleteAndUpdateBatch(proc *process.Process, bat *batch.Batch) (*batch.Batch, *batch.Batch, error) {
 	// get delete batch
-	delVec := vector.New(types.T_Rowid.ToType())
-	err := delVec.Append(vector.MustTCols[types.Rowid](bat.Vecs[7])[0], false, proc.Mp())
-	if err != nil {
-		return nil, nil, err
-	}
+	delVec := vector.NewConstFixed(types.T_Rowid.ToType(), vector.MustFixedCol[types.Rowid](bat.Vecs[7])[0], 1, proc.Mp())
 	delBatch := batch.New(true, []string{catalog.Row_ID})
 	delBatch.SetVector(0, delVec)
 	delBatch.SetZs(1, proc.Mp())

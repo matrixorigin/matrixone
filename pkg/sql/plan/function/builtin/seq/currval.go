@@ -16,7 +16,6 @@ package seq
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -30,7 +29,7 @@ import (
 // When third arg or nextval is true it will set or init the currval of this session.
 func Currval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// Get the table ids, and make key to retrieve from values stored in session.
-	tblnames := vector.MustStrCols(vecs[0])
+	tblnames := vector.MustStrCol(vecs[0])
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	txn, err := NewTxn(e, proc, proc.Ctx)
@@ -49,9 +48,10 @@ func Currval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	}
 
 	ress := make([]string, len(tblnames))
+	isNulls := make([]bool, len(tblnames))
 	for i := range tblnames {
 		if tblnames[i] == "" {
-			nulls.Add(res.Nsp, uint64(i))
+			isNulls[i] = true
 			continue
 		}
 		rel, err := dbHandler.Relation(proc.Ctx, tblnames[i])
@@ -66,6 +66,8 @@ func Currval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		ress[i] = ss
 	}
 
-	vector.AppendString(res, ress, proc.Mp())
+	if err := vector.AppendStringList(res, ress, isNulls, proc.Mp()); err != nil {
+		return nil, err
+	}
 	return res, nil
 }

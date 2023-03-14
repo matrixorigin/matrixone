@@ -46,29 +46,29 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	}
 
 	resultType := types.T_varchar.ToType()
-	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() {
+	if vecs[0].IsConstNull() || vecs[1].IsConstNull() {
 		if err1 := RollbackTxn(e, txn, proc.Ctx); err1 != nil {
 			return nil, err1
 		}
-		return proc.AllocScalarNullVector(resultType), nil
+		return vector.NewConstNull(resultType, vecs[0].Length(), proc.Mp()), nil
 	}
 
-	tblnames := vector.MustStrCols(vecs[0])
-	setnums := vector.MustStrCols(vecs[1])
+	tblnames := vector.MustStrCol(vecs[0])
+	setnums := vector.MustStrCol(vecs[1])
 	iscalled := make([]bool, 1)
 	iscalled[0] = true
 
 	var v3 *vector.Vector
 	v3 = nil
 	if len(vecs) == 3 {
-		if vecs[2].IsScalarNull() {
+		if vecs[2].IsConstNull() {
 			if err1 := RollbackTxn(e, txn, proc.Ctx); err1 != nil {
 				return nil, err1
 			}
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConstNull(resultType, vecs[0].Length(), proc.Mp()), nil
 		}
 		v3 = vecs[2]
-		iscalled = vector.MustTCols[bool](vecs[2])
+		iscalled = vector.MustFixedCol[bool](vecs[2])
 	}
 
 	maxLen := vecs[0].Length()
@@ -87,11 +87,12 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	}
 
 	ress := make([]string, len(tblnames))
+	isNulls := make([]bool, len(tblnames))
 	if len(tblnames) == 1 {
 		// When len(tblnames) == 1, left 2 params are 1 too.
 		for i := range tblnames {
 			if checkNulls(vecs[0], vecs[1], v3, 0, 0, 0) {
-				nulls.Add(res.Nsp, uint64(i))
+				isNulls[i] = true
 				continue
 			}
 			s, err := setval(tblnames[0], setnums[0], iscalled[0], proc, txn, e)
@@ -106,7 +107,7 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	} else if len(setnums) == 1 && len(iscalled) == 1 {
 		for i := range tblnames {
 			if checkNulls(vecs[0], vecs[1], v3, uint64(i), 0, 0) {
-				nulls.Add(res.Nsp, uint64(i))
+				isNulls[i] = true
 				continue
 			}
 			s, err := setval(tblnames[i], setnums[0], iscalled[0], proc, txn, e)
@@ -121,7 +122,7 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	} else if len(setnums) == 1 {
 		for i := range tblnames {
 			if checkNulls(vecs[0], vecs[1], v3, uint64(i), 0, uint64(i)) {
-				nulls.Add(res.Nsp, uint64(i))
+				isNulls[i] = true
 				continue
 			}
 			s, err := setval(tblnames[i], setnums[0], iscalled[i], proc, txn, e)
@@ -136,7 +137,7 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	} else if len(iscalled) == 1 {
 		for i := range tblnames {
 			if checkNulls(vecs[0], vecs[1], v3, uint64(i), uint64(i), 0) {
-				nulls.Add(res.Nsp, uint64(i))
+				isNulls[i] = true
 				continue
 			}
 			s, err := setval(tblnames[i], setnums[i], iscalled[0], proc, txn, e)
@@ -151,7 +152,7 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	} else {
 		for i := range tblnames {
 			if checkNulls(vecs[0], vecs[1], v3, uint64(i), uint64(i), uint64(i)) {
-				nulls.Add(res.Nsp, uint64(i))
+				isNulls[i] = true
 				continue
 			}
 			s, err := setval(tblnames[i], setnums[i], iscalled[i], proc, txn, e)
@@ -168,7 +169,7 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	if err = CommitTxn(e, txn, proc.Ctx); err != nil {
 		return nil, err
 	}
-	vector.AppendString(res, ress, proc.Mp())
+	vector.AppendStringList(res, ress, isNulls, proc.Mp())
 	return res, nil
 }
 
@@ -241,7 +242,7 @@ func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn cl
 		}
 		bat.Attrs = attrs
 
-		switch bat.Vecs[0].Typ.Oid {
+		switch bat.Vecs[0].GetType().Oid {
 		case types.T_int16:
 			_, minv, maxv, _, _, _, _ := getValues[int16](bat.Vecs)
 			// Parse and compare.
@@ -317,12 +318,12 @@ func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn cl
 func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled bool, bat *batch.Batch, rel engine.Relation) (string, error) {
 	// Made the bat to update batch.
 	bat.Vecs[0].CleanOnlyData()
-	err := bat.Vecs[0].Append(setv, false, proc.Mp())
+	err := vector.AppendAny(bat.Vecs[0], setv, false, proc.Mp())
 	if err != nil {
 		return "", err
 	}
 	bat.Vecs[6].CleanOnlyData()
-	err = bat.Vecs[6].Append(setisCalled, false, proc.Mp())
+	err = vector.AppendAny(bat.Vecs[6], setisCalled, false, proc.Mp())
 	if err != nil {
 		return "", err
 	}
@@ -345,7 +346,7 @@ func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled bo
 
 func checkNulls(v1, v2, v3 *vector.Vector, i1, i2, i3 uint64) bool {
 	if v3 == nil {
-		return nulls.Contains(v1.Nsp, i1) || nulls.Contains(v2.Nsp, i2)
+		return nulls.Contains(v1.GetNulls(), i1) || nulls.Contains(v2.GetNulls(), i2)
 	}
-	return nulls.Contains(v1.Nsp, i1) || nulls.Contains(v2.Nsp, i2) || nulls.Contains(v3.Nsp, i3)
+	return nulls.Contains(v1.GetNulls(), i1) || nulls.Contains(v2.GetNulls(), i2) || nulls.Contains(v3.GetNulls(), i3)
 }

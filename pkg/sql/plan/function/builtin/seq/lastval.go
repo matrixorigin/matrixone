@@ -31,6 +31,9 @@ func Lastval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	if lastv == "" {
 		return nil, moerr.NewInternalError(proc.Ctx, "Last value of current session is not initialized.")
 	}
-	res := vector.NewConstString(types.T_varchar.ToType(), 1, lastv, proc.Mp())
+	res := vector.NewVec(types.T_varchar.ToType())
+	if err := vector.AppendAny(res, []byte(lastv), false, proc.Mp()); err != nil {
+		return nil, err
+	}
 	return res, nil
 }

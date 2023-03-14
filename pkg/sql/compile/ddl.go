@@ -1285,56 +1285,17 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 }
 
 func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.CreateSequence, typ types.Type, proc *process.Process, incr int64, minV, maxV, startN T) error {
-	for i := 0; i < 4; i++ {
-		vecs[i] = vector.NewConst(typ, 0)
-	}
-	vecs[4] = vector.NewConst(types.T_int64.ToType(), 0)
-	for i := 5; i <= 6; i++ {
-		vecs[i] = vector.NewConst(types.T_bool.ToType(), 0)
-	}
-
+	vecs[0] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
+	vecs[1] = vector.NewConstFixed(typ, minV, 1, proc.Mp())
+	vecs[2] = vector.NewConstFixed(typ, maxV, 1, proc.Mp())
+	vecs[3] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
+	vecs[4] = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp())
 	if stmt.Cycle {
-		err := vecs[5].Append(true, false, proc.Mp())
-		if err != nil {
-			return err
-		}
+		vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
 	} else {
-		err := vecs[5].Append(false, false, proc.Mp())
-		if err != nil {
-			return err
-		}
+		vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
 	}
-
-	err := vecs[6].Append(false, false, proc.Mp())
-	if err != nil {
-		return err
-	}
-
-	err = vecs[0].Append(startN, false, proc.Mp())
-	if err != nil {
-		return err
-	}
-	err = vecs[1].Append(minV, false, proc.Mp())
-	if err != nil {
-		return err
-	}
-	err = vecs[2].Append(maxV, false, proc.Mp())
-	if err != nil {
-		return err
-	}
-	err = vecs[3].Append(startN, false, proc.Mp())
-	if err != nil {
-		return err
-	}
-	err = vecs[4].Append(incr, false, proc.Mp())
-	if err != nil {
-		return err
-	}
-
-	// Set all length to 1
-	for i := range plan2.Sequence_cols_name {
-		vector.SetLength(vecs[i], 1)
-	}
+	vecs[6] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
 	return nil
 }
 

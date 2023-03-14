@@ -51,21 +51,45 @@ func TestSetVal(t *testing.T) {
 		bat := batch.NewWithSize(8)
 		bat.Zs = []int64{1}
 		// Last_seq_num
-		bat.Vecs[0] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(20), testutil.TestUtilMp)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		if err := vector.AppendAny(bat.Vecs[0], int64(20), false, testutil.TestUtilMp); err != nil {
+			require.Nil(t, err)
+		}
 		// min_value
-		bat.Vecs[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(1), testutil.TestUtilMp)
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		if err := vector.AppendAny(bat.Vecs[1], int64(1), false, testutil.TestUtilMp); err != nil {
+			require.Nil(t, err)
+		}
 		// max_value
-		bat.Vecs[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(10000), testutil.TestUtilMp)
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		if err := vector.AppendAny(bat.Vecs[2], int64(10000), false, testutil.TestUtilMp); err != nil {
+			require.Nil(t, err)
+		}
 		// start_value
-		bat.Vecs[3] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(5), testutil.TestUtilMp)
+		bat.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+		if err := vector.AppendAny(bat.Vecs[3], int64(5), false, testutil.TestUtilMp); err != nil {
+			require.Nil(t, err)
+		}
 		// increment_value
-		bat.Vecs[4] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(1), testutil.TestUtilMp)
+		bat.Vecs[4] = vector.NewVec(types.T_int64.ToType())
+		if err := vector.AppendAny(bat.Vecs[4], int64(1), false, testutil.TestUtilMp); err != nil {
+			require.Nil(t, err)
+		}
 		// cycle
-		bat.Vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), 1, false, testutil.TestUtilMp)
+		bat.Vecs[5] = vector.NewVec(types.T_bool.ToType())
+		if err := vector.AppendAny(bat.Vecs[5], false, false, testutil.TestUtilMp); err != nil {
+			require.Nil(t, err)
+		}
 		// is_called
-		bat.Vecs[6] = vector.NewConstFixed(types.T_bool.ToType(), 1, false, testutil.TestUtilMp)
+		bat.Vecs[6] = vector.NewVec(types.T_bool.ToType())
+		if err := vector.AppendAny(bat.Vecs[6], false, false, testutil.TestUtilMp); err != nil {
+			require.Nil(t, err)
+		}
 		// row_id just 30
-		bat.Vecs[7] = vector.NewConstFixed(types.T_Rowid.ToType(), 1, types.BuildRowid(1, 2), testutil.TestUtilMp)
+		bat.Vecs[7] = vector.NewVec(types.T_Rowid.ToType())
+		if err := vector.AppendAny(bat.Vecs[7], types.BuildRowid(1, 2), false, testutil.TestUtilMp); err != nil {
+			require.Nil(t, err)
+		}
 		//err = bat.Vecs[3].Append(int64(1), false, testutil.TestUtilMp)
 		// if err != nil {
 		// require.Nil(t, err)
