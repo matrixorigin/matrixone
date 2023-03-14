@@ -93,15 +93,23 @@ func (ctx *TxnCtx) GetCtx() []byte {
 func (ctx *TxnCtx) Repr() string {
 	ctx.RLock()
 	defer ctx.RUnlock()
-	repr := fmt.Sprintf(
-		"ctx[%X][%s->%s->%s][%s]",
+	if ctx.HasSnapshotLag() {
+		return fmt.Sprintf(
+			"ctx[%X][%s->%s->%s][%s]",
+			ctx.ID,
+			ctx.SnapshotTS.ToString(),
+			ctx.StartTS.ToString(),
+			ctx.PrepareTS.ToString(),
+			txnif.TxnStrState(ctx.State),
+		)
+	}
+	return fmt.Sprintf(
+		"ctx[%X][%s->%s][%s]",
 		ctx.ID,
 		ctx.StartTS.ToString(),
 		ctx.PrepareTS.ToString(),
-		ctx.CommitTS.ToString(),
 		txnif.TxnStrState(ctx.State),
 	)
-	return repr
 }
 
 func (ctx *TxnCtx) SameTxn(startTs types.TS) bool { return ctx.StartTS.Equal(startTs) }
@@ -121,6 +129,12 @@ func (ctx *TxnCtx) GetCommitTS() types.TS {
 	ctx.RLock()
 	defer ctx.RUnlock()
 	return ctx.CommitTS
+}
+
+// test only
+// Note: unsafe
+func (ctx *TxnCtx) MockStartTS(ts types.TS) {
+	ctx.StartTS = ts
 }
 
 func (ctx *TxnCtx) SetCommitTS(cts types.TS) (err error) {
