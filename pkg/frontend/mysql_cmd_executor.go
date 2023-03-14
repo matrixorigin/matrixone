@@ -532,6 +532,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
+	ses.sentRows.Add(int64(n))
 	logInfof(ses.GetConciseProfile(), "rowCount %v \n"+
 		"time of getDataFromPipeline : %s \n"+
 		"processBatchTime %v \n"+
@@ -2998,6 +2999,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
+		sql = removePrefixComment(sql)
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
@@ -3039,6 +3041,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
+		ses.sentRows.Store(int64(0))
 		stmt := cw.GetAst()
 		sqlType := ses.sqlSourceType[0]
 		if i < len(ses.sqlSourceType) {
@@ -4345,6 +4348,10 @@ var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]b
 
 func init() {
 	motrace.SetDefaultSerializeExecPlan(SerializeExecPlan)
+}
+
+func GetStatementIdStr(ses *Session) string {
+	return trace.SpanFromContext(ses.GetRequestContext()).SpanContext().TraceID.String()
 }
 
 func getAccountId(ctx context.Context) uint32 {

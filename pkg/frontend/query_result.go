@@ -294,7 +294,7 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 		e, err := f.StatFile(requestCtx, path)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				return moerr.NewQueryIdNotFound(requestCtx, id)
+				return moerr.NewResultFileNotFound(requestCtx, path)
 			}
 			return err
 		}
@@ -623,7 +623,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	e, err := ses.GetParameterUnit().FileService.StatFile(ctx, metaFile)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, moerr.NewQueryIdNotFound(ctx, queryId)
+			return nil, moerr.NewResultFileNotFound(ctx, metaFile)
 		}
 		return nil, err
 	}
@@ -664,7 +664,7 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 		e, err := ses.GetParameterUnit().FileService.StatFile(ctx, file)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				return nil, moerr.NewQueryIdNotFound(ctx, queryId)
+				return nil, moerr.NewResultFileNotFound(ctx, file)
 			}
 			return nil, err
 		}
