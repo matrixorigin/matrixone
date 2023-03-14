@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -144,6 +145,7 @@ func (w *S3Writer) WriteEnd(proc *process.Process) {
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 	for i := range w.tableBatches {
+		fmt.Println("XXXXXX table batch:", w.tableBatches[i])
 		if w.tableBatchSizes[i] > 0 {
 			if err := w.mergeBlock(i, len(w.tableBatches[i]), proc); err != nil {
 				return err
@@ -196,11 +198,11 @@ func getStrCols(bats []*batch.Batch, idx int) [][]string {
 func (w *S3Writer) mergeBlock(idx int, length int, proc *process.Process) error {
 	bats := w.tableBatches[idx][:length]
 	sortIdx := -1
-	for i := range bats {
+	for _, bat := range bats {
 		// sort bats firstly
 		// for main table
 		if idx == 0 && len(w.sortIndex) != 0 {
-			sortByKey(proc, bats[i], w.sortIndex, proc.GetMPool())
+			sortByKey(proc, bat, w.sortIndex, proc.GetMPool())
 			sortIdx = w.sortIndex[0]
 		}
 	}

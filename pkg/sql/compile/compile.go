@@ -22,8 +22,6 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -328,10 +326,9 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 }
 
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
-	var rs *Scope
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		rs = c.newMergeScope(ss)
+		rs := c.newMergeScope(ss)
 		updateScopesLastFlag([]*Scope{rs})
 		rs.Magic = Deletion
 		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
@@ -343,14 +340,31 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Op:  vm.Deletion,
 			Arg: scp,
 		})
+		return rs, nil
 	case plan.Query_INSERT:
 		insertNode := qry.Nodes[qry.Steps[0]]
 		insertNode.NotCacheable = true
 
+		rs := c.newMergeScope(ss)
+		if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+			onDuplicateKeyArg, err := constructOnduplicateKey(insertNode, c.e, c.proc)
+			if err != nil {
+				return nil, err
+			}
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.OnDuplicateKey,
+				Arg: onDuplicateKeyArg,
+			})
+		}
 		preArg, err := constructPreInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.PreInsert,
+			Arg: preArg,
+		})
+		ss = []*Scope{rs}
 
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
@@ -361,14 +375,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
-			for _, scope := range ss {
-				scope.Instructions = append(scope.Instructions, vm.Instruction{
-					Op:  vm.PreInsert,
-					Arg: preArg,
-				})
-			}
-
-			rs = c.newInsertMergeScope(arg, preArg, ss)
+			rs = c.newInsertMergeScope(arg, ss)
 			rs.Magic = MergeInsert
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
@@ -377,35 +384,24 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 					Unique_tbls: arg.InsertCtx.UniqueSource,
 				},
 			})
-		} else {
-			rs = c.newMergeScope(ss)
-			rs.Magic = Insert
-			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-				onDuplicateKeyArg, err := constructOnduplicateKey(insertNode, c.e, c.proc)
-				if err != nil {
-					return nil, err
-				}
-				rs.Instructions = append(rs.Instructions, vm.Instruction{
-					Op:  vm.OnDuplicateKey,
-					Arg: onDuplicateKeyArg,
-				})
-			}
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op:  vm.PreInsert,
-				Arg: preArg,
-			})
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op:  vm.Insert,
-				Arg: arg,
-			})
+			return rs, nil
 		}
+
+		rs = c.newMergeScope(ss)
+		rs.Magic = Insert
+		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.Insert,
+			Arg: arg,
+		})
+		return rs, nil
+
 	case plan.Query_UPDATE:
 		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
-		rs = c.newMergeScope(ss)
+		rs := c.newMergeScope(ss)
 		updateScopesLastFlag([]*Scope{rs})
 		rs.Magic = Update
 		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
@@ -413,8 +409,9 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Op:  vm.Update,
 			Arg: scp,
 		})
+		return rs, nil
 	default:
-		rs = c.newMergeScope(ss)
+		rs := c.newMergeScope(ss)
 		updateScopesLastFlag([]*Scope{rs})
 		c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -424,8 +421,8 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 				Func: c.fill,
 			},
 		})
+		return rs, nil
 	}
-	return rs, nil
 }
 
 func constructValueScanBatch(ctx context.Context, proc *process.Process, node *plan.Node) (*batch.Batch, error) {
@@ -1296,7 +1293,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	return []*Scope{c.newMergeScope(append(rs, ss...))}
 }
 
-func (c *Compile) newInsertMergeScope(arg *insert.Argument, preArg *preinsert.Argument, ss []*Scope) *Scope {
+func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
 	ss2 := make([]*Scope, 0, len(ss))
 	for _, s := range ss {
 		if s.IsEnd {

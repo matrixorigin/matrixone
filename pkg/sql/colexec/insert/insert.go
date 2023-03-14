@@ -16,6 +16,7 @@ package insert
 
 import (
 	"bytes"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +44,10 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	insertArg := arg.(*Argument)
 	s3Writer := insertArg.s3Writer
 	bat := proc.InputBatch()
+	fmt.Println("XXXXXX insert batch:", bat)
+	if bat != nil {
+		fmt.Println("XXXXXX insert batch length:", bat.Length())
+	}
 	if bat == nil {
 		if insertArg.IsRemote {
 			// handle the last Batch that batchSize less than DefaultBlockMaxRows
