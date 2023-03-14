@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -101,4 +102,8 @@ func (w *wrappedTx) Txn() txn.TxnMeta {
 	return txn.TxnMeta{
 		ID: w.tx.GetCtx(),
 	}
+}
+
+func (w *wrappedTx) AddLockTable(lock.LockTable) error {
+	panic("should not call")
 }

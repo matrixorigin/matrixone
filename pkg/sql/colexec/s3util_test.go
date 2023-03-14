@@ -33,7 +33,7 @@ func TestSortKey(t *testing.T) {
 		},
 		Zs: []int64{1, 1, 1},
 	}
-	err := SortByKey(proc, batch1, []int{0}, proc.GetMPool())
+	err := sortByKey(proc, batch1, []int{0}, proc.GetMPool())
 	require.NoError(t, err)
 	cols := vector.ExpandFixedCol[uint16](batch1.Vecs[0])
 	for i := range cols {
@@ -48,7 +48,7 @@ func TestSortKey(t *testing.T) {
 		Zs: []int64{1, 1, 1},
 	}
 	res := []string{"a", "b", "c"}
-	err = SortByKey(proc, batch2, []int{0}, proc.GetMPool())
+	err = sortByKey(proc, batch2, []int{0}, proc.GetMPool())
 	require.NoError(t, err)
 	cols2 := vector.ExpandStrCol(batch2.Vecs[0])
 	for i := range cols {
