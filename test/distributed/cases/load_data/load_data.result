@@ -322,6 +322,10 @@ col1    col2    col3
 3    3    3
 4    4    4
 4    5    5
+load data infile '$resources/load_data/auto_increment_2.csv' into table t6 FIELDS ESCAPED BY '\\';
+invalid configuration: load operation do not support EscapedBy field.
+load data infile '$resources/load_data/auto_increment_2.csv' into table t6 LINES STARTING BY 'aaa';
+invalid configuration: load operation do not support StartingBy field.
 drop table t6;
 
 create table t7(

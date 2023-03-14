@@ -29,21 +29,24 @@ const (
 	blobsize = 65536 // 2^16-1
 )
 
-func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.New(types.T_text, 0, 0)
-	resultVector := vector.New(resultType)
-	if inputVector.ConstVectorIsNull() {
-		return vector.NewConstNull(resultType, 1), nil
+func LoadFile(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_text.ToType()
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+
 	}
-	Filepath := vector.GetStrColumn(inputVector)[0]
+	Filepath := vector.MustStrCol(inputVector)[0]
 	fs := proc.FileService
 	r, err := ReadFromFile(Filepath, fs)
 	if err != nil {
 		return nil, err
 	}
-	ctx, err := io.ReadAll(r)
 	defer r.Close()
+	ctx, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
 	if len(ctx) > blobsize {
 		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
 	}
@@ -51,10 +54,11 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	if len(ctx) == 0 {
 		isNull = true
 	}
-	if err := resultVector.Append(ctx, isNull, proc.Mp()); err != nil {
-		return nil, err
+	if isNull {
+		return vector.NewConstNull(rtyp, 1, proc.Mp()), nil
+	} else {
+		return vector.NewConstBytes(rtyp, ctx, 1, proc.Mp()), nil
 	}
-	return resultVector, nil
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {

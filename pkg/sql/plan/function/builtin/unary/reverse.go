@@ -15,29 +15,32 @@
 package unary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/reverse"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_varchar.ToType()
-	if vectors[0].GetType().Oid == types.T_blob {
-		resultType = types.T_blob.ToType()
+func Reverse(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := ivecs[0]
+	rtyp := types.T_varchar.ToType()
+	if ivecs[0].GetType().Oid == types.T_blob {
+		rtyp = types.T_blob.ToType()
 	}
-	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultValues := make([]string, 1)
-		reverse.Reverse(inputValues, resultValues)
-		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
+	ivals := vector.MustStrCol(inputVector)
+	if inputVector.IsConstNull() {
+		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
+	} else if inputVector.IsConst() {
+		var rvals [1]string
+		reverse.Reverse(ivals, rvals[:])
+		return vector.NewConstBytes(rtyp, []byte(rvals[0]), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		resultValues := make([]string, len(inputValues))
-		reverse.Reverse(inputValues, resultValues)
-		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
+		rvals := make([]string, len(ivals))
+		reverse.Reverse(ivals, rvals)
+		vec := vector.NewVec(rtyp)
+		vector.AppendStringList(vec, rvals, nil, proc.Mp())
+		nulls.Set(vec.GetNulls(), inputVector.GetNulls())
+		return vec, nil
 	}
 }

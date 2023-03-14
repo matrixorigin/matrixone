@@ -42,7 +42,7 @@ func TestI32Gt(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("%+v > %+v \n", as[i], bs[i])
 		assert.Equal(t, as[i] > bs[i], res[i])
@@ -67,7 +67,7 @@ func TestU32Gt(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("%+v > %+v \n", as[i], bs[i])
 		assert.Equal(t, as[i] > bs[i], res[i])
@@ -91,7 +91,7 @@ func TestF32Gt(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 2; i++ {
 		fmt.Printf("%+v > %+v \n", as[i], bs[i])
 		assert.Equal(t, as[i] > bs[i], res[i])
@@ -115,7 +115,7 @@ func TestF64Gt(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 2; i++ {
 		fmt.Printf("%+v > %+v \n", as[i], bs[i])
 		assert.Equal(t, as[i] > bs[i], res[i])
@@ -139,7 +139,7 @@ func TestBoolGt(t *testing.T) {
 		t.Fatalf("should not error.")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 2; i++ {
 		fmt.Printf("%+v > %+v : %v \n", as[i], bs[i], res[i])
 		assert.Equal(t, as[i] && !(bs[i]), res[i])
@@ -164,7 +164,7 @@ func TestDec64Gt(t *testing.T) {
 		t.Fatalf("decimal64 great than failed")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("%+v > %+v \n", as[i], bs[i])
 		assert.Equal(t, as[i] > bs[i], res[i])
@@ -189,7 +189,7 @@ func TestDec128Gt(t *testing.T) {
 		t.Fatalf("decimal128 great than failed")
 	}
 
-	res := vector.MustTCols[bool](cv)
+	res := vector.MustFixedCol[bool](cv)
 	for i := 0; i < 10; i++ {
 		fmt.Printf("%+v > %+v \n", as[i], bs[i])
 		assert.Equal(t, as[i] > bs[i], res[i])

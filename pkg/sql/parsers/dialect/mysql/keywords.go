@@ -543,5 +543,8 @@ func init() {
 		"setval":                   SETVAL,
 		"currval":                  CURRVAL,
 		"lastval":                  LASTVAL,
+		"publication":              PUBLICATION,
+		"subscriptions":            SUBSCRIPTIONS,
+		"publications":             PUBLICATIONS,
 	}
 }

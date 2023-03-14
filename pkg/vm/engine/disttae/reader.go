@@ -92,7 +92,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 
 	// if expr like : pkCol = xx，  we will try to find(binary search) the row in batch
 	vec := bat.GetVector(int32(r.pkidxInColIdxs))
-	canCompute, v := getPkValueByExpr(r.expr, r.pkName, vec.Typ.Oid)
+	canCompute, v := getPkValueByExpr(r.expr, r.pkName, vec.GetType().Oid)
 	if canCompute {
 		row := findRowByPkValue(vec, v)
 		if row >= vec.Length() {

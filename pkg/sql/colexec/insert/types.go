@@ -21,18 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	INSERT = iota
-	DELETE
-)
-
 type Argument struct {
-	// Ts is not used
-	Ts        uint64
 	Affected  uint64
 	Engine    engine.Engine
 	IsRemote  bool // mark if this insert is cn2s3 directly
-	Container *colexec.WriteS3Container
+	s3Writer  *colexec.S3Writer
 	InsertCtx *InsertCtx
 }
 
@@ -44,6 +37,8 @@ type InsertCtx struct {
 
 	ParentIdx    map[string]int32
 	ClusterTable *plan.ClusterTable
+
+	IdxIdx []int32
 }
 
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.

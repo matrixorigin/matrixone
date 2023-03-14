@@ -210,6 +210,8 @@ import (
     minValueOption  *tree.MinValueOption
     maxValueOption  *tree.MaxValueOption 
     startWithOption *tree.StartWithOption 
+    subscriptionOption *tree.SubscriptionOption
+    accountsSetOption *tree.AccountsSetOption
 }
 
 %token LEX_ERROR
@@ -290,6 +292,9 @@ import (
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
+// publication
+%token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS
+
 
 // MO table option
 %token <str> PROPERTIES
@@ -417,6 +422,10 @@ import (
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
+%type <statement>  create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
+%type <str> comment_opt
+%type <subscriptionOption> subcription_opt
+%type <accountsSetOption> alter_publication_accounts_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -431,7 +440,7 @@ import (
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
 %type <str> insert_column
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_opt accounts_list
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list accounts_without_parenthesis_opt
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 
 %type <functionName> func_name
@@ -795,17 +804,16 @@ mo_dump_stmt:
 
 
 load_data_stmt:
-    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name accounts_opt tail_param_opt parallel_opt
+    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt parallel_opt
     {
         $$ = &tree.Load{
             Local: $3,
             Param: $4,
             DuplicateHandling: $5,
             Table: $8,
-            Accounts: $9,
         }
-        $$.(*tree.Load).Param.Tail = $10
-        $$.(*tree.Load).Param.Parallel = $11
+        $$.(*tree.Load).Param.Tail = $9
+        $$.(*tree.Load).Param.Parallel = $10
     }
 
 load_extension_stmt:
@@ -2224,6 +2232,7 @@ alter_stmt:
 |   alter_database_config_stmt
 |   alter_view_stmt
 |   alter_table_stmt
+|   alter_publication_stmt
 // |    alter_ddl_stmt
 
 alter_view_stmt:
@@ -2501,6 +2510,8 @@ show_stmt:
 |   show_column_num_stmt
 |   show_table_values_stmt
 |   show_accounts_stmt
+|   show_publications_stmt
+|   show_subscriptions_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -2777,6 +2788,19 @@ show_accounts_stmt:
         $$ = &tree.ShowAccounts{Like: $3}
     }
 
+show_publications_stmt:
+    SHOW PUBLICATIONS like_opt
+    {
+	$$ = &tree.ShowPublications{Like: $3}
+    }
+
+
+show_subscriptions_stmt:
+    SHOW SUBSCRIPTIONS like_opt
+    {
+	$$ = &tree.ShowSubscriptions{Like: $3}
+    }
+
 like_opt:
     {
         $$ = nil
@@ -2836,6 +2860,10 @@ show_create_stmt:
     {
         $$ = &tree.ShowCreateDatabase{IfNotExists: $4, Name: $5}
     }
+|   SHOW CREATE PUBLICATION db_name
+    {
+	$$ = &tree.ShowCreatePublications{Name: $4}
+    }
 
 table_name_unresolved:
     ident
@@ -2891,6 +2919,7 @@ drop_ddl_stmt:
 |   drop_account_stmt
 |   drop_function_stmt
 |   drop_sequence_stmt
+|   drop_publication_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -3163,13 +3192,13 @@ insert_stmt:
         $$ = ins
     }
 
-accounts_opt:
+accounts_without_parenthesis_opt:
     {
-        $$ = nil
+	$$ = nil
     }
-|   ACCOUNTS '(' accounts_list ')'
+|   ACCOUNT accounts_list
     {
-        $$ = $3
+	$$ = $2
     }
 
 accounts_list:
@@ -3183,11 +3212,10 @@ accounts_list:
     }
 
 insert_data:
-    accounts_opt VALUES values_list
+    VALUES values_list
     {
-        vc := tree.NewValuesClause($3)
+        vc := tree.NewValuesClause($2)
         $$ = &tree.Insert{
-            Accounts: $1,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -3197,54 +3225,43 @@ insert_data:
             Rows: $1,
         }
     }
-|   ACCOUNTS '(' accounts_list ')' select_stmt
-   {
-        $$ = &tree.Insert{
-            Accounts: $3,
-	    Rows: $5,
-        }
-    }
-|   '(' insert_column_list ')' accounts_opt VALUES values_list
-    {
-        vc := tree.NewValuesClause($6)
-        $$ = &tree.Insert{
-            Columns: $2,
-            Accounts: $4,
-            Rows: tree.NewSelect(vc, nil, nil),
-        }
-    }
-|   '(' ')' accounts_opt VALUES values_list
+|   '(' insert_column_list ')' VALUES values_list
     {
         vc := tree.NewValuesClause($5)
         $$ = &tree.Insert{
-            Accounts: $3,
+            Columns: $2,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
-|   '(' insert_column_list ')' accounts_opt select_stmt
+|   '(' ')' VALUES values_list
+    {
+        vc := tree.NewValuesClause($4)
+        $$ = &tree.Insert{
+            Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   '(' insert_column_list ')' select_stmt
     {
         $$ = &tree.Insert{
             Columns: $2,
-            Accounts: $4,
-            Rows: $5,
+            Rows: $4,
         }
     }
-|   accounts_opt SET set_value_list
+|   SET set_value_list
     {
-        if $3 == nil {
+        if $2 == nil {
             yylex.Error("the set list of insert can not be empty")
             return 1
         }
         var identList tree.IdentifierList
         var valueList tree.Exprs
-        for _, a := range $3 {
+        for _, a := range $2 {
             identList = append(identList, a.Column)
             valueList = append(valueList, a.Expr)
         }
         vc := tree.NewValuesClause([]tree.Exprs{valueList})
         $$ = &tree.Insert{
             Columns: identList,
-            Accounts: $1,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -4340,6 +4357,7 @@ create_stmt:
 |   create_role_stmt
 |   create_user_stmt
 |   create_account_stmt
+|   create_publication_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -4561,6 +4579,77 @@ create_user_stmt:
             MiscOpt: $6,
             CommentOrAttribute: $7,
         }
+    }
+
+create_publication_stmt:
+    CREATE PUBLICATION not_exists_opt ident DATABASE ident accounts_without_parenthesis_opt comment_opt
+    {
+	$$ = &tree.CreatePublication{
+	    IfNotExists: $3,
+	    Name: tree.Identifier($4.Compare()),
+	    Database: tree.Identifier($6.Compare()),
+	    Accounts: $7,
+	    Comment: $8,
+	}
+    }
+
+comment_opt:
+    {
+    	$$ = ""
+    }
+    | COMMENT_KEYWORD STRING
+    {
+    	$$ = $2
+    }
+
+alter_publication_stmt:
+ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
+    {
+	$$ = &tree.AlterPublication{
+	    IfExists: $3,
+	    Name: tree.Identifier($4.Compare()),
+	    AccountsSet: $5,
+	    Comment: $6,
+	}
+    }
+
+alter_publication_accounts_opt:
+    {
+	$$ = nil
+    }
+    | ACCOUNT ALL
+    {
+	$$ = &tree.AccountsSetOption{
+	    All: true,
+	}
+    }
+    | ACCOUNT accounts_list
+    {
+    	$$ = &tree.AccountsSetOption{
+	    SetAccounts: $2,
+	}
+    }
+    | ACCOUNT ADD accounts_list
+    {
+    	$$ = &tree.AccountsSetOption{
+	    AddAccounts: $3,
+	}
+    }
+    | ACCOUNT DROP accounts_list
+    {
+    	$$ = &tree.AccountsSetOption{
+	    DropAccounts: $3,
+	}
+    }
+
+
+drop_publication_stmt:
+DROP PUBLICATION exists_opt ident
+    {
+	$$ = &tree.DropPublication{
+	    IfExists: $3,
+	    Name: tree.Identifier($4.Compare()),
+	}
     }
 
 account_role_name:
@@ -4954,15 +5043,26 @@ using_opt:
     }
 
 create_database_stmt:
-    CREATE database_or_schema not_exists_opt ident create_option_list_opt
+    CREATE database_or_schema not_exists_opt ident subcription_opt create_option_list_opt
     {
         $$ = &tree.CreateDatabase{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
-            CreateOptions: $5,
+            SubscriptionOption: $5,
+            CreateOptions: $6,
         }
     }
 // CREATE comment_opt database_or_schema comment_opt not_exists_opt ident
+
+subcription_opt:
+    {
+	$$ = nil
+    }
+|   FROM account_name PUBLICATION ident
+    {
+   	$$ = &tree.SubscriptionOption{From: tree.Identifier($2), Publication: tree.Identifier($4.Compare())}
+    }
+
 
 database_or_schema:
     DATABASE
@@ -7809,6 +7909,10 @@ decimal_type:
             yylex.Error("Display width for double out of range (max = 255)")
             return 1
         }
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for double out of range (max = 30)")
+            return 1
+        }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
             yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
                 return 1
@@ -7830,6 +7934,10 @@ decimal_type:
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for float out of range (max = 255)")
+            return 1
+        }
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for float out of range (max = 30)")
             return 1
         }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
@@ -8769,6 +8877,9 @@ non_reserved_keyword:
 |   CYCLE
 |   MINVALUE
 |	PROCESSLIST
+|   PUBLICATION
+|   SUBSCRIPTIONS
+|   PUBLICATIONS
 
 func_not_keyword:
     DATE_ADD

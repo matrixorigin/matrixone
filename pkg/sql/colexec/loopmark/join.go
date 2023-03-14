@@ -36,7 +36,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.New(typ)
+		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
 	return nil
 }
@@ -103,7 +103,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp]
 			bat.Vecs[rp] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), count, false, proc.Mp())
+			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
 		}
 	}
 	rbat.Zs = bat.Zs
@@ -119,7 +119,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	markPos := -1
 	for i, pos := range ap.Result {
 		if pos == -1 {
-			rbat.Vecs[i] = vector.New(types.T_bool.ToType())
+			rbat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+			rbat.Vecs[i].PreExtend(bat.Length(), proc.Mp())
 			markPos = i
 			break
 		}
@@ -134,22 +135,30 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Clean(proc.Mp())
 			return err
 		}
-		exprVals := vector.MustTCols[bool](vec)
+		exprVals := vector.MustFixedCol[bool](vec)
 		hasTrue := false
 		hasNull := false
-		for j := range exprVals {
-			if vec.Nsp.Contains(uint64(j)) {
+		if vec.IsConst() {
+			if vec.IsConstNull() {
 				hasNull = true
-			} else if exprVals[j] {
-				hasTrue = true
+			} else {
+				hasTrue = exprVals[0]
+			}
+		} else {
+			for j := range exprVals {
+				if vec.GetNulls().Contains(uint64(j)) {
+					hasNull = true
+				} else if exprVals[j] {
+					hasTrue = true
+				}
 			}
 		}
 		if hasTrue {
-			rbat.Vecs[markPos].Append(true, false, proc.Mp())
+			vector.AppendFixed(rbat.Vecs[markPos], true, false, proc.Mp())
 		} else if hasNull {
-			rbat.Vecs[markPos].Append(false, true, proc.Mp())
+			vector.AppendFixed(rbat.Vecs[markPos], false, true, proc.Mp())
 		} else {
-			rbat.Vecs[markPos].Append(false, false, proc.Mp())
+			vector.AppendFixed(rbat.Vecs[markPos], false, false, proc.Mp())
 		}
 		vec.Free(proc.Mp())
 	}

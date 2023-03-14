@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -79,16 +78,18 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return false, nil
 	}
 
-	for i, vec := range bat.Vecs {
-		if vec.IsOriginal() {
-			cloneVec, err := vector.Dup(vec, proc.Mp())
-			if err != nil {
-				bat.Clean(proc.Mp())
-				return false, err
+	/*
+		for i, vec := range bat.Vecs {
+			if vec.IsOriginal() {
+				cloneVec, err := vec.Dup(proc.Mp())
+				if err != nil {
+					bat.Clean(proc.Mp())
+					return false, err
+				}
+				bat.Vecs[i] = cloneVec
 			}
-			bat.Vecs[i] = cloneVec
 		}
-	}
+	*/
 
 	if err := ap.ctr.sendFunc(bat, ap, proc); err != nil {
 		return false, err

@@ -79,36 +79,37 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	dateVector := vectors[0]
 	formatVector := vectors[1]
 
-	resultType := types.T_varchar.ToType()
-	if !formatVector.IsScalar() {
+	rtyp := types.T_varchar.ToType()
+	if !formatVector.IsConst() {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "date format format", "not constant")
 	}
 
-	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+	if dateVector.IsConstNull() || formatVector.IsConstNull() {
+		rvec := vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp())
+		return rvec, nil
 	}
 
 	// get the format string.
-	formatMask := string(formatVector.GetString(0))
+	formatMask := string(formatVector.GetStringAt(0))
 
-	if dateVector.IsScalar() {
+	if dateVector.IsConst() {
 		// XXX Null handling maybe broken.
-		datetimes := dateVector.Col.([]types.Datetime)
-		resCol, err := CalcDateFromat(proc.Ctx, datetimes, formatMask, dateVector.Nsp)
+		datetimes := vector.MustFixedCol[types.Datetime](dateVector)
+		resCol, err := CalcDateFromat(proc.Ctx, datetimes, formatMask, dateVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConstString(resultType, 1, resCol[0], proc.Mp()), nil
+		return vector.NewConstBytes(rtyp, []byte(resCol[0]), dateVector.Length(), proc.Mp()), nil
 	} else {
-		datetimes := dateVector.Col.([]types.Datetime)
-		resCol, err := CalcDateFromat(proc.Ctx, datetimes, formatMask, dateVector.Nsp)
+		datetimes := vector.MustFixedCol[types.Datetime](dateVector)
+		resCol, err := CalcDateFromat(proc.Ctx, datetimes, formatMask, dateVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.New(resultType)
-		resultVector.Nsp = dateVector.Nsp
-		vector.AppendString(resultVector, resCol, proc.Mp())
-		return resultVector, nil
+		rvec := vector.NewVec(rtyp)
+		nulls.Set(rvec.GetNulls(), dateVector.GetNulls())
+		vector.AppendStringList(rvec, resCol, nil, proc.Mp())
+		return rvec, nil
 	}
 }
 

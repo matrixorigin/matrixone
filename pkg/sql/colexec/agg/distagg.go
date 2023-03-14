@@ -87,7 +87,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 			for i := 0; i < size; i++ {
 				a.es = append(a.es, true)
 				a.srcs = append(a.srcs, make([]T1, 0, 1))
-				mp, err := hashmap.NewStrMap(true, 0, 0, m)
+				mp, err := hashmap.NewStrMap(false, 0, 0, m)
 				if err != nil {
 					return err
 				}
@@ -100,7 +100,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 				a.vs = append(a.vs, v)
 				a.srcs = append(a.srcs, make([]T1, 0, 1))
 			}
-			mp, err := hashmap.NewStrMap(true, 0, 0, m)
+			mp, err := hashmap.NewStrMap(false, 0, 0, m)
 			if err != nil {
 				return err
 			}
@@ -134,7 +134,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 	a.da = a.da[:(n+size)*sz]
 	for i := 0; i < size; i++ {
 		a.es = append(a.es, true)
-		mp, err := hashmap.NewStrMap(true, 0, 0, m)
+		mp, err := hashmap.NewStrMap(false, 0, 0, m)
 		if err != nil {
 			return err
 		}
@@ -160,10 +160,10 @@ func (a *UnaryDistAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector
 	if hasNull {
 		return nil
 	}
-	if vec.Typ.IsString() {
-		v = (any)(vec.GetBytes(sel)).(T1)
+	if vec.GetType().IsString() {
+		v = (any)(vec.GetBytesAt(int(sel))).(T1)
 	} else {
-		v = vector.GetColumn[T1](vec)[sel]
+		v = vector.GetFixedAt[T1](vec, int(sel))
 	}
 	a.srcs[i] = append(a.srcs[i], v)
 	a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], z, a.es[i], hasNull)
@@ -181,7 +181,8 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 				continue
 			}
 			j := vps[i] - 1
-			if ok, err = a.maps[j].Insert(vecs, i+int(start)); err != nil {
+			str := vec.GetBytesAt(i + int(start))
+			if ok, err = a.maps[j].InsertValue(str); err != nil {
 				return err
 			}
 			if ok {
@@ -189,20 +190,21 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 				if hasNull {
 					continue
 				}
-				v := (any)(vec.GetBytes(int64(i) + start)).(T1)
+				v := (any)(str).(T1)
 				a.srcs[j] = append(a.srcs[j], v)
 				a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 			}
 		}
 		return nil
 	}
-	vs := vector.GetColumn[T1](vec)
+	vs := vector.MustFixedCol[T1](vec)
 	for i := range os {
 		if vps[i] == 0 {
 			continue
 		}
 		j := vps[i] - 1
-		if ok, err = a.maps[j].Insert(vecs, i+int(start)); err != nil {
+		v := vs[int64(i)+start]
+		if ok, err = a.maps[j].InsertValue(v); err != nil {
 			return err
 		}
 		if ok {
@@ -210,7 +212,6 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 			if hasNull {
 				continue
 			}
-			v := vs[int64(i)+start]
 			a.srcs[j] = append(a.srcs[j], v)
 			a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 		}
@@ -226,7 +227,8 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 	if vec.GetType().IsString() {
 		len := vec.Length()
 		for j := 0; j < len; j++ {
-			if ok, err = a.maps[i].Insert(vecs, j); err != nil {
+			str := vec.GetBytesAt(j)
+			if ok, err = a.maps[i].InsertValue(str); err != nil {
 				return err
 			}
 			if ok {
@@ -234,16 +236,16 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 				if hasNull {
 					continue
 				}
-				v := (any)(vec.GetBytes(int64(j))).(T1)
+				v := any(str).(T1)
 				a.srcs[i] = append(a.srcs[i], v)
 				a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
 			}
 		}
 		return nil
 	}
-	vs := vector.GetColumn[T1](vec)
+	vs := vector.MustFixedCol[T1](vec)
 	for j, v := range vs {
-		if ok, err = a.maps[i].Insert(vecs, j); err != nil {
+		if ok, err = a.maps[i].InsertValue(v); err != nil {
 			return err
 		}
 		if ok {
@@ -276,8 +278,8 @@ func (a *UnaryDistAgg[T1, T2]) Merge(b Agg[any], x, y int64) error {
 		}
 		if ok {
 			a.vs[x], a.es[x] = a.fill(x, v, a.vs[x], 1, a.es[x], false)
+			a.srcs[x] = append(a.srcs[x], b0.srcs[y][i])
 		}
-		a.srcs[y] = append(a.srcs[x], b0.srcs[y][i])
 	}
 	return nil
 }
@@ -305,8 +307,8 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, v
 			}
 			if ok {
 				a.vs[j], a.es[j] = a.fill(int64(j), v, a.vs[j], 1, a.es[j], false)
+				a.srcs[j] = append(a.srcs[j], b0.srcs[k][h])
 			}
-			a.srcs[j] = append(a.srcs[j], b0.srcs[k][h])
 		}
 	}
 	return nil
@@ -332,19 +334,23 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		}
 	}
 	if a.otyp.IsString() {
-		vec := vector.New(a.otyp)
-		vec.Nsp = nsp
+		vec := vector.NewVec(a.otyp)
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
-		for _, v := range vs {
-			if err := vec.Append(v, false, m); err != nil {
-				vec.Free(m)
-				return nil, err
-			}
+		if err := vector.AppendBytesList(vec, vs, nil, m); err != nil {
+			vec.Free(m)
+			return nil, err
 		}
+		vec.SetNulls(nsp)
 		return vec, nil
 	}
-	return vector.NewWithFixed(a.otyp, a.eval(a.vs), nsp, m), nil
+	vec := vector.NewVec(a.otyp)
+	if err := vector.AppendFixedList(vec, a.eval(a.vs), nil, m); err != nil {
+		vec.Free(m)
+		return nil, err
+	}
+	vec.SetNulls(nsp)
+	return vec, nil
 }
 
 func (a *UnaryDistAgg[T1, T2]) WildAggReAlloc(m *mpool.MPool) error {

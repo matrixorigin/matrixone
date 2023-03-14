@@ -58,7 +58,6 @@ func TestDateToWeekFunc(t *testing.T) {
 		{
 			name:     "Date to week test - null",
 			proc:     procs,
-			expected: []uint8{0},
 			isScalar: true,
 		},
 	}
@@ -69,19 +68,20 @@ func TestDateToWeekFunc(t *testing.T) {
 			if c.inputstr != nil {
 				vecs[0] = testutil.MakeDateVector(c.inputstr, c.inputNsp)
 				if c.isScalar {
-					vecs[0].MakeScalar(1)
+					vecs[0].SetClass(vector.CONSTANT)
+					vecs[0].SetLength(1)
 				}
 			} else {
-				vecs[0] = testutil.MakeScalarNull(types.T_date, 0)
+				vecs[0] = testutil.MakeScalarNull(types.T_date, 1)
 			}
 
 			result, err := DateToWeek(vecs, c.proc)
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := result.Col.([]uint8)
+			col := vector.MustFixedCol[uint8](result)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalar, result.IsScalar())
+			require.Equal(t, c.isScalar, result.IsConst())
 		})
 	}
 }
@@ -120,7 +120,6 @@ func TestDatetimeToWeekFunc(t *testing.T) {
 		{
 			name:     "Datetime to week test - null",
 			proc:     procs,
-			expected: []uint8{0},
 			isScalar: true,
 		},
 	}
@@ -131,19 +130,20 @@ func TestDatetimeToWeekFunc(t *testing.T) {
 			if c.inputstr != nil {
 				vecs[0] = testutil.MakeDateTimeVector(c.inputstr, c.inputNsp)
 				if c.isScalar {
-					vecs[0].MakeScalar(1)
+					vecs[0].SetClass(vector.CONSTANT)
+					vecs[0].SetLength(1)
 				}
 			} else {
-				vecs[0] = testutil.MakeScalarNull(types.T_datetime, 0)
+				vecs[0] = testutil.MakeScalarNull(types.T_datetime, 1)
 			}
 
 			result, err := DatetimeToWeek(vecs, c.proc)
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := result.Col.([]uint8)
+			col := vector.MustFixedCol[uint8](result)
 			require.Equal(t, c.expected, col)
-			require.Equal(t, c.isScalar, result.IsScalar())
+			require.Equal(t, c.isScalar, result.IsConst())
 		})
 	}
 }

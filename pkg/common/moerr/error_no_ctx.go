@@ -178,6 +178,10 @@ func NewNoAvailableBackendNoCtx() *Error {
 	return newError(Context(), ErrNoAvailableBackend)
 }
 
+func NewBackendCannotConnectNoCtx() *Error {
+	return newError(Context(), ErrBackendCannotConnect)
+}
+
 func NewTxnClosedNoCtx(txnID []byte) *Error {
 	id := "unknown"
 	if len(txnID) > 0 {
@@ -274,6 +278,14 @@ func NewAppendableBlockNotFoundNoCtx() *Error {
 
 func NewDeadLockDetectedNoCtx() *Error {
 	return newError(Context(), ErrDeadLockDetected)
+}
+
+func NewLockTableBindChangedNoCtx() *Error {
+	return newError(Context(), ErrLockTableBindChanged)
+}
+
+func NewLockTableNotFoundNoCtx() *Error {
+	return newError(Context(), ErrLockTableNotFound)
 }
 
 func NewUDFAlreadyExistsNoCtx(f string) *Error {

@@ -26,39 +26,38 @@ type number interface {
 	constraints.Unsigned | constraints.Signed | constraints.Float
 }
 
-func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vs[0]
-	firstValues := vector.MustStrCols(firstVector)
+func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	vec0 := ivecs[0]
+	vals0 := vector.MustStrCol(vec0)
 
-	vecLen := vector.Length(firstVector)
+	vecLen := vec0.Length()
 
 	//return vector
-	returnType := types.T_uint64.ToType()
-	resultVector, err := proc.AllocVector(returnType, int64(vecLen*returnType.Oid.TypeLen()))
+	rtyp := types.T_uint64.ToType()
+	rvec, err := proc.AllocVectorOfRows(rtyp, vecLen, nil)
 	if err != nil {
 		return nil, err
 	}
-	rs := vector.MustTCols[uint64](resultVector)
+	rvals := vector.MustFixedCol[uint64](rvec)
+
+	//if first vector is null, the return value is 0
+	if vec0.IsConstNull() {
+		return vector.NewConstFixed(rtyp, uint64(0), ivecs[0].Length(), proc.Mp()), err
+	}
 
 	//if first vector is scalar
-	if firstVector.IsScalar() {
-
-		//if first vector is null, the return value is 0
-		if firstVector.IsScalarNull() {
-			return vector.NewConstFixed(returnType, vecLen, uint64(0), proc.Mp()), err
-		}
+	if vec0.IsConst() {
 
 		//detect index
 		startIdx := 1
 
 		//detect in pre scalar vector
-		for i := 1; i < len(vs); i++ {
-			input := vs[i]
-			if input.IsScalar() {
-				if !input.IsScalarNull() {
-					cols := vector.MustStrCols(input)
-					if firstValues[0] == cols[0] {
-						return vector.NewConstFixed(returnType, input.Length(), uint64(i), proc.Mp()), err
+		for i := 1; i < len(ivecs); i++ {
+			vec := ivecs[i]
+			if vec.IsConst() {
+				if !vec.IsConstNull() {
+					if vals0[0] == vec.GetStringAt(0) {
+						return vector.NewConstFixed(rtyp, uint64(i), ivecs[0].Length(), proc.Mp()), err
 					}
 				}
 			} else {
@@ -67,19 +66,20 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 			}
 		}
 
-		//shouldReturn represents the non-null counts
-		shouldReturn := vecLen
+		//notFound represents the non-null counts
+		notFound := vecLen
 
-		for i := startIdx; i < len(vs); i++ {
-			input := vs[i]
-			cols := vector.MustStrCols(input)
+		for i := startIdx; i < len(ivecs); i++ {
+			vec := ivecs[i]
+			vals := vector.MustStrCol(vec)
 
-			if input.IsScalar() {
-				if !input.IsScalarNull() {
-					if firstValues[0] == cols[0] {
+			if vec.IsConst() {
+				if !vec.IsConstNull() {
+					if vals0[0] == vals[0] {
 						for j := 0; j < vecLen; j++ {
-							if rs[j] == 0 {
-								rs[j] = uint64(i)
+							if rvals[j] == 0 {
+								rvals[j] = uint64(i)
+								notFound--
 							}
 						}
 						break
@@ -87,93 +87,91 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if !nulls.Contains(input.Nsp, uint64(j)) && rs[j] == 0 && firstValues[0] == cols[j] {
-						rs[j] = uint64(i)
-						shouldReturn--
+					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && vals0[0] == vals[j] {
+						rvals[j] = uint64(i)
+						notFound--
 					}
 				}
-				if shouldReturn == 0 {
-					break
-				}
+			}
+			if notFound == 0 {
+				break
 			}
 		}
-		return resultVector, nil
+		return rvec, nil
 	} else {
-
 		//if the first vector is null
-		nullsLength := nulls.Length(firstVector.Nsp)
+		nullsLength := nulls.Length(vec0.GetNulls())
 		if nullsLength == vecLen {
-			return resultVector, nil
+			return rvec, nil
 		}
 
-		//shouldReturn represents the non-null counts
-		shouldReturn := vecLen - nullsLength
+		//notFound represents the non-null counts
+		notFound := vecLen - nullsLength
 
-		for i := 1; i < len(vs); i++ {
-			input := vs[i]
-			cols := vector.MustStrCols(input)
+		for i := 1; i < len(ivecs); i++ {
+			vec := ivecs[i]
+			vals := vector.MustStrCol(vec)
 
-			if input.IsScalar() {
-				if !input.IsScalarNull() {
+			if vec.IsConst() {
+				if !vec.IsConstNull() {
 					for j := 0; j < vecLen; j++ {
-						if rs[j] == 0 && firstValues[j] == cols[0] {
-							rs[j] = uint64(i)
-							shouldReturn--
+						if rvals[j] == 0 && vals0[j] == vals[0] {
+							rvals[j] = uint64(i)
+							notFound--
 						}
 					}
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if !nulls.Contains(input.Nsp, uint64(j)) && rs[j] == 0 && firstValues[j] == cols[j] {
-						rs[j] = uint64(i)
-						shouldReturn--
+					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && vals0[j] == vals[j] {
+						rvals[j] = uint64(i)
+						notFound--
 					}
 				}
 			}
 
-			if shouldReturn == 0 {
+			if notFound == 0 {
 				break
 			}
 
 		}
 
-		return resultVector, nil
+		return rvec, nil
 	}
 }
 
-func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	firstVector := vs[0]
-	firstValues := vector.MustTCols[T](firstVector)
+func FieldNumber[T number](ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	vec0 := ivecs[0]
+	vals0 := vector.MustFixedCol[T](vec0)
 
-	vecLen := vector.Length(firstVector)
+	vecLen := vec0.Length()
 
 	//return vector
-	returnType := types.T_uint64.ToType()
-	resultVector, err := proc.AllocVector(returnType, int64(vecLen*returnType.Oid.TypeLen()))
+	rtyp := types.T_uint64.ToType()
+	rvec, err := proc.AllocVectorOfRows(rtyp, vecLen, nil)
 	if err != nil {
 		return nil, err
 	}
-	rs := vector.MustTCols[uint64](resultVector)
+	rvals := vector.MustFixedCol[uint64](rvec)
+
+	//if first vector is null, the return value is 0
+	if vec0.IsConstNull() {
+		return vector.NewConstFixed(rtyp, uint64(0), ivecs[0].Length(), proc.Mp()), err
+	}
 
 	//if first vector is scalar
-	if firstVector.IsScalar() {
-
-		//if first vector is null, the return value is 0
-		if firstVector.IsScalarNull() {
-			return vector.NewConstFixed(returnType, vecLen, uint64(0), proc.Mp()), err
-		}
+	if vec0.IsConst() {
 
 		//detect index
 		startIdx := 1
 
 		//detect in pre scalar vector
-		for i := 1; i < len(vs); i++ {
-			input := vs[i]
-			if input.IsScalar() {
-				if !input.IsScalarNull() {
-					cols := vector.MustTCols[T](input)
-					if firstValues[0] == cols[0] {
-						return vector.NewConstFixed(returnType, input.Length(), uint64(i), proc.Mp()), err
+		for i := 1; i < len(ivecs); i++ {
+			vec := ivecs[i]
+			if vec.IsConst() {
+				if !vec.IsConstNull() {
+					if vals0[0] == vector.GetFixedAt[T](vec, 0) {
+						return vector.NewConstFixed(rtyp, uint64(i), ivecs[0].Length(), proc.Mp()), err
 					}
 				}
 			} else {
@@ -182,19 +180,20 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 			}
 		}
 
-		//shouldReturn represents the non-null counts
-		shouldReturn := vecLen
+		//notFound represents the non-null counts
+		notFound := vecLen
 
-		for i := startIdx; i < len(vs); i++ {
-			input := vs[i]
-			cols := vector.MustTCols[T](input)
+		for i := startIdx; i < len(ivecs); i++ {
+			vec := ivecs[i]
+			vals := vector.MustFixedCol[T](vec)
 
-			if input.IsScalar() {
-				if !input.IsScalarNull() {
-					if firstValues[0] == cols[0] {
+			if vec.IsConst() {
+				if !vec.IsConstNull() {
+					if vals0[0] == vals[0] {
 						for j := 0; j < vecLen; j++ {
-							if rs[j] == 0 {
-								rs[j] = uint64(i)
+							if rvals[j] == 0 {
+								rvals[j] = uint64(i)
+								notFound--
 							}
 						}
 						break
@@ -202,55 +201,55 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if !nulls.Contains(input.Nsp, uint64(j)) && rs[j] == 0 && firstValues[0] == cols[j] {
-						rs[j] = uint64(i)
-						shouldReturn--
+					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && vals0[0] == vals[j] {
+						rvals[j] = uint64(i)
+						notFound--
 					}
 				}
-				if shouldReturn == 0 {
-					break
-				}
+			}
+			if notFound == 0 {
+				break
 			}
 		}
-		return resultVector, nil
+		return rvec, nil
 	} else {
-
 		//if the first vector is null
-		nullsLength := nulls.Length(firstVector.Nsp)
+		nullsLength := nulls.Length(vec0.GetNulls())
 		if nullsLength == vecLen {
-			return resultVector, nil
+			return rvec, nil
 		}
 
-		//shouldReturn represents the non-null counts
-		shouldReturn := vecLen - nullsLength
+		//notFound represents the non-null counts
+		notFound := vecLen - nullsLength
 
-		for i := 1; i < len(vs); i++ {
-			input := vs[i]
-			cols := vector.MustTCols[T](input)
+		for i := 1; i < len(ivecs); i++ {
+			vec := ivecs[i]
+			vals := vector.MustFixedCol[T](vec)
 
-			if input.IsScalar() {
-				if !input.IsScalarNull() {
+			if vec.IsConst() {
+				if !vec.IsConstNull() {
 					for j := 0; j < vecLen; j++ {
-						if rs[j] == 0 && firstValues[j] == cols[0] {
-							rs[j] = uint64(i)
-							shouldReturn--
+						if rvals[j] == 0 && vals0[j] == vals[0] {
+							rvals[j] = uint64(i)
+							notFound--
 						}
 					}
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if !nulls.Contains(input.Nsp, uint64(j)) && rs[j] == 0 && firstValues[j] == cols[j] {
-						rs[j] = uint64(i)
-						shouldReturn--
+					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && vals0[j] == vals[j] {
+						rvals[j] = uint64(i)
+						notFound--
 					}
 				}
 			}
 
-			if shouldReturn == 0 {
+			if notFound == 0 {
 				break
 			}
 
 		}
-		return resultVector, nil
+
+		return rvec, nil
 	}
 }

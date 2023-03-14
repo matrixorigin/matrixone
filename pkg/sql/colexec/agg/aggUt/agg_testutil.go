@@ -292,58 +292,58 @@ func GetVector(typ types.Type, input any, nsp []uint64) (*vector.Vector, int) {
 func CompareResult(t *testing.T, typ types.Type, expected any, vec *vector.Vector, hasDecimalResult bool) bool {
 	switch typ.Oid {
 	case types.T_bool:
-		require.Equal(t, expected.([]bool), vector.GetColumn[bool](vec))
+		require.Equal(t, expected.([]bool), vector.MustFixedCol[bool](vec))
 	case types.T_int8:
-		require.Equal(t, expected.([]int8), vector.GetColumn[int8](vec))
+		require.Equal(t, expected.([]int8), vector.MustFixedCol[int8](vec))
 	case types.T_int16:
-		require.Equal(t, expected.([]int16), vector.GetColumn[int16](vec))
+		require.Equal(t, expected.([]int16), vector.MustFixedCol[int16](vec))
 	case types.T_int32:
-		require.Equal(t, expected.([]int32), vector.GetColumn[int32](vec))
+		require.Equal(t, expected.([]int32), vector.MustFixedCol[int32](vec))
 	case types.T_int64:
-		require.Equal(t, expected.([]int64), vector.GetColumn[int64](vec))
+		require.Equal(t, expected.([]int64), vector.MustFixedCol[int64](vec))
 	case types.T_uint8:
-		require.Equal(t, expected.([]uint8), vector.GetColumn[uint8](vec))
+		require.Equal(t, expected.([]uint8), vector.MustFixedCol[uint8](vec))
 	case types.T_uint16:
-		require.Equal(t, expected.([]uint16), vector.GetColumn[uint16](vec))
+		require.Equal(t, expected.([]uint16), vector.MustFixedCol[uint16](vec))
 	case types.T_uint32:
-		require.Equal(t, expected.([]uint32), vector.GetColumn[uint32](vec))
+		require.Equal(t, expected.([]uint32), vector.MustFixedCol[uint32](vec))
 	case types.T_uint64:
-		require.Equal(t, expected.([]uint64), vector.GetColumn[uint64](vec))
+		require.Equal(t, expected.([]uint64), vector.MustFixedCol[uint64](vec))
 	case types.T_float32:
-		require.Equal(t, expected.([]float32), vector.GetColumn[float32](vec))
+		require.Equal(t, expected.([]float32), vector.MustFixedCol[float32](vec))
 	case types.T_float64:
-		require.Equal(t, expected.([]float64), vector.GetColumn[float64](vec))
+		require.Equal(t, expected.([]float64), vector.MustFixedCol[float64](vec))
 	case types.T_char:
-		require.Equal(t, expected.([]string), vector.GetStrColumn(vec))
+		require.Equal(t, expected.([]string), vector.MustStrCol(vec))
 	case types.T_varchar:
-		require.Equal(t, expected.([]string), vector.GetStrColumn(vec))
+		require.Equal(t, expected.([]string), vector.MustStrCol(vec))
 	case types.T_date:
-		require.Equal(t, expected.([]types.Date), vector.GetColumn[types.Date](vec))
+		require.Equal(t, expected.([]types.Date), vector.MustFixedCol[types.Date](vec))
 	case types.T_time:
-		require.Equal(t, expected.([]types.Time), vector.GetColumn[types.Datetime](vec))
+		require.Equal(t, expected.([]types.Time), vector.MustFixedCol[types.Datetime](vec))
 	case types.T_datetime:
-		require.Equal(t, expected.([]types.Datetime), vector.GetColumn[types.Datetime](vec))
+		require.Equal(t, expected.([]types.Datetime), vector.MustFixedCol[types.Datetime](vec))
 	case types.T_timestamp:
-		require.Equal(t, expected.([]types.Timestamp), vector.GetColumn[types.Timestamp](vec))
+		require.Equal(t, expected.([]types.Timestamp), vector.MustFixedCol[types.Timestamp](vec))
 	case types.T_decimal64:
 		if hasDecimalResult {
 			result := testutil.MakeDecimal64ArrByFloat64Arr(expected.([]float64))
-			require.Equal(t, result, vector.GetColumn[types.Decimal64](vec))
+			require.Equal(t, result, vector.MustFixedCol[types.Decimal64](vec))
 		} else {
 			result := testutil.MakeDecimal64ArrByInt64Arr(expected.([]int64))
-			require.Equal(t, result, vector.GetColumn[types.Decimal64](vec))
+			require.Equal(t, result, vector.MustFixedCol[types.Decimal64](vec))
 		}
 	case types.T_decimal128:
 		if hasDecimalResult {
 			result := testutil.MakeDecimal128ArrByFloat64Arr(expected.([]float64))
-			require.Equal(t, result, vector.GetColumn[types.Decimal128](vec))
+			require.Equal(t, result, vector.MustFixedCol[types.Decimal128](vec))
 		} else {
 			result := testutil.MakeDecimal128ArrByInt64Arr(expected.([]int64))
-			require.Equal(t, result, vector.GetColumn[types.Decimal128](vec))
+			require.Equal(t, result, vector.MustFixedCol[types.Decimal128](vec))
 		}
 	case types.T_uuid:
-		result := vector.GetColumn[types.Uuid](testutil.MakeUuidVectorByString(expected.([]string), nil))
-		require.Equal(t, result, vector.GetColumn[types.Uuid](vec))
+		result := vector.MustFixedCol[types.Uuid](testutil.MakeUuidVectorByString(expected.([]string), nil))
+		require.Equal(t, result, vector.MustFixedCol[types.Uuid](vec))
 	default:
 		return false
 	}
