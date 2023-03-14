@@ -100,6 +100,14 @@ type SessionInfo struct {
 	ResultColTypes    []types.Type
 	AutoIncrCaches    defines.AutoIncrCaches
 	AutoIncrCacheSize uint64
+	ValueSetter       SeqValueSetter
+}
+
+type SeqValueSetter interface {
+	SetSeqLastValue(string)
+	SetSeqCurValues(uint64, string)
+	GetSeqLastValue() string
+	GetSeqCurValues(uint64) (string, bool)
 }
 
 // AnalyzeInfo  analyze information for query

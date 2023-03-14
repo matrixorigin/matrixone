@@ -3170,6 +3170,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		LastInsertID:      ses.GetLastInsertID(),
 		AutoIncrCaches:    ses.GetAutoIncrCaches(),
 		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
+		ValueSetter:       ses.GetValueSetter(),
 	}
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
@@ -4019,6 +4020,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		StorageEngine:     pu.StorageEngine,
 		AutoIncrCaches:    ses.GetAutoIncrCaches(),
 		AutoIncrCacheSize: ses.pu.SV.AutoIncrCacheSize,
+		ValueSetter:       ses.GetValueSetter(),
 	}
 
 	if ses.GetTenantInfo() != nil {

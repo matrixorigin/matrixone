@@ -19,12 +19,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -211,6 +212,63 @@ type Session struct {
 	planCache *planCache
 
 	autoIncrCaches defines.AutoIncrCaches
+
+	seqCurValues map[uint64]string
+
+	seqLastValue []string
+
+	seqValueSetter *ValueSetter
+}
+
+type ValueSetter struct {
+	ses *Session
+}
+
+func (ses *Session) GetValueSetter() *ValueSetter {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.seqValueSetter
+}
+
+func (vs *ValueSetter) SetSeqLastValue(v string) {
+	vs.ses.SetSeqLastValue(v)
+}
+
+func (vs *ValueSetter) SetSeqCurValues(k uint64, v string) {
+	vs.ses.SetSeqCurValues(k, v)
+}
+
+func (vs *ValueSetter) GetSeqCurValues(k uint64) (string, bool) {
+	return vs.ses.GetSeqCurValues(k)
+}
+
+func (vs *ValueSetter) GetSeqLastValue() string {
+	return vs.ses.GetSeqLastValue()
+}
+
+func (ses *Session) GetSeqCurValues(k uint64) (string, bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	v, isExists := ses.seqCurValues[k]
+	return v, isExists
+}
+
+func (ses *Session) GetSeqLastValue() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.seqLastValue[0]
+}
+
+func (ses *Session) SetSeqLastValue(v string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.seqLastValue[0] = v
+}
+
+func (ses *Session) SetSeqCurValues(k uint64, v string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.seqCurValues[k] = v
 }
 
 // The update version. Four function.
@@ -307,6 +365,12 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)
+
+	// For seq init values.
+	ses.seqValueSetter = &ValueSetter{ses}
+	ses.seqCurValues = make(map[uint64]string)
+	ses.seqLastValue = make([]string, 1)
+	ses.seqLastValue[0] = ""
 
 	var err error
 	if ses.mp == nil {

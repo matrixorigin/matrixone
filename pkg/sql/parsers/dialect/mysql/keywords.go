@@ -540,5 +540,8 @@ func init() {
 		"cycle":                    CYCLE,
 		"minvalue":                 MINVALUE,
 		"nextval":                  NEXTVAL,
+		"setval":                   SETVAL,
+		"currval":                  CURRVAL,
+		"lastval":                  LASTVAL,
 	}
 }

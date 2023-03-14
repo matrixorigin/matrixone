@@ -3366,4 +3366,66 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	SETVAL: {
+		Id:     SETVAL,
+		Flag:   plan.Function_STRICT,
+		Layout: UNKNOW_KIND_FUNCTION,
+		Overloads: []Function{
+			{
+				Index: 0,
+				Args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+					types.T_bool,
+				},
+				Volatile:        true,
+				RealTimeRelated: true,
+				ReturnTyp:       types.T_varchar,
+				Fn:              seq.Setval,
+			},
+			{
+				Index: 1,
+				Args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+				},
+				Volatile:        true,
+				RealTimeRelated: true,
+				ReturnTyp:       types.T_varchar,
+				Fn:              seq.Setval,
+			},
+		},
+	},
+	CURRVAL: {
+		Id:     CURRVAL,
+		Flag:   plan.Function_STRICT,
+		Layout: UNKNOW_KIND_FUNCTION,
+		Overloads: []Function{
+			{
+				Index: 0,
+				Args: []types.T{
+					types.T_varchar,
+				},
+				Volatile:        true,
+				RealTimeRelated: true,
+				ReturnTyp:       types.T_varchar,
+				Fn:              seq.Currval,
+			},
+		},
+	},
+	LASTVAL: {
+		Id:     LASTVAL,
+		Flag:   plan.Function_STRICT,
+		Layout: UNKNOW_KIND_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:           0,
+				Args:            []types.T{},
+				Volatile:        true,
+				RealTimeRelated: true,
+				ReturnTyp:       types.T_varchar,
+				Fn:              seq.Lastval,
+			},
+		},
+	},
 }

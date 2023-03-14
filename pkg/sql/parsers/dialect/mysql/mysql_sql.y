@@ -367,7 +367,7 @@ import (
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
 // Sequence function
-%token <str> NEXTVAL
+%token <str> NEXTVAL SETVAL CURRVAL LASTVAL
 
 //JSON function
 %token <str> ARROW
@@ -6926,6 +6926,30 @@ function_call_generic:
             Exprs: $3,
         }
     }
+|   SETVAL '(' expression_list  ')'
+    {
+        name := tree.SetUnresolvedName("setval")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
+        }
+    }
+|   CURRVAL '(' expression_list  ')'
+    {
+        name := tree.SetUnresolvedName("currval")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
+        }
+    }
+|   LASTVAL '('')'
+    {
+        name := tree.SetUnresolvedName("lastval")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: nil,
+        }
+    }
 |   TRIM '(' expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
@@ -8797,6 +8821,9 @@ not_keyword:
 |   AVG
 |	TIMESTAMPDIFF
 |   NEXTVAL
+|   SETVAL
+|   CURRVAL
+|   LASTVAL
 
 //mo_keywords:
 //    PROPERTIES
