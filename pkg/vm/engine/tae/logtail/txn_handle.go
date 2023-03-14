@@ -157,6 +157,22 @@ func (b *TxnLogtailRespBuilder) onTable(itbl any) {
 		}
 		catalogEntry2Batch(b.batches[tblInsBatch], tbl, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS(), b.txn.GetStartTS())
 	}
+	if !node.CreatedAt.Equal(txnif.UncommitTS) && !node.DeletedAt.Equal(txnif.UncommitTS){
+		if b.batches[columnInsBatch] == nil {
+			b.batches[columnInsBatch] = makeRespBatchFromSchema(catalog.SystemColumnSchema)
+		}
+		for _, syscol := range catalog.SystemColumnSchema.ColDefs {
+			txnimpl.FillColumnRow(tbl, syscol.Name, b.batches[columnInsBatch].GetVectorByName(syscol.Name))
+		}
+		for _, usercol := range tbl.GetSchema().ColDefs {
+			b.batches[columnInsBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))))
+			b.batches[columnInsBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS())
+		}
+		if b.batches[tblInsBatch] == nil {
+			b.batches[tblInsBatch] = makeRespBatchFromSchema(catalog.SystemTableSchema)
+		}
+		catalogEntry2Batch(b.batches[tblInsBatch], tbl, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS(), b.txn.GetStartTS())
+	}
 }
 func (b *TxnLogtailRespBuilder) onDatabase(idb any) {
 	db := idb.(*catalog.DBEntry)

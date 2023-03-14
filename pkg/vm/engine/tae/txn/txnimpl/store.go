@@ -386,6 +386,11 @@ func (store *txnStore) GetLogtails(
 					deletes := txnEntry.DeletedRows()
 					prefix := txnEntry.GetPrefix()
 					onDelete(deletes, prefix)
+				case *catalog.TableEntry:
+					if tbl.createEntry != nil || tbl.dropEntry != nil {
+						continue
+					}
+					onTable(txnEntry)
 				}
 			}
 			if tbl.localSegment != nil {
