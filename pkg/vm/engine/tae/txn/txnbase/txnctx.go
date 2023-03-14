@@ -42,24 +42,30 @@ type TxnCtx struct {
 	ID                           string
 	IDCtx                        []byte
 	StartTS, CommitTS, PrepareTS types.TS
-	Info                         []byte
-	State                        txnif.TxnState
-	Participants                 []uint64
+
+	// SnapshotTS is the specified snapshot timestamp used by this txn
+	SnapshotTS types.TS
+
+	State        txnif.TxnState
+	Participants []uint64
 
 	// Memo is not thread-safe
 	// It will be readonly when txn state is not txnif.TxnStateActive
 	Memo *txnif.TxnMemo
 }
 
-func NewTxnCtx(id []byte, start types.TS, info []byte) *TxnCtx {
+func NewTxnCtx(id []byte, start, snapshot types.TS) *TxnCtx {
+	if snapshot.IsEmpty() {
+		snapshot = start
+	}
 	ctx := &TxnCtx{
-		ID:        string(id),
-		IDCtx:     id,
-		StartTS:   start,
-		PrepareTS: txnif.UncommitTS,
-		CommitTS:  txnif.UncommitTS,
-		Info:      info,
-		Memo:      txnif.NewTxnMemo(),
+		ID:         string(id),
+		IDCtx:      id,
+		StartTS:    start,
+		PrepareTS:  txnif.UncommitTS,
+		CommitTS:   txnif.UncommitTS,
+		SnapshotTS: snapshot,
+		Memo:       txnif.NewTxnMemo(),
 	}
 	ctx.DoneCond = *sync.NewCond(ctx)
 	return ctx
@@ -106,10 +112,11 @@ func (ctx *TxnCtx) CommitAfter(startTs types.TS) bool {
 	return ctx.GetCommitTS().Greater(startTs)
 }
 
-func (ctx *TxnCtx) String() string       { return ctx.Repr() }
-func (ctx *TxnCtx) GetID() string        { return ctx.ID }
-func (ctx *TxnCtx) GetInfo() []byte      { return ctx.Info }
-func (ctx *TxnCtx) GetStartTS() types.TS { return ctx.StartTS }
+func (ctx *TxnCtx) String() string          { return ctx.Repr() }
+func (ctx *TxnCtx) GetID() string           { return ctx.ID }
+func (ctx *TxnCtx) HasSnapshotLag() bool    { return ctx.SnapshotTS.Less(ctx.StartTS) }
+func (ctx *TxnCtx) GetSnapshotTS() types.TS { return ctx.SnapshotTS }
+func (ctx *TxnCtx) GetStartTS() types.TS    { return ctx.StartTS }
 func (ctx *TxnCtx) GetCommitTS() types.TS {
 	ctx.RLock()
 	defer ctx.RUnlock()
