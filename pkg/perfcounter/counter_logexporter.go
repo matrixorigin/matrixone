@@ -15,7 +15,7 @@
 package perfcounter
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"go.uber.org/zap"
 )
 
@@ -23,7 +23,7 @@ type CounterLogExporter struct {
 	counter *Counter
 }
 
-func NewCounterLogExporter(counter *Counter) metric.LogExporter {
+func NewCounterLogExporter(counter *Counter) stats.LogExporter {
 	return &CounterLogExporter{
 		counter: counter,
 	}

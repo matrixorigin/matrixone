@@ -17,7 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"hash/fnv"
 	"math"
 	"net"
@@ -185,9 +185,10 @@ func (c *Config) createFileService(defaultName string, perfCounter *perfcounter.
 		services = append(services, service)
 		perfCounterInfos = append(perfCounterInfos, counter)
 
-		// Create and Register "Counter Log Exporter" for this PerfCounter
+		// Create "Log Exporter" for this PerfCounter
 		counterLogExporter := perfcounter.NewCounterLogExporter(&counter.perfCounter)
-		metric.DefaultLogExporterRegistry.Register(counter.fsName, &counterLogExporter)
+		// Register this PerfCounter's "Log Exporter" to global stats registry.
+		stats.Register(counter.fsName, stats.WithLogExporter(&counterLogExporter))
 	}
 
 	// cache stats

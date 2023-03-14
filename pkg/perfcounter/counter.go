@@ -16,40 +16,41 @@ package perfcounter
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
 type Counter struct {
 	S3 struct {
-		List        StatsCounter
-		Head        StatsCounter
-		Put         StatsCounter
-		Get         StatsCounter
-		Delete      StatsCounter
-		DeleteMulti StatsCounter
+		List        stats.Counter
+		Head        stats.Counter
+		Put         stats.Counter
+		Get         stats.Counter
+		Delete      stats.Counter
+		DeleteMulti stats.Counter
 	}
 
 	Cache struct {
-		Read     StatsCounter
-		Hit      StatsCounter
-		MemRead  StatsCounter
-		MemHit   StatsCounter
-		DiskRead StatsCounter
-		DiskHit  StatsCounter
+		Read     stats.Counter
+		Hit      stats.Counter
+		MemRead  stats.Counter
+		MemHit   stats.Counter
+		DiskRead stats.Counter
+		DiskHit  stats.Counter
 	}
 
 	DistTAE struct {
 		MPool mpool.MPoolStats
 
 		Logtail struct {
-			Entries               StatsCounter
-			InsertEntries         StatsCounter
-			MetadataInsertEntries StatsCounter
-			DeleteEntries         StatsCounter
-			MetadataDeleteEntries StatsCounter
+			Entries               stats.Counter
+			InsertEntries         stats.Counter
+			MetadataInsertEntries stats.Counter
+			DeleteEntries         stats.Counter
+			MetadataDeleteEntries stats.Counter
 
-			InsertRows   StatsCounter
-			ActiveRows   StatsCounter
-			InsertBlocks StatsCounter
+			InsertRows   stats.Counter
+			ActiveRows   stats.Counter
+			InsertBlocks stats.Counter
 		}
 	}
 }
