@@ -45,5 +45,4 @@ type Cache interface {
 		async bool,
 	) error
 	Flush()
-	CacheStats() *CacheStats
 }

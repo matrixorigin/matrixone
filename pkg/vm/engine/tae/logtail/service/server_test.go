@@ -15,49 +15,9 @@
 package service
 
 import (
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/stretchr/testify/require"
 )
-
-func TestTableID(t *testing.T) {
-	type testCase struct {
-		ta       api.TableID
-		tb       api.TableID
-		evaluate func(t require.TestingT, expected interface{}, actual interface{}, msgAndArgs ...interface{})
-	}
-
-	cases := []testCase{
-		{
-			ta:       mockTable(1, 1, 1),
-			tb:       mockTable(1, 1, 1),
-			evaluate: require.Equal,
-		},
-		{
-			ta:       mockTable(1, 1, 1),
-			tb:       mockTable(2, 1, 1),
-			evaluate: require.NotEqual,
-		},
-		{
-			ta:       mockTable(1, 1, 1),
-			tb:       mockTable(1, 2, 1),
-			evaluate: require.NotEqual,
-		},
-		{
-			ta:       mockTable(1, 1, 1),
-			tb:       mockTable(1, 1, 2),
-			evaluate: require.NotEqual,
-		},
-	}
-
-	for _, c := range cases {
-		taID := TableID(c.ta.String())
-		tbID := TableID(c.tb.String())
-		c.evaluate(t, taID, tbID)
-	}
-}
 
 func mockTable(dbID, tbID, ptID uint64) api.TableID {
 	return api.TableID{

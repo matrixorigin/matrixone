@@ -29,6 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"go.uber.org/zap"
 )
 
@@ -42,6 +43,8 @@ type LocalFS struct {
 
 	memCache    *MemCache
 	asyncUpdate bool
+
+	perfCounters []*perfcounter.Counter
 }
 
 var _ FileService = new(LocalFS)
@@ -54,6 +57,7 @@ func NewLocalFS(
 	name string,
 	rootPath string,
 	memCacheCapacity int64,
+	perfCounters []*perfcounter.Counter,
 ) (*LocalFS, error) {
 
 	// ensure dir
@@ -101,13 +105,17 @@ func NewLocalFS(
 	}
 
 	fs := &LocalFS{
-		name:        name,
-		rootPath:    rootPath,
-		dirFiles:    make(map[string]*os.File),
-		asyncUpdate: true,
+		name:         name,
+		rootPath:     rootPath,
+		dirFiles:     make(map[string]*os.File),
+		asyncUpdate:  true,
+		perfCounters: perfCounters,
 	}
 	if memCacheCapacity > 0 {
-		fs.memCache = NewMemCache(WithLRU(memCacheCapacity))
+		fs.memCache = NewMemCache(
+			WithLRU(memCacheCapacity),
+			WithPerfCounters(perfCounters),
+		)
 		logutil.Info("fileservice: cache initialized", zap.Any("fs-name", name), zap.Any("capacity", memCacheCapacity))
 	}
 
@@ -723,13 +731,6 @@ func (l *LocalFS) FlushCache() {
 	if l.memCache != nil {
 		l.memCache.Flush()
 	}
-}
-
-func (l *LocalFS) CacheStats() *CacheStats {
-	if l.memCache != nil {
-		return l.memCache.CacheStats()
-	}
-	return nil
 }
 
 func (l *LocalFS) SetAsyncUpdate(b bool) {

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -340,4 +341,8 @@ func (o *testOperator) Txn() txn.TxnMeta {
 
 func (o *testOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	return nil, nil
+}
+
+func (o *testOperator) AddLockTable(lock.LockTable) error {
+	return nil
 }
