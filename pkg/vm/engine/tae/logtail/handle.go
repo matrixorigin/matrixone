@@ -471,13 +471,13 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 // appendBlkMeta add block metadata into api entry according to logtail protocol
 // see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata
 func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode *catalog.MetadataMVCCNode) {
-	visitBlkMeta(e, metaNode, b.blkMetaInsBatch, b.blkMetaDelBatch, metaNode.HasDropCommitted())
+	visitBlkMeta(e, metaNode, b.blkMetaInsBatch, b.blkMetaDelBatch, metaNode.HasDropCommitted(), metaNode.End, metaNode.CreatedAt, metaNode.DeletedAt)
 }
 
-func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatch, delBatch *containers.Batch, delete bool) {
+func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatch, delBatch *containers.Batch, delete bool, committs, createts, deletets types.TS) {
 	logutil.Infof("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
 		e.AsCommonID().String(), e.IsAppendable(),
-		node.CreatedAt.ToString(), node.DeletedAt.ToString(), node.MetaLoc, node.DeltaLoc)
+		createts.ToString(), node.DeletedAt.ToString(), node.MetaLoc, node.DeltaLoc)
 	is_sorted := false
 	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
 		is_sorted = true
@@ -487,9 +487,9 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatc
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.MetaLoc))
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.DeltaLoc))
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(node.GetEnd())
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID)
-	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.CreatedAt)
+	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts)
 	insBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
 
 	// if block is deleted, send both Insert and Delete api entry
@@ -498,7 +498,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MetadataMVCCNode, insBatc
 		if node.DeletedAt.IsEmpty() {
 			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
 		}
-		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt)
+		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(deletets)
 		delBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
 	}
 

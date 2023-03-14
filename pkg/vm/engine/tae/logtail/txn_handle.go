@@ -89,7 +89,16 @@ func (b *TxnLogtailRespBuilder) onMetadata(iblk any) {
 	if b.batches[blkMetaDelBatch] == nil {
 		b.batches[blkMetaDelBatch] = makeRespBatchFromSchema(DelSchema)
 	}
-	visitBlkMeta(blk, node, b.batches[blkMetaInsBatch], b.batches[blkMetaDelBatch], node.DeletedAt.Equal(txnif.UncommitTS))
+	commitTS := b.txn.GetPrepareTS()
+	createAt := node.CreatedAt
+	if createAt.Equal(txnif.UncommitTS) {
+		createAt = b.txn.GetPrepareTS()
+	}
+	deleteAt := node.DeletedAt
+	if deleteAt.Equal(txnif.UncommitTS) {
+		deleteAt = b.txn.GetPrepareTS()
+	}
+	visitBlkMeta(blk, node, b.batches[blkMetaInsBatch], b.batches[blkMetaDelBatch], node.DeletedAt.Equal(txnif.UncommitTS), commitTS, createAt, deleteAt)
 }
 
 func (b *TxnLogtailRespBuilder) onAppend(ibat any) {
@@ -157,7 +166,7 @@ func (b *TxnLogtailRespBuilder) onTable(itbl any) {
 		}
 		catalogEntry2Batch(b.batches[tblInsBatch], tbl, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS(), b.txn.GetStartTS())
 	}
-	if !node.CreatedAt.Equal(txnif.UncommitTS) && !node.DeletedAt.Equal(txnif.UncommitTS){
+	if !node.CreatedAt.Equal(txnif.UncommitTS) && !node.DeletedAt.Equal(txnif.UncommitTS) {
 		if b.batches[columnInsBatch] == nil {
 			b.batches[columnInsBatch] = makeRespBatchFromSchema(catalog.SystemColumnSchema)
 		}
