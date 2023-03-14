@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"bytes"
-	"context"
 	"sync"
 )
 
@@ -34,27 +33,50 @@ type activeTxn struct {
 	fsp           *fixedSlicePool
 	blockedWaiter *waiter
 	holdLocks     map[uint64]*cowSlice
+	remoteService string
 }
 
 func newActiveTxn(
 	txnID []byte,
 	txnKey string,
-	fsp *fixedSlicePool) *activeTxn {
+	fsp *fixedSlicePool,
+	remoteService string) *activeTxn {
 	txn := txnPool.Get().(*activeTxn)
 	txn.Lock()
 	defer txn.Unlock()
 	txn.txnID = txnID
 	txn.txnKey = txnKey
 	txn.fsp = fsp
+	txn.remoteService = remoteService
 	return txn
 }
 
 func (txn *activeTxn) lockAdded(
 	table uint64,
-	locks [][]byte) {
-	txn.Lock()
-	defer txn.Unlock()
+	locks [][]byte,
+	locked bool) {
 
+	// only in the lockservice node where the transaction was
+	// initiated will it be holds all locks. A remote transaction
+	// will only holds locks on the current locktable.
+	//
+	// Let's consider the correctness of this and assume that transaction
+	// t1 is successful in locking against row1, think about the following
+	// cases:
+	// 1. t1 receives the response and has saved row1, then
+	//    everything is fine
+	// 2. t1 does not receive a response from remote, deadlock
+	//    detection may not be detected, but no problem, t1 will
+	//    roll the transaction due to timeout.
+	// 3. When t1 remote lock succeeds and saved the lock information
+	//    between the deadlock detection module to query, it will miss
+	//    the lock information. We use mutex to solve it.
+
+	if !locked {
+		txn.Lock()
+		defer txn.Unlock()
+	}
+	defer logTxnLockAdded(txn, locks)
 	v, ok := txn.holdLocks[table]
 	if ok {
 		v.append(locks)
@@ -63,21 +85,45 @@ func (txn *activeTxn) lockAdded(
 	txn.holdLocks[table] = newCowSlice(txn.fsp, locks)
 }
 
-func (txn *activeTxn) close(lockTableFunc func(uint64) lockTable) {
+func (txn *activeTxn) close(
+	txnID []byte,
+	lockTableFunc func(uint64) (lockTable, error)) error {
 	txn.Lock()
 	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, txnID) {
+		return nil
+	}
 
+	logTxnReadyToClose(txn)
+	// TODO(fagongzi): parallel unlock
 	for table, cs := range txn.holdLocks {
-		l := lockTableFunc(table)
-		// TODO(fagongzi): use a deadline context, and retry if has a error
-		l.unlock(context.TODO(), cs)
+		l, err := lockTableFunc(table)
+		if err != nil {
+			// if a remote transaction, then the corresponding locktable should be local
+			// and cannot return an error.
+			//
+			// or a local transaction holds a lock on remote lock table, but can not get the remote
+			// LockTable, it is a bug.
+			panic(err)
+		}
+
+		logTxnUnlockTable(
+			txn,
+			table)
+		l.unlock(txn, cs)
+		logTxnUnlockTableCompleted(
+			txn,
+			table,
+			cs)
 		cs.close()
 		delete(txn.holdLocks, table)
 	}
 	txn.txnID = nil
 	txn.txnKey = ""
 	txn.blockedWaiter = nil
+	txn.remoteService = ""
 	txnPool.Put(txn)
+	return nil
 }
 
 func (txn *activeTxn) abort(txnID []byte) {
@@ -89,21 +135,16 @@ func (txn *activeTxn) abort(txnID []byte) {
 		return
 	}
 
-	// if a deadlock occurs, then the transaction must have a waiter that is
-	// currently waiting and has been blocked inside the Lock.
 	if txn.blockedWaiter == nil {
-		panic("BUG: abort a non-waiting txn")
+		return
 	}
-
-	if !txn.blockedWaiter.notify(ErrDeadlockDetectorClosed) {
-		panic("BUG: can not notify deadlock failed")
-	}
+	txn.blockedWaiter.notify(ErrDeadLockDetected)
 }
 
 func (txn *activeTxn) fetchWhoWaitingMe(
 	txnID []byte,
-	waiters *waiters,
-	lockTableFunc func(uint64) lockTable) bool {
+	waiters func([]byte) bool,
+	lockTableFunc func(uint64) (lockTable, error)) bool {
 	txn.RLock()
 	defer txn.RUnlock()
 
@@ -111,25 +152,37 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	if !bytes.Equal(txn.txnID, txnID) {
 		return true
 	}
+
+	// if this is a remote transaction, meaning that all the information is in the
+	// remote, we need to execute the logic.
+	if txn.isRemoteLocked() {
+		panic("can not fetch waiting txn on remote txn")
+	}
+
 	for table, cs := range txn.holdLocks {
-		l := lockTableFunc(table)
+		l, err := lockTableFunc(table)
+		if err != nil {
+			// if a remote transaction, then the corresponding locktable should be local
+			// and cannot return an error.
+			//
+			// or a local transaction holds a lock on remote lock table, but can not get
+			// the remote LockTable, it is a bug.
+			panic(err)
+		}
+
 		locks := cs.slice()
 		hasDeadLock := false
 		locks.iter(func(lockKey []byte) bool {
-			// TODO(fagongzi): use a deadline context, and retry if has a error
-			if lock, ok := l.getLock(context.TODO(), lockKey); ok {
-				lock.waiter.waiters.iter(func(id []byte) bool {
-					if !waiters.add(id) {
-						hasDeadLock = true
-						return false
-					}
-					return true
+			l.getLock(
+				txnID,
+				lockKey,
+				func(lock Lock) {
+					lock.waiter.waiters.iter(func(id []byte) bool {
+						hasDeadLock = !waiters(id)
+						return !hasDeadLock
+					})
 				})
-				if hasDeadLock {
-					return false
-				}
-			}
-			return true
+			return !hasDeadLock
 		})
 		locks.unref()
 		if hasDeadLock {
@@ -139,8 +192,29 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	return true
 }
 
-func (txn *activeTxn) setBlocked(w *waiter) {
+func (txn *activeTxn) setBlocked(txnID []byte, w *waiter) {
 	txn.Lock()
 	defer txn.Unlock()
+	// txn already closed
+	if !bytes.Equal(txn.txnID, txnID) {
+		panic("invalid set Blocked")
+	}
+
 	txn.blockedWaiter = w
+	if w != nil {
+		return
+	}
+}
+
+func (txn *activeTxn) isRemoteLocked() bool {
+	return txn.remoteService != ""
+}
+
+func (txn *activeTxn) getRemoteService() string {
+	txn.RLock()
+	defer txn.RUnlock()
+	if !txn.isRemoteLocked() {
+		return ""
+	}
+	return txn.remoteService
 }

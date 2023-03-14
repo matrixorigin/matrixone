@@ -101,6 +101,9 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	return mgr
 }
 
+// Now gets a timestamp under the protect from a inner lock. The lock makes
+// all timestamps allocated before have been assigned to txn, which means those
+// txn are visible for the returned timestamp.
 func (mgr *TxnManager) Now() types.TS {
 	mgr.Lock()
 	defer mgr.Unlock()
