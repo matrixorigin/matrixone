@@ -46,6 +46,7 @@ delete from mo_catalog.mo_role_grant;
 delete from mo_catalog.mo_role_privs;
 delete from mo_catalog.mo_database;
 delete from mo_catalog.mo_columns;
+delete from mo_catalog.mo_indexes;
 
 --内置数据库不能删除
 drop database information_schema;
