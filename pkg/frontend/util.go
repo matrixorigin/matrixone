@@ -632,3 +632,22 @@ func isInvalidConfigInput(config string) bool {
 	_, err := types.ParseStringToByteJson(config)
 	return err != nil
 }
+
+func removePrefixComment(sql string) string {
+	if len(sql) >= 4 {
+		p1 := strings.Index(sql, "/*")
+		if p1 != 0 {
+			// no prefix comment in this sql
+			return sql
+		}
+
+		p2 := strings.Index(sql, "*/")
+		if p2 < 2 {
+			// no valid prefix comment in this sql
+			return sql
+		}
+
+		sql = sql[p2+2:]
+	}
+	return sql
+}

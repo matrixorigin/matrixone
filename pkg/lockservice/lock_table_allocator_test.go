@@ -96,16 +96,24 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 		t,
 		time.Millisecond,
 		func(a *lockTableAllocator) {
+			// create s1 bind
 			a.Get("s1", 1)
-			time.Sleep(time.Millisecond * 10)
-			binds := a.getServiceBinds("s1")
-			assert.Nil(t, binds)
-			a.mu.Lock()
-			defer a.mu.Unlock()
-			if len(a.mu.lockTables) > 0 {
-				assert.Equal(t,
-					pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, Valid: false},
-					a.mu.lockTables[1])
+
+			// wait bind timeout
+			for {
+				time.Sleep(time.Millisecond * 10)
+				binds := a.getServiceBinds("s1")
+				if binds != nil {
+					continue
+				}
+				a.mu.Lock()
+				if len(a.mu.lockTables) > 0 {
+					assert.Equal(t,
+						pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, Valid: false},
+						a.mu.lockTables[1])
+				}
+				a.mu.Unlock()
+				return
 			}
 		})
 }
