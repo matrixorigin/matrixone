@@ -22,6 +22,7 @@ import (
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -131,6 +132,20 @@ func TestCommitReadOnly(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Empty(t, ts.getLastRequests())
 	}, WithTxnReadyOnly())
+}
+
+func TestCommitWithLockTables(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		tc.AddLockTable(lock.LockTable{Table: 1})
+		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		err := tc.Commit(ctx)
+		assert.NoError(t, err)
+
+		requests := ts.getLastRequests()
+		assert.Equal(t, 1, len(requests))
+		assert.Equal(t, txn.TxnMethod_Commit, requests[0].Method)
+		assert.Equal(t, 1, len(requests[0].Txn.LockTables))
+	})
 }
 
 func TestContextWithoutDeadlineWillPanic(t *testing.T) {
@@ -322,6 +337,8 @@ func TestWriteOnCommittingTxn(t *testing.T) {
 
 func TestSnapshotTxnOperator(t *testing.T) {
 	runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
+		assert.NoError(t, tc.AddLockTable(lock.LockTable{Table: 1}))
+
 		v, err := tc.Snapshot()
 		assert.NoError(t, err)
 
@@ -332,6 +349,7 @@ func TestSnapshotTxnOperator(t *testing.T) {
 		assert.False(t, tc2.option.coordinator)
 		tc2.option.coordinator = true
 		assert.Equal(t, tc.option, tc2.option)
+		assert.Equal(t, 1, len(tc2.mu.lockTables))
 	}, WithTxnReadyOnly(), WithTxnDisable1PCOpt())
 }
 
@@ -349,6 +367,10 @@ func TestApplySnapshotTxnOperator(t *testing.T) {
 		snapshot.Txn.DNShards = append(snapshot.Txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 2}})
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
 		assert.Equal(t, 2, len(tc.mu.txn.DNShards))
+
+		snapshot.LockTables = append(snapshot.LockTables, lock.LockTable{Table: 1})
+		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
+		assert.Equal(t, 1, len(tc.mu.lockTables))
 	})
 }
 
@@ -359,6 +381,20 @@ func TestDebugTxnOperator(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, len(responses.Responses), 1)
 		assert.Equal(t, responses.Responses[0].CNOpResponse.Payload, []byte("OK"))
+	})
+}
+
+func TestAddLockTable(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		assert.NoError(t, tc.AddLockTable(lock.LockTable{Table: 1}))
+		assert.Equal(t, 1, len(tc.mu.lockTables))
+
+		// same lock table
+		assert.NoError(t, tc.AddLockTable(lock.LockTable{Table: 1}))
+		assert.Equal(t, 1, len(tc.mu.lockTables))
+
+		// changed lock table
+		assert.Error(t, tc.AddLockTable(lock.LockTable{Table: 1, Version: 2}))
 	})
 }
 
