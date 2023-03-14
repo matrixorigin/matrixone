@@ -243,17 +243,41 @@ drop table t3;
 
 drop database test;
 
--- show grants for role
+drop database if exists test;
+create database test;
+use test;
+SHOW CREATE TABLE information_schema.columns;
+drop database test;
+
+-- show grants for role in sys account
 create role newrole;
 grant all on table *.* to newrole;
 grant create table, drop table on database *.* to newrole;
 create user newuser identified by 'passwd';
 grant newrole to newuser;
 show grants for 'newuser'@'localhost';
+show grants for role newrole;
+show grants for 'abcuser'@'localhost';
+show grants for role role1;
 drop user newuser;
 drop role newrole;
 
--- show index test
+-- show grants for role in non-sys account
+create account abc admin_name = 'wladmin' identified by '123456';
+-- session:id=2&user=abc:wladmin&password='123456';
+create role newrole1;
+grant all on table *.* to newrole1;
+grant create table, drop table on database *.* to newrole1;
+create user newuser1 identified by 'passwd';
+grant newrole1 to newuser1;
+show grants for 'newuser1'@'localhost';
+show grants for role newrole1;
+show grants for 'abcuser1'@'localhost';
+show grants for role role1;
+drop user newuser1;
+drop role newrole1;
+
+-- show index test in sys
 -- @bvt:issue#8392
 drop table if exists index01;
 create table index01(s varchar(20), id int);
@@ -261,6 +285,7 @@ create index index1 on index01(s);
 show index from index01;
 drop table index01;
 
+-- if index is primary key, key_name is primary
 drop table if exists index02;
 create table index02(id int PRIMARY KEY,name VARCHAR(255),age int);
 insert into index02 values(1,"Abby", 24);
@@ -269,4 +294,31 @@ create unique index idx on index02(name);
 select * from index02;
 show index from index02;
 drop table index02;
+
+drop table if exists index03;
+create table index03 (col1 bigint auto_increment primary key,col2 date,col3 varchar(20),unique key d1(col2),key d2(col3));
+insert into index03 values(37821,'2022-01-01','hjeiwqn328ljdvk数据库');
+show index from index03;
+drop table index03;
+-- @bvt:issue
+
+-- show index in non-sys
+-- @bvt:issue#8392
+create account aaa admin_name = 'wladmin' identified by '123456';
+-- session:id=2&user=aaa:wladmin&password='123456';
+drop table if exists index04;
+create table index04(a int, b varchar(30), c bigint, d char, unique key(b,c),key d1(b));
+show index from index04;
+drop table index04;
+
+drop table if exists index05;
+create table index05(a int primary key auto_increment,b bigint,c char, key(c));
+show index from index05;
+drop table index05;
+
+drop table if exists index06;
+create table index06(s varchar(20), id int);
+create index index6 on index06(s);
+show index from index06;
+drop table index06;
 -- @bvt:issue
