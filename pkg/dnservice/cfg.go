@@ -53,6 +53,8 @@ var (
 	defaultLogtailResponseSendTimeout = 10 * time.Second
 	defaultMaxLogtailFetchFailure     = 5
 
+	defaultKeepBindTimeout = time.Second * 10
+
 	storageDir     = "storage"
 	defaultDataDir = "./mo-data"
 )
@@ -68,11 +70,6 @@ type Config struct {
 	// ServiceAddress service address for communication, if this address is not set, use
 	// ListenAddress as the communication address.
 	ServiceAddress string `toml:"service-address"`
-	// LockListenAddress listening address for receiving external lock table allocator requests.
-	LockListenAddress string `toml:"lock-listen-address"`
-	// LockServiceAddress service address for communication, if this address is not set, use
-	// LockListenAddress as the communication address.
-	LockServiceAddress string `toml:"lock-service-address"`
 
 	// HAKeeper configuration
 	HAKeeper struct {
@@ -137,6 +134,18 @@ type Config struct {
 		// RefreshInterval refresh cluster info from hakeeper interval
 		RefreshInterval toml.Duration `toml:"refresh-interval"`
 	}
+
+	LockService struct {
+		// LockListenAddress listening address for receiving external lock table allocator requests.
+		LockListenAddress string `toml:"lock-listen-address"`
+		// LockServiceAddress service address for communication, if this address is not set, use
+		// LockListenAddress as the communication address.
+		LockServiceAddress string `toml:"lock-service-address"`
+		// KeepBindTimeout when a locktable is assigned to a lockservice, the lockservice will continuously
+		// hold the bind, and if no hold request is received after the configured time, then all bindings for
+		// the service will fail.
+		KeepBindTimeout toml.Duration `toml:"keep-bind-timeout"`
+	} `toml:"lockservice"`
 }
 
 func (c *Config) Validate() error {
@@ -153,11 +162,14 @@ func (c *Config) Validate() error {
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = defaultServiceAddress
 	}
-	if c.LockListenAddress == "" {
-		c.LockListenAddress = defaultLockListenAddress
+	if c.LockService.LockListenAddress == "" {
+		c.LockService.LockListenAddress = defaultLockListenAddress
 	}
-	if c.LockServiceAddress == "" {
-		c.LockServiceAddress = defaultLockServiceAddress
+	if c.LockService.LockServiceAddress == "" {
+		c.LockService.LockServiceAddress = defaultLockServiceAddress
+	}
+	if c.LockService.KeepBindTimeout.Duration == 0 {
+		c.LockService.KeepBindTimeout.Duration = defaultKeepBindTimeout
 	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = StorageTAE
