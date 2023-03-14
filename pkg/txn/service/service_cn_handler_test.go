@@ -17,17 +17,25 @@ package service
 import (
 	"context"
 	"math"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestReadBasic(t *testing.T) {
@@ -611,6 +619,83 @@ func TestCommitWithRollbackIfAnyPrepareFailed(t *testing.T) {
 	checkData(t, wTxn, s2, 2, 2, false)
 }
 
+func TestCommitWithLockTables(t *testing.T) {
+	sender := NewTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	allocator := newTestLockTablesAllocator(
+		t,
+		"/tmp/locktable.sock",
+		time.Second)
+	defer func() {
+		assert.NoError(t, allocator.Close())
+	}()
+	s := NewTestTxnServiceWithAllocator(
+		t,
+		1,
+		sender,
+		NewTestClock(1),
+		allocator).(*service)
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+	sender.AddTxnService(s)
+
+	bind := allocator.Get("s1", 1)
+	wTxn := NewTestTxn(1, 1, 1)
+	wTxn.LockTables = append(wTxn.LockTables, bind)
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 0))
+	checkResponses(t, commitWriteData(t, sender, wTxn))
+
+	var values [][]byte
+	var timestamps []timestamp.Timestamp
+	kv := s.storage.(*mem.KVTxnStorage).GetCommittedKV()
+
+	kv.AscendRange(GetTestKey(0), NewTestTimestamp(0), NewTestTimestamp(math.MaxInt64), func(value []byte, ts timestamp.Timestamp) {
+		values = append(values, value)
+		timestamps = append(timestamps, ts)
+	})
+	assert.Equal(t, [][]byte{GetTestValue(0, wTxn)}, values)
+	assert.Equal(t, []timestamp.Timestamp{NewTestTimestamp(2)}, timestamps)
+}
+
+func TestCommitWithLockTablesBindChanged(t *testing.T) {
+	sender := NewTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	allocator := newTestLockTablesAllocator(
+		t,
+		"/tmp/locktable.sock",
+		time.Second)
+	defer func() {
+		assert.NoError(t, allocator.Close())
+	}()
+	s := NewTestTxnServiceWithAllocator(
+		t,
+		1,
+		sender,
+		NewTestClock(1),
+		allocator).(*service)
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+	sender.AddTxnService(s)
+
+	bind := allocator.Get("s1", 1)
+	wTxn := NewTestTxn(1, 1, 1)
+	bind.ServiceID = "s2"
+	wTxn.LockTables = append(wTxn.LockTables, bind)
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 0))
+	checkResponses(t, commitWriteData(t, sender, wTxn),
+		txn.WrapError(moerr.NewLockTableBindChanged(context.TODO()), 0))
+}
+
 func TestRollback(t *testing.T) {
 	sender := NewTestSender()
 	defer func() {
@@ -845,4 +930,23 @@ func checkWaiter(t *testing.T, w *waiter, expectStatus txn.TxnStatus) {
 	status, err := w.wait(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, expectStatus, status)
+}
+
+func newTestLockTablesAllocator(
+	t *testing.T,
+	address string,
+	keepTimeout time.Duration) lockservice.LockTableAllocator {
+	require.NoError(t, os.RemoveAll(address))
+
+	runtime.SetupProcessLevelRuntime(
+		runtime.NewRuntime(
+			metadata.ServiceType_DN,
+			"dn-uuid",
+			logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).
+				With(zap.String("case", t.Name()))))
+
+	return lockservice.NewLockTableAllocator(
+		"unix://"+address,
+		keepTimeout,
+		morpc.Config{})
 }
