@@ -39,7 +39,7 @@ func (e *StatsLogWriter) Start(inputCtx context.Context) bool {
 		for {
 			select {
 			case <-ticker.C:
-				e.gatherAndLog()
+				e.gatherAndWrite()
 			case <-ctx.Done():
 				return
 			}
@@ -58,7 +58,7 @@ func (e *StatsLogWriter) Stop(_ bool) (<-chan struct{}, bool) {
 	return stopCh, true
 }
 
-func (e *StatsLogWriter) gatherAndLog() {
+func (e *StatsLogWriter) gatherAndWrite() {
 	statsFamilies := e.registry.ExportLog()
 	for statsFName, stats := range statsFamilies {
 		// TODO: Eg output:- CachingFileService stats for 12:30:40 ...
