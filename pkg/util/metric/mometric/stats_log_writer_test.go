@@ -17,6 +17,7 @@ package mometric
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"testing"
 	"time"
@@ -81,7 +82,7 @@ func TestStatsLogWriter(t *testing.T) {
 	// 2. Start LogWriter
 	c := newStatsLogWriter(&stats.DefaultRegistry, 2*time.Second)
 	serviceCtx := context.Background()
-	c.Start(serviceCtx)
+	assert.True(t, c.Start(serviceCtx))
 
 	// 3. Perform operations on Dev Stats
 	service.Do()
@@ -93,4 +94,9 @@ func TestStatsLogWriter(t *testing.T) {
 	// 2023/03/14 11:39:30.579403 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 2, "hits": 1}
 	// 2023/03/14 11:39:32.579816 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}
 	// 2023/03/14 11:39:34.583647 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}
+
+	if ch, effect := c.Stop(true); effect {
+		<-ch
+	}
+	println("StatsLogWriter has stopped gracefully.")
 }
