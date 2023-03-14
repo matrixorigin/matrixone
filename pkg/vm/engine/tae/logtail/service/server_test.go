@@ -141,6 +141,8 @@ func (m *logtailer) RangeLogtail(
 	return tails, nil
 }
 
+func (m *logtailer) RegisterCallback(cb func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error){}
+
 func (m *logtailer) TableLogtail(
 	ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
 ) (logtail.TableLogtail, error) {

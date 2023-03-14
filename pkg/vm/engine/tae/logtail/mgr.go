@@ -37,9 +37,9 @@ const (
 	LogtailHeartbeatDuration = time.Millisecond * 2
 )
 
-func MockCallback(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) {
+func MockCallback(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error{
 	if len(tails) == 0 {
-		return
+		return nil
 	}
 	s := fmt.Sprintf("get logtail\nfrom %v, to %v, tails cnt %d", from, to, len(tails))
 	for _, tail := range tails {
@@ -53,6 +53,7 @@ func MockCallback(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) {
 		}
 	}
 	logutil.Infof(s)
+	return nil
 }
 
 // Logtail manager holds sorted txn handles. Its main jobs:
