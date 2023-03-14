@@ -39,7 +39,7 @@ type container struct {
 	// the clientsession info for the channel you want to dispatch
 	remoteReceivers []*WrapperClientSession
 	// sendFunc is the rule you want to send batch
-	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) error
+	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error)
 }
 
 type Argument struct {

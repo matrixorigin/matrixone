@@ -91,14 +91,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 	*/
 
-	if err := ap.ctr.sendFunc(bat, ap, proc); err != nil {
-		return false, err
-	}
-	if len(ap.LocalRegs) == 0 {
-		return true, nil
-	}
-	proc.SetInputBatch(nil)
-	return false, nil
+	return ap.ctr.sendFunc(bat, ap, proc)
 }
 
 func (arg *Argument) waitRemoteRegsReady(proc *process.Process) {

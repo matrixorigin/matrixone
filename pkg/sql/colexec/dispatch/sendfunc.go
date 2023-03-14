@@ -39,7 +39,7 @@ const (
 )
 
 // common sender: send to any LocalReceiver
-func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	refCountAdd := int64(len(ap.LocalRegs) - 1)
 	atomic.AddInt64(&bat.Cnt, refCountAdd)
 	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
@@ -50,16 +50,16 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) e
 	for _, reg := range ap.LocalRegs {
 		select {
 		case <-reg.Ctx.Done():
-			return moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+			return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
 		case reg.Ch <- bat:
 		}
 	}
 
-	return nil
+	return false, nil
 }
 
 // common sender: send to any LocalReceiver
-func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	// send to local receiver
 	sendto := ap.sendCnt % len(ap.LocalRegs)
 	reg := ap.LocalRegs[sendto]
@@ -73,16 +73,20 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) e
 			bat.Clean(proc.Mp())
 		}
 		ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
-		return nil
+		if len(ap.LocalRegs) == 0 {
+			return true, nil
+		}
+		return false, nil
 	case reg.Ch <- bat:
+		proc.SetInputBatch(nil)
 		ap.sendCnt++
 	}
 
-	return nil
+	return false, nil
 }
 
 // common sender: send to all receiver
-func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	if !ap.prepared {
 		ap.waitRemoteRegsReady(proc)
 	}
@@ -90,11 +94,11 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error 
 	{ // send to remote regs
 		encodeData, errEncode := types.Encode(bat)
 		if errEncode != nil {
-			return errEncode
+			return false, errEncode
 		}
 		for _, r := range ap.ctr.remoteReceivers {
 			if err := sendBatchToClientSession(encodeData, r); err != nil {
-				return err
+				return false, err
 			}
 		}
 	}
@@ -109,12 +113,12 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error 
 	for _, reg := range ap.LocalRegs {
 		select {
 		case <-reg.Ctx.Done():
-			return moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+			return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
 		case reg.Ch <- bat:
 		}
 	}
 
-	return nil
+	return false, nil
 }
 
 func sendBatchToClientSession(encodeBatData []byte, wcs *WrapperClientSession) error {
