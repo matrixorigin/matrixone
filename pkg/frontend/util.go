@@ -633,18 +633,21 @@ func isInvalidConfigInput(config string) bool {
 	return err != nil
 }
 
-func removeComments(sql string) string {
-	var sb strings.Builder
-	for i := 0; i < len(sql); i++ {
-		if i < len(sql)-1 && sql[i] == '/' && sql[i+1] == '*' {
-			i += 2
-			for i < len(sql)-1 && !(sql[i] == '*' && sql[i+1] == '/') {
-				i++
-			}
-			i++
-		} else {
-			sb.WriteByte(sql[i])
+func removePrefixComment(sql string) string {
+	if len(sql) >= 4 {
+		p1 := strings.Index(sql, "/*")
+		if p1 != 0 {
+			// no prefix comment in this sql
+			return sql
 		}
+
+		p2 := strings.Index(sql, "*/")
+		if p2 < 2 {
+			// no valid prefix comment in this sql
+			return sql
+		}
+
+		sql = sql[p2+2:]
 	}
-	return sb.String()
+	return sql
 }

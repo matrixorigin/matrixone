@@ -687,10 +687,11 @@ func TestMaybeAppendExtension(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
-func TestRemoveComments(t *testing.T) {
-	require.Equal(t, "abcd", removeComments("/*11111*/abcd"))
-	require.Equal(t, "abcd", removeComments("/*11111*/abcd/*111111*/"))
-	require.Equal(t, "abcd", removeComments("abcd/*11111*/"))
-	require.Equal(t, "abcd*/", removeComments("/*11111*/abcd*/"))
-	require.Equal(t, "abcd", removeComments("/*11111*/abcd/*"))
+func TestRemovePrefixComment(t *testing.T) {
+	require.Equal(t, "abcd", removePrefixComment("abcd"))
+	require.Equal(t, "abcd", removePrefixComment("/*11111*/abcd"))
+	require.Equal(t, "abcd", removePrefixComment("/**/abcd"))
+	require.Equal(t, "/*/abcd", removePrefixComment("/*/abcd"))
+	require.Equal(t, "/*abcd", removePrefixComment("/*abcd"))
+	require.Equal(t, "*/abcd", removePrefixComment("*/abcd"))
 }
