@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -100,6 +101,170 @@ func (s *Scope) AlterView(c *Compile) error {
 	// }
 
 	return dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
+}
+
+func (s *Scope) AlterTable(c *Compile) error {
+	qry := s.Plan.GetDdl().GetAlterTable()
+	dbName := c.db
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	tblName := qry.GetTableDef().GetName()
+	rel, err := dbSource.Relation(c.ctx, tblName)
+	if err != nil {
+		return err
+	}
+
+	tableDef := plan2.DeepCopyTableDef(qry.TableDef)
+	oldDefs, err := rel.TableDefs(c.ctx)
+	if err != nil {
+		return err
+	}
+
+	tblId := rel.GetTableID(c.ctx)
+	removeRelChildTbls := make(map[string]uint64)
+	var addRelChildTbls []uint64
+	var newFkeys []*plan.ForeignKeyDef
+
+	// drop foreign key
+	for _, action := range qry.Actions {
+		switch act := action.Action.(type) {
+		case *plan.AlterTable_Action_Drop:
+			name := act.Drop.Name
+			for i, fk := range tableDef.Fkeys {
+				if fk.Name == name {
+					removeRelChildTbls[name] = fk.ForeignTbl
+					tableDef.Fkeys = append(tableDef.Fkeys[:i], tableDef.Fkeys[i+1:]...)
+					break
+				}
+			}
+		case *plan.AlterTable_Action_AddFk:
+			addRelChildTbls = append(addRelChildTbls, act.AddFk.Fkey.ForeignTbl)
+			newFkeys = append(newFkeys, act.AddFk.Fkey)
+		}
+	}
+
+	// reset origin table's constraint
+	var oldCt *engine.ConstraintDef
+	newCt := &engine.ConstraintDef{
+		Cts: []engine.Constraint{},
+	}
+	for _, def := range oldDefs {
+		if ct, ok := def.(*engine.ConstraintDef); ok {
+			oldCt = ct
+			break
+		}
+	}
+
+	if oldCt == nil {
+		oldCt = &engine.ConstraintDef{
+			Cts: []engine.Constraint{},
+		}
+	}
+	originHasFkDef := false
+	for _, ct := range oldCt.Cts {
+		switch t := ct.(type) {
+		case *engine.ForeignKeyDef:
+			for _, fkey := range t.Fkeys {
+				if _, ok := removeRelChildTbls[fkey.Name]; !ok {
+					newFkeys = append(newFkeys, fkey)
+				}
+			}
+			t.Fkeys = newFkeys
+			originHasFkDef = true
+			newCt.Cts = append(newCt.Cts, t)
+		case *engine.RefChildTableDef:
+			newCt.Cts = append(newCt.Cts, t)
+		case *engine.IndexDef:
+			newCt.Cts = append(newCt.Cts, t)
+		}
+	}
+	if !originHasFkDef {
+		newCt.Cts = append(newCt.Cts, &engine.ForeignKeyDef{
+			Fkeys: newFkeys,
+		})
+	}
+	err = rel.UpdateConstraint(c.ctx, newCt)
+	if err != nil {
+		return err
+	}
+
+	// remove relChildTbls for drop foreign key clause
+	for _, fkTblId := range removeRelChildTbls {
+		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
+		if err != nil {
+			return err
+		}
+		fkTableDef, err := fkRelation.TableDefs(c.ctx)
+		if err != nil {
+			return err
+		}
+		var oldCt *engine.ConstraintDef
+		for _, def := range fkTableDef {
+			if ct, ok := def.(*engine.ConstraintDef); ok {
+				oldCt = ct
+				break
+			}
+		}
+		for _, ct := range oldCt.Cts {
+			if def, ok := ct.(*engine.RefChildTableDef); ok {
+				for idx, refTable := range def.Tables {
+					if refTable == tblId {
+						def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
+						break
+					}
+				}
+				break
+			}
+		}
+		if err != nil {
+			return err
+		}
+		err = fkRelation.UpdateConstraint(c.ctx, oldCt)
+		if err != nil {
+			return err
+		}
+	}
+
+	// append relChildTbls for add foreign key clause
+	for _, fkTblId := range addRelChildTbls {
+		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
+		if err != nil {
+			return err
+		}
+		fkTableDef, err := fkRelation.TableDefs(c.ctx)
+		if err != nil {
+			return err
+		}
+		var oldCt *engine.ConstraintDef
+		var oldRefChildDef *engine.RefChildTableDef
+		for _, def := range fkTableDef {
+			if ct, ok := def.(*engine.ConstraintDef); ok {
+				oldCt = ct
+				for _, ct := range oldCt.Cts {
+					if old, ok := ct.(*engine.RefChildTableDef); ok {
+						oldRefChildDef = old
+					}
+				}
+				break
+			}
+		}
+		if oldRefChildDef == nil {
+			oldRefChildDef = &engine.RefChildTableDef{}
+		}
+		oldRefChildDef.Tables = append(oldRefChildDef.Tables, tblId)
+		newCt, err := makeNewCreateConstraint(oldCt, oldRefChildDef)
+		if err != nil {
+			return err
+		}
+		err = fkRelation.UpdateConstraint(c.ctx, newCt)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *Scope) CreateTable(c *Compile) error {
@@ -531,6 +696,7 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 		if !ok {
 			oldCt.Cts = append(oldCt.Cts, c)
 		}
+
 	case *engine.IndexDef:
 		ok := false
 		var indexdef *engine.IndexDef

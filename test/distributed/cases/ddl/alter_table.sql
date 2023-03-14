@@ -1,0 +1,14 @@
+drop table if exists f1;
+drop table if exists c1;
+create table f1(fa int primary key, fb int unique key);
+create table c1 (ca int, cb int);
+alter table c1 add constraint ffa foreign key f_a(ca) references f1(fa);
+insert into f1 values (2,2);
+insert into c1 values (1,1);
+insert into c1 values (2,2);
+select ca, cb from c1 order by ca;
+alter table c1 drop foreign key ffa;
+insert into c1 values (1,1);
+select ca, cb from c1 order by ca;
+drop table c1;
+drop table f1;
