@@ -123,8 +123,8 @@ func (s *Scope) AlterTable(c *Compile) error {
 	}
 
 	tblId := rel.GetTableID(c.ctx)
-	removeRelChildTbls := make(map[string]uint64)
-	var addRelChildTbls []uint64
+	removeRefChildTbls := make(map[string]uint64)
+	var addRefChildTbls []uint64
 	var newFkeys []*plan.ForeignKeyDef
 
 	// drop foreign key
@@ -134,13 +134,13 @@ func (s *Scope) AlterTable(c *Compile) error {
 			name := act.Drop.Name
 			for i, fk := range tableDef.Fkeys {
 				if fk.Name == name {
-					removeRelChildTbls[name] = fk.ForeignTbl
+					removeRefChildTbls[name] = fk.ForeignTbl
 					tableDef.Fkeys = append(tableDef.Fkeys[:i], tableDef.Fkeys[i+1:]...)
 					break
 				}
 			}
 		case *plan.AlterTable_Action_AddFk:
-			addRelChildTbls = append(addRelChildTbls, act.AddFk.Fkey.ForeignTbl)
+			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
 		}
 	}
@@ -167,7 +167,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 		switch t := ct.(type) {
 		case *engine.ForeignKeyDef:
 			for _, fkey := range t.Fkeys {
-				if _, ok := removeRelChildTbls[fkey.Name]; !ok {
+				if _, ok := removeRefChildTbls[fkey.Name]; !ok {
 					newFkeys = append(newFkeys, fkey)
 				}
 			}
@@ -190,21 +190,21 @@ func (s *Scope) AlterTable(c *Compile) error {
 		return err
 	}
 
-	// remove relChildTbls for drop foreign key clause
-	for _, fkTblId := range removeRelChildTbls {
-		err := s.removeRelChildTbl(c, fkTblId, tblId)
+	// remove refChildTbls for drop foreign key clause
+	for _, fkTblId := range removeRefChildTbls {
+		err := s.removeRefChildTbl(c, fkTblId, tblId)
 		if err != nil {
 			return err
 		}
 	}
 
-	// append relChildTbls for add foreign key clause
-	for _, fkTblId := range addRelChildTbls {
+	// append refChildTbls for add foreign key clause
+	for _, fkTblId := range addRefChildTbls {
 		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
 		if err != nil {
 			return err
 		}
-		err = s.addRelChildTbl(c, fkRelation, tblId)
+		err = s.addRefChildTbl(c, fkRelation, tblId)
 		if err != nil {
 			return err
 		}
@@ -322,7 +322,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			if err != nil {
 				return err
 			}
-			err = s.addRelChildTbl(c, fkRelation, tblId)
+			err = s.addRefChildTbl(c, fkRelation, tblId)
 			if err != nil {
 				return err
 			}
@@ -636,7 +636,7 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 	return oldCt, nil
 }
 
-func (s *Scope) addRelChildTbl(c *Compile, fkRelation engine.Relation, tblId uint64) error {
+func (s *Scope) addRefChildTbl(c *Compile, fkRelation engine.Relation, tblId uint64) error {
 	fkTableDef, err := fkRelation.TableDefs(c.ctx)
 	if err != nil {
 		return err
@@ -665,7 +665,7 @@ func (s *Scope) addRelChildTbl(c *Compile, fkRelation engine.Relation, tblId uin
 	return fkRelation.UpdateConstraint(c.ctx, newCt)
 }
 
-func (s *Scope) removeRelChildTbl(c *Compile, fkTblId uint64, tblId uint64) error {
+func (s *Scope) removeRefChildTbl(c *Compile, fkTblId uint64, tblId uint64) error {
 	_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
 	if err != nil {
 		return err
@@ -847,7 +847,7 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	// update tableDef of foreign key's table
 	for _, fkTblId := range qry.ForeignTbl {
-		err := s.removeRelChildTbl(c, fkTblId, tblId)
+		err := s.removeRefChildTbl(c, fkTblId, tblId)
 		if err != nil {
 			return err
 		}
