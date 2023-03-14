@@ -45,6 +45,7 @@ func (r *Registry) ExportLog() (families map[string][]zap.Field) {
 	return
 }
 
+// WithLogExporter registers Family with the LogExporter
 func WithLogExporter(logExporter *LogExporter) Options {
 	return func(o *options) {
 		o.logExporter = logExporter
@@ -61,6 +62,7 @@ func defaultOptions() options {
 	return options{}
 }
 
+// DefaultRegistry will be used to register all the MO Dev Stats.
 var DefaultRegistry = Registry{}
 
 // Register registers stats family to default stats registry
