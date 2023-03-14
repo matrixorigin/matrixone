@@ -63,6 +63,8 @@ type StatementInfo struct {
 	// SerializeExecPlan
 	SerializeExecPlan SerializeExecPlanFunc // see SetExecPlan, ExecPlan2Json
 
+	ResultCount int64 `json:"result_count"` // see EndStatement
+
 	// flow ctrl
 	end bool // cooperate with mux
 	mux sync.Mutex
@@ -143,6 +145,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(statsCol, stats)
 	row.SetColumnVal(stmtTypeCol, s.StatementType)
 	row.SetColumnVal(queryTypeCol, s.QueryType)
+	row.SetColumnVal(resultCntCol, s.ResultCount)
 }
 
 // ExecPlan2Json return ExecPlan Serialized json-str
@@ -216,7 +219,7 @@ func (s *StatementInfo) Report(ctx context.Context) {
 	ReportStatement(ctx, s)
 }
 
-var EndStatement = func(ctx context.Context, err error) {
+var EndStatement = func(ctx context.Context, err error, sentRows int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
@@ -229,6 +232,7 @@ var EndStatement = func(ctx context.Context, err error) {
 	if !s.end { // cooperate with s.mux
 		// do report
 		s.end = true
+		s.ResultCount = sentRows
 		s.ResponseAt = time.Now()
 		s.Duration = s.ResponseAt.Sub(s.RequestAt)
 		s.Status = StatementStatusSuccess
