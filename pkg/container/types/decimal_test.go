@@ -52,7 +52,7 @@ func TestDecimalMulDiv(t *testing.T) {
 	z := x
 	y := Decimal128{uint64(rand.Int()), uint64(rand.Int() & 255)}
 	x, _, _ = x.Mul(y, 0, 0)
-	x, _, _ = x.Div(y, 0, 0)
+	x, _, _ = x.Div(y, 12, 0)
 	if x != z {
 		panic("DecimalMulDiv wrong")
 	}
