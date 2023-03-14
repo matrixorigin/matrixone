@@ -15,35 +15,32 @@
 package service
 
 import (
+	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
 
-func TestWaterliner(t *testing.T) {
-	current := mockTimestamp(100, 100)
+func TestPublisher(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	w := NewWaterliner()
+	event := NewNotifier(ctx, 10)
+	eventNum := 5
 
-	/* ---- waterline not initialized ---- */
-	waterline := w.Waterline()
-	require.Equal(t, timestamp.Timestamp{}, waterline)
+	go func() {
+		for i := 1; i <= eventNum; i++ {
+			from, to := mockTimestamp(int64(i-1), 0), mockTimestamp(int64(i), 0)
+			table := mockTable(uint64(i), uint64(i), uint64(i))
+			err := event.NotifyLogtail(from, to, mockLogtail(table, to))
+			require.NoError(t, err)
+		}
+	}()
 
-	/* ---- advance waterline ---- */
-	w.Advance(current)
-	waterline = w.Waterline()
-	require.Equal(t, current, waterline)
-
-	/* ---- advance with a backward ts ---- */
-	require.Panics(t, func() {
-		prev := current.Prev()
-		w.Advance(prev)
-	})
-
-	/* ---- advance with a monotonous ts ---- */
-	next := current.Next()
-	w.Advance(next)
-	waterline = w.Waterline()
-	require.Equal(t, next, waterline)
+	for j := 1; j <= eventNum; j++ {
+		e := <-event.C
+		require.Equal(t, mockTimestamp(int64(j-1), 0), e.from)
+		require.Equal(t, mockTimestamp(int64(j), 0), e.to)
+		require.Equal(t, 1, len(e.logtails))
+	}
 }
