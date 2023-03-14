@@ -22,6 +22,7 @@ import (
 	"math"
 	"math/bits"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1186,6 +1187,9 @@ const (
 	updateConfigurationByAccountName = `update mo_catalog.mo_mysql_compatbility_mode set configuration = %s where account_name = "%s";`
 
 	getConfiguationByDbName = `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatbility_mode where dat_name = "%s";`
+
+	getDbIdAndTypFormat    = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
+	insertIntoMoPubsFormat = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
 )
 
 var (
@@ -1486,6 +1490,21 @@ func getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx context.Context, roleId i
 
 func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privId, privilegeLevelStar)
+}
+func getSqlForGetDbIdAndType(ctx context.Context, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getDbIdAndTypFormat, dbName), nil
+}
+
+func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string, databaseId uint64, allTable, allAccount bool, tableList, accountList string, owner, creator uint32, comment string) (string, error) {
+	err := inputNameIsInvalid(ctx, pubName, databaseName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(insertIntoMoPubsFormat, pubName, databaseName, databaseId, allTable, allAccount, tableList, accountList, owner, creator, comment), nil
 }
 
 func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) {
@@ -2078,6 +2097,27 @@ func nameIsInvalid(name string) bool {
 	}
 	return strings.Contains(s, ":") || strings.Contains(s, "#")
 }
+func accountNameIsInvalid(name string) bool {
+	s := strings.TrimSpace(name)
+	if len(s) == 0 {
+		return true
+	}
+	for _, c := range s {
+		switch {
+		case c >= '0' && c <= '9':
+			continue
+		case c >= 'a' && c <= 'z':
+			continue
+		case c >= 'A' && c <= 'Z':
+			continue
+		case c == '_' || c == '-':
+			continue
+		default:
+			return true
+		}
+	}
+	return false
+}
 
 // normalizeName normalizes and checks the name
 func normalizeName(ctx context.Context, name string) (string, error) {
@@ -2093,19 +2133,8 @@ func normalizeNameOfAccount(ctx context.Context, ca *tree.CreateAccount) error {
 	if len(s) == 0 {
 		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
 	}
-	for _, c := range s {
-		switch {
-		case c >= '0' && c <= '9':
-			continue
-		case c >= 'a' && c <= 'z':
-			continue
-		case c >= 'A' && c <= 'Z':
-			continue
-		case c == '_' || c == '-':
-			continue
-		default:
-			return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
-		}
+	if accountNameIsInvalid(s) {
+		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
 	}
 	ca.Name = s
 	return nil
@@ -2442,18 +2471,30 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		all_account  bool
 		table_list   string
 		account_list string
+		tenantInfo   *TenantInfo
 	)
+
 	all_account = len(cp.Accounts) == 0
 	if !all_account {
 		accts := make([]string, 0, len(cp.Accounts))
 		for _, acct := range cp.Accounts {
-			accts = append(accts, string(acct))
+			accName := string(acct)
+			if accountNameIsInvalid(accName) {
+				return moerr.NewInternalError(ctx, "invalid account name '%s'", accName)
+			}
+			accts = append(accts, accName)
 		}
+		sort.Strings(accts)
 		account_list = strings.Join(accts, ",")
 	}
+
 	bh.Exec(ctx, "begin;")
 	bh.ClearExecResultSet()
-	sql = fmt.Sprintf(`select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`, cp.Database)
+
+	sql, err = getSqlForGetDbIdAndType(ctx, string(cp.Database))
+	if err != nil {
+		goto handleFailed
+	}
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
@@ -2477,8 +2518,12 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	if datType != "" { //TODO: check the dat_type
 		err = moerr.NewInternalError(ctx, "database '%s' is not a user database", cp.Database)
 	}
-	sql = fmt.Sprintf(`insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`, cp.Name, cp.Database, datId, all_table, all_account, table_list, account_list, ses.GetTenantInfo().GetDefaultRoleID(), ses.GetTenantInfo().GetUserID(), cp.Comment)
 	bh.ClearExecResultSet()
+	tenantInfo = ses.GetTenantInfo()
+	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), string(cp.Database), datId, all_table, all_account, table_list, account_list, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment)
+	if err != nil {
+		goto handleFailed
+	}
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		goto handleFailed
