@@ -15,43 +15,41 @@
 package perfcounter
 
 import (
-	"sync/atomic"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 type Counter struct {
 	S3 struct {
-		List        atomic.Int64
-		Head        atomic.Int64
-		Put         atomic.Int64
-		Get         atomic.Int64
-		Delete      atomic.Int64
-		DeleteMulti atomic.Int64
+		List        StatsCounter
+		Head        StatsCounter
+		Put         StatsCounter
+		Get         StatsCounter
+		Delete      StatsCounter
+		DeleteMulti StatsCounter
 	}
 
 	Cache struct {
-		Read     atomic.Int64
-		Hit      atomic.Int64
-		MemRead  atomic.Int64
-		MemHit   atomic.Int64
-		DiskRead atomic.Int64
-		DiskHit  atomic.Int64
+		Read     StatsCounter
+		Hit      StatsCounter
+		MemRead  StatsCounter
+		MemHit   StatsCounter
+		DiskRead StatsCounter
+		DiskHit  StatsCounter
 	}
 
 	DistTAE struct {
 		MPool mpool.MPoolStats
 
 		Logtail struct {
-			Entries               atomic.Int64
-			InsertEntries         atomic.Int64
-			MetadataInsertEntries atomic.Int64
-			DeleteEntries         atomic.Int64
-			MetadataDeleteEntries atomic.Int64
+			Entries               StatsCounter
+			InsertEntries         StatsCounter
+			MetadataInsertEntries StatsCounter
+			DeleteEntries         StatsCounter
+			MetadataDeleteEntries StatsCounter
 
-			InsertRows   atomic.Int64
-			ActiveRows   atomic.Int64
-			InsertBlocks atomic.Int64
+			InsertRows   StatsCounter
+			ActiveRows   StatsCounter
+			InsertBlocks StatsCounter
 		}
 	}
 }
