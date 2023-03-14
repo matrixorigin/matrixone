@@ -15,12 +15,13 @@
 package util
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"go/constant"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func SplitTableAndColumn(name string) (string, string) {
@@ -130,10 +131,16 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	// att_relname in ('mo_database','mo_tables','mo_columns')
 	inExpr := tree.NewComparisonExpr(tree.IN, att_relnameColName, inValues)
 
+	relkindEqualAst := makeStringEqualAst(catalog.SystemColAttr_DBName, "mo_catalog")
+
+	// (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster')
+	tempExpr := tree.NewOrExpr(inExpr, relkindEqualAst)
+	tempExpr2 := tree.NewParenExpr(tempExpr)
+
 	// account_id = 0
 	accountIdEqulZero := makeAccountIdEqualAst(0)
 	// andExpr is: account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns'))
-	andExpr := tree.NewAndExpr(accountIdEqulZero, inExpr)
+	andExpr := tree.NewAndExpr(accountIdEqulZero, tempExpr2)
 
 	// right is: (account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns')))
 	right := tree.NewParenExpr(andExpr)
