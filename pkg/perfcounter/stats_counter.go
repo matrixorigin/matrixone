@@ -18,14 +18,16 @@ func (c *StatsCounter) Load() int64 {
 	return c.global.Load() + c.local.Load()
 }
 
-// LoadC loads local counter value
+// LoadC returns local counter value.
+// Right now, only user of LoadC is LogExporter. Hence, MergeAndReset is also embedded here.
 func (c *StatsCounter) LoadC() int64 {
-	return c.local.Load()
-}
+	val := c.local.Load()
 
-// MergeAndReset merge the local to global and reset local
-func (c *StatsCounter) MergeAndReset() (new int64) {
-	new = c.global.Add(c.local.Load())
-	c.local.Store(0)
-	return
+	{
+		// Merge and Reset
+		c.global.Add(val)
+		c.local.Store(0)
+	}
+
+	return val
 }
