@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math/rand"
 	"strings"
@@ -204,7 +205,10 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 
 	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
+
 	get := 0
+	blkInfos := make([]BlockMeta, 0, 10)
+
 	for _, i := range tbl.dnList {
 		blocks := tbl.meta.blocks[i]
 		get += len(blocks)
@@ -254,13 +258,34 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 		for _, blk := range blks {
 			tbl.skipBlocks[blk.Info.BlockID] = 0
 			if !exprMono || needRead(ctx, expr, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc) {
+				blkInfos = append(blkInfos, blk)
 				ranges = append(ranges, blockMarshal(blk))
 			}
 		}
 		tbl.meta.modifedBlocks[i] = genModifedBlocks(ctx, deletes,
 			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.db.txn.proc)
 	}
-	logutil.Infof("[disttae] table[id: %d], Range() get from meta %d, return %d", tbl.tableId, get, len(ranges))
+
+	/*
+		BlockID    uint64
+		EntryState bool
+		Sorted     bool
+		MetaLoc    string
+		DeltaLoc   string
+		CommitTs   types.TS
+		SegmentID  uint64
+	*/
+	debugBlkInfos := ""
+	for _, info := range blkInfos {
+		debugBlkInfos += fmt.Sprintf(
+			"[rowNum:%d, info:{blockId: %d, EntryState: %v, Sorted: %v, MetaLoc: %s, DeltaLoc: %s, CommitTs: %s, SegmentID: %d}]\n",
+			info.Rows, info.Info.BlockID, info.Info.EntryState, info.Info.Sorted,
+			info.Info.MetaLoc, info.Info.DeltaLoc, info.Info.CommitTs, info.Info.SegmentID)
+	}
+
+	logutil.Infof(
+		"[disttae] table[id: %d], Range() get from meta %d, return %d, \n, block info: %s",
+		tbl.tableId, get, len(ranges), debugBlkInfos)
 	return ranges, nil
 }
 
