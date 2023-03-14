@@ -15,6 +15,7 @@
 package txnbase
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -93,6 +94,10 @@ type TxnManager struct {
 	TxnFactory      TxnFactory
 	Exception       *atomic.Value
 	CommitListener  *batchTxnCommitListener
+	OpTxnChan       chan *OpTxn
+	ctx             context.Context
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
@@ -107,11 +112,14 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		TxnFactory:      txnFactory,
 		Exception:       new(atomic.Value),
 		CommitListener:  newBatchCommitListener(),
+		OpTxnChan:       make(chan *OpTxn, 20000),
+		wg:              sync.WaitGroup{},
 	}
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
 	fqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, fqueue)
 
+	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
 	return mgr
 }
 
@@ -213,6 +221,50 @@ func (mgr *TxnManager) GetTxn(id string) txnif.AsyncTxn {
 func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
 	_, err = mgr.PreparingSM.EnqueueCheckpoint(op)
 	return
+}
+
+func (mgr *TxnManager) heartbeat() {
+	defer mgr.wg.Done()
+	heartbeatTicker := time.NewTicker(time.Millisecond * 2)
+	for {
+		select {
+		case <-mgr.ctx.Done():
+			return
+		case op := <-mgr.OpTxnChan:
+			_, err := mgr.PreparingSM.EnqueueRecevied(op)
+			if err != nil {
+				panic(err)
+			}
+		case <-heartbeatTicker.C:
+			op := mgr.newHeartbeatOpTxn()
+			op.Txn.(*Txn).Add(1)
+			_, err := mgr.PreparingSM.EnqueueRecevied(op)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+}
+
+func (mgr *TxnManager) newHeartbeatOpTxn() *OpTxn {
+	if exp := mgr.Exception.Load(); exp != nil {
+		err := exp.(error)
+		logutil.Warnf("StartTxn: %v", err)
+		return nil
+	}
+	mgr.Lock()
+	defer mgr.Unlock()
+	txnId := mgr.IdAlloc.Alloc()
+	startTs := mgr.TsAlloc.Alloc()
+
+	store := &heartbeatStore{}
+	txn := DefaultTxnFactory(mgr, store, txnId, startTs, types.TS{})
+	store.BindTxn(txn)
+	mgr.IDMap[string(txnId)] = txn
+	return &OpTxn{
+		Txn: txn,
+		Op:  OpCommit,
+	}
 }
 
 func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
@@ -458,9 +510,13 @@ func (mgr *TxnManager) MinTSForTest() types.TS {
 
 func (mgr *TxnManager) Start() {
 	mgr.PreparingSM.Start()
+	mgr.wg.Add(1)
+	go mgr.heartbeat()
 }
 
 func (mgr *TxnManager) Stop() {
+	mgr.cancel()
+	mgr.wg.Wait()
 	mgr.PreparingSM.Stop()
 	mgr.OnException(common.ErrClose)
 	logutil.Info("[Stop]", TxnMgrField(mgr))

@@ -123,9 +123,6 @@ func (mgr *Manager) onCollectTxnLogtails(items ...any) {
 		txn := item.(txnif.AsyncTxn)
 		entries := builder.CollectLogtail(txn)
 		txn.GetStore().DoneWaitEvent(1)
-		if len(*entries) == 0 {
-			continue
-		}
 		txnWithLogtails := &txnWithLogtails{
 			txn:   txn,
 			tails: entries,
@@ -161,15 +158,15 @@ func (mgr *Manager) Start() {
 }
 func (mgr *Manager) generateLogtails() {
 	defer mgr.wg.Done()
-	ticker := time.NewTicker(LogtailHeartbeatDuration)
+	// ticker := time.NewTicker(LogtailHeartbeatDuration)
 	for {
 		select {
 		case <-mgr.ctx.Done():
 			return
 		case txn := <-mgr.committedTxn:
 			mgr.generateLogtailWithTxn(txn)
-		case <-ticker.C:
-			mgr.generateHeartbeat()
+			// case <-ticker.C:
+			// 	mgr.generateHeartbeat()
 		}
 	}
 }
@@ -177,10 +174,10 @@ func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 	icallback := mgr.logtailCallback.Load()
 	if icallback != nil {
 		callback := icallback.(func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error)
-		to := (*txn.tails)[0].Ts
+		to := txn.txn.GetPrepareTS()
 		from := mgr.previousSaveTS
-		mgr.previousSaveTS = types.TimestampToTS(*to)
-		callback(from.ToTimestamp(), *to, *txn.tails...)
+		mgr.previousSaveTS = to
+		callback(from.ToTimestamp(), to.ToTimestamp(), *txn.tails...)
 	}
 }
 func (mgr *Manager) getSaveTS() types.TS {
