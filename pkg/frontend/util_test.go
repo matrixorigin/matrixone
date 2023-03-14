@@ -695,3 +695,35 @@ func TestRemovePrefixComment(t *testing.T) {
 	require.Equal(t, "/*abcd", removePrefixComment("/*abcd"))
 	require.Equal(t, "*/abcd", removePrefixComment("*/abcd"))
 }
+
+func TestSplitBySemicolon(t *testing.T) {
+	t1 := splitBySemicolon("abc;abcd;abcde;")
+	require.Equal(t, 3, len(t1))
+	require.Equal(t, "abc", t1[0])
+	require.Equal(t, "abcd", t1[1])
+	require.Equal(t, "abcde", t1[2])
+
+	t2 := splitBySemicolon("abc/*123;*/;abcd;abcde;")
+	require.Equal(t, 3, len(t2))
+	require.Equal(t, "abc/*123;*/", t2[0])
+	require.Equal(t, "abcd", t2[1])
+	require.Equal(t, "abcde", t2[2])
+
+	t3 := splitBySemicolon("abc'123;';abcd;abcde;")
+	require.Equal(t, 3, len(t3))
+	require.Equal(t, "abc'123;'", t3[0])
+	require.Equal(t, "abcd", t3[1])
+	require.Equal(t, "abcde", t3[2])
+
+	t4 := splitBySemicolon("abc\"123;\";abcd;abcde;")
+	require.Equal(t, 3, len(t4))
+	require.Equal(t, "abc\"123;\"", t4[0])
+	require.Equal(t, "abcd", t4[1])
+	require.Equal(t, "abcde", t4[2])
+
+	t5 := splitBySemicolon("abc;abcd;abcde")
+	require.Equal(t, 3, len(t5))
+	require.Equal(t, "abc", t5[0])
+	require.Equal(t, "abcd", t5[1])
+	require.Equal(t, "abcde", t5[2])
+}

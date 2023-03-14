@@ -651,3 +651,49 @@ func removePrefixComment(sql string) string {
 	}
 	return sql
 }
+
+func splitBySemicolon(sql string) []string {
+	lastEnd := 0
+	sqlLen := len(sql)
+	ret := make([]string, 0)
+	for i := 0; i < sqlLen; i++ {
+		// skip double quotes
+		if i < sqlLen-1 && sql[i] == '"' {
+			i++
+			for i < sqlLen && sql[i] != '"' {
+				i++
+			}
+			i++
+		}
+
+		// skip single quotes
+		if i < sqlLen-1 && sql[i] == '\'' {
+			i++
+			for i < sqlLen && sql[i] != '\'' {
+				i++
+			}
+			i++
+		}
+
+		// skip comments
+		if i < sqlLen-3 && sql[i] == '/' && sql[i+1] == '*' {
+			i += 2
+			for i < sqlLen-1 && !(sql[i] == '*' && sql[i+1] == '/') {
+				i++
+			}
+			i += 2
+		}
+
+		if i < sqlLen && sql[i] == ';' {
+			ret = append(ret, sql[lastEnd:i])
+			i++
+			lastEnd = i
+		}
+	}
+
+	if lastEnd != sqlLen {
+		ret = append(ret, sql[lastEnd:])
+	}
+
+	return ret
+}
