@@ -192,36 +192,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 
 	// remove relChildTbls for drop foreign key clause
 	for _, fkTblId := range removeRelChildTbls {
-		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
-		if err != nil {
-			return err
-		}
-		fkTableDef, err := fkRelation.TableDefs(c.ctx)
-		if err != nil {
-			return err
-		}
-		var oldCt *engine.ConstraintDef
-		for _, def := range fkTableDef {
-			if ct, ok := def.(*engine.ConstraintDef); ok {
-				oldCt = ct
-				break
-			}
-		}
-		for _, ct := range oldCt.Cts {
-			if def, ok := ct.(*engine.RefChildTableDef); ok {
-				for idx, refTable := range def.Tables {
-					if refTable == tblId {
-						def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
-						break
-					}
-				}
-				break
-			}
-		}
-		if err != nil {
-			return err
-		}
-		err = fkRelation.UpdateConstraint(c.ctx, oldCt)
+		err := s.removeRelChildTbl(c, fkTblId, tblId)
 		if err != nil {
 			return err
 		}
@@ -233,32 +204,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		fkTableDef, err := fkRelation.TableDefs(c.ctx)
-		if err != nil {
-			return err
-		}
-		var oldCt *engine.ConstraintDef
-		var oldRefChildDef *engine.RefChildTableDef
-		for _, def := range fkTableDef {
-			if ct, ok := def.(*engine.ConstraintDef); ok {
-				oldCt = ct
-				for _, ct := range oldCt.Cts {
-					if old, ok := ct.(*engine.RefChildTableDef); ok {
-						oldRefChildDef = old
-					}
-				}
-				break
-			}
-		}
-		if oldRefChildDef == nil {
-			oldRefChildDef = &engine.RefChildTableDef{}
-		}
-		oldRefChildDef.Tables = append(oldRefChildDef.Tables, tblId)
-		newCt, err := makeNewCreateConstraint(oldCt, oldRefChildDef)
-		if err != nil {
-			return err
-		}
-		err = fkRelation.UpdateConstraint(c.ctx, newCt)
+		err = s.addRelChildTbl(c, fkRelation, tblId)
 		if err != nil {
 			return err
 		}
@@ -376,32 +322,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			if err != nil {
 				return err
 			}
-			fkTableDef, err := fkRelation.TableDefs(c.ctx)
-			if err != nil {
-				return err
-			}
-			var oldCt *engine.ConstraintDef
-			var oldRefChildDef *engine.RefChildTableDef
-			for _, def := range fkTableDef {
-				if ct, ok := def.(*engine.ConstraintDef); ok {
-					oldCt = ct
-					for _, ct := range oldCt.Cts {
-						if old, ok := ct.(*engine.RefChildTableDef); ok {
-							oldRefChildDef = old
-						}
-					}
-					break
-				}
-			}
-			if oldRefChildDef == nil {
-				oldRefChildDef = &engine.RefChildTableDef{}
-			}
-			oldRefChildDef.Tables = append(oldRefChildDef.Tables, tblId)
-			newCt, err := makeNewCreateConstraint(oldCt, oldRefChildDef)
-			if err != nil {
-				return err
-			}
-			err = fkRelation.UpdateConstraint(c.ctx, newCt)
+			err = s.addRelChildTbl(c, fkRelation, tblId)
 			if err != nil {
 				return err
 			}
@@ -711,83 +632,70 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 		if !ok {
 			oldCt.Cts = append(oldCt.Cts, c)
 		}
-
-		//case *engine.UniqueIndexDef:
-		//	d := &plan.UniqueIndexDef{}
-		//	err := d.UnMarshalUniqueIndexDef([]byte(t.UniqueIndex))
-		//	if err != nil {
-		//		return nil, err
-		//	}
-		//
-		//	ok := false
-		//	var idx *engine.UniqueIndexDef
-		//	for i, ct := range oldCt.Cts {
-		//		if idx, ok = ct.(*engine.UniqueIndexDef); ok {
-		//			u := &plan.UniqueIndexDef{}
-		//			err := u.UnMarshalUniqueIndexDef([]byte(idx.UniqueIndex))
-		//			if err != nil {
-		//				return nil, err
-		//			}
-		//			u.IndexNames = append(u.IndexNames, d.IndexNames[0])
-		//			u.TableNames = append(u.TableNames, d.TableNames[0])
-		//			u.TableExists = append(u.TableExists, d.TableExists[0])
-		//			u.Fields = append(u.Fields, d.Fields[0])
-		//			u.Comments = append(u.Comments, d.Comments[0])
-		//
-		//			oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-		//
-		//			bytes, err := u.MarshalUniqueIndexDef()
-		//			if err != nil {
-		//				return nil, err
-		//			}
-		//			oldCt.Cts = append(oldCt.Cts, &engine.UniqueIndexDef{
-		//				UniqueIndex: string(bytes),
-		//			})
-		//			break
-		//		}
-		//	}
-		//	if !ok {
-		//		oldCt.Cts = append(oldCt.Cts, c)
-		//	}
-		//case *engine.SecondaryIndexDef:
-		//	d := &plan.SecondaryIndexDef{}
-		//	err := d.UnMarshalSecondaryIndexDef([]byte(t.SecondaryIndex))
-		//	if err != nil {
-		//		return nil, err
-		//	}
-		//
-		//	ok := false
-		//	var idx *engine.SecondaryIndexDef
-		//	for i, ct := range oldCt.Cts {
-		//		if idx, ok = ct.(*engine.SecondaryIndexDef); ok {
-		//			u := &plan.SecondaryIndexDef{}
-		//			err := u.UnMarshalSecondaryIndexDef([]byte(idx.SecondaryIndex))
-		//			if err != nil {
-		//				return nil, err
-		//			}
-		//			u.IndexNames = append(u.IndexNames, d.IndexNames[0])
-		//			u.TableNames = append(u.TableNames, d.TableNames[0])
-		//			u.TableExists = append(u.TableExists, d.TableExists[0])
-		//			u.Fields = append(u.Fields, d.Fields[0])
-		//			u.Comments = append(u.Comments, d.Comments[0])
-		//
-		//			oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-		//
-		//			bytes, err := u.MarshalSecondaryIndexDef()
-		//			if err != nil {
-		//				return nil, err
-		//			}
-		//			oldCt.Cts = append(oldCt.Cts, &engine.SecondaryIndexDef{
-		//				SecondaryIndex: string(bytes),
-		//			})
-		//			break
-		//		}
-		//	}
-		//	if !ok {
-		//		oldCt.Cts = append(oldCt.Cts, c)
-		//	}
 	}
 	return oldCt, nil
+}
+
+func (s *Scope) addRelChildTbl(c *Compile, fkRelation engine.Relation, tblId uint64) error {
+	fkTableDef, err := fkRelation.TableDefs(c.ctx)
+	if err != nil {
+		return err
+	}
+	var oldCt *engine.ConstraintDef
+	var oldRefChildDef *engine.RefChildTableDef
+	for _, def := range fkTableDef {
+		if ct, ok := def.(*engine.ConstraintDef); ok {
+			oldCt = ct
+			for _, ct := range oldCt.Cts {
+				if old, ok := ct.(*engine.RefChildTableDef); ok {
+					oldRefChildDef = old
+				}
+			}
+			break
+		}
+	}
+	if oldRefChildDef == nil {
+		oldRefChildDef = &engine.RefChildTableDef{}
+	}
+	oldRefChildDef.Tables = append(oldRefChildDef.Tables, tblId)
+	newCt, err := makeNewCreateConstraint(oldCt, oldRefChildDef)
+	if err != nil {
+		return err
+	}
+	return fkRelation.UpdateConstraint(c.ctx, newCt)
+}
+
+func (s *Scope) removeRelChildTbl(c *Compile, fkTblId uint64, tblId uint64) error {
+	_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
+	if err != nil {
+		return err
+	}
+	fkTableDef, err := fkRelation.TableDefs(c.ctx)
+	if err != nil {
+		return err
+	}
+	var oldCt *engine.ConstraintDef
+	for _, def := range fkTableDef {
+		if ct, ok := def.(*engine.ConstraintDef); ok {
+			oldCt = ct
+			break
+		}
+	}
+	for _, ct := range oldCt.Cts {
+		if def, ok := ct.(*engine.RefChildTableDef); ok {
+			for idx, refTable := range def.Tables {
+				if refTable == tblId {
+					def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
+					break
+				}
+			}
+			break
+		}
+	}
+	if err != nil {
+		return err
+	}
+	return fkRelation.UpdateConstraint(c.ctx, oldCt)
 }
 
 // Truncation operations cannot be performed if the session holds an active table lock.
@@ -938,37 +846,8 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	// update tableDef of foreign key's table
-	for _, ftblId := range qry.ForeignTbl {
-		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, ftblId)
-		if err != nil {
-			return err
-		}
-		fkTableDef, err := fkRelation.TableDefs(c.ctx)
-		if err != nil {
-			return err
-		}
-		var oldCt *engine.ConstraintDef
-		for _, def := range fkTableDef {
-			if ct, ok := def.(*engine.ConstraintDef); ok {
-				oldCt = ct
-				break
-			}
-		}
-		for _, ct := range oldCt.Cts {
-			if def, ok := ct.(*engine.RefChildTableDef); ok {
-				for idx, refTable := range def.Tables {
-					if refTable == tblId {
-						def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
-						break
-					}
-				}
-				break
-			}
-		}
-		if err != nil {
-			return err
-		}
-		err = fkRelation.UpdateConstraint(c.ctx, oldCt)
+	for _, fkTblId := range qry.ForeignTbl {
+		err := s.removeRelChildTbl(c, fkTblId, tblId)
 		if err != nil {
 			return err
 		}
@@ -1014,22 +893,6 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 			exeDefs = append(exeDefs, &engine.PropertiesDef{
 				Properties: properties,
 			})
-			//case *plan.TableDef_DefType_UIdx:
-			//	bytes, err := defVal.UIdx.MarshalUniqueIndexDef()
-			//	if err != nil {
-			//		return nil, err
-			//	}
-			//	c.Cts = append(c.Cts, &engine.UniqueIndexDef{
-			//		UniqueIndex: string(bytes),
-			//	})
-			//case *plan.TableDef_DefType_SIdx:
-			//	bytes, err := defVal.SIdx.MarshalSecondaryIndexDef()
-			//	if err != nil {
-			//		return nil, err
-			//	}
-			//	c.Cts = append(c.Cts, &engine.SecondaryIndexDef{
-			//		SecondaryIndex: string(bytes),
-			//	})
 		}
 	}
 
@@ -1037,15 +900,6 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 		c.Cts = append(c.Cts, &engine.IndexDef{
 			Indexes: tableDef.Indexes,
 		})
-
-		//bytes, err := tableDef.Index.Marshal()
-		//if err != nil {
-		//	return nil, err
-		//}
-		//
-		//c.Cts = append(c.Cts, &engine.IndexesDef{
-		//	Indexes: string(bytes),
-		//})
 	}
 
 	if tableDef.Partition != nil {
