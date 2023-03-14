@@ -246,9 +246,9 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		dbNode := node.(*catalog.DBMVCCNode)
 		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts
-			catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
+			catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
 		} else {
-			catalogEntry2Batch(b.insBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
+			catalogEntry2Batch(b.insBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.GetEnd())
 		}
 	}
 	return nil
@@ -291,9 +291,9 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			}
 		} else {
 			if tblNode.HasDropCommitted() {
-				catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
+				catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
 			} else {
-				catalogEntry2Batch(b.insBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
+				catalogEntry2Batch(b.insBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.GetEnd())
 			}
 		}
 	}
@@ -364,9 +364,10 @@ func catalogEntry2Batch[T *catalog.DBEntry | *catalog.TableEntry](
 	fillDataRow func(e T, attr string, col containers.Vector, ts types.TS),
 	rowid types.Rowid,
 	commitTs types.TS,
+	visibleTS types.TS,
 ) {
 	for _, col := range schema.ColDefs {
-		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name), commitTs)
+		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name), visibleTS)
 	}
 	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid)
 	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)

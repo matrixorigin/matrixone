@@ -139,7 +139,7 @@ func (b *TxnLogtailRespBuilder) onTable(itbl any) {
 		if b.batches[tblDelBatch] == nil {
 			b.batches[tblDelBatch] = makeRespBatchFromSchema(DelSchema)
 		}
-		catalogEntry2Batch(b.batches[tblDelBatch], tbl, DelSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[tblDelBatch], tbl, DelSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS(), b.txn.GetStartTS())
 	}
 	if node.CreatedAt.Equal(txnif.UncommitTS) {
 		if b.batches[columnInsBatch] == nil {
@@ -155,7 +155,7 @@ func (b *TxnLogtailRespBuilder) onTable(itbl any) {
 		if b.batches[tblInsBatch] == nil {
 			b.batches[tblInsBatch] = makeRespBatchFromSchema(catalog.SystemTableSchema)
 		}
-		catalogEntry2Batch(b.batches[tblInsBatch], tbl, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[tblInsBatch], tbl, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS(), b.txn.GetStartTS())
 	}
 }
 func (b *TxnLogtailRespBuilder) onDatabase(idb any) {
@@ -165,13 +165,13 @@ func (b *TxnLogtailRespBuilder) onDatabase(idb any) {
 		if b.batches[dbDelBatch] == nil {
 			b.batches[dbDelBatch] = makeRespBatchFromSchema(DelSchema)
 		}
-		catalogEntry2Batch(b.batches[dbDelBatch], db, DelSchema, txnimpl.FillDBRow, u64ToRowID(db.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[dbDelBatch], db, DelSchema, txnimpl.FillDBRow, u64ToRowID(db.GetID()), b.txn.GetPrepareTS(), b.txn.GetStartTS())
 	}
 	if node.CreatedAt.Equal(txnif.UncommitTS) {
 		if b.batches[dbInsBatch] == nil {
 			b.batches[dbInsBatch] = makeRespBatchFromSchema(catalog.SystemDBSchema)
 		}
-		catalogEntry2Batch(b.batches[dbInsBatch], db, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(db.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[dbInsBatch], db, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(db.GetID()), b.txn.GetPrepareTS(), b.txn.GetStartTS())
 	}
 }
 
