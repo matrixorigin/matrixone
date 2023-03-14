@@ -16,9 +16,13 @@ package mometric
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"testing"
 	"time"
 )
@@ -79,8 +83,18 @@ func TestStatsLogWriter(t *testing.T) {
 	serviceLogExporter := NewMockServiceLogExporter(service)
 	stats.Register("MockServiceStats", stats.WithLogExporter(&serviceLogExporter))
 
-	// 2. Start LogWriter
-	c := newStatsLogWriter(&stats.DefaultRegistry, 2*time.Second)
+	//2.1 Setup a Runtime
+	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
+
+	//2.2 Create custom Hook logger
+	var writtenLogs []zapcore.Entry
+	custLogger := runtime.ProcessLevelRuntime().Logger().WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
+		writtenLogs = append(writtenLogs, entry)
+		return nil
+	}))
+
+	// 2.3 Start the LogWriter
+	c := newStatsLogWriter(&stats.DefaultRegistry, custLogger, 2*time.Second)
 	serviceCtx := context.Background()
 	assert.True(t, c.Start(serviceCtx))
 
@@ -96,7 +110,12 @@ func TestStatsLogWriter(t *testing.T) {
 	}
 	println("StatsLogWriter has stopped gracefully.")
 
-	// 6. Read from the console. Should print
+	//6. Validate the log printed.
+	for _, log := range writtenLogs {
+		assert.Contains(t, log.Message, "window values")
+	}
+
+	// 7. (Optional) Read from the console and validate the log.
 	// 2023/03/14 11:39:30.579403 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 2, "hits": 1}
 	// 2023/03/14 11:39:32.579816 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}
 	// 2023/03/14 11:39:34.583647 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}

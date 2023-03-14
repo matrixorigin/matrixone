@@ -16,7 +16,7 @@ package mometric
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"sync"
 	"sync/atomic"
@@ -30,12 +30,15 @@ type StatsLogWriter struct {
 
 	registry       *stats.Registry
 	gatherInterval time.Duration
+
+	logger *log.MOLogger
 }
 
-func newStatsLogWriter(registry *stats.Registry, gatherInterval time.Duration) *StatsLogWriter {
+func newStatsLogWriter(registry *stats.Registry, logger *log.MOLogger, gatherInterval time.Duration) *StatsLogWriter {
 	return &StatsLogWriter{
 		registry:       registry,
 		gatherInterval: gatherInterval,
+		logger:         logger,
 	}
 }
 
@@ -79,7 +82,7 @@ func (e *StatsLogWriter) Stop(_ bool) (<-chan struct{}, bool) {
 // 2023/03/14 11:39:34.583647 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}
 func (e *StatsLogWriter) gatherAndWrite() {
 	statsFamilies := e.registry.ExportLog()
-	for statsFName, stats := range statsFamilies {
-		logutil.Info(statsFName+" window values ", stats...)
+	for statsFName, statsFamily := range statsFamilies {
+		e.logger.Info(statsFName+" window values ", statsFamily...)
 	}
 }

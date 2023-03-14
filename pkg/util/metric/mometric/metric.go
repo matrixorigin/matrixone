@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"net/http"
@@ -82,7 +83,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		moCollector = newMetricCollector(ieFactory, WithFlushInterval(initOpts.exportInterval))
 	}
 	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
-	statsLogWriter = newStatsLogWriter(&stats.DefaultRegistry, metric.GetGatherInterval())
+	statsLogWriter = newStatsLogWriter(&stats.DefaultRegistry, runtime.ProcessLevelRuntime().Logger().Named("StatsLog"), metric.GetGatherInterval())
 
 	// register metrics and create tables
 	registerAllMetrics()
