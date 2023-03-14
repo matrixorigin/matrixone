@@ -66,6 +66,7 @@ var (
 	stmtTypeCol  = table.StringColumn("statement_type", "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]")
 	queryTypeCol = table.StringColumn("query_type", "query type, val in [DQL, DDL, DML, DCL, TCL]")
 	sqlTypeCol   = table.TextColumn("sql_source_type", "sql statement source type")
+	resultCntCol = table.Int64Column("result_count", "the number of rows of sql execution results")
 
 	SingleStatementTable = &table.Table{
 		Account:  table.AccountAll,
@@ -98,6 +99,7 @@ var (
 			queryTypeCol,
 			roleIdCol,
 			sqlTypeCol,
+			resultCntCol,
 		},
 		PrimaryKeyColumn: []table.Column{stmtIDCol},
 		Engine:           table.ExternalTableEngine,
