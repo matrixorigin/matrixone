@@ -17,37 +17,20 @@ package lockservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
-// Granularity row granularity, single row or row range
-type Granularity int
-
-const (
-	// Row single row
-	Row Granularity = iota
-	// Range row range mode
-	Range
-)
-
-// LockMode exclusive or shared lock
-type LockMode int
-
-const (
-	// Exclusive mode
-	Exclusive LockMode = iota
-	// Shared mode
-	Shared
-)
-
-// WaitPolicy waiting strategy if lock conflicts are encountered when locking.
-type WaitPolicy int
-
-const (
-	// Wait waiting for conflicting locks to be released
-	Wait WaitPolicy = iota
-	// FastFail return fail if lock conflicts are encountered
-	FastFail
+var (
+	// ErrDeadlockDetectorClosed deadlock detector is closed
+	ErrDeadlockDetectorClosed = moerr.NewInvalidStateNoCtx("deadlock detector is closed")
+	// ErrDeadLockDetected dead lock detected
+	ErrDeadLockDetected = moerr.NewDeadLockDetectedNoCtx()
+	// ErrLockTableBindChanged lock table and lock service bind changed
+	ErrLockTableBindChanged = moerr.NewLockTableBindChangedNoCtx()
+	// ErrLockTableNotFound lock table not found on remote lock service
+	ErrLockTableNotFound = moerr.NewLockTableNotFoundNoCtx()
 )
 
 // LockStorage the store that holds the locks, a storage instance is corresponding to
@@ -67,6 +50,10 @@ type LockStorage interface {
 	Delete(key []byte)
 	// Seek returns the first KV Pair that is >= the given key
 	Seek(key []byte) ([]byte, Lock, bool)
+	// Iter iter all values
+	Iter(func([]byte, Lock) bool)
+	// Clear clear the lock
+	Clear()
 }
 
 // LockService lock service is running at the CN node. The lockservice maintains a set
@@ -95,7 +82,7 @@ type LockService interface {
 	// returns if current operation was aborted by deadlock detection.
 	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) error
 	// Unlock release all locks associated with the transaction.
-	Unlock(txnID []byte) error
+	Unlock(ctx context.Context, txnID []byte) error
 	// Close close the lock service.
 	Close() error
 }
@@ -118,11 +105,14 @@ type lockTable interface {
 	// 2. ErrLockTableNotMatch, indicates that the LockTable binding relationship has changed.
 	// 3. Other known errors.
 	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions) error
-	// Unlock release a set of locks, it will keep retrying until the context times out when it encounters an
-	// error.
-	unlock(ctx context.Context, ls *cowSlice) error
-	// getLock get a lock, it will keep retrying until the context times out when it encounters an error.
-	getLock(ctx context.Context, key []byte) (Lock, bool)
+	// Unlock release a set of locks
+	unlock(txn *activeTxn, ls *cowSlice)
+	// getLock get a lock
+	getLock(txnID, key []byte, fn func(Lock))
+	// getBind returns lock table binding
+	getBind() pb.LockTable
+	// close close the locktable
+	close()
 }
 
 // LockTableAllocator is used to managing the binding relationship between
@@ -142,10 +132,10 @@ type LockTableAllocator interface {
 	// Get get the original LockTable data corresponding to a Table. If there is no
 	// corresponding binding, then the CN binding of the current request will be used.
 	Get(serviceID string, tableID uint64) pb.LockTable
-	// Keepalive once a cn is bound to a Table, a heartbeat needs to be sent periodically
-	// to keep the binding in place. If no heartbeat is sent for a long period of time
-	// to maintain the binding, the binding will become invalid.
-	Keepalive(serviceID string) bool
+	// KeepLockTableBind once a cn is bound to a Table, a heartbeat needs to be sent
+	// periodically to keep the binding in place. If no heartbeat is sent for a long
+	// period of time to maintain the binding, the binding will become invalid.
+	KeepLockTableBind(serviceID string) bool
 	// Valid check for changes in the binding relationship of a specific locktable.
 	Valid(binds []pb.LockTable) bool
 	// Close close the lock table allocator
@@ -155,30 +145,40 @@ type LockTableAllocator interface {
 // LockTableKeeper is used to keep a heartbeat with the LockTableAllocator to keep the
 // LockTable bind. And get the changed info of LockTable and LockService bind.
 type LockTableKeeper interface {
-	// Add add a new LockTable to keepalive.
-	Add(pb.LockTable)
-	// Changed lock table bind changed notify, if a lock table bind changed, all related
-	// transactions must be abort
-	Changed() chan pb.LockTable
 	// Close close the keeper
 	Close() error
 }
 
-// KeepaliveSender is used to send keepalive message to LockTableAllocator.
-type KeepaliveSender interface {
-	// Keep send locktables keepalive messages, if lockTable version changed, the return
-	// []pb.LockTable will include these.
-	Keep(context.Context, []pb.LockTable) ([]pb.LockTable, error)
-	// Close close the sender
+// Client is used to send lock table operations to other service.
+// 1. lock service <-> lock service
+// 2. lock service <-> lock table allocator
+type Client interface {
+	// Send send request to other lock service, and wait for a response synchronously.
+	Send(context.Context, *pb.Request) (*pb.Response, error)
+	// AsyncSend async send request to other lock service.
+	AsyncSend(context.Context, *pb.Request) (*morpc.Future, error)
+	// Close close the client
 	Close() error
 }
 
-// LockOptions options for lock
-type LockOptions struct {
-	granularity Granularity
-	mode        LockMode
-	policy      WaitPolicy
+// RequestHandleFunc request handle func
+type RequestHandleFunc func(context.Context, *pb.Request, *pb.Response) error
+
+// ServerOption server option
+type ServerOption func(*server)
+
+// Server receives and processes requests from Client.
+type Server interface {
+	// Start start the txn server
+	Start() error
+	// Close the txn server
+	Close() error
+	// RegisterMethodHandler register txn request handler func
+	RegisterMethodHandler(pb.Method, RequestHandleFunc)
 }
+
+// LockOptions options for lock
+type LockOptions = pb.LockOptions
 
 // Lock stores specific lock information. Since there are a large number of lock objects
 // in the LockStorage at runtime, this object has been specially designed to save memory
