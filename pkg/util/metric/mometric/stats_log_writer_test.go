@@ -88,13 +88,13 @@ func TestStatsLogWriter(t *testing.T) {
 
 	//2.2 Create custom Hook logger
 	var writtenLogs []zapcore.Entry
-	custLogger := runtime.ProcessLevelRuntime().Logger().WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
+	customLogger := runtime.ProcessLevelRuntime().Logger().WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
 		writtenLogs = append(writtenLogs, entry)
 		return nil
 	}))
 
 	// 2.3 Start the LogWriter
-	c := newStatsLogWriter(&stats.DefaultRegistry, custLogger, 2*time.Second)
+	c := newStatsLogWriter(&stats.DefaultRegistry, customLogger, 2*time.Second)
 	serviceCtx := context.Background()
 	assert.True(t, c.Start(serviceCtx))
 
@@ -111,6 +111,7 @@ func TestStatsLogWriter(t *testing.T) {
 	println("StatsLogWriter has stopped gracefully.")
 
 	//6. Validate the log printed.
+	assert.Equal(t, 3, len(writtenLogs))
 	for _, log := range writtenLogs {
 		assert.Contains(t, log.Message, "window values")
 	}
