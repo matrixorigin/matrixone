@@ -277,7 +277,8 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		//io
 		gDiskIO := NewStatisticValue(DiskIO, "byte")
 		gS3IOByte := NewStatisticValue(S3IOByte, "byte")
-		gS3IOCount := NewStatisticValue(S3IOCount, "count")
+		gS3IOInputCount := NewStatisticValue(S3IOInputCount, "count")
+		gS3IOOutputCount := NewStatisticValue(S3IOOutputCount, "count")
 
 		// network
 		gNetwork := NewStatisticValue(Network, "byte")
@@ -326,8 +327,11 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 				if ioValue.Name == S3IOByte {
 					gS3IOByte.Value += ioValue.Value
 				}
-				if ioValue.Name == S3IOCount {
-					gS3IOCount.Value += ioValue.Value
+				if ioValue.Name == S3IOInputCount {
+					gS3IOInputCount.Value += ioValue.Value
+				}
+				if ioValue.Name == S3IOOutputCount {
+					gS3IOOutputCount.Value += ioValue.Value
 				}
 			}
 
@@ -342,7 +346,7 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		times := []StatisticValue{*gtimeConsumed, *gwaitTime}
 		mbps := []StatisticValue{*ginputRows, *goutputRows, *ginputSize, *goutputSize}
 		mems := []StatisticValue{*gMemorySize}
-		io := []StatisticValue{*gDiskIO, *gS3IOByte, *gS3IOCount}
+		io := []StatisticValue{*gDiskIO, *gS3IOByte, *gS3IOInputCount, *gS3IOOutputCount}
 		nw := []StatisticValue{*gNetwork}
 
 		graphData.Global.Statistics.Time = append(graphData.Global.Statistics.Time, times...)

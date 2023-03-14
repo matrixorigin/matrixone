@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -169,11 +170,14 @@ type Compile struct {
 	// ast
 	stmt tree.Statement
 
+	s3Counter perfcounter.Counter
+
 	// when we construct the scope, compileTableScan will new a scope, the magic is
 	// remote, but now the tempEngine is just standlone. So for now use this to read
 	// table locally. But int the future, this will disappear.
 	isTemporaryScan bool
 }
+
 type RemoteReceivRegInfo struct {
 	Idx      int
 	Uuid     uuid.UUID

@@ -44,42 +44,6 @@ type IVFile interface {
 	GetFileType() FileType
 }
 
-type IRWFile interface {
-	io.Writer
-	IVFile
-}
-
-func MockRWFile() *rwFile {
-	return &rwFile{
-		stat: baseFileInfo{},
-		data: make([]byte, 0),
-	}
-}
-
-type rwFile struct {
-	stat baseFileInfo
-	data []byte
-}
-
-func (f *rwFile) Write(p []byte) (n int, err error) {
-	n = len(p)
-	f.data = append(f.data, p...)
-	f.stat.size += int64(n)
-	return
-}
-
-func (f *rwFile) Read(p []byte) (n int, err error) {
-	n = len(p)
-	copy(p, f.data[:n])
-	return
-}
-
-func (f *rwFile) Ref()                  {}
-func (f *rwFile) Unref()                {}
-func (f *rwFile) RefCount() int64       { return 0 }
-func (f *rwFile) Stat() FileInfo        { return &f.stat }
-func (f *rwFile) GetFileType() FileType { return DiskFile }
-
 type baseFileInfo struct {
 	size int64
 }
