@@ -47,7 +47,7 @@ Usage:
 	func (c *CounterLogExporter) Export() []zap.Field {
 		var fields []zap.Field
 
-		reads := c.counter.Cache.Read.LoadC() //NOTE: LoadC()
+		reads := c.counter.Cache.Read.Swap() //NOTE: Swap()
 		fields = append(fields, zap.Any("reads", reads))
 		return fields
 	}

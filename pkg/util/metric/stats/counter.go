@@ -32,9 +32,8 @@ func (c *Counter) Load() int64 {
 	return c.global.Load() + c.local.Load()
 }
 
-// LoadC returns current local counter value.
-// TODO: Right now, only user of LoadC is LogExporter. Hence, MergeAndReset is also embedded here. It can be seperated later if required.
-func (c *Counter) LoadC() int64 {
+// Swap returns current local counter value. It then merges the local counter value to the global one and resets the local counter.
+func (c *Counter) Swap() int64 {
 	val := c.local.Load()
 
 	{

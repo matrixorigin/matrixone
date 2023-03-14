@@ -43,9 +43,9 @@ func TestCounterLoadC(t *testing.T) {
 	assert.Equal(t, int64(2), c.Load())
 
 	c.Add(2)
-	assert.Equal(t, int64(4), c.LoadC())
+	assert.Equal(t, int64(4), c.Swap())
 
-	assert.Equal(t, int64(0), c.LoadC())
+	assert.Equal(t, int64(0), c.Swap())
 
 	c.Add(2)
 	assert.Equal(t, int64(6), c.Load())
