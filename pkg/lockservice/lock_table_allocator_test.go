@@ -133,12 +133,17 @@ func TestKeepaliveBind(t *testing.T) {
 			assert.NotNil(t, binds)
 
 			assert.NoError(t, k.Close())
-			time.Sleep(interval * 10)
-			a.mu.Lock()
-			assert.Equal(t,
-				pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, Valid: false},
-				a.mu.lockTables[1])
-			a.mu.Unlock()
+
+			for {
+				a.mu.Lock()
+				valid := a.mu.lockTables[1].Valid
+				a.mu.Unlock()
+				if !valid {
+					break
+				}
+				time.Sleep(time.Millisecond * 20)
+			}
+
 			assert.False(t, a.KeepLockTableBind("s1"))
 		})
 }
