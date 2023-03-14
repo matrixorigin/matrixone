@@ -206,6 +206,6 @@ func (s *StorageTxnOperator) GetOperationHandler(shard memoryengine.Shard) (memo
 	return storage.handler, s.meta
 }
 
-func (w *StorageTxnOperator) AddLockTable(lock.LockTable) error {
+func (s *StorageTxnOperator) AddLockTable(lock.LockTable) error {
 	panic("should not call")
 }
