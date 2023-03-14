@@ -24,7 +24,7 @@ type Registry map[string]*Family
 func (r *Registry) Register(familyName string, opts ...Options) {
 
 	if _, exists := (*r)[familyName]; exists {
-		panic("Duplicate Family Name")
+		panic("Duplicate Family Name " + familyName)
 	}
 
 	initOpts := defaultOptions()
