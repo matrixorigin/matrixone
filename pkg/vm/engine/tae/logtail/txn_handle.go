@@ -94,12 +94,19 @@ func (b *TxnLogtailRespBuilder) onMetadata(iblk any) {
 
 func (b *TxnLogtailRespBuilder) onAppend(ibat any) {
 	bat := ibat.(*containers.Batch)
-	mybat := bat.CloneWindow(0, bat.Length())
+	mybat := containers.NewBatch()
+	mybat.AddVector(catalog.AttrRowID, bat.GetVectorByName(catalog.AttrRowID).CloneWindow(0, bat.Length()))
 	commitVec := containers.MakeVector(types.T_TS.ToType(), false)
 	for i := 0; i < bat.Length(); i++ {
 		commitVec.Append(b.txn.GetPrepareTS())
 	}
 	mybat.AddVector(catalog.AttrCommitTs, commitVec)
+	for _, attr := range bat.Attrs {
+		if attr == catalog.AttrRowID || attr == catalog.AttrCommitTs {
+			continue
+		}
+		mybat.AddVector(attr, bat.GetVectorByName(attr).CloneWindow(0, bat.Length()))
+	}
 	if b.batches[dataInsBatch] == nil {
 		b.batches[dataInsBatch] = mybat
 	} else {
@@ -205,10 +212,10 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 }
 
 func (b *TxnLogtailRespBuilder) onRotateTable(dbName, tableName string, dbid, tid uint64) {
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
-	b.batches[blkMetaDelBatch] = nil
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaInsBatch, false)
 	b.batches[blkMetaInsBatch] = nil
+	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
+	b.batches[blkMetaDelBatch] = nil
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
 	b.batches[dataDelBatch] = nil
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
@@ -220,8 +227,8 @@ func (b *TxnLogtailRespBuilder) onRotateTable(dbName, tableName string, dbid, ti
 }
 
 func (b *TxnLogtailRespBuilder) BuildResp() {
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaInsBatch, false)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
 
