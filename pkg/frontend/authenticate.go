@@ -1190,6 +1190,9 @@ const (
 
 	getDbIdAndTypFormat    = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
 	insertIntoMoPubsFormat = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
+	getPubInfoFormat       = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
+	getAllAccountSql       = `select account_name from mo_catalog.mo_account order by account_name;`
+	updatePubInfoFormat    = `update mo_catalog.mo_pubs set all_account = %t,account_list = '%s',comment = '%s' where pub_name = '%s';`
 )
 
 var (
@@ -1505,6 +1508,20 @@ func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string
 		return "", err
 	}
 	return fmt.Sprintf(insertIntoMoPubsFormat, pubName, databaseName, databaseId, allTable, allAccount, tableList, accountList, owner, creator, comment), nil
+}
+func getSqlForGetPubInfo(ctx context.Context, pubName string) (string, error) {
+	err := inputNameIsInvalid(ctx, pubName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getPubInfoFormat, pubName), nil
+}
+func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountAll bool, accountList string, comment string) (string, error) {
+	err := inputNameIsInvalid(ctx, pubName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updatePubInfoFormat, accountAll, accountList, comment, pubName), nil
 }
 
 func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) {
@@ -2463,12 +2480,12 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	defer bh.Close()
 	const allTable = true
 	var (
-		err          error
-		sql          string
-		erArray      []ExecResult
-		datId        uint64
-		datType    string
-		allAccount   bool
+		err         error
+		sql         string
+		erArray     []ExecResult
+		datId       uint64
+		datType     string
+		allAccount  bool
 		tableList   string
 		accountList string
 		tenantInfo  *TenantInfo
@@ -2488,7 +2505,10 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		accountList = strings.Join(accts, ",")
 	}
 
-	bh.Exec(ctx, "begin;")
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
 	bh.ClearExecResultSet()
 
 	sql, err = getSqlForGetDbIdAndType(ctx, string(cp.Database))
@@ -2547,12 +2567,172 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
-		allAccount  bool
-		accountList string
-		comment      string
-		trigger_account bool
+		allAccount     bool
+		allAccountStr  string
+		accountList    string
+		accountListSep []string
+		comment        string
+		sql            string
+		erArray        []ExecResult
+		err            error
 	)
-	if ap.
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+	bh.ClearExecResultSet()
+	sql, err = getSqlForGetPubInfo(ctx, string(ap.Name))
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(ctx, "publication '%s' does not exist", ap.Name)
+		goto handleFailed
+	}
+	allAccountStr, err = erArray[0].GetString(ctx, 0, 0)
+	if err != nil {
+		goto handleFailed
+	}
+	allAccount = allAccountStr == "true"
+	accountList, err = erArray[0].GetString(ctx, 0, 1)
+	if err != nil {
+		goto handleFailed
+	}
+
+	comment, err = erArray[0].GetString(ctx, 0, 2)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if ap.AccountsSet != nil {
+		switch {
+		case ap.AccountsSet.All:
+			allAccount = true
+			accountList = ""
+		case len(ap.AccountsSet.SetAccounts) > 0:
+			accountListSep, err = getAllAccountName(ctx, ses, bh)
+			if err != nil {
+				goto handleFailed
+			}
+			accts := make([]string, 0, len(ap.AccountsSet.SetAccounts))
+			for _, acct := range ap.AccountsSet.SetAccounts {
+				s := string(acct)
+				if accountNameIsInvalid(s) {
+					err = moerr.NewInternalError(ctx, "invalid account name '%s'", s)
+					goto handleFailed
+				}
+				idx := sort.SearchStrings(accountListSep, s)
+				if idx >= len(accountListSep) || accountListSep[idx] != s {
+					err = moerr.NewInternalError(ctx, "account '%s' does not exist", s)
+					goto handleFailed
+				}
+				accts = append(accts, s)
+			}
+			sort.Strings(accts)
+			accountList = strings.Join(accts, ",")
+			allAccount = false
+		case len(ap.AccountsSet.DropAccounts) > 0:
+			if allAccount {
+				accountListSep, err = getAllAccountName(ctx, ses, bh)
+				if err != nil {
+					goto handleFailed
+				}
+			} else {
+				accountListSep = strings.Split(accountList, ",")
+			}
+			for _, acct := range ap.AccountsSet.DropAccounts {
+				if accountNameIsInvalid(string(acct)) {
+					err = moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
+					goto handleFailed
+				}
+				idx := sort.SearchStrings(accountListSep, string(acct))
+				if idx < len(accountListSep) && accountListSep[idx] == string(acct) {
+					accountListSep = append(accountListSep[:idx], accountListSep[idx+1:]...)
+				}
+			}
+			accountList = strings.Join(accountListSep, ",")
+			allAccount = false
+		case len(ap.AccountsSet.AddAccounts) > 0:
+			if allAccount {
+				err = moerr.NewInternalError(ctx, "cannot add accounts to a publication with ALL")
+				goto handleFailed
+			}
+			accountListSep := strings.Split(accountList, ",")
+			for _, acct := range ap.AccountsSet.AddAccounts {
+				if accountNameIsInvalid(string(acct)) {
+					err = moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
+					goto handleFailed
+				}
+				idx := sort.SearchStrings(accountListSep, string(acct))
+				if idx == len(accountListSep) || accountListSep[idx] != string(acct) {
+					accountListSep = append(accountListSep[:idx], append([]string{string(acct)}, accountListSep[idx:]...)...)
+				}
+			}
+			allAccount = false
+			accountList = strings.Join(accountListSep, ",")
+		}
+	}
+	if ap.Comment != "" {
+		comment = ap.Comment
+	}
+	sql, err = getSqlForUpdatePubInfo(ctx, string(ap.Name), allAccount, accountList, comment)
+	if err != nil {
+		goto handleFailed
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+func getAllAccountName(ctx context.Context, ses *Session, bh BackgroundExec) (ret []string, err error) {
+	if !ses.GetTenantInfo().IsSysTenant() {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, getAllAccountSql)
+	if err != nil {
+		return
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	if !execResultArrayHasData(erArray) {
+		return nil, moerr.NewInternalError(ctx, "no account found")
+	}
+	ret = make([]string, 0, erArray[0].GetRowCount())
+	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+		name, err := erArray[0].GetString(ctx, uint64(i), 0)
+		if err != nil {
+			return nil, err
+		}
+		ret = append(ret, name)
+	}
+	return
+
 }
 
 // doDropAccount accomplishes the DropAccount statement

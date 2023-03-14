@@ -269,6 +269,15 @@ func (de *UpdateExecutor) Setup(ctx context.Context, ses *Session) error {
 	return nil
 }
 
+type AlterPublicationExecutor struct {
+	*statusStmtExecutor
+	ap *tree.AlterPublication
+}
+
+func (ape *AlterPublicationExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return doAlterPublication(ctx, ses, ape.ap)
+}
+
 type CreatePublicationExecutor struct {
 	*statusStmtExecutor
 	cp *tree.CreatePublication

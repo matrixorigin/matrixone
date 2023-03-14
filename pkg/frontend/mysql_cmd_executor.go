@@ -2451,6 +2451,14 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			cp: st,
 		})
+	case *tree.AlterPublication:
+		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
+		ret = (&AlterPublicationExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			ap: st,
+		})
 	case *tree.CreateAccount:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
 		ret = (&CreateAccountExecutor{
@@ -3652,7 +3660,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CreateTable, *tree.DropTable,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.Load, *tree.MoDump,
-			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication,
+			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication,
 			*tree.CreateFunction, *tree.DropFunction,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
@@ -4156,7 +4164,7 @@ func IsAdministrativeStatement(stmt tree.Statement) bool {
 		*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 		*tree.CreateRole, *tree.DropRole,
 		*tree.Revoke, *tree.Grant,
-		*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.CreatePublication:
+		*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.CreatePublication, *tree.AlterPublication:
 		return true
 	case *tree.Use:
 		return st.IsUseRole()
