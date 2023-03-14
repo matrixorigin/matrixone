@@ -2461,21 +2461,21 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePublication) error {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
+	const allTable = true
 	var (
 		err          error
 		sql          string
 		erArray      []ExecResult
 		datId        uint64
-		datType      string
-		all_table    bool = true
-		all_account  bool
-		table_list   string
-		account_list string
-		tenantInfo   *TenantInfo
+		datType    string
+		allAccount   bool
+		tableList   string
+		accountList string
+		tenantInfo  *TenantInfo
 	)
 
-	all_account = len(cp.Accounts) == 0
-	if !all_account {
+	allAccount = len(cp.Accounts) == 0
+	if !allAccount {
 		accts := make([]string, 0, len(cp.Accounts))
 		for _, acct := range cp.Accounts {
 			accName := string(acct)
@@ -2485,7 +2485,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 			accts = append(accts, accName)
 		}
 		sort.Strings(accts)
-		account_list = strings.Join(accts, ",")
+		accountList = strings.Join(accts, ",")
 	}
 
 	bh.Exec(ctx, "begin;")
@@ -2517,10 +2517,11 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	}
 	if datType != "" { //TODO: check the dat_type
 		err = moerr.NewInternalError(ctx, "database '%s' is not a user database", cp.Database)
+		goto handleFailed
 	}
 	bh.ClearExecResultSet()
 	tenantInfo = ses.GetTenantInfo()
-	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), string(cp.Database), datId, all_table, all_account, table_list, account_list, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment)
+	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), string(cp.Database), datId, allTable, allAccount, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment)
 	if err != nil {
 		goto handleFailed
 	}
@@ -2540,6 +2541,18 @@ handleFailed:
 		return rbErr
 	}
 	return err
+}
+
+func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublication) error {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	var (
+		allAccount  bool
+		accountList string
+		comment      string
+		trigger_account bool
+	)
+	if ap.
 }
 
 // doDropAccount accomplishes the DropAccount statement
@@ -3990,7 +4003,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
-	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase:
+	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase, *tree.ShowCreatePublications:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.CreateTable:
@@ -4076,7 +4089,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
-		*tree.ShowLocks, *tree.ShowFunctionStatus:
+		*tree.ShowLocks, *tree.ShowFunctionStatus, *tree.ShowPublications:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.ShowAccounts:
@@ -4128,7 +4141,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.LockTableStmt, *tree.UnLockTableStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.CreatePublication:
+	case *tree.CreatePublication, *tree.DropPublication, *tree.AlterPublication:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone

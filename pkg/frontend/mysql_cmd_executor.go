@@ -1532,6 +1532,10 @@ func (mce *MysqlCmdExecutor) handleCreatePublication(ctx context.Context, cp *tr
 	return doCreatePublication(ctx, mce.GetSession(), cp)
 }
 
+func (mce *MysqlCmdExecutor) handleAlterPublication(ctx context.Context, ap *tree.AlterPublication) error {
+	return doAlterPublication(ctx, mce.GetSession(), ap)
+}
+
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
 func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
@@ -3222,6 +3226,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CreatePublication:
 			selfHandle = true
 			if err = mce.handleCreatePublication(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.AlterPublication:
+			selfHandle = true
+			if err = mce.handleAlterPublication(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.CreateAccount:
