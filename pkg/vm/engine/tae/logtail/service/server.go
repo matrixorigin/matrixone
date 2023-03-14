@@ -207,6 +207,7 @@ func NewLogtailServer(
 
 	// receive logtail on event
 	s.event = NewNotifier(s.rootCtx, eventBufferSize)
+	logtail.RegisterCallback(s.event.NotifyLogtail)
 
 	return s, nil
 }

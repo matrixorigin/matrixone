@@ -37,8 +37,6 @@ const (
 	LogtailHeartbeatDuration = time.Millisecond * 2
 )
 
-type Callback func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail)
-
 func MockCallback(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) {
 	if len(tails) == 0 {
 		return
@@ -107,7 +105,7 @@ func (mgr *Manager) OnCommittedTS(ts types.TS) {
 func (mgr *Manager) generateHeartbeat() {
 	icallback := mgr.logtailCallback.Load()
 	if icallback != nil {
-		callback := icallback.(Callback)
+		callback := icallback.(func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error)
 		from := mgr.previousSaveTS
 		to := mgr.getSaveTS()
 		callback(from.ToTimestamp(), to.ToTimestamp())
@@ -178,7 +176,7 @@ func (mgr *Manager) generateLogtails() {
 func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 	icallback := mgr.logtailCallback.Load()
 	if icallback != nil {
-		callback := icallback.(Callback)
+		callback := icallback.(func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error)
 		to := (*txn.tails)[0].Ts
 		from := mgr.previousSaveTS
 		mgr.previousSaveTS = types.TimestampToTS(*to)
@@ -251,7 +249,7 @@ func (mgr *Manager) GetTableOperator(
 	)
 }
 
-func (mgr *Manager) RegisterCallback(cb Callback) error {
+func (mgr *Manager) RegisterCallback(cb func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error) error {
 	mgr.logtailCallback.Store(cb)
 	return nil
 }
