@@ -38,11 +38,12 @@ func (r *Registry) Register(familyName string, opts ...Options) {
 }
 
 // ExportLog returns the snapshot of all the Family in the registry
-func (r *Registry) ExportLog() (families map[string][]zap.Field) {
+func (r *Registry) ExportLog() map[string][]zap.Field {
+	families := make(map[string][]zap.Field)
 	for familyName, family := range *r {
 		families[familyName] = (*family.logExporter).Export()
 	}
-	return
+	return families
 }
 
 // WithLogExporter registers Family with the LogExporter
