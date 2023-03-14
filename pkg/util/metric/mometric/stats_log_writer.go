@@ -72,10 +72,14 @@ func (e *StatsLogWriter) Stop(_ bool) (<-chan struct{}, bool) {
 	return stopCh, true
 }
 
+// gatherAndWriter gathers all the logs from Stats and Writes to Log
+// Example log output:
+// 2023/03/14 11:39:30.579403 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 2, "hits": 1}
+// 2023/03/14 11:39:32.579816 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}
+// 2023/03/14 11:39:34.583647 -0500 INFO mometric/stats_log_writer.go:83 MockServiceStats window values  {"reads": 0, "hits": 0}
 func (e *StatsLogWriter) gatherAndWrite() {
 	statsFamilies := e.registry.ExportLog()
 	for statsFName, stats := range statsFamilies {
-		// TODO: Eg output:- CachingFileService stats for 12:30:40 ...
-		logutil.Info(statsFName+" stats for "+time.Now().String(), stats...)
+		logutil.Info(statsFName+" window values ", stats...)
 	}
 }
