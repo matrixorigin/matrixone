@@ -66,7 +66,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
-		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
+		var newStmt *tree.ShowCreateView
+		if stmt.Name.NumParts == 1 {
+			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
+		} else if stmt.Name.NumParts == 2 {
+			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(2, [3]string{tblName, dbName, ""}))
+		}
+
 		return buildShowCreateView(newStmt, ctx)
 	}
 
