@@ -61,8 +61,8 @@ func (c *MockServiceLogExporter) Export() []zap.Field {
 
 	stats := c.service.Stats()
 
-	reads := stats.reads.Swap()
-	hits := stats.hits.Swap()
+	reads := stats.reads.SwapW(0)
+	hits := stats.hits.SwapW(0)
 
 	fields = append(fields, zap.Any("reads", reads))
 	fields = append(fields, zap.Any("hits", hits))
@@ -78,10 +78,10 @@ func TestRegister(t *testing.T) {
 	serviceLogExporter := NewMockServiceLogExporter(service)
 
 	// 3. Register LogExporter to the default stats registry
-	Register("MockServiceStats", WithLogExporter(&serviceLogExporter))
+	Register("MockServiceStats1", WithLogExporter(&serviceLogExporter))
 
 	assert.Equal(t, 1, len(DefaultRegistry))
-	assert.Equal(t, &serviceLogExporter, DefaultRegistry["MockServiceStats"].logExporter)
+	assert.Equal(t, &serviceLogExporter, DefaultRegistry["MockServiceStats1"].logExporter)
 }
 
 func TestExportLog(t *testing.T) {
@@ -92,7 +92,7 @@ func TestExportLog(t *testing.T) {
 	serviceLogExporter := NewMockServiceLogExporter(service)
 
 	// 3. Register LogExporter to the default stats registry
-	Register("MockServiceStats", WithLogExporter(&serviceLogExporter))
+	Register("MockServiceStats2", WithLogExporter(&serviceLogExporter))
 
 	// 4. Let the service perform some operations
 	service.Do()
@@ -102,7 +102,7 @@ func TestExportLog(t *testing.T) {
 	//5. Call ExportLog for exporting the snapshots of registered stats.
 	result := DefaultRegistry.ExportLog()
 
-	assert.Equal(t, 2, len(result["MockServiceStats"]))
-	assert.Equal(t, zap.Any("reads", 6), result["MockServiceStats"][0])
-	assert.Equal(t, zap.Any("hits", 3), result["MockServiceStats"][1])
+	assert.Equal(t, 2, len(result["MockServiceStats2"]))
+	assert.Equal(t, zap.Any("reads", 6), result["MockServiceStats2"][0])
+	assert.Equal(t, zap.Any("hits", 3), result["MockServiceStats2"][1])
 }

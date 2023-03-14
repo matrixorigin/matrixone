@@ -16,31 +16,24 @@ package stats
 
 import "sync/atomic"
 
-// Counter represents a combination of global & local counter.
+// Counter represents a combination of global & current_window counter.
 type Counter struct {
-	local  atomic.Int64
+	window atomic.Int64
 	global atomic.Int64
 }
 
-// Add adds to local counter
+// Add adds to global and window counter
 func (c *Counter) Add(delta int64) (new int64) {
-	return c.local.Add(delta)
+	c.window.Add(delta)
+	return c.global.Add(delta)
 }
 
-// Load return the sum of local and global
+// Load return the global counter value
 func (c *Counter) Load() int64 {
-	return c.global.Load() + c.local.Load()
+	return c.global.Load()
 }
 
-// Swap returns current local counter value. It then merges the local counter value to the global one and resets the local counter.
-func (c *Counter) Swap() int64 {
-	val := c.local.Load()
-
-	{
-		// Merge and Reset
-		c.global.Add(val)
-		c.local.Store(0)
-	}
-
-	return val
+// SwapW swaps current window counter with new
+func (c *Counter) SwapW(new int64) int64 {
+	return c.window.Swap(new)
 }

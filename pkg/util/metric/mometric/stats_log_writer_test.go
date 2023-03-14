@@ -68,8 +68,8 @@ func (c *MockServiceLogExporter) Export() []zap.Field {
 
 	stats := c.service.Stats()
 
-	reads := stats.reads.Swap()
-	hits := stats.hits.Swap()
+	reads := stats.reads.SwapW(0)
+	hits := stats.hits.SwapW(0)
 
 	fields = append(fields, zap.Any("reads", reads))
 	fields = append(fields, zap.Any("hits", hits))
