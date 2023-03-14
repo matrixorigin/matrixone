@@ -43,6 +43,9 @@ type Logtailer interface {
 		ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
 	) (logtail.TableLogtail, error)
 
+	// Now is a time getter from TxnManager. Users of Logtailer should get a timestamp
+	// from Now and use the timestamp to collect logtail, in that case, all txn prepared
+	// before it are visible.
 	Now() (timestamp.Timestamp, timestamp.Timestamp)
 }
 
@@ -65,13 +68,17 @@ func NewLogtailer(
 	}
 }
 
+// Now is a time getter from TxnManager. Users of Logtailer should get a timestamp
+// from Now and use the timestamp to collect logtail, in that case, all txn prepared
+// before it are visible.
 func (l *LogtailerImpl) Now() (timestamp.Timestamp, timestamp.Timestamp) {
-	ts := l.mgr.now()
+	ts := l.mgr.now() // now in logtail manager is the same with the one in TxnManager
 
 	return ts.ToTimestamp(), timestamp.Timestamp{}
 }
 
 // TableLogtail returns logtail for the specified table.
+// It boils down to calling `HandleSyncLogTailReq`
 func (l *LogtailerImpl) TableLogtail(
 	ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
 ) (logtail.TableLogtail, error) {
@@ -92,7 +99,8 @@ func (l *LogtailerImpl) TableLogtail(
 	return ret, nil
 }
 
-// RangeLogtail returns logtail for all tables within the range (from, to].
+// RangeLogtail returns logtail for all tables that are modified within the range (from, to].
+// Check out all dirty tables in the time window and collect logtails for every table
 func (l *LogtailerImpl) RangeLogtail(
 	ctx context.Context, from, to timestamp.Timestamp,
 ) ([]logtail.TableLogtail, error) {
@@ -134,7 +142,6 @@ func (l *LogtailerImpl) RangeLogtail(
 		did, tid := table.DbID, table.ID
 		resp, err := l.getTableRespBuilder(did, tid, reader, ckpLoc).build()
 		if err != nil {
-			// fixme: log err and continue?
 			return resps, err
 		}
 		resps = append(resps, resp)

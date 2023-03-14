@@ -21,33 +21,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
-
-// WithSenderPayloadBufferSize set buffer size for copy payload data to socket.
-func WithSenderPayloadBufferSize(value int) SenderOption {
-	return func(s *sender) {
-		s.options.payloadCopyBufferSize = value
-	}
-}
-
-// WithSenderBackendOptions set options for create backend connections
-func WithSenderBackendOptions(options ...morpc.BackendOption) SenderOption {
-	return func(s *sender) {
-		s.options.backendCreateOptions = append(s.options.backendCreateOptions, options...)
-	}
-}
-
-// WithSenderClientOptions set options for create client
-func WithSenderClientOptions(options ...morpc.ClientOption) SenderOption {
-	return func(s *sender) {
-		s.options.clientOptions = options
-	}
-}
 
 // WithSenderLocalDispatch set options for dispatch request to local to avoid rpc call
 func WithSenderLocalDispatch(localDispatch LocalDispatch) SenderOption {
@@ -56,31 +34,13 @@ func WithSenderLocalDispatch(localDispatch LocalDispatch) SenderOption {
 	}
 }
 
-// WithSenderMaxMessageSize set max rpc message size
-func WithSenderMaxMessageSize(maxMessageSize int) SenderOption {
-	return func(s *sender) {
-		s.options.maxMessageSize = maxMessageSize
-	}
-}
-
-// WithSenderEnableCompress enable compress
-func WithSenderEnableCompress(enable bool) SenderOption {
-	return func(s *sender) {
-		s.options.enableCompress = enable
-	}
-}
-
 type sender struct {
+	cfg    *Config
 	rt     moruntime.Runtime
 	client morpc.RPCClient
 
 	options struct {
-		localDispatch         LocalDispatch
-		payloadCopyBufferSize int
-		maxMessageSize        int
-		enableCompress        bool
-		backendCreateOptions  []morpc.BackendOption
-		clientOptions         []morpc.ClientOption
+		localDispatch LocalDispatch
 	}
 
 	pool struct {
@@ -90,23 +50,12 @@ type sender struct {
 	}
 }
 
-// NewSenderWithConfig create a txn sender by config and options
-func NewSenderWithConfig(cfg Config,
-	rt moruntime.Runtime,
-	options ...SenderOption) (TxnSender, error) {
-	cfg.adjust()
-	options = append(options, WithSenderBackendOptions(cfg.getBackendOptions(rt.Logger().RawLogger())...))
-	options = append(options, WithSenderClientOptions(cfg.getClientOptions(rt.Logger().RawLogger())...))
-	options = append(options, WithSenderMaxMessageSize(int(cfg.MaxMessageSize)))
-	options = append(options, WithSenderEnableCompress(cfg.EnableCompress))
-	return NewSender(rt, options...)
-}
-
 // NewSender create a txn sender
 func NewSender(
+	cfg Config,
 	rt moruntime.Runtime,
 	options ...SenderOption) (TxnSender, error) {
-	s := &sender{rt: rt}
+	s := &sender{rt: rt, cfg: &cfg}
 	for _, opt := range options {
 		opt(s)
 	}
@@ -132,25 +81,9 @@ func NewSender(
 		},
 	}
 
-	var codecOpts []morpc.CodecOption
-	codecOpts = append(codecOpts,
-		morpc.WithCodecIntegrationHLC(s.rt.Clock()),
-		morpc.WithCodecPayloadCopyBufferSize(s.options.payloadCopyBufferSize),
-		morpc.WithCodecEnableChecksum(),
-		morpc.WithCodecMaxBodySize(s.options.maxMessageSize))
-	if s.options.enableCompress {
-		mp, err := mpool.NewMPool("txn_rpc_sender", 0, mpool.NoFixed)
-		if err != nil {
-			return nil, err
-		}
-		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(mp))
-	}
-
-	codec := morpc.NewMessageCodec(
-		func() morpc.Message { return s.acquireResponse() },
-		codecOpts...)
-	bf := morpc.NewGoettyBasedBackendFactory(codec, s.options.backendCreateOptions...)
-	client, err := morpc.NewClient(bf, s.options.clientOptions...)
+	client, err := s.cfg.NewClient("txn-rpc-sender",
+		s.rt.Logger().RawLogger(),
+		func() morpc.Message { return s.acquireResponse() })
 	if err != nil {
 		return nil, err
 	}
@@ -159,13 +92,8 @@ func NewSender(
 }
 
 func (s *sender) adjust() {
-	if s.options.payloadCopyBufferSize == 0 {
-		s.options.payloadCopyBufferSize = 16 * 1024
-	}
-	s.options.backendCreateOptions = append(s.options.backendCreateOptions,
-		morpc.WithBackendLogger(s.rt.Logger().RawLogger()))
-
-	s.options.clientOptions = append(s.options.clientOptions, morpc.WithClientLogger(s.rt.Logger().RawLogger()))
+	s.cfg.Adjust()
+	s.cfg.CodecOptions = append(s.cfg.CodecOptions, morpc.WithCodecIntegrationHLC(s.rt.Clock()))
 }
 
 func (s *sender) Close() error {

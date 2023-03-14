@@ -36,12 +36,13 @@ enum NodeState {
 }
 
 message CNStore {
-  string          UUID           = 1;
-  string          ServiceAddress = 2;
-  string          SQLAddress     = 3;
-  metadata.CNRole Role           = 4;
-  uint64          Tick           = 5;
-  NodeState       State          = 6;
+  string          UUID               = 1;
+  string          ServiceAddress     = 2;
+  string          SQLAddress         = 3;
+  string          LockServiceAddress = 4;
+  metadata.CNRole Role               = 5;
+  uint64          Tick               = 6;
+  NodeState       State              = 7;
 }
 
 message DNStore {
@@ -54,6 +55,8 @@ message DNStore {
 
   // Server address for logtail push model
   string LogtailServerAddress = 6;
+  // LockServiceAddress lock service address for lock table allocator
+  string LockServiceAddress = 7;
 }
 
 message LogStore {
@@ -93,11 +96,12 @@ message LogReplicaInfo {
 
 // CNStoreHeartbeat is the periodic message sent tp the HAKeeper by CN stores.
 message CNStoreHeartbeat {
-  string          UUID           = 1;
-  string          ServiceAddress = 2;
-  string          SQLAddress     = 3;
-  metadata.CNRole Role           = 4;
-  bool            TaskServiceCreated    = 5;
+  string          UUID               = 1;
+  string          ServiceAddress     = 2;
+  string          SQLAddress         = 3;
+  string          LockServiceAddress = 4;
+  metadata.CNRole Role               = 5;
+  bool            TaskServiceCreated = 6;
 }
 
 
@@ -149,6 +153,8 @@ message DNStoreHeartbeat {
 
   // Server address for logtail push model
   string LogtailServerAddress = 5;
+  // LockServiceAddress lock service address for lock table allocator
+  string LockServiceAddress = 6;
 };
 
 message RSMState {
@@ -388,12 +394,12 @@ message CommandBatch {
 
 // CNStoreInfo contains information on a CN store.
 message CNStoreInfo {
-  uint64          Tick           = 1;
-  string          ServiceAddress = 2;
-  string          SQLAddress     = 3;
-  metadata.CNRole Role           = 4;
-
-  bool TaskServiceCreated = 5;
+  uint64          Tick               = 1;
+  string          ServiceAddress     = 2;
+  string          SQLAddress         = 3;
+  string          LockServiceAddress = 4;
+  metadata.CNRole Role               = 5;
+  bool            TaskServiceCreated = 6;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -413,6 +419,8 @@ message DNStoreInfo {
 
   // Server address for logtail push model
   string LogtailServerAddress = 5;
+  // LockServiceAddress lock service address for lock table allocator
+  string LockServiceAddress = 6;
 }
 
 // DNState contains all DN details known to the HAKeeper.

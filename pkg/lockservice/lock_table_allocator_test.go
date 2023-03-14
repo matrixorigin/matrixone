@@ -16,15 +16,20 @@ package lockservice
 
 import (
 	"fmt"
+	"os"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"golang.org/x/exp/rand"
 )
@@ -109,34 +114,32 @@ func TestKeepaliveBind(t *testing.T) {
 	interval := time.Millisecond * 100
 	runLockTableAllocatorTest(
 		t,
-		time.Millisecond*100,
+		interval,
 		func(a *lockTableAllocator) {
-			c := make(chan pb.LockTable)
-			defer close(c)
-			go func() {
-				for l := range c {
-					assert.True(t, a.Keepalive(l.ServiceID))
-				}
+			c, err := NewClient(morpc.Config{})
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, err)
 			}()
-			s := newChannelBasedSender(c, nil)
-			k := NewLockTableKeeper(s, interval/5)
-			k.Add(a.Get("s1", 1))
 
-			time.Sleep(interval * 2)
+			a.Get("s1", 1)
+			k := NewLockTableKeeper("s1", c, interval/5, interval/5, &sync.Map{})
+
 			binds := a.getServiceBinds("s1")
 			assert.NotNil(t, binds)
 
-			// close keep alive
-			assert.NoError(t, k.Close())
+			time.Sleep(interval * 2)
+			binds = a.getServiceBinds("s1")
+			assert.NotNil(t, binds)
 
+			assert.NoError(t, k.Close())
 			time.Sleep(interval * 10)
 			a.mu.Lock()
 			assert.Equal(t,
 				pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, Valid: false},
 				a.mu.lockTables[1])
 			a.mu.Unlock()
-
-			assert.False(t, a.Keepalive("s1"))
+			assert.False(t, a.KeepLockTableBind("s1"))
 		})
 }
 
@@ -190,7 +193,7 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 			runtime.WithClock(clock.NewHLCClock(func() int64 {
 				return time.Now().UTC().UnixNano()
 			}, 0))))
-		a := NewLockTableAllocator(time.Hour)
+		a := NewLockTableAllocator(testSockets, time.Hour, morpc.Config{})
 		defer func() {
 			assert.NoError(b, a.Close())
 		}()
@@ -217,8 +220,27 @@ func runLockTableAllocatorTest(
 	t *testing.T,
 	timeout time.Duration,
 	fn func(*lockTableAllocator)) {
+	require.NoError(t, os.RemoveAll(testSockets[7:]))
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	a := NewLockTableAllocator(timeout)
+	cluster := clusterservice.NewMOCluster(
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(
+			[]metadata.CNService{
+				{
+					ServiceID:          "s1",
+					LockServiceAddress: testSockets,
+				},
+			},
+			[]metadata.DNService{
+				{
+					LockServiceAddress: testSockets,
+				},
+			}))
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+
+	a := NewLockTableAllocator(testSockets, timeout, morpc.Config{})
 	defer func() {
 		assert.NoError(t, a.Close())
 	}()

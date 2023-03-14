@@ -101,7 +101,7 @@ var dummyFSWriterFactory = func(ctx context.Context, account string, tbl *table.
 
 func Test_newBuffer2Sql_base(t *testing.T) {
 
-	buf := newItemBuffer()
+	buf := NewItemBuffer()
 	byteBuf := new(bytes.Buffer)
 	assert.Equal(t, true, buf.IsEmpty())
 	buf.Add(&MOSpan{})

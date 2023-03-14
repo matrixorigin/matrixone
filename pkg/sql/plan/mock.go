@@ -382,7 +382,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		pks: []int{0}, // primary key "empno"
 		fks: []*plan.ForeignKeyDef{
 			{
-				Name:        "",                          // string
+				Name:        "fk1",                       // string
 				Cols:        []uint64{7},                 // []uint64
 				ForeignTbl:  272450,                      // uint64
 				ForeignCols: []uint64{1},                 // []uint64
