@@ -378,6 +378,7 @@ func (rb *remoteBackend) inactive() {
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.logger.Info("write loop started")
 	defer func() {
+		rb.closeConn(false)
 		rb.readStopper.Stop()
 		rb.closeConn(true)
 		rb.logger.Info("write loop stopped")
@@ -601,7 +602,6 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 }
 
 func (rb *remoteBackend) stopWriteLoop() {
-	rb.closeConn(false)
 	close(rb.stopWriteC)
 }
 
