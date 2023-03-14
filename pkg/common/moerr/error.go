@@ -135,6 +135,8 @@ const (
 	ErrStreamClosed uint16 = 20503
 	// ErrNoAvailableBackend no available backend
 	ErrNoAvailableBackend uint16 = 20504
+	// ErrBackendCannotConnect can not connect to remote backend
+	ErrBackendCannotConnect uint16 = 20505
 
 	// Group 6: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
@@ -176,6 +178,10 @@ const (
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
 	ErrDeadLockDetected uint16 = 20701
+	// ErrLockTableBindChanged lockservice and lock table bind changed
+	ErrLockTableBindChanged uint16 = 20702
+	// ErrLockTableNotFound lock table not found on remote lock service instance
+	ErrLockTableNotFound uint16 = 20703
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -272,11 +278,12 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrQueryIdNotFound:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s is not found, or invalid tenant"},
 	ErrNoConfig:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
 	// Group 5: rpc timeout
-	ErrRPCTimeout:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
-	ErrClientClosed:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
-	ErrBackendClosed:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "backend closed"},
-	ErrStreamClosed:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "stream closed"},
-	ErrNoAvailableBackend: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
+	ErrRPCTimeout:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
+	ErrClientClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
+	ErrBackendClosed:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "backend closed"},
+	ErrStreamClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "stream closed"},
+	ErrNoAvailableBackend:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
+	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not connect to remote backend"},
 
 	// Group 6: txn
 	ErrTxnClosed:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
@@ -308,7 +315,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
 
 	// Group 7: lock service
-	ErrDeadLockDetected: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
+	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
+	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind chaged"},
+	ErrLockTableNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -706,6 +715,10 @@ func NewNoAvailableBackend(ctx context.Context) *Error {
 	return newError(ctx, ErrNoAvailableBackend)
 }
 
+func NewBackendCannotConnect(ctx context.Context) *Error {
+	return newError(ctx, ErrBackendCannotConnect)
+}
+
 func NewTxnClosed(ctx context.Context, txnID []byte) *Error {
 	id := "unknown"
 	if len(txnID) > 0 {
@@ -901,6 +914,14 @@ func NewAppendableBlockNotFound(ctx context.Context) *Error {
 
 func NewDeadLockDetected(ctx context.Context) *Error {
 	return newError(ctx, ErrDeadLockDetected)
+}
+
+func NewLockTableBindChanged(ctx context.Context) *Error {
+	return newError(ctx, ErrLockTableBindChanged)
+}
+
+func NewLockTableNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrLockTableNotFound)
 }
 
 var contextFunc atomic.Value

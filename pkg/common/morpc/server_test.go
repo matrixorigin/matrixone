@@ -245,7 +245,7 @@ func TestStreamServerWithCache(t *testing.T) {
 
 func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
-		ctx, cancel := context.WithTimeout(context.TODO(), time.Millisecond*10)
+		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 		defer cancel()
 
 		c := newTestClient(t)
