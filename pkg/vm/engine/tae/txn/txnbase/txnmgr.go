@@ -66,7 +66,7 @@ func (bl *batchTxnCommitListener) OnEndPrePrepare(txn txnif.AsyncTxn) {
 }
 
 type TxnStoreFactory = func() txnif.TxnStore
-type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, []byte) txnif.AsyncTxn
+type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) txnif.AsyncTxn
 
 type TxnManager struct {
 	sync.RWMutex
@@ -145,7 +145,7 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	startTs := mgr.TsAlloc.Alloc()
 
 	store := mgr.TxnStoreFactory()
-	txn = mgr.TxnFactory(mgr, store, txnId, startTs, info)
+	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
 	mgr.IDMap[string(txnId)] = txn
 	return
@@ -166,7 +166,7 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 	txn, ok := mgr.IDMap[string(id)]
 	if !ok {
 		store := mgr.TxnStoreFactory()
-		txn = mgr.TxnFactory(mgr, store, id, ts, info)
+		txn = mgr.TxnFactory(mgr, store, id, ts, ts)
 		store.BindTxn(txn)
 		mgr.IDMap[string(id)] = txn
 	}
