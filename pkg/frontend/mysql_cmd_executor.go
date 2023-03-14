@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/util"
 	"io"
 	"os"
 	"reflect"
@@ -277,7 +278,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt, sqlType string) context.Context {
 	// When a sql has syntax errors, split it by ";" before record
-	for _, sql := range splitBySemicolon(envStmt) {
+	for _, sql := range util.SplitBySemicolon(envStmt) {
 		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
 	}
 	tenant := ses.GetTenantInfo()
@@ -2980,7 +2981,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		sql = removePrefixComment(sql)
+		sql = util.RemovePrefixComment(sql)
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, ses.sqlSourceType[0])
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
