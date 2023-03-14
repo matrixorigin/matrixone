@@ -187,7 +187,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			}
 			indexStr += ")"
 			if indexdef.Comment != "" {
-				indexStr += fmt.Sprintf(" COMMENT `%s`", indexdef.Comment)
+				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
+				indexStr += fmt.Sprintf(" COMMENT '%s'", indexdef.Comment)
 			}
 			if rowCount != 0 {
 				createStr += ",\n"

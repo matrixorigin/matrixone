@@ -342,7 +342,7 @@ CREATE TABLE show_03(a int, b int);
 CREATE unique index x ON show_03(a) comment 'x';
 show CREATE table show_03;
 Table    Create Table
-show_03    CREATE TABLE `show_03` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `x` (`a`) COMMENT `x`\n)
+show_03    CREATE TABLE `show_03` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `x` (`a`) COMMENT 'x'\n)
 show INDEX FROM show_03;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Visible    Expression
 show_03    0    a    1    a    A    0    NULL    NULL    YES            YES    NULL
