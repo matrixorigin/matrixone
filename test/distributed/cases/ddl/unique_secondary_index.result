@@ -693,7 +693,7 @@ insert into create_secondary_01 values (1,'13456789872',20.23,'5678'),(2,'138734
 create index varchar_second_index on create_secondary_01(col4) comment 'create varchar index';
 show create table create_secondary_01;
 Table    Create Table
-create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`),\nKEY `varchar_second_index` (`col4`) COMMENT `create varchar index`\n)
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`),\nKEY `varchar_second_index` (`col4`) COMMENT 'create varchar index'\n)
 insert into create_secondary_01 values (4,'13456789899',20.23,'5678'),(5,'13873458255',100.00,'23');
 select * from create_secondary_01;
 col1    col2    col3    col4

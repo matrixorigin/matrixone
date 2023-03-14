@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -39,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -104,11 +104,13 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 			err = moerr.ConvertPanicError(ctx, e)
 		}
 	}()
+	c.proc.Ctx = perfcounter.WithCounter(c.proc.Ctx, &c.s3Counter)
 	c.u = u
+	c.ctx = c.proc.Ctx
 	c.fill = fill
 	c.info = plan2.GetExecTypeFromPlan(pn)
 	// build scope for a single sql
-	s, err := c.compileScope(ctx, pn)
+	s, err := c.compileScope(c.proc.Ctx, pn)
 	if err != nil {
 		return err
 	}
@@ -130,10 +132,11 @@ func (c *Compile) Run(_ uint64) (err error) {
 	if c.scope == nil {
 		return nil
 	}
-	defer func() { c.scope = nil }() // free pipeline
+	defer func() {
+		// free pipeline
+		c.scope = nil
+	}()
 
-	// XXX PrintScope has a none-trivial amount of logging
-	// PrintScope(nil, []*Scope{c.scope})
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -348,32 +351,10 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		insertNode := qry.Nodes[qry.Steps[0]]
 		insertNode.NotCacheable = true
 
-		var err error
-		var onDuplicateKeyArg *onduplicatekey.Argument
-		if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-			onDuplicateKeyArg, err = constructOnduplicateKey(insertNode, c.e, c.proc)
-			if err != nil {
-				return nil, err
-			}
-		}
-
 		preArg, err := constructPreInsert(insertNode, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
-
-		rs = c.newMergeScope(ss)
-		if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op:  vm.OnDuplicateKey,
-				Arg: onDuplicateKeyArg,
-			})
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.PreInsert,
-			Arg: preArg,
-		})
-		ss = []*Scope{rs}
 
 		arg, err := constructInsert(insertNode, c.e, c.proc)
 		if err != nil {
@@ -384,6 +365,13 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag {
 			// use distributed-insert
 			arg.IsRemote = true
+			for _, scope := range ss {
+				scope.Instructions = append(scope.Instructions, vm.Instruction{
+					Op:  vm.PreInsert,
+					Arg: preArg,
+				})
+			}
+
 			rs = c.newInsertMergeScope(arg, preArg, ss)
 			rs.Magic = MergeInsert
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -397,6 +385,20 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			rs = c.newMergeScope(ss)
 			rs.Magic = Insert
 			c.SetAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+			if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
+				onDuplicateKeyArg, err := constructOnduplicateKey(insertNode, c.e, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op:  vm.OnDuplicateKey,
+					Arg: onDuplicateKeyArg,
+				})
+			}
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.PreInsert,
+				Arg: preArg,
+			})
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op:  vm.Insert,
 				Arg: arg,
@@ -1579,9 +1581,17 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 		analInfos: anals,
 		curr:      int(qry.Steps[0]),
 	}
+	c.proc.AnalInfos = c.anal.analInfos
 }
 
 func (c *Compile) fillAnalyzeInfo() {
+	// record the number of s3 requests
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3Counter.S3.Put.Load()
+	c.anal.analInfos[c.anal.curr].S3IOInputCount += c.s3Counter.S3.List.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3Counter.S3.Head.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3Counter.S3.Get.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3Counter.S3.Delete.Load()
+	c.anal.analInfos[c.anal.curr].S3IOOutputCount += c.s3Counter.S3.DeleteMulti.Load()
 	for i, anal := range c.anal.analInfos {
 		if c.anal.qry.Nodes[i].AnalyzeInfo == nil {
 			c.anal.qry.Nodes[i].AnalyzeInfo = new(plan.AnalyzeInfo)
@@ -1595,7 +1605,8 @@ func (c *Compile) fillAnalyzeInfo() {
 		c.anal.qry.Nodes[i].AnalyzeInfo.WaitTimeConsumed = atomic.LoadInt64(&anal.WaitTimeConsumed)
 		c.anal.qry.Nodes[i].AnalyzeInfo.DiskIO = atomic.LoadInt64(&anal.DiskIO)
 		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOByte = atomic.LoadInt64(&anal.S3IOByte)
-		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOCount = atomic.LoadInt64(&anal.S3IOCount)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOInputCount = atomic.LoadInt64(&anal.S3IOInputCount)
+		c.anal.qry.Nodes[i].AnalyzeInfo.S3IOOutputCount = atomic.LoadInt64(&anal.S3IOOutputCount)
 		c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO = atomic.LoadInt64(&anal.NetworkIO)
 		c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime = atomic.LoadInt64(&anal.ScanTime)
 		c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime = atomic.LoadInt64(&anal.InsertTime)
