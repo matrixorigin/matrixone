@@ -54,7 +54,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return false, moerr.NewQueryIdNotFound(proc.Ctx, uuid.ToString())
+			return false, moerr.NewResultFileNotFound(proc.Ctx, path)
 		}
 		return false, err
 	}

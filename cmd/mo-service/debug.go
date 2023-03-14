@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 var (
@@ -37,6 +38,8 @@ var (
 	allocsProfilePathFlag      = flag.String("allocs-profile", "", "write allocs profile to the specified file")
 	fileServiceProfilePathFlag = flag.String("file-service-profile", "", "write file service profile to the specified file")
 	httpListenAddr             = flag.String("debug-http", "", "http server listen address")
+
+	globalCounter = new(perfcounter.Counter)
 )
 
 func startCPUProfile() func() {
@@ -261,6 +264,9 @@ func init() {
 
 	// file service profile
 	http.Handle("/debug/fs/", fileservice.FSProfileHandler)
+
+	// global performance counter
+	http.Handle("/debug/perfcounter", globalCounter)
 
 }
 

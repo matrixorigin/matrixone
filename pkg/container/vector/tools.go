@@ -129,17 +129,19 @@ func FromDNVector(typ types.Type, header []types.Varlena, storage []byte) (vec *
 	vec.cantFreeData = true
 	vec.cantFreeArea = true
 	if typ.IsString() {
-		vec.col = header
 		if len(header) > 0 {
+			vec.col = header
 			vec.data = unsafe.Slice((*byte)(unsafe.Pointer(&header[0])), typ.TypeSize()*cap(header))
+			vec.area = storage
+			vec.capacity = cap(header)
+			vec.length = len(header)
 		}
-		vec.area = storage
-		vec.capacity = cap(header)
-		vec.length = len(header)
 	} else {
-		vec.data = storage
-		vec.length = len(storage) / typ.TypeSize()
-		vec.setupColFromData()
+		if len(storage) > 0 {
+			vec.data = storage
+			vec.length = len(storage) / typ.TypeSize()
+			vec.setupColFromData()
+		}
 	}
 	return
 }

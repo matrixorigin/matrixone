@@ -825,7 +825,7 @@ func ScanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 			e, err := service.StatFile(proc.Ctx, param.Fileparam.Filepath)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-					return nil, moerr.NewQueryIdNotFound(ctx, param.Fileparam.Filepath)
+					return nil, moerr.NewResultFileNotFound(ctx, param.Fileparam.Filepath)
 				}
 				return nil, err
 			}
