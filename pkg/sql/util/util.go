@@ -131,16 +131,29 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	// att_relname in ('mo_database','mo_tables','mo_columns')
 	inExpr := tree.NewComparisonExpr(tree.IN, att_relnameColName, inValues)
 
-	relkindEqualAst := makeStringEqualAst(catalog.SystemColAttr_DBName, "mo_catalog")
+	dbNameEqualAst := makeStringEqualAst(catalog.SystemColAttr_DBName, "mo_catalog")
+
+	mo_userConst := tree.NewNumValWithType(constant.MakeString("mo_user"), "mo_user", false, tree.P_char)
+	mo_roleConst := tree.NewNumValWithType(constant.MakeString("mo_role"), "mo_role", false, tree.P_char)
+	mo_user_grantConst := tree.NewNumValWithType(constant.MakeString("mo_user_grant"), "mo_user_grant", false, tree.P_char)
+	mo_role_grantConst := tree.NewNumValWithType(constant.MakeString("mo_role_grant"), "mo_role_grant", false, tree.P_char)
+	mo_role_privsConst := tree.NewNumValWithType(constant.MakeString("mo_role_privs"), "mo_role_privs", false, tree.P_char)
+	mo_user_defined_functionConst := tree.NewNumValWithType(constant.MakeString("mo_user_defined_function"), "mo_user_defined_function", false, tree.P_char)
+	mo_mysql_compatbility_modeConst := tree.NewNumValWithType(constant.MakeString("mo_mysql_compatbility_mode"), "mo_mysql_compatbility_mode", false, tree.P_char)
+
+	notInValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst, mo_userConst, mo_roleConst, mo_user_grantConst, mo_role_grantConst, mo_role_privsConst, mo_user_defined_functionConst, mo_mysql_compatbility_modeConst})
+	notInexpr := tree.NewComparisonExpr(tree.NOT_IN, att_relnameColName, notInValues)
 
 	// (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster')
-	tempExpr := tree.NewOrExpr(inExpr, relkindEqualAst)
+	tempExpr := tree.NewOrExpr(inExpr, dbNameEqualAst)
 	tempExpr2 := tree.NewParenExpr(tempExpr)
+
+	innerAndExpr := tree.NewAndExpr(tempExpr2, notInexpr)
 
 	// account_id = 0
 	accountIdEqulZero := makeAccountIdEqualAst(0)
 	// andExpr is: account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns'))
-	andExpr := tree.NewAndExpr(accountIdEqulZero, tempExpr2)
+	andExpr := tree.NewAndExpr(accountIdEqulZero, innerAndExpr)
 
 	// right is: (account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns')))
 	right := tree.NewParenExpr(andExpr)
